@@ -43,6 +43,19 @@
 #       and it is not a required context), and only `quality-advisory` carries a job-level `if`/`needs`
 #       (it is not a required context either); `quality-advisory` has NO continue-on-error, so it is not
 #       exempt from that rule. See POLICY below.
+#       Re-measure the continue-on-error census (a count written here goes stale on the next edit) with:
+#       python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci.yml'))['jobs']['guards-advisory']['steps']; print([s['id'] for s in d if 'continue-on-error' in s])"
+#   (g2) WORKFLOW KEYS AND ENV: the top level of each of the three umbrella workflows is checked against
+#       an allow-list (name, on, permissions, concurrency, env, jobs), so a workflow-level `defaults:`
+#       (`defaults.run.shell: "echo {0}"` applies to every job and never runs a member) is rejected. Measured:
+#       none of the three files carries a top-level `defaults:` today (ci.yml has job-level ones in OTHER jobs, which
+#       this lint does not read). `env` is checked in EVERY mapping of an umbrella job (workflow, job, step): no
+#       BASH_ENV, ENV, SHELLOPTS, BASHOPTS, PS4, BASH_FUNC_* or GITHUB_* name (a BASH_ENV file holding an EXIT
+#       trap turns the aggregate's `exit 1` into success; GITHUB_ENV/GITHUB_PATH/GITHUB_OUTPUT redirect the runner's
+#       command files). The only GITHUB_* names the tree uses in an umbrella env are GITHUB_BASE_REF and
+#       GITHUB_REPOSITORY (measured), exempt by exact name. The aggregate step's env is exactly
+#       `EVENT_NAME: ${{ github.event_name }}`, the one variable `member()` reads.
+#       A step carrying both `uses` and `run` is rejected (GitHub rejects it too; the lint says why).
 #   (h) STEP `if:` GRAMMAR (every umbrella step with an `id`): the parsed value is
 #       `${{ !cancelled() }}` or `${{ !cancelled() && <expr> }}`, where <expr> is built ONLY from the
 #       allow-listed comparison atoms below joined by `&&`, `||` and parentheses, with no `||` at depth
@@ -63,8 +76,10 @@
 # name `secret-guards` is not checked.
 #
 # Parsing: PyYAML (the same dependency the required quality-guards member `workflow-duplicate-keys`
-# has, assumed preinstalled on ubuntu-24.04: its summary line prints `pyyaml=<version>` as the
-# evidence). A missing PyYAML fails this lint (exit 2) rather than skipping it.
+# has, assumed preinstalled on the runner: ubuntu-latest for the `test-scripts` job that runs this lint, ubuntu-24.04
+# for `secret-guards`, which runs it through scripts/ci-parked-hold.test.sh; the `pyyaml=<version>` this lint
+# prints on success is the evidence). A missing PyYAML fails this lint (exit 2) rather than skipping it.
+# Census scope: *.yml and *.yaml under .github/workflows (none uses .yaml today; measured with `ls`).
 # The member(...) call's THIRD argument is the single-quoted CSV of step ids.
 #
 # Umbrella census (three files, five jobs):
@@ -86,7 +101,9 @@ import sys
 try:
     import yaml
 except ImportError:
-    print("::error::lint-umbrella-aggregate: PyYAML is required to parse the workflows (python3 -c 'import yaml' failed); failing closed", file=sys.stderr)
+    print("::error::lint-umbrella-aggregate: PyYAML is required to parse the workflows (python3 -c 'import yaml' failed); failing closed. "
+          "Its presence on ubuntu-latest is ASSUMED, not installed here: other suites in the test-scripts job already require it "
+          "(measure with: git grep -n 'import yaml' scripts)", file=sys.stderr)
     sys.exit(2)
 
 # CSafeLoader when PyYAML was built with libyaml (about 10x faster), the pure-python SafeLoader otherwise.
@@ -109,9 +126,15 @@ STEP_KEYS = {"id", "if", "name", "env", "run", "uses", "with", "working-director
 JOB_KEYS = {"name", "runs-on", "timeout-minutes", "permissions", "env", "steps"}
 POLICY = {
     # job -> (allowed job keys, allowed step keys). Required contexts take the defaults.
-    "guards-advisory": (JOB_KEYS, STEP_KEYS | {"continue-on-error"}),  # 8 steps use it today
+    "guards-advisory": (JOB_KEYS, STEP_KEYS | {"continue-on-error"}),  # several steps use it; re-measure per the header
     "quality-advisory": (JOB_KEYS | {"if", "needs"}, STEP_KEYS),  # job-level if/needs today, no continue-on-error
 }
+
+# Workflow top-level keys (YAML 1.1 parses an unquoted `on` as True) and env names (rule (g2)).
+TOP_KEYS = {"name", "on", True, "permissions", "concurrency", "env", "jobs"}
+ENV_FORBIDDEN = {"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4"}
+GITHUB_ENV_EXEMPT = {"GITHUB_BASE_REF", "GITHUB_REPOSITORY"}  # measured in the real umbrella jobs
+AGG_ENV_WANT = {"EVENT_NAME": "${{ github.event_name }}"}
 
 failures = []
 
@@ -119,6 +142,19 @@ failures = []
 def fail(msg):
     failures.append(msg)
     print(f"::error::lint-umbrella-aggregate: {msg}", file=sys.stderr)
+
+
+def check_env(where, env, level):
+    """Rule (g2): no env name that changes how bash or the runner treats a later command."""
+    if env is None:
+        return
+    if not isinstance(env, dict):
+        fail(f"{where}: {level} `env` is not a mapping ({type(env).__name__}); the lint cannot read its names")
+        return
+    for k in env:
+        ku = str(k).upper()
+        if ku in ENV_FORBIDDEN or ku.startswith("BASH_FUNC_") or (ku.startswith("GITHUB_") and str(k) not in GITHUB_ENV_EXEMPT):
+            fail(f"{where}: forbidden env name `{k}` in {level} env (it can change how a later command runs: BASH_ENV/ENV/SHELLOPTS/BASHOPTS/PS4/BASH_FUNC_*/GITHUB_*)")
 
 
 # ---- rule (h): step `if:` grammar ---------------------------------------------------------------
@@ -258,7 +294,17 @@ for path, jobs in UMBRELLAS.items():
     except Exception as e:  # unreadable or unparseable: fail closed
         fail(f"{path}: cannot be parsed as YAML ({type(e).__name__})")
         continue
-    all_jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict):
+        fail(f"{path}: the workflow is not a mapping")
+        continue
+    for k in doc:
+        if k not in TOP_KEYS:
+            fail(f"{path}: workflow key `{k}` is outside the allow-list (name, on, permissions, concurrency, env, jobs); a workflow-level `defaults` or similar key applies to every job")
+    check_env(path, doc.get("env"), "workflow")
+    all_jobs = doc.get("jobs")
+    if not isinstance(all_jobs, dict) or not all_jobs:
+        fail(f"{path}: `jobs` is missing, empty or not a mapping")
+        continue
     for job in jobs:
         jb = all_jobs.get(job)
         where = f"{path} `{job}`"
@@ -269,6 +315,7 @@ for path, jobs in UMBRELLAS.items():
         for k in jb:
             if k not in job_keys:
                 fail(f"{where}: job key `{k}` is outside the allow-list ({', '.join(sorted(job_keys))}); a `continue-on-error`, `if`, `defaults` or similar job key can turn a red member into a pass")
+        check_env(where, jb.get("env"), "job")
         steps = jb.get("steps")
         if not isinstance(steps, list):
             fail(f"{where}: no steps list")
@@ -283,6 +330,9 @@ for path, jobs in UMBRELLAS.items():
             for k in s:
                 if k not in step_keys:
                     fail(f"{where} step `{label}`: disallowed step key `{k}` (allow-list: {', '.join(sorted(step_keys))})")
+            check_env(f"{where} step `{label}`", s.get("env"), "step")
+            if "uses" in s and "run" in s:
+                fail(f"{where} step `{label}`: has both `uses` and `run` (GitHub rejects a step with both; a step is one or the other)")
             u = s.get("uses")
             if u is not None and not (isinstance(u, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}", u)):
                 fail(f"{where} step `{label}`: `uses` must be an owner/repo@<40-hex sha> action (a local or docker action's inner steps are not scanned): {u}")
@@ -307,6 +357,8 @@ for path, jobs in UMBRELLAS.items():
             if why:
                 fail(f"{where} step `{s['id']}`: {why}")
 
+        if agg[0].get("env") != AGG_ENV_WANT:
+            fail(f"{where} aggregate: aggregate `env` must be exactly {{EVENT_NAME: ${{{{ github.event_name }}}}}}, the one variable member() reads (got {agg[0].get('env')!r})")
         agg_run = agg[0].get("run")
         if not isinstance(agg_run, str):
             fail(f"{where} aggregate: no `run:` string")
@@ -357,7 +409,7 @@ else:
 
 # (e) census — every job with an `id: aggregate` step in the tree must be a registered umbrella
 discovered = set()
-for path in sorted(glob.glob(".github/workflows/*.yml")):
+for path in sorted(glob.glob(".github/workflows/*.yml") + glob.glob(".github/workflows/*.yaml")):
     if "aggregate" not in open(path, encoding="utf-8").read():
         continue  # no step can be named `aggregate` in a file that never says the word: skip the parse
     try:
@@ -365,7 +417,8 @@ for path in sorted(glob.glob(".github/workflows/*.yml")):
     except Exception as e:
         fail(f"{path}: cannot be parsed as YAML ({type(e).__name__}); the census cannot read it")
         continue
-    for jname, jb in (doc.get("jobs") or {}).items() if isinstance(doc, dict) else []:
+    census_jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    for jname, jb in census_jobs.items() if isinstance(census_jobs, dict) else []:
         for s in (jb.get("steps") or []) if isinstance(jb, dict) else []:
             # an umbrella aggregate is the one that sources the canonical member() lib or calls member
             # (scheduled-integration-suites.yml has an unrelated step that is also named `aggregate`)
@@ -382,5 +435,5 @@ for path, job in sorted(census - discovered):
 if failures:
     print(f"lint-umbrella-aggregate: FAIL ({len(failures)} finding(s))")
     sys.exit(1)
-print(f"lint-umbrella-aggregate: OK ({sum(len(v) for v in UMBRELLAS.values())} umbrella jobs verified)")
+print(f"lint-umbrella-aggregate: OK ({sum(len(v) for v in UMBRELLAS.values())} umbrella jobs verified, pyyaml={yaml.__version__})")
 PYEOF

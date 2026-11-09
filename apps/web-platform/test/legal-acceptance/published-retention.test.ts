@@ -92,7 +92,14 @@ const DRAFT_WITH_ISSUE_COUNT: Record<string, number> = {
 }; // equals origin/main: the new entries add none (CLO round 4 (g))
 const DRAFT_PLAIN = "[DRAFT — pending CLO/counsel review]";
 // The old claim survives on history lines only: Oct 29 Amended entry, its Superseded blockquote, the Nov 9 Amended entry.
-const FALSE_CLAIM_LINES = 3;
+const FALSE_CLAIM_OCCURRENCES = 3;
+// Whole-sentence pins (CLO round 4): a clause appended to or edited inside these cannot hide behind fragment pins.
+const RETENTION_CORE =
+  "5 years from the date of the decision, and then we delete the record. This covers the whole record, including any note and the marker in the third table, which is kept and deleted with the decision record it names. If a legal claim, a complaint or an official inquiry about the record is open when the 5 years end, we keep it until that matter is closed. We have not yet built the step that deletes a record at the end of this period (the application cannot delete the record today); we will build it before any record reaches that age, and until then records are kept as they are.";
+const MONITORING_FULL =
+  "which of the following an event carries depends on the event, and no event carries all of them: the name of the text, the version, the choice, a reason or the name of the step that failed, an error class, an error code (a database error code, or a code saying what is wrong with a legal text file) or the name of the function that failed (never an error message), the name of a protected setting that is missing or malformed (never its value), the age and status of the record, and an account identifier pseudonymised before it is sent (only events raised from a signed-in session carry it; the events raised by the status check and the counts check carry none); only the event for a stored decision record that fails its checksum and the event for a record with no marker carry the text fingerprint, which is not secret; no event carries the note, the code, your email address or the text; and one line is written to our logs, which are copied to our log provider (Better Stack), for each event.";
+const NOV9_ENTRY_PREFIX = "**Amended:** November 9, 2026";
+const YEARS_TOKEN = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\b/gi;
 const FALSE_CLAIM = "The approval queue is not switched on for any workspace that Jikigai does not own";
 const OVERTAKEN = [
   "may be switched on for workspaces that Jikigai itself owns",
@@ -134,6 +141,13 @@ describe.each(DOCS)("published %s", (doc) => {
     expect(lines[0]).toContain(NOT_BUILT_FULL);
     expect(count(body, HOLD)).toBe(1);
     expect(count(body, NOT_BUILT_FULL)).toBe(1);
+    // The four ruled sentences, contiguous and verbatim; anything inserted between or around them moves this.
+    expect(count(body, RETENTION_CORE)).toBe(1);
+    expect(lines[0]).toContain(RETENTION_CORE);
+    // No other period may be stated on the retention line: every "<n> years" token is the ruled "5 years".
+    const years = (lines[0].match(YEARS_TOKEN) ?? []).map((t) => t.toLowerCase());
+    expect(years.length).toBeGreaterThan(0);
+    for (const t of years) expect(t).toBe("5 years");
   });
 
   it.each(both)("%s no longer carries the earlier unconfirmed proposal", (_label, body) => {
@@ -161,10 +175,16 @@ describe.each(DOCS)("published %s", (doc) => {
     }
     // The history exemption is a prefix test, so pin its POPULATION: exactly these lines may quote the old claim,
     // and every one of them is a history line. A new "**Amended:**" line carrying it would raise the count.
-    // Case-insensitive: the Nov 9 Amended entry quotes it mid-sentence in lower case.
+    // Case-insensitive: the Nov 9 Amended entry quotes it mid-sentence in lower case. Count OCCURRENCES, not lines:
+    // a second quote inside one history line must also move the number.
     const carriers = lines.filter((l) => l.toLowerCase().includes(FALSE_CLAIM.toLowerCase()));
-    expect(carriers).toHaveLength(FALSE_CLAIM_LINES);
+    expect(count(body.toLowerCase(), FALSE_CLAIM.toLowerCase())).toBe(FALSE_CLAIM_OCCURRENCES);
     for (const l of carriers) expect(isHistory(l)).toBe(true);
+    // The branch-only Nov 9 entry may quote the old claim once, as the thing it corrects, and none of the overtaken wording.
+    const nov9 = lines.filter((l) => l.startsWith(NOV9_ENTRY_PREFIX));
+    expect(nov9).toHaveLength(1);
+    expect(count(nov9[0].toLowerCase(), FALSE_CLAIM.toLowerCase())).toBe(1);
+    for (const o of OVERTAKEN) expect(nov9[0]).not.toContain(o);
   });
 
   it.each(both)("%s notices say only what this document itself promised", (_label, body) => {
@@ -175,6 +195,7 @@ describe.each(DOCS)("published %s", (doc) => {
 
   it.each(both)("%s names the counts reader once and lists monitoring fields truthfully", (_label, body) => {
     expect(count(body, COUNTS_READER)).toBe(1);
+    expect(count(body, MONITORING_FULL)).toBe(1);
     for (const m of MONITORING_NEW) expect(count(body, m)).toBe(1);
     for (const o of MONITORING_OLD) expect(body).not.toContain(o);
     expect(body).not.toContain("choice, text fingerprint, record age");

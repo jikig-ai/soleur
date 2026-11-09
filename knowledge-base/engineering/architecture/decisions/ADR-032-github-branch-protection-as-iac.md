@@ -1118,13 +1118,27 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   the `if [ "$failed" -ne 0 ]` tail (an early `exit`, a statement after the tail, `|| true` between the `||` links
   are rejected). `scripts/ci-parked-hold.test.sh` re-pins the two parked-hold steps and the job by the same
   parsed allow-list and feeds the lint one mutated copy of the workflows per rule (sections D and G, each
-  mutation-proven in a sandbox copy). The tree was swept: the only umbrella that uses `continue-on-error` is the
-  advisory `guards-advisory` (8 steps; not a required context), which the lint exempts by name from that one key.
+  mutation-proven in a sandbox copy). The lint also allow-lists the TOP-LEVEL keys of the three umbrella workflows
+  (`name`, `on`, `permissions`, `concurrency`, `env`, `jobs`), so a workflow-level `defaults.run.shell` is rejected
+  like the job-level one (measured: none of the three files carries a top-level `defaults:`); it rejects `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `BASH_FUNC_*` and `GITHUB_*` names in any `env` mapping (workflow, job or
+  step) of an umbrella, except the two `GITHUB_*` names the tree measured in use (`GITHUB_BASE_REF`,
+  `GITHUB_REPOSITORY`) (a `BASH_ENV` file holding an EXIT trap turns the aggregate's `exit 1` into success);
+  pins the aggregate step's `env` to exactly `EVENT_NAME: ${{ github.event_name }}`; rejects a step with both `uses`
+  and `run`, and an empty `jobs:` (a clean annotated failure, not a traceback); and its census reads `*.yml` and
+  `*.yaml`. The tree was swept: the only umbrella that uses `continue-on-error` is the advisory `guards-advisory`
+  (several of its steps, the harness-discovery ones; the number is deliberately not written here, re-measure with
+  the one-liner in the lint header; not a required context), which the lint exempts by name from that one key.
   `quality-advisory` is NOT exempt from it (it has none); it is allowed only its job-level `if`/`needs`.
-  PyYAML is a dependency of the lint and of the suite that runs it in the `secret-guards` job: it is assumed
-  preinstalled on `ubuntu-24.04`, exactly as the required `workflow-duplicate-keys` member already assumes (its
-  summary line prints `pyyaml=<version>` as the evidence), and a missing PyYAML fails the lint (exit 2) rather
-  than skipping it.
+  PyYAML is a dependency of the lint and of the suite that runs it in the `secret-guards` job: its presence on the
+  runner (`ubuntu-24.04` for `secret-guards`, `ubuntu-latest` for `test-scripts`) is assumed, not installed or
+  verified here, exactly as the required `workflow-duplicate-keys` member already assumes it. The assumption has
+  precedent in the same `test-scripts` job: `git grep -n 'import yaml' scripts` finds
+  `scripts/digest-oracle-guard.test.sh:55`, `scripts/ci-draft-light.test.sh:60` and
+  `scripts/ci-push-dedupe.test.sh:67`, each of which hard-fails (exit 2) when `import yaml` fails. The lint prints
+  `pyyaml=<version>` on success (that run output is the evidence), and a missing PyYAML fails the lint (exit 2)
+  rather than skipping it; a missing PyYAML would also turn the required `parked-hold-selftest` member red, because
+  section G of the suite runs the lint.
   Residuals this does NOT close: (i) a member group is an OR over its arms, so a dead arm next to a live sibling of
   the same member (for example `scan-install`, which runs on every event) stays green; (ii) the `run:` bodies of
   member steps are not inspected by the lint (the parked-hold steps' bodies are executed by section E of the

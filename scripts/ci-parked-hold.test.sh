@@ -607,8 +607,8 @@ cp "$ROOT/scripts/lib/umbrella-member.sh" "$LINTREPO/scripts/lib/"
 git -C "$LINTREPO" init -q 2>/dev/null
 run_lint() { reset_stub; OUT=$(cd "$LINTREPO" && env -i HOME="$WORK" PATH="$ORIG_PATH" bash scripts/lint-umbrella-aggregate.sh 2>&1); RC=$?; }
 run_lint; expect_pass "lint-umbrella-aggregate passes on the unmutated workflow copies"
-lint_mutant() { # lint_mutant <name> <workflow> <umbrella job> <step id | JOB>: inject continue-on-error: true
-  local name="$1" wf="$2" job="$3" at="$4"
+lint_mutant() { # lint_mutant <name> <workflow> <umbrella job> <step id | JOB> <fixed substring the finding must contain>: inject continue-on-error: true
+  local name="$1" wf="$2" job="$3" at="$4" want="$5"
   cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
   python3 -I - "$LINTREPO/.github/workflows/$wf" "$job" "$at" <<'PYEOF'
 import re, sys
@@ -625,14 +625,15 @@ open(path, "w", encoding="utf-8").write("\n".join(lines))
 PYEOF
   if cmp -s "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"; then bad "lint mutant $name did not change $wf"; else
     run_lint
-    if [ "$RC" -ne 0 ] && [[ "$OUT" == *"continue-on-error"* ]]; then ok "lint mutant $name rejected"; else bad "lint mutant $name survived (rc $RC)"; fi
+    if [ "$RC" -ne 0 ] && [[ "$OUT" == *"$want"* ]]; then ok "lint mutant $name rejected"; else bad "lint mutant $name survived or was caught by another rule (rc $RC, wanted '$want')"; fi
   fi
   cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
 }
-lint_mutant coe-on-parked-hold secret-scan.yml secret-guards parked-hold
-lint_mutant coe-on-secret-guards-job secret-scan.yml secret-guards JOB
-lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
-lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+COE_STEP='disallowed step key `continue-on-error`'
+lint_mutant coe-on-parked-hold secret-scan.yml secret-guards parked-hold "$COE_STEP"
+lint_mutant coe-on-secret-guards-job secret-scan.yml secret-guards JOB 'job key `continue-on-error`'
+lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
+lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
 # Every other spelling or route by which a member is neutralised while rules (a)-(f) still hold. Each mutant is a
 # python re.sub (MULTILINE, count=1) on one workflow copy; it must change the copy, the lint must exit non-zero, and
 # its output must carry the finding that names THAT rule (a crash or an unrelated finding does not count as caught).
@@ -666,7 +667,30 @@ lint_resub job-if-false-guards-ruleset ci.yml '^(  guards-ruleset:\n)' '\1    if
 lint_resub job-if-false-quality-guards pr-quality-guards.yml '^(  quality-guards:\n)' '\1    if: ${{ false }}\n' 'job key `if`'
 lint_resub local-composite-action $SS '^(      - name: Checkout \(full history for diff scans\)\n        uses: )[^\n]*\n' '\1./.github/actions/x\n' '`uses` must be an owner/repo@<40-hex sha> action'
 # quality-advisory is NOT exempt from the continue-on-error rule (it has no use of it); guards-advisory still is
-lint_mutant coe-on-quality-advisory-step pr-quality-guards.yml quality-advisory "$(sed -n '/^  quality-advisory:/,$p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+lint_mutant coe-on-quality-advisory-step pr-quality-guards.yml quality-advisory "$(sed -n '/^  quality-advisory:/,$p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
+# rule (g2): workflow top-level keys, env names (every level) and the aggregate env; plus step shape and jobs shape
+TOPDEF='defaults:\n  run:\n    shell: "echo {0}"\n'
+lint_resub workflow-defaults-shell-secret-scan $SS '^(concurrency:)' "$TOPDEF"'\1' 'workflow key `defaults`'
+lint_resub workflow-defaults-shell-ci ci.yml '^(concurrency:)' "$TOPDEF"'\1' 'workflow key `defaults`'
+lint_resub workflow-defaults-shell-quality pr-quality-guards.yml '^(concurrency:)' "$TOPDEF"'\1' 'workflow key `defaults`'
+STEP_ENV_PAT='^(      - id: waiver-discipline\n(?:[^\n]*\n)*?        env:\n)'
+lint_resub bash-env-step-level $SS "$STEP_ENV_PAT" '\1          BASH_ENV: ./scripts/x.sh\n' 'forbidden env name `BASH_ENV` in step env'
+lint_resub bash-env-job-level $SS '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    env:\n      BASH_ENV: ./scripts/x.sh' 'forbidden env name `BASH_ENV` in job env'
+lint_resub bash-env-workflow-level $SS '^(env:\n)' '\1  BASH_ENV: ./scripts/x.sh\n' 'forbidden env name `BASH_ENV` in workflow env'
+lint_resub bash-env-workflow-level-new-block ci.yml '^(concurrency:)' 'env:\n  BASH_ENV: ./scripts/x.sh\n\1' 'forbidden env name `BASH_ENV` in workflow env'
+lint_resub ps4-step-level $SS "$STEP_ENV_PAT" '\1          PS4: "$(exit 0)"\n' 'forbidden env name `PS4` in step env'
+lint_resub bash-func-step-level $SS "$STEP_ENV_PAT" '\1          "BASH_FUNC_member%%": "() { :; }"\n' 'forbidden env name `BASH_FUNC_member%%` in step env'
+lint_resub github-env-step-level $SS "$STEP_ENV_PAT" '\1          GITHUB_ENV: ./scripts/x.env\n' 'forbidden env name `GITHUB_ENV` in step env'
+AGG_ENV_PAT='^(      - id: aggregate\n(?:[^\n]*\n)*?        env:\n)'
+lint_resub aggregate-env-extra-key $SS "$AGG_ENV_PAT" '\1          EXTRA: x\n' 'aggregate `env` must be exactly'
+lint_resub aggregate-env-constant-event $SS '^(          EVENT_NAME: )\$\{\{ github.event_name \}\}(\n        run: \|\n          set -uo pipefail)' '\1pull_request\2' 'aggregate `env` must be exactly'
+lint_resub step-uses-and-run $SS '^(      - name: Checkout \(full history for diff scans\)\n        uses: [^\n]*\n)' '\1        run: echo x\n' 'has both `uses` and `run`'
+lint_resub jobs-empty $SS '^jobs:\n(?:.*\n)*' 'jobs:\n' '`jobs` is missing, empty or not a mapping'
+# the census also reads *.yaml: an umbrella aggregate in a .yaml file unregistered in UMBRELLAS is a finding
+cp "$ROOT/.github/workflows/secret-scan.yml" "$LINTREPO/.github/workflows/extra-umbrella.yaml"
+run_lint
+if [ "$RC" -ne 0 ] && [[ "$OUT" == *'extra-umbrella.yaml: `- id: aggregate` in unregistered umbrella'* ]]; then ok "lint mutant census-yaml-extension rejected"; else bad "lint mutant census-yaml-extension survived or was caught by another rule (rc $RC)"; fi
+rm -f "$LINTREPO/.github/workflows/extra-umbrella.yaml"
 # the step `if:` grammar
 lint_resub if-and-false $SS '^(      - id: waiver-discipline\n        if: [^\n]*?) \}\}\n' '\1 && false }}\n' 'term outside the allow-listed comparison atoms'
 lint_resub if-trailing-comment-names-cancelled $SS '^(      - id: waiver-discipline\n)        if: [^\n]*\n' '\1        if: ${{ success() }} # !cancelled()\n' 'does not start with ${{ !cancelled() &&'
@@ -686,9 +710,9 @@ run_lint; expect_pass "lint-umbrella-aggregate passes again once the mutated cop
 
 # ─── anti-vacuity floor (Guard row 9): an emptied call list must not report ok ───────────────────
 # The floor exits directly: it must not run THROUGH bad()/fails, which a neutered assertion machinery silences
-# (scripts/guard-vacuity-floor.test.sh). MIN_ROWS is the actual row count (147) minus two; it stays on the line
+# (scripts/guard-vacuity-floor.test.sh). MIN_ROWS is the actual row count (162) minus two; it stays on the line
 # directly above the `if` so the meta-guard can bind it when it builds its neutered mutant.
-MIN_ROWS=145
+MIN_ROWS=160
 if [ "$rows" -lt "$MIN_ROWS" ]; then printf 'parked-hold selftest FAILED: anti-vacuity floor: only %d rows ran (minimum %d)\n' "$rows" "$MIN_ROWS" >&2; exit 1; fi
 
 if [ "$fails" -ne 0 ]; then
