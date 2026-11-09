@@ -82,3 +82,11 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Stall-check suite: adjacent-boundary row node $((maxpos+1)), "behind young head" message fix — suite run IN FLIGHT (/tmp/stall-fix.txt).
 - Other: workflow comment ~15->~49min; ADR table annotate+heading h3+:280 fix; docs >=1->>=2; suite-durations.tsv floor row; test-all.sh registration moved to last run_suite; plan 24-vs-27 clause.
 - REMAINING: wait stall suite -> commit fix round -> push -> fix-round seats (fix-round-seats.sh on fix diff) -> Review Phase Complete -> soleur:qa -> compound -> ship -> postmerge (directive earliest=<merge>+21d secrets=GH_TOKEN + F3 follow-up issue for enqueuedAt promotion FP) -> DONE. Backlog: #9323, #11556. NEVER dispatch #9729.
+
+## Resume Point 4 (fix-round seats in flight)
+
+- Fix round committed+pushed 5ffdcb85: all panel findings resolved; suites green (guard 74/0, probe 23/0, stall 166/0).
+- Fix-round seats SPAWNED (background): 02872ffe (security), d7afe284 (pattern+test-design), 7aa2f1af (code-quality), scoped to diff 90543a00..5ffdcb85. performance-oracle folded (its findings were probe-scope, covered by pattern/code-quality lenses). shellcheck = local check, already clean.
+- NEXT: read seat outputs -> resolve any new findings -> `## Review Phase Complete` (pipeline mode marker only, no compound/ship inline) -> wait — review skill standalone handoff says one-shot parent owns pipeline: emit Review Phase Complete, then Step 5 resolve findings, 5.5 QA, 6 compound, 7 ship, 8 DONE.
+- Post-merge (3B.5): apply-github-infra.yml verify; directive on #12269 earliest=<merge>+21d secrets=GH_TOKEN; file F3 follow-up issue (enqueuedAt promotion false-positive).
+- Backlog after: #9323, #11556. NEVER dispatch #9729 (sibling live).
