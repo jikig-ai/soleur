@@ -51,6 +51,7 @@ case "$ep" in
     fi ;;
   repos/*/actions/workflows/ci.yml/runs?event=pull_request*) f="$FX/runs.json" ;;
   repos/*/actions/workflows/ci.yml/runs?event=push*) f="$FX/push-${ep##*head_sha=}.json" ;;
+  repos/*/actions/workflows/ci.yml/runs?event=merge_group*) f="$FX/mg-${ep##*head_sha=}.json" ;;
   repos/*/actions/runs/*/jobs*) r="${ep#*runs/}"; f="$FX/jobs-${r%%/*}.json" ;;
   repos/*/actions/runs/*/artifacts*) r="${ep#*runs/}"; f="$FX/arts-${r%%/*}.json" ;;
   repos/*/actions/artifacts/*/zip) a="${ep#*artifacts/}"; a="${a%%/*}"; f="$FX/art-$a.zip"; [ -f "$f" ] || f="$FX/art-any.zip" ;;
@@ -139,7 +140,7 @@ expect() {
 }
 
 build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~49.3 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
-if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the classifier's third read is red-only"; else pass "a green push run issues no jobs read (the need_min 2-read bound holds)"; fi
+if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the jobs read is red-run-only"; else pass "a green push run issues no jobs read (the need_min listing bound holds)"; fi
 build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
 build_fx "$TMP/s4" 5 40;            expect "NOT YET: 5 qualifying runs (< 20)" 2 "NOT YET" "$TMP/s4"
@@ -159,10 +160,14 @@ build_fx "$TMP/b4" 25 2; sed -i 's/"conclusion":"success"/"conclusion":"failure"
 build_fx "$TMP/b5" 25 40; for i in $(seq 1 25); do sed -i 's/test-scripts (1\/7)/lint/' "$TMP/b5/jobs-$i.json"; done
                                     expect "a run with no test-scripts job measures nothing and is excluded" 2 "NOT YET: 0" "$TMP/b5"
 build_fx "$TMP/b6" 25 40; rm -f "$TMP/b6/push-sha101.json"; printf '{"workflow_runs":[]}\n' > "$TMP/b6/push-sha101.json"
-                                    expect "an absent push run is NOT YET, never 'no escape'" 2 "no completed push run" "$TMP/b6"
+printf '{"workflow_runs":[]}\n' > "$TMP/b6/mg-sha101.json"   # absent push AND absent merge_group: genuinely pending
+                                    expect "an absent push run is NOT YET, never 'no escape'" 2 "no completed push or merge_group run" "$TMP/b6"
 build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"id":500777,"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
 printf '{"jobs":[{"name":"test-scripts (5/7)","conclusion":"timed_out"}]}' > "$TMP/b7/jobs-500777.json"
                                     expect "a timed_out push run on a green PR is an escape" 1 "ESCAPE: PR 102" "$TMP/b7"
+build_fx "$TMP/b7b" 25 40; printf '{"workflow_runs":[{"id":500778,"conclusion":"action_required"}]}\n' > "$TMP/b7b/push-sha103.json"
+printf '{"jobs":[{"name":"test-scripts (1/7)","conclusion":"failure"}]}' > "$TMP/b7b/jobs-500778.json"
+                                    expect "an action_required push run on a green PR is an escape (the conclusive list's membership is pinned)" 1 "ESCAPE: PR 103" "$TMP/b7b"
 # --- Guard Contract rows 2-5 (#9323, Arm A ruling 2026-11-08): a red push run is an ADR-262 R1
 # escape only when >=1 failed job is a gated test-scripts* leg; a run red solely on unrelated
 # infra jobs is reported, never counted; a jobs read that cannot be established is pending, never ok.
@@ -171,17 +176,76 @@ build_fx "$TMP/e2" 25 40 0 0 112; printf '{"jobs":[{"name":"lint-bot-statuses","
 build_fx "$TMP/e3" 25 40 0 0 115; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (2/7)","conclusion":"failure"}]}' > "$TMP/e3/jobs-500015.json"
                                     expect "a gated test-scripts failure beside unrelated reds is still an escape" 1 "ESCAPE: PR 115" "$TMP/e3"
 build_fx "$TMP/e4" 25 40 0 0 113; rm -f "$TMP/e4/jobs-500013.json"
-                                    expect "a red push run whose jobs read fails is NOT YET, never ok" 2 "no completed push run" "$TMP/e4"
+                                    expect "a red push run whose jobs read fails is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e4"
 build_fx "$TMP/e5" 25 40 0 0 114; printf '{"jobs":[]}' > "$TMP/e5/jobs-500014.json"
-                                    expect "a red push run with an empty jobs read is NOT YET, never ok" 2 "no completed push run" "$TMP/e5"
+                                    expect "a red push run with an empty jobs read is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e5"
 build_fx "$TMP/e6" 25 40 0 0 116; printf '{"workflow_runs":[{"conclusion":"failure"}]}\n' > "$TMP/e6/push-sha116.json"
-                                    expect "a red push run with no run id is NOT YET, never ok" 2 "no completed push run" "$TMP/e6"
+                                    expect "a red push run with no run id is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e6"
 build_fx "$TMP/e7" 25 40 0 0 117; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":"cancelled"}]}' > "$TMP/e7/jobs-500017.json"
-                                    expect "a red push run whose gated job is cancelled (inconclusive) is NOT YET, never ok and never an escape" 2 "no completed push run" "$TMP/e7"
+                                    expect "a red push run whose gated job is cancelled (inconclusive) is NOT YET, never ok and never an escape" 2 "no completed push or merge_group run" "$TMP/e7"
 out="$(env FX="$TMP/e7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 2 && "$out" == *"cancelled/inconclusive"* ]]; then pass "the inconclusive-gated pending row echoes its detail"; else fail "inconclusive-gated pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/e8" 25 40 0 0 118; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":null}]}' > "$TMP/e8/jobs-500018.json"
-                                    expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push run" "$TMP/e8"
+                                    expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e8"
+# --- Guard Contract: merge_group fallback (#12478, Arm A ruling 2026-11-09) --------------------------------
+# A merged qualifying PR whose merge commit carries no conclusive `push` run is classified by the
+# `merge_group` ci.yml run on that commit through the SAME classifier — a queue-merged PR's merge
+# commit never gets a push run, so push-only evidence pends forever (the shipped defect). The
+# `push-*.json` overrides below write the empty list (absent run), never a deleted file (transport
+# failure) — matching the b6 idiom.
+build_fx "$TMP/mg1" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg1/push-sha101.json"
+printf '{"workflow_runs":[{"id":600101,"conclusion":"success"}]}\n' > "$TMP/mg1/mg-sha101.json"
+expect "a queue-merged PR with a green merge_group run is ok — verified via the mg run, counted on the note line" 0 "verified via merge_group" "$TMP/mg1"
+rm -f "$TMP/mg1/requests.log"   # single-run log for the read-count assertion (expect already ran one sweep)
+out="$(env FX="$TMP/mg1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) verified via merge_group run(s)"* ]]; then
+  pass "the via_mg note names the count and the evidence source"
+else fail "via_mg note line: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if [ "$(grep -c 'event=merge_group.*head_sha=sha101' "$TMP/mg1/requests.log")" = "1" ] && [ "$(grep -c 'event=merge_group' "$TMP/mg1/requests.log")" = "1" ]; then
+  pass "an absent-push merged PR issues exactly one merge_group read (sha-scoped and sweep-total)"
+else fail "mg read count for the absent-push PR: $(grep -c 'event=merge_group' "$TMP/mg1/requests.log") total mg reads"; fi
+if grep -q 'event=merge_group' "$TMP/s1/requests.log"; then
+  fail "a conclusive push arm issued a merge_group read — the fallback is inconclusive-only"
+else pass "conclusive push runs issue no merge_group read (the +1 read is inconclusive-arm only)"; fi
+build_fx "$TMP/mg2" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg2/push-sha103.json"
+printf '{"workflow_runs":[{"id":600103,"conclusion":"failure"}]}\n' > "$TMP/mg2/mg-sha103.json"
+printf '{"jobs":[{"name":"test-scripts (6/7)","conclusion":"failure"}]}' > "$TMP/mg2/jobs-600103.json"
+expect "a queue-merged PR whose mg run is red on a gated test-scripts* leg is an escape" 1 "merge-commit merge_group run" "$TMP/mg2"
+build_fx "$TMP/mg3" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg3/push-sha104.json"
+printf '{"workflow_runs":[{"id":600104,"conclusion":"failure"}]}\n' > "$TMP/mg3/mg-sha104.json"
+printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"tenant-integration","conclusion":"failure"}]}' > "$TMP/mg3/jobs-600104.json"
+expect "a queue-merged PR whose mg run is red on non-gated jobs only is unrelated, never an escape" 0 "never an escape" "$TMP/mg3"
+build_fx "$TMP/mg4" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg4/push-sha105.json"
+# no mg-sha105.json — a MISSING mg fixture is a transport failure (fake gh exits 1), not an empty
+# list: the fail row is CANNOT ESTABLISH, never folded into pending (the transport-vs-absent
+# distinction the suite already enforces at b6/t1; absent-both pending is pinned at b6 + d3).
+expect "absent push AND a failed merge_group read is CANNOT ESTABLISH, never pending" 3 "merge_group run" "$TMP/mg4"
+build_fx "$TMP/mg5" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg5/push-sha106.json"
+printf '{"workflow_runs":[{"id":600106,"conclusion":"failure"}]}\n' > "$TMP/mg5/mg-sha106.json"
+# no jobs-600106.json — the jobs read fails; unreadable red evidence is pending, never ok
+expect "a red merge_group run whose jobs read fails is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/mg5"
+out="$(env FX="$TMP/mg5" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"jobs read of red merge_group"* ]]; then pass "the mg jobs-read pending row echoes its event and detail"; else fail "mg5 pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+build_fx "$TMP/mg6" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg6/push-sha107.json"
+printf '{"workflow_runs":[{"id":600107,"conclusion":null}]}\n' > "$TMP/mg6/mg-sha107.json"
+expect "an in-flight merge_group run (null conclusion) is NOT YET, never 'no escape'" 2 "no completed push or merge_group run" "$TMP/mg6"
+build_fx "$TMP/mg7" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg7/push-sha108.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/mg7/push-sha109.json"
+printf '{"workflow_runs":[{"id":600108,"conclusion":"success"}]}\n' > "$TMP/mg7/mg-sha108.json"
+printf '{"workflow_runs":[{"id":600109,"conclusion":"failure"}]}\n' > "$TMP/mg7/mg-sha109.json"
+printf '{"jobs":[{"name":"test-scripts (2/7)","conclusion":"failure"}]}' > "$TMP/mg7/jobs-600109.json"
+expect "two queue-merged PRs, first mg-green second mg-red-gated: the escape still fires on the second" 1 "ESCAPE: PR 109" "$TMP/mg7"
+out="$(env FX="$TMP/mg7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 1 && "$out" == *"verified via merge_group"* ]]; then
+  pass "the green mg member counts via_mg beside the escaping second member"
+else fail "mg7 via_mg beside escape: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/b8" 25 40; bash -c 'FX="'"$TMP/b8"'" PATH="'"$TMP/bin"':$PATH" GH_TOKEN=x bash "'"$PROBE"'"' >/dev/null 2>&1
 if grep -q 'created=%3E2026-10-01T00:00:00Z' "$TMP/b8/requests.log" && grep -q 'status=completed' "$TMP/b8/requests.log" && grep -q 'event=pull_request' "$TMP/b8/requests.log"; then
   pass "the runs query is windowed after the merge time, completed and pull_request-only"
@@ -274,12 +338,15 @@ build_fx "$TMP/d2" 20 40
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d2/pr-105.json"
 expect "an open qualifying PR lands in the open bucket (note line, pending==0) and the sweep still PASSes" 0 "qualifying PR(s) still open" "$TMP/d2"
 out="$(env FX="$TMP/d2" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) still open"* && "$out" != *"no completed push run"* ]]; then
+if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) still open"* && "$out" != *"no completed push or merge_group run"* ]]; then
   pass "the open bucket removes the PR from pending entirely (no NOT YET line for open PRs)"
 else fail "open-PR re-scope: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 if grep -q 'head_sha=tms105' "$TMP/d2/requests.log"; then
   fail "an open PR must not issue a push-run read — its merge_commit_sha is a test merge"
 else pass "an open PR issues no push-run read (state rides the existing pulls/N meta read)"; fi
+if grep -q 'event=merge_group' "$TMP/d2/requests.log"; then
+  fail "an open PR must not issue a merge_group read either — its merge_commit_sha is a test merge"
+else pass "an open PR issues no merge_group read (the open bucket's zero-extra-reads contract survives)"; fi
 if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must not trigger a second-page fetch"; else pass "a short page 1 (<100 runs) does not paginate"; fi
 # --- realized-skip evidence arms (the re-instrument) ----------------------------------------------------
 build_fx "$TMP/q1" 25 40; printf '{"resources":{"core":{"remaining":5}}}' > "$TMP/q1/rate_limit.json"
@@ -340,9 +407,10 @@ build_fx "$TMP/d3" 20 40
 # real pending — the merged PR still NOT YETs while the open one only notes.
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d3/pr-105.json"
 printf '{"workflow_runs":[]}\n' > "$TMP/d3/push-sha106.json"
-expect "open bucket does not mask pending: a merged PR with an absent push run still NOT YETs beside an open PR" 2 "no completed push run" "$TMP/d3"
+printf '{"workflow_runs":[]}\n' > "$TMP/d3/mg-sha106.json"   # absent push AND absent merge_group: still pending
+expect "open bucket does not mask pending: a merged PR with an absent push run still NOT YETs beside an open PR" 2 "no completed push or merge_group run" "$TMP/d3"
 out="$(env FX="$TMP/d3" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 2 && "$out" == *"qualifying PR(s) still open"* && "$out" == *"no completed push run"* ]]; then
+if [[ "$rc" == 2 && "$out" == *"qualifying PR(s) still open"* && "$out" == *"no completed push or merge_group run"* ]]; then
   pass "the open note prints beside a real pending NOT YET (open excluded, merged still pends)"
 else fail "d3 open+pending mix: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 # parallel-mode wall row: the SLOW fixture (1 s per fake-gh call) is ~123 serial reads — serial cannot

@@ -23,6 +23,7 @@ import { resolveDebugMode } from "@/server/resolve-debug-mode";
 import { resolveWebEgress } from "@/server/resolve-web-egress";
 import { isDebugModeAvailable, type Role } from "@/lib/feature-flags/server";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { GH_DISCLOSURE } from "@/lib/web-egress-disclosure";
 
 export const dynamic = "force-dynamic";
 
@@ -266,7 +267,7 @@ export default async function ScopeGrantsPage() {
           A compromised or prompt-injected agent could send workspace data to
           external hosts. While enabled, sandboxed commands run without
           platform credentials (agents can't push to git remotes or use
-          stored API keys while this is on).
+          stored API keys while this is on). {GH_DISCLOSURE}
         </p>
       </section>
 

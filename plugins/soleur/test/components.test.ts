@@ -752,7 +752,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     whole: (raw) => flatten(stripLive(raw)),
     rule: (raw) => flatten(stripLive(ruleLine(raw))),
   };
-  const PAIRS_FLOOR = 59; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS_FLOOR = 65; // the table's length at write time; raise it in the same edit as any added row
   const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
     [SD, "sd9", "## 9. Class R: acts needing no delegation"],
     [SD, "sd9", "Class R is not a delegation"],
@@ -813,6 +813,12 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [TRD, "whole", "every decision or task"],
     [OH, "whole", "A read-only check is never a hold line"],
     [OH, "whole", "never `Operator-reserved:` for the read itself"],
+    [OH, "whole", "Say go and I run it: <words> - only you can say go"],
+    [SD, "sd9", "`Operator-authorizes:`"],
+    [SD, "whole", "full remaining grammar-compatible act chain"],
+    [CTO, "ctoOwn", "`Operator-authorizes:`"],
+    [TRD, "whole", "Say go and I run it: <the act> - only you can say go"],
+    [GO, "whole", "`Operator-authorizes:`"],
     [RULES, "rule", "A live read-only check is technical."],
   ];
 

@@ -1653,7 +1653,7 @@ t_pto_3_fast_probe_is_untouched() {
 }
 
 t_pto_4_probe_exit_3_is_not_rewritten() {
-  # A probe that itself reports CANNOT ESTABLISH (exit 3, e.g. ci-draft-light-soak-9728) must not
+  # A probe that itself reports CANNOT ESTABLISH (exit 3, e.g. ci-push-dedupe-soak-9512) must not
   # be logged as a timeout: the TIMED OUT line is keyed on 124 only.
   local root posted=""
   root=$(pto_root 'echo own-verdict; exit 3')
@@ -1732,7 +1732,7 @@ t_pto_7_default_is_300_and_job_ceiling_covers_it() {
 }
 
 # wf_pr_read <workflow file>: 0 when the TOP-LEVEL permissions map grants `pull-requests: read` AND no job declares its own `permissions:` (a job-level
-# block would make the top-level line decorative). Parsed, not grepped: comments, quoting, flow style and key order cannot change the answer. Live probes read /pulls and the mixed issues endpoint through this scope (ci-push-dedupe-soak-9512.sh, ci-draft-light-soak-9728.sh et al.).
+# block would make the top-level line decorative). Parsed, not grepped: comments, quoting, flow style and key order cannot change the answer. Live probes read /pulls and the mixed issues endpoint through this scope (ci-push-dedupe-soak-9512.sh et al.; the #9728 draft-light soak read it too before retirement).
 wf_pr_read() {
   python3 -I -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); sys.exit(0 if (d.get("permissions") or {}).get("pull-requests") == "read" and not any("permissions" in (j or {}) for j in (d.get("jobs") or {}).values()) else 1)' "$1" 2>/dev/null
 }
