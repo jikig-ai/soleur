@@ -31,6 +31,7 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import { createProxyServer } from "@/server/session-proxy";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 import {
   PROXY_REPORT_INTERVAL_MS,
   __resetProxyListenerStatusForTests,
@@ -94,6 +95,10 @@ beforeEach(() => {
   vi.stubEnv("PROXY_TLS_CERT", CERT);
   vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", PEER);
   vi.stubEnv("SOLEUR_PROXY_BIND", "");
+  // #12289: the relay refuses to start without a hello key (the check sits after tls/bind/allowlist, so the
+  // disabled / no_bind / no_allowlist assertions below keep their meaning).
+  vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(64));
+  __resetProxyHelloKeyForTests();
   __resetProxyListenerStatusForTests();
 });
 
@@ -338,6 +343,9 @@ describe("collapsed (docker env-file) PEM reaches a working listener", () => {
   it("collapsed key + cert + client CA: listener binds and a client pinning the collapsed CA completes the handshake", async () => {
     vi.stubEnv("PROXY_TLS_KEY", collapse(KEY));
     vi.stubEnv("PROXY_TLS_CERT", collapse(CERT));
+    // The handshake client connects from loopback: since #12288 a non-allowlisted source is reset
+    // before the handshake, so this case allowlists the address it dials from.
+    vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
     expect(process.env.PROXY_TLS_KEY).not.toContain("\n");
     const { loadProxyTlsClientCa } = await import("@/server/proxy-tls");
     const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));

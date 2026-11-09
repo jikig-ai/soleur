@@ -1,0 +1,38 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "random_bytes.proxy_hello_hmac[0]",
+      "mode": "managed",
+      "type": "random_bytes",
+      "name": "proxy_hello_hmac",
+      "index": 0,
+      "change": {
+        "actions": [
+          "forget"
+        ],
+        "before": {
+          "byte_length": 32
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "doppler_secret.proxy_hello_hmac_key[0]",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "proxy_hello_hmac_key",
+      "index": 0,
+      "change": {
+        "actions": [
+          "forget"
+        ],
+        "before": {
+          "name": "PROXY_HELLO_HMAC_KEY"
+        },
+        "after": null
+      }
+    }
+  ]
+}

@@ -96,6 +96,7 @@ apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	535	measured
 apps/web-platform/scripts/seed-live-verify-user.test.sh	379	measured
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	14387	measured
 apps/web-platform/scripts/supabase-local.test.sh	400	measured
+apps/web-platform/scripts/verify-required-secrets.test.sh	1272	floor
 apps/web-platform/test/parse-gitleaks-allowlists	300	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	12147	measured
 plugins/soleur/scripts/affected-tests.test.sh	1222	floor
