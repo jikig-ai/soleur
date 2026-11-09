@@ -236,16 +236,19 @@ honest about reach — sweep list below) and point the ack test at the combined 
 `tests/scripts/lib/deploy-policy-gate.sh` comment lines ~6-8,
 `tests/scripts/test-deploy-access-token-forget.sh` G11 literal ~line 133.
 
-### Semantics (pending rulings — see `specs/<branch>/decision-challenges.md`)
+### Semantics (ruled — see `specs/<branch>/decision-challenges.md`)
 
-- **Kill-switch reach**: assumed **any-commit** — the token is a veto with no un-skip
-  counterpart; a suppressed apply is recoverable through the `manual-rerun` dispatch, while
-  an apply inside a retirement window is the harm the token exists to prevent.
-- **Ack reach**: assumed **any-commit** — parity with `deploy_policy_gate`; the push's
-  commit set collectively constitutes the merged change the apply operates on.
-- Both rows are `pending - assumed:` technical rulings; the ruling gate batches a CTO spawn
-  after this plan returns. If the ruling lands tip-only for either gate, the fix reduces to
-  documenting the blind spot — the concat shape still ships unchanged (identical to #12404).
+- **Kill-switch reach**: **any-commit** (Ruled by CTO agent, 2026-11-09) — the token is a
+  veto with no un-skip counterpart; a suppressed apply is recoverable through the
+  `manual-rerun` dispatch (verified at workflow :284 + runbook :1039), while an apply
+  inside a retirement window is the harm the token exists to prevent.
+- **Ack reach**: **any-commit** (Ruled by CTO agent, 2026-11-09) — parity with
+  `deploy_policy_gate` (#12404); the push's commit set collectively constitutes the merged
+  change the apply operates on, and a buried ack's same-`head_commit` re-run cannot unwedge.
+- **Sibling workflows**: ruled **ship web-platform only** — file one follow-up issue
+  covering the four sibling readers (`apply-github-infra.yml:88,290`,
+  `apply-sentry-infra.yml:161,802`); the pipeline files it as a Class R act alongside this
+  PR.
 
 ### Test plan
 
