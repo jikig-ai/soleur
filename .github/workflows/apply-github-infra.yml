@@ -86,9 +86,18 @@ jobs:
       - id: kill_switch
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         run: |
           set -euo pipefail
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-github-apply\]($|$'\n') ]]; then
+          # The token can sit below the tip when the merge queue coalesces:
+          # the squash carrying it is in event.commits, not head_commit
+          # (#12501). event.commits caps at 20 entries — a token older than
+          # the window in a giant coalesced push still misses (fail-open for
+          # the skip), a documented residual, not engineered around.
+          POLICY_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
+          if [[ "$POLICY_MSGS" =~ (^|$'\n')\[skip-github-apply\]($|$'\n') ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Kill switch detected in commit message — skipping apply."
           else
@@ -112,7 +121,9 @@ jobs:
     #
     # Exact `==`, never startsWith(): `refs/heads/main-anything` would satisfy a prefix
     # test. The kill-switch conjunct is ANDed on, not replaced — it is inert on
-    # dispatch (head_commit is absent, so HEAD_MSG is empty) and covers only pushes.
+    # dispatch (head_commit and event.commits are both absent, so POLICY_MSGS is
+    # empty) and covers pushes, where any commit in the push — not just the
+    # tip — can supply the token (#12501).
     if: needs.preflight.outputs.skip != 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -288,6 +299,7 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
           # with the ::error:: below instead of aborting silently.
@@ -333,8 +345,16 @@ jobs:
             exit 1
           fi
           destroy_count=$((resource_deletes + nested_deletes))
+          # The ack can sit below the tip when the merge queue coalesces: the
+          # squash carrying the token is in event.commits, not head_commit
+          # (#12501). event.commits caps at 20 entries — an older token still
+          # misses (fail-closed for the ack), a documented residual, not
+          # engineered around.
+          POLICY_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
           ack_destroy=false
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+          if [[ "$POLICY_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then

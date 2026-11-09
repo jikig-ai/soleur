@@ -159,12 +159,22 @@ jobs:
       - id: kill_switch
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         # Anchor `[skip-sentry-apply]` to its own line so it cannot
         # fire from a quoted block, code fence, or trailer that happens
         # to carry the literal substring. Symmetric posture with the
-        # `[ack-destroy]` gate in the apply job.
+        # `[ack-destroy]` gate in the apply job. The token can sit below
+        # the tip when the merge queue coalesces (#12501): the squash
+        # carrying it is in event.commits, not head_commit, so the read
+        # is over HEAD_MSG + every push commit's message. event.commits
+        # caps at 20 entries — a token older than the window in a giant
+        # coalesced push still misses (fail-open for the skip), a
+        # documented residual, not engineered around.
         run: |
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-sentry-apply\]($|$'\n') ]]; then
+          POLICY_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
+          if [[ "$POLICY_MSGS" =~ (^|$'\n')\[skip-sentry-apply\]($|$'\n') ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Kill switch detected in commit message — skipping apply."
           else
@@ -800,6 +810,7 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
           GH_TOKEN: ${{ github.token }}   # scripts/sentry-last-applied-sha.sh (#8451)
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
@@ -970,8 +981,17 @@ jobs:
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
           # `Co-Authored-By:` trailer carrying that literal substring.
+          # The ack can sit below the tip when the merge queue coalesces
+          # (#12501): the squash carrying it is in event.commits, not
+          # head_commit, so the read is over HEAD_MSG + every push commit's
+          # message. event.commits caps at 20 entries — an older token
+          # still misses (fail-closed for the ack), a documented residual,
+          # not engineered around.
+          POLICY_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
           ack_destroy=false
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+          if [[ "$POLICY_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
@@ -1187,8 +1207,10 @@ jobs:
         # the failure issue named it as such — while `terraform state list` needs
         # the R2 backend credentials and `SENTRY_IAC_AUTH_TOKEN` that only this
         # job holds, and the same issue body tells the operator NOT to
-        # `workflow_dispatch` (a dispatch carries no `head_commit.message`, so it
-        # cannot supply an `[ack-destroy]`). So the documented emergency check had
+        # `workflow_dispatch` (a dispatch carries neither `head_commit` nor
+        # `event.commits`, so it cannot supply an `[ack-destroy]` on any
+        # commit's line — #12501 widened the read to every push commit, but
+        # there is still nothing to read on a dispatch). So the documented emergency check had
         # no keyboard route at all. It runs here instead, and the counts go into
         # the run summary so the answer is READ rather than reproduced.
         #
@@ -1299,7 +1321,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es); the .tf declares ${exp_alert} and ${exp_issue}"
           if [[ -n "$missing" || -n "$orphan" ]]; then
-            echo "::error::AC17 FAILED: state and config name different addresses, which after an apply means the apply did not fully land. DECLARED BUT ABSENT FROM STATE: ${missing:-<none>}. IN STATE BUT NOT DECLARED (orphan): ${orphan:-<none>}. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
+            echo "::error::AC17 FAILED: state and config name different addresses, which after an apply means the apply did not fully land. DECLARED BUT ABSENT FROM STATE: ${missing:-<none>}. IN STATE BUT NOT DECLARED (orphan): ${orphan:-<none>}. Re-run THIS job (a re-run replays the original push's head_commit AND event.commits, so an [ack-destroy] on any commit's line still resolves — a workflow_dispatch carries neither and can never supply one); the adoption assert will report how many pairs remain."
             exit 1
           fi
 
@@ -1442,8 +1464,8 @@ jobs:
             printf -- '- Apply `failure`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n'
             printf -- '- Apply `success`, post-apply probe `failure`: the apply is COMPLETE (AC17 says whether state matches the .tf). The probe compared live Sentry against the reference projected from THIS plan, so its findings are live state Terraform does not own (DISABLED, MONITOR UNBIND, LOGICTYPE FLIP, UNMANAGED, and the excluded-type classes FROZEN */UNMANAGED-FROZEN/MANAGED RULE GAINED EXCLUDED TRIGGER/UNRECONCILED HAND-OFF) or evidence the apply did not do what it reported — not a stale reference file.\n\n'
             printf '### Recovery is ROLL-FORWARD (#7650)\n\n'
-            printf -- '1. **Re-run the failed job on THIS run.** It is the only gesture that works, because it is the only one that carries the original `head_commit.message` — and therefore any `[ack-destroy]` the merge needed.\n'
-            printf -- '2. **Do NOT `workflow_dispatch`.** A dispatch has no `head_commit.message`, so it can never supply the ack, and a plan needing one will red again for a different reason.\n'
+            printf -- '1. **Re-run the failed job on THIS run.** It is the gesture that works without a new commit, because it replays the original push — the ack resolves from `head_commit.message` OR any `event.commits` message (#12501), so a token on any commit'"'"'s own line counts (event.commits caps at 20; an ack older than that window in a giant coalesced push still misses). A fresh push carrying the token on a commit'"'"'s own line supplies it the same way.\n'
+            printf -- '2. **Do NOT `workflow_dispatch`.** A dispatch has neither `head_commit` nor `event.commits`, so it can never supply the ack, and a plan needing one will red again for a different reason.\n'
             printf -- '3. **Do NOT revert.** A revert re-adds the `sentry_issue_alert` blocks for addresses that are no longer in state and removes the `sentry_alert` blocks for addresses that now are, which plans as a destroy of live paging rules.\n'
             printf -- '4. **Do NOT restore state from a backup.** The forensics artifacts on this run are for reading, not for writing back; a state restore re-asserts management over addresses whose live objects have already moved.\n\n'
             printf '### If the failure was a Sentry 410\n\n'

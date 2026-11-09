@@ -243,9 +243,11 @@ row g2-wrapper-apply     "g2:wrapper"          'terraform apply -auto-approve -i
 # Only the SECOND import helper regressed: the first stays compliant, so a "first match" checker passes it.
 row g2-wrapper-import-2  "g2:wrapper"          'terraform import "$addr" "$name"' "${WRAP}                terraform import \"\$addr\" \"\$name\""
 row g2-token-plan        "g2:doppler-token-env" '          HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         run: |
           # We capture' '          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         run: |
           # We capture'
 row g2-token-verify-secrets "g2:doppler-token-env" "DOPPLER_TOKEN_CHECK: \${{ secrets.DOPPLER_TOKEN }}" "DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN }}"
