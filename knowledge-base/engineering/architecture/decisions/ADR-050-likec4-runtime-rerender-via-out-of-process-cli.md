@@ -495,7 +495,10 @@ allowed, so there only the env pin and the file-tool guard hold.
   > `commondir` redirect or a tracked `.gitattributes`), `merge.*.driver`, repo-config remote, proxy and TLS settings
   > (`url.<x>.insteadOf` is followed, and the key-auth arm then dials the rewritten host with its host-key pin options
   > still on the command), and the consumer's own auth variable (the installation token in the legacy arm; in the
-  > key-auth arm a helper that runs can read the 0600 transport key file during the push). `--attr-source` was measured
+  > key-auth arm a helper that runs can read the 0600 transport key file during the push), and a gitfile `.git` the agent
+  > wrote that names another repository's gitdir: `GIT_WORK_TREE` pins the working tree, not the git directory, so the
+  > auto-commit lands in the foreign repository (measured: its history moved; cross-tenant WRITE, a follow-up shape check
+  > is the candidate closure, not done here). `--attr-source` was measured
   > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). The structural closure remains the
   > isolated-`GIT_DIR` path, which is operator-held and unchanged. Census-only host-side callers (not routed through the
   > helper): `workspace.ts`, `git-config-atomic.ts`, `worktree-config-seed.ts`, `push-branch.ts` (legacy branch),

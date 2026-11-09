@@ -519,6 +519,26 @@ describe("RESIDUAL rows: measured open items, not controls", () => {
   });
 });
 
+describe("RESIDUAL: a gitfile .git pointing at a foreign gitdir (not closed by GIT_WORK_TREE)", () => {
+  // Measured open item, not a control. `GIT_WORK_TREE=<workspace>` pins the working tree, not the git directory: a workspace
+  // `.git` FILE ("gitdir: <path>") the agent wrote redirects the object store, refs and config to another repository, and the
+  // consumer then commits the workspace's files INTO that repository. The shape check in git-worktree-validity.ts is the
+  // candidate structural answer (follow-up); until then this row pins today's behaviour.
+  it("RESIDUAL session-sync syncPush: the auto-commit lands in the foreign repository the gitfile names", async () => {
+    const { ws } = newWorkspace(w);
+    const foreign = newWorkspace(w, "foreign-tenant");
+    const before = w.git(foreign.ws, "rev-list", "--count", "HEAD");
+    rmSync(join(ws, ".git"), { recursive: true, force: true });
+    writeFileSync(join(ws, ".git"), `gitdir: ${join(foreign.ws, ".git")}\n`);
+    writeFileSync(join(ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
+    await syncPush(USER, ws, {} as never, WS_ID).catch(() => {});
+    residualRows++;
+    const after = w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--count", "HEAD");
+    // pin: the foreign repository's history moved
+    expect(Number(after)).toBeGreaterThan(Number(before));
+  });
+});
+
 describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDUAL: the dial still goes to the rewritten host)", () => {
   // A fake `ssh` first on PATH records its argv and fails like a refused handshake. The helper's scrubbed env keeps PATH.
   function fakeSsh(): { bin: string; argvFile: string } {
@@ -644,7 +664,7 @@ describe("floor", () => {
   it("the battery executed one canary-checked run per closable cell (derived, not a literal)", () => {
     const expected = DRIVERS.reduce((n, d) => n + d.closable.length, 0);
     expect(canaryCheckedRuns).toBe(expected);
-    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 3; // + merge-driver/token, insteadOf, rewritten-host
+    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 4; // + merge-driver/token, insteadOf, rewritten-host, gitfile
     expect(residualRows).toBe(residualExpected);
     expect(PLANTERS.length).toBeGreaterThan(0);
   });
