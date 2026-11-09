@@ -2040,7 +2040,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=328   # recomputed (-1 at #12480: the retired ci-draft-light-soak-9728 suite's tr shim triple leaves with the deleted file, undoing its half of the +2 at #12332; the ci-push-dedupe-soak-9512 half stays) (+1 at #12007: host-state.test.sh names the feeder as source text, one text-only exempt row; +2 at #12332: ci.yml gained a pipe into the CR/NUL translator, one new producer file for each of the two soak suites; the 9728 pair gets an exempt row mirroring the 9512 one)
+PJ_TRIPLES=326   # recomputed (-2 at #9729: the retired preactivation suite's two sed-pipe triples leave with the deleted file) (was 328; (-1 at #12480: the retired ci-draft-light-soak-9728 suite's tr shim triple leaves with the deleted file, undoing its half of the +2 at #12332; the ci-push-dedupe-soak-9512 half stays) (+1 at #12007: host-state.test.sh names the feeder as source text, one text-only exempt row; +2 at #12332: ci.yml gained a pipe into the CR/NUL translator, one new producer file for each of the two soak suites; the 9728 pair gets an exempt row mirroring the 9512 one)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
