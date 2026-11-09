@@ -14,7 +14,7 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Two-branch gated design, not unconditional flip: lever-1 eval (issue comment 6717099123, 12h window) measured zero cancelled merge_group builds and recommended decline at current traffic. Plan runs ~28-day re-instrumented decision gate (FLIP iff cancelled ≥ 2 OR merge_group demand share ≥ 40%); decline-with-record expected, flip contingent (assumed thresholds → decision-challenge rows T1/T2).
 - Four parity surfaces + fifth mirror: `.github/workflows/merge-queue-stall-check.yml:172` `MAX_ENTRIES_TO_BUILD` is an S8-asserted mirror that must move under flip (narrows stall coverage to `position <= 1`).
 - Guard-2 `{1,2}` sanctioned pin added in BOTH branches (mirrors `max_entries_to_merge ∈ {1,3}` #11678 precedent), `T-mq-1.m14` + must-PASS rows + `## Guard Contract`.
-- Re-arm via dual-arm followthrough probe `scripts/followthroughs/mq-lever-e-verdict-12269.sh`: 2-arm counts cancelled merge_group runs (≥1 → exit 5); 1-arm compares tracker p50 post-flip; gh failure → exit 3. Dated `earliest=` directive. #12269 stays OPEN as tracker (`Ref`, never `Closes`).
+- Re-arm via dual-arm followthrough probe `scripts/followthroughs/mq-lever-e-verdict-12269.sh`: 2-arm counts cancelled merge_group runs (≥2 → exit 5); 1-arm compares tracker p50 post-flip; gh failure → exit 3. Dated `earliest=` directive. #12269 stays OPEN as tracker (`Ref`, never `Closes`).
 - All deepen-plan halt gates passed (§4.6 User-Brand none, §4.7 Observability, §4.8 PAT-clean, §4.10 Encryption, §4.11 Guard Contract lint, §4.12 Scope Check).
 
 ### Components Invoked
@@ -105,3 +105,4 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Fix-round verification: security-seat found a NEW P1 (sed|awk ordering) — resolved in 195da34; code-quality found epilogue-registration P1 — resolved in c1e1c80.
 - Disclosure: pattern+test-design fix-round seat (d7afe284) did not return within 30 min — treated as wedged; its scope (90543a00..5ffdcb85) was superseded by c1e1c80+195da34 and its lenses overlapped the two verification seats that did return. Suites re-verified green post-fix: probe 25/25, guard 74/0, stall-check 166/0.
 - PANEL_SHA: 90543a00 (main panel); fix range reviewed through 195da34.
+- QA: Test Scenarios are integration-level Given/When/Then prose (no executable Browser:/API verify: steps) — covered by unit test suite (probe 25/25, guard 74/0, stall-check 166/0). Skipping automated QA per soleur:qa Step 1.

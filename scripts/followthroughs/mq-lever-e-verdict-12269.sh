@@ -130,8 +130,10 @@ fi
 # ---- value==1: post-flip soak ----
 
 # FLIP_MERGED: explicit env override, else anchored -G pickaxe — fires on any
-# value edit on the assignment line; comment-only edits cannot match (comments
-# start with #) and a value-only revert moves it correctly.
+# value edit on the assignment line; # comment lines cannot match (the anchor
+# requires the token at column-0). Caveat: a `/* */`-interior assignment line
+# WOULD match — the tf currently has none; a comment-only edit there would move
+# FLIP_MERGED forward into repoll (conservative direction).
 FLIP_MERGED="${SOLEUR_FT_FLIP_MERGED:-}"
 if [ -z "$FLIP_MERGED" ]; then
   FLIP_MERGED="$(cd "$REPO_ROOT" && git log -1 --first-parent --format=%cI \
@@ -162,8 +164,8 @@ body="$(gh issue view "$TRACKER" --repo jikig-ai/soleur --json body --jq .body 2
 # Postdate check: the body's `Report refreshed:` must postdate the flip merge —
 # the row carries a rolling last-30-green sample, so a fresh report after the
 # flip is post-flip-dominated; a stale report is a pre-flip sample -> repoll.
-# The charset keeps Z and . so the emitted %FT%TZ parses as UTC (a zone-less
-# stamp would parse in host-local time and shift the gate by hours).
+# The charset keeps Z and . so the emitted %FT%TZ parses cleanly; a zone-less
+# or absent Z degrades to day granularity, never to a wrong verdict.
 refreshed="$(printf '%s\n' "$body" | grep -oE 'Report refreshed: [0-9T:.+Z-]+' | head -1 | grep -oE '[0-9]{4}[^ ]+$' || true)"
 [ -n "$refreshed" ] || repoll 'report-refreshed-missing'
 ref_s="$(date -u -d "$refreshed" +%s 2>/dev/null)" || repoll 'report-refreshed-unparseable'
