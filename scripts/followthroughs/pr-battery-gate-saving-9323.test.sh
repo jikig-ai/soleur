@@ -176,6 +176,12 @@ build_fx "$TMP/e5" 25 40 0 0 114; printf '{"jobs":[]}' > "$TMP/e5/jobs-500014.js
                                     expect "a red push run with an empty jobs read is NOT YET, never ok" 2 "no completed push run" "$TMP/e5"
 build_fx "$TMP/e6" 25 40 0 0 116; printf '{"workflow_runs":[{"conclusion":"failure"}]}\n' > "$TMP/e6/push-sha116.json"
                                     expect "a red push run with no run id is NOT YET, never ok" 2 "no completed push run" "$TMP/e6"
+build_fx "$TMP/e7" 25 40 0 0 117; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":"cancelled"}]}' > "$TMP/e7/jobs-500017.json"
+                                    expect "a red push run whose gated job is cancelled (inconclusive) is NOT YET, never ok and never an escape" 2 "no completed push run" "$TMP/e7"
+out="$(env FX="$TMP/e7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"cancelled/inconclusive"* ]]; then pass "the inconclusive-gated pending row echoes its detail"; else fail "inconclusive-gated pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+build_fx "$TMP/e8" 25 40 0 0 118; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":null}]}' > "$TMP/e8/jobs-500018.json"
+                                    expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push run" "$TMP/e8"
 build_fx "$TMP/b8" 25 40; bash -c 'FX="'"$TMP/b8"'" PATH="'"$TMP/bin"':$PATH" GH_TOKEN=x bash "'"$PROBE"'"' >/dev/null 2>&1
 if grep -q 'created=%3E2026-10-01T00:00:00Z' "$TMP/b8/requests.log" && grep -q 'status=completed' "$TMP/b8/requests.log" && grep -q 'event=pull_request' "$TMP/b8/requests.log"; then
   pass "the runs query is windowed after the merge time, completed and pull_request-only"
