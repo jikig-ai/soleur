@@ -951,6 +951,14 @@ row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the e
   check_eq "O-LOCK env re-lock + SWITCH=on: skip_legs" "$O_SKIP" ""
   check_eq "O-LOCK env re-lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
   check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_FIVE"
+  # Non-`1` values must NOT lock: the O-LOCK-READ compare is exact-`1`. `on` is the highest-value member
+  # (the plausible "same as the switch" fat-finger); `0` and `true` cover the numeric/string truthy spellings.
+  for v in 0 true on; do
+    drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=$v"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: active" "$O_ACTIVE" "true"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: notice locked" "$N_LOCKED" "false"
+  done
   drive accept "$d" "UNSET:SWITCH"
   check_eq "O-ARM dark (switch unset): oracle_only" "$O_OO" "false"
   check_eq "O-ARM dark (switch unset): would_skip" "$N_WOULD" "none"
@@ -1057,6 +1065,9 @@ echo "  control: $((passes)) checks green against the pristine and the lock-neut
 # ── Static guards: the lock literal, the lock copy, and the driver's tool surface ──
 _lockn=$(grep -c -E "$LOCK_RE" "$PRISTINE")
 check_eq "O-LOCK the activation lock is ABSENT (removed by the activation PR; a re-lock is a driver edit, not an accident)" "$_lockn" "0"
+# Pin intent (not redundant with _lockn): `_lockn` counts only LOCK_RE matches, so it cannot see a recipe that
+# over-deletes or drifts in operand — this whole-file compare reds that drift while `_lockn` stays green.
+# $UNLOCKED is also the row_switch control operand and the mutation base for the $UNLOCKED-targeted mutants.
 check_eq "O-LOCK the lock-neutralization recipe is now a no-op on the unlocked driver" \
   "$(cmp -s "$PRISTINE" "$UNLOCKED"; echo $?)" "0"
 check_eq "O-LOCK the neutralized copy has no lock line" "$(grep -c -E '^readonly ORACLE_LANE_LOCKED=' "$UNLOCKED")" "0"
@@ -1549,8 +1560,10 @@ mutate "O-SWITCH the exact-on compare becomes non-empty"        "$UNLOCKED"  's|
 mutate "O-SWITCH any non-empty switch arms"                     "$UNLOCKED"  's|\[ "\${SWITCH:-}" = on \]|[ -n "${SWITCH:-}" ]|' row_switch
 # a dead arm is verdict-identical on the LOCKED copy (active stays false by construction), so this one mutates the
 # lock-neutralized driver and is read by the unlocked rows that expect active=true.
-mutate "O-LOCK the arm ignores the lock"                        "$UNLOCKED"  "$(kill_guard O-ARM)"           row_switch
+mutate "O-ARM the whole arm line is deleted (arm-presence, not lock-conjunct)" "$UNLOCKED" "$(kill_guard O-ARM)" row_switch
+mutate "O-LOCK the arm's lock conjunct is dropped"              "$PRISTINE"  's| && \[ "\$locked" = false \]||' row_lock
 mutate "O-LOCK the lock is not read"                            "$PRISTINE"  "$(kill_guard O-LOCK-READ)"     row_lock
+mutate "O-LOCK the lock-read is loosened to non-empty"          "$PRISTINE"  's|\[ "\${ORACLE_LANE_LOCKED:-}" = 1 \]|[ -n "${ORACLE_LANE_LOCKED:-}" ]|' row_lock
 mutate "O-DEFAULTS the defaults are not written first"          "$PRISTINE"  "$(kill_guard O-DEFAULTS)"      row_defaults_first
 mutate "O-EXIT the always-exit-0 trap is removed"               "$PRISTINE"  "$(kill_guard ALWAYS-EXIT-0)"   row_diff_error
 mutate "O-DIAGRAMS the diagrams carve-out flag is removed"      "$PRISTINE"  "$(kill_guard O-DIAGRAMS-FLAG)" row_oracle_surface
@@ -1573,7 +1586,7 @@ fi
 # ASSERTION FLOOR, reported with printf + exit rather than through the helpers it backstops
 # (ADR-193). DERIVED FROM A MEASURED GREEN RUN, not guessed: re-derive after adding a row —
 #   bash scripts/ci-oracle-lane.test.sh | tail -1
-MIN_ROWS=400
+MIN_ROWS=5022
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2

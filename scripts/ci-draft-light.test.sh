@@ -96,7 +96,7 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # `needs:` and the skip conjunct appended AFTER every earlier term — the same four-term shape as the S4 PR term
 # (event disjunct, active, head_sha nonempty, head bound to either event's sha); `shard-totality-mutations` carries
 # the same four-term conjunct MINUS the skip_legs membership — it skips on event+active+bound-head alone
-# (active, not oracle_only: oracle_only is true during the locked dark phase while active stays false).
+# (active, not oracle_only: a non-`on` switch or an `ORACLE_LANE_LOCKED=1` env re-lock leaves `oracle_only` true while `active` stays false).
 OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
 SHARD_GATED="shard-totality-mutations"
 OR_T_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
