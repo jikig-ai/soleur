@@ -26,6 +26,7 @@ Envelope: <path>[#<title>]
   Gate: pr-merged <N>
   Gate: no-inflight-run <workflow-file>
 - Hold: Operator-reserved: <a decision only the operator may make, in their words>
+- Hold: Operator-authorizes: <an act the agent can run once the operator types a go>
 - Hold: <the operator's words> [Text name (added by the plan's author): <key>]
   Gate: web-acceptance <key> <64 lowercase hex>
 ```
@@ -39,6 +40,21 @@ bold, quotes, a full-width colon and invisible characters are ignored (`Operator
 evaluator prints `Reserved for you: <words> - only you can clear this`, does not probe its gates, and exits 2. It is cleared
 only by the operator saying so, and the CTO then removes or rewrites the line. Words in the middle of a hold do not reserve
 it.
+
+**`Operator-authorizes:` is the second prefix of the same family**, for an act the agent can run once the operator
+authorizes it: it is outside the delegation grammar and the Excluded list, the agent can name a concrete command path
+for it, and it is lawful under the section-9 hard limits of standing-delegation.md. A hold whose words BEGIN with
+`Operator-authorizes:` always STANDS under the same spelling rules and the same guarantee: the evaluator prints
+`Say go and I run it: <words> - only you can say go`, does not probe its gates, and exits 2. It is cleared only by the
+operator's typed go in the session naming the exact command (hr-menu-option-ack-not-prod-write-auth — a menu click or a
+bare go is not a go, and a key-rotation workflow is never run without a typed go naming the exact command); the agent
+then runs the act and the line is removed or rewritten. The split, stated identically everywhere it applies: a hold
+that reserves a founder DECISION, or one needing the operator's hands (the closed physical list — console-only,
+credential entry, payment, 2FA/CAPTCHA, signing a record, closing a tracker, arming a pull request on an epic's behalf,
+the webhook-secret change, credential minting), is `Operator-reserved:` and the operator executes; a hold on an act the
+agent can run after authorization is `Operator-authorizes:` and the agent executes after the go. A never-authorizable
+act (force-push to main, bypassing required checks, editing the delegation, a money/scope/legal/brand decision) is
+neither and `Operator-authorizes:` never covers it.
 
 The grammar has three kinds, `pr-merged`, `no-inflight-run` and `web-acceptance`. `command` and `run-green` are deferred: the
 first real consumer re-adds them, and only by CTO ruling. A `Gate:` line of any other kind is an unknown kind, and the hold
@@ -160,7 +176,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan 
 |---|---|---|
 | 0 | Every hold is discharged, or none is recorded (an absent or empty section is a no-op) | Continue to Phase 6.45 and the arming in Phase 6.5 |
 | 1 | At least one hold STANDS (a gate is false, a web acceptance is undecided, declined or changes-requested, or the delegation is invalid) | Stop and name that condition, in one plain sentence to the operator; for a web acceptance, follow "What ship does with each" in section 1 |
-| 2 | A hold could not be evaluated or is reserved to the operator (unknown gate kind, unreadable probe, unreadable delegation, no `Envelope:` line, two `Delegation:` lines, a hold outside a readable section, a section that parses to zero holds, no time-limit tool, an `Operator-reserved:` hold, a web acceptance mixed with other kinds and no delegation, a web acceptance that could not be asked) | It STANDS. Say so in one plain sentence; never retry it into a pass |
+| 2 | A hold could not be evaluated or is reserved to the operator (unknown gate kind, unreadable probe, unreadable delegation, no `Envelope:` line, two `Delegation:` lines, a hold outside a readable section, a section that parses to zero holds, no time-limit tool, an `Operator-reserved:` or `Operator-authorizes:` hold, a web acceptance mixed with other kinds and no delegation, a web acceptance that could not be asked) | It STANDS. Say so in one plain sentence; never retry it into a pass |
 | 3 | No `Delegation:` line is recorded and no non-reserved hold carries a `web-acceptance` gate: legacy prose holds | Evaluate by hand per section 3 |
 | any other status (127 script not found, 124 timed out, 137 killed) | The check did not run | Treat it as 2: the hold STANDS and was not checked. Say so; never read it as a no-op |
 
@@ -206,9 +222,10 @@ the turn on "Paused: awaiting merge approval": the Stop hook can reject it, and 
 merge. Record the instruction as a hold under `## Operator Holds` in the plan (section 1), then, when this section is entered
 (Phase 6 step 5, before arming; the merge itself still waits for the required checks):
 
-1. **What this does not cover.** A hold that begins `Operator-reserved:` (section 1), or that names another person's approval,
-   stands, and the question below never discharges it. A sibling change or a state change is judged by its own condition
-   (section 3 above), not by this question.
+1. **What this does not cover.** A hold that begins `Operator-reserved:` or `Operator-authorizes:` (section 1), or
+   that names another person's approval, stands, and the question below never discharges it — an `Operator-authorizes:`
+   hold waits on the operator's typed go naming the exact command, not on a standing approval. A sibling change or a
+   state change is judged by its own condition (section 3 above), not by this question.
 2. **Ask.** Put the epic-start question of
    [standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 6 to
    the person as a real question (AskUserQuestion, options labelled `Yes ...` and `No ...`), once per delegation. Its Scope
@@ -285,7 +302,8 @@ exists because prose re-evaluation by the model is the failure mode a hold guard
 ## 5. What the evaluator prints
 
 When a delegation was checked, its verdict line comes first (`delegation: valid reason=ok`, or the failing state and
-reason). Then one plain line per hold (`Done:`, `Still waiting:`, `Needs a person:` or `Could not check:`, each with the
+reason). Then one plain line per hold (`Done:`, `Still waiting:`, `Needs a person:`, `Reserved for you:`,
+`Say go and I run it:` or `Could not check:`, each with the
 hold's own words and a plain reason) and a final machine line `holds: N discharged: M standing: K`. The human lines carry no
 jargon; the evaluator's suite checks them against a jargon denylist (the two machine lines are excluded). Control characters,
 bidi marks and line separators in a hold's words are stripped before they are printed.
