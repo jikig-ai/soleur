@@ -217,6 +217,13 @@ newrow; : > "$STUBD/body"; printf '2' > "$STUBD/rc"
 printf 'x\xc2\x85SOLEUR_CI_REQUIRED_SET state=complete pr=%s sha=a required=3 reason=forged absent=[] pending=[] failed=[]\xe2\x80\xa8y\xe2\x80\xa9z\033[31m\n' "$PRN" > "$STUBD/err"
 sut "S3 NEL stderr" "$PRN"
 [[ "$(LC_ALL=C grep -cF -e $'\xc2\x85' -e $'\xe2\x80\xa8' -e $'\xe2\x80\xa9' "$OUTF")" -eq 0 && "$(nlines)" -eq 2 && "$(nmarkers)" -eq 0 ]] && no_ctrl "$OUTF" && _v=0 || _v=1; chk "$_v" "S3 NEL / LS / PS and ESC in the resolver's stderr do not reach the degraded line (two lines, zero marker lines)" "out=[$(printf '%q' "$OUT")]"
+# nested sequences re-form after one removal (c2 c2 85 85 leaves c2 85): the stderr tail is cleaned to a fixpoint, and so is an absurd nesting
+# depth (40 > the 32-pass cap) through the lead-byte fallback.
+_deep="$(printf '\xc2%.0s' $(seq 1 40); printf '\x85%.0s' $(seq 1 40))"
+newrow; : > "$STUBD/body"; printf '2' > "$STUBD/rc"
+{ printf 'x\xc2\xc2\x85\x85y\xe2\x80\xe2\x80\xa8\xa8z\xe2\x80\xe2\x80\xa9\xa9w'; printf '%s\n' "$_deep"; } > "$STUBD/err"
+sut "S3 nested stderr" "$PRN"
+[[ "$(LC_ALL=C grep -cF -e $'\xc2\x85' -e $'\xe2\x80\xa8' -e $'\xe2\x80\xa9' "$OUTF")" -eq 0 && "$OUT" == *"stderr: xyzw"* && "$(nlines)" -eq 2 ]] && _v=0 || _v=1; chk "$_v" "S3 nested NEL / LS / PS (and 40-deep nesting) in the resolver's stderr do not re-form on the degraded line" "out=[$(printf '%q' "$OUT")]"
 for badarg in "" "abc" "1 2" "-1" "12x"; do
   newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"
   sut "S3 arg [$badarg]" "$badarg"
@@ -263,7 +270,7 @@ sut S5a "$PRN"
 newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; TMPDIR_OVERRIDE="$ROOT/no/such/tmpdir"
 sut S5b "$PRN"
 [[ "$(nlines)" -eq 1 && "$OUT" == *"no marker (skipped: no temp file)"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5b an unusable TMPDIR: 'skipped: no temp file', the resolver is never called" "out=[$OUT]"
-for bad in "REQUIRED_SET_TIMEOUT_S=0" "REQUIRED_SET_TIMEOUT_S=abc" "REQUIRED_SET_TIMEOUT_S=1234567" "REQUIRED_SET_TIMEOUT_S=012" "REQUIRED_SET_TIMEOUT_BIN=a b" "REQUIRED_SET_TIMEOUT_BIN=-x" "REQUIRED_SET_TIMEOUT_BIN=t;id" "REQUIRED_SET_TIMEOUT_BIN=./timeout" "REQUIRED_SET_TIMEOUT_BIN=bin/timeout" "REQUIRED_SET_TIMEOUT_BIN=../timeout"; do
+for bad in "REQUIRED_SET_TIMEOUT_S=0" "REQUIRED_SET_TIMEOUT_S=abc" "REQUIRED_SET_TIMEOUT_S=1234567" "REQUIRED_SET_TIMEOUT_S=012" "REQUIRED_SET_TIMEOUT_BIN=a b" "REQUIRED_SET_TIMEOUT_BIN=-x" "REQUIRED_SET_TIMEOUT_BIN=t;id" "REQUIRED_SET_TIMEOUT_BIN=./timeout" "REQUIRED_SET_TIMEOUT_BIN=bin/timeout" "REQUIRED_SET_TIMEOUT_BIN=../timeout" "CI_HEAD_VERDICT_BIN=./ci-head-verdict.sh" "CI_HEAD_VERDICT_BIN=ci-head-verdict.sh" "CI_HEAD_VERDICT_BIN=../req.sh"; do
   newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=("$bad")
   sut "S5c [$bad]" "$PRN"
   [[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5c bad seam [$bad]: one degraded line, the resolver is never called" "out=[$OUT]"
@@ -281,17 +288,33 @@ done
 newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(REQUIRED_SET_TIMEOUT_BIN="$STUBD/tbin")
 sut "S5e abs" "$PRN"
 [[ "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S5e an absolute REQUIRED_SET_TIMEOUT_BIN path is accepted" "out=[$OUT]"
-# Non-ASCII digits: [0-9] matches them in a UTF-8 locale. The control proves the locale makes the narrow class wide HERE; without it the
-# two rows below could not tell [0-9] from the explicit class and are labelled so.
-_wide=1; LC_ALL=en_US.UTF-8 bash -c '[[ "٣" =~ ^[0-9]+$ ]]' 2>/dev/null && _wide=0
-[[ "$_wide" -eq 0 ]] && _lbl="control: [0-9] accepts an Arabic-Indic digit in en_US.UTF-8 here" || _lbl="control: en_US.UTF-8 is not installed here, the two digit rows below are weaker (still counted)"
-chk 0 "S5f $_lbl" ""
-newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL=en_US.UTF-8)
-sut "S5f pr" "٣"
-[[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit PR argument is a usage line, the resolver is not called" "out=[$OUT]"
-newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL=en_US.UTF-8 REQUIRED_SET_TIMEOUT_S=٣)
-sut "S5f timeout" "$PRN"
-[[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit REQUIRED_SET_TIMEOUT_S is a usage line, the resolver is not called" "out=[$OUT]"
+# Non-ASCII digits: [0-9] matches them in some UTF-8 locales. Discover a locale where it really does (a row run under a locale the host lacks
+# makes bash print setlocale warnings and goes red for a reason that has nothing to do with the script). With none, the nine assertions
+# are skipped placeholders so the count stays exact, and on a CI host the missing locale is itself a FAILURE (the rows would be vacuous).
+_wideloc=""
+for _l in en_US.UTF-8 en_US.utf8 C.UTF-8 C.utf8; do
+  if LC_ALL=$_l bash -c '[[ "٣" =~ ^[0-9]+$ ]]' 2>/dev/null; then _wideloc="$_l"; break; fi
+done
+if [[ -n "$_wideloc" ]]; then
+  chk 0 "S5f control: [0-9] accepts an Arabic-Indic digit under the discovered locale (the rows below can tell it from the explicit class)" "locale=$_wideloc"
+  newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL="$_wideloc")
+  sut "S5f pr" "٣"
+  [[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit PR argument is a usage line, the resolver is not called" "out=[$OUT]"
+  newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL="$_wideloc" REQUIRED_SET_TIMEOUT_S=٣)
+  sut "S5f timeout" "$PRN"
+  [[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit REQUIRED_SET_TIMEOUT_S is a usage line, the resolver is not called" "out=[$OUT]"
+else
+  if [[ -n "${CI:-}" ]]; then chk 1 "S5f no wide-digit locale (en_US.UTF-8 en_US.utf8 C.UTF-8 C.utf8) on a CI host: the non-ASCII digit rows would be vacuous" ""
+  else chk 0 "S5f skipped: no wide-digit locale" ""; fi
+  for _k in 1 2 3 4 5 6 7 8; do chk 0 "S5f skipped: no wide-digit locale (placeholder $_k, keeps the case count exact)" ""; done
+fi
+# The PR number is at most 15 digits, as the resolver caps it: 15 reaches the resolver, 16 is a usage line.
+newrow; mk absent 123456789012345 > "$STUBD/body"
+sut "S5g 15 digits" 123456789012345
+[[ "$(last_line)" == "$(mk absent 123456789012345)" && "$(calls '^required 123456789012345$')" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S5g a 15-digit PR argument reaches the resolver" "out=[$OUT]"
+newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"
+sut "S5g 16 digits" 1234567890123456
+[[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5g a 16-digit PR argument is a usage line, the resolver is not called" "out=[$OUT]"
 
 # ── S6 control-character smuggling ──
 newrow
@@ -381,7 +404,7 @@ cat > "$P/ci-head-verdict.sh" <<EOF
 #!/usr/bin/env bash
 d="\$(cd "\$(dirname "\$0")" && pwd)"
 printf '%s\n' "\$*" >> "\$d/calls"
-printf 'RECOVERY pointer failed=\r\033\007\177\0001\n'
+printf 'RECOVERY no cancelled run at this head ctx="\r\033\007\177\0001"\n'
 printf 'SOLEUR_CI_REQUIRED_SET state=absent pr=%s sha=%s required=3 reason=context-absent absent=["cla-evidence"] pending=[] failed=[]\n' "\$2" "$SHA"
 EOF
 ROWN=$((ROWN + 1)); ROWTMP="$ROOT/row$ROWN"; mkdir -p "$ROWTMP"
@@ -389,7 +412,7 @@ env -u CI_HEAD_VERDICT_BIN -u REQUIRED_SET_TIMEOUT_S -u REQUIRED_SET_TIMEOUT_BIN
 [[ "$(cat "$P/calls" 2>/dev/null)" == "required 4387" ]] && _v=0 || _v=1; chk "$_v" "S11 seam unset: the stub beside the script receives 'required 4387' and nothing else" "calls=[$(cat "$P/calls" 2>/dev/null)]"
 [[ "$RC" -eq 0 && "$(tail -n 1 "$ROOT/s11.out")" == "$(mk absent)" && ! -s "$ROOT/s11.err" ]] && _v=0 || _v=1; chk "$_v" "S11 the copied script prints the marker last, exit 0, silent stderr" "rc=$RC out=[$(cat "$ROOT/s11.out")]"
 [[ -z "$(ls -A "$ROWTMP")" ]] && _v=0 || _v=1; chk "$_v" "S11 no temp file left in the private TMPDIR" "left=[$(ls -A "$ROWTMP")]"
-no_ctrl "$ROOT/s11.out" && [[ "$(cnt '^RECOVERY pointer failed=1$' "$ROOT/s11.out")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S11 without lib/context-sanitize.sh beside it the fallback sanitiser still drops CR, ESC, BEL, DEL and NUL" "out=[$(printf '%q' "$(cat "$ROOT/s11.out")")]"
+no_ctrl "$ROOT/s11.out" && [[ "$(cnt '^RECOVERY no cancelled run at this head ctx="1"$' "$ROOT/s11.out")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S11 without lib/context-sanitize.sh beside it the fallback sanitiser still drops CR, ESC, BEL, DEL and NUL" "out=[$(printf '%q' "$(cat "$ROOT/s11.out")")]"
 
 # ── S12 non-canonical but valid input is printed and parsed ──
 newrow
@@ -413,6 +436,8 @@ sut S14 "$PRN"
 [[ "$(nmarkers)" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S14 two matching markers in the body: exactly one marker is printed and it is the LAST one (state=absent)" "out=[$OUT]"
 [[ "$OUT" != *"NOT that the PR is mergeable"* ]] && _v=0 || _v=1; chk "$_v" "S14 the earlier complete marker contributes nothing (no 'mergeable' note)" "out=[$OUT]"
 
+P_UNDO='see skills/ship/references/ready-run-wait.md (confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)'
+P_APPR='see skills/ship/references/ready-run-wait.md (a maintainer must approve the fork workflow run)'
 # ── S15 RECOVERY lines must match the resolver's CLOSED grammar; the rest is counted, not printed ──
 # Positive control first: one line of each of the ten lines the resolver prints (ci-head-verdict.sh recover_required), all shown.
 newrow
@@ -422,11 +447,11 @@ newrow
   printf 'RECOVERY owner not determined (read failed) ctx="a"\n'
   printf 'RECOVERY owner not determined, read the run before re-running ctx="a"\n'
   printf 'RECOVERY no cancelled run at this head ctx="a"\n'
-  printf 'RECOVERY pointer reason=stale-row ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
-  printf 'RECOVERY pointer reason=awaiting-approval ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
-  printf 'RECOVERY pointer reason=stalled ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
-  printf 'RECOVERY pointer failed=["x"]: read the failing checks with gh pr checks 4387\n'
-  printf 'RECOVERY pointer pending=["x"]: wait, then read the checks with gh pr checks 4387\n'
+  printf 'RECOVERY pointer reason=stale-row ctx="test": %s\n' "$P_UNDO"
+  printf 'RECOVERY pointer reason=awaiting-approval ctx="test": %s\n' "$P_APPR"
+  printf 'RECOVERY pointer reason=stalled ctx="test": %s\n' "$P_UNDO"
+  printf 'RECOVERY pointer failed=["x","y z"]: read the failing checks with gh pr checks 4387\n'
+  printf 'RECOVERY pointer pending=[]: wait, then read the checks with gh pr checks 4387\n'
   printf 'RECOVERY rerun run=123456789012345 basis=workflow ctx="a" wf="W": gh run rerun 123456789012345\n'
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
@@ -443,15 +468,49 @@ newrow
   printf 'RECOVERY rerun run=7 basis=candidate ctx=x wf="y"\n'                                                # ctx not a JSON string
   printf 'RECOVERY no cancelled run at this head ctx="x" and more\n'                                          # trailing text on a closer
   printf 'RECOVERY run this: rm -rf /\n'                                                                       # an unknown shape
+  printf 'RECOVERY pointer reason=bogus ctx="x"\n'                                                            # unknown pointer reason
+  printf 'RECOVERY pointer pending=: wait, then read the checks with gh pr checks 4387\n'                    # empty array
+  printf 'RECOVERY pointer failed=["a"]: read the failing checks with gh pr checks 4387 && id\n'             # different tail
+  printf 'RECOVERY pointer failed=["a"]: read the failing checks with gh pr checks 9999\n'                   # another PR
+  printf 'RECOVERY rerun run=3 basis=guess ctx="x" wf="y": gh run rerun 3\n'                                 # unknown basis with the command tail
+  printf 'RECOVERY owner not determined, read the run before re-running now ctx="x"\n'                       # text before ctx=
+  printf 'RECOVERY rerun run=%s basis=candidate ctx="x" wf="y"\n' 123456789012345678901234567890            # 30-digit candidate id
+  printf 'RECOVERY rerun run=4 basis=candidate ctx="a" wf="b" wf="c"\n'                                      # unescaped embedded " wf="
+  printf 'RECOVERY\n'                                                                                         # bare keyword
+  printf 'RECOVERY pointer reason=stale-row ctx="test": do something else entirely\n'                         # fixed-reason pointer, other tail
+  printf 'RECOVERY pointer reason=stalled ctx="x": %s and then more\n' "$P_UNDO"                              # stalled pointer, extra tail
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 sut S15b "$PRN"
-[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$(cnt '^REQUIRED-SET READ — 8 RECOVERY line(s) outside the resolver grammar not shown' "$OUTF")" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15b eight lines outside the grammar (trailing command text, id mismatch, 16 digits, bad basis, unquoted ctx, trailing text, unknown shape): none printed, one count line, marker last" "out=[$OUT]"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$(cnt "^REQUIRED-SET READ — 19 RECOVERY line(s) outside the resolver grammar not shown (run the read by hand: ready-run-wait.md, 'A green verdict that never enqueues')\$" "$OUTF")" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15b nineteen lines outside the grammar (command tails, id mismatch, 16- and 30-digit ids, bad bases, unquoted ctx, trailing text, unknown shape and pointer reason, empty array, other PR, embedded wf=, bare keyword): none printed, one count line with the by-hand pointer, marker last" "out=[$OUT]"
 [[ "$(wc -l < "$STUBD/calls")" -eq 1 && ! -e "$ROOT/S15" ]] && _v=0 || _v=1; chk "$_v" "S15b nothing was executed (no sentinel) and the resolver was called once" "calls=$(cat "$STUBD/calls")"
 newrow
 { printf 'RECOVERY rerun run=2 basis=workflow ctx="x" wf="y": gh run rerun 9\n'; printf 'RECOVERY no cancelled run at this head ctx="ok"\n'; mk error; } > "$STUBD/body"; printf '3' > "$STUBD/rc"
 sut S15c "$PRN"
 [[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$OUT" != *"outside the resolver grammar"* ]] && _v=0 || _v=1; chk "$_v" "S15c state=error prints neither hints nor a grammar count line" "out=[$OUT]"
+
+# ── S15d nested sequences inside wf= on a RECOVERY line that IS printed: only the resolver's ctx text is cleaned by the resolver first, wf=
+# is not, so the script must clean to a fixpoint ──
+newrow
+{
+  printf 'RECOVERY rerun run=9 basis=workflow ctx="c" wf="a\xc2\xc2\x85\x85b\xe2\x80\xe2\x80\xa8\xa8c\xe2\x80\xe2\x80\xa9\xa9d": gh run rerun 9\n'
+  printf 'RECOVERY rerun run=10 basis=candidate ctx="c" wf="%s"\n' "$_deep"
+  printf '%s\n' "$M_ABS"
+} > "$STUBD/body"
+sut S15d "$PRN"
+[[ "$(LC_ALL=C grep -cF -e $'\xc2\x85' -e $'\xe2\x80\xa8' -e $'\xe2\x80\xa9' "$OUTF")" -eq 0 && "$(cnt '^RECOVERY rerun run=9 basis=workflow ctx="c" wf="abcd": gh run rerun 9$' "$OUTF")" -eq 1 && "$(cnt '^RECOVERY rerun run=10 basis=candidate' "$OUTF")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S15d nested NEL / LS / PS inside wf= (and 40-deep nesting) do not re-form; both lines are still printed" "out=[$(printf '%q' "$OUT")]"
+
+# ── S18 the grammar is tied to the resolver's SOURCE: every `printf 'RECOVERY` line of ci-head-verdict.sh, instantiated, is accepted ──
+# A resolver edit that adds or rewords a RECOVERY line fails here instead of silently dropping the hint in production. The count (10) is the
+# number of lines S15a covers; the positive control is that those ten instantiated lines all come out.
+mapfile -t _fmts < <(grep -o "printf 'RECOVERY[^']*'" "$DIR/ci-head-verdict.sh" | sed -e "s/^printf '//" -e "s/'\$//" \
+  -e 's/failed=%s/failed=["a"]/' -e 's/pending=%s/pending=["a"]/' -e 's/run=%s/run=12345/' -e 's/ctx=%s/ctx="c"/' -e 's/wf=%s/wf="w"/' \
+  -e 's/gh run rerun %s/gh run rerun 12345/' -e 's/gh pr checks %s/gh pr checks 4387/' -e 's/\\n$//')
+_left=0; for _f in "${_fmts[@]}"; do [[ "$_f" == *%* ]] && _left=$((_left + 1)); done
+[[ "${#_fmts[@]}" -eq 10 && "$_left" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "S18 ci-head-verdict.sh has exactly 10 printf 'RECOVERY lines and every %s in them is one this suite knows how to fill" "lines=${#_fmts[@]} unfilled=$_left"
+newrow; { printf '%s\n' "${_fmts[@]}"; printf '%s\n' "$M_ABS"; } > "$STUBD/body"
+sut S18 "$PRN"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 10 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S18 all ten of the resolver's own RECOVERY lines pass the script's grammar (no 'outside the grammar' line)" "out=[$OUT]"
 
 # ── S16 the marker anchors: a marker-shaped fragment inside a RECOVERY line is never the marker; unknown states and short markers are no markers ──
 D_ABS="RECOVERY no cancelled run at this head ctx=\"x $(mk absent | sed 's/"/\\"/g') y\""   # the quotes inside are escaped, as the resolver's @json does
@@ -485,7 +544,7 @@ rm -f "$STUBD/stdin-rc"
 # ── totals and the assertion floor ──
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=325
+_min_cases=358
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

@@ -14,16 +14,17 @@
 #   4. RECOVERY lines in the resolver's own order (none when state=error). Each line must match the resolver's CLOSED grammar (the
 #      ten lines ci-head-verdict.sh prints: rerun basis=workflow|candidate, owner not determined x2, no cancelled run, pointer
 #      reason=|failed=|pending=; a `gh run rerun <id>` tail must repeat the run id and the id has at most 15 digits); a line outside
-#      it is counted, not printed, and one "N RECOVERY line(s) ... not shown" line follows. Pointer lines are matched by prefix:
-#      they carry no command text beyond fixed words. Only `basis=candidate` lines are capped at 20, then one "N more candidate
-#      lines not shown" line
+#      it is counted, not printed, and one "N RECOVERY line(s) ... not shown" line follows. The three pointer shapes are matched
+#      against the resolver's exact text and end (the PR number in their tail must be this PR's); the grammar is a hand copy of the
+#      printf lines in ci-head-verdict.sh recover_required, pinned by a drift row in the suite. Only `basis=candidate` lines are
+#      capped at 20, then one "N more candidate lines not shown" line
 #   5. the marker, LAST: SOLEUR_CI_REQUIRED_SET state=<complete|absent|pending|failed|error> pr=<PR> sha=... (bound to this PR)
 # or, when no marker can be produced, ONE degraded line (never marker-shaped), treat as state=error:
 #   REQUIRED-SET READ — no marker (<cause>): ...
 #
 # RECOVERY text, ctx= and wf= are untrusted PR data: printed, never passed to eval, bash -c, a command substitution or gh.
 #
-# Seams (tests only): CI_HEAD_VERDICT_BIN (the resolver), REQUIRED_SET_TIMEOUT_S (default 120, clamped to 120 so the fence's "up to
+# Seams (tests only): CI_HEAD_VERDICT_BIN (the resolver; an ABSOLUTE path, for the same cwd reason), REQUIRED_SET_TIMEOUT_S (default 120, clamped to 120 so the fence's "up to
 # ~125s" stays true), REQUIRED_SET_TIMEOUT_BIN (a bare name or an ABSOLUTE path: a relative path would resolve against a
 # PR-controlled cwd). Like the monitor's seams they print no announcement line.
 # A SIGTERM runs the EXIT trap (no temp file leaks) but the already-started `timeout -k 5` child lives until its own bound, as in
@@ -37,7 +38,8 @@ _deg() { printf 'REQUIRED-SET READ — no marker (%s): treat as state=error\n' "
 
 PR="${1:-}"
 # Explicit digit classes: in a UTF-8 locale [0-9] matches non-ASCII digits (ci-head-verdict.sh does the same).
-if [[ $# -ne 1 || ! "$PR" =~ ^[0123456789]+$ ]]; then
+# At most 15 digits, as the resolver caps it.
+if [[ $# -ne 1 || ! "$PR" =~ ^[0123456789]{1,15}$ ]]; then
   _deg "usage: required-set-report.sh <pr-number>"; exit 0
 fi
 # The resolver normalises the number (`required 007` prints pr=7), so bind the marker to the normalised form.
@@ -45,6 +47,7 @@ PRN="${PR#"${PR%%[!0]*}"}"; PRN="${PRN:-0}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)"
 VERDICT_SH="${CI_HEAD_VERDICT_BIN:-$HERE/ci-head-verdict.sh}"
+if [[ "$VERDICT_SH" != /* ]]; then _deg "usage: CI_HEAD_VERDICT_BIN must be an absolute path"; exit 0; fi
 # No leading zero and at most 6 digits for the timeout: GNU `timeout 0` means NO limit, which would remove the bound, and a leading
 # zero is octal in $(( )). Above 120 it is clamped, so the "up to ~125s" the fence announces cannot be exceeded through the seam.
 T_S="${REQUIRED_SET_TIMEOUT_S:-120}"; T_BIN="${REQUIRED_SET_TIMEOUT_BIN:-timeout}"
@@ -53,14 +56,28 @@ if [[ ! "$T_S" =~ ^[123456789][0123456789]{0,5}$ ]]; then _deg "usage: REQUIRED_
 if [[ ! "$T_BIN" =~ ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ ]]; then _deg "usage: REQUIRED_SET_TIMEOUT_BIN must be a binary name or path"; exit 0; fi
 if [[ "$T_BIN" == */* && "$T_BIN" != /* ]]; then _deg "usage: REQUIRED_SET_TIMEOUT_BIN must be a bare name or an absolute path"; exit 0; fi
 
-# Shared context-sanitize lib (#10395): the LF-only variant also drops the NEL/LS/PS line-break class (one pass per sequence: the
-# lib does not re-scan for a sequence that re-forms after a removal; the resolver cleans its own output first, so that is not
-# reachable here). When the lib cannot be sourced the fallback below is the strip set of the monitor's pre-adoption site.
+# Shared context-sanitize lib (#10395): the LF-only variant also drops the NEL/LS/PS line-break class, one pass per sequence, so a
+# nested sequence can re-form after a removal (and wf= text and stderr are NOT cleaned by the resolver first: only its stdout ctx
+# text is). _fix below therefore re-runs the sanitiser to a fixpoint on everything this script prints from the resolver. When the lib
+# cannot be sourced the fallback is the strip set of the monitor's pre-adoption site (C0 and DEL only: no NEL/LS/PS).
 _ctx_lib="$HERE/lib/context-sanitize.sh"
 # shellcheck source=lib/context-sanitize.sh disable=SC1091
 [[ -r "$_ctx_lib" ]] && source "$_ctx_lib" 2>/dev/null
 declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
   || soleur_ctx_sanitize_nl() { LC_ALL=C tr -d '\000-\011\013-\037\177'; }
+# _fix: stdin through soleur_ctx_sanitize_nl until the output stops changing (bounded). Input has already had NUL stripped by a first
+# pass in the pipeline (a bash string cannot hold one). If it has not converged after 32 passes (absurd nesting) every 0xC2 and 0xE2
+# byte is dropped, which is the lead byte of every sequence the lib strips.
+_fix() {
+  local t u n=0
+  t="$(cat; printf x)"; t="${t%x}"
+  while (( n < 32 )); do
+    u="$(printf '%s' "$t" | soleur_ctx_sanitize_nl; printf x)"; u="${u%x}"
+    [[ "$u" == "$t" ]] && { printf '%s' "$t"; return 0; }
+    t="$u"; n=$((n + 1))
+  done
+  printf '%s' "$t" | LC_ALL=C tr -d '\302\342'
+}
 
 if ! command -v "$T_BIN" >/dev/null 2>&1; then _deg "skipped: no timeout binary"; exit 0; fi
 
@@ -79,10 +96,10 @@ rc=0
 
 # Keep the TAIL (the marker is the last line) and drop control characters other than newline, so a smuggled CR or escape cannot
 # reshape a line. The resolver's own cleaning is the first layer; this strip is not claimed to be a complete second one.
-out="$(tail -c 262144 "$OUT" 2>/dev/null | soleur_ctx_sanitize_nl)"
+out="$(tail -c 262144 "$OUT" 2>/dev/null | soleur_ctx_sanitize_nl | _fix)"
 marker="$(grep -E "^SOLEUR_CI_REQUIRED_SET state=(complete|absent|pending|failed|error) pr=${PRN} sha=[^ ]+ required=[^ ]+ reason=[^ ]+ absent=.* pending=.* failed=.*\$" <<<"$out" | tail -n 1)" || true
 if [[ -z "$marker" ]]; then
-  err="$(head -c 160 "$ERR" 2>/dev/null | tr '[:cntrl:]' ' ' | soleur_ctx_sanitize_nl)"
+  err="$(head -c 160 "$ERR" 2>/dev/null | tr '[:cntrl:]' ' ' | soleur_ctx_sanitize_nl | _fix)"
   case "$rc" in
     124|137) _deg "timed out after ${T_S}s" ;;
     *)       _deg "exit ${rc}${err:+; stderr: $err}" ;;
@@ -99,23 +116,32 @@ fi
 # printed in its own order (the doc keys actions on the pointer, owner-not-determined and basis=workflow lines, so none of those is
 # capped); only basis=candidate lines, one per cancelled run at the head, are cut at 20. awk runs under LC_ALL=C: byte semantics.
 if [[ "$st" != error ]]; then
-  LC_ALL=C awk '
-    BEGIN { J = "\"([^\"\\\\]|\\\\.)*\"" }   # a JSON string as the resolver emits it (@json): ctx= and wf= are untrusted text inside it
-    /^RECOVERY /{
+  LC_ALL=C awk -v pr="$PR" -v prn="$PRN" '
+    BEGIN {
+      J = "\"([^\"\\\\]|\\\\.)*\""                          # a JSON string as the resolver emits it (@json): ctx= and wf= are untrusted text inside it
+      A = "\\[(" J "(," J ")*)?\\]"                         # a compact JSON array of such strings (jq -c)
+      UNDO = "see skills/ship/references/ready-run-wait.md (confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)"
+      APPR = "see skills/ship/references/ready-run-wait.md (a maintainer must approve the fork workflow run)"
+    }
+    function rid(l,   i) { i = l; sub(/^RECOVERY rerun run=/, "", i); sub(/ .*/, "", i); return i }
+    function tailis(l, pre,   t) { if (!match(l, pre)) return 0; t = substr(l, RLENGTH + 1); return (t == pr || t == prn) }
+    /^RECOVERY/{
       l = $0
-      if (l ~ ("^RECOVERY rerun run=[0123456789]+ basis=candidate ctx=" J " wf=" J "$")) { if (++c > 20) next; print; next }
+      if (l ~ ("^RECOVERY rerun run=[0123456789]+ basis=candidate ctx=" J " wf=" J "$") && length(rid(l)) <= 15) { if (++c > 20) next; print; next }
       if (l ~ ("^RECOVERY rerun run=[0123456789]+ basis=workflow ctx=" J " wf=" J ": gh run rerun [0123456789]+$")) {
-        id = l; sub(/^RECOVERY rerun run=/, "", id); sub(/ .*/, "", id); t = l; sub(/.*: gh run rerun /, "", t)
-        if (id == t && length(id) <= 15) { print; next }
+        t = l; sub(/.*: gh run rerun /, "", t)
+        if (rid(l) == t && length(t) <= 15) { print; next }
         skipped++; next
       }
       if (l ~ ("^RECOVERY (no cancelled run at this head|owner not determined \\(read failed\\)|owner not determined, read the run before re-running) ctx=" J "$")) { print; next }
-      if (l ~ /^RECOVERY pointer (reason=(stale-row|awaiting-approval|stalled)|failed=|pending=)/) { print; next }
+      if (l == "RECOVERY pointer reason=stale-row ctx=\"test\": " UNDO || l == "RECOVERY pointer reason=awaiting-approval ctx=\"test\": " APPR) { print; next }
+      if (match(l, "^RECOVERY pointer reason=stalled ctx=" J ": ") && substr(l, RLENGTH + 1) == UNDO) { print; next }
+      if (tailis(l, "^RECOVERY pointer failed=" A ": read the failing checks with gh pr checks ") || tailis(l, "^RECOVERY pointer pending=" A ": wait, then read the checks with gh pr checks ")) { print; next }
       skipped++
     }
     END {
       if (c > 20) printf "REQUIRED-SET READ — %d more candidate lines not shown (run the read by hand)\n", c - 20
-      if (skipped) printf "REQUIRED-SET READ — %d RECOVERY line(s) outside the resolver grammar not shown (run the read by hand)\n", skipped
+      if (skipped) printf "REQUIRED-SET READ — %d RECOVERY line(s) outside the resolver grammar not shown (run the read by hand: ready-run-wait.md, \047A green verdict that never enqueues\047)\n", skipped
     }' <<<"$out"
 fi
 printf '%s\n' "$marker"
