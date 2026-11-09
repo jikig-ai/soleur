@@ -113,3 +113,10 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Latest commit df2bbdf9 on pushed head; matrix re-running (run 42681624241 family).
 - On merge: verify merge SHA via `gh pr view 12495 --json mergedAt,mergeCommit`, verify apply-github-infra.yml ran (value-only tf change) + live ruleset shows max_entries_to_build=1, file followthrough directive comment on #12269: `<!-- soleur:followthrough script=scripts/followthroughs/mq-lever-e-verdict-12269.sh earliest=<merge>+21d secrets=GH_TOKEN -->`, emit DONE resume prompt. F3 follow-up = #12507 already filed.
 - Backlog after: #9323, #11556. NEVER #9729.
+
+## Resume Point 7 (blocked: red-on-main required check)
+
+- PR #12495: ready + auto-merge armed; all MY-scope checks green. NOT enqueued: required `test` context blocked by `test-scripts (7/8)` -> `lint-shell-capture-exit` ~203 S1 findings in sibling-merged files (e.g. tests/scripts/test-sentry-*.sh — verbatim on origin/main, line #7821). Baseline may only shrink; findings are not my diff. Tracker: #12516. Advisory deploy-script-tests (4/4) red-on-main tracked #10613; sibling #12489 bumps inngest pin.
+- My own 2 lint findings fixed (guard-2 helpers) at HEAD. Baseline fixture-relative-assert regen done.
+- Resume: poll `gh pr view 12495 --json state,mergedAt` + check `git show origin/main:tests/scripts/test-sentry-destroy-counts.sh` line 95 — when main heals (violations fixed/baselined by sibling), merge main in, checks re-run green -> queue takes it. Then postmerge: verify merge SHA, apply-github-infra.yml applied (value-only tf), live ruleset max_entries_to_build=1, file directive on #12269 (`earliest=<merge>+21d secrets=GH_TOKEN`), DONE prompt.
+- F3 issue = #12507. Backlog after: #9323, #11556. NEVER #9729.
