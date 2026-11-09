@@ -15,3 +15,11 @@ None — sibling sweep found exactly one instance of the defect shape (ci-oracle
 
 ### Components Invoked
 soleur:one-shot Steps 0–2 (workspace gate, collision checks, worktree, draft PR #12511, tally, plan, deepen) run inline; review/qa/ship skills read and executed in-process.
+
+## Review Phase
+- Panel: 7/7 seats (floor 5 + test-design-reviewer + shellcheck deterministic), tier `none`, no design-risk. `Reviewed-Coverage: full 7/7` trailer + `Reviewed-Fix-Round`/`Reviewed-Fix-Range` over PANEL_SHA..HEAD.
+- Findings: P3 rejection-side row (3 concurring seats) -> row_bot_malformed_input + bot-suffix-dropped mutant; fix-round P3 bracket-escape class -> alice(bot) + bot-bracket-unescaped mutant; P2 WIP sed-escape fixed pre-commit. Pre-existing P3 pin-shape drift noted, no fix (seat's own disposition).
+
+## Ship Phase
+- PR #12511: body written, lint PASS, semver:patch applied, marked ready. Pushed through 27393e1c54.
+- Owner-review note: oracle-review-required resolves via author arm (PR author = deruelle = REQUIRED_REVIEWER); the base-side driver re-execs the PRE-FIX copy but deruelle matches either regex. Merge NOT executed per pipeline instruction.
