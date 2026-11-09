@@ -522,3 +522,56 @@ plan touches besides new spec-dir files). Check ran, zero matches.
   selection); PR #12477 (this branch's draft).
 + Merged fixes this window exercises: #12446 (ejections corroboration + classifier coverage),
   #12439 (escape classifier Arm A + R3 re-ruling), #12329 (PR3b required ratchet).
+
+## Enhancement Summary (deepen-plan, 2026-11-09)
+
+### Halt-gate results
+
++ Phase 4.6 User-Brand Impact — **pass** (section present, threshold `none`, zero sensitive-path matches).
++ Phase 4.7 Observability — **pass** (5 fields non-placeholder; `discoverability_test.command`
+  first token `grep` is allowlisted, no SSH, no shell-active characters, finishes <15 s;
+  `expected_output` is the literal path the command prints; `credentials_required` omitted).
++ Phase 4.8 PAT-shaped variable — **pass** (zero matches on all four patterns).
++ Phase 4.9 UI wireframe — skipped (no UI-surface file in Files to Create/Edit).
++ Phase 4.10 Encryption Posture — skipped (no persistent store, no new cross-component connection;
+  receipts are committed docs, `/var/tmp` scratch is not a store).
++ Phase 4.11 Guard Contract — skipped (no guard, gate, lint or drift-check deliverable).
++ Phase 4.12 Scope Check — **pass** (single unfenced section; 8 Ask-Mapping rows all `mapped`;
+  every `inferred` provenance row carries a justification; `Recommendation:` line present;
+  adequacy read: inferred items are recorded, not silent).
++ Phase 4.13 Task Design — skipped (no new autonomous-task surface).
++ Phase 4.5 network-outage — trigger fired on the `SSH` substring in the brief; discharged in
+  `## Hypotheses` (no SSH path exists in scope).
++ Phase 4.55 downtime/cutover — skipped (no production mutation; the run is read-only).
++ Phase 4.4 precedent-diff — satisfied by construction: every prescribed command is the runbook
+  §4 recipe verbatim, and the receipt set mirrors `receipts/r3/` file-for-file (the precedent).
++ Phase 4.45 implementation-realism — every command/flag verified against
+  `scripts/ci-pr-affected-replay.py --help` at HEAD and the committed prior-run receipts;
+  `gh api` endpoint shapes match what the prior re-rulings recorded.
+
+### Enrichments applied during the deepen pass
+
++ Bullet style normalized to the repo's `+` convention (markdownlint clean on plan + tasks.md).
++ `discoverability_test` shape checked against Check-10 reject rules (verb allowlist, 15 s cap,
+  no shell-active bytes, literal `expected_output`, PR-tree-resident target).
++ `decision-challenges.md` written in the gated 3-column shape; `pending - assumed` rows left for
+  the parent's batched CTO spawn per the pipeline ruling contract.
+
+### Degraded phases (recorded, not silently skipped)
+
++ Phase 1–3 research fan-outs (repo-research-analyst, learnings-researcher, community/discovery,
+  domain leaders, spec-flow-analyzer, Phase-4.5 advisor consult, Phase-5 review agents, plan-review
+  panel): **not run — this planning agent cannot spawn subagents.** The equivalents were executed
+  inline: the runbook, replay `--help`, ADR-276, prior receipts and learnings were read directly;
+  the scope/domain/GDPR/IaC gates were evaluated against the actual file lists; the open-issue
+  overlap query ran against live `gh` data. The parent's pipeline may run `soleur:plan-review`
+  before `soleur:work` if it wants the panel verdict.
+
+### New considerations discovered
+
++ The merged ejections-corroboration makes `aggregate` refuse (rc 2) a unit count that mismatches
+  `ejections-window.json`'s `expected_units` — a refusal is the gate working, not a defect to patch.
++ The plain `audit` subcommand does not auto-load the accept file (only `ratchet` does); both
+  spellings are prescribed so the pre-exemption set is on record (R3 disclosure).
++ `preactivation` must run inside the detached `origin/main` worktree for `tree=head-is-main`;
+  run it before `git worktree remove`.
