@@ -1949,6 +1949,190 @@ systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-
 systemctl enable --now inngest-server-probe.timer
 systemctl start inngest-server-probe.service || log "warn: server-probe oneshot non-zero (timer will retry hourly)"
 
+# host-kernel-marker:begin
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  # SOLEUR_HOST_KERNEL periodic marker (#12007), dedicated host only: the co-located web host takes the SAME collector from the web image
+  # bake with `--role web` under the same unit names, so writing this pair there would overwrite it. The three heredocs below are BYTE COPIES
+  # of apps/web-platform/infra/host-kernel-marker.{sh,service,timer} (the unit differing only in `--role inngest`); host-kernel-marker-delivery.test.sh
+  # extracts them and fails on any drift. To re-sync after an edit to a source file, re-paste it between the delimiters. Embedded here, rather than as a
+  # new staged asset, because the OCI bootstrap image already carries this script: cloud-init-inngest.yml's STAGED list and the image build are
+  # unchanged by this feature. DELIVERY: the inngest host receives inngest-bootstrap.sh and vector.toml ONLY through the digest-pinned bootstrap OCI image,
+  # so the emitter reaches a replaced host only after a new bootstrap tag is minted and the digest pin is bumped. Quoted delimiters: the bodies are fully literal.
+  # Observability, never a gate: every step below is guarded so a failure logs a warning and does not abort the bootstrap (set -euo pipefail).
+  HKM_SCRIPT="/usr/local/bin/host-kernel-marker.sh"
+  HKM_UNIT="/etc/systemd/system/host-kernel-marker.service"
+  HKM_TIMER="/etc/systemd/system/host-kernel-marker.timer"
+  # hkm_warn <step> <message>: every guarded failure below goes through it. `log` writes to the bootstrap's stderr only, which is NOT shipped off-box, so a
+  # failed install would be invisible without SSH (hr-no-ssh-fallback-in-runbooks); the `logger` line reaches journald under the allowlisted tag
+  # (vector.toml Source 4) and so Better Stack. It is deliberately NOT a SOLEUR_HOST_KERNEL row (readers parse only that prefix), and `|| true` keeps
+  # a missing logger from aborting the bootstrap under set -euo pipefail. ORDER MATTERS: the shipped `logger` line runs FIRST and `log` runs last with its own `|| true`, because `log`
+  # writes to stderr and a closed or failing stderr makes it return 1, which under set -e would exit the bootstrap BEFORE the off-box line was ever written.
+  hkm_warn() {
+    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=$1" || true
+    log "warn: host-kernel-marker $2" || true
+  }
+  cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF' || hkm_warn write_script "collector write failed (#12007)"
+#!/usr/bin/env bash
+# host-kernel-marker.sh --role <web|inngest|registry>
+#
+# Prints EXACTLY ONE line describing the running kernel of this host, for the SOLEUR_HOST_KERNEL periodic marker
+# (#12007; consumed by plugins/soleur/skills/cve-exposure/scripts/host-state.sh and the host-kernel dead-man feeder):
+#
+#   SOLEUR_HOST_KERNEL v=1 role=<web|inngest|registry> kernel=<uname -r|unreadable> uptime_s=<uint|unknown> \
+#     reboot_required=<0|1|unknown> sec_updates=<uint|unknown>[ host=<registry host id>]
+#
+# (one physical line; the backslash above is documentation only). ` host=` is printed ONLY for --role registry: the
+# registry ships no journald identity, so the in-message host is its only isolation (the SOLEUR_ZOT_DISK precedent);
+# the journald hosts are identified by the Vector-stamped host_name and a `host=` token on their rows is rejected.
+#
+# GRAMMAR PROMISES readers rely on:
+#   - `kernel=<value>` is ALWAYS followed by a single space and `uptime_s=`, so a reader delimits the kernel without a
+#     `$` anchor (the feeder's SQL builder refuses a bare `$`).
+#   - `kernel=` carries a value only when `uname -r` matches the anchored shape the reader also pins
+#     (^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9-]+$); anything else (empty, multi-line, upper-case flavour, shell
+#     metacharacters, a failed read) is the literal `unreadable`. No raw host-controlled string ever reaches the line.
+#   - A measurement failure is a token value (`unknown` / `unreadable`), NEVER a non-zero exit: this runs from a timer
+#     (and, once the registry emitter ships in its follow-up PR, #12386, from a cron wrapper), and a failing unit would turn a missing apt list into a journal storm. The only non-zero
+#     exit is 64 (usage: bad or missing role), which prints nothing on stdout.
+#
+# sec_updates is DISPLAY ONLY. It counts `^Inst .*-security` lines of a SIMULATED `apt-get -s upgrade` over the LOCAL
+# package lists (no `apt-get update`, no network, no lock), so a stale list undercounts; it never feeds kernel_state.
+# It is bounded by `timeout` (default 20 s) and is `unknown` on any failure or timeout.
+#
+# ENVIRONMENT. PATH is set explicitly to the system directories only (no /usr/local: this runs as root and a planted
+# /usr/local/bin/{uname,apt-get,timeout} must not be picked up) and includes /usr/sbin: cron and systemd both start
+# without it (the 2026-07-15 blind-host learning), and a bare `command not found` would read as a dark host. LC_ALL=C
+# pins apt's output.
+#
+# TEST SEAM. Honoured ONLY when HKM_TEST=1 (no unit sets it): HKM_STUB_BIN_DIR (prepended to PATH), HKM_PROC_UPTIME,
+# HKM_REBOOT_FILE, HKM_APT_TIMEOUT_S. host-kernel-marker.test.sh proves the seam is inert without HKM_TEST=1.
+
+export LC_ALL=C
+readonly REGISTRY_HOST_ID='soleur-registry'
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+UPTIME_FILE=/proc/uptime
+REBOOT_FILE=/var/run/reboot-required
+APT_TIMEOUT=20
+if [[ "${HKM_TEST:-}" == 1 ]]; then
+  if [[ -n "${HKM_STUB_BIN_DIR:-}" && -d "${HKM_STUB_BIN_DIR}" ]]; then PATH="${HKM_STUB_BIN_DIR}:${PATH}"; fi
+  UPTIME_FILE="${HKM_PROC_UPTIME:-$UPTIME_FILE}"
+  REBOOT_FILE="${HKM_REBOOT_FILE:-$REBOOT_FILE}"
+  if [[ "${HKM_APT_TIMEOUT_S:-}" =~ ^[1-9][0-9]?$ ]]; then APT_TIMEOUT="$HKM_APT_TIMEOUT_S"; fi
+fi
+
+usage() {
+  printf 'usage: host-kernel-marker.sh --role <web|inngest|registry>\n' >&2
+  exit 64
+}
+
+role=""
+role_seen=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --role)
+      [[ $# -ge 2 && "$role_seen" -eq 0 ]] || usage
+      role="$2"; role_seen=1; shift 2 ;;
+    *) usage ;;
+  esac
+done
+case "$role" in
+  web | inngest | registry) : ;;
+  *) usage ;;
+esac
+
+# kernel: only the anchored shape is ever printed.
+kernel=unreadable
+if k="$(uname -r 2>/dev/null)" && [[ "$k" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9-]+$ ]]; then
+  kernel="$k"
+fi
+
+# uptime_s: integer part of the first /proc/uptime field.
+uptime_s=unknown
+up=""
+{ read -r up _ < "$UPTIME_FILE"; } 2>/dev/null
+if [[ "$up" =~ ^[0-9]{1,12}(\.[0-9]+)?$ ]]; then uptime_s="${up%%.*}"; fi
+
+# reboot_required: marker file present -> 1; absent in a readable directory -> 0; unreadable directory -> unknown.
+if [[ -e "$REBOOT_FILE" ]]; then
+  reboot_required=1
+elif [[ -d "${REBOOT_FILE%/*}" ]]; then
+  reboot_required=0
+else
+  reboot_required=unknown
+fi
+
+# sec_updates: simulated upgrade over the local lists, bounded, display only.
+sec_updates=unknown
+if command -v timeout > /dev/null 2>&1 && command -v apt-get > /dev/null 2>&1; then
+  if apt_out="$(timeout -k 2 "$APT_TIMEOUT" apt-get -s -o Debug::NoLocking=1 upgrade 2> /dev/null)"; then
+    n="$(printf '%s\n' "$apt_out" | grep -c '^Inst .*-security')"
+    if [[ "$n" =~ ^[0-9]{1,9}$ ]]; then sec_updates="$n"; fi
+  fi
+fi
+
+line="SOLEUR_HOST_KERNEL v=1 role=${role} kernel=${kernel} uptime_s=${uptime_s} reboot_required=${reboot_required} sec_updates=${sec_updates}"
+
+if [[ "$role" == registry ]]; then
+  # The registry id is a CONSTANT, never whatever `hostname` prints: the helper (host-state.sh REGISTRY_HOST_ID) and the
+  # dead-man feeder predicate pin this same literal, and a test asserts equality across all three.
+  line="${line} host=${REGISTRY_HOST_ID}"
+fi
+
+printf '%s\n' "$line"
+exit 0
+HKMSCRIPTEOF
+  chmod 0755 "$HKM_SCRIPT" || hkm_warn chmod_script "chmod failed (#12007)"
+  cat > "$HKM_UNIT" <<'HKMUNITEOF' || hkm_warn write_unit "unit write failed (#12007)"
+[Unit]
+Description=Report the running kernel to the host log (SOLEUR_HOST_KERNEL, #12007)
+Documentation=https://github.com/jikig-ai/soleur/issues/12007
+
+[Service]
+Type=oneshot
+# SyslogIdentifier retags the unit's stdout away from the ExecStart basename `bash` to the identifier
+# vector.toml Source 4 (host_scripts_journald) allowlists, so the one marker line reaches Better Stack off-box
+# (hr-no-ssh-fallback-in-runbooks). Mirrored in vector.toml; the AC3 derived-tag test in vector-pii-scrub.test.sh
+# derives this literal and reds if the allowlist entry and this line drift apart.
+SyslogIdentifier=host-kernel-marker
+# The collector reads uname, /proc/uptime, the reboot-required marker and the LOCAL apt lists; it needs no credential
+# and no EnvironmentFile. It exits 0 on every measurement failure (the failure is a token value in the line).
+TimeoutStartSec=60
+Nice=10
+# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax OOM kill of apt must degrade
+# sec_updates to `unknown`, not stop the unit before the line prints: systemd's default OOMPolicy (stop) would tear the whole unit down on
+# the first kill in the cgroup, and the collector's contract is a printed line with token values, never a non-zero exit.
+# OOMPolicy=continue keeps the unit running so the collector prints its row. It does not take the host down either way.
+OOMPolicy=continue
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+MemoryMax=256M
+ExecStart=/usr/local/bin/host-kernel-marker.sh --role inngest
+HKMUNITEOF
+  cat > "$HKM_TIMER" <<'HKMTIMEREOF' || hkm_warn write_timer "timer write failed (#12007)"
+[Unit]
+Description=Report the running kernel every 6 hours and shortly after boot (SOLEUR_HOST_KERNEL, #12007)
+
+[Timer]
+# One row shortly after every boot, then 00:00/06:00/12:00/18:00 plus a randomized delay: at least one row per day
+# survives a missed slot, and the 36 h dead-man tolerates five missed 6 h slots. Persistent=true replays
+# one missed slot after downtime; the oneshot service cannot overlap itself.
+OnBootSec=2min
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
+HKMTIMEREOF
+  systemctl daemon-reload || hkm_warn daemon_reload "daemon-reload failed (#12007)"
+  # Observability, never a gate: `enable --now` arms the timer (OnBootSec does not refire on an already-booted host), and the immediate `start` ships
+  # the first row now. Source 4 (vector.toml host_scripts_journald) allowlists the SyslogIdentifier.
+  systemctl enable --now host-kernel-marker.timer || hkm_warn timer_enable "timer enable failed (#12007)"
+  systemctl start host-kernel-marker.service || hkm_warn oneshot_start "oneshot non-zero (timer will retry in 6h)"
+fi
+# host-kernel-marker:end
+
 # #5150: 7-day status-gated trace retention. Dedicated host only. A host that has not
 # been replaced onto an image carrying these assets is not yet pruning. Missing assets
 # log and skip; they do not fail bootstrap. The timer is enabled only after psql is

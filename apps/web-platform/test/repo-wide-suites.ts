@@ -65,6 +65,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/git-isolated-push-dir.test.ts",
   "test/git-lock-marker-telemetry.test.ts",
   "test/github-app-manifest-parity.test.ts",
+  "test/hosted-playwright-mcp-absence.test.ts",
   "test/kb-content-binary.test.ts",
   "test/kb-delete.test.ts",
   "test/kb-reader.test.ts",

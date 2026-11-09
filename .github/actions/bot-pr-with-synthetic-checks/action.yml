@@ -275,7 +275,7 @@ runs:
         GITLEAKS_VERSION="8.24.2"
         GITLEAKS_SHA256="fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
         GITLEAKS_DIR="$(mktemp -d)"
-        curl -sSLo "${GITLEAKS_DIR}/gitleaks.tgz" \
+        curl --fail --retry 5 --retry-all-errors -sSLo "${GITLEAKS_DIR}/gitleaks.tgz" \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
         echo "${GITLEAKS_SHA256}  ${GITLEAKS_DIR}/gitleaks.tgz" | sha256sum -c -
         tar -xzf "${GITLEAKS_DIR}/gitleaks.tgz" -C "${GITLEAKS_DIR}" gitleaks

@@ -449,17 +449,20 @@ describe("startOriginTlsListener", () => {
     expect(tls!.server.keepAliveTimeout).toBeGreaterThan(900_000);
   });
 
-  // headersTimeout is deliberately NOT set on the :443 server (ADR-321, ruling R-A of 2026-11-08): the plain server's assignment is
-  // bounded by Node's requestTimeout (300 s), so mirroring it would loosen the :443 slow-header cutoff from Node's 60 s default to
-  // 300 s for no demonstrated need (an idle keep-alive socket stays open at 75 s with the default, measured on Node 22.23.4 and 26).
+  // headersTimeout is deliberately NOT set on the :443 server (ADR-321, ruling R-A of 2026-11-08): the earlier 910 s assignment on
+  // the plain server was bounded by Node's requestTimeout (300 s), so mirroring it would have loosened the :443 slow-header cutoff
+  // from Node's 60 s default to 300 s for no demonstrated need (an idle keep-alive socket stays open at 75 s with the default,
+  // measured on Node 22.23.4 and 26). The plain :80 server now states 60 s / 300 s explicitly (server/http-timeouts.ts, item 12).
   test("the HTTPS server keeps Node's 60 s headersTimeout (the slow-header cutoff is not loosened)", async () => {
     await boot(envOf(good));
-    expect(tls!.server.headersTimeout).toBeLessThanOrEqual(60_000);
+    // Node's documented defaults, pinned with equality: a bound that merely stays <= is satisfied by 0 (disabled).
+    expect(tls!.server.headersTimeout).toBe(60_000);
+    expect(tls!.server.requestTimeout).toBe(300_000);
   });
   test("origin-tls.ts never assigns headersTimeout (a loosening needs a demonstrated need and an explicit requestTimeout)", () => {
     const src = readFileSync(join(__dirname, "..", "server/origin-tls.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    expect(src).not.toMatch(/headersTimeout\s*=/);
-    expect(src).not.toMatch(/requestTimeout\s*=/);
+    expect(src).not.toMatch(/headersTimeout\s*[:=]/);
+    expect(src).not.toMatch(/requestTimeout\s*[:=]/);
   });
 
   // The once-per-start line is the per-host proof; `required` makes "REQUIRED is live on this host" a direct read.
@@ -754,10 +757,26 @@ describe("wiring and contract pins", () => {
     expect(src).toContain("originTls?.closeAllConnections()");
   });
 
-  test("the plain :80 server uses the same keep-alive constant, with headersTimeout above it (unchanged from main)", () => {
+  test("the plain :80 server uses the same keep-alive constant and states its header bound through applyPlainHttpTimeouts (ADR-321 item 12)", () => {
     const src = stripComments(read("server/index.ts"));
     expect(src).toMatch(/^\s*server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;$/m);
-    expect(src).toMatch(/^\s*server\.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS \+ 5_000;$/m);
+    expect(src).toMatch(/^\s*applyPlainHttpTimeouts\(server\);$/m);
+    // The inert 910 s assignment is gone; the behaviour is covered in http-timeouts.test.ts.
+    expect(src).not.toMatch(/server\.headersTimeout\s*=/);
+  });
+
+  test("server/index.ts skips the rest of boot on a REQUIRED start whose listener is null, after the reaper and before the ready log", () => {
+    const src = stripComments(read("server/index.ts"));
+    const guard = src.match(/if \(originTls === null && process\.env\[ORIGIN_TLS_REQUIRED_ENV\] === "1"\) return;/g);
+    expect(guard).toHaveLength(1);
+    const guardAt = src.indexOf(guard![0]);
+    const startAt = src.indexOf("originTls = startOriginTlsListener({ httpServer: server })");
+    const reaperAt = src.indexOf("reapOrphanEgressForwarders();");
+    const readyAt = src.indexOf('"Server ready"');
+    expect(startAt).toBeGreaterThan(-1);
+    expect(reaperAt).toBeGreaterThan(startAt);
+    expect(guardAt).toBeGreaterThan(reaperAt);
+    expect(readyAt).toBeGreaterThan(guardAt);
   });
 
   test("the default container port equals the port the run sites publish as host :443", () => {

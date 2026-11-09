@@ -283,7 +283,7 @@
 "external"
 ],
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@1 serving since the 2026-11 serve flip (#12167); drain is an explicit ga-pool-update act}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "title": "Cloudflare",
 "kind": "system",
@@ -699,7 +699,7 @@
 },
 "technology": "Next.js API",
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, and a flag-gated PostToolUse(Bash) gh-output framing note, annotate-only, registered under the same web-egress and classify-flag predicate, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "title": "API Routes",
 "kind": "container",
@@ -1357,6 +1357,17 @@
 }
 },
 "relations": {
+"11e4u1o60scy7": {
+"technology": "HTTPS (ClickHouse SQL Logs read + Logs INGEST write + Uptime monitors + heartbeats API, eu-fsn-3; --disable/--noproxy confined)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "11e4u1o60scy7",
+"title": "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes, and — since #11631 — scheduled-deadman-heartbeat-feeder.yml reads the Logs archive hourly (remote() UNION s3Cluster, via betterstack-query.sh) and, only when a qualifying luks-monitor or cost-marker row exists, sends one beat to the matching dead-man heartbeat (URL resolved through the read-only heartbeats API; a withheld beat is the page), and reads the Uptime API read-only (GET /api/v2/monitors + GET /api/v2/heartbeats) for the live reconcile. SINCE #8178 it also polls git-data's OWN Logs source 2734275 (t520508_soleur_git_data_prd_logs) for stage:boot_complete, from both the birth job (since #6982) and the replace job; that read pins the source rather than taking betterstack-query.sh's default (the shared 2457081, which holds no git-data rows) and resolves its credentials through doppler run -c prd_terraform, because the repository-secret connection does not cover this source (#7867). The heartbeats read (GET /api/v2/heartbeats) comes from the scheduled-terraform-drift.yml heartbeat-live-reconcile job (#6549 item 2): it reconciles the LIVE paused/existence of each monitored heartbeat against the executable MANIFEST (heartbeat-manifest.ts) and flags fed-but-paused (the #6537 shape) or non-count-gated-absent-live (the #6548 git-data shape) — the live-state layer ADR-117's static guard cannot see. SINCE #7884/ADR-222 the same job also reads GET /api/v2/monitors and reconciles every live monitor (by literal declared url) and heartbeat (by declared name, for_each/count resolved from literal variable defaults) against the apps/web-platform/infra declarations: reason=unmanaged-live for a live object no declaration accounts for (issue also labeled infra-drift), reason=monitor-config-drift when a declared monitor's live monitor_type, required_keyword or paused differs, or a declared alerting/cadence attribute (email, call, sms, push, confirmation_period, check_frequency, request_timeout, recovery_period, verify_ssl, follow_redirects) differs, or a maintenance window is live (the vendor-side disarm of the database-readiness alarm; emails every run), and a SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n> line every run in which both reads succeed — a measured object count in place of an asserted vendor cap. Distinct surface from the Logs poll above. SINCE #6178/ADR-146 this edge also carries a SAFETY-CRITICAL read: cutover-inngest.yml op=verify derives the double-fire scan window's trust anchor from the on-host flip-FSM transition row via the same Logs query path, so a retention miss or query failure degrades the anchor and ultimately FAILS the verify closed. SINCE #8054 (ADR-100 addendum 2026-09-11) op=execute step 2.0 is a SECOND safety-critical read on this edge: when the webhook's GQL forward returns non-200 (the EXPECTED pre-arm state under P1-5), 2.0 reads the dedicated host's SOLEUR_INNGEST_SERVER_PROBE row and the inngest-cutover-flip heartbeat as TWO separate --grep reads (an OR-combined read was measured starving the hourly probe row out of a 500-row window) and grades a POSITIVELY dark host through tests/scripts/lib/inngest-host-dark-gate.sh's inngest_execute_registry_gate; a retention miss, a query failure, an absent row or a stale boot each REFUSE 2.0 closed, exactly as they fail verify closed. Both reads go through scripts/betterstack-query.sh, so the --disable/--noproxy obligation below is inherited, not re-implemented. SINCE #7278/ADR-172 THIS EDGE IS NO LONGER READ-ONLY: registry-zot-inventory.yml POSTs a SOLEUR_ZOT_INVENTORY marker to the Logs INGEST endpoint (https://s2457081.eu-fsn-3.betterstackdata.com/, Authorization: Bearer BETTERSTACK_LOGS_TOKEN). READ THE CONFIG NAME: CI reads that token from the **soleur/prd** root via secrets.DOPPLER_TOKEN_PRD — NOT from soleur-registry/prd, which is what the zotRegistry -> betterstack edge names for the HOST's copy. A reader who takes the isolated project's credential as CI's requirement will conclude, wrongly, that this needs a new Doppler grant; it needs none, and that is why the design is zero-Terraform (the soleur/prd copy is out-of-band and deliberately NOT Terraform-declared — ADR-172 §6). The POST is measured, not assumed: 202 on ingest, ~17 s POST->queryable, and the run is green only after the SAME ClickHouse read path returns the line carrying this run's run_id with enumeration_complete=true. AND THE ADR-172 WRITE IS NOT THE ONLY ONE — an older one goes unnamed above: apply-web-platform-infra.yml's measured-beat ARM gate PATCHes /api/v2/heartbeats/<id> with {paused:false} to begin arming and {paused:true} to roll back, from apps/web-platform/infra/arm-heartbeats.sh (extracted out of the workflow in #7587) and from the if: always() re-pause sweep step beside it. It authenticates with a DEDICATED write credential — BETTERSTACK_API_TOKEN read via secrets.DOPPLER_TOKEN_WEB_ARM (doppler_service_token.web_arm_write) — NOT the DOPPLER_TOKEN_PRD path the ingest write above names, and its blast radius is account-wide and recorded in ADR-117. Zero SOLEUR_ZOT_DISK control rows in the poll window means channel_dark, never marker_absent. SINCE #7873 every credentialed curl on this edge is REQUIRED to be TRANSPORT-CONFINED (--disable first, --noproxy '*'): a pinned URL alone does not pin a destination, because curl honours ALL_PROXY/HTTPS_PROXY and ~/.curlrc before the host it was given. Stated as an OBLIGATION, not as an accomplished fact (ADR-202): Rule D of lint-shell-trace-credential-refusal.py blocks on any file the PR touches (--changed bypasses the baseline), but repo-wide it carries a baselined remainder of 65 files (measured 2026-09-11; #8054 drew scripts/cutover-inngest.sh, the cutover orchestrator with 24 credentialed curls, down to zero) -- including arm-heartbeats.sh, a writer named on THIS edge. Drawdown tracked in #7898. SINCE #8386 a further follow-through probe reads this source: scripts/followthroughs/registry-luks-live-8386.sh polls SOLEUR_ZOT_DISK for the store_luks / store_mount_devid posture fields. Treat it as a SAFETY-CRITICAL INPUT in the ADR-146 sense — its verdict gates an encryption-posture LEDGER ROW (hcloud_volume.registry), so a retention miss, a query failure or an absent row must degrade to ACTION REQUIRED rather than to a pass. It is deliberately NOT auto-closing: source 2457081 is shared and multi-tenant with one ingest token and host=/boot_id are producer-controlled inside the message, so three producer-shaped rows are forgeable and that is not adequate authority to close a security tracker unattended (its V7 exits 5). It uses the BETTERSTACK_QUERY_* credentials the sweeper already holds and issues no GitHub Actions call, because the sweeper has no actions: read. ENROLMENT IS NOT AUTOMATIC: the sweeper selects on `--label follow-through --state open` plus a column-0 `<!-- soleur:followthrough -->` directive in #8386's body, so this read begins only once that label and that directive land — at merge it polls nothing. From 2026-10-07 until its retirement on 2026-10-12 (#9372) the `observe` job of web-host-reboot.yml also polled web-2's journald boot, probe and readiness rows through scripts/web-host-reboot-evidence.sh (read-only, rows only, no statement about the volume). SINCE #6931/ADR-263 the daily workspaces-luks-verify.yml `web2_marker` leg and the web2-luks-live-6931 follow-through also read web-2's `luks-monitor` probe row (host_name soleur-web-2) and its once-per-instance SOLEUR_FRESH_BOOT_READY row through scripts/lib/web2-luks-rows.sh (a raw SELECT with an explicit host predicate; the readiness row has no host dimension, only a host= token in its message). Both rows are producer-shaped and host-forgeable, so the verdict is advisory evidence for the soak marker, not an authority. SINCE #11704 git-data-cutover.yml mode=flip reads the per-host new-sessions pause line in its flip-preconditions step (verdicts pause_not_on and pause_unread; a precondition-time check, not a lock). scripts/followthroughs/git-data-replication-signal.sh is a second, OPERATOR-RUN reader here (no workflow references it; its test runs on fixtures only): it grades the replication-success marker against the reporter line (ADR-068 addendum 2026-10-31). SINCE #12007 (ADR-322 addendum 2026-11-08) scheduled-deadman-heartbeat-feeder.yml carries four more targets, soleur-host-kernel-<web-1|web-2|inngest|registry>-prd: each beats only while that host has its own valid SOLEUR_HOST_KERNEL row inside a literal 36 hour window read from the hot table UNION the archive, so a dark host withholds its beat and pages (about 40 hours worst case). The four heartbeats are born paused and the targets join the workflow loop only at the arming change (#12386), so until then this part of the edge is declared but inert"
+},
 "11l15c18hxs15": {
 "technology": "HTTPS (unauthenticated GET /health)",
 "source": {
@@ -1565,17 +1576,6 @@
 "id": "189i3k1f8wlqb",
 "title": "Conversation PII origin — the operator captures notes about this third party"
 },
-"18qch4lqc3jab": {
-"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "doppler"
-},
-"id": "18qch4lqc3jab",
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job holds the deploy webhook credentials only. Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-314) is a loader consumer in its apply job alone: its guard, redeploy and notify jobs hold no Doppler credential (the guard reads the GitHub API only, the redeploy job names the deploy webhook credentials in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
-},
 "18qt3whw1zxxc": {
 "source": {
 "model": "platform.plugin.oneshot"
@@ -1585,6 +1585,17 @@
 },
 "id": "18qt3whw1zxxc",
 "title": "Step 3"
+},
+"195jq17ovy2dn": {
+"technology": "Vector → Better Stack Logs (HTTPS)",
+"source": {
+"model": "platform.infra.inngest"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "195jq17ovy2dn",
+"title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 (the journald includes, on a host created from an image cut after PR #10975, the TLS terminator unit soleur-inngest-tls.service through the fail-open drop-list filter inngest_terminator_filter, which omits only three healthy-request line shapes). SECOND DELIVERY CHANNEL on this edge (the curl-direct phone-home): while Vector is down, inngest-boot-phone-home.sh POSTs an envelope {message, marker, stage, detail, host, dt (self-attested), shipper=cloud-init-phone-home} to the SAME source 2457081 independent of Vector — e.g. the probe's stage=inngest-server-probe-vector-down row, which carries the identical field row in `detail`; since #11526 the wrong-volume alert's predicate reads BOTH channels (journald leg OR shipper+stage envelope leg) -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Also on this edge once delivered (#9927 item 2, ADR-282 addendum 2026-10-26; merged but inert on the host until the owner delivers the signed bundle that carries it, #11266): the plain-text (never JSON) marker SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<ok|fail_passphrase|fail_header|fail_key_absent|indeterminate> rc=<n> at=<step>, emitted (daily while healthy, hourly while not ok) by a bounded function inside inngest-cutover-flip.sh under the same tag plus a curl-direct phone-home copy; since #11527 the key-probe paging alert's predicate reads BOTH emitters (journald tag inngest-cutover-flip OR shipper=cloud-init-phone-home + stage=luks-key-probe envelope leg, fail-loud detail='' arm) per the ADR-218 dual-channel convention; verdict=fail_ pages and indeterminate never pages on its own (a dead-man absence alert is a planned follow-up, not shipped with this change). It asserts only that the key the host holds opens a keyslot of the header at probe time. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 POISONED until 2026-09-19: web-1 wore this node's host_name=soleur-inngest-prd until its recreate cleared the stale label (#6616), and no longer does. The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml). ALSO on this edge once delivered (#12007, ADR-322 addendum 2026-11-08; the dedicated node receives the emitter only through the digest-pinned bootstrap OCI image, so the pin bump is the delivery event, held in #12386; the carrier per host class is the delivery matrix in the host-kernel section of runbooks/workspaces-luks-cutover-6604.md): the plain-text marker `SOLEUR_HOST_KERNEL v=1` (kernel, uptime, reboot-required and security-update fields), printed every 6 hours and once per boot by host-kernel-marker.sh under the fixed SyslogIdentifier host-kernel-marker through this same Vector path; identity is the Vector-stamped host_name plus the exact SYSLOG_IDENTIFIER plus _SYSTEMD_UNIT host-kernel-marker.service (a local process can forge the identifier, not the unit), never a self-declared host= (a journald-path row whose message contains host= is rejected), and the vector.toml allowlist must carry the tag or the row never ships. Until a first row lands this host is `unknown` in the cve-exposure skill, which is the honest rollout state"
 },
 "198ah9kid4ha3": {
 "technology": "HTTPS (cosign)",
@@ -1639,17 +1650,6 @@
 },
 "id": "1ckaygd7d7lgz",
 "title": "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-136, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern). NOT ON THIS EDGE, AND RECORDED HERE BECAUSE THE MODEL CARRIES NO SEPARATE ONE: every CI Terraform run also reaches Cloudflare R2 as its S3-compatible STATE BACKEND, with an AWS_* key pair that is neither CF_API_TOKEN_RULESETS nor the DNS-edit token. Since #8209/ADR-241 that path is TIERED and there are TWO state buckets, not one. (a) soleur-terraform-state keeps the web-platform, infra/github, sentry and the other roots' objects; its Tier-A key pair in prd_terraform becomes READ-ONLY, and the read/write pair moves to Tier B as TF_STATE_AWS_* — before that split a branch actor could FORGE state a later main run acts on, for example by swapping a doppler_service_token.key that a main run then publishes (ADR-241 residual R7, closed at the runbook's state-key step). Every backend-credential extraction in a Tier-B job therefore prefers the Tier-B pair and falls back to the prd_terraform pair, which is what makes the change work in both the before and after states. (b) soleur-terraform-state-privileged is a SECOND bucket (cloudflare_r2_bucket.terraform_state_privileged in infra-privileged-environment.tf) holding exactly one object, the git-data root-key state — the state that contains the private key that is root on the host storing every connected user's repositories. Only a bucket-scoped Tier-B token reads it, and that token is operator-minted because no credential here can mint one programmatically (ADR-130). The separation is real rather than nominal because the prd_terraform keys are BUCKET-SCOPED, measured: ListBuckets returns AccessDenied while ListObjectsV2 returned all seven objects of the shared bucket — so a bucket they are not scoped to is genuinely out of reach, which is what reverses ADR-220's D2.1 shared-bucket amendment. The root's backend is now PARTIAL (no literal bucket; -backend-config=bucket=$BUCKET), and the legacy bucket is refused once the repo variable GIT_DATA_ROOT_STATE_MIGRATED=1 is set."
-},
-"1csnfkovwrhwe": {
-"technology": "Vector → Better Stack Logs (HTTPS)",
-"source": {
-"model": "platform.infra.inngest"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "1csnfkovwrhwe",
-"title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 (the journald includes, on a host created from an image cut after PR #10975, the TLS terminator unit soleur-inngest-tls.service through the fail-open drop-list filter inngest_terminator_filter, which omits only three healthy-request line shapes). SECOND DELIVERY CHANNEL on this edge (the curl-direct phone-home): while Vector is down, inngest-boot-phone-home.sh POSTs an envelope {message, marker, stage, detail, host, dt (self-attested), shipper=cloud-init-phone-home} to the SAME source 2457081 independent of Vector — e.g. the probe's stage=inngest-server-probe-vector-down row, which carries the identical field row in `detail`; since #11526 the wrong-volume alert's predicate reads BOTH channels (journald leg OR shipper+stage envelope leg) -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Also on this edge once delivered (#9927 item 2, ADR-282 addendum 2026-10-26; merged but inert on the host until the owner delivers the signed bundle that carries it, #11266): the plain-text (never JSON) marker SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<ok|fail_passphrase|fail_header|fail_key_absent|indeterminate> rc=<n> at=<step>, emitted (daily while healthy, hourly while not ok) by a bounded function inside inngest-cutover-flip.sh under the same tag plus a curl-direct phone-home copy; since #11527 the key-probe paging alert's predicate reads BOTH emitters (journald tag inngest-cutover-flip OR shipper=cloud-init-phone-home + stage=luks-key-probe envelope leg, fail-loud detail='' arm) per the ADR-218 dual-channel convention; verdict=fail_ pages and indeterminate never pages on its own (a dead-man absence alert is a planned follow-up, not shipped with this change). It asserts only that the key the host holds opens a keyslot of the header at probe time. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 currently POISONS: web-1 wears this node's host_name=soleur-inngest-prd until its recreate clears the stale label (#6616). The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml)"
 },
 "1d3me9ksz1bvh": {
 "technology": "gh CLI (HTTPS)",
@@ -1801,17 +1801,6 @@
 },
 "id": "1jn68nupn3hwr",
 "title": "The release-outcome operator email: an inline `curl` to the Resend API from the runner (NOT via webapp/api, which carry the statutory-triage edges), one of fourteen Resend emitters under .github/ (#8211 added the fourteenth, git-data-cutover.yml's notify-failure job, which emails a failed, stranded or cancelled cutover through the notify-ops-email composite and files a ci/git-data-cutover issue as the primary channel; before it, #7539 added the thirteenth: apply-web-platform-infra.yml's SSH-stage-skipped arm, which gives the ssh_token_gate green-skip a consumer — a green apply that delivered nothing is the failure mode that PR exists to close; #8189 added a fourteenth: apply-git-data-root-key.yml's notify-root-key-apply job, which emails on any non-success root-key apply; #8377 then removed one, taking the count back to thirteen — rule-metrics-aggregate.yml was deleted when rule-metrics.json became an untracked cache under ADR-235; #8511 added a fourteenth, git-data-pin-redeploy.yml, and #8211 PR2 removed it again, taking the count back to thirteen — the pin load is now the apply job's inline pin_load step, which needs no email arm because a skipped/failed pin_load reds the job itself) and the only one that fires regardless of which job in the release graph failed — `deploy`'s inline email and `reusable-release.yml`'s `notify-ops-email` step are job-scoped, so they are structurally silent for a failure outside their own job (#7138)"
-},
-"1jqvnjh6ie1uo": {
-"technology": "GitHub Actions environment protection (required_reviewers + deployment branch policy)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "github"
-},
-"id": "1jqvnjh6ie1uo",
-"title": "Approves a queued production-mutating rotate dispatch at the reviewer-gated `key-rotate-approval` environment: the credential-free `approve` job of key-rotate.yml (mode=rotate) and inngest-key-rotate.yml (rotate + converge) parks in `Waiting` until a listed reviewer approves in the Actions UI — `mode=plan` never gates. The environment carries NO secrets (the approve job holds none and DOPPLER_TOKEN_INFRA_PRIVILEGED stays on infra-privileged), so no github -> doppler carrier row is needed. The guard live-reads the env's `protection_rules` and refuses `approval_environment_unprotected` when required_reviewers or the main branch policy is absent; the PAT-dispatch residual is bounded by this distinct human act (ADR-317 amendment 2026-11-05, #11923)"
 },
 "1l1gtz1pvduj9": {
 "technology": "HTTPS",
@@ -2030,6 +2019,17 @@
 },
 "id": "1xrpzrr8q19ef",
 "title": "Injects secrets"
+},
+"20907t23auq5h": {
+"technology": "HTTPS (ClickHouse SQL)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "20907t23auq5h",
+"title": "cve-exposure host-state read: fixed read-only ClickHouse SQL through scripts/betterstack-query.sh under the Doppler prd_terraform credential via the upstream-verified reader (byte-identical to main); output is session-only; the same read now also decodes the periodic SOLEUR_HOST_KERNEL kernel marker (#12007), so a host reports `observed` only from a valid row at most 48 hours old, `stale` from an older periodic row or a failed-deploy row alone, and `unknown` otherwise; the query is documented in the betterstack-log-query runbook"
 },
 "20mxc9i97mhst": {
 "technology": "File I/O",
@@ -2346,17 +2346,6 @@
 "id": "2hx5cdjc3tumy",
 "title": "Fetches its OWN zot image at first boot as the pinned release asset zot-image-<version>-<D12> (a prerelease of this repo) - NEVER from itself (bootstrap paradox) and NEVER from ghcr.io, which the first runcmd entry name-resolution-denies (heartbeat ghcr_blocked). zot-image-fetch.sh runs under env -i and refuses unless the tarball sha256 is the pinned T, its manifest is D naming config C, and the loaded image ID is C or D; zot runs by that verified ID (heartbeat zot_image_fetch). Every route that creates the host runs preflight P6 on the asset first; rule-audit probes it on its cron. amd64 only. Detail: ADR-096 amendment 2026-09-28 (part 2)"
 },
-"2i94un6wpqlhz": {
-"technology": "curl → Better Stack Logs + heartbeats (HTTPS, eu-fsn-3)",
-"source": {
-"model": "zotRegistry"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "2i94un6wpqlhz",
-"title": "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event, plus a SOLEUR_PRIVATE_NIC private-NIC convergence event (#6415), to the SHARED Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK|SOLEUR_PRIVATE_NIC (#6244/#6415). SOURCE 2457081 IS NOT ISOLATED TO THIS HOST — the web hosts and the Inngest node ship to the SAME source (see the hetzner and inngest edges), and an earlier version of this description called it 'the isolated Logs source', contradicting those edges. Rows are told apart only by a per-host discriminator, and on THIS edge that discriminator is an IN-MESSAGE host= token, never the host_name FIELD: host_name is Vector-populated and this host runs no Vector, so a direct curl POST carries none. SINCE #7440/ADR-184 THIS EDGE ALSO CARRIES THE ZOT CONTAINER LOG STREAM. a 5-minute /etc/cron.d/zot-log-shipper one-shot (NOT a daemon — ADR-184 §4 rejects Restart=always on this host because it has no in-place execution path, so every daemon failure mode costs a destructive replace) reads journald CONTAINER_NAME=zot (the container already runs --log-driver journald, so this was a SHIPPING gap, not an instrumentation one) and POSTs each line envelope-stamped as `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<hostname> <sanitized line>`, plus SOLEUR_ZOT_LOG_DROPPED rate-cap accounting rows and a one-shot SOLEUR_ZOT_LOG_BOOT delivery marker. Before it, the ONLY registry observability was the 5-min heartbeat, which samples one log line per interval — so every count derived from it was a LOWER BOUND, and a 6h measurement on 2026-08-11 found 72 rows for this host, all 72 heartbeats, with ZERO genuine zot log lines ever having reached the warehouse. ALSO pushes two distinct absence-based heartbeats, whose scopes must not be conflated: the 900s disk beat pings on df alone, so it alarms HOST death but stays green with zot dead; the 60s liveness beat (zot-liveness-heartbeat.timer, #6537) pings ONLY while zot answers on the host's own PRIVATE IP — never loopback, since zot binds 0.0.0.0 and loopback answers on a NIC-less host (#6400). That 60s beat doubles as the container-log channel's free positive control: zot logs every request at info, so a genuine zot line lands every minute BY CONSTRUCTION (~1,440/day), traversing the whole path a shipper-emitted canary would skip. The liveness beat's monitor is armed (#6537's feeder shipped; up/unpaused, re-measured 2026-09-24); consumer-perspective reachability is BUILT (#6438 §1): each web host runs web-zot-consumer-probe against its own per-host heartbeat (see the hetzner -> zotRegistry edge). SINCE #7270 THE HEARTBEAT ALSO SAYS WHY THE LIVENESS BEAT WAS WITHHELD: the feeder keeps per-boot counters in tmpfs after every beat, and SOLEUR_ZOT_DISK carries them in its trusted region as liveness_miss_cum, liveness_ping_fail_cum, liveness_ok_cum, liveness_late_ok_cum and liveness_last_miss_code, with no new token or egress on the feeder. It reaches the host through the registry-host replace that registry-host-replace-dispatch fires on the merge (#8361, the size-limit blocker named below, closed 2026-09-20). DO NOT LOOK FOR A HOST-SIDE SOLEUR_ZOT_INVENTORY EMITTER — THERE IS NONE. That marker lands on the same source 2457081 but is emitted by GITHUB ACTIONS (see the github -> betterstack edge), not by this host, and it reads the token from soleur/prd rather than this host's isolated soleur-registry/prd copy. Note what that does NOT imply any more: the reason USED to be that a host-side emitter needs a REPLACE and no safe replace existed while the LUKS recut was unfired, but the recut HAS fired (pcent 100 -> 8 across 2026-08-04 -> 2026-08-10) and ADR-184 §6 retires that blocker, so CI-side emission is no longer the only near side of the deadlock. The inventory marker stays CI-side because a runner can compute a catalog-wide enumeration the host cannot, not because the host is uninstrumentable. A host-side change still applies NOTHING at merge (cloud-init-only, ADR-096) and waits for the next provisioning event — that rule is unchanged and still governs the NEXT such change. This shipper, however, is no longer waiting: DELIVERED 2026-08-12T20:54:12Z by a DEDICATED registry-host-replace (run 31639782781), and the earlier wording here — that delivery rides the step-6 registry-host-replace of the zot-pin ordered path — is RETRACTED 2026-08-12 (#7455) as falsified by ORDERING rather than by being wrong when written. That step-6 replace had already fired atomically inside registry-luks-recut on 2026-08-10T22:08Z, ~45h BEFORE this shipper merged (2026-08-12T19:38Z), so it carried nothing and the shipper sat inert on a host born before it existed. A rider is only valid while its vehicle is still pending. First PASS was read back OUT of the warehouse at 2026-08-12T21:03:51Z (37 envelope rows against a floor of 7, boot_marker present), which flipped ADR-184 adopting -> accepted. SINCE #8386 THE HEARTBEAT ALSO CARRIES THE STORE'S AT-REST POSTURE: store_mount_src, store_backing_dev, store_mount_devid, store_expected_devid and store_luks, all placed AHEAD of the free-text zot_last_err tail so they sit in the trusted region a consumer may parse. This is what makes hcloud_volume.registry's LUKS claim measurable off-box — before it, the claim rested on one 2026-08-10 registry_luks_recut job log and nothing observed whether the mapper reopened after any later replace. UNDELIVERED AT MERGE: it reaches the host only through a registry-host replace, blocked while #8361 keeps apply-web-platform-infra.yml over the workflow-file size limit."
-},
 "2iqc4z29wj0ob": {
 "source": {
 "model": "founder"
@@ -2453,6 +2442,17 @@
 },
 "id": "2pdvbpkpcib7q",
 "title": "Reaps the agent session by stopping its scope, via BindsTo= on the terminal's own scope — a UNIT dependency, because adoption moves the process out of the terminal's cgroup so co-membership can no longer do it (ADR-161)"
+},
+"2prv3rd7qvp6e": {
+"technology": "Vector → Better Stack Logs (HTTPS)",
+"source": {
+"model": "platform.infra.hetzner"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "2prv3rd7qvp6e",
+"title": "Ships journald + host_metrics via Vector to the shared Logs source 2457081 -- AND, since #4786 / 2026-06-02, the user-serving `soleur-web-platform` application container's pino stdout at severity WARN and above (`level_int >= 40`), which is the HIGHEST-SENSITIVITY payload on this edge: it carries `userIdHash`, conversation identifiers, request metadata and error stack traces. That stream was absent from this description until #7786, in exactly the way the legal corpus understated it -- naming the host telemetry plane and omitting the user-serving container. Its `userIdHash` is computed in the APPLICATION's pino logger before the line reaches journald, not by Vector's HMAC transform (which short-circuits for this stream) (per-host host_name discriminator; token BETTERSTACK_LOGS_TOKEN in soleur/prd); ungated from web_colocate_inngest so every web host ships logs post-ADR-100 (#6396). CREATE-TIME-RENDER CAVEAT (#6616, same class as the tunnel-connector coin-flip): the per-host host_name is a construction-time render, so web-1 — which predates #6396 and, under lifecycle{ignore_changes=[user_data]}, never re-ran cloud-init — shipped host_name=soleur-inngest-prd until 2026-09-19 (its inngest-owned vector.service from the co-located era), colliding on source 2457081 with the dedicated Inngest node until web-1's recreate cleared the stale label; that collision ended 2026-09-19. The invariant is enforced by the #6616 follow-through, not by the render alone. host_metrics rows are stored as the bare Vector metric (host in tags.host, value in gauge.value, no host_name), which is the shape the web-2 emptiness gate reads (#9372, confirmed 2026-10-06). SINCE #11704 the same pino stream carries a counts-only, per-process rate-capped warn marker for a successful git-data replication push (`git_data_replication_success=1 transient_retried=<0|1>`; presence, not a count; ADR-068 addendum 2026-10-31); it exists only on images from the release carrying that change. SINCE #12007 (ADR-322 addendum 2026-11-08) the web hosts also ship the plain-text marker `SOLEUR_HOST_KERNEL v=1`, printed every 6 hours and once per boot by host-kernel-marker.sh under the fixed SyslogIdentifier host-kernel-marker through this same Vector path and its allowlist; identity is the Vector-stamped host_name (web-1 and web-2 are told apart by it) plus the exact SYSLOG_IDENTIFIER, the unit is pinned to host-kernel-marker.service, and a journald-path row whose message contains host= is rejected. Delivery per host class is the delivery matrix in the host-kernel section of runbooks/workspaces-luks-cutover-6604.md (running web hosts by the held provisioner pair, a fresh host through cloud-init); until a first row lands the host is `unknown` in the cve-exposure skill"
 },
 "2q69o0kgcwqkr": {
 "technology": "HTTPS",
@@ -2619,6 +2619,17 @@
 "id": "32wmv64tvrjlu",
 "title": "Statutory triage notifications (to the claimed row's owner, today always the configured operator — ADR-269; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)"
 },
+"33ci096wc63n6": {
+"technology": "cloudflared access tcp/ssh (CF Access service token; admission liveness-gated in-bridge since #7133)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "platform.infra.tunnel"
+},
+"id": "33ci096wc63n6",
+"title": "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 28 server.tf terraform_data SSH provisioners (27 plus the read-only web_1_host_key_probe, the count web-host-provisioner-parity.test.sh pins as FLOOR_RESOURCES; #12007 added host_kernel_marker_install and host_kernel_marker_install_web2, the latter reached by the same ssh -L forward through the pinned web-1 bastion as deploy_pipeline_fix_web2 with no new tunnel ingress, both operator-applied rather than delivered by the merge; #9151 added deploy_pipeline_fix_web2, which apply-deploy-pipeline-fix.yml reaches by an ssh -L 2223:<web-2-private>:22 forward THROUGH the pinned web-1 bastion plus a second OUTPUT REDIRECT — web-2's pinned host key on the connection block, no new tunnel ingress; #9534 added egress_gateway and egress_gateway_web2, both in apply-web-platform-infra.yml's SSH-stage target list, which opens no web-2 forward because the shared bridge redirects web-1 only) — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access). The ssh. hop also carries git-data-cutover.yml's jump to the git-data store (ADR-220). HOST KEY PINNED (ADR-237, #7226/#8125): web-1's ECDSA-P256 host key is a committed, reviewed pin (apps/web-platform/infra/web-1-ssh-host-key.pub, captured outside Cloudflare) that the bridge writes into a strict known_hosts for its bash callers and that every Terraform connection block sets as host_key, so neither the CF edge nor anything else can stand in for web-1; a mismatch fails closed. ACCESS AND TUNNEL ARE SEPARABLE AND THIS EDGE DEPENDS ON BOTH — a distinction this model otherwise elides (there is no distinct Access node; it lives only in edge descriptions like this one). ADMISSION is decided by CF Access at the edge; TRANSPORT is the tunnel. They fail independently, and the Access failure is the one that looks healthy: cloudflared connects, the local 127.0.0.1:2222 listener opens, and `nc -z` succeeds, because the service-token handshake is refused only when a connection is actually proxied. 2026-07-28 CAUSE CLASS (#7095), a SECOND instance of the token-rotation shape recorded on the registry. edge above but on the ssh. route: the ci_ssh Access service token was rotated out-of-band during incident response, and since Cloudflare returns client_secret ONLY at create, both Terraform state and Doppler went stale invisibly while `terraform plan` stayed clean. Run 30650564509 built this bridge, DESTROYED terraform_data.{infra_config_handler_bootstrap,deploy_pipeline_fix}, and only then failed on `ssh: handshake failed: connection reset by peer` — leaving state emptier than reality and production undeployable for 3 days on a host whose cx33 type had 0/6 datacenter stock, i.e. unreplaceable. GATED SINCE #7133 (ADR-154): the shared cf-tunnel-ssh-bridge composite's FINAL step asserts Access still admits the credential and fails with a named reason (ci_ssh_access_denied / ci_ssh_liveness_unverifiable / ci_ssh_liveness_unavailable) BEFORE any caller's terraform runs. Repair path is the ci-ssh-token-replace dispatch arm, never a host replace."
+},
 "33oelk4lvl3u7": {
 "technology": "HTTPS/SSH",
 "source": {
@@ -2717,17 +2728,6 @@
 "id": "387i48ce28fsa",
 "title": "Pages the operator — the LARGER of two independent exits (betterstack is the other; a Sentry outage is survivable BY DESIGN). Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list). Every rule is a `sentry_alert` carrying the route as `action_filters[].actions[].email` with a lowercase `target_type = issue_owners`; since #8451 the two rules whose `event_unique_user_frequency_count` trigger the pinned provider cannot express (`auth_per_user_loop` and `sandbox_startup_failure`) are FROZEN `sentry_alert` blocks (`legacy_trigger_conditions`, `ignore_changes = all`), no longer `sentry_issue_alert`. `scripts/sentry-alert-live-fidelity.sh` checks every `sentry_alert` field-for-field against the plan-derived reference (#8050) after each apply and daily. One further rule is live in the project and ABSENT FROM IaC: the Sentry-default `Send a notification for high priority issues` — empty filters, null environment, NotifyEmailAction with target_type IssueOwners and fallthrough_type ActiveMembers. Its conditions are New/ExistingHighPriorityIssueCondition, i.e. FIRST-SEEN and ESCALATED-TO — NOT a recurrence of an issue that is already high priority. Since Sentry derives high priority from level, it is what actually routes a level=error event carrying no matching tag filter (the release-outcome mirror among them), and a repeat of an identical event is silent on this route. It is UI-managed, so ADR-031's IaC-is-the-source-of-truth posture does not cover it; tracked as #7142. NB IssueOwners has no ownership rule on this project, so the fallthrough is what actually reaches a human: a NoOne rule fires and pages nobody, by design only where issue-alerts.tf says so and a defect anywhere else. The cron monitors open an issue on a missed/failed check-in (per-monitor failure_issue_threshold). Since #8630 those issues reach email through one more `sentry_alert`, `cron_monitor_failure` in cron-monitor-alerts.tf, which binds every routed cron detector in `monitor_ids` (first-seen, reappeared and regression triggers; at most one email per monitor per 24 h) with the same issue_owners → ActiveMembers route. A MUTED monitor environment creates no issue, so it pages nobody even though it is routed; mute is not expressible in the provider. The uptime monitors open an issue on downtime, but their detectors are bound to no workflow, so this edge claims no route for them"
 },
-"38rzye6381gyj": {
-"technology": "Vector → Better Stack Logs (HTTPS)",
-"source": {
-"model": "platform.infra.hetzner"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "38rzye6381gyj",
-"title": "Ships journald + host_metrics via Vector to the shared Logs source 2457081 -- AND, since #4786 / 2026-06-02, the user-serving `soleur-web-platform` application container's pino stdout at severity WARN and above (`level_int >= 40`), which is the HIGHEST-SENSITIVITY payload on this edge: it carries `userIdHash`, conversation identifiers, request metadata and error stack traces. That stream was absent from this description until #7786, in exactly the way the legal corpus understated it -- naming the host telemetry plane and omitting the user-serving container. Its `userIdHash` is computed in the APPLICATION's pino logger before the line reaches journald, not by Vector's HMAC transform (which short-circuits for this stream) (per-host host_name discriminator; token BETTERSTACK_LOGS_TOKEN in soleur/prd); ungated from web_colocate_inngest so every web host ships logs post-ADR-100 (#6396). CREATE-TIME-RENDER CAVEAT (#6616, same class as the tunnel-connector coin-flip): the per-host host_name is a construction-time render, so web-1 — which predates #6396 and, under lifecycle{ignore_changes=[user_data]}, never re-ran cloud-init — still ships host_name=soleur-inngest-prd (its inngest-owned vector.service from the co-located era), colliding on source 2457081 with the dedicated Inngest node until web-1's next recreate. The invariant is enforced by the #6616 follow-through, not by the render alone. host_metrics rows are stored as the bare Vector metric (host in tags.host, value in gauge.value, no host_name), which is the shape the web-2 emptiness gate reads (#9372, confirmed 2026-10-06). SINCE #11704 the same pino stream carries a counts-only, per-process rate-capped warn marker for a successful git-data replication push (`git_data_replication_success=1 transient_retried=<0|1>`; presence, not a count; ADR-068 addendum 2026-10-31); it exists only on images from the release carrying that change"
-},
 "394luvufs3uia": {
 "technology": "PreToolUse hook (deny disposition, ADR-162)",
 "source": {
@@ -2781,17 +2781,6 @@
 },
 "id": "3czdvmt9evxi3",
 "title": "Supplies the immutable run binding"
-},
-"3dkxkb5pgtzp7": {
-"technology": "HTTPS (ClickHouse SQL Logs read + Logs INGEST write + Uptime monitors + heartbeats API, eu-fsn-3; --disable/--noproxy confined)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "3dkxkb5pgtzp7",
-"title": "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes, and — since #11631 — scheduled-deadman-heartbeat-feeder.yml reads the Logs archive hourly (remote() UNION s3Cluster, via betterstack-query.sh) and, only when a qualifying luks-monitor or cost-marker row exists, sends one beat to the matching dead-man heartbeat (URL resolved through the read-only heartbeats API; a withheld beat is the page), and reads the Uptime API read-only (GET /api/v2/monitors + GET /api/v2/heartbeats) for the live reconcile. SINCE #8178 it also polls git-data's OWN Logs source 2734275 (t520508_soleur_git_data_prd_logs) for stage:boot_complete, from both the birth job (since #6982) and the replace job; that read pins the source rather than taking betterstack-query.sh's default (the shared 2457081, which holds no git-data rows) and resolves its credentials through doppler run -c prd_terraform, because the repository-secret connection does not cover this source (#7867). The heartbeats read (GET /api/v2/heartbeats) comes from the scheduled-terraform-drift.yml heartbeat-live-reconcile job (#6549 item 2): it reconciles the LIVE paused/existence of each monitored heartbeat against the executable MANIFEST (heartbeat-manifest.ts) and flags fed-but-paused (the #6537 shape) or non-count-gated-absent-live (the #6548 git-data shape) — the live-state layer ADR-117's static guard cannot see. SINCE #7884/ADR-222 the same job also reads GET /api/v2/monitors and reconciles every live monitor (by literal declared url) and heartbeat (by declared name, for_each/count resolved from literal variable defaults) against the apps/web-platform/infra declarations: reason=unmanaged-live for a live object no declaration accounts for (issue also labeled infra-drift), reason=monitor-config-drift when a declared monitor's live monitor_type, required_keyword or paused differs, or a declared alerting/cadence attribute (email, call, sms, push, confirmation_period, check_frequency, request_timeout, recovery_period, verify_ssl, follow_redirects) differs, or a maintenance window is live (the vendor-side disarm of the database-readiness alarm; emails every run), and a SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n> line every run in which both reads succeed — a measured object count in place of an asserted vendor cap. Distinct surface from the Logs poll above. SINCE #6178/ADR-146 this edge also carries a SAFETY-CRITICAL read: cutover-inngest.yml op=verify derives the double-fire scan window's trust anchor from the on-host flip-FSM transition row via the same Logs query path, so a retention miss or query failure degrades the anchor and ultimately FAILS the verify closed. SINCE #8054 (ADR-100 addendum 2026-09-11) op=execute step 2.0 is a SECOND safety-critical read on this edge: when the webhook's GQL forward returns non-200 (the EXPECTED pre-arm state under P1-5), 2.0 reads the dedicated host's SOLEUR_INNGEST_SERVER_PROBE row and the inngest-cutover-flip heartbeat as TWO separate --grep reads (an OR-combined read was measured starving the hourly probe row out of a 500-row window) and grades a POSITIVELY dark host through tests/scripts/lib/inngest-host-dark-gate.sh's inngest_execute_registry_gate; a retention miss, a query failure, an absent row or a stale boot each REFUSE 2.0 closed, exactly as they fail verify closed. Both reads go through scripts/betterstack-query.sh, so the --disable/--noproxy obligation below is inherited, not re-implemented. SINCE #7278/ADR-172 THIS EDGE IS NO LONGER READ-ONLY: registry-zot-inventory.yml POSTs a SOLEUR_ZOT_INVENTORY marker to the Logs INGEST endpoint (https://s2457081.eu-fsn-3.betterstackdata.com/, Authorization: Bearer BETTERSTACK_LOGS_TOKEN). READ THE CONFIG NAME: CI reads that token from the **soleur/prd** root via secrets.DOPPLER_TOKEN_PRD — NOT from soleur-registry/prd, which is what the zotRegistry -> betterstack edge names for the HOST's copy. A reader who takes the isolated project's credential as CI's requirement will conclude, wrongly, that this needs a new Doppler grant; it needs none, and that is why the design is zero-Terraform (the soleur/prd copy is out-of-band and deliberately NOT Terraform-declared — ADR-172 §6). The POST is measured, not assumed: 202 on ingest, ~17 s POST->queryable, and the run is green only after the SAME ClickHouse read path returns the line carrying this run's run_id with enumeration_complete=true. AND THE ADR-172 WRITE IS NOT THE ONLY ONE — an older one goes unnamed above: apply-web-platform-infra.yml's measured-beat ARM gate PATCHes /api/v2/heartbeats/<id> with {paused:false} to begin arming and {paused:true} to roll back, from apps/web-platform/infra/arm-heartbeats.sh (extracted out of the workflow in #7587) and from the if: always() re-pause sweep step beside it. It authenticates with a DEDICATED write credential — BETTERSTACK_API_TOKEN read via secrets.DOPPLER_TOKEN_WEB_ARM (doppler_service_token.web_arm_write) — NOT the DOPPLER_TOKEN_PRD path the ingest write above names, and its blast radius is account-wide and recorded in ADR-117. Zero SOLEUR_ZOT_DISK control rows in the poll window means channel_dark, never marker_absent. SINCE #7873 every credentialed curl on this edge is REQUIRED to be TRANSPORT-CONFINED (--disable first, --noproxy '*'): a pinned URL alone does not pin a destination, because curl honours ALL_PROXY/HTTPS_PROXY and ~/.curlrc before the host it was given. Stated as an OBLIGATION, not as an accomplished fact (ADR-202): Rule D of lint-shell-trace-credential-refusal.py blocks on any file the PR touches (--changed bypasses the baseline), but repo-wide it carries a baselined remainder of 65 files (measured 2026-09-11; #8054 drew scripts/cutover-inngest.sh, the cutover orchestrator with 24 credentialed curls, down to zero) -- including arm-heartbeats.sh, a writer named on THIS edge. Drawdown tracked in #7898. SINCE #8386 a further follow-through probe reads this source: scripts/followthroughs/registry-luks-live-8386.sh polls SOLEUR_ZOT_DISK for the store_luks / store_mount_devid posture fields. Treat it as a SAFETY-CRITICAL INPUT in the ADR-146 sense — its verdict gates an encryption-posture LEDGER ROW (hcloud_volume.registry), so a retention miss, a query failure or an absent row must degrade to ACTION REQUIRED rather than to a pass. It is deliberately NOT auto-closing: source 2457081 is shared and multi-tenant with one ingest token and host=/boot_id are producer-controlled inside the message, so three producer-shaped rows are forgeable and that is not adequate authority to close a security tracker unattended (its V7 exits 5). It uses the BETTERSTACK_QUERY_* credentials the sweeper already holds and issues no GitHub Actions call, because the sweeper has no actions: read. ENROLMENT IS NOT AUTOMATIC: the sweeper selects on `--label follow-through --state open` plus a column-0 `<!-- soleur:followthrough -->` directive in #8386's body, so this read begins only once that label and that directive land — at merge it polls nothing. From 2026-10-07 until its retirement on 2026-10-12 (#9372) the `observe` job of web-host-reboot.yml also polled web-2's journald boot, probe and readiness rows through scripts/web-host-reboot-evidence.sh (read-only, rows only, no statement about the volume). SINCE #6931/ADR-263 the daily workspaces-luks-verify.yml `web2_marker` leg and the web2-luks-live-6931 follow-through also read web-2's `luks-monitor` probe row (host_name soleur-web-2) and its once-per-instance SOLEUR_FRESH_BOOT_READY row through scripts/lib/web2-luks-rows.sh (a raw SELECT with an explicit host predicate; the readiness row has no host dimension, only a host= token in its message). Both rows are producer-shaped and host-forgeable, so the verdict is advisory evidence for the soak marker, not an authority. SINCE #11704 git-data-cutover.yml mode=flip reads the per-host new-sessions pause line in its flip-preconditions step (verdicts pause_not_on and pause_unread; a precondition-time check, not a lock). scripts/followthroughs/git-data-replication-signal.sh is a second, OPERATOR-RUN reader here (no workflow references it; its test runs on fixtures only): it grades the replication-success marker against the reporter line (ADR-068 addendum 2026-10-31)"
 },
 "3dygujozzss1t": {
 "source": {
@@ -2856,17 +2845,6 @@
 },
 "id": "3idpj0g67ih89",
 "title": "Incident mirror (ADR-298, epic #10390): scheduled-betterstack-incident-mirror.yml runs every 15 min (watchdog-dispatch primary — it watches the paging substrate, so it cannot be Inngest-scheduled — plus schedule: fallback), reads GET /api/v2/incidents?resolved=false with BETTERSTACK_API_TOKEN_READONLY (GET-only; bearer on curl stdin config, never argv; projected {id,name,cause,started_at} — ping URLs never echo) and files/dedupes/resolves [ci/betterstack-incident] issues on jikig-ai/soleur keyed on a <!-- betterstack-incident id= --> body marker, never title alone (the #10918 title-confusion class). Read failures are fail-loud: error Sentry check-in on sentry_cron_monitor.scheduled_betterstack_incident_mirror (unrouted at first apply, two-PR rule) + ::error::. The issue WRITE is github-internal (github.token, issues:write) — a github -> github self-relation LikeC4 refuses, recorded here per the #8359/ADR-232 convention"
-},
-"3ijae32ni13da": {
-"technology": "HTTPS (ClickHouse SQL)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "3ijae32ni13da",
-"title": "cve-exposure host-state read: fixed read-only ClickHouse SQL through scripts/betterstack-query.sh under the Doppler prd_terraform credential via the upstream-verified reader (byte-identical to main); output is session-only"
 },
 "3iwk8dw7n1ck1": {
 "technology": "HTTPS (Flagsmith Admin API)",
@@ -3182,17 +3160,6 @@
 "id": "4v59hychoe17",
 "title": "Writes spec.c4 / model.c4 / views.c4 cwd-relative — same directory sync generates into (ADR-171 two-writer precedence)"
 },
-"5m2fl0vsjyf8": {
-"technology": "cloudflared access tcp/ssh (CF Access service token; admission liveness-gated in-bridge since #7133)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "platform.infra.tunnel"
-},
-"id": "5m2fl0vsjyf8",
-"title": "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 25 terraform_data SSH provisioners (24 plus the read-only web_1_host_key_probe; #9151 added deploy_pipeline_fix_web2, which apply-deploy-pipeline-fix.yml reaches by an ssh -L 2223:<web-2-private>:22 forward THROUGH the pinned web-1 bastion plus a second OUTPUT REDIRECT — web-2's pinned host key on the connection block, no new tunnel ingress; #9534 added egress_gateway and egress_gateway_web2, both in apply-web-platform-infra.yml's SSH-stage target list, which opens no web-2 forward because the shared bridge redirects web-1 only) — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access). The ssh. hop also carries git-data-cutover.yml's jump to the git-data store (ADR-220). HOST KEY PINNED (ADR-237, #7226/#8125): web-1's ECDSA-P256 host key is a committed, reviewed pin (apps/web-platform/infra/web-1-ssh-host-key.pub, captured outside Cloudflare) that the bridge writes into a strict known_hosts for its bash callers and that every Terraform connection block sets as host_key, so neither the CF edge nor anything else can stand in for web-1; a mismatch fails closed. ACCESS AND TUNNEL ARE SEPARABLE AND THIS EDGE DEPENDS ON BOTH — a distinction this model otherwise elides (there is no distinct Access node; it lives only in edge descriptions like this one). ADMISSION is decided by CF Access at the edge; TRANSPORT is the tunnel. They fail independently, and the Access failure is the one that looks healthy: cloudflared connects, the local 127.0.0.1:2222 listener opens, and `nc -z` succeeds, because the service-token handshake is refused only when a connection is actually proxied. 2026-07-28 CAUSE CLASS (#7095), a SECOND instance of the token-rotation shape recorded on the registry. edge above but on the ssh. route: the ci_ssh Access service token was rotated out-of-band during incident response, and since Cloudflare returns client_secret ONLY at create, both Terraform state and Doppler went stale invisibly while `terraform plan` stayed clean. Run 30650564509 built this bridge, DESTROYED terraform_data.{infra_config_handler_bootstrap,deploy_pipeline_fix}, and only then failed on `ssh: handshake failed: connection reset by peer` — leaving state emptier than reality and production undeployable for 3 days on a host whose cx33 type had 0/6 datacenter stock, i.e. unreplaceable. GATED SINCE #7133 (ADR-154): the shared cf-tunnel-ssh-bridge composite's FINAL step asserts Access still admits the credential and fails with a named reason (ci_ssh_access_denied / ci_ssh_liveness_unverifiable / ci_ssh_liveness_unavailable) BEFORE any caller's terraform runs. Repair path is the ci-ssh-token-replace dispatch arm, never a host replace."
-},
 "75gt0qtt240x": {
 "technology": "HTTPS (Web Push / VAPID)",
 "source": {
@@ -3224,6 +3191,17 @@
 },
 "id": "8p9oloc4osac",
 "title": "Phase 0.5 assessment"
+},
+"9kpu4xmy19ky": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "9kpu4xmy19ky",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job holds the deploy webhook credentials only. Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-317) is a loader consumer in its apply and clear jobs: its guard, redeploy and notify jobs hold no Doppler credential (the guard reads the GitHub API only, the redeploy job names the deploy webhook credentials in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
 },
 "ajv7s70947f": {
 "technology": "Slack push",
@@ -3492,6 +3470,17 @@
 "id": "rukmrzv940cv",
 "title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND — since #9178/ADR-260 — field Core Web Vitals RUM: sampled pageload/navigation transactions from browserTracingIntegration carrying LCP/CLS/INP/FCP/TTFB measurements (tracesSampler 0.1 real sessions, 1.0 under the soleur.perf-probe marker; the standalone webVitalsIntegration path was rejected — it covers only cls/inp/lcp, never FCP/TTFB), scrubbed by the same beforeSend* PII chain extended to transaction and span payloads; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 13 Inngest-substrate sentry_cron_monitors"
 },
+"s79tukw6hgh2": {
+"technology": "curl → Better Stack Logs + heartbeats (HTTPS, eu-fsn-3)",
+"source": {
+"model": "zotRegistry"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "s79tukw6hgh2",
+"title": "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event, plus a SOLEUR_PRIVATE_NIC private-NIC convergence event (#6415), to the SHARED Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK|SOLEUR_PRIVATE_NIC (#6244/#6415). SOURCE 2457081 IS NOT ISOLATED TO THIS HOST — the web hosts and the Inngest node ship to the SAME source (see the hetzner and inngest edges), and an earlier version of this description called it 'the isolated Logs source', contradicting those edges. Rows are told apart only by a per-host discriminator, and on THIS edge that discriminator is an IN-MESSAGE host= token, never the host_name FIELD: host_name is Vector-populated and this host runs no Vector, so a direct curl POST carries none. SINCE #7440/ADR-184 THIS EDGE ALSO CARRIES THE ZOT CONTAINER LOG STREAM. a 5-minute /etc/cron.d/zot-log-shipper one-shot (NOT a daemon — ADR-184 §4 rejects Restart=always on this host because it has no in-place execution path, so every daemon failure mode costs a destructive replace) reads journald CONTAINER_NAME=zot (the container already runs --log-driver journald, so this was a SHIPPING gap, not an instrumentation one) and POSTs each line envelope-stamped as `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<hostname> <sanitized line>`, plus SOLEUR_ZOT_LOG_DROPPED rate-cap accounting rows and a one-shot SOLEUR_ZOT_LOG_BOOT delivery marker. Before it, the ONLY registry observability was the 5-min heartbeat, which samples one log line per interval — so every count derived from it was a LOWER BOUND, and a 6h measurement on 2026-08-11 found 72 rows for this host, all 72 heartbeats, with ZERO genuine zot log lines ever having reached the warehouse. ALSO pushes two distinct absence-based heartbeats, whose scopes must not be conflated: the 900s disk beat pings on df alone, so it alarms HOST death but stays green with zot dead; the 60s liveness beat (zot-liveness-heartbeat.timer, #6537) pings ONLY while zot answers on the host's own PRIVATE IP — never loopback, since zot binds 0.0.0.0 and loopback answers on a NIC-less host (#6400). That 60s beat doubles as the container-log channel's free positive control: zot logs every request at info, so a genuine zot line lands every minute BY CONSTRUCTION (~1,440/day), traversing the whole path a shipper-emitted canary would skip. The liveness beat's monitor is armed (#6537's feeder shipped; up/unpaused, re-measured 2026-09-24); consumer-perspective reachability is BUILT (#6438 §1): each web host runs web-zot-consumer-probe against its own per-host heartbeat (see the hetzner -> zotRegistry edge). SINCE #7270 THE HEARTBEAT ALSO SAYS WHY THE LIVENESS BEAT WAS WITHHELD: the feeder keeps per-boot counters in tmpfs after every beat, and SOLEUR_ZOT_DISK carries them in its trusted region as liveness_miss_cum, liveness_ping_fail_cum, liveness_ok_cum, liveness_late_ok_cum and liveness_last_miss_code, with no new token or egress on the feeder. It reaches the host through the registry-host replace that registry-host-replace-dispatch fires on the merge (#8361, the size-limit blocker named below, closed 2026-09-20). DO NOT LOOK FOR A HOST-SIDE SOLEUR_ZOT_INVENTORY EMITTER — THERE IS NONE. That marker lands on the same source 2457081 but is emitted by GITHUB ACTIONS (see the github -> betterstack edge), not by this host, and it reads the token from soleur/prd rather than this host's isolated soleur-registry/prd copy. Note what that does NOT imply any more: the reason USED to be that a host-side emitter needs a REPLACE and no safe replace existed while the LUKS recut was unfired, but the recut HAS fired (pcent 100 -> 8 across 2026-08-04 -> 2026-08-10) and ADR-184 §6 retires that blocker, so CI-side emission is no longer the only near side of the deadlock. The inventory marker stays CI-side because a runner can compute a catalog-wide enumeration the host cannot, not because the host is uninstrumentable. A host-side change still applies NOTHING at merge (cloud-init-only, ADR-096) and waits for the next provisioning event — that rule is unchanged and still governs the NEXT such change. This shipper, however, is no longer waiting: DELIVERED 2026-08-12T20:54:12Z by a DEDICATED registry-host-replace (run 31639782781), and the earlier wording here — that delivery rides the step-6 registry-host-replace of the zot-pin ordered path — is RETRACTED 2026-08-12 (#7455) as falsified by ORDERING rather than by being wrong when written. That step-6 replace had already fired atomically inside registry-luks-recut on 2026-08-10T22:08Z, ~45h BEFORE this shipper merged (2026-08-12T19:38Z), so it carried nothing and the shipper sat inert on a host born before it existed. A rider is only valid while its vehicle is still pending. First PASS was read back OUT of the warehouse at 2026-08-12T21:03:51Z (37 envelope rows against a floor of 7, boot_marker present), which flipped ADR-184 adopting -> accepted. SINCE #8386 THE HEARTBEAT ALSO CARRIES THE STORE'S AT-REST POSTURE: store_mount_src, store_backing_dev, store_mount_devid, store_expected_devid and store_luks, all placed AHEAD of the free-text zot_last_err tail so they sit in the trusted region a consumer may parse. This is what makes hcloud_volume.registry's LUKS claim measurable off-box — before it, the claim rested on one 2026-08-10 registry_luks_recut job log and nothing observed whether the mapper reopened after any later replace. UNDELIVERED AT MERGE: it reaches the host only through a registry-host replace, blocked while #8361 keeps apply-web-platform-infra.yml over the workflow-file size limit.. HELD, NOT POSTED TODAY (#12007, ADR-322 addendum 2026-11-08 and its #12007 fix round): the registry does NOT post `SOLEUR_HOST_KERNEL` today. The registry-side emitter (a 6-hourly stamp-gated block in zot-disk-heartbeat.sh reusing the existing post() sender) ships in a separate owner-approved follow-up PR (#12386), because merging a change to cloud-init-registry.yml auto-fires registry-host-replace-dispatch.yml (ADR-190) and replaces the production registry host. The collector's `--role registry` support and the helper and feeder decode (identity is the in-message pair role=registry plus host=, both required, because this host runs no Vector) are already in place, so the registry stays `unknown` in the cve-exposure skill until that follow-up merges"
+},
 "sbh0j17zkbip": {
 "technology": "Event hook",
 "source": {
@@ -3567,6 +3556,17 @@
 },
 "id": "uyddfvfidosi",
 "title": "crm_* MCP tools read AND write the owner-private CRM via auth.uid()-pinned RPCs (agent-native parity)"
+},
+"vbhbq1beo76i": {
+"technology": "GitHub Actions environment protection (required_reviewers + deployment branch policy)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "github"
+},
+"id": "vbhbq1beo76i",
+"title": "Approves a queued production-mutating rotate dispatch at the reviewer-gated `key-rotate-approval` environment: the credential-free `approve` job of key-rotate.yml (mode=rotate) and inngest-key-rotate.yml (rotate + converge) parks in `Waiting` until a listed reviewer approves in the Actions UI — `mode=plan` never gates. The environment carries NO secrets (the approve job holds none and DOPPLER_TOKEN_INFRA_PRIVILEGED stays on infra-privileged), so no github -> doppler carrier row is needed. The guard live-reads the env's `protection_rules` and refuses `approval_environment_unprotected` when required_reviewers or the main branch policy is absent; the PAT-dispatch residual is bounded by this distinct human act (ADR-317 amendment 2026-11-05, #11923); since the 2026-11-08 ruling the parked dispatch may be owner- or agent-initiated under the owner's fresh, per-command, in-session go naming the exact full command, and the click stays the owner's"
 },
 "wpmscbozq4n1": {
 "technology": "WebSocket",
@@ -4572,7 +4572,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@1 serving since the 2026-11 serve flip (#12167); drain is an explicit ga-pool-update act}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -5908,7 +5908,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6179,7 +6179,7 @@
 },
 "parent": null,
 "relations": [
-"3ijae32ni13da"
+"20907t23auq5h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7877,10 +7877,10 @@
 },
 "parent": null,
 "relations": [
-"1csnfkovwrhwe",
+"195jq17ovy2dn",
 "1eiqdhwmybug3",
 "297phgcjd6fne",
-"38rzye6381gyj"
+"2prv3rd7qvp6e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8246,8 +8246,8 @@
 "2g0w538bran25",
 "2tj8f33jl4xt5",
 "2yr82vu9vvbf7",
+"33ci096wc63n6",
 "3uqa0opk3z597",
-"5m2fl0vsjyf8",
 "7lwv9h6xngcj"
 ],
 "color": "gray",
@@ -9139,9 +9139,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
@@ -9734,8 +9734,8 @@
 },
 "parent": null,
 "relations": [
-"1ufgt56pybycl",
-"3dkxkb5pgtzp7"
+"11e4u1o60scy7",
+"1ufgt56pybycl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -10216,7 +10216,7 @@
 },
 "parent": null,
 "relations": [
-"2i94un6wpqlhz"
+"s79tukw6hgh2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -11389,7 +11389,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@1 serving since the 2026-11 serve flip (#12167); drain is an explicit ga-pool-update act}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -13386,7 +13386,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14590,9 +14590,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
@@ -15789,7 +15789,7 @@
 },
 "parent": null,
 "relations": [
-"3ijae32ni13da"
+"20907t23auq5h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15887,8 +15887,8 @@
 },
 "parent": null,
 "relations": [
-"1ufgt56pybycl",
-"3dkxkb5pgtzp7"
+"11e4u1o60scy7",
+"1ufgt56pybycl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15937,7 +15937,7 @@
 },
 "parent": null,
 "relations": [
-"2i94un6wpqlhz"
+"s79tukw6hgh2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -17715,7 +17715,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, and a flag-gated PostToolUse(Bash) gh-output framing note, annotate-only, registered under the same web-egress and classify-flag predicate, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -19202,7 +19202,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@1 serving since the 2026-11 serve flip (#12167); drain is an explicit ga-pool-update act}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -21552,7 +21552,7 @@
 520
 ],
 [
-4819,
+4818,
 573
 ],
 [
@@ -21560,11 +21560,11 @@
 706
 ],
 [
-6901,
+6900,
 758
 ],
 [
-6919,
+6918,
 759
 ],
 [
@@ -21872,11 +21872,11 @@
 757
 ],
 [
-7038,
+7037,
 759
 ],
 [
-7018,
+7017,
 758
 ],
 [
@@ -21884,7 +21884,7 @@
 731
 ],
 [
-6625,
+6624,
 683
 ],
 [
@@ -23012,7 +23012,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23564,7 +23564,7 @@
 "id": "sd2896",
 "source": "github",
 "target": "platform.infra.tunnel",
-"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 25 terraform_data \nSSH provisioners (24 plus the read-only \nweb_1_host_key_probe; #9151 added ",
+"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 28 server.tf \nterraform_data SSH provisioners (27 plus \nthe read-only web_1_host_key_probe, the ",
 "points": [
 [
 13135,
@@ -23587,7 +23587,7 @@
 662
 ],
 [
-8059,
+8058,
 624
 ],
 [
@@ -23634,12 +23634,12 @@
 "labelBBox": {
 "x": 7104,
 "y": 648,
-"width": 265,
+"width": 266,
 "height": 106
 },
 "parent": null,
 "relations": [
-"5m2fl0vsjyf8"
+"33ci096wc63n6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24497,9 +24497,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
@@ -26238,7 +26238,7 @@
 },
 "parent": null,
 "relations": [
-"3ijae32ni13da"
+"20907t23auq5h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26313,7 +26313,7 @@
 "parent": null,
 "relations": [
 "297phgcjd6fne",
-"38rzye6381gyj"
+"2prv3rd7qvp6e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26398,7 +26398,7 @@
 },
 "parent": null,
 "relations": [
-"1csnfkovwrhwe"
+"195jq17ovy2dn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26618,8 +26618,8 @@
 },
 "parent": null,
 "relations": [
-"1ufgt56pybycl",
-"3dkxkb5pgtzp7"
+"11e4u1o60scy7",
+"1ufgt56pybycl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26668,7 +26668,7 @@
 },
 "parent": null,
 "relations": [
-"2i94un6wpqlhz"
+"s79tukw6hgh2"
 ],
 "color": "gray",
 "line": "dashed",
