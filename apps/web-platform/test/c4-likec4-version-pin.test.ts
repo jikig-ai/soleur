@@ -254,9 +254,10 @@ const PUSH_DEDUPE_IF = "${{ !cancelled() && (github.event_name == 'merge_group' 
 // that condition; scripts/ci-draft-light.test.sh pins the same string against ci.yml. web-platform-build does NOT take it.
 const DRAFT_LIGHT_IF = PUSH_DEDUPE_IF.replace(" }}", " && needs.draft-light.outputs.light != 'true' }}");
 // ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling): the PR-affected skip term and its lever are
-// gone. test-webplat's `if:` is the draft-light condition plus the oracle-lane conjunct below; the retired term's
-// spelling is deliberately NOT reconstructed here — scripts/ci-push-dedupe.test.sh's zero-reference census pins
+// gone. test-webplat's `if:` is the draft-light condition plus the oracle-lane conjunct below. The retired term's
+// spelling is kept ONLY as a refusal fixture below — scripts/ci-push-dedupe.test.sh's zero-reference census pins
 // that no `needs.pr-selection` read can reappear anywhere in ci.yml.
+const RETIRED_PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) }}");
 // ADR-276 oracle-only lane (#12156, amendment): the five lane-gated legs append ONE more `!(…)` conjunct after every
 // earlier term — event disjunct covering pull_request AND merge_group, `active == 'true'`, head_sha non-empty, head
 // bound to either event's sha, and membership in `oracle-selection`'s `skip_legs` list — and add `oracle-selection`
@@ -405,14 +406,13 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
       found.push(jobId);
       // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
       // Exceptions, exact strings only: the ADR-276 S2 (#9512) condition and its S3 draft-light append (any job),
-      // the ADR-276 S4 PR-affected term (test-webplat only), and the ADR-276 oracle-lane conjunct (#12156) on the
-      // two legs it is spelled for — ORACLE_WEBPLAT_IF on test-webplat, ORACLE_SCRIPTS_IF on test-scripts. An
-      // oracle-shaped condition on any other job is still refused.
+      // and the ADR-276 oracle-lane conjunct (#12156) on the two legs it is spelled for — ORACLE_WEBPLAT_IF on
+      // test-webplat, ORACLE_SCRIPTS_IF on test-scripts. An oracle-shaped condition on any other job is still
+      // refused; the retired S4 PR-affected term is refused like any other conditional.
       if (
         ("if" in job &&
           job.if !== PUSH_DEDUPE_IF &&
           job.if !== DRAFT_LIGHT_IF &&
-          !(jobId === "test-webplat" && job.if === PR_AFFECTED_WEBPLAT_IF) &&
           !(jobId === "test-webplat" && job.if === ORACLE_WEBPLAT_IF) &&
           !(jobId === "test-scripts" && job.if === ORACLE_SCRIPTS_IF)) ||
         "continue-on-error" in job
@@ -1088,14 +1088,11 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
     expect(checkCiLikec4Jobs(withJobKey("continue-on-error: true")).join("\n")).toMatch(/job test-scripts carries/);
   });
 
-  it("the exact PR-affected condition is sanctioned on test-webplat only; a near-miss or another job is refused (ADR-276 S4)", () => {
+  it("the retired PR-affected condition is refused even on test-webplat (ADR-276 S4 retirement)", () => {
     const onWebplat = (cond: string): string => ci().replace("  test-webplat:\n", `  test-webplat:\n    if: ${cond}\n`);
     const onScripts = (cond: string): string => ci().replace("  test-scripts:\n", `  test-scripts:\n    if: ${cond}\n`);
-    expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF)).join("\n")).toBe("");
-    expect(checkCiLikec4Jobs(onScripts(PR_AFFECTED_WEBPLAT_IF)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
-    expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace(",test-webplat,", ",test-bun,"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
-    expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace("== 'true'", "!= 'false'"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
-    expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace("!cancelled()", "success()"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onWebplat(RETIRED_PR_AFFECTED_WEBPLAT_IF)).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onScripts(RETIRED_PR_AFFECTED_WEBPLAT_IF)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
   });
 
   it("the exact oracle-lane conjunct is sanctioned on its own leg only; a near-miss or another job is refused (ADR-276 #12156)", () => {

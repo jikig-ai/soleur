@@ -169,9 +169,13 @@ pr_arm() {
   # fallback convention the driver itself uses on pre-PR3b bases. Guard 1 (binding): an empty or unreadable
   # resolved list is a fail (api/shape), NEVER a vacuous not-oracle.
   if git show "$base:$ORACLE_SURFACE" > "$work/oracle.txt" 2> "$work/show.err"; then
-    : canonical list resolved from the base surface file
+    : canonical list resolved from the base surface file — require the self-member line,
+    : so a directory listing, symlink target, or comment file can never pass as the list
+    grep -qxF -- "$ORACLE_SURFACE" "$work/oracle.txt" || { rm -rf "$work"; finish fail shape; }
   elif git show "$base:$ORACLE_REPLAY" > "$work/replay-base.py" 2> "$work/show.err"; then
-    python3 - "$work/replay-base.py" > "$work/oracle.txt" 2> "$work/py.err" <<'PY' || { rm -rf "$work"; finish fail api; }
+    # -I: keep the PR-controlled cwd off sys.path — a shadowing argparse.py at repo
+    # root could otherwise forge the list (and run code) inside the required gate.
+    python3 -I - "$work/replay-base.py" > "$work/oracle.txt" 2> "$work/py.err" <<'PY' || { rm -rf "$work"; finish fail api; }
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("replay_base", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
