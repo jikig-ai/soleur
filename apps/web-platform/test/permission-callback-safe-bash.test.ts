@@ -942,6 +942,35 @@ describe("#9600 — git log|diff|show exec flags reach the review card and emit 
     expect(fallEvents()).toEqual([]);
   });
 
+  test("only the FIRST git segment that rejects a flag reports (one event per command)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -p && git diff --ext-diff" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
+  });
+
+  test("a --flag=value payload is cut at `=` and the NAME is what is reported", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --pretty=format:topsecret" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "--pretty" }]);
+  });
+
+  test("shell words after a pipe or redirect are never read as git flags", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log | grep -v x" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --oneline; ls -la" }, sdkOptions());
+    expect(fallEvents()).toEqual([]);
+  });
+
+  test("a quoted value of an admitted value-flag is not reported as a rejected flag", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: 'git log --author="John Smith"' }, sdkOptions());
+    expect(fallEvents()).toEqual([]);
+  });
+
   test("an agent-chosen odd flag name is reported as `other` (no free text reaches Sentry)", async () => {
     const { ctx } = buildContext();
     const canUseTool = createCanUseTool(ctx);

@@ -158,11 +158,11 @@ RUN git --version | awk '{ split($3, v, "."); exit !(v[1] + 0 > 2 || (v[1] + 0 =
 # writable ~/.gitconfig is never read; this root-owned, read-only (bound under /usr) identity-only file
 # is what it points at, restoring the fallback commit identity the HOME global used to supply. Local
 # workspace identity still wins. Identity ONLY: no safe.directory, credential.*, core.*, include, url.*
-# or filter.* may ever be added here. The last step proves git can parse the file and derive an identity from it.
+# or filter.* may ever be added here. The last step proves git derives THIS identity from the file (not an auto-detected host identity).
 RUN mkdir -p /usr/local/share/soleur \
     && printf '[user]\n\tname = github-actions[bot]\n\temail = 41898282+github-actions[bot]@users.noreply.github.com\n' > /usr/local/share/soleur/agent.gitconfig \
     && chmod 0644 /usr/local/share/soleur/agent.gitconfig \
-    && GIT_CONFIG_GLOBAL=/usr/local/share/soleur/agent.gitconfig GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT > /dev/null
+    && [ "$(cd / && GIT_CONFIG_GLOBAL=/usr/local/share/soleur/agent.gitconfig GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT | sed 's/ <.*//')" = "github-actions[bot]" ]
 
 # #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
 # --unshare-* flags: the vendored inner sandbox unconditionally unshares
@@ -458,6 +458,9 @@ RUN useradd --no-log-init --uid 1001 -m soleur \
     && mkdir -p /var/lib/soleur/worktrees \
     && chown 1001:1001 /var/lib/soleur/worktrees
 USER soleur
+# Host-side git (session-sync, ensure-workspace-repo, git-data-replication) reads HOME's global identity; the
+# agent's git reads /usr/local/share/soleur/agent.gitconfig instead (#9600). Keep the two identities equal
+# (asserted in test/dockerfile-git-version-floor.test.ts).
 RUN git config --global user.name "github-actions[bot]" \
     && git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 

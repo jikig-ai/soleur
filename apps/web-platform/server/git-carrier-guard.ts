@@ -7,15 +7,22 @@
 // place that decides "does this file-tool call write into a `.git` path", called from BOTH enforcement
 // points (the PreToolUse sandbox hook and `canUseTool`) so they cannot drift.
 //
-// A path is a carrier when ANY component the kernel would traverse equals `.git` case-insensitively
-// (any depth: nested repos, submodules, `.GIT`, a gitdir pointer FILE named `.git`). `.gitignore`,
-// `.github/` and `.gitmodules` are different names and pass. The path is resolved TOP-DOWN the way
-// the kernel resolves it, in ONE pass: each existing component is `lstat`ed, a symlink is expanded
-// from its `readlink` text (so a DANGLING link whose target text names `.git`, and `link/../x`
-// after the link is expanded, are both seen), and the not-yet-existing tail is appended as plain
-// names. Anything the walk cannot decide (a loop, a non-ENOENT filesystem error, an over-long path,
-// a non-string location value) fails CLOSED. One lstat per existing component and none for the
-// missing tail, so a long nonexistent path costs O(existing depth), not O(missing components^2).
+// A path is a carrier when ANY component it traverses equals `.git` case-insensitively (any depth:
+// nested repos, submodules, `.GIT`, a gitdir pointer FILE named `.git`). `.gitignore`, `.github/` and
+// `.gitmodules` are different names and pass. The path is judged under TWO readings and denied if
+// EITHER hits, because how the CLI's Write tool turns the string into an open(2) argument is
+// unmeasured (it may or may not normalise `a/../b` lexically first):
+//   (1) the KERNEL reading, resolved TOP-DOWN in one pass: each existing component is `lstat`ed, a
+//       symlink is expanded from its `readlink` text (so a DANGLING link whose target text names
+//       `.git`, and `link/../x` after the link is expanded, are both seen), and a not-yet-existing
+//       tail is appended as plain names (a later `..` re-enters the walk, so a link that follows it
+//       is still expanded);
+//   (2) the LEXICAL reading: the same walk over `path.posix.normalize(spelling)`.
+// A backslash is an ordinary filename byte on Linux, so the walk splits on `/` only; a separate scan
+// also treats `\` as a separator inside a component and denies a `.git` piece (over-denying is fine).
+// Anything the walk cannot decide (a loop, a non-ENOENT filesystem error, an over-long path, a
+// non-string location value) fails CLOSED. One lstat per existing component and none for a missing
+// tail, so a long nonexistent path costs O(existing depth), not O(missing components^2).
 //
 // Reads (Read / Grep / Glob / LS) are deliberately untouched: reading `.git` is not the carrier.
 // Residuals the guard does not claim to cover (ADR-050 amendment 2026-11-09): hardlinks to `.git`
@@ -56,7 +63,14 @@ function isGitCarrierTool(toolName: string): boolean {
 }
 
 function splitParts(p: string): string[] {
-  return p.split(/[\\/]+/).filter((c) => c !== "" && c !== ".");
+  return p.split(/\/+/).filter((c) => c !== "" && c !== ".");
+}
+
+/** A backslash-separated `.git` piece inside any single component (a Linux filename byte, not a separator). */
+function backslashGit(text: string): boolean {
+  return text
+    .split("/")
+    .some((comp) => comp.includes("\\") && comp.split("\\").some((piece) => piece.toLowerCase() === ".git"));
 }
 
 function realWorkspace(workspacePath: string): string {
@@ -98,9 +112,11 @@ function resolveForCarrier(wsParts: string[], spelling: string): GitCarrierMatch
 
   while (queue.length > 0) {
     const { name, origin } = queue.shift() as Pending;
-    if (name === "." || name === "") continue;
     if (name === "..") {
       resolved = resolved.slice(0, -1);
+      // Popping can land back on EXISTING directories, so the components after it must be looked up
+      // again (a link following `missing/..` is still a link); a still-missing one re-sets the flag.
+      missing = false;
       continue;
     }
     const hit = judge(name, origin);
@@ -132,6 +148,7 @@ function resolveForCarrier(wsParts: string[], spelling: string): GitCarrierMatch
     } catch {
       return "malformed";
     }
+    if (backslashGit(target)) return "resolved";
     if (target.startsWith("/")) resolved = [];
     queue.unshift(...splitParts(target).map((n) => ({ name: n, origin: "resolved" as const })));
   }
@@ -156,11 +173,19 @@ export function gitCarrierMatch(
     const value = input[field];
     if (value === undefined || value === null || value === "") continue;
     if (typeof value !== "string") return "malformed";
-    // The CLI trims before it expands, so the trimmed spelling is the path that is written.
+    // Assumed: the CLI trims before it expands, so the trimmed spelling is the path that is written.
     const spelling = value.trim();
     if (!spelling) continue;
-    const hit = resolveForCarrier(wsParts, spelling);
-    if (hit) return hit;
+    if (backslashGit(spelling)) return "lexical";
+    const kernel = resolveForCarrier(wsParts, spelling);
+    if (kernel) return kernel;
+    // The lexical reading (`a/../b` collapsed first) differs whenever a `..` follows a missing or
+    // symlinked component; judge it too and deny if either reading reaches `.git`.
+    const normalized = path.posix.normalize(spelling);
+    if (normalized !== spelling) {
+      const lexical = resolveForCarrier(wsParts, normalized);
+      if (lexical) return lexical;
+    }
   }
   return null;
 }

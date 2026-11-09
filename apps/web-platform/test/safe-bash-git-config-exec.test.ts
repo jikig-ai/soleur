@@ -11,7 +11,7 @@
 // Honest reading (stated in the PR): bare `git diff` / `git status` still execute a config that is
 // present. The hole is closed at the CARRIERS (env pin + `.git` file-tool guard), not at the verb.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { isBashCommandSafe, SAFE_BASH_PATTERNS } from "@/server/safe-bash";
+import { GIT_READ_FLAG_LITERALS, isBashCommandSafe, SAFE_BASH_PATTERNS } from "@/server/safe-bash";
 import {
   buildGitConfigExecFixture,
   type Base,
@@ -214,7 +214,7 @@ describe("safe-bash git config-exec falsifier (#9600)", () => {
     const LOG_FLAGS = [
       "--oneline", "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw",
       "--graph", "--no-patch", "-s", "--no-color", "--abbrev-commit", "--decorate", "--first-parent",
-      "--no-merges", "--merges", "--reverse", "-3", "-n 3", "--max-count=3", "--since=2020-01-01",
+      "--no-merges", "--merges", "--reverse", "--", "-3", "-n 3", "--max-count=3", "--since=2020-01-01",
       "--until=2030-01-01", "--author=Fixture", "--grep=c1", "--diff-filter=A",
     ];
     const DIFF_FLAGS = [
@@ -238,6 +238,11 @@ describe("safe-bash git config-exec falsifier (#9600)", () => {
         if (extra.length) bad.push(`${cmd} adds channels ${JSON.stringify(extra)} beyond ${JSON.stringify(baseline.channels)}`);
       }
     };
+    // The admission rule is ENFORCED, not process-only: every literal spelling in the SHIPPED grammar must be
+    // exercised below (or in its dedicated row), so admitting a new flag without a measured row fails here.
+    const exercised = new Set([...LOG_FLAGS, ...DIFF_FLAGS, ...SHOW_FLAGS, "--cached", "--staged", "--all"]);
+    const unmeasured = GIT_READ_FLAG_LITERALS.filter((f) => !exercised.has(f));
+    expect(unmeasured, "admitted flags with no real-git row").toEqual([]);
     check("git log", LOG_FLAGS);
     check("git diff HEAD~1 HEAD", DIFF_FLAGS);
     check("git show", SHOW_FLAGS);

@@ -488,3 +488,8 @@ allowed, so there only the env pin and the file-tool guard hold.
 - Sessions that started before the deploy keep the old env until restart, and a workspace `.git/config`
   poisoned before the deploy is not scanned.
 - In-session `git config --global ...` writes now fail (the pinned global file is read-only by design); a session that needs a global setting uses `--local` or a `-c` flag.
+- Check-to-use gap: a symlink swapped between the guard's `lstat` walk and the CLI's `open(2)` by a concurrent Bash process (same class as the hardlink residual).
+- Server-fixed writers that follow a committed symlink (`attachments/<convId>/`, `knowledge-base/overview/vision.md`) can land inside `.git/hooks` under names that are not hook names today; and the bundled CLI's own `git status`/`diff` subprocesses run outside the wrap with the agent env. Pager channels (`core.pager`, `pager.<verb>`) would run only under a PTY; safety rests on agent Bash stdout never being a TTY. The batch-approval prefix cache exists on the cc-dispatcher lineage only.
+- `~/.gitconfig` is still bound read-write into every sandbox (`agent-outer-wrap.ts`) and HOME is shared across tenants; the agent's git no longer reads it, but host-side git that sets no `GIT_CONFIG_GLOBAL` and scripts that run `env -u GIT_CONFIG_GLOBAL` still do. In-session `gh auth setup-git`, `git lfs install` and `git config --global` writes fail by design.
+- The in-sandbox delivery of the pin and the readability of the identity file are probed together by `printenv GIT_CONFIG_COUNT` and `git var GIT_AUTHOR_IDENT` inside a real sandbox (not yet run); an unreadable or missing global file is read as empty, which would only cost the fallback identity.
+

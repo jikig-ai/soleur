@@ -119,7 +119,14 @@ const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verb
 // --ext-diff, --textconv, -p/--patch/-u and -U<n> (patch output), -S, -G, -c/--cc (imply -p),
 // -O<orderfile> (reads a file), --show-signature (gpg.program), --no-index (reads arbitrary paths),
 // --output (writes; also in FILE_WRITE_FLAG_DENYLIST).
-const GIT_READ_FLAG_TOKEN = String.raw`(?:--oneline|--stat|--name-only|--name-status|--numstat|--shortstat|--summary|--raw|--graph|--no-patch|-s|--cached|--staged|--no-color|--abbrev-commit|--decorate|--all|--first-parent|--no-merges|--merges|--reverse|-\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+|--)`;
+/** Every admitted LITERAL flag spelling. Exported so the real-git admission test iterates the SHIPPED list:
+ *  a spelling added here without a measured row in test/safe-bash-git-config-exec.test.ts fails that test. */
+export const GIT_READ_FLAG_LITERALS: readonly string[] = [
+  "--oneline", "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw",
+  "--graph", "--no-patch", "-s", "--cached", "--staged", "--no-color", "--abbrev-commit", "--decorate",
+  "--all", "--first-parent", "--no-merges", "--merges", "--reverse", "--",
+];
+const GIT_READ_FLAG_TOKEN = String.raw`(?:${GIT_READ_FLAG_LITERALS.join("|")}|-\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+)`;
 const GIT_READ_FLAG = String.raw`(?:${GIT_READ_FLAG_TOKEN}|-n\s+\d+)`;
 const GIT_READ_FLAG_TOKEN_RE = new RegExp(`^${GIT_READ_FLAG_TOKEN}$`);
 
@@ -127,7 +134,9 @@ const GIT_READ_FLAG_TOKEN_RE = new RegExp(`^${GIT_READ_FLAG_TOKEN}$`);
  * The first dash-token of a `git log|diff|show` tail that the closed grammar does NOT admit, or `null`
  * when every flag is admitted (the command then missed the allowlist for another reason). Walks the
  * SAME flag source as the allowlist pattern so the telemetry names the flag that actually fell
- * through, not merely the first flag on the line. `-n` is the one two-token flag (`-n 5`).
+ * through, not merely the first flag on the line. `-n` is the one two-token flag (`-n 5`). A
+ * `--stem=value` whose stem is an admitted value-flag is not a rejected FLAG (the value, e.g. a quoted
+ * string, is what missed the allowlist), so it is skipped.
  */
 export function firstRejectedGitFlag(tail: string): string | null {
   const tokens = tail.split(/\s+/).filter(Boolean);
@@ -138,7 +147,10 @@ export function firstRejectedGitFlag(tail: string): string | null {
       i += 1;
       continue;
     }
-    if (!GIT_READ_FLAG_TOKEN_RE.test(t)) return t;
+    if (GIT_READ_FLAG_TOKEN_RE.test(t)) continue;
+    const eq = t.indexOf("=");
+    if (eq > 0 && GIT_READ_FLAG_TOKEN_RE.test(`${t.slice(0, eq + 1)}x`)) continue;
+    return t;
   }
   return null;
 }

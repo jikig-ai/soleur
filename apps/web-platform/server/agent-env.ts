@@ -34,7 +34,7 @@ export interface AgentCredential {
 // the allowlist is equivalent to blocking it.
 // ---------------------------------------------------------------------------
 
-const AGENT_ENV_ALLOWLIST = Object.freeze([
+export const AGENT_ENV_ALLOWLIST = Object.freeze([
   "HOME",
   "PATH",
   "NODE_ENV",

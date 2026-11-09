@@ -350,12 +350,23 @@ describe("#9600 — git log|diff|show closed flag grammar (exec-requesting flags
       "", "--oneline -5", "-n 5", "-n 5 HEAD~1", "--stat HEAD~1", "--since=2026-01-01 --author=a", "-- src/x.ts",
       "-p", "--oneline -p", "--stat --ext-diff", "-n 5 --textconv", "-n", "-n x", "-Sneedle", "-w", "--follow f",
       "--ext", "--no-ext-diff", "--first-parent --all --decorate", "--diff-filter=AM", "--max-count=3",
+      "-n5", "-n 5x", "-n  5", "--author=a --since=b",
     ];
     for (const t of tails) {
       const allowed = isBashCommandSafe(`git log ${t}`.trimEnd());
       expect(firstRejectedGitFlag(t) === null, `tail ${JSON.stringify(t)}`).toBe(allowed);
     }
-    expect(tails.length).toBeGreaterThanOrEqual(20);
+    expect(tails.length).toBeGreaterThanOrEqual(24);
+  });
+
+  // A QUOTED value of an admitted value-flag misses the allowlist (the quote is not a PATH_TOKEN char) but is
+  // not a rejected FLAG: the telemetry must not name `--author` / `--since` / `--grep` for it.
+  test("firstRejectedGitFlag does not blame an admitted value-flag for its quoted value", () => {
+    for (const t of ['--author="John Smith"', "--grep='fix bug' --oneline", '--since="2 weeks ago"']) {
+      expect(isBashCommandSafe(`git log ${t}`), t).toBe(false);
+      expect(firstRejectedGitFlag(t), t).toBeNull();
+    }
+    expect(firstRejectedGitFlag('--author="a b" -p')).toBe("-p");
   });
 
   test("firstRejectedGitFlag returns the rejected token itself", () => {

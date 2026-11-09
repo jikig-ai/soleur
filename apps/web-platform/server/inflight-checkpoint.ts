@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { GIT_HARDENING_ARGS } from "./inngest/functions/_git-hardening";
+import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
 import { rm } from "node:fs/promises";
 
 import { reportSilentFallback } from "./observability";
@@ -92,10 +92,8 @@ async function runPlumbingGit(
       cwd,
       env: {
         ...process.env,
-        GIT_NO_REPLACE_OBJECTS: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
+        // GLOBAL/SYSTEM/NOSYSTEM nulled + GIT_NO_REPLACE_OBJECTS: the args and env travel as one unit.
+        ...GIT_HARDENING_ENV,
         GIT_AUTHOR_NAME: "Soleur Checkpoint",
         GIT_AUTHOR_EMAIL: "checkpoint@soleur.local",
         GIT_COMMITTER_NAME: "Soleur Checkpoint",

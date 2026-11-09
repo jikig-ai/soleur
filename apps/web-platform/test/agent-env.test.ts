@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { ALLOWED_SERVICE_ENV_VARS, AGENT_GIT_GLOBAL_CONFIG, buildAgentEnv } from "../server/agent-env";
+import { AGENT_ENV_ALLOWLIST, ALLOWED_SERVICE_ENV_VARS, AGENT_GIT_GLOBAL_CONFIG, buildAgentEnv } from "../server/agent-env";
 
 // Force the production branch of the plugin-path guard (mirrors the harness in
 // plugin-path.test.ts). The `buildAgentEnv` describe's afterEach calls
@@ -276,7 +276,8 @@ describe("buildAgentEnv", () => {
     // set-level property directly: a behavioural "ambient value cannot displace it" test passes only
     // because of this filtering and would stay green if the filtering were removed along with a re-assert.
     test("no ambient-allowlisted or service-token variable may be a GIT_CONFIG_* name", () => {
-      expect(EXPECTED_ALLOWLIST.filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]);
+      expect([...AGENT_ENV_ALLOWLIST].filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]); // the SHIPPED list, not the test copy
+      expect(AGENT_ENV_ALLOWLIST.length).toBeGreaterThan(0);
       expect([...ALLOWED_SERVICE_ENV_VARS].filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]);
       expect(ALLOWED_SERVICE_ENV_VARS.size).toBeGreaterThan(0); // the set really was enumerated
     });

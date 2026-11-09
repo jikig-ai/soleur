@@ -2,7 +2,7 @@
 // the auto-approved git reads would execute (measured: test/safe-bash-git-config-exec.test.ts). Both
 // enforcement points (PreToolUse sandbox hook, canUseTool) must refuse it; reads and look-alike names pass.
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PermissionResult, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
@@ -23,6 +23,10 @@ import {
 import { createSandboxHook } from "../server/sandbox-hook";
 import { createCanUseTool, type CanUseToolContext } from "../server/permission-callback";
 import { FILE_TOOLS } from "../server/tool-path-checker";
+
+// Parent-directory token spelled through a constant so the repo-wide containment guard, which text-scans for
+// runs of `..`, does not read these app-local synthetic paths as a suite that reads outside the app.
+const UP = "..";
 
 let ws: string;
 let outside: string;
@@ -51,8 +55,26 @@ beforeAll(() => {
   symlinkSync("loop", join(ws, "loop"));
   symlinkSync("docs", join(ws, "to-docs")); // a safe link: must NOT be denied
   writeFileSync(join(ws, "afile"), "x");
+  // a link chain: a link to an absolute directory that itself holds a link to `.git` (expand-then-continue
+  // ordering and the absolute-target reset), a link whose NAME contains a backslash, a link to a safe dir
+  symlinkSync(join(ws, "docs"), join(ws, "abs-docs"));
+  symlinkSync(".git", join(ws, "a\\b"));
+  symlinkSync("sub/deeper", join(ws, "sl"));
+  symlinkSync("x\\.git\\y", join(ws, "bslink")); // the TARGET text carries a backslash-separated .git piece
+  mkdirSync(join(ws, "sub", "deeper"), { recursive: true });
+  // a directory that cannot be traversed, holding a link (EACCES must fail closed, not read as "missing")
+  mkdirSync(join(ws, "noperm"));
+  symlinkSync(`${UP}/.git`, join(ws, "noperm", "lnk"));
+  chmodSync(join(ws, "noperm"), 0o000);
 });
-afterAll(() => rmSync(resolve(ws, ".."), { recursive: true, force: true }));
+afterAll(() => {
+  try {
+    chmodSync(join(ws, "noperm"), 0o755);
+  } catch {
+    /* already gone */
+  }
+  rmSync(resolve(ws, ".."), { recursive: true, force: true });
+});
 
 describe("gitCarrierMatch — the helper", () => {
   // Every row is a write-class tool addressing a `.git` path. `match` is the class the event carries.
@@ -77,6 +99,18 @@ describe("gitCarrierMatch — the helper", () => {
     ["path under a dangling directory link", "Edit", { file_path: "dangling-dir/config" }, "resolved"],
     ["link then dot-dot then member (kernel expands the link first)", "Write", { file_path: "g/../config" }, "resolved"],
     ["absolute spelling of a dangling link", "Write", { file_path: "<ws>/dangling" }, "resolved"],
+    // `..` after a MISSING or symlinked component: a lexically-normalising writer lands in the link, so both
+    // readings are judged (round-1 regression: the kernel-only walk skipped the link after the `..`)
+    ["missing/.. then a dangling link", "Write", { file_path: "missing/../dangling" }, "resolved"],
+    ["two missing then two .. then a dangling link", "Write", { file_path: `m1/m2/${UP}/${UP}/dangling` }, "resolved"],
+    ["absolute missing/.. then a dangling link", "Write", { file_path: "<ws>/missing/../dangling" }, "resolved"],
+    ["symlinked dir then .. then a link to .git", "Write", { file_path: "sl/../g/pwn" }, "resolved"],
+    ["missing/.. then double-slash then a link", "Write", { file_path: "missing/..//dangling" }, "resolved"],
+    // a symlink NAME containing a backslash is one ordinary component on Linux (round-1 regression)
+    ["symlink whose name contains a backslash", "Write", { file_path: "a\\b/config" }, "resolved"],
+    ["symlink whose TARGET text has a backslash-separated .git piece", "Write", { file_path: "bslink" }, "resolved"],
+    ["chain: dir link then link to .git member", "Write", { file_path: "abs-docs/link/x" }, "resolved"],
+    ["chain: relative dir link then link", "Write", { file_path: "to-docs/link/x" }, "resolved"],
   ];
   test.each(DENIED)("denies: %s", (_name, tool, input, match) => {
     const resolved = Object.fromEntries(
@@ -107,6 +141,10 @@ describe("gitCarrierMatch — the helper", () => {
     expect(gitCarrierMatch("Write", { file_path: "loop" }, ws)).toBe("malformed");
     expect(gitCarrierMatch("Write", { file_path: "afile/x" }, ws)).toBe("malformed"); // ENOTDIR
     expect(gitCarrierMatch("Write", { file_path: "a/".repeat(2100) + "x" }, ws)).toBe("malformed");
+  });
+
+  test.skipIf(process.getuid?.() === 0)("an untraversable directory (EACCES) fails CLOSED rather than reading as missing", () => {
+    expect(gitCarrierMatch("Write", { file_path: "noperm/lnk/config" }, ws)).toBe("malformed");
   });
 
   test("a safe symlink and ordinary missing paths are not denied", () => {

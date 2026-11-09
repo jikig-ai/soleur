@@ -89,10 +89,20 @@ describe("runner image ships the agent identity-only gitconfig (#9600)", () => {
     expect(run).toContain(AGENT_GIT_GLOBAL_CONFIG);
   });
 
+  it("the build proves the identity comes FROM the file, and the HOME global identity (host-side git) is the same one", () => {
+    expect(run).toContain("git var GIT_AUTHOR_IDENT");
+    expect(run).toContain('= "github-actions[bot]"');
+    const home = joined.match(/git config --global user\.name "([^"]+)"\s+&&\s+git config --global user\.email "([^"]+)"/);
+    expect(home, "Dockerfile lost the HOME global identity lines").not.toBeNull();
+    expect(run).toContain(`name = ${home![1]}`);
+    expect(run).toContain(`email = ${home![2]}`);
+  });
+
   function build(): { dir: string; file: string; cleanup: () => void } {
     const dir = mkdtempSync(path.join(tmpdir(), "agentcfg-"));
     const script = run!.split("/usr/local/share/soleur").join(dir);
     const r = spawnSync("sh", ["-c", script], {
+      cwd: dir, // not inside any repository: a repo-local identity would beat the file under test
       env: { PATH: "/usr/bin:/bin", HOME: dir, NODE_ENV: "test" },
       encoding: "utf8",
     });
@@ -127,7 +137,7 @@ describe("runner image ships the agent identity-only gitconfig (#9600)", () => {
       // control: the same commit with /dev/null as global must fail, so the pass above is the file, not ambient state
       writeFileSync(path.join(repo, "g.txt"), "y\n");
       git(repo, { GIT_CONFIG_GLOBAL: "/dev/null" }, "add", "g.txt");
-      const bad = git(repo, { GIT_CONFIG_GLOBAL: "/dev/null" }, "commit", "-q", "-m", "d");
+      const bad = git(repo, { GIT_CONFIG_GLOBAL: "/dev/null" }, "-c", "user.useConfigOnly=true", "commit", "-q", "-m", "d");
       expect(bad.status).not.toBe(0);
       expect(bad.stderr).toMatch(/identity|Author identity unknown|empty ident/i);
     } finally {

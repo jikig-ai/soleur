@@ -26,7 +26,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-fix-safe-bash-git-config-exec-car
 
 ## Phase 4 - Env pin (primary control; do this first after Phase 1)
 
-- 4.1 `apps/web-platform/server/agent-env.ts`: pin `safe.bareRepository=explicit` via `GIT_CONFIG_COUNT/KEY/VALUE` (append to ambient count) and move `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` out of the git-auth block; set after the allowlist loop.
+- 4.1 `apps/web-platform/server/agent-env.ts`: pin `safe.bareRepository=explicit` via `GIT_CONFIG_COUNT/KEY/VALUE` (count is not allowlisted, so there is nothing to append to) and move `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` out of the git-auth block; set after the allowlist loop.
 - 4.2 Extend `apps/web-platform/test/agent-env.test.ts`; real-git refusal assertion for the text-built bare dir.
 - 4.2b `apps/web-platform/Dockerfile`: build-time assertion that git is 2.38 or later; text test pinning the floor; record the built image's `git --version` for AC11.
 - 4.3 Check identity seeding (`git-config-atomic.ts`) and `git-auth.ts`/`git-hardened-env.ts` interplay; consumer grep for builder bypass.

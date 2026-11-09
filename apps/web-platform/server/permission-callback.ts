@@ -844,13 +844,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // so the list is widened by evidence (with a real-git table row), never by guess. Every `&&`
       // segment is examined (a leading `cd repo &&` must not hide it), the reported flag is the first
       // dash-token the grammar actually rejects, and its name is validated so agent-controlled text
-      // never reaches Sentry: `--flag=value` is cut at `=`, an attached short-flag value (`-Sneedle`) is
-      // cut to the flag letter, and anything that is not a plain flag name is reported as `other`.
+      // is bounded: `--flag=value` is cut at `=`, an attached short-flag value (`-Sneedle`) is cut to the flag
+      // letter, and a name that is not a plain flag name (<= 31 chars of [A-Za-z0-9-]) is reported as `other`.
       // Own budget (not the near-miss one): a loop of unique git flags must not silence near-miss.
       for (const segment of trimmedCmd.split("&&")) {
-        const gitFall = /^\s*git\s+(log|diff|show)(?=\s|$)(.{0,256})/.exec(segment);
+        const gitFall = /^\s*git\s+(log|diff|show)(?=\s|$)([\s\S]{0,256})/.exec(segment);
         if (!gitFall) continue;
-        const rejected = firstRejectedGitFlag(gitFall[2]);
+        // Examine only the git part of the segment (a pipe, `;`, redirect or substitution ends it) and drop
+        // a token cut by the 256-char cap, so a shell word or half a flag is never reported as a flag.
+        let tail = gitFall[2].split(/[|;<>$`()\\]/)[0];
+        if (gitFall[2].length === 256) tail = tail.replace(/\S+$/, "");
+        const rejected = firstRejectedGitFlag(tail);
         if (rejected === null) continue;
         const cut = /^-[^-]/.test(rejected) ? rejected.slice(0, 2) : rejected.split("=")[0];
         const flag = /^--?[A-Za-z][A-Za-z0-9-]{0,30}$/.test(cut) ? cut : "other";
