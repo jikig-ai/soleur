@@ -26,7 +26,7 @@ Issue: #12008 items 2 and 3 (Ref, not Closes). Nothing production-mutating runs;
 ## Phase 4: Registration and hygiene
 
 - 4.1 Add run_suite lines (label equals manifest key) plus each suite's AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry to scripts/test-all.sh.
-- 4.2 Regenerate shard manifests with scripts/regenerate-shard-manifest.py --write (no hand edits).
+- 4.2 Regenerate shard manifests with python3 scripts/regenerate-shard-manifest.py --incremental --write (no hand edits).
 - 4.3 Verify bash scripts/test-all.sh --print-selection --paths=apps/web-platform/infra/firewall.tf selects the exposure suite; else register as always-on.
 - 4.4 Run lint-orphan-test-suites.sh, c4-count-parity (13/0), lint-infra-no-human-steps.py on the runbook, lint-guard-contract.py on the plan, hold-gate-eval.sh on the plan (exit 0), technical-ruling-gate.sh on decision-challenges.md.
 - 4.5 Confirm git diff --name-only origin/main...HEAD has no path under apps/, plugins/, infra/ or .github/.

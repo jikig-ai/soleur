@@ -14,6 +14,20 @@ brand_survival_threshold: aggregate pattern
 
 # feat(infra): standing kernel patch and reboot cadence per host class, plus a non-SSH exposure check for non-web hosts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09. **Passes:** repo research, learnings research, functional-overlap check (no registry offers a Terraform-to-exposure parser or a log-marker cadence checker; build in-repo), three CTO ruling rounds (F1 to F5, the reader-reuse follow-up, R1 to R8), a five-seat plan review (DHH, Kieran, code-simplicity, CTO devex, plus the CTO re-rule), and the deepen-plan gates 4.4 to 4.13 run mechanically against this file.
+
+### Key improvements
+1. Per-workflow merge-trigger enumeration: the design keeps every new path under `scripts/` and `knowledge-base/`, so the merge cannot start an apply, a registry replace or a release.
+2. The review round cut the surface roughly in half: one probe script (no conf file, no exemption ratchet, no extra modes), one exposure suite (no table script), and the probe is filed unarmed until a host reports.
+3. A time-boxed per-row acknowledgement replaces a permanent "overdue by design" state, so a known-bad row cannot mask a new one.
+4. Verified-in-repo corrections: the right generator form for adding suites is `--incremental --write`; the sweeper gives probes no `HOME`, `CI` or `HEADLESS_MODE`; `kernel_age_hours` is the age of the report row, not of the kernel.
+
+### New considerations discovered
+- Three ADR files already share the ordinal 033 in the repo; this plan cites only the Inngest-cron one by title and creates no ADR.
+- `ADR-263`'s "a host is replaced, not rebooted" is an owner decision recorded in an addendum (2026-10-07), so the runbook cites it as the reason the unrebuildable web host has no activation path.
+
 Spec lacks a valid `lane:` (no spec.md exists for this branch): defaulted to `cross-domain` (fail-closed).
 This PR is `Ref #12008`, never `Closes`: items 1 and 4 of the issue stay open.
 
@@ -127,6 +141,24 @@ Every command string in this plan was read from the repository, not recalled: `a
 the sweeper directive fields from `followthrough-convention.md`; the exit-code vocabulary (2, 3, 5) from the same file and
 `sweep-followthroughs.sh`; the registry re-fire command from `registry-host-replace-dispatch.md`; `--print-selection`,
 `--print-affected-set` and the registration-only rule from `scripts/test-all.sh --help`. No external CLI flag is introduced.
+
+### Deepen-plan verification (gates 4.4 to 4.13, run 2026-11-09)
+
+| Gate | Result |
+|---|---|
+| 4.4 precedent diff | The probe follows `arm-token-revisit-12229.sh` (notify-only, exits 2/3/5, xtrace refusal, `env -i` suite). The suite follows its test's layout. The exposure suite follows `firewall-9000-deny.test.sh` (named design invariant, parser-liveness floor). No pattern is novel. Scheduled-work check: no new scheduled job is created; the probe enrols on the existing sweeper, so the ADR-033 prefer-Inngest hook (new workflow files only) does not apply. |
+| 4.5 network | Answered in `## Hypotheses` (not a connectivity diagnosis; live firewall state explicitly unverified). Telemetry emitted. |
+| 4.55 downtime | Not triggered: no host, volume, migration or router operation. |
+| 4.6 user-brand | Section present, threshold `aggregate pattern`, both vectors concrete. |
+| 4.7 observability | All five fields present and non-placeholder; the command starts with an allowlisted verb (`grep`), needs no SSH, finishes well inside 15 s, and `expected_output` is the literal `4`. Block is new in this plan, so the two #8412 conditions bind and pass. |
+| 4.8 PAT | No PAT-shaped variable or token literal. |
+| 4.9 UI | No UI-surface file. |
+| 4.10 encryption | Not triggered (no `.tf`, migration, cloud-init or compose file is created or edited; no store or connection). |
+| 4.11 guard contract | `lint-guard-contract.py` green on both guards; assemblies name chokepoints (the row classifier, the aggregate, the directory census), not member lists; matrices are derivable from the design and include own-dispatch, second-member, added-instance and reorder rows. |
+| 4.12 scope check | Exactly one unfenced section, three subsections, no `unmapped` status cell, no `descoped` or `inferred` row without a justification, a `Recommendation:` line, no `BLOCKED` marker. |
+| 4.13 task design | Not triggered (no new workflow, Inngest function, cron, timer or daemon). |
+| Live citations | #12007 closed, #12008/#12385/#12386/#6442 open, PR #12497 is this branch's own draft; commit `d731cfdebd` resolves and is an ancestor of `origin/main`; rule ids `hr-menu-option-ack-not-prod-write-auth`, `hr-dispatch-async-must-arm-watch`, `hr-prod-host-config-change-immutable-redeploy` and `wg-when-deferring-a-capability-create-a` exist in `AGENTS.rules.md`; labels `follow-through`, `domain/engineering`, `type/security`, `type/chore` and `priority/p2-medium` exist; `cutover-inngest.yml` has an `op` input with a `resume` option; the generator, orphan lint and c4 parity test exist. |
+| Literal consistency | The three public lines appear identically (two occurrences each) across the plan; the exit codes 5, 2, 3 map the same way in the runbook, guard and ACs. |
 
 ## Open Code-Review Overlap
 
@@ -358,7 +390,7 @@ No kernel strings, no CVE ids, no host names or addresses anywhere; `plan_only` 
 
 ### Phase 4 — Registration and hygiene sweeps
 
-- Register the two suites with `run_suite` lines in `scripts/test-all.sh` (label equal to the manifest key, form `scripts/<name>`), then regenerate the shard manifests with `python3 scripts/regenerate-shard-manifest.py --write` (never hand-edit `scripts/suite-shard-legs.tsv` or `scripts/suite-durations.tsv`; `suite-durations.tsv` carries a growth stamp). A registration-only diff also needs, for each suite it registers, its own `AFFECTED_*_PATHS` block and `ALWAYS_ON_SUITES` entry (`bash scripts/test-all.sh --help`, "RUNNER EDITS"). The probe suite is path-selected on its own script and on `host-state.sh`. The exposure suite needs an affected-set edge from `apps/web-platform/infra/*.tf`: verify with `bash scripts/test-all.sh --print-selection --paths=apps/web-platform/infra/firewall.tf` that it is selected; if the registry has no declarative path edge, register it as a declared always-on ratchet.
+- Register the two suites with `run_suite` lines in `scripts/test-all.sh` (label equal to the manifest key, form `scripts/<name>`), then regenerate the shard manifests with `python3 scripts/regenerate-shard-manifest.py --incremental --write` (the add/remove path: it fetches no timings, pins incumbent rows verbatim, places only the new labels and merges their durations rows as `floor`; never hand-edit `scripts/suite-shard-legs.tsv` or `scripts/suite-durations.tsv`; `suite-durations.tsv` carries a growth stamp). A registration-only diff also needs, for each suite it registers, its own `AFFECTED_*_PATHS` block and `ALWAYS_ON_SUITES` entry (`bash scripts/test-all.sh --help`, "RUNNER EDITS"). The probe suite is path-selected on its own script and on `host-state.sh`. The exposure suite needs an affected-set edge from `apps/web-platform/infra/*.tf`: verify with `bash scripts/test-all.sh --print-selection --paths=apps/web-platform/infra/firewall.tf` that it is selected; if the registry has no declarative path edge, register it as a declared always-on ratchet.
 - Run `bash scripts/lint-orphan-test-suites.sh`.
 - Forbidden-token scan (a section of the probe suite, over the durable new files only: the script, both suites, the runbook): no CVE-id pattern, no kernel-version pattern, no IPv4 address, no Terraform host name (the scan reads the `name = "..."` string values of the server resources from the Terraform directory at run time and greps for each), no "not affected" or "patched" next to a CVE id. A second check asserts that no line of the runbook and no line of this plan's Deferred Production Acts section begins with a hold or gate marker, inline occurrences of the literal marker words at line start included.
 - Run `plugins/soleur/test/c4-count-parity.test.sh` (must stay 13/0), `python3 scripts/lint-infra-no-human-steps.py` on the runbook, `python3 scripts/lint-guard-contract.py` on this plan, and the shellcheck and format hooks the repo runs.
