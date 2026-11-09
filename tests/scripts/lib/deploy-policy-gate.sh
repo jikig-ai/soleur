@@ -3,9 +3,11 @@
 # Deploy-webhook Access policy gate (#9294 G1 PR-2, ADR-241 D10; Ruled by CTO agent, 2026-10-23).
 #
 # SOURCED by .github/workflows/apply-web-platform-infra.yml's "Terraform plan (allow-list ...)" step, which calls
-#   deploy_policy_gate "$counts" "$POLICY_MSGS" || exit 1
-# where POLICY_MSGS is the tip message plus every push commit's message (a merge-queue coalesce can bury the
-# ack one squash below the tip; event.commits is capped at 20 entries — an older ack still misses, fail-closed).
+#   deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1
+# where ALL_MSGS is the tip message plus every push commit's message (a merge-queue coalesce can bury the
+# ack one squash below the tip; event.commits is capped at 20 entries — an older ack still misses, fail-closed
+# for the acks, fail-open for the [skip-web-platform-apply] kill-switch, which reads the same combined var at
+# preflight; both ack gates and the skip gate consume it).
 # right after the apex_move_orphans HALT and BEFORE the destroy_count sum, so `[ack-destroy]` cannot reach it. It lives
 # here, not inline, so a test can EXECUTE it (tests/scripts/test-deploy-access-token-forget.sh) and so the 490,000-byte
 # ADR-231 workflow cap is not spent on it.

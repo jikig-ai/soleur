@@ -248,13 +248,17 @@ jobs:
       - id: kill_switch
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         # Anchor `[skip-web-platform-apply]` to its own line so it cannot
         # fire from a quoted block, code fence, or trailer that happens
         # to carry the literal substring. Symmetric posture with the
-        # `[ack-destroy]` gate in the apply job.
+        # `[ack-destroy]` gate in the apply job. Reads all push commits.
         run: |
           set -euo pipefail
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; then
+          ALL_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
+          if [[ "$ALL_MSGS" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Kill switch detected in commit message — skipping apply."
           else
@@ -865,17 +869,17 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/deploy-policy-gate.sh"
           # The ack can sit below the tip when the merge queue coalesces: the
           # squash that changed the policy is in event.commits, not head_commit.
-          POLICY_MSGS="$HEAD_MSG"
+          ALL_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
-          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
-          deploy_policy_gate "$counts" "$POLICY_MSGS" || exit 1
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
+          deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
           # `Co-Authored-By:` trailer carrying that literal substring.
           ack_destroy=false
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+          if [[ "$ALL_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then

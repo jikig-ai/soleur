@@ -2094,7 +2094,7 @@ _halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf"
 # pattern matched zero lines in the workflow (inside single quotes grep saw a BRE
 # with a literal backslash), so it was dead code that read as protective while a
 # fallback silently did all the work.
-_ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
+_ack_line=$(grep -n 'ALL_MSGS.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
 if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
   _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
 else
@@ -2159,6 +2159,86 @@ t_workspaces_passphrase_indexed_fixture_halts
 t_workspaces_passphrase_normalization_mutant_caught
 t_apply_job_luks_halt_executes
 
+# ── T66 — coalesced-commit feed for the kill-switch + [ack-destroy] gates (#12403). ────
+#
+# The merge-queue coalesce that buried [ack-deploy-policy] one squash below the tip
+# (#12404) left the same tip-only blind spot on two sibling readers of
+# github.event.head_commit.message: the preflight kill-switch (fail-UNSAFE — a buried
+# [skip-web-platform-apply] is silently ignored and the apply runs inside the window the
+# token was holding open) and the apply step's [ack-destroy] test (fail-closed — a buried
+# ack refuses the apply). Both now read ALL_MSGS = tip + every event.commits[*].message,
+# the identical idiom #12404 shipped for deploy_policy_gate (any-commit reach, CTO-ruled
+# 2026-11-09).
+
+_t66_kill_switch_run() {
+  awk '
+    /^      - id: kill_switch/ { instep = 1; next }
+    instep && /^        run: \|/ { inrun = 1; next }
+    inrun && /^          / { print; next }
+    inrun { exit }
+    instep && /^      [^ ]/ { instep = 0 }
+  ' "$WORKFLOW_YML"
+}
+
+t66_coalesced_gate_feeds() {
+  local blk
+  blk="$(_job_block "$WORKFLOW_YML" "preflight" | grep -vE '^[[:space:]]*#')"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && _report "T66a: the preflight job carries the EVENT_MSGS_JSON feed env" ok \
+    || _report "T66a: the preflight job carries the EVENT_MSGS_JSON feed env" FAIL \
+       "env line absent in comment-stripped preflight block"
+  grep -nE '\$ALL_MSGS.*skip-web-platform-apply' <<<"$blk" >/dev/null \
+    && _report "T66b: the kill_switch token test reads ALL_MSGS" ok \
+    || _report "T66b: the kill_switch token test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-skip-token line in comment-stripped preflight block"
+  blk="$(_job_block "$WORKFLOW_YML" "apply" | grep -vE '^[[:space:]]*#')"
+  grep -nE '\$ALL_MSGS.*ack-destroy' <<<"$blk" >/dev/null \
+    && _report "T66c: the [ack-destroy] test reads ALL_MSGS" ok \
+    || _report "T66c: the [ack-destroy] test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-ack-token line in comment-stripped apply block"
+}
+
+t66_executed_kill_switch_span() {
+  local run_body out
+  run_body="$(_t66_kill_switch_run)"
+  out="$(mktemp -t t66-goutput.XXXXXX)"
+
+  : > "$out"
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: infra\n\n[skip-web-platform-apply]"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
+  grep -qF 'skip=true' "$out" \
+    && _report "T66d executed: a line-anchored token buried in event.commits arms the kill-switch" ok \
+    || _report "T66d executed: a line-anchored token buried in event.commits arms the kill-switch" FAIL \
+       "GITHUB_OUTPUT: $(cat "$out")"
+
+  : > "$out"
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: see [skip-web-platform-apply] note"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
+  grep -qF 'skip=false' "$out" \
+    && _report "T66e executed: a mid-line token does not arm (anchor preserved through the concat)" ok \
+    || _report "T66e executed: a mid-line token does not arm" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+
+  : > "$out"
+  HEAD_MSG='chore: tip' GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
+  grep -qF 'skip=false' "$out" \
+    && _report "T66f executed: EVENT_MSGS_JSON absent (dispatch shape) degrades to tip-only" ok \
+    || _report "T66f executed: EVENT_MSGS_JSON absent degrades to tip-only" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+
+  : > "$out"
+  HEAD_MSG=$'chore\n\n[skip-web-platform-apply]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
+  grep -qF 'skip=true' "$out" \
+    && _report "T66g executed: a tip-carried token still arms (baseline preserved)" ok \
+    || _report "T66g executed: a tip-carried token still arms" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+
+  rm -f "$out"
+}
+
+t66_coalesced_gate_feeds
+t66_executed_kill_switch_span
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -2183,15 +2263,16 @@ _ran=$((pass + fail))
 # indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the retirement change for #9372:
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
 # T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
-# T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 120 assertions ran, floor is 121". The floor sits at the
+# T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 7 coalesced-feed rows (#12403:
+# T66a-c feed pins + T66d-g executed kill-switch span) = 128. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 127 assertions ran, floor is 128". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 121 ]]; then
+if [[ "$_ran" -lt 128 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 121. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 128. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 121)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 128)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="
