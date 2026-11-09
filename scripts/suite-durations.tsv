@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1272
-# generated-at=2026-11-09T11:03:10Z
+# default-weight-ms=1251
+# generated-at=2026-11-09T19:08:04Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -96,6 +96,7 @@ apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	535	measured
 apps/web-platform/scripts/seed-live-verify-user.test.sh	379	measured
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	14387	measured
 apps/web-platform/scripts/supabase-local.test.sh	400	measured
+apps/web-platform/scripts/verify-required-secrets.test.sh	1272	floor
 apps/web-platform/test/parse-gitleaks-allowlists	300	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	12147	measured
 plugins/soleur/scripts/affected-tests.test.sh	1222	floor
@@ -434,6 +435,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
+scripts/followthroughs/mq-lever-e-verdict-12269	1251	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
