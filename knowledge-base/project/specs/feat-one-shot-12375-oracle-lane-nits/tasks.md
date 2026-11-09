@@ -5,6 +5,8 @@ All edits are comment-or-test-assertion only; no driver (`scripts/ci-oracle-lane
 
 ## Phase 1 — Stale-comment rewrites (4 sites)
 
+Scope discipline (deepen-pass): rewrite ONLY the stale lock sentences; the surrounding accurate text (the `if:` non-empty compare explanation, ORACLE_HEAD_OK event-agnostic binding, S4 input descriptions) stays.
+
 - [ ] 1.1 `.github/workflows/ci.yml` oracle-selection job header comment (~L432-444): replace the "SWITCHED OFF, THEN DARK AND LOCKED" staging line and the "While `ORACLE_LANE_LOCKED=1` stands in the driver, `active` never becomes `true` … (dark launch; activation is a separate authorized step …)" sentences with post-activation semantics — compile-time lock removed by #12300 (2026-11-08); `ORACLE_LANE_LOCKED=1` in env is the unwired dark-mode revert path; `active` becomes `true` on an oracle-only diff with `SWITCH=on`.
 - [ ] 1.2 `.github/workflows/ci.yml` aggregator env comment (~L2437): replace "While `ORACLE_LANE_LOCKED=1` stands in the driver, `active` is always `false` and nothing is tolerated" with the env re-lock / armed semantics.
 - [ ] 1.3 Do NOT touch the pr-selection S4 comment (~L2430 "While the activation lock holds") — `PR_AFFECTED_LOCKED=1` still stands at `scripts/ci-pr-selection.sh:90`. [AC-2]

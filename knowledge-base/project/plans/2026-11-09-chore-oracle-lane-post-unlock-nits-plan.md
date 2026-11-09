@@ -15,6 +15,23 @@ closes: 12375
 
 # chore(ci): oracle-lane post-unlock comment/test nits
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Sections enhanced:** 5 (Observability added per Phase 4.7 halt; Technical Considerations, Acceptance Criteria, Test Scenarios, Files to Edit tightened)
+**Coverage disclosure:** `Reviewed-Coverage: sequential-fallback` — this deepener is a sub-subagent with no Task tool; every fan-out the skill prescribes (per-section research, learnings application, the review-agent discovery pass) was executed inline and sequentially by this process against each role's definition, not by spawned agents. Halt gates 4.6–4.13 were run mechanically where the skill gives a command (PAT regex, unfenced Scope-Check count, `lint-guard-contract.py`, sensitive-path regex, UI glob scan).
+
+### Key Improvements
+
+1. **`## Observability` section added** — deepen-plan Phase 4.7 fires on any non-pure-docs Files-to-Edit; the section declares the battery's own verdict lines as the liveness signal and a 15-second-safe `grep` discoverability probe.
+2. **Both prescribed seds verified live against the driver** — `s| && \[ "\$locked" = false \]||` lands on `ci-oracle-lane.sh:384` and `s|\[ "\${ORACLE_LANE_LOCKED:-}" = 1 \]|[ -n "${ORACLE_LANE_LOCKED:-}" ]|` lands on `:137`; both mutants `bash -n` clean. The first draft's `\["\$locked"` (missing the space after `[`) was caught and corrected by the sharp-edges pass.
+3. **`MIN_ROWS`/`MIN_MUTANTS` floor note** — deepen-pass read of the verdict block confirmed the floors are minimums (no bump required); optional re-derive recorded.
+
+### New Considerations Discovered
+
+- **Comment-rewrite scope discipline:** the two ci.yml blocks carry accurate context alongside the stale sentence (the `if:` non-empty compare explanation, the ORACLE_HEAD_OK event-agnostic binding, the `S4` input descriptions). Rewrites MUST be scoped to the lock sentences only — replacing the whole comment block would lose accurate content. Recorded as an implementation constraint.
+- **Sweep value selection:** `{0, true, on}` chosen — `on` is the highest-value member (the plausible "same as the switch" fat-finger), `0` and `true` cover the numeric/string truthy spellings. `01`, `"1"`, `1␣` are also non-`1` but add no discrimination the three chosen values don't already give.
+
 ## Overview
 
 GitHub issue #12375 collects four P3 review nits deferred out of the oracle-lane activation review (PR #12300, merged 2026-11-08) so the unlock diff stayed narrow. The oracle-only fast lane is now armed (`CI_ORACLE_LANE=on` since 2026-11-08), which makes the lock-era comments in `.github/workflows/ci.yml` affirmatively false, leaves the mutation battery carrying a label that misdescribes what its `O-LOCK` mutant proves, leaves the `ORACLE_LANE_LOCKED` env re-lock's exact-`1` semantics unpinned by any non-`1` value, and leaves one `cmp -s` sentinel read as redundant with no stated intent. This change rewrites the stale comments to post-activation semantics, makes the battery discriminate the lock conjunct itself, sweeps non-`1` lock values, and resolves the sentinel's intent — all inside CI/test tooling, no production or product surface.
@@ -79,7 +96,7 @@ Four small defects survived the activation PR review by explicit deferral:
 
 Four independent one-to-few-line changes in one PR:
 
-1. **Comment rewrites (4 sites).** Replace each stale lock claim with post-activation semantics: the compile-time `readonly ORACLE_LANE_LOCKED=1` was removed by #12300 on 2026-11-08; `ORACLE_LANE_LOCKED=1` in env remains as an unwired dark-mode revert path; `active` becomes `true` on an oracle-only diff with `SWITCH=on` and no env re-lock. The "SWITCHED OFF, THEN DARK AND LOCKED" staging header becomes armed-state phrasing. The ci-draft-light parenthetical is rephrased to name the live distinction (non-`on` switch or env re-lock can leave `oracle_only` true while `active` stays false).
+1. **Comment rewrites (4 sites).** Replace each stale lock claim — and ONLY the lock sentences — with post-activation semantics (the surrounding accurate text stays: the `if:` non-empty compare explanation, the ORACLE_HEAD_OK event-agnostic binding, the S4 input descriptions): the compile-time `readonly ORACLE_LANE_LOCKED=1` was removed by #12300 on 2026-11-08; `ORACLE_LANE_LOCKED=1` in env remains as an unwired dark-mode revert path; `active` becomes `true` on an oracle-only diff with `SWITCH=on` and no env re-lock. The "SWITCHED OFF, THEN DARK AND LOCKED" staging header becomes armed-state phrasing. The ci-draft-light parenthetical is rephrased to name the live distinction (non-`on` switch or env re-lock can leave `oracle_only` true while `active` stays false).
 2. **Battery label + surgical mutant.** Retitle `mutate "O-LOCK the arm ignores the lock" "$UNLOCKED" "$(kill_guard O-ARM)" row_switch` to name arm-presence; add `mutate "O-LOCK the arm's lock conjunct is dropped" "$PRISTINE" 's| && \[ "\$locked" = false \]||' row_lock`, porting the sibling's proven shape (ci-pr-selection.test.sh:1455). Only `row_lock` can kill it — it drives `ORACLE_LANE_LOCKED=1` and asserts `active=false`; with the conjunct gone the mutant arms under the re-lock.
 3. **Negative-value sweep in `row_lock`.** After the existing `ORACLE_LANE_LOCKED=1` block, a `for v in 0 true on` loop: `drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=$v"` asserting `active=true`, `skip_legs=$ORACLE_FIVE`, `locked` notice field `false` — the exact-`1` semantics, pinned.
 4. **`cmp -s` intent annotation.** One comment line above the check naming the residual property: `_lockn` pins the lock literal absent; the `cmp` pin bounds the recipe's blast radius — a `LOCK_RE`/recipe edit matching anything else reds here while `_lockn` stays green, and `$UNLOCKED` is the file `row_switch` + two mutants are measured against.
@@ -125,6 +142,32 @@ None — `gh issue list --label code-review --state open` bodies searched for bo
 - **If this leaks, the user's [data / workflow / money] is exposed via:** nothing — the diff touches CI comments and a test harness; it carries no user data, credentials, or tenant surface.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** the diff is confined to internal CI/test files with no user data, auth, or production surface; worst case is a red gate blocking merges, not a user-visible defect.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "the ci-oracle-lane mutation battery's own verdict lines (`mutation battery: K/K killed`, `ci-oracle-lane.test.sh: N rows, P passed, F failed`) and the GUARD anchors on the driver"
+  cadence: "per-PR (the battery runs in the test leg on every pull_request/merge_group) + local on-demand"
+  alert_target: "the PR's required check status"
+  configured_in: ".github/workflows/ci.yml (test leg) + scripts/ci-oracle-lane.test.sh"
+error_reporting:
+  destination: "GitHub Actions step output and PR check status"
+  fail_loud: "non-zero exit from scripts/ci-oracle-lane.test.sh reds the check; `surviving mutants` names each undetected edit on stderr"
+failure_modes:
+  - mode: "battery loses discrimination (a mutant survives)"
+    detection: "the battery's own MUT_KILLED < MUT_TOTAL verdict plus the surviving-mutants stderr list — this change adds two mutants to that machinery"
+    alert_route: "PR check failure (blocks merge)"
+  - mode: "stale lock-era comment claims re-accumulate"
+    detection: "code review only — the defect class is prose and has no mechanical signal; the cmp -s annotation is the stated-intent record that prevents the same question recurring"
+    alert_route: "PR review"
+logs:
+  where: "GitHub Actions run logs (test leg) and local stdout"
+  retention: "GitHub run-log retention (~90 days)"
+discoverability_test:
+  command: grep -c 'GUARD:O-ARM' scripts/ci-oracle-lane.sh
+  expected_output: "1"
+```
 
 ## Guard Contract
 
