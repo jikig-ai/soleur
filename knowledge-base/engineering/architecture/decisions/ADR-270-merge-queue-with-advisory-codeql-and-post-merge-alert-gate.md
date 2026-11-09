@@ -1214,6 +1214,7 @@ queue-wait design, which waits for the same self-enqueue on human/agent PRs
 and still needs no explicit enqueue of its own; whether #12489's stall was a
 general regression or specific to App-authored arming is unmeasured. The
 dated bodies above are left as written.
+
 ### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
 The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.
