@@ -18,6 +18,15 @@
 #   ORACLE_LANE_LOCKED   env re-lock (dark-mode revert path)         (=1 keeps active=false; no ci.yml env wires it —
 #                                                                     wiring is itself an excluded-path code edit)
 #   PR_HEAD_SHA          github.event.pull_request.head.sha         (pull_request)
+#   PR_BASE_REF          github.event.pull_request.base.ref         (pull_request; the live base ref to fetch —
+#                                                                     branch-name grammar only, never a refspec.
+#                                                                     Trust model: a real refs/heads/ base tip is
+#                                                                     attacker-influenceable only to the degree
+#                                                                     GitHub's own three-dot Files view is — a
+#                                                                     base containing PR-side commits hides them
+#                                                                     identically in both. The pin kills only the
+#                                                                     EXTRA surface: hex/tags/ resolving outside
+#                                                                     the named branch)
 #   HEAD_REPO            github.event.pull_request.head.repo.full_name  (pull_request; a fork head is full)
 #   MERGE_GROUP_HEAD_SHA github.event.merge_group.head_sha          (merge_group; the whole queued batch is diffed)
 #   MERGE_GROUP_BASE_SHA github.event.merge_group.base_sha          (merge_group)
@@ -38,7 +47,8 @@
 #   skip_legs    a comma list over    {test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
 #                                     written ONLY when active
 #   head_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^2 of the merge ref; merge_group: MERGE_GROUP_HEAD_SHA
-#   base_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^1; merge_group: MERGE_GROUP_BASE_SHA
+#   base_sha     ^([0-9a-f]{40})?$    pull_request: merge-base(HEAD^2, live base ref) — the base the diff ran
+#                                     against (#12418); merge_group: MERGE_GROUP_BASE_SHA
 # The step also prints ONE `::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE ...` line (fixed tokens only: a path, a
 # ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step summary.
 # The notice carries, in this order: event, switch, locked, attempt, files, reason, oracle_only, would_skip, active.
@@ -271,9 +281,7 @@ run() {
     [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:O1-HEAD-IS-GITHUB-SHA
     [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O-PRHEAD
     head_sha="$p2"
-    base_sha="$p1"
-    diff_base="HEAD^1"
-    diff_head="HEAD"
+    diff_head="$p2"
 
     # (3a) full on a fork head.
     reason=fork
@@ -301,6 +309,27 @@ run() {
   # value. Deliberately before the diff: an off switch must never pay the classification cost.
   reason=switch_off
   [ "$sw" = on ] || return 0  # GUARD:O1-SWITCH-GATE
+
+  if [ "$EVENT_NAME" = pull_request ]; then
+    # The pull_request diff is GitHub three-dot — merge-base(HEAD^2, live base) .. HEAD^2. Never the merge
+    # ref's first parent (it freezes at merge-ref computation and re-counts main-side changes the branch
+    # already merged, #12418) and never the merge RESULT against that base (its tree carries the base-side
+    # arc whenever the frozen parent is ahead of the fork point — the common case for a PR that has not
+    # synced main). The fetch is unconditional — a payload base.sha can be stale-but-resolvable and would
+    # freeze the same defect class (CTO ruling 2026-11-09) — and is pinned to refs/heads/ so a hex- or
+    # tags/-shaped base.ref cannot FETCH_HEAD a commit outside the named branch. The grammar is a
+    # deliberate superset of refname rules (git-invalid-but-safe names simply fail the fetch) while still
+    # rejecting `+`/`:`/leading `-` — refspec writes and option injection. Deliberately AFTER the switch
+    # gate, on this file's own doctrine: an off switch must never pay the classification cost.
+    reason=bad_base_ref
+    [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:O-BASE-REF
+    reason=base_fetch
+    git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:O-BASE-FETCH
+    reason=no_merge_base
+    diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:O-NO-MERGE-BASE
+    [ -n "$diff_base" ] || return 0  # belt: merge-base's rc on no-ancestor varies by git version; unreachable today
+    base_sha="$diff_base"
+  fi
 
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error
