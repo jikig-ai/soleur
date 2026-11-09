@@ -33,7 +33,8 @@ anywhere in this procedure and none is needed.
   the environment's `protection_rules` before anything writes: an absent environment, a missing `required_reviewers` or
   branch-policy rule, or a failed read refuses `approval_environment_unprotected`. A personal access token can still START the
   dispatch, but the run cannot pass `approve` — the reviewer's click is a distinct human act; a PAT approval of the job is the
-  owner's click by design. **An agent never dispatches `rotate`; that is policy, now backed by the reviewer gate.**
+  owner's click by design. **An agent may dispatch `rotate` only under the owner's fresh, per-command, in-session go
+  naming the exact full command; the reviewer click is never delegated.**
 - One key per dispatch. The confirm names exactly one key.
 
 ### The approval gate (`key-rotate-approval`)
@@ -54,6 +55,17 @@ gh api repos/jikig-ai/soleur/environments/key-rotate-approval --jq '.protection_
 Both `required_reviewers` and `branch_policy` must be listed. If either is missing, restore the environment through the infra
 apply path (`apply-web-platform-infra.yml` owns the `github_repository_environment.key_rotate_approval` target) — do NOT
 hand-edit it, and do not run the rotate anyway: the guard refuses for a reason.
+
+**Environment split** (live-verified 2026-11-08): `rotate` parks at `key-rotate-approval` here (required reviewer
+`deruelle`, `main`-only branch policy); on the sibling `inngest-key-rotate.yml` both `rotate` and `converge` park there; `mode=plan` and the apply path (`apply`/`clear`; `apply1`/`reboot`/`apply2` on the
+inngest route) bind `infra-privileged` (branch policy, zero required reviewers, no park); `guard`/`redeploy`/`notify` bind
+no environment.
+
+**Who clicks what.** Under the 2026-11-08 ruling, an agent may dispatch `rotate`/`converge` ONLY under a fresh,
+per-command, in-session owner go naming the exact full command; the reviewer click on `key-rotate-approval` is NEVER
+delegated — the owner opens the run and approves it themselves. The approval tap should land inside a measured
+release-quiet stretch: the apply path re-checks in-flight runs itself, so a run parked at `approve` CAN still refuse
+post-approval if a conflicting run started while it waited.
 
 ## The seven keys
 
@@ -89,7 +101,8 @@ The plan rehearsal command shape (no confirm):
 gh workflow run key-rotate.yml -f mode=plan -f key=inngest_manual_trigger_secret_dev
 ```
 
-The rotate command shape (the owner types this themselves, under their own go):
+The rotate command shape (the owner words the go — fresh, per-command, in-session, naming the exact full command; an
+agent may then run the dispatch under that go, but the approval click on `key-rotate-approval` is always the owner's):
 
 ```bash
 gh workflow run key-rotate.yml -f mode=rotate -f key=inngest_manual_trigger_secret_dev \
@@ -178,7 +191,7 @@ The three passing verdicts (`guard_ok`, `plan_ok`, `rotate_ok`) are the first ro
 | `ref_refused` | dispatched from a ref other than `main` | dispatch from `main` |
 | `inputs_invalid` | mode not `plan`/`rotate`, or key not one of the seven (an API dispatch bypasses the choice list) | correct the input |
 | `actor_refused` | `github.actor` or `github.triggering_actor` is empty or a `[bot]` | dispatch as the owner, not through a bot |
-| `actor_not_owner` | an actor outside the committed owner allowlist | only the owner dispatches |
+| `actor_not_owner` | an actor outside the committed owner allowlist | dispatch as the owner's login (the committed allowlist); under a fresh, per-command owner go an agent may run that dispatch — the approval click stays the owner's |
 | `rerun_refused` | `GITHUB_RUN_ATTEMPT` is not 1 (a re-run would reuse the first attempt's go) | dispatch a fresh run; only `plan` may be re-run |
 | `confirm_mismatch` | the typed confirm is not exactly `ROTATE-<KEY>-<YYYY-MM-DD>` (key upper-cased, UTC date of the run) | retype it for today's UTC date |
 | `quiet_window_missing` | `quiet_window` was not attested | check the attestation conditions, then set `quiet_window=true` |
