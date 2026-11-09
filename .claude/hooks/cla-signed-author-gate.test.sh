@@ -202,7 +202,7 @@ assert_pass() {
   local decision jsonl denied=0
   decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
   jsonl="$inc/.claude/.rule-incidents.jsonl"
-  [[ -f "$jsonl" ]] && denied=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
+  [[ -f "$jsonl" ]] && denied=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || true)
   if [[ "$rc" -eq 0 && "$decision" != "deny" && "$denied" -eq 0 ]]; then
     echo "PASS: $name"; PASS=$((PASS+1))
   else

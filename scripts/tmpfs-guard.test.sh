@@ -665,8 +665,8 @@ fi
 # #6991 exists to fix — and no other test would notice.
 LOADER="$REPO_ROOT/.claude/hooks/session-rules-loader.sh"
 for var in TMPFS_GUARD_ALARM_FILE TMPFS_GUARD_HEARTBEAT_FILE; do
-  g_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$GUARD" | head -1)
-  l_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$LOADER" | head -1)
+  g_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$GUARD" | head -1) || true
+  l_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$LOADER" | head -1) || true
   cases=$((cases + 1))
   if [[ -n "$g_default" && "$g_default" == "$l_default" ]]; then
     pass "$var default matches between the guard and the SessionStart reader"
@@ -923,7 +923,7 @@ fi
 # seam) while disarming the guard permanently in production: tmpfs is wiped on
 # reboot, so stored would always equal the current count and growth would be
 # pinned at 0 forever.
-wm_default="$(grep -E '^WATERMARK_FILE=' "$GUARD" | head -1)"
+wm_default="$(grep -E '^WATERMARK_FILE=' "$GUARD" | head -1)" || true
 cases=$((cases + 1))
 if [[ -n "$wm_default" && "$wm_default" == *'.local/state/soleur'* && "$wm_default" != *'${TMPDIR'* && "$wm_default" != *'"/tmp'* && "$wm_default" != *'=/tmp'* && "$wm_default" != *':-/tmp'* ]]; then
   pass "the watermark default lives in durable state, not on the tmpfs it measures"

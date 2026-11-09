@@ -133,7 +133,7 @@ rules="$(
 )"
 
 rule_count=0
-[[ -n "$rules" ]] && rule_count=$(printf '%s\n' "$rules" | grep -c '|')
+[[ -n "$rules" ]] && rule_count=$(printf '%s\n' "$rules" | grep -c '|') || true
 
 # --- AC0: the extractor actually saw the file --------------------------------------
 # A REAL cardinality assert: it counts rules EXTRACTED, not turns of a literal list.

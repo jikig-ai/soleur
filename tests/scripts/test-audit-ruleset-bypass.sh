@@ -747,7 +747,7 @@ t_rsc_canonical_matches_terraform() {
   # Extract `context = "..."` (required_check blocks are the only `context =`
   # assignments in this root); strip quotes; sort for set comparison.
   tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" \
-    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort) || true
   if [[ "$json_ctx" == "$tf_ctx" ]]; then
     _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" ok
   else
