@@ -1,0 +1,646 @@
+// #12517 — hermetic tests for the egress injector spike's pure decision code (plan
+// knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md, Phase 1).
+//
+// Three modules under test, all on the test path (no production code imports them):
+//   policy.mjs        the per-host classifier and the action-hash recipe (Guard 2's chokepoint)
+//   approval-hook.mjs decide(): the hook's decision order over a fake RPC client (every reason code)
+//   verdict.mjs       the outcome floor (Guard 3): GO / NO-GO / INCONCLUSIVE from the arms' records
+//
+// Guard 2 rows covered here: 1, 3, 4, 5, 7, 9 (and 10, the must-PASS). Guard 3 rows: 1, 2, 3, 5, 6.
+// Every fixture is synthesized in this file (cq-test-fixtures-synthesized-only): no real token, repository or user.
+
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
+import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+
+import * as policyMod from "./infra/egress-injector-spike/policy.mjs";
+import * as hookMod from "./infra/egress-injector-spike/approval-hook.mjs";
+import * as verdictMod from "./infra/egress-injector-spike/verdict.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SPIKE = join(HERE, "infra", "egress-injector-spike");
+const BASE_POLICY = policyMod.compilePolicy(parseYaml(readFileSync(join(SPIKE, "policy.yaml"), "utf8")));
+const OVERLAY_POLICY = policyMod.compilePolicy(
+  policyMod.mergePolicy(
+    parseYaml(readFileSync(join(SPIKE, "policy.yaml"), "utf8")),
+    parseYaml(readFileSync(join(SPIKE, "policy.add-verb.yaml"), "utf8")),
+  ),
+);
+const KEY = randomBytes(32);
+const REPOS = ["acme-synth/widget"];
+const OID_A = "a".repeat(40);
+const OID_B = "b".repeat(40);
+const OID_C = "c".repeat(40);
+
+type Req = {
+  method: string;
+  host: string;
+  path: string;
+  query?: string;
+  headers?: Record<string, string>;
+  body?: Buffer;
+};
+
+function req(r: Req) {
+  return { query: "", headers: {}, body: Buffer.alloc(0), ...r };
+}
+
+function pkt(line: string): string {
+  const len = (Buffer.byteLength(line, "latin1") + 4).toString(16).padStart(4, "0");
+  return len + line;
+}
+
+function receivePack(updates: Array<[string, string, string]>, opts: { shallow?: string } = {}): Buffer {
+  const lines: string[] = [];
+  if (opts.shallow) lines.push(pkt(`shallow ${opts.shallow}\n`));
+  updates.forEach(([o, n, ref], i) => {
+    lines.push(pkt(i === 0 ? `${o} ${n} ${ref}\0report-status side-band-64k\n` : `${o} ${n} ${ref}\n`));
+  });
+  lines.push("0000");
+  return Buffer.concat([Buffer.from(lines.join(""), "latin1"), Buffer.from("PACK-synthetic-bytes")]);
+}
+
+function gql(body: unknown): Buffer {
+  return Buffer.from(JSON.stringify(body));
+}
+
+function classify(r: Req, policy = BASE_POLICY, repositories = REPOS) {
+  return policyMod.classify(policyMod.normalizeRequest(req(r)), policy, { repositories });
+}
+
+function hashOf(r: Req, policy = BASE_POLICY) {
+  const c = classify(r, policy);
+  expect(c.verdict).toBe("write");
+  return policyMod.actionHash(c.canonical, KEY);
+}
+
+describe("policy.mjs — module shape", () => {
+  it("imports nothing from server code or the network (portable into server/ unchanged)", () => {
+    const src = readFileSync(join(SPIKE, "policy.mjs"), "utf8");
+    const specs = [...src.matchAll(/^\s*import\s[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1]);
+    expect(specs.length).toBeGreaterThan(0);
+    for (const s of specs) expect(["node:crypto", "node:zlib", "graphql"]).toContain(s);
+  });
+
+  it("actionHash requires the HMAC key (no default)", () => {
+    const c = classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
+    expect(() => policyMod.actionHash(c.canonical, undefined)).toThrow();
+    expect(() => policyMod.actionHash(c.canonical, Buffer.alloc(0))).toThrow();
+    expect(policyMod.actionHash(c.canonical, KEY)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("the base policy declares exactly the four inject hosts", () => {
+    expect([...BASE_POLICY.injectHosts].sort()).toEqual(["api.github.com", "codeload.github.com", "github.com", "uploads.github.com"]);
+  });
+});
+
+describe("policy.mjs — git smart HTTP", () => {
+  it("upload-pack advertisement and POST git-upload-pack are reads on the allowlist", () => {
+    expect(classify({ method: "GET", host: "github.com", path: "/acme-synth/widget.git/info/refs", query: "service=git-upload-pack" }).verdict).toBe("read");
+    expect(classify({ method: "POST", host: "github.com", path: "/acme-synth/widget.git/git-upload-pack", body: Buffer.from("0000") }).verdict).toBe("read");
+  });
+
+  it("the receive-pack advertisement GET is a push-advert (vends without a row, CTO R1)", () => {
+    const c = classify({ method: "GET", host: "github.com", path: "/acme-synth/widget/info/refs", query: "service=git-receive-pack" });
+    expect(c.verdict).toBe("push-advert");
+  });
+
+  it("Guard 2 row 1: POST git-receive-pack is a write, never a read", () => {
+    const c = classify({ method: "POST", host: "github.com", path: "/acme-synth/widget.git/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
+    expect(c.verdict).toBe("write");
+    expect(c.rule).toBe("git-push");
+    expect(c.canonical).toMatchObject({ kind: "git-push", host: "github.com", repository: "acme-synth/widget" });
+    expect(c.canonical.updates).toEqual([{ old: OID_A, new: OID_B, ref: "refs/heads/main" }]);
+  });
+
+  it("parses two ref updates and skips shallow lines", () => {
+    const c = classify({
+      method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack",
+      body: receivePack([[OID_A, OID_B, "refs/heads/main"], [OID_C, OID_A, "refs/heads/dev"]], { shallow: OID_C }),
+    });
+    expect(c.verdict).toBe("write");
+    expect(c.canonical.updates).toHaveLength(2);
+  });
+
+  it("decodes a gzip-encoded receive-pack body (tracer item 3: the hook sees it still encoded)", () => {
+    const raw = receivePack([[OID_A, OID_B, "refs/heads/main"]]);
+    const plain = classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: raw });
+    const gz = classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: gzipSync(raw), headers: { "content-encoding": "gzip" } });
+    expect(gz.verdict).toBe("write");
+    expect(policyMod.actionHash(gz.canonical, KEY)).toBe(policyMod.actionHash(plain.canonical, KEY));
+  });
+
+  it("a receive-pack body with no ref update, a bad pkt-line or an unknown encoding is unparseable", () => {
+    for (const body of [Buffer.from("0000"), Buffer.from("zzzz"), Buffer.from("0010short")]) {
+      expect(classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    }
+    expect(classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]), headers: { "content-encoding": "br" } })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+  });
+
+  it("a push to a repository outside the allowlist is refused with no row", () => {
+    const c = classify({ method: "POST", host: "github.com", path: "/other-synth/thing/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
+    expect(c).toMatchObject({ verdict: "refused", subreason: "write-outside-allowlist" });
+  });
+});
+
+describe("policy.mjs — REST", () => {
+  it("GET and HEAD on an allowlisted repository path are reads", () => {
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" }).verdict).toBe("read");
+    expect(classify({ method: "HEAD", host: "api.github.com", path: "/repos/acme-synth/widget/pulls/3" }).verdict).toBe("read");
+    expect(classify({ method: "GET", host: "codeload.github.com", path: "/acme-synth/widget/tar.gz/main" }).verdict).toBe("read");
+  });
+
+  it("GET outside the allowlist is refused read-outside-allowlist", () => {
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/other-synth/thing" })).toMatchObject({ verdict: "refused", subreason: "read-outside-allowlist" });
+    expect(classify({ method: "GET", host: "api.github.com", path: "/user" })).toMatchObject({ verdict: "refused", subreason: "read-outside-allowlist" });
+  });
+
+  it("a listed REST write is a write with the REST recipe", () => {
+    const c = classify({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", body: Buffer.from('{"title":"t"}') });
+    expect(c).toMatchObject({ verdict: "write", rule: "rest-create-pull" });
+    expect(c.canonical).toMatchObject({ kind: "rest", method: "POST", host: "api.github.com", repository: "acme-synth/widget" });
+    expect(c.canonical.body_sha256).toBe(createHash("sha256").update('{"title":"t"}').digest("hex"));
+  });
+
+  it("Guard 2 row 7: an unlisted REST write is not-allowlisted, never 'needs a row' (CTO R13)", () => {
+    const c = classify({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/issues", body: Buffer.from("{}") });
+    expect(c).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      expect(classify({ method, host: "api.github.com", path: "/repos/acme-synth/widget" })).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+    }
+  });
+
+  it("criterion 7: the overlay moves create-issue from refused to gated with policy data only", () => {
+    const r = { method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/issues", body: Buffer.from('{"title":"x"}') };
+    expect(classify(r).verdict).toBe("refused");
+    expect(classify(r, OVERLAY_POLICY)).toMatchObject({ verdict: "write", rule: "rest-create-issue" });
+  });
+});
+
+describe("policy.mjs — GraphQL (classified with the graphql package, CTO R23)", () => {
+  const path = "/graphql";
+  const host = "api.github.com";
+
+  it("a single query is a read; Guard 2 row 10 must-PASS: a query with variables and an operationName", () => {
+    expect(classify({ method: "POST", host, path, body: gql({ query: "{ viewer { login } }" }) }).verdict).toBe("read");
+    expect(classify({ method: "POST", host, path, body: gql({ query: "query Repo($o: String!) { repository(owner: $o, name: \"w\") { id } }", variables: { o: "acme-synth" }, operationName: "Repo" }) }).verdict).toBe("read");
+  });
+
+  it("a single listed mutation is a write with the GraphQL recipe", () => {
+    const c = classify({ method: "POST", host, path, body: gql({ query: "mutation M { addComment(input: {subjectId: \"x\", body: \"y\"}) { clientMutationId } }" }) });
+    expect(c).toMatchObject({ verdict: "write", rule: "graphql-mutation" });
+    expect(c.canonical).toMatchObject({ kind: "graphql", host, operation_name: "M", operation_type: "mutation" });
+  });
+
+  it("Guard 2 row 3: query first, mutation second, selected by operationName, is a write", () => {
+    const doc = "query Q { viewer { login } } mutation M { addComment(input: {subjectId: \"x\", body: \"y\"}) { clientMutationId } }";
+    expect(classify({ method: "POST", host, path, body: gql({ query: doc, operationName: "M" }) }).verdict).toBe("write");
+    expect(classify({ method: "POST", host, path, body: gql({ query: doc, operationName: "Q" }) }).verdict).toBe("read");
+  });
+
+  it("multi-operation without operationName, unknown operationName, batched array and unparseable bodies are refused", () => {
+    const doc = "query Q { viewer { login } } mutation M { addComment(input: {}) { clientMutationId } }";
+    expect(classify({ method: "POST", host, path, body: gql({ query: doc }) })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(classify({ method: "POST", host, path, body: gql({ query: doc, operationName: "Nope" }) })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(classify({ method: "POST", host, path, body: gql([{ query: "{ viewer { login } }" }]) })).toMatchObject({ verdict: "refused", subreason: "batched" });
+    expect(classify({ method: "POST", host, path, body: Buffer.from("{not json") })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(classify({ method: "POST", host, path, body: gql({ query: "mutation { " }) })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+  });
+
+  it("an unlisted mutation field, a mixed listed/unlisted mutation, a top-level fragment and a subscription are refused", () => {
+    expect(classify({ method: "POST", host, path, body: gql({ query: "mutation { deleteRepository(input: {}) { clientMutationId } }" }) })).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+    expect(classify({ method: "POST", host, path, body: gql({ query: "mutation { addComment(input: {}) { clientMutationId } deleteRepository(input: {}) { clientMutationId } }" }) })).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+    expect(classify({ method: "POST", host, path, body: gql({ query: "mutation { ...F } fragment F on Mutation { deleteRepository(input: {}) { clientMutationId } }" }) })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(classify({ method: "POST", host, path, body: gql({ query: "subscription { x }" }) })).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+  });
+
+  it("an aliased unlisted mutation is judged by field name, not alias", () => {
+    expect(classify({ method: "POST", host, path, body: gql({ query: "mutation { addComment: deleteRepository(input: {}) { clientMutationId } }" }) })).toMatchObject({ verdict: "refused", subreason: "unlisted-write" });
+  });
+});
+
+describe("policy.mjs — canonical path (normalized or refused before matching and hashing)", () => {
+  it("refuses traversal, encoded slashes and dots, double slashes and backslashes", () => {
+    for (const p of [
+      "/repos/acme-synth/widget/../../other-synth/thing",
+      "/repos/acme-synth/widget/%2e%2e/x",
+      "/repos/acme-synth/widget/%2E%2E/x",
+      "/repos/acme-synth%2Fwidget",
+      "/repos//acme-synth/widget",
+      "/repos/acme-synth/widget\\x",
+      "/repos/acme-synth/./widget",
+    ]) {
+      expect(classify({ method: "GET", host: "api.github.com", path: p }), p).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    }
+  });
+
+  it("owner/repo case variants and percent-encoded letters resolve to the allowlisted repository", () => {
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/ACME-Synth/Widget" }).verdict).toBe("read");
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/%77idget" }).verdict).toBe("read");
+  });
+
+  it("host case and a trailing dot are normalized; a Host header that disagrees with the target is refused (Guard 2 row 14)", () => {
+    expect(classify({ method: "GET", host: "API.GitHub.com.", path: "/repos/acme-synth/widget" }).verdict).toBe("read");
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", headers: { host: "api.github.com:443" } }).verdict).toBe("read");
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", headers: { host: "uploads.github.com" } })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+  });
+
+  it("a host outside the four inject hosts is refused", () => {
+    expect(classify({ method: "GET", host: "gist.github.com", path: "/acme-synth/widget" })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+  });
+});
+
+describe("policy.mjs — action hash recipe (CTO R6)", () => {
+  const push = (path: string, updates: Array<[string, string, string]>) => ({ method: "POST", host: "github.com", path, body: receivePack(updates) });
+  const rest = (path: string, body: string) => ({ method: "POST", host: "api.github.com", path, body: Buffer.from(body) });
+
+  it("each single hashed-field change produces a different hash", () => {
+    const base = hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]));
+    expect(hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_C, OID_B, "refs/heads/main"]]))).not.toBe(base);
+    expect(hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_C, "refs/heads/main"]]))).not.toBe(base);
+    expect(hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_B, "refs/heads/dev"]]))).not.toBe(base);
+    const r1 = hashOf(rest("/repos/acme-synth/widget/pulls", '{"title":"a"}'));
+    expect(hashOf(rest("/repos/acme-synth/widget/pulls", '{"title":"b"}'))).not.toBe(r1); // Guard 2 row 4
+    expect(hashOf(rest("/repos/acme-synth/widget/issues/1/comments", '{"title":"a"}'))).not.toBe(r1);
+    const g1 = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation { addComment(input: {body: \"a\"}) { clientMutationId } }" }) });
+    const g2 = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation { addComment(input: {body: \"b\"}) { clientMutationId } }" }) });
+    const g3 = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation { addComment(input: {body: $b}) { clientMutationId } }", variables: { b: "a" } }) });
+    const g4 = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation { addComment(input: {body: $b}) { clientMutationId } }", variables: { b: "z" } }) });
+    expect(new Set([g1, g2, g3, g4]).size).toBe(4);
+  });
+
+  it("repository spelling variants hash equal", () => {
+    const a = hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]));
+    expect(hashOf(push("/ACME-SYNTH/Widget.git/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]))).toBe(a);
+    expect(hashOf(push("/acme-synth/%77idget.git/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]))).toBe(a);
+  });
+
+  it("Guard 2 row 5: a fork hashes differently (repository path is always hashed)", () => {
+    const repos = ["acme-synth/widget", "fork-synth/widget"];
+    const p = (path: string) => policyMod.classify(policyMod.normalizeRequest(req(push(path, [[OID_A, OID_B, "refs/heads/main"]]))), BASE_POLICY, { repositories: repos });
+    const a = p("/acme-synth/widget/git-receive-pack");
+    const b = p("/fork-synth/widget/git-receive-pack");
+    expect(policyMod.actionHash(a.canonical, KEY)).not.toBe(policyMod.actionHash(b.canonical, KEY));
+  });
+
+  it("GraphQL whitespace and key-order differences do not change the hash", () => {
+    const a = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation{addComment(input:{body:$b}){clientMutationId}}", variables: { b: "a", c: 1 } }) });
+    const b = hashOf({ method: "POST", host: "api.github.com", path: "/graphql", body: gql({ query: "mutation {\n  addComment(input: {body: $b}) {\n    clientMutationId\n  }\n}", variables: { c: 1, b: "a" } }) });
+    expect(a).toBe(b);
+  });
+
+  it("a different HMAC key gives a different hash", () => {
+    const c = classify(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]));
+    expect(policyMod.actionHash(c.canonical, KEY)).not.toBe(policyMod.actionHash(c.canonical, randomBytes(32)));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// approval-hook.mjs decide() over a fake RPC client that mirrors 180_approval_request.sql's contract.
+// ---------------------------------------------------------------------------------------------------------------
+
+type Row = { id: string; status: string; expires_at: string; action_sha256: string; conversation_id: string };
+
+function fakeRpc(opts: { now: () => number }) {
+  const rows: Row[] = [];
+  const calls: string[] = [];
+  let throwOnCreate: { code: string; message: string } | null = null;
+  let consumeOverride: { consumed: boolean; reason: string } | null = null;
+  let n = 0;
+  const live = (r: Row) => r.status === "pending" || r.status === "approved";
+  const rpc = {
+    async create(a: { conversationId: string; hash: string; ttlSeconds: number; toolName: string; canonical: object }) {
+      calls.push(`create:${a.toolName}`);
+      if (throwOnCreate) throw Object.assign(new Error(throwOnCreate.message), { code: throwOnCreate.code });
+      const existing = rows.find((r) => r.conversation_id === a.conversationId && r.action_sha256 === a.hash && live(r));
+      if (existing) return { approval: { ...existing }, created: false };
+      const row: Row = {
+        id: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+        status: "pending",
+        expires_at: new Date(opts.now() + a.ttlSeconds * 1000).toISOString(),
+        action_sha256: a.hash,
+        conversation_id: a.conversationId,
+      };
+      rows.push(row);
+      return { approval: { ...row }, created: true };
+    },
+    async consume(a: { id: string; hash: string; conversationId: string }) {
+      calls.push("consume");
+      if (consumeOverride) return consumeOverride;
+      const r = rows.find((x) => x.id === a.id);
+      if (!r) return { consumed: false, reason: "not_found" };
+      if (r.status === "consumed") return { consumed: false, reason: "already_consumed" };
+      if (r.status !== "approved") return { consumed: false, reason: "not_approved" };
+      if (Date.parse(r.expires_at) <= opts.now()) return { consumed: false, reason: "expired" };
+      if (r.conversation_id !== a.conversationId) return { consumed: false, reason: "wrong_conversation" };
+      if (r.action_sha256 !== a.hash) return { consumed: false, reason: "hash_mismatch" };
+      r.status = "consumed";
+      return { consumed: true, reason: "ok" };
+    },
+    async status(id: string) {
+      calls.push("status");
+      const r = rows.find((x) => x.id === id);
+      return r ? { status: r.status } : null;
+    },
+  };
+  return {
+    rpc,
+    rows,
+    calls,
+    approveAll: () => rows.filter((r) => r.status === "pending").forEach((r) => (r.status = "approved")),
+    rejectAll: () => rows.filter((r) => r.status === "pending").forEach((r) => (r.status = "rejected")),
+    expireAll: () => rows.filter((r) => live(r)).forEach((r) => (r.status = "expired")),
+    failCreate: (code: string, message = "x") => (throwOnCreate = { code, message }),
+    overrideConsume: (v: { consumed: boolean; reason: string } | null) => (consumeOverride = v),
+  };
+}
+
+const SESSION = {
+  sessionId: "sessA",
+  conversationId: "11111111-1111-4111-8111-111111111111",
+  workspaceId: "22222222-2222-4222-8222-222222222222",
+  requesterId: "33333333-3333-4333-8333-333333333333",
+  repositories: REPOS,
+  flagOn: true,
+  routerCredential: "router-cred-synthetic-A",
+};
+
+function setup(over: Record<string, unknown> = {}) {
+  let t = Date.parse("2026-11-10T00:00:00Z");
+  const fake = fakeRpc({ now: () => t });
+  const decider = hookMod.createDecider({
+    policy: BASE_POLICY,
+    hmacKey: KEY,
+    rpc: fake.rpc,
+    toolName: hookMod.SPIKE_TOOL_NAME,
+    ttlSeconds: 600,
+    now: () => t,
+    ...over,
+  });
+  return { fake, decider, advance: (ms: number) => (t += ms) };
+}
+
+const PUSH = () => req({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
+const READ = () => req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" });
+
+describe("approval-hook.mjs decide() — decision order", () => {
+  it("1. flag off REJECTs every vend, reads included, and creates no row (CTO R2)", async () => {
+    const { fake, decider } = setup();
+    const s = { ...SESSION, flagOn: false };
+    for (const r of [READ(), PUSH()]) {
+      const d = await decider.decide(r, s);
+      expect(d).toMatchObject({ action: "REJECT", reason: "flag-off" });
+    }
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("Guard 2 row 9: the flag is read from the session input, not from a constant", async () => {
+    const { decider } = setup();
+    expect((await decider.decide(READ(), { ...SESSION, flagOn: true })).action).toBe("CONTINUE");
+    expect((await decider.decide(READ(), { ...SESSION, flagOn: false })).action).toBe("REJECT");
+    expect((await decider.decide(READ(), { ...SESSION, flagOn: "true" as unknown as boolean })).reason).toBe("flag-off");
+  });
+
+  it("2. an unlisted write is REJECTed not-allowlisted with no row", async () => {
+    const { fake, decider } = setup();
+    const d = await decider.decide(req({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/issues", body: Buffer.from("{}") }), SESSION);
+    expect(d).toMatchObject({ action: "REJECT", reason: "not-allowlisted", subreason: "unlisted-write" });
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("3. an allowlisted read and the push advertisement CONTINUE with no row", async () => {
+    const { fake, decider } = setup();
+    expect(await decider.decide(READ(), SESSION)).toMatchObject({ action: "CONTINUE", class: "read" });
+    expect(await decider.decide(req({ method: "GET", host: "github.com", path: "/acme-synth/widget/info/refs", query: "service=git-receive-pack" }), SESSION)).toMatchObject({ action: "CONTINUE", class: "push-advert" });
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("4. a read outside the allowlist is REJECTed with no row", async () => {
+    const { fake, decider } = setup();
+    expect(await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/other-synth/thing" }), SESSION)).toMatchObject({ action: "REJECT", reason: "not-allowlisted", subreason: "read-outside-allowlist" });
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("5. a listed write with no row creates one pending row; a retry reuses it", async () => {
+    const { fake, decider } = setup();
+    const d1 = await decider.decide(PUSH(), SESSION);
+    expect(d1).toMatchObject({ action: "REJECT", reason: "pending" });
+    expect(d1.approvalId).toBe(fake.rows[0].id);
+    expect(d1.body).toContain(fake.rows[0].id);
+    expect(fake.calls).toEqual([`create:${hookMod.SPIKE_TOOL_NAME}`]);
+    const d2 = await decider.decide(PUSH(), SESSION);
+    expect(d2).toMatchObject({ action: "REJECT", reason: "pending", approvalId: d1.approvalId });
+    expect(fake.rows).toHaveLength(1);
+  });
+
+  it("5. approved and live: consumed exactly once, then a retry creates a new pending row", async () => {
+    const { fake, decider } = setup();
+    await decider.decide(PUSH(), SESSION);
+    fake.approveAll();
+    const d = await decider.decide(PUSH(), SESSION);
+    expect(d).toMatchObject({ action: "CONTINUE", class: "write", rule: "git-push" });
+    expect(fake.rows[0].status).toBe("consumed"); // Guard 2 row 2: consume ran before CONTINUE
+    const again = await decider.decide(PUSH(), SESSION);
+    expect(again).toMatchObject({ action: "REJECT", reason: "pending" });
+    expect(fake.rows).toHaveLength(2);
+  });
+
+  it("5. approved but expired by the hook's own clock: REJECT expired, no consume", async () => {
+    const { fake, decider, advance } = setup();
+    await decider.decide(PUSH(), SESSION);
+    fake.approveAll();
+    advance(601_000);
+    const d = await decider.decide(PUSH(), SESSION);
+    expect(d).toMatchObject({ action: "REJECT", reason: "expired" });
+    expect(fake.calls).not.toContain("consume");
+  });
+
+  it("5. a rejected (or expired) previous row is reported once, later retries report pending", async () => {
+    for (const [settle, reason] of [["rejectAll", "rejected"], ["expireAll", "expired"]] as const) {
+      const { fake, decider } = setup();
+      const first = await decider.decide(PUSH(), SESSION);
+      fake[settle]();
+      const d = await decider.decide(PUSH(), SESSION);
+      expect(d).toMatchObject({ action: "REJECT", reason });
+      expect(d.approvalId).not.toBe(first.approvalId);
+      expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ reason: "pending" });
+    }
+  });
+
+  it("binding: a row approved for request X does not authorize request Y", async () => {
+    const { fake, decider } = setup();
+    await decider.decide(PUSH(), SESSION);
+    fake.approveAll();
+    const y = req({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_C, "refs/heads/main"]]) });
+    expect(await decider.decide(y, SESSION)).toMatchObject({ action: "REJECT", reason: "pending" });
+    expect(fake.rows.find((r) => r.status === "approved")).toBeDefined();
+  });
+
+  it("maps every RPC failure to its reason code", async () => {
+    for (const [code, message, reason] of [
+      ["AP429", "approval: too many pending requests", "cap"],
+      ["AP430", "approval: too many pending requests", "cap"],
+      ["40001", "approval: concurrent change, retry", "retry"],
+      ["P0001", "approval: conversation closed", "closed"],
+      ["22023", "approval: conversation not found in workspace", "rpc-error"],
+    ] as const) {
+      const { fake, decider } = setup();
+      fake.failCreate(code, message);
+      expect(await decider.decide(PUSH(), SESSION), code).toMatchObject({ action: "REJECT", reason });
+    }
+  });
+
+  it("maps consume failures to consume-failed with the RPC's subreason", async () => {
+    for (const sub of ["already_consumed", "decider_not_owner", "requester_not_member"]) {
+      const { fake, decider } = setup();
+      await decider.decide(PUSH(), SESSION);
+      fake.approveAll();
+      fake.overrideConsume({ consumed: false, reason: sub });
+      expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ action: "REJECT", reason: "consume-failed", subreason: sub });
+    }
+  });
+
+  it("bounds its own work: a stalled RPC yields hook-timeout", async () => {
+    const { decider } = setup({
+      deadlineMs: 50,
+      rpc: { create: () => new Promise(() => {}), consume: async () => ({}), status: async () => null },
+    });
+    const t0 = performance.now();
+    expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ action: "REJECT", reason: "hook-timeout" });
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it("CONNECT: the router-only credential is required (407 without it), and a CONNECT is not a vend (R26)", async () => {
+    const { fake, decider } = setup();
+    const conn = (auth?: string) => req({ method: "CONNECT", host: "github.com", path: "", headers: auth ? { "proxy-authorization": auth } : {} });
+    const good = "Basic " + Buffer.from(`router:${SESSION.routerCredential}`).toString("base64");
+    expect(await decider.decide(conn(), SESSION)).toMatchObject({ action: "REJECT", status: 407 });
+    expect(await decider.decide(conn("Basic " + Buffer.from("router:wrong").toString("base64")), SESSION)).toMatchObject({ action: "REJECT", status: 407 });
+    expect(await decider.decide(conn(good), SESSION)).toMatchObject({ action: "CONTINUE", class: "connect" });
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("markers carry no body, header value or token, and name request id, source and hash prefix", async () => {
+    const { decider } = setup();
+    const canary = "BODY-CANARY-" + randomBytes(6).toString("hex");
+    const tokenish = "decoy-" + randomBytes(8).toString("hex");
+    const r = req({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", body: Buffer.from(`{"title":"${canary}"}`), headers: { authorization: `token ${tokenish}` } });
+    const d = await decider.decide({ ...r, requestId: "req-1" }, SESSION);
+    const line = hookMod.formatMarker(d.marker.name, d.marker.fields);
+    expect(line).toMatch(/^SOLEUR_EGRESS_VEND_REFUSED /);
+    expect(line).toContain("request_id=req-1");
+    expect(line).toContain("source=hook");
+    expect(line).toContain("reason=pending");
+    expect(line).toMatch(/action_sha256=[0-9a-f]{12}( |$)/);
+    expect(line).not.toContain(canary);
+    expect(line).not.toContain(tokenish);
+    expect(hookMod.formatMarker("SOLEUR_EGRESS_VEND", { host: "a b\nSOLEUR_FAKE=1" })).not.toMatch(/\n|a b/);
+  });
+});
+
+describe("approval-hook.mjs — Supabase target guard (CTO R21)", () => {
+  const status = { API_URL: "http://127.0.0.1:54321", SERVICE_ROLE_KEY: "svc-synthetic" };
+  it("accepts a loopback URL whose URL and key match supabase status", () => {
+    expect(hookMod.checkSupabaseTarget({ url: "http://127.0.0.1:54321", key: "svc-synthetic", status })).toEqual({ ok: true });
+  });
+  it("refuses a non-loopback host, a hostname, or a URL/key that differs from supabase status", () => {
+    expect(hookMod.checkSupabaseTarget({ url: "https://abc.supabase.co", key: "svc-synthetic", status }).ok).toBe(false);
+    expect(hookMod.checkSupabaseTarget({ url: "http://localhost:54321", key: "svc-synthetic", status }).ok).toBe(false);
+    expect(hookMod.checkSupabaseTarget({ url: "http://127.0.0.1:54321", key: "other", status }).ok).toBe(false);
+    expect(hookMod.checkSupabaseTarget({ url: "http://127.0.0.1:9999", key: "svc-synthetic", status }).ok).toBe(false);
+    expect(hookMod.checkSupabaseTarget({ url: "http://127.0.0.1:54321", key: "svc-synthetic", status: {} }).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// verdict.mjs — Guard 3 (outcome floor and never-skip).
+// ---------------------------------------------------------------------------------------------------------------
+
+function allPass() {
+  return Array.from({ length: 9 }, (_, i) => ({ criterion: i + 1, verdict: "pass", observation: `observed-${i + 1}` }));
+}
+
+describe("verdict.mjs — outcome floor", () => {
+  it("GO when criteria 1-9 all pass with an observation", () => {
+    expect(verdictMod.computeVerdict({ records: allPass() })).toMatchObject({ verdict: "GO", exitCode: 0 });
+  });
+
+  it("Guard 3 row 6 must-PASS: every criterion measured, criterion 4 fails: NO-GO, exit 0", () => {
+    const recs = allPass();
+    recs[3] = { criterion: 4, verdict: "fail", observation: "vended without approval" };
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "NO-GO", exitCode: 0, f1Holds: false });
+  });
+
+  it("a failure of criterion 2 or 5 is recorded as F1 evidence", () => {
+    for (const c of [2, 5]) {
+      const recs = allPass();
+      recs[c - 1] = { criterion: c, verdict: "fail", observation: "x" };
+      expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "NO-GO", f1Holds: true });
+    }
+  });
+
+  it("Guard 3 row 1: a missing arm (criterion 5) is INCONCLUSIVE, exit 1", () => {
+    const v = verdictMod.computeVerdict({ records: allPass().filter((r) => r.criterion !== 5) });
+    expect(v).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+    expect(v.missing).toEqual([5]);
+  });
+
+  it("Guard 3 row 2: no records at all is INCONCLUSIVE", () => {
+    expect(verdictMod.computeVerdict({ records: [] })).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+    expect(verdictMod.computeVerdict({})).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+  });
+
+  it("Guard 3 row 3: the floor counts distinct ids (criterion 4 twice, criterion 6 never)", () => {
+    const recs = allPass().filter((r) => r.criterion !== 6);
+    recs.push({ criterion: 4, verdict: "pass", observation: "dup" });
+    expect(recs).toHaveLength(9);
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "INCONCLUSIVE", missing: [6] });
+  });
+
+  it("Guard 3 row 5: all unmeasurable with reasons is INCONCLUSIVE and each reason is carried", () => {
+    const recs = allPass().map((r) => ({ criterion: r.criterion, verdict: "unmeasurable", reason: `harness-${r.criterion}` }));
+    const v = verdictMod.computeVerdict({ records: recs });
+    expect(v).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+    expect(v.unmeasurable).toHaveLength(9);
+    expect(v.unmeasurable[0]).toEqual({ criterion: 1, reason: "harness-1" });
+  });
+
+  it("a pass with no positive observation does not count as a verdict", () => {
+    const recs = allPass();
+    recs[0] = { criterion: 1, verdict: "pass", observation: "" };
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "INCONCLUSIVE" });
+  });
+
+  it("a measured failure of criterion 2 is still F1 evidence when the run is INCONCLUSIVE", () => {
+    const recs = allPass().filter((r) => r.criterion !== 9);
+    recs[1] = { criterion: 2, verdict: "fail", observation: "x" };
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "INCONCLUSIVE", f1Holds: true });
+  });
+
+  it("conflicting records for one id: fail beats unmeasurable beats pass", () => {
+    const recs = allPass();
+    recs.push({ criterion: 3, verdict: "fail", observation: "x" });
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "NO-GO", failed: [3] });
+    const recs2 = allPass();
+    recs2.push({ criterion: 3, verdict: "unmeasurable", reason: "r" } as never);
+    expect(verdictMod.computeVerdict({ records: recs2 })).toMatchObject({ verdict: "INCONCLUSIVE" });
+  });
+
+  it("an unknown criterion id or verdict value makes the run INCONCLUSIVE", () => {
+    expect(verdictMod.computeVerdict({ records: [...allPass(), { criterion: 10, verdict: "pass", observation: "x" }] })).toMatchObject({ verdict: "INCONCLUSIVE" });
+    const recs = allPass();
+    recs[0] = { criterion: 1, verdict: "PASS", observation: "x" };
+    expect(verdictMod.computeVerdict({ records: recs })).toMatchObject({ verdict: "INCONCLUSIVE" });
+  });
+
+  it("a stored top-level verdict that disagrees with the records is INCONCLUSIVE", () => {
+    expect(verdictMod.computeVerdict({ verdict: "GO", records: allPass() })).toMatchObject({ verdict: "GO" });
+    const recs = allPass();
+    recs[0] = { criterion: 1, verdict: "fail", observation: "x" };
+    expect(verdictMod.computeVerdict({ verdict: "GO", records: recs })).toMatchObject({ verdict: "INCONCLUSIVE" });
+  });
+});

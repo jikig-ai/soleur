@@ -1,0 +1,82 @@
+# Egress injector spike policy (#12517). Test path only; no production config references it.
+#
+# The per-host classifier's data, and the only place a verb is declared. The write policy is CLOSED (CTO R13): a
+# write that matches no `writes` rule is refused `not-allowlisted` with no row, so the overlay
+# (policy.add-verb.yaml) can move a verb from refused to gated and criterion 7 can fail.
+#
+# Path patterns: `{owner}` and `{repo}` bind the repository (lowercased, `.git` stripped, checked against the
+# session's repository allowlist); `{number}` is decimal; a trailing `/**` matches zero or more further segments.
+# `methods` lists the HTTP methods the rule covers. A `query` map must match the query string exactly.
+
+version: 1
+
+inject_hosts:
+  - github.com
+  - api.github.com
+  - uploads.github.com
+  - codeload.github.com
+
+# Reads vend without a row, on the session's repository allowlist. Classified by protocol, not by method:
+# git's upload-pack POST and a GraphQL query POST are reads.
+reads:
+  - id: git-upload-pack-advert
+    host: github.com
+    methods: [GET]
+    path: /{owner}/{repo}/info/refs
+    query: { service: git-upload-pack }
+  - id: git-upload-pack
+    host: github.com
+    methods: [POST]
+    path: /{owner}/{repo}/git-upload-pack
+  - id: rest-repo-read
+    host: api.github.com
+    methods: [GET, HEAD]
+    path: /repos/{owner}/{repo}/**
+  - id: uploads-repo-read
+    host: uploads.github.com
+    methods: [GET, HEAD]
+    path: /repos/{owner}/{repo}/**
+  - id: codeload-archive
+    host: codeload.github.com
+    methods: [GET, HEAD]
+    path: /{owner}/{repo}/**
+  # Not repository-scoped: a GraphQL query names its repositories in the document, which this classifier does not
+  # resolve. Recorded as part of the confused-deputy residual (reads plus open-web egress).
+  - id: graphql-query
+    host: api.github.com
+    methods: [POST]
+    path: /graphql
+    graphql: query
+
+# The push ref advertisement vends without a row: it mutates nothing and carries no ref update to hash (CTO R1).
+push_advertisement:
+  - id: git-receive-pack-advert
+    host: github.com
+    methods: [GET]
+    path: /{owner}/{repo}/info/refs
+    query: { service: git-receive-pack }
+
+# Listed writes need one approved row whose action hash equals this request's (ADR-309 consume).
+# `recipe` names the canonical-action fields hashed into action_sha256; every recipe also hashes host and repository.
+writes:
+  - id: git-push
+    host: github.com
+    methods: [POST]
+    path: /{owner}/{repo}/git-receive-pack
+    recipe: git-push
+  - id: rest-create-pull
+    host: api.github.com
+    methods: [POST]
+    path: /repos/{owner}/{repo}/pulls
+    recipe: rest
+  - id: rest-issue-comment
+    host: api.github.com
+    methods: [POST]
+    path: /repos/{owner}/{repo}/issues/{number}/comments
+    recipe: rest
+  - id: graphql-mutation
+    host: api.github.com
+    methods: [POST]
+    path: /graphql
+    recipe: graphql
+    mutation_fields: [createPullRequest, addComment]
