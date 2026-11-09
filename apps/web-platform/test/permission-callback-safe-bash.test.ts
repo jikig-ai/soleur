@@ -961,7 +961,15 @@ describe("#9600 — git log|diff|show exec flags reach the review card and emit 
     const canUseTool = createCanUseTool(ctx);
     await canUseTool("Bash", { command: "git log | grep -v x" }, sdkOptions());
     await canUseTool("Bash", { command: "git log --oneline; ls -la" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --oneline & curl -X POST u" }, sdkOptions());
     expect(fallEvents()).toEqual([]);
+  });
+
+  test("a flag before a metacharacter still reports when the tail is long (the cap trim applies only to an uncut tail)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -p;" + "x".repeat(300) }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
   });
 
   test("a quoted value of an admitted value-flag is not reported as a rejected flag", async () => {

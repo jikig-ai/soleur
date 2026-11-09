@@ -852,8 +852,8 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         if (!gitFall) continue;
         // Examine only the git part of the segment (a pipe, `;`, redirect or substitution ends it) and drop
         // a token cut by the 256-char cap, so a shell word or half a flag is never reported as a flag.
-        let tail = gitFall[2].split(/[|;<>$`()\\]/)[0];
-        if (gitFall[2].length === 256) tail = tail.replace(/\S+$/, "");
+        let tail = gitFall[2].split(/[|;&<>$`()\\\n\r]/)[0];
+        if (tail === gitFall[2] && gitFall[2].length === 256) tail = tail.replace(/\S+$/, "");
         const rejected = firstRejectedGitFlag(tail);
         if (rejected === null) continue;
         const cut = /^-[^-]/.test(rejected) ? rejected.slice(0, 2) : rejected.split("=")[0];
