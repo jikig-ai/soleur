@@ -34,3 +34,10 @@
 - Operator collision answer: "Continue, accept races" (live PRs #12434, #12475 on ci.yml; #7390 on suite TSVs).
 - Operator-only open item for close-out: retire-vs-schedule on #9729 per #10448.
 - Next: soleur:review (step 4) → resolve findings → fix-commit round → QA → compound → ship → DONE.
+
+## Review Round 1 (8-seat code panel, report-only)
+- Seats: all 8 ran. P1s: arch F1 (diff_head was merge-result — re-counted base arc when p1 ahead of fork point; fixed → true three-dot diff_head=$p2 + `behind` fixture + revert mutation); git-history evidence P1 (the #12376 run was a correct verdict — defect direction is lane DENIAL, not fabricated oracle_only; ADR/plan/session-state corrected, #12418 comment posted).
+- Mediums: security F1 (SHA-want/dwim via hex/tags/ base.ref → refs/heads/ pin + regression rows); pattern F1 (PJ_TRIPLES 328→327 + note); runbook reason enum (all 3 tokens added); ordering (×3 seats → block moved after switch gate).
+- Filed: #12484 (ci-pr-selection.sh same-class sibling port, meta/machinery, Post-MVP).
+- Suite after fixes: 5184 rows green, 35/35 mutants killed; grep-q-pipe-guard green at 327 triples.
+- Fix-round seats (arch + security re-check) spawned on delta 80a2bffe60..2b65e94e9a.
