@@ -65,3 +65,12 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - GDPR gate: skip (CI/tf/shell/docs only; no regulated-data surfaces).
 - Phase 3 quality: markdownlint clean on touched KB files.
 - Next: soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship.
+
+## Review Phase Progress
+
+- Class: code. Tier: none (plan-declared, no sensitive-path hit). design-risk: yes.
+- Design pass (3 seats) concurred on 3 P1s in the soak probe: SOLEUR_FT_* env undeliverable via secrets= (reserved prefix, names-not-values); fictional tracker schema (real body = 8 cols seconds + Report refreshed, no window col); suite unregistered in test-all.sh. Plus P2s (comment-literal arming, malformed directive, unattributed cancels, p50-only watch, enqueuedAt promotion FP).
+- Rework committed 45ba7b1: probe derives TRACKER (find-or-file) + FLIP_MERGED (-S pickaxe), parses real schema, Report-refreshed postdate, >=2-aligned decline arm, p90+churn signals, comment-anchored tf parse; suite 14/14; registered in test-all.sh (orphan-lint clean); ADR attribution + hazard lines; directive fixed to secrets=GH_TOKEN.
+- Cancelled-run attribution sample recorded: 3 runs, 42-44 jobs started, ~44-50min runtime, group-reformation discards.
+- Main panel spawned (6 seats): git-history, pattern, security, code-quality, test-design, structural-enum. PANEL_SHA=90543a00. Dedup: arch/perf/simplicity ran in design pass; data-integrity+agent-native shed (tier none, not path-mapped).
+- Remaining: synthesize panel -> resolve findings -> Step 4 simplicity -> fix-round seats -> QA -> compound -> ship -> postmerge (directive earliest=<merge>+21d secrets=GH_TOKEN + F3 follow-up issue) -> DONE.
