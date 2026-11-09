@@ -830,7 +830,9 @@ describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () 
       expect(err?.message ?? "").toMatch(/too many distinct hashes/);
       expect(err?.message ?? "").not.toContain(KEY);
     });
-  });
+    // 21 founders x (user, intent, record) round trips to the dev database exceed the 16 s default on a CI runner (measured:
+    // timed out at 16 000 ms, and the open transaction then starved the next two tests of a connection).
+  }, 180_000);
 
   test("a different key's rows are not counted", async () => {
     await scenario(async (t, c) => {
