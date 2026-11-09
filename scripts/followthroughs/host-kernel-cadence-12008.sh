@@ -7,11 +7,17 @@
 # never copies the numbers.
 #
 # Exit semantics (enforced by scripts/sweep-followthroughs.sh):
-#   5 = ACTION REQUIRED   at least one row is past its cadence and not acknowledged
-#   2 = NOT YET           every row is fresh, observed and within its cadence
+#   5 = ACTION REQUIRED   at least one row is past its cadence
+#   2 = NOT YET           every required row is fresh, observed and within its cadence
 #   3 = CANNOT ESTABLISH  anything else: an unknown, stale or silent row, a missing or duplicate or unseen role row,
-#                         an unreadable uptime, a reader problem, an argument, an acknowledged-only overdue row
+#                         a row whose fixed columns do not have the reader's shape, an unreadable uptime, a reader
+#                         problem, an argument
 #   (78 under xtrace.) This probe NEVER exits 0 or 1: it must not close the tracker and must not read as a failure.
+#
+# Rows. The five REQUIRED_ROLES must each appear once. IGNORED_ROLES are rows the reader prints for hosts that are
+# default-off and have no emitter and no cadence; they are skipped, never graded. Any other role is a problem
+# (fail closed), and the suite pins the reader's role table against these two lists, so a role the reader adds or
+# renames fails in the change that causes it.
 #
 # Public output. The sweeper republishes stdout near-verbatim as a public tracker comment. Stdout is therefore
 # exactly one of three fixed lines; no class name, no count, no version, no host, no digit. The reader's
@@ -25,10 +31,12 @@
 #
 # Credential posture: this script holds none. The tracker directive's secrets= clause injects the Better Stack read
 # credentials the reader needs; without them the reader exits non-zero and this prints the cannot-establish line.
-# The tracker is filed UNARMED until a session run of the reader shows at least one fresh, observed row.
+# The tracker is filed UNARMED. It is armed only once a session run of this probe prints a line other than
+# cannot-establish (which needs the emitter roll-out and the git-data reader source); until then it can only say
+# cannot-establish. Acknowledging a row that is overdue by design is deferred to the arming change.
 #
-# Test seam: HKC_READER (a stub path) and HKC_TODAY (YYYY-MM-DD) are honoured only when HKC_TEST=1; the sweeper
-# runs probes under env -i, so neither can redirect a production run.
+# Test seam: HKC_READER (a stub path) is honoured only when HKC_TEST=1; the sweeper runs probes under env -i, so
+# nothing can redirect a production run.
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #
@@ -54,17 +62,8 @@ readonly CADENCE_DAYS_INNGEST=30
 readonly CADENCE_DAYS_REGISTRY=30
 readonly CADENCE_DAYS_GIT_DATA=45
 
-# Time-boxed acknowledgement per host row (YYYY-MM-DD, empty by default). It suppresses ONLY an overdue
-# row, never an unknown one, and only until that date. A non-empty value needs a comment line directly above it that
-# carries its tracking issue number, and may be at most 90 days past this file's last commit date (the test
-# enforces both). An expired date re-arms the row.
-readonly ACK_UNTIL_WEB_1=''
-readonly ACK_UNTIL_WEB_2=''
-readonly ACK_UNTIL_INNGEST=''
-readonly ACK_UNTIL_REGISTRY=''
-readonly ACK_UNTIL_GIT_DATA=''
-
 REQUIRED_ROLES='web-1 web-2 inngest registry git-data'
+IGNORED_ROLES='grok-dogfood'
 
 emit() { # token -> prints the one fixed line and exits; an unrecognised token can only print cannot-establish
   local tok="$1" rc
@@ -80,10 +79,8 @@ emit() { # token -> prints the one fixed line and exits; an unrecognised token c
 
 [ "$#" -eq 0 ] || emit cannot-establish
 
-today="$(date -u +%Y-%m-%d)"
-if [ "${HKC_TEST:-}" = 1 ] && [ -n "${HKC_TODAY:-}" ]; then today="$HKC_TODAY"; fi
-
 known_role() { case "$1" in web-1|web-2|inngest|registry|git-data) return 0 ;; *) return 1 ;; esac; }
+ignored_role() { case " $IGNORED_ROLES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 cadence_days() {
   case "$1" in
@@ -94,35 +91,19 @@ cadence_days() {
   esac
 }
 
-ack_for() {
-  case "$1" in
-    web-1) printf '%s' "$ACK_UNTIL_WEB_1" ;;
-    web-2) printf '%s' "$ACK_UNTIL_WEB_2" ;;
-    inngest) printf '%s' "$ACK_UNTIL_INNGEST" ;;
-    registry) printf '%s' "$ACK_UNTIL_REGISTRY" ;;
-    git-data) printf '%s' "$ACK_UNTIL_GIT_DATA" ;;
-  esac
-}
-
-ack_live() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$1" > "$today" ]]; }
-
-classify_row() { # role marker_state kernel_state uptime_s -> overdue | acked | within | unknown
-  local role="$1" ms="$2" ks="$3" up="$4" days ack
+classify_row() { # role marker_state kernel_state uptime_s -> overdue | within | unknown
+  local role="$1" ms="$2" ks="$3" up="$4" days
   days="$(cadence_days "$role")"
-  [[ "$days" =~ ^[0-9]+$ ]] || { echo unknown; return; }
   [ "$ms" = fresh ] && [ "$ks" = observed ] || { echo unknown; return; }
   [[ "$up" =~ ^[0-9]{1,12}$ ]] || { echo unknown; return; }
   if [ "$up" -le $((days * 86400)) ]; then echo within; return; fi
-  ack="$(ack_for "$role")"
-  if [ -n "$ack" ] && ack_live "$ack"; then echo acked; return; fi
   echo overdue
 }
 
-aggregate() { # classes... -> token. Precedence: overdue, then unknown, then acked, then the all-clear.
+aggregate() { # classes... -> token. Precedence: overdue, then unknown, then the all-clear.
   local c
   for c in "$@"; do if [ "$c" = overdue ]; then echo review-needed; return; fi; done
   for c in "$@"; do if [ "$c" = unknown ]; then echo cannot-establish; return; fi; done
-  for c in "$@"; do if [ "$c" = acked ]; then echo cannot-establish; return; fi; done
   echo nothing-to-report
 }
 
@@ -140,9 +121,14 @@ problem=0
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in SOLEUR_CVE_HOST_STATE\ *) continue ;; esac
-  fields="$(awk -F'\t' 'NF >= 8 { print $1 "\t" $2 "\t" $3 "\t" $6; next } { print "BAD" }' <<<"$line")"
+  # Columns (the reader's header comment): host_role marker_state kernel_state age_hours kernel uptime_s kernel_age_hours
+  # source_marker. Eight or more fields are accepted so a column appended later is safe; the fixed columns must have
+  # their shape or the row is a problem, so a column inserted before uptime_s cannot shift a number into its place
+  # unnoticed unless it also keeps every enum and numeric column valid.
+  fields="$(awk -F'\t' 'NF >= 8 && $2 ~ /^(fresh|stale|silent|unknown)$/ && $3 ~ /^(observed|stale|unknown)$/ && $4 ~ /^([0-9]+|unknown)$/ && $5 ~ /^[A-Za-z0-9._+~:-]+$/ && $7 ~ /^([0-9]+|unknown)$/ { print $1 "\t" $2 "\t" $3 "\t" $6; next } { print "BAD" }' <<<"$line")"
   if [ -z "$fields" ] || [ "$fields" = BAD ]; then problem=1; continue; fi
   IFS=$'\t' read -r role ms ks up <<<"$fields"
+  if ignored_role "$role"; then continue; fi
   if ! known_role "$role"; then problem=1; continue; fi
   [ -z "${SEEN[$role]:-}" ] || problem=1
   SEEN[$role]=1

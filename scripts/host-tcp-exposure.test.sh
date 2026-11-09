@@ -3,23 +3,25 @@
 # from the repository text alone. No SSH, no network, no credential.
 #
 # WHAT THIS IS. A declared-design invariant, like firewall-9000-deny.test.sh: a non-web firewall
-# declares no inbound rule, every mapped server is bound to its firewall, nothing unmapped exists, and the
+# declares no rule block at all (a future egress rule is then a deliberate edit here), every mapped server is bound to its firewall, nothing unmapped exists, and the
 # parser demonstrably reads the web firewall (the control). It is a check on what the repository
 # DECLARES. It is not live state: console drift, a stale attachment id (#6442) and a firewall that was
 # never applied need a live read, which is a session-only step (ADR-322) and is NOT done here.
 # Tunnel ingress (tunnel.tf) is outbound-initiated and opens no inbound public port, so it is out of scope.
 #
-# Mapping below = one row per server resource label: server | firewall | binding kind.
-#   control     the web firewall: it MUST parse with inbound rules (parser liveness), and its only
-#               dynamic rule is the documented admin-address block.
-#   inline      the server carries firewall_ids naming its firewall (bound at creation).
-#   attachment  bound by a separate hcloud_firewall_attachment (attaches after first boot, #6442).
-#   excluded    default-off, count-gated server whose firewall is not part of the always-on surface.
-# ATTACH_ALLOW is the set of non-control servers that may stay attachment-bound. It only shrinks:
-# moving a server to inline binding means deleting its entry here; adding an entry is a review event.
+# Mapping below = one row per server resource label: server | firewall | kind.
+#   control   the web firewall: it MUST parse with rules (parser liveness), and its only dynamic rule is the
+#             documented admin-address block.
+#   plain     a non-web server: its firewall declares no rule block, and the server must be bound to it, either
+#             inline (firewall_ids, bound at creation) or by a separate hcloud_firewall_attachment (attaches
+#             after first boot, #6442).
+#   excluded  default-off, count-gated server whose firewall is not part of the always-on surface (its firewall
+#             carries a dynamic admin-address SSH rule, so only the count gate is checked).
+# ATTACH_ALLOW is the set of plain servers that may stay attachment-bound. It only shrinks: moving a server to
+# inline binding means deleting its entry here; adding an entry is a review event.
 #
-# A new hcloud_server that is not in the mapping makes this suite fail closed, by design: the first
-# infra change that adds a server must add its row here.
+# A new hcloud_server that is not in the mapping makes this suite fail closed, by design: the first infra change
+# that adds a server must add its MAP row here and decide inline versus attachment binding.
 #
 # Parser note: text parsing by resource boundary and brace depth over every .tf file in the directory.
 # Comment lines are dropped first. Failure messages name resource addresses only (already public in
@@ -34,9 +36,9 @@ ROOT="$(cd "$HERE/.." && pwd)"
 REAL_TF="$ROOT/apps/web-platform/infra"
 
 readonly MAP='web|web|control
-git_data|git_data|attachment
-registry|registry|attachment
-inngest|inngest|inline
+git_data|git_data|plain
+registry|registry|plain
+inngest|inngest|plain
 grok_dogfood|grok_dogfood|excluded'
 readonly ATTACH_ALLOW='git_data registry'
 
@@ -52,7 +54,8 @@ export TMPDIR="$D"
 # ---- the analyzer: records, then findings --------------------------------------------------------
 records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH records, one per resource
   local f
-  for f in $(LC_ALL=C ls "$1"/*.tf 2>/dev/null); do
+  for f in "$1"/*.tf; do
+    [ -f "$f" ] || continue
     sed -E -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]+#[^"]*$//' "$f"
   done | awk '
     function collect(s, lit,   out, re) {
@@ -67,7 +70,7 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH records, one per r
     /^resource[[:space:]]+"[a-z_]+"[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ && blk == "" {
       blk = $2; lab = $3; gsub(/"/, "", blk); gsub(/"/, "", lab)
       depth = 1; hascount = 0; fwids = ""; inb = 0; ndyn = 0; ndynadmin = 0; nfe = 0
-      in_rule = 0; in_dyn = 0; in_fwids = 0; in_srv = 0; fwid = ""; srvs = ""; dirout = 0
+      in_dyn = 0; in_fwids = 0; in_srv = 0; fwid = ""; srvs = ""
       next
     }
     blk == "" { next }
@@ -86,12 +89,10 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH records, one per r
       if (blk == "hcloud_firewall") {
         if (d == 1 && line ~ /^[[:space:]]*(count|for_each)[[:space:]]*=/) nfe++
         if (in_dyn && line ~ /for_each[[:space:]]*=[[:space:]]*var\.admin_ips[[:space:]]*$/) ndynadmin++
-        if (!in_rule && !in_dyn && d == 1 && line ~ /^[[:space:]]*dynamic[[:space:]]+"rule"/) { ndyn++; in_dyn = 1; dyn_d = d }
-        else if (!in_rule && !in_dyn && d == 1 && line ~ /^[[:space:]]*rule[[:space:]]*\{/) { in_rule = 1; rule_d = d; dirout = 0 }
-        else if (in_rule && line ~ /direction[[:space:]]*=[[:space:]]*"out"/) dirout = 1
+        if (!in_dyn && d == 1 && line ~ /^[[:space:]]*dynamic[[:space:]]+"rule"/) { ndyn++; in_dyn = 1; dyn_d = d }
+        else if (!in_dyn && d == 1 && line ~ /^[[:space:]]*rule[[:space:]]*\{/) inb++
       }
       depth = d + count_of(line, "{") - count_of(line, "}")
-      if (in_rule && depth <= rule_d) { if (!dirout) inb++; in_rule = 0 }
       if (in_dyn && depth <= dyn_d) in_dyn = 0
       if (depth <= 0) {
         if (blk == "hcloud_server") printf "SERVER\t%s\t%d\t%s\n", lab, hascount, fwids
@@ -105,7 +106,7 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH records, one per r
 field() { awk -F'\t' -v k="$1" -v l="$2" -v n="$3" '$1 == k && $2 == l { print $n; exit }'; } # kind label col <records
 
 analyze() { # dir -> prints FINDING lines; empty output = clean
-  local dir="$1" rec nserv nfw row srv fw kind has fwids found attach_actual="" a
+  local dir="$1" rec nserv nfw srv fw kind has fwids found attach_actual="" a
   rec="$(records "$dir")"
   nserv="$(grep -c '^SERVER' <<<"$rec")"; nfw="$(grep -c '^FIREWALL' <<<"$rec")"
   [ "$nserv" -gt 0 ] || { echo "FINDING no-servers directory"; return; }
@@ -139,7 +140,7 @@ analyze() { # dir -> prints FINDING lines; empty output = clean
       [ "${inb:-0}" -gt 0 ] || echo "FINDING parser-liveness hcloud_firewall.${fw}"
       if [ "${ndyn:-0}" -gt "${ndyna:-0}" ] || [ "${nfe:-0}" -gt 0 ]; then echo "FINDING dynamic-rule hcloud_firewall.${fw}"; fi
     else
-      [ "${inb:-0}" -eq 0 ] || echo "FINDING inbound-rule hcloud_firewall.${fw}"
+      [ "${inb:-0}" -eq 0 ] || echo "FINDING rule-block hcloud_firewall.${fw}"
       if [ "${ndyn:-0}" -gt 0 ] || [ "${nfe:-0}" -gt 0 ]; then echo "FINDING dynamic-rule hcloud_firewall.${fw}"; fi
     fi
   done <<<"$MAP"
@@ -158,8 +159,8 @@ tf_server() { # label [count] [firewall-label]
   [ -n "${3:-}" ] && printf '  firewall_ids = [hcloud_firewall.%s.id]\n' "$3"
   printf '}\n\n'
 }
-tf_fw_plain() { # label  (deny-all: one outbound rule only)
-  printf 'resource "hcloud_firewall" "%s" {\n  rule {\n    direction = "out"\n    protocol = "tcp"\n    port = "443"\n  }\n}\n\n' "$1"
+tf_fw_plain() { # label  (deny-all: no rule block at all)
+  printf 'resource "hcloud_firewall" "%s" {\n  labels = {}\n}\n\n' "$1"
 }
 tf_fw_web() {
   printf '# a comment mentioning rule { and dynamic "rule" must not count\n'
@@ -181,7 +182,7 @@ base_fixture() { # dir
     tf_server grok_dogfood count; tf_fw_plain grok_dogfood
   } > "$1/main.tf"
 }
-clone() { rm -rf "$D/$2"; cp -r "$D/$1" "$D/$2"; }
+clone() { rm -rf "${D:?}/$2"; cp -r "$D/$1" "$D/$2"; }
 
 # ---- expectations --------------------------------------------------------------------------------
 CASES=0
@@ -214,21 +215,19 @@ case_baseline() {
   CASES=$((CASES + 1))
   expect_clean "baseline fixture is clean (positive control)" ctl
   clone ctl out_only; sed -i '/resource "hcloud_firewall" "git_data" {/a\  rule {\n    direction = "out"\n    protocol = "udp"\n  }' "$D/out_only/main.tf"
-  expect_clean "an extra outbound rule on a non-web firewall is fine" out_only
+  expect_finding "even an outbound rule on a non-web firewall is a review event (no rule block at all)" out_only rule-block hcloud_firewall.git_data
 }
 case_inbound() {
   CASES=$((CASES + 1))
   clone ctl inb; sed -i '/resource "hcloud_firewall" "git_data" {/a\  rule {\n    direction = "in"\n    protocol = "tcp"\n    port = "22"\n  }' "$D/inb/main.tf"
-  expect_finding "inbound rule on a non-web firewall" inb inbound-rule hcloud_firewall.git_data
-  clone ctl inb2; sed -i '/resource "hcloud_firewall" "git_data" {/a\  rule {\n    protocol = "tcp"\n  }' "$D/inb2/main.tf"
-  expect_finding "a rule with no direction counts as inbound" inb2 inbound-rule hcloud_firewall.git_data
+  expect_finding "inbound rule on a non-web firewall" inb rule-block hcloud_firewall.git_data
 }
 case_second_member() {
   CASES=$((CASES + 1))
   clone ctl sm; sed -i '/resource "hcloud_firewall" "inngest" {/a\  rule {\n    direction = "in"\n    protocol = "tcp"\n  }' "$D/sm/main.tf"
-  expect_finding "a violation in a LATER non-web firewall after compliant ones" sm inbound-rule hcloud_firewall.inngest
+  expect_finding "a violation in a LATER non-web firewall after compliant ones" sm rule-block hcloud_firewall.inngest
   clone ctl sm2; sed -i '/resource "hcloud_firewall" "registry" {/a\  rule {\n    direction = "in"\n    protocol = "tcp"\n  }' "$D/sm2/main.tf"
-  expect_finding "a violation in an EARLIER member while later ones are compliant" sm2 inbound-rule hcloud_firewall.registry
+  expect_finding "a violation in an EARLIER member while later ones are compliant" sm2 rule-block hcloud_firewall.registry
 }
 case_empty() {
   CASES=$((CASES + 1))
@@ -312,7 +311,7 @@ case_real_tree() {
   [ "$(field FIREWALL web 3 <<<"$rec")" -gt 0 ] 2>/dev/null && ok "real tree: the control firewall parsed with inbound rules" || bad "real tree: the control firewall parsed with no inbound rule"
   out="$(analyze "$REAL_TF")"
   [ -z "$out" ] && ok "real tree: the declared-design invariant holds (non-web firewalls deny inbound, every mapped server is bound, nothing unmapped)" \
-    || bad "real tree: declared-design invariant violated: $(tr '\n' ';' <<<"$out")"
+    || bad "real tree: declared-design invariant violated: $(tr '\n' ';' <<<"$out") (a new server needs a MAP row: see the suite header)"
 }
 
 [ -d "$REAL_TF" ] || { printf '[FATAL] real Terraform directory missing\n' >&2; exit 1; }
@@ -321,11 +320,11 @@ case_binding; case_ratchet; case_dynamic; case_ignored_constructs; case_noncanon
 case_excluded; case_real_tree
 
 # ---- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
-EXPECTED_CASES=12
+EXPECTED_CASES=13
 if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted)\n' "$CASES" "$EXPECTED_CASES" >&2; exit 1
 fi
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=27
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2; exit 1
 fi

@@ -21,7 +21,7 @@ brand_survival_threshold: aggregate pattern
 ### Key improvements
 1. Per-workflow merge-trigger enumeration: the design keeps every new path under `scripts/` and `knowledge-base/`, so the merge cannot start an apply, a registry replace or a release.
 2. The review round cut the surface roughly in half: one probe script (no conf file, no exemption ratchet, no extra modes), one exposure suite (no table script), and the probe is filed unarmed until a host reports.
-3. A time-boxed per-row acknowledgement replaces a permanent "overdue by design" state, so a known-bad row cannot mask a new one.
+3. A time-boxed per-row acknowledgement was planned for rows overdue by design; the review (CTO, 2026-11-09) deferred it to the change that arms the tracker, because no row can be overdue while the tracker is unarmed (see the Review Amendments section).
 4. Verified-in-repo corrections: the right generator form for adding suites is `--incremental --write`; the sweeper gives probes no `HOME`, `CI` or `HEADLESS_MODE`; `kernel_age_hours` is the age of the report row, not of the kernel.
 
 ### New considerations discovered
@@ -30,6 +30,18 @@ brand_survival_threshold: aggregate pattern
 
 Spec lacks a valid `lane:` (no spec.md exists for this branch): defaulted to `cross-domain` (fail-closed).
 This PR is `Ref #12008`, never `Closes`: items 1 and 4 of the issue stay open.
+
+## Review Amendments (2026-11-09, append-only record)
+
+The review's design-validity pass (simplicity and architecture seats) and a CTO ruling on its dissents changed the plan as follows; the sections below were edited to match and each edited line names this section:
+
+1. The real reader prints a sixth role (the default-off dogfood host), so the probe could never print the all-clear. The probe now skips an `IGNORED_ROLES` list, and the suite pins the reader's role table and column header against the probe.
+2. Field-shape validation of the fixed columns (a column inserted before the uptime cannot silently shift a number into its place).
+3. CTO item A (supersedes R4): per-row acknowledgements are deferred to the change that arms the tracker.
+4. CTO item B: the mutation matrix stays, trimmed by the two acknowledgement mutants and made to stop at the first kill.
+5. CTO item C (amends R6): any rule block on a non-web firewall is red.
+6. CTO item D: the hygiene scan keeps covering the script, both suites and the runbook (AC7 stands).
+7. CTO item E (amends R5): the tracker is armed only once a session run of the probe prints a line other than `cannot-establish`, which needs #12385 and #12386.
 
 ## Overview
 
@@ -121,7 +133,7 @@ Stale: the brief's commit hash had one extra character (the real one is d731cfde
 | Tunnel ingress parsing | 5 | Cut. Outbound-initiated; opens no inbound port. |
 | New ADR for git-data's route | 2 | Cut. The route already exists (CTO F3). A reboot route for git-data would need a new ADR superseding ADR-115's "not adopted" and is an owner decision, noted in the runbook. |
 | Enrolling the probe on the sweeper now | 3 | Deferred (CTO R5): until a host reports it can only print `cannot-establish` and post a daily public comment. The arming step is a tracked issue. |
-| Per-class aggregate that never clears (rows past cadence by design) | 3 | Replaced by a time-boxed per-row acknowledgement (CTO R4), because a permanent known-bad row would mask every new one. |
+| Per-class aggregate that never clears (rows past cadence by design) | 3 | A time-boxed per-row acknowledgement was the R4 answer; deferred to the arming change by the 2026-11-09 review ruling (see Review Amendments). |
 
 ### Institutional learnings applied
 
@@ -201,7 +213,7 @@ four-layer checklist is answered for what it is, in L3 to L7 order, with nothing
 |-----------|-----------------------------------|---------|
 | Runbook `host-kernel-patch-cadence.md` | "expressed as durable repo artifacts (runbook + whatever machine-checkable gate/alert fits the existing patterns" | asked |
 | `scripts/followthroughs/host-kernel-cadence-12008.sh` (cadence constants, overdue rule, fixed public line) | "a cadence-overdue signal built on the #12007 marker/heartbeats" | asked |
-| `ACK_UNTIL_<row>` acknowledgement constants inside that script | asks 1 | inferred — justification: two rows are past cadence by design (the one web host with no rebuild path, git-data behind its interlocks); without a time-boxed acknowledgement they hold the aggregate at `review-needed` forever and mask every new overdue row (CTO R4) |
+| `ACK_UNTIL_<row>` acknowledgement constants inside that script (REMOVED from this PR by the 2026-11-09 review ruling; deferred to the arming change) | asks 1 | inferred — justification: two rows are past cadence by design (the one web host with no rebuild path, git-data behind its interlocks); without a time-boxed acknowledgement they hold the aggregate at `review-needed` forever and mask every new overdue row (CTO R4) |
 | `scripts/followthroughs/host-kernel-cadence-12008.test.sh` | "recorded as a repeatable check/test" (item 3 wording, applied to item 2 because the probe is a guard) | inferred — justification: a guard with no suite is the vacuous-guard class (Guard Contract) |
 | `scripts/host-tcp-exposure.test.sh` | "recorded as a repeatable check/test, not as a verdict in a durable or public artifact" | asked |
 | Attachment-binding ratchet inside the exposure suite | "check public TCP exposure of the non-web hosts using only non-SSH, read-only, repo-and-IaC-derivable evidence" | inferred — justification: binding shape is the part of "exposure" a rule count cannot show (ADR-100 addendum #8754, open #6442), so a rule-count-only check would read clean over an unbound host |
@@ -289,13 +301,10 @@ failure_modes:
   - mode: host emitter not delivered or silent (today's state for every host)
     detection: every row unknown, probe prints cannot-establish; the runbook procedure names which row in a session
     alert_route: layer 6 for the aggregate; host-state.sh in a session for the row
-  - mode: a row is past its cadence and not acknowledged
+  - mode: a row is past its cadence
     detection: probe prints review-needed, exit 5, sweeper heading ACTION REQUIRED
     alert_route: layer 6, tracker comment
-  - mode: an acknowledgement constant is permanent, covers an unknown row or is not tied to an issue
-    detection: the probe suite fails in CI (90-day cap from the script's commit date, ack never touches unknown, issue number required)
-    alert_route: CI red on the PR (layer 6, workflow-run log)
-  - mode: a non-web firewall gains an inbound rule, a server loses its binding, a new server appears unmapped, or the parser reads nothing
+  - mode: a non-web firewall gains any rule block, a server loses its binding, a new server appears unmapped, or the parser reads nothing
     detection: scripts/host-tcp-exposure.test.sh fails in CI
     alert_route: CI red on the PR (layer 6)
 logs:
@@ -328,7 +337,7 @@ None of these is run, dispatched or prepared by this PR. Each needs the owner's 
 - Operator-authorizes: registry class replace, `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason='<why>'` (or the dispatcher re-fire `gh workflow run registry-host-replace-dispatch.yml -f reason='<why>'`). Precondition: the registry preflight is green; the registry is the sole image pull path and a replace destroys before it creates.
 - Operator-authorizes: git-data class replace, `gh workflow run apply-web-platform-infra.yml -f apply_target=git-data-host-replace -f reason='<why>'` (rehearsal first with `-f plan_only=true`). Precondition: the three interlocks clear (rung-2 evidence for the current cloud-init, plaintext volume id empty, SSH authorization map). Whether git-data should ever have a reboot route is a founder decision because it supersedes an ADR; it is not an act and is not authorized here.
 - Operator-authorizes: delivering the host kernel emitter to running hosts and arming the four dead-man heartbeats, which is the existing owner-only roll-out tracked on #12386. This plan neither performs nor changes it.
-- Operator-authorizes: arming the cadence probe on the sweeper (the tracker directive), after a session run of the reader shows at least one row with a fresh, observed marker. The tracker for this step is filed unarmed in Phase 5.
+- Operator-authorizes: arming the cadence probe on the sweeper (the tracker directive), once a session run of the probe prints `review-needed` or `nothing-to-report` (never `cannot-establish`), which needs #12385 and #12386. The tracker for this step is filed unarmed in Phase 5.
 - Operator-authorizes: any host patching act that is not one of the dispatches above. None exists in this plan, and an in-place edit on a running host is forbidden by `hr-prod-host-config-change-immutable-redeploy`.
 
 <!-- lint-infra-ignore end -->
@@ -341,27 +350,27 @@ Class R reads this work may run itself because they are read-only: the reader on
 
 Write the two suites before the code. All fixtures are synthesized inside the suites (temporary directories, here-strings built with a function, no committed host data, no real names, no real kernel strings). Never spell a heredoc opener as a literal inside a test's own pattern (`guard-vacuity-floor.test.sh` reads it as a heredoc; learning 2026-11-08). Model the layout on `scripts/followthroughs/arm-token-revisit-12229.test.sh` (case-count and assertion-count floors, `env -i` invocation).
 
-- `scripts/followthroughs/host-kernel-cadence-12008.test.sh` — decision table, aggregation precedence, acknowledgement rules, stdout byte pin, fail-closed reader cases, stderr-leak case, hygiene scan of the script.
+- `scripts/followthroughs/host-kernel-cadence-12008.test.sh` — decision table, aggregation precedence, ignored role, field-shape, reader-contract, stdout byte pin, fail-closed reader cases, stderr-leak case, hygiene scan of the script.
 - `scripts/host-tcp-exposure.test.sh` — synthesized `.tf` fixtures plus the real-tree design invariant.
 
 ### Phase 1 — The probe (one script)
 
 `scripts/followthroughs/host-kernel-cadence-12008.sh` (notify-only; header states credential posture, the proxy caveat and a `RETIREMENT:` list):
 
-1. Constants at the top, all `readonly`: `CADENCE_DAYS_WEB=30`, `CADENCE_DAYS_INNGEST=30`, `CADENCE_DAYS_REGISTRY=30`, `CADENCE_DAYS_GIT_DATA=45` (CTO defaults; the owner edits one file), and `ACK_UNTIL_<row>=` (default empty), one per reader row, each with an adjacent comment naming only a tracking issue number.
+1. Constants at the top, all `readonly`: `CADENCE_DAYS_WEB=30`, `CADENCE_DAYS_INNGEST=30`, `CADENCE_DAYS_REGISTRY=30`, `CADENCE_DAYS_GIT_DATA=45` (CTO defaults; the owner edits one file). (Per-row `ACK_UNTIL_<row>` constants were planned here and are deferred to the arming change by the review ruling.)
 2. Refuse xtrace (exit 78, the #7797 stub header). Accept no arguments. `cd` to the repository root before calling the reader (the reader resolves its tree from the working directory). The reader is `plugins/soleur/skills/cve-exposure/scripts/host-state.sh`, unmodified; its path may be overridden by `HKC_READER` only when `HKC_TEST=1` (the `HKM_TEST` precedent), so a sweeper run cannot be redirected.
 3. Parse the reader's per-row lines and ignore its trailing `SOLEUR_CVE_HOST_STATE ...` summary line explicitly. Map the two web rows to the web cadence, inngest, registry and git-data to theirs.
 4. Row rule (CTO F2 + R1): `overdue` iff `marker_state=fresh`, `kernel_state=observed` and numeric `uptime_s > cadence_days*86400`; `within-cadence` iff the same evidence and `uptime_s` at or below it; anything else (stale, silent, unknown, non-numeric `uptime_s`, role row missing) is `unknown`. `uptime_s` is time since last boot, an upper-bound proxy for patch age (a reboot onto the same kernel resets it; the value can come from a row up to 48 h older than the state row), and the header says so.
-5. Acknowledgement (CTO R4): a row that is `overdue` and whose `ACK_UNTIL_<row>` date is in the future is not counted toward `review-needed`; an expired or empty date re-arms; an ack never touches an `unknown` row. Test-enforced: the date is at most 90 days after the script's last commit date (falling back to the HEAD commit date, red if neither is readable), and the adjacent comment carries an issue number.
-6. Aggregate and public line (precedence overdue > unknown > within-cadence): any un-acknowledged overdue row prints `host-kernel-cadence: review-needed` (exit 5); else any unknown row, any acked-overdue row left with no other evidence, or any reader problem (non-zero reader exit including 4, unparseable output, a role row missing) prints `host-kernel-cadence: cannot-establish` (exit 3); else `host-kernel-cadence: nothing-to-report` (exit 2). Stdout is exactly that one line: stderr of the reader is discarded, no digits, no class names, no counts, never exit 0 or 1.
+5. Acknowledgement: DEFERRED to the change that arms the tracker (CTO review ruling, 2026-11-09; supersedes R4). The probe has no acknowledgement constants and no `acked` class.
+6. Aggregate and public line (precedence overdue > unknown > within-cadence): any overdue row prints `host-kernel-cadence: review-needed` (exit 5); else any unknown row, or any reader problem (non-zero reader exit including 4, unparseable output, a role row missing) prints `host-kernel-cadence: cannot-establish` (exit 3); else `host-kernel-cadence: nothing-to-report` (exit 2). Stdout is exactly that one line: stderr of the reader is discarded, no digits, no class names, no counts, never exit 0 or 1.
 
 ### Phase 2 — Exposure suite
 
 `scripts/host-tcp-exposure.test.sh` (CTO R6). Plain grep and awk by resource boundary (a resource header at column 0 to the next column-0 closing brace) over every `.tf` file in the Terraform directory; it relies on `terraform fmt` layout, and assertion 1 guards that assumption. Header comments: this asserts a declared design, not live state; tunnel ingress is outbound-initiated and out of scope; live state needs a live read (deferred). Assertions, each with a fixture case in the same file:
 
-1. Parser liveness: the web firewall parses with more than zero inbound rules, else red.
+1. Parser liveness: the web firewall parses with more than zero rule blocks, else red.
 2. Any `dynamic` rule block or `for_each` on a firewall resource, other than the web firewall's documented admin-IP block, is red, never silent.
-3. A non-web firewall with any inbound rule is red (outbound rules are fine). Wording is a declared-design invariant; no exposure-verdict words.
+3. A non-web firewall with any `rule` or `dynamic "rule"` block is red (CTO review ruling, 2026-11-09, amends R6: the check is "no rule block at all"; a future egress rule is then a deliberate edit to the suite). Wording is a declared-design invariant; no exposure-verdict words.
 4. Every mapped server has a binding other than none, and the set of attachment-shaped bindings equals an allow-list (registry, git-data) that only shrinks, issue-keyed to #6442.
 5. Any `hcloud_server` outside the mapping is red (the default-off dogfood server is mapped as excluded with its reason in a comment).
 6. A directory with servers but zero firewall resources is red; a directory with zero servers is red.
@@ -417,9 +426,9 @@ Commit with `LEFTHOOK_EXCLUDE=bun-test git commit -F <file>`; never stash; open 
 
 ### Guard 1 — cadence decision and public vocabulary (the probe)
 
-**Property.** No input in which any host row is past its cadence and not acknowledged prints the all-clear line, no unknown, stale, absent or unreadable evidence is ever read as within-cadence, an acknowledgement can only suppress an overdue row for a bounded time, and stdout is always exactly one of three fixed lines.
+**Property.** No input in which any host row is past its cadence prints the all-clear line, no unknown, stale, absent, unreadable or wrongly-shaped evidence is ever read as within-cadence, a role outside the required and ignored lists is a problem, and stdout is always exactly one of three fixed lines.
 
-**Assembly.** Every input and output path of the decision: the rows of the reader for BOTH web rows plus inngest, registry and git-data; the cadence and acknowledgement constants; the reader's exit code (0, 2, 3, 4, 64, 78); the trailing summary line; the single decision chokepoint `classify_row` for rows and `aggregate` for the line; and the exit-code mapping. The chokepoints are those two functions; the line printer must not recompute either. Rows are enumerated from the reader's output (a census), not from a name list, so a row the script has never seen is `unknown`.
+**Assembly.** Every input and output path of the decision: the rows of the reader for BOTH web rows plus inngest, registry and git-data; the cadence constants; the reader's exit code (0, 2, 3, 4, 64, 78); the trailing summary line; the single decision chokepoint `classify_row` for rows and `aggregate` for the line; and the exit-code mapping. The chokepoints are those two functions; the line printer must not recompute either. Rows are enumerated from the reader's output (a census), not from a name list, so a row the script has never seen is `unknown`.
 
 **Mutation matrix:**
 
@@ -433,17 +442,14 @@ Commit with `LEFTHOOK_EXCLUDE=bun-test git commit -F <file>`; never stash; open 
 | 6 | Make the script print a class name, a digit, or one extra stdout byte | RED (public-vocabulary byte pin) |
 | 7 | Make the reader write a distinctive token to stderr | RED (stdout must stay clean; no stderr passthrough) |
 | 8 | Map an unknown aggregate token to the all-clear line | RED (the printer must not recompute) |
-| 9 | Set an acknowledgement on an unknown row, or a date more than 90 days past the commit date, or no issue number in the adjacent comment | RED (ack bounds) |
-| 10 | Acknowledge one web row while the other is overdue | RED (per-row ack must not mask the sibling) |
-| 11 | An acknowledgement dated in the past | RED (expiry re-arms) |
 
 **Harness rows.** (a) Delete one case from the suite's case table: the case-count floor must fail. (b) Must-PASS non-canonical input: a within-cadence synthesized reader output whose rows are reordered, carry extra trailing tab fields and list the other web row first must still resolve to the same aggregate; and the whole suite is run under `env -i PATH=...` to match the sweeper's environment.
 
-**Anchor.** The cadence numbers and acknowledgements are stored values compared to the script's behavior, and one diff can edit both the value and the rule, so the suite proves consistency, not integrity. Outside the commit: the acknowledgement date is capped against the commit date (a clock the editing diff does not control), must carry an issue number, and the numbers are reviewed in the diff. This residual is accepted and stated in the runbook.
+**Anchor.** The cadence numbers are stored values compared to the script's behavior, and one diff can edit both the value and the rule, so the suite proves consistency, not integrity. Outside the commit: the numbers are reviewed in the diff. This residual is accepted.
 
 ### Guard 2 — exposure suite and real-tree design invariant (host-tcp-exposure.test.sh)
 
-**Property.** A non-web firewall is accepted only when the parser positively read it with no inbound rule and every mapped server is bound; anything unparsed, dynamic, unbound or unmapped is red, and the real tree cannot gain a non-web inbound rule, an unbound server or an unmapped server with the suite green.
+**Property.** A non-web firewall is accepted only when the parser positively read it with no rule block and every mapped server is bound; anything unparsed, dynamic, unbound or unmapped is red, and the real tree cannot gain a non-web rule block, an unbound server or an unmapped server with the suite green.
 
 **Assembly.** Every server resource, every firewall resource, every attachment resource and every inline `firewall_ids`, across ALL `.tf` files in the directory (not only the mapped ones); the server mapping inside the suite; the web firewall as the control. Members drift (a new server appears), so the assembly is the directory census, not the current server list.
 
@@ -451,7 +457,7 @@ Commit with `LEFTHOOK_EXCLUDE=bun-test git commit -F <file>`; never stash; open 
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Add an inbound rule to a non-web firewall fixture | RED (declared-design invariant) |
+| 1 | Add a rule block (inbound or outbound) to a non-web firewall fixture | RED (declared-design invariant) |
 | 2 | Add a second non-web server (with a rule) after a compliant first | RED (second member) |
 | 3 | Point the parser at a directory with no servers | RED (own dispatch: zero servers parsed must fail, not print clean) |
 | 4 | A directory with servers but zero firewall resources | RED (a clean-looking result over nothing) |
@@ -473,7 +479,7 @@ Commit with `LEFTHOOK_EXCLUDE=bun-test git commit -F <file>`; never stash; open 
 1. `bash scripts/followthroughs/host-kernel-cadence-12008.test.sh` and `bash scripts/host-tcp-exposure.test.sh` exit 0, each with a non-zero case-count floor; both are registered in `scripts/test-all.sh` with the label equal to the shard-manifest key, the manifests were regenerated by the generator, and `bash scripts/lint-orphan-test-suites.sh` exits 0.
 2. After `git fetch origin main`, `git diff --name-only origin/main...HEAD | grep -E '^(apps/|plugins/|infra/|\.github/)'` prints nothing, and none of `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf` appears in the diff.
 3. The probe prints exactly one of `host-kernel-cadence: review-needed`, `host-kernel-cadence: nothing-to-report`, `host-kernel-cadence: cannot-establish`, never exits 0 or 1, accepts no arguments, and a test fails on any extra stdout byte, digit, class name or reader stderr token; the suite also runs under `env -i PATH=...`.
-4. The acknowledgement rules (per-row, overdue-only, 90-day cap from the commit date, issue number required, expiry re-arms) are each driven red by a mutation row.
+4. (Amended by the 2026-11-09 review ruling.) Acknowledgements are deferred to the arming change: the probe carries no `ACK_UNTIL_*` constants. In their place the probe skips the reader's default-off dogfood role, rejects rows whose fixed columns lack the reader's shape, and the suite pins the reader's role table and column header against the probe.
 5. `bash scripts/test-all.sh --print-selection --paths=apps/web-platform/infra/firewall.tf` selects the exposure suite, and the exposure suite's real-tree invariant passes and is named as a design invariant, not an exposure verdict.
 6. `grep -c '^readonly CADENCE_DAYS_' scripts/followthroughs/host-kernel-cadence-12008.sh` prints `4`.
 7. The forbidden-token scan over the durable new files (the script, both suites, the runbook) finds no CVE-id pattern, no kernel-version pattern, no Terraform server `name` value and no IPv4 address; it reads the server names from the Terraform directory at run time.
@@ -490,7 +496,7 @@ Commit with `LEFTHOOK_EXCLUDE=bun-test git commit -F <file>`; never stash; open 
 
 ## Test Scenarios
 
-- Probe: all rows within; one overdue; one unknown; both web rows in each order; threshold boundary; reader exit 4; zero rows; summary-only output; an unseen role row; non-numeric `uptime_s`; acknowledgement on overdue, on unknown, expired, over 90 days, without an issue number, on one web row with the sibling overdue; stderr token; xtrace refusal exits 78; no arguments; `env -i` run.
+- Probe: all rows within; one overdue; one unknown; both web rows in each order; threshold boundary; reader exit 4; zero rows; summary-only output; an unseen role row; non-numeric `uptime_s`; a column inserted before the fixed columns; the ignored dogfood role; the reader's role table and header against the probe; stderr token; xtrace refusal exits 78; no arguments; `env -i` run.
 - Exposure: zero rules; rules present; inline binding; attachment binding; no binding; dynamic block; unmapped server; ignored `removed` block and comment; control firewall with rules; empty directory; servers with no firewalls; real tree.
 - Hygiene: forbidden-token scan; no hold or gate marker lines in the runbook or the deferred section; runbook lint.
 
@@ -503,7 +509,7 @@ Bash suites in the repository's existing style (`ok`/`bad` counters, a printed t
 - **False all-clear.** Mitigated by unknown-by-default, fail-closed reader handling, and by not arming the probe until a host reports. Residual: `nothing-to-report` is reachable once every row is fresh and within cadence, and says nothing about unmeasured hosts beyond what the reader reports; the tracker body states it is not an assurance.
 - **Public residual.** `review-needed` on a public tracker discloses that some row is past cadence (no class, no count). CTO F1 accepted this under ADR-322; the owner can end it by closing the tracker and removing its label.
 - **Proxy weakness.** `uptime_s` resets on a reboot onto the same kernel and can come from a row up to 48 h old. The header and runbook say so; the `reboot_required` clause is a deferred issue.
-- **Acknowledgement drift.** An ack can be renewed by editing the script every 90 days; each renewal is a visible diff with an issue number.
+- **Rows overdue by design.** With no acknowledgement mechanism, a row past its cadence keeps the aggregate at `review-needed`; the arming change adds the mechanism before the tracker is armed if any row is in that state.
 - **Daily comment volume.** Once armed the sweeper comments on every run; the arming step is deferred until a host reports, and the tracker has a retirement trigger (#12385 and #12386 done and the probe observed through one full cadence).
 - **Parser blind spots.** Terraform text parsing relies on `terraform fmt` layout and misses constructs it does not model; every unmodelled construct on a non-web firewall is red, and the control firewall proves the parser reads at all.
 - **Declared is not live.** The suite cannot see a stale attachment id or console drift. It says so; the live read is deferred and session-only.

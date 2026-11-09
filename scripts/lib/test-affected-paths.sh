@@ -4994,9 +4994,11 @@ AFFECTED_SCRIPTS_HOST_TCP_EXPOSURE_PATHS=(
   "glob:apps/web-platform/infra/**.tf"
 )
 # scripts/host-kernel-cadence-12008 (#12008): its hygiene section reads the cadence runbook, the exposure suite and
-# the server name values in the infra Terraform; the probe itself is reached by the name-stem convention.
+# the server name values in the infra Terraform, and its contract case reads the reader's role table and column
+# header; the probe itself is reached by the name-stem convention.
 AFFECTED_SCRIPTS_HOST_KERNEL_CADENCE_12008_PATHS=(
   "scripts/followthroughs/host-kernel-cadence-12008.sh"
+  "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
   "scripts/host-tcp-exposure.test.sh"

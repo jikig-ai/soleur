@@ -39,13 +39,13 @@ them: edit the constants, nothing else.
 | web (primary host) | none | the replace path refuses it at input validation and in the plan gate (see the web section) | owner decision, not an act | n/a |
 | inngest | `inngest-host-replace`, then the separately human-approved cutover resume | scheduler pause window, resume approval | owner, per dispatch | a fresh reader run, then the scheduler health the cutover runbook names |
 | registry | `registry-host-replace` (or the dispatcher re-fire) | registry preflight; the registry is the only image pull path and a replace destroys before it creates | owner, per dispatch | a fresh reader run, then an image pull from a web host |
-| git-data | `git-data-host-replace` only | three interlocks (see the git-data section); volumes and the volume passphrase are preserved by omission | owner, per dispatch | a fresh reader run once its emitter is delivered |
+| git-data | `git-data-host-replace` only | three interlocks (see the git-data section); volumes and the volume passphrase are preserved by omission | owner, per dispatch | a fresh reader run once the git-data emitter is delivered and the reader reads that source (#12385) |
 
 <!-- lint-infra-ignore end -->
 
 Every route starts with its rehearsal (`plan_only` where the workflow offers it) and ends with a reader run. A replace does
-**not** by itself guarantee a patched kernel: the cloud-init files set `package_update` only, never a package upgrade, so a new
-host boots the base image plus whatever package state the mirror holds that day. The verification step is therefore mandatory,
+**not** by itself guarantee a patched kernel: no cloud-init file runs a package upgrade, so a new host boots the base image
+plus whatever package state the mirror holds that day. The verification step is therefore mandatory,
 and "the uptime reset" without "the kernel changed" means the host was rebuilt but not patched. Whether cloud-init should upgrade
 packages is tracked separately; do not edit a cloud-init file to find out (see the registry section).
 
@@ -53,11 +53,11 @@ packages is tracked separately; do not edit a cloud-init file to find out (see t
 
 - Each web host is a `hcloud_server.web[<key>]`. The standby host takes the replace route in the table; its own runbook is
   [web-host-replace.md](./web-host-replace.md).
-- The primary web host has **no activation path**. It is refused at four layers of the replace path, because it is
-  topologically different (the workspaces volume attachment is hardcoded to it and is ForceNew). The reboot workflow that once existed
+- The primary web host has **no activation path**. The replace path refuses it (see the web-host-replace runbook section
+  "`web-1` is refused"), because it is topologically different (the workspaces volume attachment is hardcoded to it and is ForceNew). The reboot workflow that once existed
   is retired (see [web-host-reboot.md](./web-host-reboot.md), ADR-263 addendum 2026-10-12: "a host is replaced, not rebooted").
-  So a primary-host row past its cadence has no sanctioned act today. That is an owner decision, not a gap an agent closes: record
-  it with a time-boxed acknowledgement in the probe (below), tied to an issue, and escalate.
+  So a primary-host row past its cadence has no sanctioned act today. That is an owner decision, not a gap an agent closes:
+  escalate it. Acknowledging a row that is overdue by design is deferred to the change that arms the tracker.
 
 ## inngest
 
@@ -85,8 +85,7 @@ a cadence act. Runbooks: [git-data-rung2-rehearsal.md](./git-data-rung2-rehearsa
 
 <!-- lint-infra-ignore end -->
 
-Until the interlocks clear, a git-data row past its cadence is acknowledged in the probe (an issue number and a 90-day cap) and agents
-take no action on it.
+Until the interlocks clear, a git-data row past its cadence is escalated to the owner and agents take no action on it.
 
 ## Per-class view (a session procedure, not a mode)
 
@@ -96,36 +95,23 @@ session. There is no table script and no stored view, deliberately: a stored per
 
 ## Reading the tracker line
 
-Once the tracker is armed, the daily follow-through sweeper posts exactly one of three lines, and nothing else:
+Once the tracker is armed, the daily follow-through sweeper posts exactly one of three lines and nothing else (no class,
+count or version): `host-kernel-cadence: review-needed` (exit 5, some row is past its cadence), `host-kernel-cadence:
+cannot-establish` (exit 3, some row is unknown or the reader failed) and `host-kernel-cadence: nothing-to-report` (exit 2,
+every required row is fresh, observed and within its cadence; not an assurance about unmeasured hosts). Which row, and why, is
+answered in a session only. The probe header owns the rules, including the uptime proxy caveat and the roles it grades or ignores.
 
-| Line | Exit | Meaning |
-|---|---|---|
-| `host-kernel-cadence: review-needed` | 5 | at least one row is past its cadence and not acknowledged |
-| `host-kernel-cadence: cannot-establish` | 3 | at least one row is unknown (the default today), or the reader failed |
-| `host-kernel-cadence: nothing-to-report` | 2 | every row is fresh, observed and within its cadence; this is not an assurance about unmeasured hosts |
-
-No class, count or version is published, so a public reader learns only that some row needs review. Which row, and why, is answered
-in a session. The overdue signal is the host's uptime, an upper bound on the kernel's age: a reboot onto the same kernel resets it,
-and it can come from a row up to 48 hours older than the state it is paired with. The probe is armed only after a session run of
-the reader shows at least one row with a fresh, observed marker; until then it can only say "cannot-establish".
-
-**Acknowledgements.** A row past its cadence by design may carry a time-boxed acknowledgement in the probe: per row, only for an
-overdue row (never an unknown one), at most 90 days past the file's last commit date, with a comment line above it carrying an
-issue number. An expired date re-arms the row. Each renewal is a visible diff. The cadence values and acknowledgements are stored
-beside the rule that reads them, so the suite proves they are consistent, not that they are right; the issue number and the commit-date
-cap are the checks that sit outside the diff.
+**Arming precondition.** The tracker (#12504) is armed only once a session run of the probe prints `review-needed` or
+`nothing-to-report`, never `cannot-establish`. That needs the emitter roll-out (#12386) and the git-data reader source (#12385);
+armed earlier, the sweeper would post a content-free `cannot-establish` every day. Any row that is overdue by design at that
+point needs the acknowledgement mechanism first, which is added with the arming change.
 
 ## Exposure suite
 
-`scripts/host-tcp-exposure.test.sh` asserts a **declared design**, not live state: each non-web firewall declares no inbound
-rule, every mapped server is bound to its firewall, no server exists outside the mapping, and the web firewall (the control) parses
-with inbound rules so a parser that reads nothing cannot pass. The attachment-bound servers must equal an allow-list that only shrinks
-(the registry and git-data firewalls still bind through a separate attachment resource, which attaches after first boot, #6442).
-
-What it cannot see: console drift, a stale attachment id, a firewall that was never applied. Those need a live read of the provider,
-which is a session-only step and is not done by this suite. Tunnel ingress is outbound-initiated and opens no inbound public port, so
-it is out of scope. A new server added to the Terraform makes the suite fail until its row is added to the mapping in the suite: that
-failure is by design.
+`scripts/host-tcp-exposure.test.sh` asserts a **declared design**, not live state; its header owns the rules and the mapping. It
+cannot see console drift, a stale attachment id or a firewall that was never applied: those need a live read of the provider, a
+session-only step this suite does not do. A new server added to the Terraform makes the suite fail until its row is added to the
+mapping, by design.
 
 ## Escalation
 

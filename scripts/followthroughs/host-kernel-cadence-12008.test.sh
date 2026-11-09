@@ -4,7 +4,7 @@
 #
 # PROPERTY. No input in which any host row is past its cadence and not acknowledged prints the all-clear
 # line; no unknown, stale, absent or unreadable evidence is ever read as within-cadence; an acknowledgement
-# can only suppress an overdue row, per row and for a bounded time; stdout is always exactly one of
+# is not graded when it is an ignored role; stdout is always exactly one of
 # three fixed lines (no class name, no digit, no reader stderr), and the probe never exits 0 or 1.
 #
 # The probe reads the reader (plugins/soleur/skills/cve-exposure/scripts/host-state.sh) through a stub that
@@ -16,9 +16,8 @@
 #   M3 reader exit code ignored         M4 a missing role row is skipped, not unknown
 #   M5 boundary < instead of <=          M6 marker_state check dropped
 #   M7 kernel_state check dropped        M8 unknown rows yield the all-clear
-#   M9 reader stderr passed through     M10 web-2 shares web-1's acknowledgement
-#   M11 extra digit on stdout           M12 cannot-establish exits 1
-#   M13 duplicate role rows accepted    M14 acknowledgement never expires
+#   M9 reader stderr passed through     M10 extra digit on stdout
+#   M11 cannot-establish exits 1         M12 duplicate role rows accepted
 # Floors: the case count, the mutant count and the assertion count are reported with printf + exit.
 
 set -uo pipefail
@@ -39,7 +38,6 @@ trap 'chmod -R u+rwx "$D" 2>/dev/null; rm -rf "$D"' EXIT
 export TMPDIR="$D"
 
 SEC=86400
-TODAY=2026-11-09
 LINE_REVIEW='host-kernel-cadence: review-needed'
 LINE_CLEAR='host-kernel-cadence: nothing-to-report'
 LINE_CANNOT='host-kernel-cadence: cannot-establish'
@@ -76,7 +74,7 @@ build() { # name rc [role=ms/ks/up ...]  (up: w | o | literal; role=DROP removes
 
 run_probe() { # probe name [extra env assignments...] -> RC OUT ERR
   local pr="$1" n="$2"; shift 2
-  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/$n/reader.sh" HKC_TODAY="$TODAY" "$@" bash "$pr" 2>"$D/$n/err")"; RC=$?
+  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/$n/reader.sh" "$@" bash "$pr" 2>"$D/$n/err")"; RC=$?
   ERR="$(cat "$D/$n/err")"
 }
 expect() { # label probe name want-rc want-line [env...]
@@ -98,38 +96,6 @@ if [ "$pass" -ne $((_p + 1)) ] || [ "$fail" -ne $((_f + 2)) ]; then
   exit 1
 fi
 pass=$_p; fail=$_f; FAILURES=()
-
-# ---- acknowledgement helpers --------------------------------------------------------------------
-ackify() { # probe-file var date out
-  sed -E "s/^readonly $2=''/readonly $2='$3'/" "$1" > "$4"
-  cmp -s "$1" "$4" && return 1
-  return 0
-}
-commit_date() {
-  local d; d="$(git -C "$ROOT" log -1 --format=%cs -- "$1" 2>/dev/null)"
-  [ -n "$d" ] || d="$(git -C "$ROOT" log -1 --format=%cs 2>/dev/null)"
-  printf '%s' "$d"
-}
-check_acks() { # probe-file commit-date -> prints problems; empty = fine
-  local f="$1" cdate="$2" line var val prev="" cap n=0
-  cap="$(date -u -d "$cdate +90 days" +%Y-%m-%d 2>/dev/null)" || { echo "cannot-compute-cap"; return; }
-  while IFS= read -r line; do
-    case "$line" in
-      readonly\ ACK_UNTIL_*=*)
-        n=$((n + 1))
-        var="${line#readonly }"; var="${var%%=*}"
-        case "$var" in ACK_UNTIL_WEB_1|ACK_UNTIL_WEB_2|ACK_UNTIL_INNGEST|ACK_UNTIL_REGISTRY|ACK_UNTIL_GIT_DATA) : ;; *) echo "unknown-ack-constant $var" ;; esac
-        val="${line#*=}"; val="${val//\'/}"; val="${val//\"/}"
-        if [ -n "$val" ]; then
-          [[ "$val" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || echo "bad-date $var"
-          [[ "$val" > "$cap" ]] && echo "over-cap $var"
-          grep -qE '#[0-9]{3,}' <<<"$prev" || echo "no-issue-number $var"
-        fi ;;
-    esac
-    prev="$line"
-  done < "$f"
-  [ "$n" -eq 5 ] || echo "ack-constant-census-$n"
-}
 
 CASES=0
 case_decision() {
@@ -181,6 +147,12 @@ case_census() {
   build neg 0 "web-1=fresh/observed/-5"; expect "negative uptime" "$PROBE" neg 3 "$LINE_CANNOT"
   mkcase short 0 < <(for r in web-1 web-2 inngest registry; do printf '%s\tfresh\tobserved\t5\n' "$r"; done; row git-data fresh observed "$(up_w git-data)")
   expect "rows with too few fields are unknown" "$PROBE" short 3 "$LINE_CANNOT"
+  build shifted 0 "web-1=DROP"; printf 'web-1\tinserted\tfresh\tobserved\t5\tkern-x\t%s\t5\tsrc-x\n' "$(up_w web-1)" >> "$D/shifted/rows"
+  expect "a column inserted before the fixed columns makes the row a problem, not a shifted reading" "$PROBE" shifted 3 "$LINE_CANNOT"
+  build ign 0; printf 'grok-dogfood\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\tnone\n' >> "$D/ign/rows"
+  expect "the reader's default-off dogfood row is skipped, so the all-clear stays reachable against the real row set" "$PROBE" ign 2 "$LINE_CLEAR"
+  build ign2 0; row grok-dogfood fresh observed "$((900 * SEC))" >> "$D/ign2/rows"
+  expect "an ignored role is never graded, even with an old uptime" "$PROBE" ign2 2 "$LINE_CLEAR"
 }
 case_non_canonical() {
   CASES=$((CASES + 1))
@@ -196,7 +168,7 @@ case_non_canonical() {
 }
 case_output_contract() {
   CASES=$((CASES + 1))
-  local n all="" bad_out=""
+  local n bad_out=""
   for n in all_within over_web-1 over_git-data unk_silent prec_a b_plus rd4 zero extra_role dup noncanon; do
     run_probe "$PROBE" "$n"
     case "$OUT" in "$LINE_REVIEW"|"$LINE_CLEAR"|"$LINE_CANNOT") : ;; *) bad_out="$bad_out $n" ;; esac
@@ -209,32 +181,19 @@ case_output_contract() {
   done
   [ -z "$bad_out" ] && ok "stdout is exactly one fixed line, no digit or class name, nothing on stderr, no reader token, rc in {2,3,5}" || bad "output contract broken for:$bad_out"
 }
-case_ack_behaviour() {
+case_reader_contract() {
   CASES=$((CASES + 1))
-  local p="$D/ack-probe.sh"
-  ackify "$PROBE" ACK_UNTIL_WEB_1 2026-12-01 "$p" || { bad "ackify did not land on ACK_UNTIL_WEB_1"; return; }
-  build a_over 0 "web-1=fresh/observed/o";            expect "a live ack on the overdue row is not review-needed, and not the all-clear either" "$p" a_over 3 "$LINE_CANNOT"
-  build a_sib 0 "web-1=fresh/observed/o" "web-2=fresh/observed/o"; expect "an ack on web-1 does not mask an overdue web-2" "$p" a_sib 5 "$LINE_REVIEW"
-  build a_unk 0 "web-1=silent/unknown/unknown";       expect "an ack never touches an unknown row (no all-clear)" "$p" a_unk 3 "$LINE_CANNOT"
-  build a_within 0;                                   expect "an ack on a within-cadence row changes nothing" "$p" a_within 2 "$LINE_CLEAR"
-  expect "an ack that expires today is expired" "$p" a_over 5 "$LINE_REVIEW" HKC_TODAY=2026-12-01
-  expect "an ack dated in the past is expired" "$p" a_over 5 "$LINE_REVIEW" HKC_TODAY=2027-01-15
-  ackify "$PROBE" ACK_UNTIL_WEB_1 soon "$D/ack-bad.sh"
-  expect "a malformed ack date never suppresses" "$D/ack-bad.sh" a_over 5 "$LINE_REVIEW"
-}
-case_ack_bounds() {
-  CASES=$((CASES + 1))
-  local cd_ f p o; cd_="$(commit_date "$PROBE")"
-  [ -n "$cd_" ] || { bad "no commit date readable (neither the probe's nor HEAD's)"; return; }
-  [ -z "$(check_acks "$PROBE" "$cd_")" ] && ok "the shipped acknowledgement constants pass the bounds (five constants, empty or capped and tied to an issue)" || bad "shipped acks violate the bounds: $(check_acks "$PROBE" "$cd_" | tr '\n' ';')"
-  f="$D/ack-far.sh"; sed -E "s/^readonly ACK_UNTIL_WEB_1=''/# tracked in #12345\nreadonly ACK_UNTIL_WEB_1='2999-01-01'/" "$PROBE" > "$f"
-  o="$(check_acks "$f" "$cd_")"; grep -q 'over-cap ACK_UNTIL_WEB_1' <<<"$o" && ok "an ack more than 90 days past the commit date is rejected" || bad "over-cap ack not rejected"
-  f="$D/ack-noissue.sh"; sed -E "s/^readonly ACK_UNTIL_WEB_1=''/readonly ACK_UNTIL_WEB_1='$(date -u -d "$cd_ +30 days" +%Y-%m-%d)'/" "$PROBE" > "$f"
-  o="$(check_acks "$f" "$cd_")"; grep -q 'no-issue-number ACK_UNTIL_WEB_1' <<<"$o" && ok "an ack with no issue number in the adjacent comment is rejected" || bad "ack without an issue number not rejected"
-  f="$D/ack-good.sh"; sed -E "s/^readonly ACK_UNTIL_WEB_1=''/# tracked in #12345\nreadonly ACK_UNTIL_WEB_1='$(date -u -d "$cd_ +30 days" +%Y-%m-%d)'/" "$PROBE" > "$f"
-  [ -z "$(check_acks "$f" "$cd_")" ] && ok "an ack within the cap and tied to an issue passes (positive control for the bounds check)" || bad "a valid ack was rejected: $(check_acks "$f" "$cd_" | tr '\n' ';')"
-  f="$D/ack-extra.sh"; sed -E "s/^readonly ACK_UNTIL_WEB_1=''/readonly ACK_UNTIL_WEB_1=''\nreadonly ACK_UNTIL_NOPE=''/" "$PROBE" > "$f"
-  o="$(check_acks "$f" "$cd_")"; grep -q 'unknown-ack-constant ACK_UNTIL_NOPE' <<<"$o" && ok "an ack constant for a role outside the census is rejected" || bad "extra ack constant not rejected"
+  local reader="$ROOT/plugins/soleur/skills/cve-exposure/scripts/host-state.sh" roles have r missing="" extra="" hdr want
+  roles="$(awk -v q="'" '/^readonly ROLE_TABLE=/ { inb = 1; sub(/^readonly ROLE_TABLE=./, "") } inb { l = $0; e = (substr(l, length(l), 1) == q); if (e) l = substr(l, 1, length(l) - 1); split(l, a, "|"); print a[1]; if (e) exit }' "$reader")"
+  have="$(sed -n -e "s/^REQUIRED_ROLES='\(.*\)'\$/\1/p" -e "s/^IGNORED_ROLES='\(.*\)'\$/\1/p" "$PROBE" | tr '\n' ' ')"
+  [ "$(printf '%s\n' "$roles" | grep -c .)" -ge 5 ] && ok "contract: the reader's role table was read (at least five roles)" || bad "contract: the reader's role table was not read"
+  for r in $roles; do case " $have " in *" $r "*) : ;; *) missing="$missing $r" ;; esac; done
+  [ -z "$missing" ] && ok "contract: every role the reader prints is required or ignored by the probe" || bad "contract: reader roles the probe does not know:$missing"
+  for r in $have; do case " $(printf '%s ' $roles) " in *" $r "*) : ;; *) extra="$extra $r" ;; esac; done
+  [ -z "$extra" ] && ok "contract: every role the probe requires or ignores exists in the reader" || bad "contract: probe roles absent from the reader:$extra"
+  hdr="$(sed -n 's/^#   host_role /host_role /p' "$reader" | head -1)"
+  want="host_role marker_state kernel_state age_hours kernel uptime_s kernel_age_hours source_marker"
+  case "$hdr" in "$want"*) ok "contract: the reader's documented column order starts with the eight columns the probe indexes" ;; *) bad "contract: reader column header is '$hdr' (probe indexes: $want)" ;; esac
 }
 case_override_gate() {
   CASES=$((CASES + 1))
@@ -243,15 +202,15 @@ case_override_gate() {
   build ovr 0
   # HKC_TEST unset: the override must be ignored. The real reader is then reached; a curl shim makes it
   # fail closed at once (offline-safe), so the all-clear can never be produced through the override.
-  OUT="$(env -i PATH="$shim:$PATH" TMPDIR="$D" HKC_READER="$D/ovr/reader.sh" HKC_TODAY="$TODAY" bash "$PROBE" 2>/dev/null)"; RC=$?
+  OUT="$(env -i PATH="$shim:$PATH" TMPDIR="$D" HKC_READER="$D/ovr/reader.sh" bash "$PROBE" 2>/dev/null)"; RC=$?
   [ "$OUT" = "$LINE_CANNOT" ] && [ "$RC" -eq 3 ] && ok "HKC_READER is ignored without HKC_TEST (the stub's all-clear is not reachable)" || bad "override honoured without HKC_TEST: rc=$RC out='$OUT'"
 }
 case_invocation() {
   CASES=$((CASES + 1))
   build inv 0
-  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/inv/reader.sh" HKC_TODAY="$TODAY" bash "$PROBE" extra-arg 2>/dev/null)"; RC=$?
+  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/inv/reader.sh" bash "$PROBE" extra-arg 2>/dev/null)"; RC=$?
   [ "$OUT" = "$LINE_CANNOT" ] && [ "$RC" -eq 3 ] && ok "an argument is refused with the fixed cannot-establish line" || bad "argument not refused: rc=$RC out='$OUT'"
-  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/inv/reader.sh" HKC_TODAY="$TODAY" bash -x "$PROBE" 2>/dev/null)"; RC=$?
+  OUT="$(env -i PATH="$PATH" TMPDIR="$D" HKC_TEST=1 HKC_READER="$D/inv/reader.sh" bash -x "$PROBE" 2>/dev/null)"; RC=$?
   [ "$RC" -eq 78 ] && ok "xtrace refusal exits 78" || bad "xtrace run exited $RC (want 78)"
   local m
   m="$(git -C "$HERE" ls-files -s -- host-kernel-cadence-12008.sh 2>/dev/null | awk '{print $1}')"
@@ -259,12 +218,11 @@ case_invocation() {
   else [ "$m" = 100755 ] && ok "probe is committed with mode 100755" || bad "probe mode is $m, want 100755"; fi
   [ "$(grep -c '^readonly CADENCE_DAYS_' "$PROBE")" -eq 4 ] && ok "four cadence constants, one per class" || bad "cadence constant count is not four"
   grep -q '^# soleur:followthrough-stub v1' "$PROBE" && ok "carries the follow-through stub marker" || bad "stub marker missing"
-  grep -q '^# RETIREMENT:' "$PROBE" && ok "header lists the retirement sites" || bad "retirement note missing"
 }
 case_env_i() {
   CASES=$((CASES + 1))
   build envi 0 "web-1=fresh/observed/o"
-  OUT="$(env -i PATH=/usr/bin:/bin HKC_TEST=1 HKC_READER="$D/envi/reader.sh" HKC_TODAY="$TODAY" /usr/bin/env bash "$PROBE" 2>/dev/null)"; RC=$?
+  OUT="$(env -i PATH=/usr/bin:/bin HKC_TEST=1 HKC_READER="$D/envi/reader.sh" /usr/bin/env bash "$PROBE" 2>/dev/null)"; RC=$?
   [ "$OUT" = "$LINE_REVIEW" ] && [ "$RC" -eq 5 ] && ok "runs under the sweeper's environment (no HOME, CI, HEADLESS_MODE or TMPDIR)" || bad "env -i run: rc=$RC out='$OUT'"
 }
 
@@ -323,13 +281,13 @@ if [ ! -f "$PROBE" ]; then
   bad "probe missing: $PROBE"
 else
   case_decision; case_precedence; case_boundary; case_reader_problems; case_census; case_non_canonical
-  case_output_contract; case_ack_behaviour; case_ack_bounds; case_override_gate; case_invocation; case_env_i
+  case_output_contract; case_reader_contract; case_override_gate; case_invocation; case_env_i
 fi
 case_hygiene
 
 # ---- mutants: each is a copy of the probe with one edit; the discriminating cases must go RED ---------
 grade() { # probe-copy -> prints 1 when ANY discriminating case misbehaves (killed), else 0
-  local mp="$1" killed=0 spec n wrc wl want
+  local mp="$1" killed=0 spec n wrc
   for spec in "all_within:2" "over_web-1:5" "over_git-data:5" "unk_silent:3" "unk_stale:3" "unk_ks:3" "unk_ms:3" "unk_ms2:3" "prec_a:5" "prec_b:5" \
               "b_eq:2" "b_plus:5" "rd4:3" "zero:3" "extra_role:3" "drop_row:3" "dup:3" "nan:3"; do
     n="${spec%%:*}"; wrc="${spec##*:}"
@@ -338,13 +296,8 @@ grade() { # probe-copy -> prints 1 when ANY discriminating case misbehaves (kill
     case "$RC" in 2|3|5) : ;; *) killed=1 ;; esac
     case "$OUT" in "$LINE_REVIEW"|"$LINE_CLEAR"|"$LINE_CANNOT") : ;; *) killed=1 ;; esac
     [ -z "$ERR" ] || killed=1
+    [ "$killed" = 0 ] || break
   done
-  # the acknowledgement rows, applied to the mutant itself
-  if ackify "$mp" ACK_UNTIL_WEB_1 2026-12-01 "$mp.ack"; then
-    run_probe "$mp.ack" a_sib; [ "$RC" -eq 5 ] || killed=1
-    run_probe "$mp.ack" a_unk; [ "$RC" -eq 3 ] || killed=1
-    run_probe "$mp.ack" a_over HKC_TODAY=2027-01-15; [ "$RC" -eq 5 ] || killed=1
-  fi
   printf '%s' "$killed"
 }
 mutate() { # name sed-expression
@@ -369,25 +322,23 @@ if [ -f "$PROBE" ]; then
   mutate M7  's/ && \[ "\$ks" = observed \]//';                                                 MUTANTS=$((MUTANTS + 1))
   mutate M8  's/(= unknown \].*)echo cannot-establish/\1echo nothing-to-report/';              MUTANTS=$((MUTANTS + 1))
   mutate M9  's/bash "\$READER" 2>\/dev\/null/bash "$READER" 2>\&2/';                           MUTANTS=$((MUTANTS + 1))
-  mutate M10 's/(web-2\) printf .%s. )"\$ACK_UNTIL_WEB_2"/\1"$ACK_UNTIL_WEB_1"/';                MUTANTS=$((MUTANTS + 1))
-  mutate M11 "s/host-kernel-cadence: %s\\\\n/host-kernel-cadence: %s 1\\\\n/";                   MUTANTS=$((MUTANTS + 1))
-  mutate M12 's/cannot-establish\) rc=3/cannot-establish) rc=1/';                               MUTANTS=$((MUTANTS + 1))
-  mutate M13 's/^(.*)\[ -z "\$\{SEEN\[\$role\]:-\}" \] \|\| problem=1/\1true/';                 MUTANTS=$((MUTANTS + 1))
-  mutate M14 's/\[\[ "\$1" > "\$today" \]\]/true/';                                             MUTANTS=$((MUTANTS + 1))
+  mutate M10 "s/host-kernel-cadence: %s\\\\n/host-kernel-cadence: %s 1\\\\n/";                   MUTANTS=$((MUTANTS + 1))
+  mutate M11 's/cannot-establish\) rc=3/cannot-establish) rc=1/';                               MUTANTS=$((MUTANTS + 1))
+  mutate M12 's/^(.*)\[ -z "\$\{SEEN\[\$role\]:-\}" \] \|\| problem=1/\1true/';                 MUTANTS=$((MUTANTS + 1))
 fi
 
 # ---- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
-EXPECTED_CASES=13
+EXPECTED_CASES=12
 if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted or the list was emptied)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=14
+EXPECTED_MUTANTS=12
 if [ "$MUTANTS" -lt "$EXPECTED_MUTANTS" ]; then
   printf '[FATAL] mutant-count floor: ran %s mutants, want >= %s\n' "$MUTANTS" "$EXPECTED_MUTANTS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=79
+MIN_ASSERTIONS=71
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2
   exit 1
