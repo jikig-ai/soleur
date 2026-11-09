@@ -323,7 +323,7 @@ logs:
 
 discoverability_test:
   command: rg -c git-carrier-write-denied apps/web-platform/server
-  expected_output: sandbox-hook.ts
+  expected_output: git-carrier-guard.ts
 ```
 
 ## Files to Edit
@@ -351,16 +351,16 @@ Never edited: `apps/web-platform/server/dsar-export-allowlist.ts`; no file for i
 
 ### Pre-merge (PR)
 
-- [ ] AC1 Falsifier committed first (RED on pre-fix `safe-bash.ts`), table pins the observed channel set per row with `git --version` in the title.
-- [ ] AC2 `isBashCommandSafe` is false for every row that carries an exec-requesting flag, in `--flag=value`, combined, abbreviated and `&&`-segment spellings.
-- [ ] AC3 The approved-and-executing set equals `CARRIER_DEPENDENT_APPROVED` exactly (Test C); no approved row contains an exec-requesting flag.
-- [ ] AC4 Existing `permission-callback-safe-bash.test.ts` cases stay green; `git status`, `git diff HEAD~1`, `git log --oneline -5`, `git show HEAD`, `--stat`, `--name-only` stay approved; the ReDoS pin test stays green.
-- [ ] AC5 A denied git form reaches the review card (callback returns the ask path), not a hard deny.
-- [ ] AC6 Neighbouring knobs audited with rows: `--output` (write, denylisted), `-O<orderfile>` (read-only, rejected by grammar), `--textconv`, `--show-signature`, `git status` fsmonitor.
-- [ ] AC7 Carrier guard refuses Write/Edit/NotebookEdit on any `.git` component at both enforcement points (nested, case, symlink, gitdir-pointer file); reads unaffected; deny mirrored to an event.
-- [ ] AC8 Env pin present for every auth scheme; real-git tests show (a) a text-built bare dir, (b) a committed-then-cloned embedded bare repo, and (c) a bare repo whose own config sets `safe.bareRepository=all` are all refused/skipped under the pinned env; Dockerfile build asserts git >= 2.38.
-- [ ] AC9 `bunx tsc --noEmit` and `vitest run` for the touched test files pass; `lint-guard-contract.py` passes on this plan.
-- [ ] AC10 PR body: `Ref #9600` (not `Closes`); falsifier result stated honestly, including that bare `git diff`/`git status` still execute a planted config; residual list (see the ADR-050 amendment for the full list: Bash-created `.git` members incl. a `commondir` redirect, nested gitfile pointees, hardlinks, host-side git consumers other than inflight-checkpoint, bare-root-layout scripts, pre-deploy sessions and configs; the grammar does not bind under `bash_autonomous` or a batch grant); (CLI-side `.git` write block unmeasured; HOME/system gitconfig in sessions before the pin lands; Bash-created dirs that reach the card and rely on human review; runtime-image git version until measured; submodule gitdirs; non-bare embedded repos only via the guarded file-tool path; env and discovery overrides `GIT_DIR`, `-c`, `--git-dir` rely on safe-bash rejecting them; bare `git diff` and `git status` still run any config that is present); UX cost; `Changelog` section; `- **Brand-survival threshold:** single-user incident`; a `Follow-ups not filed` line with: "9b residual (a) object-store swap after the walk; re-evaluate before the approval-queue flag leaves the Jikigai canary or when the sandbox-write probe result is recorded."
+- [x] AC1 Falsifier committed first (RED on pre-fix `safe-bash.ts`), table pins the observed channel set per row with `git --version` in the title.
+- [x] AC2 `isBashCommandSafe` is false for every row that carries an exec-requesting flag, in `--flag=value`, combined, abbreviated and `&&`-segment spellings.
+- [x] AC3 The approved-and-executing set equals `CARRIER_DEPENDENT_APPROVED` exactly (Test C); no approved row contains an exec-requesting flag.
+- [x] AC4 Existing `permission-callback-safe-bash.test.ts` cases stay green; `git status`, `git diff HEAD~1`, `git log --oneline -5`, `git show HEAD`, `--stat`, `--name-only` stay approved; the ReDoS pin test stays green.
+- [x] AC5 A denied git form reaches the review card (callback returns the ask path), not a hard deny.
+- [x] AC6 Neighbouring knobs audited with rows: `--output` (write, denylisted), `-O<orderfile>` (read-only, rejected by grammar), `--textconv`, `--show-signature`, `git status` fsmonitor.
+- [x] AC7 Carrier guard refuses Write/Edit/NotebookEdit on any `.git` component at both enforcement points (nested, case, symlink, gitdir-pointer file); reads unaffected; deny mirrored to an event.
+- [x] AC8 Env pin present for every auth scheme; real-git tests show (a) a text-built bare dir, (b) a committed-then-cloned embedded bare repo, and (c) a bare repo whose own config sets `safe.bareRepository=all` are all refused/skipped under the pinned env; Dockerfile build asserts git >= 2.38.
+- [x] AC9 `bunx tsc --noEmit` and `vitest run` for the touched test files pass; `lint-guard-contract.py` passes on this plan.
+- [x] AC10 PR body: `Ref #9600` (not `Closes`); falsifier result stated honestly, including that bare `git diff`/`git status` still execute a planted config; residual list (see the ADR-050 amendment for the full list: Bash-created `.git` members incl. a `commondir` redirect, nested gitfile pointees, hardlinks, host-side git consumers other than inflight-checkpoint, bare-root-layout scripts, pre-deploy sessions and configs; the grammar does not bind under `bash_autonomous` or a batch grant); (CLI-side `.git` write block unmeasured; HOME/system gitconfig in sessions before the pin lands; Bash-created dirs that reach the card and rely on human review; runtime-image git version until measured; submodule gitdirs; non-bare embedded repos only via the guarded file-tool path; env and discovery overrides `GIT_DIR`, `-c`, `--git-dir` rely on safe-bash rejecting them; bare `git diff` and `git status` still run any config that is present); UX cost; `Changelog` section; `- **Brand-survival threshold:** single-user incident`; a `Follow-ups not filed` line with: "9b residual (a) object-store swap after the walk; re-evaluate before the approval-queue flag leaves the Jikigai canary or when the sandbox-write probe result is recorded."
 - [ ] AC11 `Closes #9600` is allowed only if, before ship, these are measured and recorded in the PR: the built runtime image's `git --version` is 2.38 or later and the Phase 1 table plus Phase 4 pin tests pass on it; the home and system gitconfig are pinned (or shown not tenant-writable); and the CLI-side `.git` write behaviour is measured or the guard is recorded as the sole barrier. Otherwise stays `Ref`.
 
 ## Test Scenarios
