@@ -145,6 +145,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
+# #9600 build-time floor: `safe.bareRepository=explicit` (the agent-env config-carrier pin,
+# server/agent-env.ts GIT_CARRIER_ENV_PIN) needs git 2.38 or later and is silently INERT below it, so
+# a base-image change that lowers git would reopen the committed-bare-repository carrier with every
+# test green. Fail the build instead. Guarded by test/dockerfile-git-version-floor.test.ts.
+RUN git --version | awk '{ split($3, v, "."); exit !(v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 38)) }' \
+    || { echo "git $(git --version) is older than 2.38: the safe.bareRepository pin would be inert (#9600)" >&2; exit 1; }
+
 # #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
 # --unshare-* flags: the vendored inner sandbox unconditionally unshares
 # user+pid+net and cannot nest under an outer userns (measured 2026-10-08;
