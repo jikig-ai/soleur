@@ -108,6 +108,7 @@ plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/merge-effect-class.test.sh	1
 plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
+plugins/soleur/scripts/required-set-report.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	6
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	3
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8

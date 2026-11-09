@@ -132,6 +132,12 @@ rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
 # resolver has its own suite (plugins/soleur/test/ci-head-verdict.test.sh); the V rows install a stub that answers.
 printf '#!/usr/bin/env bash\nprintf "SOLEUR_CI_HEAD_VERDICT state=error pr=%%s sha=unknown run=none reason=api-error\\n" "$2"\nexit 3\n' > "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
 chmod +x "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
+# The required-set read (#11544) dispatches to required-set-report.sh. The default root carries a STUB that logs every call to
+# $MOCK_STATE/rs-calls and prints one degraded line: run_scenario fails any row that did not declare (X_RS_CALLS) the calls it
+# expects, so an accidental trigger in a row that is about something else is visible. The R rows run a dedicated root (RROOT) whose
+# stub prints a body the row chose, and R7 a root (RREAL) that keeps the REAL script behind the real fence.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$MOCK_STATE/rs-calls"\nprintf "REQUIRED-SET READ — no marker (default stub): treat as state=error\\n"\n' > "$PLUGIN_COPY/scripts/required-set-report.sh"
+chmod +x "$PLUGIN_COPY/scripts/required-set-report.sh"
 
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
@@ -232,7 +238,8 @@ else
                'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
                '(( qwait == 1 )) || qidle=0' \
                '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]' \
-               '[ship.phase7.ready_unarmed]' 'VERDICT_OK=1' '"$VERDICT_OK" -eq 1' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run'; do
+               '[ship.phase7.ready_unarmed]' 'VERDICT_OK=1' '"$VERDICT_OK" -eq 1' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run' \
+               '[ship.phase7.required_set]' 'RS_SH="$SYNC_ROOT/scripts/required-set-report.sh"' 'done < <(bash "$RS_SH" "$PR" 2>/dev/null)'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -244,7 +251,12 @@ else
                '(( ${#REQUIRED_CHECKS[@]} > 0 )) || QUEUE_RULE=0' '.[] | "\(.bucket)\t\(.name)"' 'seen+="$n"' \
                '(( qidle > QUEUE_GRACE_TICKS ))' '[[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* ]] && qidle=0' \
                '(( qwait == 1 )) || qidle=0' 'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
-               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]'; do
+               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]' \
+               '[ship.phase7.required_set]' 'RS_SH="$SYNC_ROOT/scripts/required-set-report.sh"' 'done < <(bash "$RS_SH" "$PR" 2>/dev/null)' \
+               'RS_AFTER=10; RS_MAX=3' '"$qs" == "not_queued OPEN armed "*' 'rs_to="timeout -k 5 60"' 'absent|failed)' \
+               '"$VERDICT_OK" -eq 1 ]] && (( rs_reads < RS_MAX ))' 'rs_hold >= RS_AFTER && rs_reads < RS_MAX' \
+               'read budget spent' 'reason=untrusted-ci' 'rs_state=""; rs_reason=""; rs_own=0' '[[ -z "$rs_state" && "$rs_own" -eq 0 ]]' \
+               'if (( rs_reads < RS_MAX )); then echo "$rs_t' 'rs_hold=$((rs_hold+1)); else rs_hold=0'; do
     for qf in "$BLOCK_FILE" "$MIRROR_FILE"; do
       if ! grep -qF -- "$token" "$qf"; then
         fail "queue-mode token missing from $([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr): $token"
@@ -408,6 +420,38 @@ run_scenario() {
     n="$(grep -cE "$pat" "$logfile" || true)"
     if [[ "$n" -eq 1 ]]; then pass "[$label] exactly once: $pat"; else fail "[$label] want exactly 1 line matching '$pat', got $n"; fi
   done <<< "${ONCE:-}"
+  # The required-set read (#11544): the stub script logs each call to rs-calls. A row that is not about the read must see ZERO
+  # calls (X_RS_CALLS unset), so an accidental trigger anywhere is a red row; the R and F rows declare their exact count.
+  # X_V_CALLS (optional) pins how many `verdict` samples the fence asked the resolver for; X_FILE/X_FILE_RE (optional) pin a line
+  # in a state file the row left under $MOCK_STATE (the logging `timeout` shim's record).
+  local rs_n=0 v_n
+  [[ -f "$MOCK_STATE/rs-calls" ]] && rs_n="$(grep -c '' "$MOCK_STATE/rs-calls" || true)"
+  if [[ "$rs_n" -eq "${X_RS_CALLS:-0}" ]]; then
+    pass "[$label] required-set-report.sh called ${rs_n}x (want ${X_RS_CALLS:-0})"
+  else
+    fail "[$label] required-set-report.sh called ${rs_n}x, want ${X_RS_CALLS:-0}"
+  fi
+  if [[ -n "${X_V_CALLS:-}" ]]; then
+    v_n=0
+    [[ -f "$MOCK_STATE/vcalls" ]] && v_n="$(grep -c '^verdict ' "$MOCK_STATE/vcalls" || true)"
+    if [[ "$v_n" -eq "$X_V_CALLS" ]]; then pass "[$label] ci-head-verdict.sh verdict sampled ${v_n}x"; else fail "[$label] ci-head-verdict.sh verdict sampled ${v_n}x, want ${X_V_CALLS}"; fi
+  fi
+  if [[ -n "${X_FILE:-}" ]]; then
+    if grep -qE -- "${X_FILE_RE:-.}" "$MOCK_STATE/$X_FILE" 2>/dev/null; then
+      pass "[$label] $X_FILE has a line matching: ${X_FILE_RE:-.}"
+    else
+      fail "[$label] $X_FILE has no line matching: ${X_FILE_RE:-.} ($(head -c 300 "$MOCK_STATE/$X_FILE" 2>/dev/null | tr '\n' '|'))"
+    fi
+  fi
+  # X_NO_FILE/X_NO_RE (optional): NO line of that state file may match (a missing file passes) — the "never even asked" clause.
+  if [[ -n "${X_NO_FILE:-}" ]]; then
+    n="$(grep -cE -- "${X_NO_RE:-.}" "$MOCK_STATE/$X_NO_FILE" 2>/dev/null || true)"
+    if [[ "${n:-0}" -eq 0 ]]; then
+      pass "[$label] $X_NO_FILE has no line matching: ${X_NO_RE:-.}"
+    else
+      fail "[$label] $X_NO_FILE has $n line(s) matching: ${X_NO_RE:-.}"
+    fi
+  fi
   rm -rf "$MOCK_STATE"
   rm -f "$logfile" "$errfile"
 }
@@ -1694,7 +1738,8 @@ fi
 #                                      required-check failure scan; `mixed` (three members) and `pending_optional` (two) carry several members
 #                                      so a first-element-only reader or a count over non-required checks is visible;
 #                                      MOCK_PENDING_FROM=N / MOCK_PENDING_UNTIL=M bound the ticks on which `pending` is pending)
-# `gh pr view` state: MOCK_MERGED_AT=N merges from tick N; MOCK_BLOCKED_AT=N reads BLOCKED on tick N only;
+# `gh pr view` state: MOCK_MERGED_AT=N merges from tick N; MOCK_BLOCKED_AT=N reads BLOCKED on tick N only; MOCK_FLAP_AT=N reads
+# OPEN CLEAN on tick N only (the inverse shape, for a BLOCKED poll that flaps once; the R and F rows);
 # MOCK_NO_MERGE_ON_PUSH=1 keeps the PR OPEN after a push (the saturation shape); MOCK_MSS defaults BEHIND.
 # MOCK_GQL_SEQ defaults to not_queued: the Q rows that do not set it still run the child's queue read.
 # ---------------------------------------------------------------------------
@@ -1731,6 +1776,7 @@ gh() {
         *)
           if [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); then echo "MERGED CLEAN"
           elif [[ -e "$MOCK_STATE/pushed" && -z "${MOCK_NO_MERGE_ON_PUSH:-}" ]]; then echo "MERGED CLEAN"
+          elif [[ -n "${MOCK_FLAP_AT:-}" ]] && (( i == MOCK_FLAP_AT )); then echo "OPEN CLEAN"
           elif [[ -n "${MOCK_BLOCKED_AT:-}" ]] && (( i == MOCK_BLOCKED_AT )); then echo "OPEN BLOCKED"
           else echo "OPEN ${MOCK_MSS:-BEHIND}"; fi ;;
       esac ;;
@@ -2135,6 +2181,439 @@ else
   fail "[Q-rows] merge-queue row set drifted: got '${RANQ[*]}'"
 fi
 
+# ── R and F rows — the required-set read (#11544, inline half) ───────────────────────────────────────────────────────────────
+# A PR that is OPEN BLOCKED with every check green, auto-merge armed and not queued is held by something the check list does not
+# show. The fence counts a GREEN DWELL: RS_AFTER (10) consecutive ticks on which the PR reads OPEN BLOCKED, the every-5th-tick
+# `--queue-state` sample says `not_queued OPEN armed` and the every-5th-tick verdict sample says `full-decided` (both reused between
+# samples), then dispatches ONE read to required-set-report.sh, at most RS_MAX (3) per poll, a miss restarts the count (not the
+# latch). With the gates holding from the first sample (tick 5) the first read lands at tick 14, then 24 and 34. The marker the
+# script prints decides the exit: absent|failed end the poll, anything else (complete, pending, error, no marker) keeps polling.
+# Absence is asserted through `MERGED CLEAN`, the stub call counts (X_RS_CALLS / X_V_CALLS) and `[scenario exit rc=0]`, never through
+# a missing tick label: the heartbeat prints only on a state change or i % 3 == 1, so `[11/90]` is never printed.
+# Three roots, all copies of the default one: RROOT (the verdict stub BRANCHES ON $1 — `verdict` answers from $MOCK_STATE/vstate,
+# `required` prints $MOCK_STATE/rs-body and exits $MOCK_STATE/rs-rc — and a script stub that prints the same body), RREAL (the REAL
+# required-set-report.sh behind the real fence, so the stub rows do not certify the fence against itself) and RGONE (no script).
+RROOT="$(mktemp -d)"
+_TMP_OWNED+=("$RROOT")
+assert_fixture_dir "$RROOT"
+cp -R "$PLUGIN_COPY/." "$RROOT/" || { printf 'FATAL: could not copy the plugin copy into %s\n' "$RROOT" >&2; exit 1; }
+cat > "$RROOT/scripts/ci-head-verdict.sh" <<'RVSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_STATE/vcalls"
+case "${1:-}" in
+  verdict)
+    # vseq (optional, comma list, the LAST entry repeats) answers per CALL; otherwise vstate answers every call alike.
+    vn=$(( $(cat "$MOCK_STATE/vn" 2>/dev/null || echo 0) + 1 )); echo "$vn" > "$MOCK_STATE/vn"
+    if [[ -f "$MOCK_STATE/vseq" ]]; then IFS=, read -ra vm < "$MOCK_STATE/vseq"; st="${vm[$((vn-1))]:-${vm[${#vm[@]}-1]}}"
+    else st="$(cat "$MOCK_STATE/vstate" 2>/dev/null)"; fi
+    [[ -n "$st" ]] || { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=%s sha=x run=none reason=api-error\n' "$2"; exit 3; }
+    printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=x run=none reason=stub\n' "$st" "$2" ;;
+  required)
+    cat "$MOCK_STATE/rs-body" 2>/dev/null
+    exit "$(cat "$MOCK_STATE/rs-rc" 2>/dev/null || echo 0)" ;;
+  *) exit 64 ;;
+esac
+RVSTUB
+cat > "$RROOT/scripts/required-set-report.sh" <<'RSSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_STATE/rs-calls"
+# rs-body.N (optional) answers the Nth read; otherwise rs-body answers every read alike.
+n="$(grep -c '' "$MOCK_STATE/rs-calls")"
+if [[ -f "$MOCK_STATE/rs-body.$n" ]]; then cat "$MOCK_STATE/rs-body.$n"; else cat "$MOCK_STATE/rs-body" 2>/dev/null; fi
+exit "$(cat "$MOCK_STATE/rs-rc" 2>/dev/null || echo 0)"
+RSSTUB
+chmod +x "$RROOT/scripts/ci-head-verdict.sh" "$RROOT/scripts/required-set-report.sh"
+RREAL="$(mktemp -d)"
+_TMP_OWNED+=("$RREAL")
+assert_fixture_dir "$RREAL"
+{ cp -R "$RROOT/." "$RREAL/" && cp "$REPO_ROOT/plugins/soleur/scripts/required-set-report.sh" "$RREAL/scripts/required-set-report.sh"; } \
+  || { printf 'FATAL: could not build the RREAL root in %s\n' "$RREAL" >&2; exit 1; }
+RGONE="$(mktemp -d)"
+_TMP_OWNED+=("$RGONE")
+assert_fixture_dir "$RGONE"
+{ cp -R "$RROOT/." "$RGONE/" && rm -f "$RGONE/scripts/required-set-report.sh"; } \
+  || { printf 'FATAL: could not build the RGONE root in %s\n' "$RGONE" >&2; exit 1; }
+[[ ! -e "$RGONE/scripts/required-set-report.sh" && -x "$RREAL/scripts/required-set-report.sh" && -x "$RROOT/scripts/required-set-report.sh" ]] \
+  || { fail "R roots are not what their names say (RGONE has a script, or RREAL/RROOT lacks one)"; exit 1; }
+# RNOVERD: no ci-head-verdict.sh (VERDICT_OK=0 while the sync snapshot works). RFOREIGN: a plugin.json that does not name soleur.
+RNOVERD="$(mktemp -d)"
+_TMP_OWNED+=("$RNOVERD")
+assert_fixture_dir "$RNOVERD"
+{ cp -R "$RROOT/." "$RNOVERD/" && rm -f "$RNOVERD/scripts/ci-head-verdict.sh"; } \
+  || { printf 'FATAL: could not build the RNOVERD root in %s\n' "$RNOVERD" >&2; exit 1; }
+RFOREIGN="$(mktemp -d)"
+_TMP_OWNED+=("$RFOREIGN")
+assert_fixture_dir "$RFOREIGN"
+{ cp -R "$RROOT/." "$RFOREIGN/" && printf '{"name":"not-the-plugin"}\n' > "$RFOREIGN/.claude-plugin/plugin.json"; } \
+  || { printf 'FATAL: could not build the RFOREIGN root in %s\n' "$RFOREIGN" >&2; exit 1; }
+[[ ! -e "$RNOVERD/scripts/ci-head-verdict.sh" ]] && ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$RFOREIGN/.claude-plugin/plugin.json" \
+  || { fail "R roots are not what their names say (RNOVERD has a resolver, or RFOREIGN still names soleur)"; exit 1; }
+SCEN_ROOT="$RROOT"
+
+# rs_put <state-file> <text> — a knob line that writes <text> to $MOCK_STATE/<state-file>. No here-document on purpose: a heredoc opener inside
+# a double-quoted string never terminates in scripts/guard-vacuity-floor.test.sh's line scan, which then blanks the rest of this file
+# (the floor at its end included) and reports the suite as a floor that exits 0 when neutered.
+rs_put() { local q; q="$(printf '%q' "$2")"; printf '%s\n' "printf '%s\\n' $q > \"\$MOCK_STATE/$1\""; }
+# r_mocks <rs-body> <knob-or-shell-line>... — a BLOCKED poll whose gates all hold (armed, not queued, a full-decided verdict), the
+# resolver/script stubs answering <rs-body>; later arguments override. Sets QF like q_mocks.
+r_mocks() {
+  local body="$1"; shift
+  q_mocks MOCK_MSS=BLOCKED MOCK_ARMED=true MOCK_CHECKS=green MOCK_GQL_SEQ=not_queued \
+    'echo full-decided > "$MOCK_STATE/vstate"' \
+    "$(rs_put rs-body "$body")" "$@"
+}
+rsm() { printf 'SOLEUR_CI_REQUIRED_SET state=%s pr=4387 sha=abc123 required=test reason=%s absent=[] pending=[] failed=[]' "$1" "${2:-fixture}"; }
+rs_body_n() { rs_put "rs-body.$1" "$2"; }   # a knob line giving read N its own body
+RANR=()
+r_both() { RANR+=("$1"); run_scenario_both "$@"; }
+R_FORBID="$Q_FORBID"
+R_HEAD='\[ship\.phase7\.required_set\] PR 4387 has been BLOCKED for 10 ticks with auto-merge armed, not queued and a full-decided verdict'
+
+# R1 — nine gate-holding ticks (5-13) are not ten: no read, two verdict samples (ticks 5 and 10), the PR merges on tick 14.
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=14
+X_V_CALLS=2 r_both "R1-nine-gate-ticks-make-no-read" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|$R_FORBID"
+rm -f "$QF"
+
+# R2 — the tenth gate-holding tick (14) reads once; `complete` and `error` print the marker and keep the poll going. The verdict is
+# sampled on ticks 5, 10 and 15 only (three calls), not every tick.
+for st in complete error; do
+  r_mocks "$(rsm $st)" MOCK_MERGED_AT=16
+  ONCE="$R_HEAD.*required-set read 1/3
+^SOLEUR_CI_REQUIRED_SET state=$st pr=4387
+\[ship\.phase7\.required_set\] state=$st — polling on \(2 required-set reads left\)" X_RS_CALLS=1 X_V_CALLS=3 r_both "R2-$st-marker-is-printed-and-the-poll-continues" "$QF" \
+    "\[14/90\] $R_HEAD
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+    "exiting poll|Merge poll timed out|read 2/3|no marker|$R_FORBID"
+  rm -f "$QF"
+done
+# … and under an errexit host shell (`set -e`): every added line survives it.
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=16
+ONCE="$R_HEAD.*required-set read 1/3
+^SOLEUR_CI_REQUIRED_SET state=complete pr=4387" X_RS_CALLS=1 SCENARIO_SET_E=1 r_both "R2e-read-under-errexit" "$QF" \
+  "MERGED CLEAN
+\[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
+\[scenario exit rc=0\]" \
+  "exiting poll|Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+# A marker that is not canonical (sha=-, required=-, a `]` and a TAB inside the JSON-ish lists) is still printed whole and parsed.
+r_mocks "$(printf 'SOLEUR_CI_REQUIRED_SET state=pending pr=4387 sha=- required=- reason=x absent=["a]b"] pending=["c\td"] failed=[]')" MOCK_MERGED_AT=16
+ONCE="^SOLEUR_CI_REQUIRED_SET state=pending pr=4387 sha=- required=- reason=x absent=\[\"a\]b\"\] pending=\[\"c.d\"\] failed=\[\]\$" X_RS_CALLS=1 r_both "R2n-noncanonical-marker-is-printed-and-parsed" "$QF" \
+  "\[ship\.phase7\.required_set\] state=pending — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|no marker|$R_FORBID"
+rm -f "$QF"
+# R2b — the verdict sample is bounded: a logging `timeout` shim first in PATH records the argv it was handed (the --queue-state child
+# also calls `timeout -k 2`, so only the verdict line is matched). The shim is a BASH script, never `#!/bin/sh`: the harness mocks git and gh
+# with `export -f`, and dash (the /bin/sh on Debian and Ubuntu CI runners) drops exported functions from the environment it hands its
+# children, so the real gh ran inside `timeout -k 2 10 bash -c ...`, the queue read failed and the row went red on CI only.
+R2B_SHIM='real_to="$(command -v timeout)"
+mkdir -p "$MOCK_STATE/shim"
+cat > "$MOCK_STATE/shim/timeout" <<SHIM
+#!/usr/bin/env bash
+printf "%s\n" "\$*" >> "\$MOCK_STATE/timeout-calls"
+exec $real_to "\$@"
+SHIM
+chmod +x "$MOCK_STATE/shim/timeout"
+PATH="$MOCK_STATE/shim:$PATH"'
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=16 "$R2B_SHIM"
+X_FILE=timeout-calls X_FILE_RE='^-k 5 60 bash .*/scripts/ci-head-verdict\.sh verdict 4387$' X_RS_CALLS=1 r_both "R2b-the-verdict-sample-runs-under-timeout-k-5-60" "$QF" \
+  "MERGED CLEAN
+$R_HEAD" \
+  "Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+
+# R3 — `absent` and `failed` end the poll on the read's tick with the exit line; nothing else follows.
+for st in absent failed; do
+  r_mocks "$(rsm $st)" MOCK_MERGED_AT=60
+  ONCE="$R_HEAD.*required-set read 1/3
+^SOLEUR_CI_REQUIRED_SET state=$st pr=4387" X_RS_CALLS=1 r_both "R3-$st-ends-the-poll" "$QF" \
+    "\[14/90\] \[ship\.phase7\.required_set\] state=$st — exiting poll\. The RECOVERY lines above are hints; this poll ran none\.
+\[scenario exit rc=0\]" \
+    "MERGED CLEAN|Merge poll timed out|polling on|read 2/3|$R_FORBID"
+  rm -f "$QF"
+done
+
+# R4 — a gate that does not hold means no read: a control with every gate held (it must read, so a mistyped knob cannot make every
+# variant pass), then (i) disarmed (the queue sample prints `not_queued OPEN disarmed`), (ii) queued, (iii) dequeued (the existing
+# stop, on its own tick), (iv) a verdict that is not full-decided, (v) a verdict the resolver cannot answer, (vi) a queue read that
+# fails. Variants (i), (ii), (iii) and (vi) also pin that the SAMPLE gate does not even ask the resolver (zero `verdict` calls).
+for v in 0-control i-disarmed ii-queued iii-removed iv-pending-full v-unanswered vi-queue-read-fails; do
+  vx=(MOCK_MERGED_AT=40); want_rs=0; want_v=""
+  must="MERGED CLEAN
+\[scenario exit rc=0\]"
+  forbid="required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+  case "$v" in
+    0-control)           want_rs=3
+                         must="MERGED CLEAN
+$R_HEAD.*required-set read 1/3
+$R_HEAD.*required-set read 3/3"
+                         forbid="Merge poll timed out|read 4/3|$R_FORBID" ;;
+    i-disarmed)          vx+=(MOCK_GQL_SEQ=dequeued); want_v=0 ;;
+    ii-queued)           vx+=(MOCK_GQL_SEQ=queued); want_v=0 ;;
+    iii-removed)         vx+=(MOCK_GQL_SEQ=removed); want_v=0
+                         must="\[5/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged
+\[scenario exit rc=0\]"
+                         forbid="MERGED CLEAN|\[6/90\]|required_set\]|SOLEUR_CI_REQUIRED_SET|$R_FORBID" ;;
+    iv-pending-full)     vx+=('echo pending-full > "$MOCK_STATE/vstate"') ;;
+    v-unanswered)        vx+=('rm -f "$MOCK_STATE/vstate"') ;;
+    vi-queue-read-fails) vx+=(MOCK_GQL_SEQ=fail); want_v=0 ;;
+  esac
+  r_mocks "$(rsm complete)" "${vx[@]}"
+  X_RS_CALLS=$want_rs X_V_CALLS=$want_v r_both "R4-$v" "$QF" "$must" "$forbid"
+  rm -f "$QF"
+done
+
+# R5 — at most 3 reads per poll, ten gate-holding ticks apart: 14, 24, 34, and never a fourth (the poll merges on tick 50). The third
+# read prints the budget-spent line instead of `polling on`, and the verdict sample stops with the cap: ticks 5-30 are six samples
+# (X_V_CALLS=6), the ticks 35, 40 and 45 samples that would feed nothing are not asked for.
+r_mocks "$(rsm pending)" MOCK_MERGED_AT=50
+ONCE="\[14/90\] $R_HEAD.*required-set read 1/3
+\[24/90\] $R_HEAD.*required-set read 2/3
+\[34/90\] $R_HEAD.*required-set read 3/3
+\[34/90\] \[ship\.phase7\.required_set\] state=pending — read budget spent \(3/3\), no more reads: state this marker and the --queue-state output \(ready-run-wait\.md, Bound\) in your next status message; polling continues\.
+\[24/90\] \[ship\.phase7\.required_set\] state=pending — polling on \(1 required-set reads left\)" X_RS_CALLS=3 X_V_CALLS=6 r_both "R5-three-reads-ten-ticks-apart-and-no-fourth" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "read 4/3|\[44/90\] \[ship\.phase7\.required_set\]|exiting poll|Merge poll timed out|polling on \(0 required-set|$R_FORBID"
+rm -f "$QF"
+
+# R6 — no marker is `error`: the script's own degraded line (exit 0, then exit 7) or a script that is missing or prints nothing. The
+# stream says `state=error` (never a state name no document defines). The fence adds its `no marker: ... printed nothing` line ONLY when
+# the script emitted no `REQUIRED-SET READ` line itself and no marker, so the first two (the script spoke) must NOT carry it, and the
+# last two (missing script, silent script) carry it once, pointing at ready-run-wait.md by the plugin-root path.
+R6_EXTRA='^REQUIRED-SET READ — no marker: the report script printed nothing \(state=error\); by-hand read: .*/skills/ship/references/ready-run-wait\.md$'
+r_mocks 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error' MOCK_MERGED_AT=16
+ONCE="^REQUIRED-SET READ — no marker \(stub degraded\): treat as state=error" X_RS_CALLS=1 r_both "R6a-degraded-line-keeps-polling" "$QF" \
+  "\[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "^SOLEUR_CI_REQUIRED_SET|exiting poll|printed nothing|state=none|$R_FORBID"
+rm -f "$QF"
+r_mocks 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error' MOCK_MERGED_AT=16 'echo 7 > "$MOCK_STATE/rs-rc"'
+ONCE="^REQUIRED-SET READ — no marker \(stub degraded\): treat as state=error" X_RS_CALLS=1 r_both "R6b-a-failing-script-keeps-polling" "$QF" \
+  "\[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "^SOLEUR_CI_REQUIRED_SET|exiting poll|printed nothing|state=none|$R_FORBID"
+rm -f "$QF"
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=16
+SCEN_ROOT="$RGONE" ONCE="$R6_EXTRA" r_both "R6c-a-missing-script-keeps-polling" "$QF" \
+  "\[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "no marker \(|REQUIRED-SET READ — running|^SOLEUR_CI_REQUIRED_SET|exiting poll|state=none|$R_FORBID"
+rm -f "$QF"
+# R6d — the script exists and prints NOTHING (empty body): the same one extra line, the same keep-polling.
+r_mocks "" MOCK_MERGED_AT=16
+ONCE="$R6_EXTRA" X_RS_CALLS=1 r_both "R6d-a-silent-script-keeps-polling" "$QF" \
+  "\[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "^SOLEUR_CI_REQUIRED_SET|exiting poll|state=none|$R_FORBID"
+rm -f "$QF"
+
+# R8 — the per-read reset: read 1 answers `complete`, read 2 (the script now speaks only a degraded line). Read 2 must report
+# state=error, not the stale `complete` of read 1, and must not add the `printed nothing` line (the script spoke).
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=26 "$(rs_body_n 2 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error')"
+ONCE="\[14/90\] \[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
+\[24/90\] \[ship\.phase7\.required_set\] state=error — polling on \(1 required-set reads left\)" X_RS_CALLS=2 r_both "R8-the-second-read-does-not-inherit-the-first-reads-state" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "\[24/90\] \[ship\.phase7\.required_set\] state=complete|printed nothing|exiting poll|$R_FORBID"
+rm -f "$QF"
+# … and the reverse: read 1 speaks (a degraded line, so no extra line), read 2 is silent (the extra line, once, on read 2 only: a stale
+# "the script spoke" flag from read 1 would swallow it).
+r_mocks 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error' MOCK_MERGED_AT=26 "$(rs_body_n 2 '')"
+ONCE="\[14/90\] \[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+\[24/90\] \[ship\.phase7\.required_set\] state=error — polling on \(1 required-set reads left\)
+$R6_EXTRA" X_RS_CALLS=2 r_both "R8b-a-silent-second-read-is-not-masked-by-the-first" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "exiting poll|$R_FORBID"
+rm -f "$QF"
+
+# R9 — the marker anchors in the FENCE. (a) A RECOVERY line that contains a full absent marker mid-line, printed LAST after the real
+# complete marker: the fence reads only a line that STARTS with the marker, so the poll keeps going. (b) A state outside the five (the
+# script printed it) is not a break state: it keeps polling and is named as printed.
+R9_DECOY='RECOVERY no cancelled run at this head ctx="x SOLEUR_CI_REQUIRED_SET state=absent pr=4387 sha=abc123 required=test reason=fixture absent=[] pending=[] failed=[] y"'
+r_mocks "$(rsm complete)
+$R9_DECOY" MOCK_MERGED_AT=16
+ONCE="^SOLEUR_CI_REQUIRED_SET state=complete pr=4387
+^RECOVERY no cancelled run at this head ctx=\"x SOLEUR_CI_REQUIRED_SET state=absent" X_RS_CALLS=1 r_both "R9a-a-marker-shaped-fragment-last-is-not-a-marker" "$QF" \
+  "\[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|required_set\] state=absent|$R_FORBID"
+rm -f "$QF"
+r_mocks "$(rsm bogus)" MOCK_MERGED_AT=16
+X_RS_CALLS=1 r_both "R9b-an-unknown-state-keeps-polling" "$QF" \
+  "\[ship\.phase7\.required_set\] state=bogus — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|$R_FORBID"
+rm -f "$QF"
+
+# R10 — error with reason=untrusted-ci prints the one-line handoff note on every read it appears; any other error reason does not.
+r_mocks "$(rsm error untrusted-ci)" MOCK_MERGED_AT=16
+ONCE="\[14/90\] \[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+\[14/90\] \[ship\.phase7\.required_set\] state=error reason=untrusted-ci: a PR that edits workflows has no agent --admin hatch; tell the operator in chat\.$" X_RS_CALLS=1 r_both "R10a-untrusted-ci-prints-the-handoff-note" "$QF" \
+  "MERGED CLEAN" \
+  "exiting poll|$R_FORBID"
+rm -f "$QF"
+r_mocks "$(rsm error api-error)" MOCK_MERGED_AT=16
+X_RS_CALLS=1 r_both "R10b-other-error-reasons-print-no-note" "$QF" \
+  "\[14/90\] \[ship\.phase7\.required_set\] state=error — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "untrusted-ci|admin hatch|exiting poll|$R_FORBID"
+rm -f "$QF"
+# a complete marker whose reason merely LOOKS like the token is not an error: no note
+r_mocks "$(rsm complete untrusted-ci)" MOCK_MERGED_AT=16
+X_RS_CALLS=1 r_both "R10c-the-note-needs-state-error" "$QF" \
+  "MERGED CLEAN" \
+  "admin hatch|exiting poll|$R_FORBID"
+rm -f "$QF"
+
+# R11 — mid-dwell transitions: the gates held on the first sample (tick 5) and stop holding on the second (tick 10), so the count that
+# had reached 5 is thrown away and no read follows. (a) auto-merge disarmed, (b) the PR queued, (c) the verdict flips to pending-full.
+# Each stays changed from then on (the last answer repeats). The first sample's verdict call is the only one the gates allow in (a)/(b).
+for v in a-disarmed b-queued; do
+  case "$v" in a-disarmed) seq=not_queued,dequeued ;; b-queued) seq=not_queued,queued ;; esac
+  r_mocks "$(rsm complete)" MOCK_MERGED_AT=40 MOCK_GQL_SEQ=$seq
+  X_RS_CALLS=0 X_V_CALLS=1 r_both "R11$v-mid-dwell" "$QF" \
+    "MERGED CLEAN
+\[scenario exit rc=0\]" \
+    "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+  rm -f "$QF"
+done
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=40 'echo full-decided,pending-full > "$MOCK_STATE/vseq"'
+X_RS_CALLS=0 X_V_CALLS=7 r_both "R11c-verdict-flips-mid-dwell" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+
+# R12 — the dwell needs the resolver read: a root WITHOUT ci-head-verdict.sh (VERDICT_OK=0) while the sync snapshot is fine, BLOCKED,
+# armed and not queued. No read, and the resolver is never even asked: the logging `timeout` shim sees no `verdict` line.
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=40 "$R2B_SHIM"
+SCEN_ROOT="$RNOVERD" X_RS_CALLS=0 X_NO_FILE=timeout-calls X_NO_RE='ci-head-verdict\.sh verdict' r_both "R12a-no-resolver-no-read-and-no-verdict-sample" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+# … and a root whose plugin.json does not name soleur (the ADR-179 identity check fails): no read either.
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=40 "$R2B_SHIM"
+SCEN_ROOT="$RFOREIGN" X_RS_CALLS=0 X_NO_FILE=timeout-calls X_NO_RE='ci-head-verdict\.sh verdict' r_both "R12b-identity-failed-root-no-read" "$QF" \
+  "\[ship\.phase7\.precondition\].*does not name soleur
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+
+# R13 — BEHIND auto-sync disabled (not in a worktree): there is no sync snapshot, so the queue read comes back empty, the
+# `not_queued OPEN armed` conjunct fails and the dwell never starts. The poll says so through the precondition line only; no read, no
+# verdict call. (This pins that outcome, not the `-n "$SYNC_SNAP"` guard text: with the guard removed the unguarded call fails and
+# gives the same empty read, so the guard itself is not observable here.)
+Q_TAIL='git() { case "$1 ${2:-}" in "rev-parse --is-inside-work-tree") echo false ;; *) _git_base "$@" ;; esac; }'
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=40
+X_RS_CALLS=0 X_NO_FILE=vcalls X_NO_RE='^verdict ' r_both "R13-sync-disabled-means-the-required-set-is-never-read" "$QF" \
+  "\[ship\.phase7\.precondition\] not inside a worktree — BEHIND auto-sync disabled
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
+rm -f "$QF"; Q_TAIL=""
+
+# R14 — a host without `timeout`: the verdict sample is not wrapped (rs_to stays empty) and the dwell still reads at tick 14. `timeout`
+# is shadowed by a function that fails and `command -v timeout` by one that says "absent": a fence that wraps unconditionally gets the
+# failing function, an empty verdict and no read.
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=16 'timeout() { return 127; }' 'command() { if [[ "${1:-}" == -v && "${2:-}" == timeout ]]; then return 1; fi; builtin command "$@"; }'
+ONCE="$R_HEAD.*required-set read 1/3" X_RS_CALLS=1 X_V_CALLS=3 r_both "R14-no-timeout-binary-the-dwell-still-reads" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "Merge poll timed out|$R_FORBID"
+rm -f "$QF"
+
+# F2 — a flap on a SAMPLE tick: tick 10 reads OPEN CLEAN, so that tick's sample is empty and the dwell restarts at the tick-15 sample
+# (ticks 15-24): one read, at 24, not at 14 and not at 19 (the count must restart, not pause).
+r_mocks "$(rsm pending)" MOCK_FLAP_AT=10 MOCK_MERGED_AT=26
+ONCE="\[24/90\] $R_HEAD.*required-set read 1/3" X_RS_CALLS=1 r_both "F2-a-flap-on-a-sample-tick-restarts-the-dwell" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "\[(1[0-9]|2[0-3])/90\] \[ship\.phase7\.required_set\]|read 2/3|$R_FORBID"
+rm -f "$QF"
+# F3 — a flap on a NON-sample tick (17): the else arm zeroes the count while the samples from tick 15 persist, so the dwell restarts
+# at tick 18 and the second read lands at 27 (`read 2/3`: the flap restarted the dwell, not the 3-read latch). A counter that does
+# not reset would read at 24.
+r_mocks "$(rsm pending)" MOCK_FLAP_AT=17 MOCK_MERGED_AT=32
+ONCE="\[14/90\] $R_HEAD.*required-set read 1/3
+\[27/90\] $R_HEAD.*required-set read 2/3" X_RS_CALLS=2 r_both "F3-a-flap-on-a-non-sample-tick-restarts-the-dwell-not-the-latch" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "\[24/90\] \[ship\.phase7\.required_set\]|read 3/3|$R_FORBID"
+rm -f "$QF"
+
+# R7 — the REAL required-set-report.sh behind the real fence (the resolver is still a stub, answering the REAL contract: hints first,
+# marker last). The script's own lines (running, read-only note, the hint) reach the stream, the fence parses the marker the script
+# printed, `absent` breaks, `complete` continues, and a non-canonical marker survives the script's sanitiser and ERE.
+R7_ABSENT='RECOVERY no cancelled run at this head ctx="fixture"
+SOLEUR_CI_REQUIRED_SET state=absent pr=4387 sha=abc123 required=test reason=fixture absent=["test"] pending=[] failed=[]'
+r_mocks "$R7_ABSENT" MOCK_MERGED_AT=60
+SCEN_ROOT="$RREAL" ONCE="^SOLEUR_CI_REQUIRED_SET state=absent pr=4387
+^REQUIRED-SET READ — running" r_both "R7a-real-script-absent-ends-the-poll" "$QF" \
+  "^RECOVERY no cancelled run at this head ctx=\"fixture\"
+\[14/90\] \[ship\.phase7\.required_set\] state=absent — exiting poll
+\[scenario exit rc=0\]" \
+  "MERGED CLEAN|polling on|no marker|$R_FORBID"
+rm -f "$QF"
+r_mocks "$(rsm complete)" MOCK_MERGED_AT=16
+SCEN_ROOT="$RREAL" ONCE="^SOLEUR_CI_REQUIRED_SET state=complete pr=4387
+^REQUIRED-SET READ — running" r_both "R7b-real-script-complete-keeps-polling" "$QF" \
+  "REQUIRED-SET READ — state=complete means the required set is green at this head, NOT that the PR is mergeable
+\[14/90\] \[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|no marker|$R_FORBID"
+rm -f "$QF"
+r_mocks "$(printf 'SOLEUR_CI_REQUIRED_SET state=pending pr=4387 sha=- required=- reason=x absent=["a]b"] pending=["c\td"] failed=[]')" MOCK_MERGED_AT=16
+SCEN_ROOT="$RREAL" ONCE="^SOLEUR_CI_REQUIRED_SET state=pending pr=4387 sha=- required=- reason=x absent=\[\"a\]b\"\] pending=\[\"cd\"\] failed=\[\]\$" r_both "R7c-real-script-noncanonical-marker-survives" "$QF" \
+  "\[14/90\] \[ship\.phase7\.required_set\] state=pending — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|no marker|$R_FORBID"
+rm -f "$QF"
+
+# R15 — RECOVERY text is printed and NEVER executed, at the FENCE: the real script prints grammar-valid lines whose untrusted fields (and a
+# pointer's JSON array) carry command substitutions; a `touch` shim first in PATH logs any call and a sentinel file would appear.
+# Control first: the shim logs a direct call, so an empty log means "not called", not "cannot log".
+R15D="$(mktemp -d)"
+_TMP_OWNED+=("$R15D")
+assert_fixture_dir "$R15D"
+mkdir -p "$R15D/shim"
+printf '#!/bin/sh\nprintf "touch %%s\\n" "$*" >> "%s/log"\nexec "%s" "$@"\n' "$R15D" "$(command -v touch)" > "$R15D/shim/touch"
+chmod +x "$R15D/shim/touch"
+PATH="$R15D/shim:$PATH" touch "$R15D/control"
+if [[ "$(grep -c '' "$R15D/log" 2>/dev/null)" == 1 && -e "$R15D/control" ]]; then pass "[R15] control: the touch shim logs a call"; else fail "[R15] control: the touch shim does not log"; fi
+rm -f "$R15D/log" "$R15D/control"
+R15_BODY="$(printf '%s\n' \
+  "RECOVERY rerun run=1 basis=workflow ctx=\"\$(touch $R15D/S1)\" wf=\"\`touch $R15D/S2\`\": gh run rerun 1" \
+  "RECOVERY rerun run=2 basis=candidate ctx=\"a;touch $R15D/S3\" wf=\"W\"" \
+  "RECOVERY pointer failed=[\"\$(touch $R15D/S4)\"]: read the failing checks with gh pr checks 4387" \
+  "$(rsm complete)")"
+r_mocks "$R15_BODY" MOCK_MERGED_AT=16 "PATH=\"$R15D/shim:\$PATH\""
+SCEN_ROOT="$RREAL" ONCE="^RECOVERY rerun run=1 basis=workflow ctx=\"\\\$\\(touch .*/S1\\)\"
+^RECOVERY pointer failed=\\[\"\\\$\\(touch .*/S4\\)\"\\]: read the failing checks with gh pr checks 4387\$
+^SOLEUR_CI_REQUIRED_SET state=complete pr=4387" r_both "R15-recovery-text-is-printed-and-never-executed" "$QF" \
+  "\[14/90\] \[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
+MERGED CLEAN" \
+  "exiting poll|outside the resolver grammar|$R_FORBID"
+rm -f "$QF"
+if [[ ! -e "$R15D/S1" && ! -e "$R15D/S2" && ! -e "$R15D/S3" && ! -e "$R15D/S4" && ! -s "$R15D/log" ]]; then pass "[R15] no sentinel was created and the touch shim was never called"; else fail "[R15] hint text was executed: sentinels=[$(ls "$R15D" | tr '\n' ' ')] log=[$(cat "$R15D/log" 2>/dev/null | tr '\n' '|')]"; fi
+
+# The R/F row set is pinned exactly like the Q rows (the verdict floor counts verdicts, not which rows produced them).
+WANTR="R1-nine-gate-ticks-make-no-read R2-complete-marker-is-printed-and-the-poll-continues R2-error-marker-is-printed-and-the-poll-continues R2e-read-under-errexit R2n-noncanonical-marker-is-printed-and-parsed R2b-the-verdict-sample-runs-under-timeout-k-5-60 R3-absent-ends-the-poll R3-failed-ends-the-poll R4-0-control R4-i-disarmed R4-ii-queued R4-iii-removed R4-iv-pending-full R4-v-unanswered R4-vi-queue-read-fails R5-three-reads-ten-ticks-apart-and-no-fourth R6a-degraded-line-keeps-polling R6b-a-failing-script-keeps-polling R6c-a-missing-script-keeps-polling R6d-a-silent-script-keeps-polling R8-the-second-read-does-not-inherit-the-first-reads-state R8b-a-silent-second-read-is-not-masked-by-the-first R9a-a-marker-shaped-fragment-last-is-not-a-marker R9b-an-unknown-state-keeps-polling R10a-untrusted-ci-prints-the-handoff-note R10b-other-error-reasons-print-no-note R10c-the-note-needs-state-error R11a-disarmed-mid-dwell R11b-queued-mid-dwell R11c-verdict-flips-mid-dwell R12a-no-resolver-no-read-and-no-verdict-sample R12b-identity-failed-root-no-read R13-sync-disabled-means-the-required-set-is-never-read R14-no-timeout-binary-the-dwell-still-reads F2-a-flap-on-a-sample-tick-restarts-the-dwell F3-a-flap-on-a-non-sample-tick-restarts-the-dwell-not-the-latch R7a-real-script-absent-ends-the-poll R7b-real-script-complete-keeps-polling R7c-real-script-noncanonical-marker-survives R15-recovery-text-is-printed-and-never-executed"
+if [[ "${RANR[*]}" == "$WANTR" ]]; then
+  pass "[R-rows] required-set row set is exactly: ${#RANR[@]} rows"
+else
+  fail "[R-rows] required-set row set drifted: got '${RANR[*]}'"
+fi
+SCEN_ROOT=""
+
 # ---------------------------------------------------------------------------
 # Scenario 11 — not inside a worktree (`--is-inside-work-tree` prints
 # `false`, rc 0 — a bare repo): the precondition disables the BEHIND arm and
@@ -2393,7 +2872,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=1123
+MIN_VERDICTS=2019
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

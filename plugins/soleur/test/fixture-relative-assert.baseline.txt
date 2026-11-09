@@ -332,6 +332,7 @@
 5	plugins/soleur/scripts/pipeline-tally.test.sh
 2	plugins/soleur/scripts/plugin-version.sh
 2	plugins/soleur/scripts/render-c4-model.sh
+1	plugins/soleur/scripts/required-set-report.test.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/scripts/write-budget-marker.sh
@@ -432,6 +433,7 @@
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
 11	plugins/soleur/test/ship-battery-owed.test.sh
+1	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh
 1	plugins/soleur/test/ship-pir-action-items-gate.test.sh
 1	plugins/soleur/test/technical-ruling-gate.test.sh
 3	plugins/soleur/test/test-helpers.sh

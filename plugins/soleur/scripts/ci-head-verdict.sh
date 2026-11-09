@@ -81,7 +81,7 @@
 #
 # `required` is the read-only required-context SET check. Issue #9927 is the operator-directed carrier issue for the deferred hold;
 # `monitor-pr-checks.sh` runs it on a gated CHECKS GREEN BUT BLOCKED ending (see its header); the inline poll loop in ship Phase 7 (#11544)
-# still does not, so there it is run by hand (skills/ship/references/ready-run-wait.md).
+# runs it through required-set-report.sh (skills/ship/references/ready-run-wait.md).
 # A green `verdict` plus an armed auto-merge does not prove the set: `verdict` reads only the `test` row of ci.yml pull_request runs, so a
 # context owned by another workflow that never reported (its pull_request_target run was cancelled during a push) is invisible, and the
 # PR sits un-enqueued. `required` reads the PR head over REST, runs `admin-merge-ready.sh <pr> <head-sha> --base <PR base>` WITHOUT
