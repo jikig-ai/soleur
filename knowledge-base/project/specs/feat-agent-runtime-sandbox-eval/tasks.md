@@ -4,15 +4,15 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Phase 0: Hold the dependent work
 
-- [ ] 0.1 Move #12517 to milestone "Phase 4: Validate + Scale".
-- [ ] 0.2 Add blocked-by edges: #12467 and #11637 blocked by #12517.
-- [ ] 0.3 Comment on #12467: paused for the spike, review date 2026-11-30.
+- [x] 0.1 Move #12517 to milestone "Phase 4: Validate + Scale".
+- [x] 0.2 Add blocked-by edges: #12467 and #11637 blocked by #12517.
+- [x] 0.3 Comment on #12467: paused for the spike, review date 2026-11-30.
 - [ ] 0.4 Arm the 2026-11-30 issue-comment reminder on #12467 via the schedule-reminder endpoint, only after the operator's typed go naming the exact command (`## Operator Holds`).
 
 ## Phase 0.5: Tracer (local docker, before anything else is built)
 
-- [ ] 0.5.1 Pin iron-proxy by digest; start it with one stub host and a throwaway logging hook, under `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null` and an internal docker network with no route to real GitHub.
-- [ ] 0.5.2 Answer the eight tracer items (upstream chaining, selective termination, hook body access incl. gzip and chunked receive-pack, upstream trust, whole-header replacement in configuration only incl. absent and duplicate headers, dead-hook fail-closed, inbound Proxy-Authorization, gRPC over a unix socket with per-call metadata) and the sandbox-to-injector binding mechanism.
+- [x] 0.5.1 Pin iron-proxy by digest; start it with one stub host and a throwaway logging hook, under `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null` and an internal docker network with no route to real GitHub.
+- [x] 0.5.2 Answer the eight tracer items (upstream chaining, selective termination, hook body access incl. gzip and chunked receive-pack, upstream trust, whole-header replacement in configuration only incl. absent and duplicate headers, dead-hook fail-closed, inbound Proxy-Authorization, gRPC over a unix socket with per-call metadata) and the sandbox-to-injector binding mechanism.
 - [ ] 0.5.3 Record the answers in `iron-proxy-image.provenance.md`; any "no" configuration cannot fix goes to the CTO before Phase 1.
 
 ## Phase 1: Hermetic tests, then the harness
