@@ -27,6 +27,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("worktree-config-seed");
 
@@ -70,9 +71,14 @@ export function seedWorktreeConfig(workspacePath: string): void {
     git(["config", "--get", "extensions.worktreeConfig"]);
     hadWorktreeConfig = true;
   } catch (err) {
-    // A refused `.git` shape is not "healthy": say so (the caller mirrors the refusal where it has a user to attribute it to).
+    // A refused `.git` shape is not "healthy": report it here (reason only: the path embeds the user id).
     if (err instanceof HostGitRefusedError) {
-      log.warn({ workspacePath, reason: err.reason }, "worktree config heal skipped: workspace .git refused");
+      log.warn({ reason: err.reason }, "worktree config heal skipped: workspace .git refused");
+      reportSilentFallback(new Error(`worktree-config-seed refused: ${err.reason}`), {
+        feature: "worktree-config-seed",
+        op: "git-refused",
+        message: "Host git refused the workspace .git shape during the worktree config heal",
+      });
       return;
     }
     // absent → healthy, nothing to unset.

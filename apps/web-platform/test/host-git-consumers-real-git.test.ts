@@ -549,6 +549,8 @@ describe("git-data remote: the push target is the explicit URL, and a url.* rewr
     // the two expected remotes alone are fine
     const { ws: ws2 } = newWorkspace(w, "second-ws");
     w.git(ws2, "remote", "add", "git-data", `file://${a}`);
+    w.git(ws2, "remote", "add", "upstream", `file://${b}`); // a fork workflow is ordinary state, not a rewrite
+    w.git(ws2, "config", "remote.pushDefault", "upstream");
     expect(() => assertNoUrlRewrite(ws2)).not.toThrow();
   });
 

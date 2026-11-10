@@ -144,6 +144,12 @@ describe("hostGitInvocation: environment", () => {
     expect(() => hostGitInvocation(["init"], { allowProtocol: "none" })).not.toThrow();
   });
 
+  it("an argv --git-dir / --work-tree / --namespace outranks the pinned env and is refused", () => {
+    for (const bad of [["--git-dir=/x", "status"], ["--git-dir", "/x", "status"], ["--work-tree=/x", "status"], ["--namespace=n", "status"]]) {
+      expect(() => hostGitInvocation(bad, { cwd: "/ws/a", allowProtocol: "none" }), bad.join(" ")).toThrow(HostGitRefusedError);
+    }
+  });
+
   it("a refusal never carries a path in its message", () => {
     try {
       hostGitInvocation(["status"], { cwd: "relative/secret-ws-id", allowProtocol: "none" });
@@ -293,6 +299,9 @@ describe("hostGitInvocation with real git", () => {
       ["refs-heads-symlink", (ws) => { rmSync(join(ws, ".git", "refs", "heads"), { recursive: true, force: true }); symlinkSync(join(vg, "refs", "heads"), join(ws, ".git", "refs", "heads")); }],
       ["alternates", (ws) => { mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "objects", "info", "alternates"), `${join(vg, "objects")}\n`); }],
       ["http-alternates", (ws) => { mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "objects", "info", "http-alternates"), "http://x.invalid/objects\n"); }],
+      ["refs-depth2-symlink", (ws) => { mkdirSync(join(ws, ".git", "refs", "heads"), { recursive: true }); symlinkSync(join(vg, "refs", "heads"), join(ws, ".git", "refs", "heads", "foo")); }],
+      ["logs-head-symlink", (ws) => { mkdirSync(join(ws, ".git", "logs"), { recursive: true }); symlinkSync(join(vg, "config"), join(ws, ".git", "logs", "HEAD")); }],
+      ["logs-refs-symlink", (ws) => { mkdirSync(join(ws, ".git", "logs"), { recursive: true }); symlinkSync(join(vg, "refs"), join(ws, ".git", "logs", "refs")); }],
       ["grafts", (ws) => { mkdirSync(join(ws, ".git", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "info", "grafts"), "\n"); }],
     ];
     for (const [name, plant] of redirects) {

@@ -488,14 +488,17 @@ allowed, so there only the env pin and the file-tool guard hold.
   > `safe.bareRepository=explicit`, `protocol.ext.allow=never`, `core.alternateRefsCommand=`, signing off, and a scrubbed
   > environment with the image identity file as the global config. For a call with a workspace `cwd` it sets
   > `GIT_WORK_TREE`, `GIT_DIR` and `GIT_COMMON_DIR` to the workspace itself and REFUSES a `.git` that is a gitfile or a
-  > symlink, whose first-level entries or `refs/*` / `objects/*` children are symlinks, or that carries `commondir`,
+  > symlink, any of whose first-level entries, any entry under `refs/` or `logs/` (walked recursively) or children of
+  > `objects/` is a symlink, or that carries `commondir`,
   > `objects/info/alternates`, `http-alternates` or `info/grafts` (measured: each redirected a read or a write into another
   > repository). A preflight, not a structural control: a swap after the check is not covered (the `GIT_DIR` pin does not stop
-  > `commondir` or a swapped symlink), and symlinks deeper than `refs/*` and `objects/*` and `modules/` are not examined. `GIT_ALLOW_PROTOCOL` is required on every
+  > `commondir` or a swapped symlink), and a live agent process defeats it quickly (measured: a swapped `refs/heads` symlink hit
+  > within 87 ms), so it checks a pre-poisoned workspace, not a running agent. Not examined: symlinks below `objects/<xx>/` and
+  > `modules/`. Structural options NOT done: freezing the sandbox around host git, or a server-private `GIT_DIR`. `GIT_ALLOW_PROTOCOL` is required on every
   > call: `https` (installation-auth), `ssh` (key-auth), `none` (every local-only consumer, which also stops a promisor
   > or `file` remote reached from a local verb). The git-data push goes to the explicit server-derived URL, and a
   > preflight guard (shared with the fetch) refuses any effective `url.*` rewrite and any `remote.<name>.*` key whose name is
-  > not `origin` or `git-data` (git resolves a push or fetch argument as a remote NAME first, so a remote named by the
+  > URL-shaped (contains `/`, `:` or `@`; ordinary remotes such as `upstream` and `remote.pushDefault` are untouched) (git resolves a push or fetch argument as a remote NAME first, so a remote named by the
   > explicit URL defeated it; measured): the host-key pin limits which
   > host key is trusted, NOT which repository path on that host is written, so same-host cross-repo writes are limited by
   > the explicit URL plus that preflight, which is not a structural control (the receiving side checks fencing and
@@ -521,7 +524,7 @@ allowed, so there only the env pin and the file-tool guard hold.
   > Sites that run host git on an agent-authored `.git` WITHOUT the shared hardening (census-only, not routed here):
   > `git-config-atomic.ts`, `git-worktree-validity.ts`, `push-branch.ts` (the file holds the
   > operator-held isolated push; its direct `cat-file` / `config user.*` calls run unhardened), and the cron helpers;
-  > their writes follow a gitfile or `commondir` redirect (read from source, not measured). `--attr-source` was measured
+  > their writes follow a gitfile, symlink or `commondir` redirect (measured for `git-config-atomic` and the `push-branch` `config user.*` calls: each set the target repository's `user.name` through a symlinked `.git`). The implicit remotes the legacy arm resolves by name (`remote.origin.*`, `branch.<b>.remote`, e.g. through `include.path`) are not covered by the git-data guard (residual, same family as the askpass-for-any-host item). `--attr-source` was measured
   > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). Structural options NOT done here: running
   > host git where the server's `/proc` entry is not visible (`bwrap --unshare-pid --proc`), a non-dumpable server
   > (`PR_SET_DUMPABLE=0`), and the isolated-`GIT_DIR` path (operator-held, unchanged).

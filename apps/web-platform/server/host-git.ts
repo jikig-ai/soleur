@@ -37,7 +37,7 @@ export const ALLOW_PROTOCOL_NONE = "none";
 
 /** Thrown when a call is refused before git runs. The message never carries a path (it is mirrored to Sentry). */
 export class HostGitRefusedError extends Error {
-  constructor(readonly reason: "git-dir-shape" | "cwd" | "extra-env") {
+  constructor(readonly reason: "git-dir-shape" | "cwd" | "extra-env" | "args") {
     super(`host git refused: ${reason}`);
     this.name = "HostGitRefusedError";
   }
@@ -157,7 +157,8 @@ export interface HostGitInvocation {
   env: NodeJS.ProcessEnv;
 }
 
-function firstSubcommand(args: readonly string[]): string | undefined {
+/** The subcommand and the index it sits at; only the tokens BEFORE it are git's own (global) options. */
+function subcommandOf(args: readonly string[]): { sub: string | undefined; at: number } {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-C" || a === "-c") {
@@ -165,9 +166,9 @@ function firstSubcommand(args: readonly string[]): string | undefined {
       continue;
     }
     if (a.startsWith("-")) continue;
-    return a;
+    return { sub: a, at: i };
   }
-  return undefined;
+  return { sub: undefined, at: args.length };
 }
 
 function enoent(err: unknown): boolean {
@@ -175,19 +176,24 @@ function enoent(err: unknown): boolean {
 }
 
 // Files whose mere presence redirects or rewrites what git reads from ANOTHER repository's store. No server code writes
-// them in a workspace (the isolated push creator refuses the same ones).
+// them in a workspace (the isolated push creator refuses the alternates pair).
 const REDIRECTING_GIT_FILES = ["commondir", "objects/info/alternates", "objects/info/http-alternates", "info/grafts"] as const;
 
 /**
  * Refuse a workspace whose `.git` is not a plain directory (a gitfile or a symlink points at another repository), whose
- * first-level entries, or the children of `refs/` and `objects/`, are symlinks (measured: a symlinked `refs` or `objects`
- * wrote a ref and a blob into another repository under the pinned GIT_DIR), or that carries `commondir`,
- * `objects/info/alternates`, `http-alternates` or `info/grafts`. An absent `.git` passes: the pinned `GIT_DIR` then names a
- * path that does not exist and git fails closed. A PREFLIGHT, not a structural control: a write between this check and the
- * git call is not covered (pinning GIT_DIR/GIT_COMMON_DIR does not stop `commondir` or a symlink swapped in after the
- * check), symlinks deeper than `refs/*` and `objects/*`, and `modules/`, are not examined. Same family as
+ * first-level entries, ANY entry under `refs/` or `logs/` (walked recursively), or the children of `objects/`, are symlinks
+ * (measured: a symlinked `refs`, `refs/heads/<x>`, `logs/HEAD` or `objects` wrote a ref, a reflog line or a blob into another
+ * repository under the pinned GIT_DIR), or that carries `commondir`, `objects/info/alternates`, `http-alternates` or
+ * `info/grafts`. An absent `.git` passes: the pinned `GIT_DIR` then names a path that does not exist and git fails closed.
+ * A PREFLIGHT, not a structural control, and a live agent defeats it quickly: a second process swapping a `refs/heads`
+ * symlink in after the check hit within 87 ms (measured), because git follows the path for the whole run. Pinning
+ * GIT_DIR/GIT_COMMON_DIR does not stop `commondir` or a swapped symlink. Not examined: symlinks below `objects/<xx>/`, and
+ * `modules/`. Same family as
  * `probeGitWorktreeShape` (git-worktree-validity.ts), whose semantics differ (an absent `.git` is invalid there).
  */
+const MAX_WALK_DEPTH = 8;
+const MAX_WALK_ENTRIES = 20_000; // a workspace with more loose refs/reflog files than this is refused, not walked unbounded
+
 export function assertWorkspaceGitShape(cwd: string): void {
   const gitDir = join(cwd, ".git");
   try {
@@ -208,11 +214,28 @@ export function assertWorkspaceGitShape(cwd: string): void {
     return refuse();
   }
   for (const e of entries) if (e.isSymbolicLink()) refuse();
-  for (const sub of ["refs", "objects"]) {
-    if (!entries.some((e) => e.name === sub && e.isDirectory())) continue;
+  // refs/ and logs/ hold only small ref and reflog files: walk them fully. objects/ is fan-out directories: one level.
+  let visited = 0;
+  const walk = (dir: string, depth: number): void => {
+    if (depth > MAX_WALK_DEPTH) refuse();
     let children;
     try {
-      children = readdirSync(join(gitDir, sub), { withFileTypes: true });
+      children = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      if (enoent(err)) return;
+      return refuse();
+    }
+    for (const c of children) {
+      if (++visited > MAX_WALK_ENTRIES) refuse();
+      if (c.isSymbolicLink()) refuse();
+      if (c.isDirectory()) walk(join(dir, c.name), depth + 1);
+    }
+  };
+  for (const sub of ["refs", "logs"]) if (entries.some((e) => e.name === sub && e.isDirectory())) walk(join(gitDir, sub), 0);
+  if (entries.some((e) => e.name === "objects" && e.isDirectory())) {
+    let children;
+    try {
+      children = readdirSync(join(gitDir, "objects"), { withFileTypes: true });
     } catch {
       return refuse();
     }
@@ -246,8 +269,11 @@ export function hostGitInvocation(args: readonly string[], opts: HostGitOpts): H
   };
   if (opts.cwd !== undefined) {
     if (opts.cwd === "" || !isAbsolute(opts.cwd)) throw new HostGitRefusedError("cwd");
-    const sub = firstSubcommand(args);
+    const { sub, at } = subcommandOf(args);
     if (sub === "clone" || sub === "init") throw new HostGitRefusedError("cwd");
+    // a GLOBAL `--git-dir` / `--work-tree` outranks the pinned GIT_DIR / GIT_WORK_TREE (measured); no call site passes one.
+    // (`rev-parse --git-dir` is a subcommand option, after the subcommand, and is fine.)
+    if (args.slice(0, at).some((a) => /^--(git-dir|work-tree|namespace)(=|$)/.test(a))) throw new HostGitRefusedError("args");
     const cwd = resolve(opts.cwd);
     assertWorkspaceGitShape(cwd);
     env.GIT_WORK_TREE = cwd;

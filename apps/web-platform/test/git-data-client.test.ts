@@ -129,8 +129,8 @@ describe("fetchFromGitData — authorized read", () => {
   it("a url.* rewrite (or a remote named by the explicit URL) in the workspace config REFUSES the fetch: no transport, no cross-tenant read", async () => {
     rpcMock.mockResolvedValue({ data: true, error: null });
     for (const lines of [
-      "url.ssh://git@evil.invalid/.insteadof ssh://git@10.0.1.20/\n",
-      "remote.ssh://git@10.0.1.20/mnt/git-data/repositories/x.git.url ssh://git@10.0.1.20/mnt/git-data/repositories/other.git\n",
+      "url.ssh://git@evil.invalid/.insteadof\0",
+      "remote.ssh://git@10.0.1.20/mnt/git-data/repositories/x.git.url\0",
     ]) {
       gitTransport.mockClear();
       execFileSyncMock.mockImplementation((...a: unknown[]) => {

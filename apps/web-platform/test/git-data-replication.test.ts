@@ -138,7 +138,7 @@ describe("replicateToGitData — the url/remote rewrite guard runs before ANY pu
   function configAnswers(lines: string): void {
     execFileSyncMock.mockImplementation((...a: unknown[]) => {
       const args = stripBlock(a[1] as string[]);
-      if (args[0] === "config" && args[1] === "--get-regexp") {
+      if (args[0] === "config" && args.includes("--get-regexp")) {
         if (lines === "") throw Object.assign(new Error("exit 1"), { status: 1 });
         return Buffer.from(lines);
       }
@@ -148,8 +148,8 @@ describe("replicateToGitData — the url/remote rewrite guard runs before ANY pu
   const run = () => replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 4, userId: USER });
 
   it.each([
-    ["a url.<base>.insteadOf rewrite", "url.ssh://git@evil.invalid/.insteadof ssh://git@10.0.1.20/\n"],
-    ["a remote named by the explicit URL carrying a pushurl", `remote.${gitDataRemoteUrl(WS)}.pushurl ssh://git@10.0.1.20/mnt/git-data/repositories/other.git\n`],
+    ["a url.<base>.insteadOf rewrite", "url.ssh://git@evil.invalid/.insteadof\0"],
+    ["a remote named by the explicit URL carrying a pushurl", `remote.${gitDataRemoteUrl(WS)}.pushurl\0`],
   ])("%s: refuses, pushes nothing, and reports the refusal under its own op", async (_n, lines) => {
     configAnswers(lines);
     await expect(run()).rejects.toThrow(/refused/);
@@ -161,8 +161,9 @@ describe("replicateToGitData — the url/remote rewrite guard runs before ANY pu
     expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain("evil.invalid");
   });
 
-  it("the expected remotes (origin, git-data) and a clean config pass, and the push goes to the explicit URL", async () => {
-    configAnswers("remote.origin.url https://github.com/o/r.git\nremote.git-data.url ssh://x/y\n");
+  it("ordinary remotes (origin, git-data, upstream) and remote.pushDefault pass, and the push goes to the explicit URL", async () => {
+    // ordinary remotes (a fork workflow) and remote.pushDefault are NOT rewrites: only a URL-shaped remote name can matter
+    configAnswers("remote.origin.url\0remote.git-data.url\0remote.upstream.url\0remote.pushdefault\0");
     await run();
     expect(gitPush).toHaveBeenCalled();
     expect((gitPush.mock.calls[0][0] as string[])).toContain(gitDataRemoteUrl(WS));
