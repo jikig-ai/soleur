@@ -259,7 +259,7 @@ VERIFY_RESULT=$(
 
 CREATED_RESOURCES+=("cd ${PROVISIONING_DIR} && terraform destroy")
 
-TOKEN_STATUS=$(echo "$VERIFY_RESULT" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+TOKEN_STATUS=$(echo "$VERIFY_RESULT" | grep -o '"status":"[^"]*"' | cut -d'"' -f4) || true
 if [[ "$TOKEN_STATUS" == "active" ]]; then
   echo "Smoke-test passed: scoped token is active."
 else

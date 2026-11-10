@@ -279,7 +279,7 @@ echo ""
       -d "$SA_PAYLOAD"
   )
 
-  SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4)
+  SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4) || true
   if [[ -z "$SA_SLUG" ]]; then
     echo "Error: Failed to create service account. Response:" >&2
     echo "$SA_RESPONSE" >&2

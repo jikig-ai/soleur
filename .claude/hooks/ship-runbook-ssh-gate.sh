@@ -117,7 +117,7 @@ for f in "${RUNBOOK_FILES[@]}"; do
   if grep -qiE '(last-?resort|emergency only|when all else fails)' <<<"$added"; then
     # If the file has a "last-resort" heading in its added content, only
     # block if the hit appears BEFORE that heading in the diff order.
-    last_resort_line=$(printf '%s\n' "$added" | grep -niE '(last-?resort|emergency only|when all else fails)' | head -1 | awk -F: '{print $1}')
+    last_resort_line=$(printf '%s\n' "$added" | grep -niE '(last-?resort|emergency only|when all else fails)' | head -1 | awk -F: '{print $1}') || true
     while IFS= read -r hit; do
       hit_line=$(echo "$hit" | awk -F: '{print $1}')
       if [[ "$hit_line" -lt "$last_resort_line" ]]; then

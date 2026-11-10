@@ -83,7 +83,7 @@ assert_eq "exactly 3 broken-link findings (AC4)" "3" "$got_broken_link"
 assert_eq "exactly 2 broken-anchor findings (AC4)" "2" "$got_broken_anchor"
 
 # JSON shape check: every finding has the 4 required fields.
-fields_missing=$(printf '%s' "$OUT" | grep -oE '"kind":"[^"]+","source_path":"[^"]+","target":"[^"]+","source_ref":"(link|anchor)-[0-9a-f]{16}"' | wc -l | tr -d '[:space:]')
+fields_missing=$(printf '%s' "$OUT" | grep -oE '"kind":"[^"]+","source_path":"[^"]+","target":"[^"]+","source_ref":"(link|anchor)-[0-9a-f]{16}"' | wc -l | tr -d '[:space:]') || true
 assert_eq "5 findings each carry kind/source_path/target/source_ref shape" "5" "$fields_missing"
 
 # Negative: healthy controls do NOT appear in findings.

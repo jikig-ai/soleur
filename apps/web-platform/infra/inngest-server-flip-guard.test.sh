@@ -369,7 +369,7 @@ if [[ ! -f "$FSM" ]]; then
 else
   # Guard allowlist: the tokens before ')' on the `flag_ok=true` case line.
   guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | head -1 | sed -E 's/\).*//' \
-    | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u)
+    | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u) || true
   # FSM start-states: walk top-down tracking the nearest preceding `flag_set <arg>` OR case-arm
   # label `<state>)`, and emit that state at every line that STARTS THE SERVER. "Starts the
   # server" is deliberately BROAD — ANY `start_server` call shape (bare, `if ! start_server`,
@@ -388,7 +388,7 @@ else
     /(^|[^A-Za-z_])start_server([^A-Za-z_(]|$)/         { if (cur!="") print cur; next }
     /systemctl_cmd start[[:space:]]+"\$SERVER_UNIT"/    { if (cur!="") print cur; next }
   ' "$FSM")
-  fsm_states=$(printf '%s\n' "$raw_starts" | grep -vE '^$' | LC_ALL=C sort -u)
+  fsm_states=$(printf '%s\n' "$raw_starts" | grep -vE '^$' | LC_ALL=C sort -u) || true
   start_site_count=$(printf '%s\n' "$raw_starts" | grep -cE '^[a-z-]+$' || true)
 
   # Count-drift latch (also gives the case-arm-label rule independent coverage): the FSM starts

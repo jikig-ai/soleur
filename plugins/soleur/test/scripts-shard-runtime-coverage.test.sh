@@ -176,7 +176,7 @@ fi
 
 # Mutation-proof the central assertion: with the setup step removed from the block,
 # the bun check MUST fail. A guard nobody has seen red is not a guard.
-MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')"
+MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')" || true
 if printf '%s\n' "$MUTATED" | grep -cE >/dev/null 'oven-sh/setup-bun'; then
   echo "  FAIL: self-check — could not remove the setup-bun line to prove non-vacuity"
   FAIL=$((FAIL + 1))

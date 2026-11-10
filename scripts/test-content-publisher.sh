@@ -158,7 +158,7 @@ fi
 
 assert_eq "stale-emit-one-entry" "1" "$(wc -l < "$tmp_events" | tr -d ' ')"
 
-status=$(grep '^status:' "$fixture/stale-test.md" | sed 's/^status: *//')
+status=$(grep '^status:' "$fixture/stale-test.md" | sed 's/^status: *//') || true
 assert_eq "stale-status-transitions-to-stale" "stale" "$status"
 
 # Second run: idempotent -- file is now status: stale, no new emit line.

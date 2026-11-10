@@ -341,7 +341,7 @@ if [[ ${#pins[@]} -gt 0 ]]; then
   # UNKNOWN — never as "the pin is fresh".
   if command -v gh >/dev/null 2>&1; then
     _tip="$(gh api repos/anthropics/claude-code-action/releases --jq '.[0].tag_name' 2>/dev/null || true)"
-    _pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)"
+    _pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)" || true
     # These pins are annotated TAG objects, so git/tags resolves them. A pin
     # produced by pin-github-action/Dependabot is a plain COMMIT sha, where
     # git/tags 404s and commits/<sha> is the correct call — try both.

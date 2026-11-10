@@ -124,11 +124,11 @@ want "T13c rc=22 auth + CLUSTER_DOESNT_EXIST -> source-not-in-connection" \
 
 # ── return-code contract ─────────────────────────────────────────────────────
 # Asserted directly: every caller runs under `set -e`.
-_rc_probe() { local bf rc; bf="$(_body '')"; bs_read_classify 22 "$bf" >/dev/null; rc=$?; rm -f "$bf"; return "$rc"; }
+_rc_probe() { local bf rc; bf="$(_body '')"; if bs_read_classify 22 "$bf" >/dev/null; then rc=0; else rc=$?; fi; rm -f "$bf"; return "$rc"; }
 if _rc_probe; then _report "T14 returns 0 on the common path" ok
 else _report "T14 returns 0 on the common path" bad "returned non-zero — would abort a set -e caller"; fi
 
-_rc_probe_match() { local bf rc; bf="$(_body 'Authentication failed')"; bs_read_classify 22 "$bf" >/dev/null; rc=$?; rm -f "$bf"; return "$rc"; }
+_rc_probe_match() { local bf rc; bf="$(_body 'Authentication failed')"; if bs_read_classify 22 "$bf" >/dev/null; then rc=0; else rc=$?; fi; rm -f "$bf"; return "$rc"; }
 if _rc_probe_match; then _report "T15 returns 0 on a MATCHING body" ok
 else _report "T15 returns 0 on a matching body" bad "returned non-zero"; fi
 
@@ -162,7 +162,7 @@ else _report "T22 only the FIRST stderr line reaches the log" bad "got '$_s'"; f
 _s="$(_scrub "$(printf 'x%.0s' {1..300})")"
 if [[ "${#_s}" == 200 ]]; then _report "T23 the line is capped at 200 characters" ok
 else _report "T23 the line is capped at 200 characters" bad "got ${#_s}"; fi
-_s="$(bs_read_scrub_err1 "/nonexistent/err-$$")"; _src=$?
+if _s="$(bs_read_scrub_err1 "/nonexistent/err-$$")"; then _src=0; else _src=$?; fi
 if [[ "$_s" == "<none>" && "$_src" == 0 ]]; then _report "T21 missing errfile -> <none>, rc 0" ok
 else _report "T21 missing errfile -> <none>, rc 0" bad "got '$_s' rc=$_src"; fi
 

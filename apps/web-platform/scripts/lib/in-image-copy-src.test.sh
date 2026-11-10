@@ -269,7 +269,7 @@ echo "7: both helpers call the shared copy; no raw copy verb touches /src"
 a7_ok=1
 for h in "$H1" "$H2"; do
   hname="$(basename "$h")"
-  body="$(grep -vE '^[[:space:]]*#' "$h")"
+  body="$(grep -vE '^[[:space:]]*#' "$h")" || true
   grep -qF -- "$CALL_LITERAL" <<<"$body" \
     || { fail "$hname does not invoke the shared copy in executable code ($CALL_LITERAL) — it must be EXECUTED, not sourced: sourcing leaks pipefail into the caller's bun-install pipeline"; a7_ok=0; }
   grep -qE '\b(cp|rsync)\b[^|]*/src' <<<"$body" \
@@ -323,7 +323,7 @@ if [ "$df_n" -lt 1 ]; then
   fail "no pinned FROM node:22-slim@sha256 in $(basename "$DOCKERFILE")"
   a9_ok=0
 else
-  digests="$(grep -oE '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | sed 's/^FROM //')"
+  digests="$(grep -oE '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | sed 's/^FROM //')" || true
 fi
 for h in "$H1" "$H2"; do
   hname="$(basename "$h")"
@@ -343,7 +343,7 @@ for h in "$H1" "$H2"; do
 $d"
 done
 if [ "$a9_ok" -eq 1 ]; then
-  uniq_n="$(printf '%s\n' "$digests" | grep -v '^$' | sort -u | wc -l)"
+  uniq_n="$(printf '%s\n' "$digests" | grep -v '^$' | sort -u | wc -l)" || true
   if [ "$uniq_n" -ne 1 ]; then
     fail "digest drift across Dockerfile + helpers ($uniq_n distinct): $(printf '%s' "$digests" | tr '\n' ' ')"
   else
@@ -360,7 +360,7 @@ echo "10: helpers mount \$APP_DIR (not \$PWD) as /src"
 a10_ok=1
 for h in "$H1" "$H2"; do
   hname="$(basename "$h")"
-  body="$(grep -vE '^[[:space:]]*#' "$h")"
+  body="$(grep -vE '^[[:space:]]*#' "$h")" || true
   # shellcheck disable=SC2016  # the literal string is the assertion; no expansion wanted
   grep -qF -- '$PWD/$APP_DIR:/src:ro' <<<"$body" \
     || { fail "$hname does not mount \$PWD/\$APP_DIR at /src — $SUT_REL would be unreachable in-container"; a10_ok=0; }
