@@ -559,14 +559,15 @@ for pair in \
   "VERSION=\${{ steps.version.outputs.next }}" \
   "SLACK_RELEASES_WEBHOOK_URL=\${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}" \
   "COMPONENT_DISPLAY=\${{ inputs.component_display }}" \
-  "RUN_URL=\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}"; do
+  "RUN_URL=\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}" \
+  "RERUN_SCOPE=\${{ inputs.docker_image != '' && 'this run and, once it succeeds, the deploy-arm (workflow_run) run for the same SHA' || 'this run' }}"; do
   key="${pair%%=*}"
   assert_eq "BLOCKED notifier env.$key wiring" \
     "$(wf_step_field "$STEP_BLOCKED" "env.$key" || echo "<rc=$?>")" "${pair#*=}"
 done
-assert_eq "BLOCKED notifier env key set is exactly the seven wired keys" \
+assert_eq "BLOCKED notifier env key set is exactly the eight wired keys" \
   "$(wf_env_keys "$STEP_BLOCKED" || echo "<rc=$?>")" \
-  "COMPONENT_DISPLAY,MIRROR_REASON,RUN_URL,SLACK_RELEASES_WEBHOOK_URL,TAG,TOKEN_VERDICT,VERSION"
+  "COMPONENT_DISPLAY,MIRROR_REASON,RERUN_SCOPE,RUN_URL,SLACK_RELEASES_WEBHOOK_URL,TAG,TOKEN_VERDICT,VERSION"
 assert_eq "BLOCKED notifier: every steps.<id> it reads is defined by a step" \
   "$(wf_ref_check "$STEP_BLOCKED" || echo "<rc=$?>")" \
   "refs=check_changed,create_release,idempotency,token_preflight,version,zot_mirror;unresolved="
@@ -1066,7 +1067,7 @@ fi
 # exit, never through the fail() it backstops. Ratchet MIN_ASSERTIONS in the same commit as
 # any added assertion; slack in a floor is attack budget.
 ASSERTED=$((PASS + FAIL))
-MIN_ASSERTIONS=121
+MIN_ASSERTIONS=122
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

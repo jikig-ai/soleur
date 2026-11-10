@@ -852,19 +852,10 @@ jobs:
             BUILD_SHA=${{ github.sha }}
             NEXT_PUBLIC_AGENT_COUNT=${{ steps.plugin_stats.outputs.agent_count }}
 
-      # #8211 (CTO C1-C3, D2): a failed image step reports itself. DIAGNOSTICS ONLY: no retry, no
-      # billing read, no new permission, no secret. One closed-grammar SOLEUR_GHCR_PUSH_FAILED line
-      # (stdout, ::error::, step summary) carrying the validated attempt and a class:
-      #   push_denied  the registry denied the push; denial= is the allowlisted `denied: <code>: <reason>`
-      #   push_other   a push failure whose registry text is withheld (denial=withheld)
-      #   not_push     the build failed before the push (denial=see-step-log); the runbook does not apply
-      #   unknown      the build history was unreadable (denial=see-step-log)
-      # `denial` never reaches $GITHUB_OUTPUT or the email. continue-on-error keeps the verdict
-      # unchanged; timeout-minutes: 1 keeps a hang from turning the job `cancelled`, which would
-      # silence the failure email below. Runbook:
-      # knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md.
-      # Pinned by plugins/soleur/test/reusable-release-push-failed-marker.test.sh (Guard 4), which
-      # executes this body: no ${{ }} inside run:.
+      # #8211: one closed-grammar SOLEUR_GHCR_PUSH_FAILED line on a failed image step. Diagnostics only (no retry,
+      # billing read, permission or secret); continue-on-error, timeout-minutes: 1, no ${{ }} inside run:. Classes:
+      # runbooks/web-platform-release-image-push-failed.md; pinned by plugins/soleur/test/reusable-release-push-failed-marker.test.sh.
+      # The parser depends on the runner's unpinned buildx output format (measured on 0.38.1); drift reads as class=unknown.
       - name: Report a failed image push (GHCR)
         id: push_failed_marker
         if: failure() && steps.docker_build.outcome == 'failure'
@@ -924,20 +915,10 @@ jobs:
           line="SOLEUR_GHCR_PUSH_FAILED image=${image} version=${version} attempt=${attempt} run=${run_url} class=${class} denial=${denial} runbook=${runbook}"
           printf '%s\n' "$line"
           printf '::error::%s\n' "$line"
-          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-            bt=$'\x60' # a backtick: the summary line sits in a code span, so a URL never renders as a link
-            printf '%s%s%s\n' "$bt" "$line" "$bt" >> "$GITHUB_STEP_SUMMARY" || true
-          fi
-          # Only class (from literal arms) and attempt leave this step; the email reads them.
-          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-            case "$class" in
-              push_denied) printf 'class=push_denied\n' >> "$GITHUB_OUTPUT" ;;
-              push_other) printf 'class=push_other\n' >> "$GITHUB_OUTPUT" ;;
-              not_push) printf 'class=not_push\n' >> "$GITHUB_OUTPUT" ;;
-              *) printf 'class=unknown\n' >> "$GITHUB_OUTPUT" ;;
-            esac
-            printf 'attempt=%s\n' "$attempt" >> "$GITHUB_OUTPUT"
-          fi
+          bt=$'\x60' # a backtick: the summary line sits in a code span, so a URL never renders as a link
+          printf '%s%s%s\n' "$bt" "$line" "$bt" >> "$GITHUB_STEP_SUMMARY" || true
+          # Only class (always one of the four literals above) and attempt leave this step; the email reads them.
+          printf 'class=%s\nattempt=%s\n' "$class" "$attempt" >> "$GITHUB_OUTPUT"
 
       - name: Set docker_pushed output
         id: docker_pushed
@@ -1726,7 +1707,7 @@ jobs:
           # the run actually delivers instead: what was measured, and what that rules out.
           # `verdict` rides in the body so the first touchpoint is triageable without
           # opening the run at all.
-          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.push_failed_marker.outputs.class != '''' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, first check Billing &gt; Packages; <code>not_push</code> is not an image-push failure, so that runbook does not apply and Billing is not the cause.</p>'', steps.push_failed_marker.outputs.class, steps.push_failed_marker.outputs.attempt) || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so ''Re-run failed jobs'' (on both the release run and the deploy-arm run) is safe; a fresh ''Run workflow'' dispatch is not (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
+          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.docker_build.outcome == ''failure'' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, first run its read-only Packages budget and usage API reads (<code>gh api orgs/jikig-ai/settings/billing/budgets</code> and <code>.../billing/usage</code>); <code>not_push</code> is not an image-push failure, so that runbook does not apply and Billing is not the cause.</p>'', steps.push_failed_marker.outputs.class || ''unmeasured — the marker step did not report'', steps.push_failed_marker.outputs.attempt || ''unmeasured'') || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so ''Re-run failed jobs'' on ${{ inputs.docker_image != '''' && ''both the release run and the deploy-arm run'' || ''this run'' }} is safe; a fresh ''Run workflow'' dispatch is not (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire
@@ -1875,6 +1856,7 @@ jobs:
           MIRROR_REASON: ${{ steps.zot_mirror.outputs.mirror_reason }}
           TOKEN_VERDICT: ${{ steps.token_preflight.outputs.verdict }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RERUN_SCOPE: ${{ inputs.docker_image != '' && 'this run and, once it succeeds, the deploy-arm (workflow_run) run for the same SHA' || 'this run' }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
           if [ -z "$WEBHOOK" ]; then
@@ -1902,8 +1884,8 @@ jobs:
               "$MESSAGE" "${REASON:-n/a (failed before or outside the mirror step)}" "${VERDICT:-unmeasured}")
           fi
 
-          MESSAGE=$(printf '%s\n\nRe-run failed jobs on this run to retry with the same version; a fresh "Run workflow" dispatch recomputes it.\n\nRun: %s' \
-            "$MESSAGE" "$RUN_URL")
+          MESSAGE=$(printf '%s\n\nRe-run failed jobs on %s to retry with the same version; a fresh "Run workflow" dispatch recomputes it.\n\nRun: %s' \
+            "$MESSAGE" "${RERUN_SCOPE:-this run}" "$RUN_URL")
 
           PAYLOAD=$(jq -n \
             --arg text "$MESSAGE" \

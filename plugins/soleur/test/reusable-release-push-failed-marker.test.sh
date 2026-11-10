@@ -49,6 +49,24 @@
 #   7    take RUN_ATTEMPT unvalidated                                    RED  b13 (grammar, output, attempt)
 #   8    a `${{ }}` inside the run body                                  RED  S7, rc rows
 #   H    the stub ignores its argv (alone, and together with 4e)         RED  H, H2
+# Review round (PR #12536), 2026-11-10, in an allocated sandbox, pristine copies restored and cmp-verified after each
+# row. Control: unmutated, GREEN 575/575 (before and after the matrix). Every row went RED:
+#   R1   reason class `[^[:cntrl:]]+`                                    RED  b10n (30 rows)
+#   R2   `^denied: [A-Za-z0-9_]+: [A-Za-z0-9_.]+$`                       RED  b10n (20 rows)
+#   R3   cap `-le 299` / R4 `-le 301`                                    RED  b14b / b14c (3 rows each)
+#   R5   check_eq `if true`, check `|| true`, check_absent `hit=0`,
+#        `matches() { true; }`, `not() { true; }`, `in_order() { true; }` RED  helper self-test (rc 2, one row each)
+#   R6   a second, unbounded docker call on the `ls` line                RED  S8, S8b, b4 call count
+#   R7   VERSION / RUN_URL unvalidated; IMAGE widened to [^[:cntrl:]]    RED  b17v* / b17r* / b17i1
+#   R8   email paragraph gated on the marker's class again               RED  S13
+#   R9   email class fallback dropped                                    RED  S13b
+#   R10  email deploy-arm clause unconditional again                     RED  S12b, S12c
+#   R11  Slack sentence ignores RERUN_SCOPE                              RED  S16c
+#   R12  a runbook class row renamed; runbook log read back to --log-failed  RED  S17b; b1 runbook rows
+#   R13  a build-arg name printed to stderr                              RED  every case's name row (41 rows)
+#   R14  the email names a runbook file that does not exist             RED  S18, S18b
+#   R15  a step class outside the grammar                                RED  S17, S17b, behavioural rows
+#   R16  the email sends the reader back to the Billing page             RED  S13d, S13e
 #
 # Run: bash plugins/soleur/test/reusable-release-push-failed-marker.test.sh
 
@@ -128,6 +146,34 @@ check_absent() { # <desc> <needle> <file>...
   if [[ "$hit" -eq 0 ]]; then pass "$desc"; else fail "$desc -> '$needle' found in output"; fi
 }
 
+# Known-negative self-test: every helper that owns a verdict is driven once with an input that MUST fail, and its
+# failure counter must move by exactly one. An always-pass helper (`if true`, `matches() { true; }`, `hit=0`) would
+# otherwise hold both the conservation check and the floor below. Counters are unwound afterwards; the verdict is
+# reported with printf + exit, never through a helper under test.
+st_passes=$passes st_fails=$fails st_cases=$cases
+SELFTEST_FILE="$TMP_ROOT/selftest.needle"
+printf 'selftest-needle\n' > "$SELFTEST_FILE"
+selftest_expect_fail() { # <helper name> <command...>: the command must raise fails by exactly one
+  local name="$1" before="$fails"
+  shift
+  "$@" > /dev/null
+  if [[ "$fails" -ne $((before + 1)) ]]; then
+    printf 'FATAL: verdict helper %s did not fail on a known-false input (fails %s -> %s)\n' "$name" "$before" "$fails" >&2
+    exit 2
+  fi
+}
+selftest_expect_fail check_eq check_eq "selftest check_eq (expected FAIL)" "a" "b"
+selftest_expect_fail check check "selftest check (expected FAIL)" false
+selftest_expect_fail check_absent check_absent "selftest check_absent (expected FAIL)" "selftest-needle" "$SELFTEST_FILE"
+selftest_expect_fail matches check "selftest matches (expected FAIL)" matches "x" '^y$'
+selftest_expect_fail not check "selftest not (expected FAIL)" not true
+selftest_expect_fail in_order check "selftest in_order (expected FAIL)" in_order 1 1
+if [[ "$cases" -ne $((st_cases + 6)) || "$passes" -ne "$st_passes" ]]; then
+  printf 'FATAL: helper self-test accounting broken (cases %s -> %s, passes %s -> %s)\n' "$st_cases" "$cases" "$st_passes" "$passes" >&2
+  exit 2
+fi
+passes=$st_passes fails=$st_fails cases=$st_cases
+
 echo "reusable-release-push-failed-marker.test.sh"
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -145,9 +191,11 @@ marker = idx(lambda s: s.get("id") == "push_failed_marker")
 build = idx(lambda s: s.get("id") == "docker_build")
 email = idx(lambda s: s.get("name") == "Email notification (release FAILED)")
 zot = idx(lambda s: s.get("id") == "zot_mirror")
+slack = idx(lambda s: s.get("name") == "Post to Slack (release BLOCKED)")
 m = steps[marker[0]] if len(marker) == 1 else {}
 b = steps[build[0]] if len(build) == 1 else {}
 e = steps[email[0]] if len(email) == 1 else {}
+k = steps[slack[0]] if len(slack) == 1 else {}
 out = {
     "marker_count": len(marker),
     "marker_index": marker[0] if marker else -1,
@@ -163,6 +211,8 @@ out = {
     "email_if": e.get("if"),
     "email_body": (e.get("with") or {}).get("body") or "",
     "permissions": job.get("permissions"),
+    "slack_rerun_scope": (k.get("env") or {}).get("RERUN_SCOPE"),
+    "slack_run": k.get("run") or "",
 }
 print(json.dumps(out))
 PY
@@ -191,11 +241,12 @@ check_eq "S6 env keys are exactly IMAGE RUN_ATTEMPT RUN_URL VERSION" "$(x '.env 
 check_eq "S6b RUN_ATTEMPT is github.run_attempt" "$(x '.env.RUN_ATTEMPT')" "\${{ github.run_attempt }}"
 check_eq "S6c no env value reads a secret" "$(x '[.env[] | tostring | select(test("secrets\\."))] | length')" "0"
 check "S7 no \${{ }} expression inside the run body" not grep -qF "\${{" "$BODY"
-# Every non-comment line naming docker runs it through `timeout 10 docker buildx history`.
-docker_lines=$(grep -vE '^[[:space:]]*#' "$BODY" | grep -cE '(^|[^A-Za-z_])docker[[:space:]]' || true)
-bounded_lines=$(grep -vE '^[[:space:]]*#' "$BODY" | grep -cE 'timeout 10 docker buildx history (ls|inspect) ' || true)
-check_eq "S8 both docker reads are present" "$docker_lines" "2"
-check_eq "S8b every docker call is bounded by timeout 10" "$bounded_lines" "$docker_lines"
+# Every docker INVOCATION (counted per occurrence, not per line: two calls can share a line) on a non-comment line
+# runs through `timeout 10 docker buildx history`.
+docker_calls=$(grep -vE '^[[:space:]]*#' "$BODY" | grep -oE '(^|[^A-Za-z_])docker[[:space:]]' | wc -l | tr -d ' ')
+bounded_calls=$(grep -vE '^[[:space:]]*#' "$BODY" | grep -oE 'timeout 10 docker buildx history (ls|inspect) ' | wc -l | tr -d ' ')
+check_eq "S8 exactly the two docker reads are invoked" "$docker_calls" "2"
+check_eq "S8b every docker invocation is bounded by timeout 10" "$bounded_calls" "$docker_calls"
 check_eq "S9a docker_build env DOCKER_BUILD_RECORD_UPLOAD is the string false" "$(x '.build_env.DOCKER_BUILD_RECORD_UPLOAD | tojson')" '"false"'
 check_eq "S9b docker_build env DOCKER_BUILD_SUMMARY is the string false" "$(x '.build_env.DOCKER_BUILD_SUMMARY | tojson')" '"false"'
 gho_denial=$(grep -vE '^[[:space:]]*#' "$BODY" | grep 'GITHUB_OUTPUT' | grep -c 'denial' || true)
@@ -204,13 +255,31 @@ EMAIL_BODY="$TMP_ROOT/email-body.txt"
 x '.email_body' > "$EMAIL_BODY"
 check "S11 the failure email never names denial" not grep -qi 'denial' "$EMAIL_BODY"
 check "S12 the old 're-running this workflow is safe' wording is gone" not grep -qF 're-running this workflow is safe' "$EMAIL_BODY"
-check "S12b the email names Re-run failed jobs on both runs and forbids a fresh dispatch" grep -qF "so 'Re-run failed jobs' (on both the release run and the deploy-arm run) is safe; a fresh 'Run workflow' dispatch is not" "$EMAIL_BODY"
-check "S13 the email's image sentence renders only when the class output is non-empty" grep -qF "\${{ steps.push_failed_marker.outputs.class != '' && format('<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>)" "$EMAIL_BODY"
-check "S13b the email sentence formats only class and attempt" grep -qF "', steps.push_failed_marker.outputs.class, steps.push_failed_marker.outputs.attempt) || '' }}" "$EMAIL_BODY"
+check "S12b the email names the deploy-arm run only for an image release and forbids a fresh dispatch" grep -qF "so 'Re-run failed jobs' on \${{ inputs.docker_image != '' && 'both the release run and the deploy-arm run' || 'this run' }} is safe; a fresh 'Run workflow' dispatch is not" "$EMAIL_BODY"
+check "S12c the email no longer names the deploy-arm run unconditionally" not grep -qF "(on both the release run and the deploy-arm run)" "$EMAIL_BODY"
+check "S13 the email's image paragraph renders whenever docker_build failed (not on the marker's output)" grep -qF "\${{ steps.docker_build.outcome == 'failure' && format('<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>)" "$EMAIL_BODY"
+check "S13b the email paragraph formats only class and attempt, each with an unmeasured fallback" grep -qF "', steps.push_failed_marker.outputs.class || 'unmeasured — the marker step did not report', steps.push_failed_marker.outputs.attempt || 'unmeasured') || '' }}" "$EMAIL_BODY"
+check "S13d the email points push_denied at the read-only budget API read, not a Billing page" grep -qF "first run its read-only Packages budget and usage API reads (<code>gh api orgs/jikig-ai/settings/billing/budgets</code>" "$EMAIL_BODY"
+check "S13e the email no longer sends the reader to the Billing > Packages page" not grep -qF "check Billing &gt; Packages" "$EMAIL_BODY"
+check_eq "S16 the Slack BLOCKED re-run scope names the deploy-arm run only for an image release" "$(x '.slack_rerun_scope')" "\${{ inputs.docker_image != '' && 'this run and, once it succeeds, the deploy-arm (workflow_run) run for the same SHA' || 'this run' }}"
+SLACK_RUN="$TMP_ROOT/slack-run.sh"
+x '.slack_run' > "$SLACK_RUN"
+check "S16b the Slack re-run sentence renders that scope" grep -qF 'Re-run failed jobs on %s to retry with the same version' "$SLACK_RUN"
+check "S16c the Slack re-run sentence's argument is RERUN_SCOPE, defaulting to this run" grep -qF '"${RERUN_SCOPE:-this run}"' "$SLACK_RUN"
+check "S16d the old unconditional Slack re-run advice is gone" not grep -qF 'Re-run failed jobs on this run to retry' "$SLACK_RUN"
 check_eq "S13c the email step's if: is still failure()" "$(x '.email_if')" "failure()"
 check_eq "S14 the release job's permissions are unchanged" "$(x '.permissions | tojson')" '{"contents":"write","packages":"write","id-token":"write"}'
 check "S15 the runbook the marker points at exists" test -f "$REPO_ROOT/$RUNBOOK_REL"
 check "S15b the run body names that runbook" grep -qF "runbook=\"$RUNBOOK_REL\"" "$BODY"
+# Parity: the classes the step can assign are exactly the grammar's, and each has a row in the runbook's class table.
+body_classes=$(grep -vE '^[[:space:]]*#' "$BODY" | grep -oE 'class="[a-z_]+"' | sed -E 's/^class="(.*)"$/\1/' | sort -u | tr '\n' ' ')
+check_eq "S17 the step assigns exactly the four grammar classes" "$body_classes" "not_push push_denied push_other unknown "
+for c in $body_classes; do
+  check "S17b the runbook class table has a row for class $c" grep -qE "^\| \`$c\` \|" "$REPO_ROOT/$RUNBOOK_REL"
+done
+email_runbook=$(grep -oE '<code>[a-z0-9-]+\.md</code>' "$EMAIL_BODY" | sed -E 's#</?code>##g' | sort -u | tr '\n' ' ')
+check_eq "S18 the email names exactly one runbook file, the marker's" "$email_runbook" "${RUNBOOK_REL##*/} "
+check "S18b the runbook file the email names exists" test -f "$REPO_ROOT/$(dirname "$RUNBOOK_REL")/${email_runbook% }"
 
 # ---------------------------------------------------------------------------------------------------------------
 # Strict-argv docker stub.
@@ -276,7 +345,8 @@ GRAMMAR='^SOLEUR_GHCR_PUSH_FAILED image=[^ ]+ version=[^ ]+ attempt=([1-9][0-9]*
 STUB_INVOCATIONS=0
 # run_case <name>: runs the marker body with the fixture files under $TMP_ROOT/<name>/ and leaves
 # rc / stdout / summary / output / calls / refused in that directory. Env knobs: CASE_LS_RC, CASE_ATTEMPT,
-# CASE_IMAGE.
+# CASE_IMAGE, CASE_VERSION, CASE_RUN_URL. `env -i` leaves the POSIX locale, so `${#remainder}` counts bytes here; the
+# runner (C.UTF-8) counts characters. The allowlist is ASCII-only, so the two agree on every value it can admit.
 run_case() {
   local d="$TMP_ROOT/$1"
   mkdir -p "$d/inspect"
@@ -285,9 +355,9 @@ run_case() {
   env -i PATH="$STUB_DIR:$PATH" HOME="$d" \
     STUB_CALLS="$d/calls" STUB_REFUSED="$d/refused" STUB_LS="$d/ls" STUB_INSPECT_DIR="$d/inspect" \
     STUB_LS_RC="${CASE_LS_RC:-0}" \
-    IMAGE="${CASE_IMAGE-ghcr.io/jikig-ai/soleur-web-platform}" VERSION="0.402.0" \
+    IMAGE="${CASE_IMAGE-ghcr.io/jikig-ai/soleur-web-platform}" VERSION="${CASE_VERSION-0.402.0}" \
     RUN_ATTEMPT="${CASE_ATTEMPT-1}" \
-    RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/123456789/attempts/1" \
+    RUN_URL="${CASE_RUN_URL-https://github.com/jikig-ai/soleur/actions/runs/123456789/attempts/1}" \
     GITHUB_OUTPUT="$d/output" GITHUB_STEP_SUMMARY="$d/summary" \
     bash --noprofile --norc -eo pipefail "$BODY" > "$d/stdout" 2> "$d/stderr"
   echo $? > "$d/rc"
@@ -304,6 +374,7 @@ marker_line() { grep -E '^SOLEUR_GHCR_PUSH_FAILED ' "$TMP_ROOT/$1/stdout" | head
 class_of() { marker_line "$1" | sed -nE 's/.* class=([a-z_]+) denial=.*/\1/p'; }
 denial_of() { marker_line "$1" | sed -nE 's/.* denial=(.*) runbook=.*/\1/p'; }
 attempt_of() { marker_line "$1" | sed -nE 's/.* attempt=([^ ]+) run=.*/\1/p'; }
+field_of() { marker_line "$1" | sed -nE "s/^SOLEUR_GHCR_PUSH_FAILED (.* )?$2=([^ ]*) .*/\\2/p"; } # <case> <image|version|run>
 
 # expect_case <name> <class> <denial> <attempt>: the common rows every behavioural case must hold.
 expect_case() {
@@ -319,7 +390,7 @@ expect_case() {
   check_eq "$n: the summary is the line in a code span" "$(cat "$d/summary")" "\`$line\`"
   check_eq "$n: \$GITHUB_OUTPUT holds only class and attempt" "$(cat "$d/output")" "class=$c"$'\n'"attempt=$att"
   check_absent "$n: no build-arg token value reaches any output" "$SYNTH_TOKEN_TAIL" "$d/stdout" "$d/stderr" "$d/summary" "$d/output"
-  check_absent "$n: no build-arg name reaches any output" "SENTRY_AUTH_TOKEN" "$d/stdout" "$d/summary" "$d/output"
+  check_absent "$n: no build-arg name reaches any output" "SENTRY_AUTH_TOKEN" "$d/stdout" "$d/stderr" "$d/summary" "$d/output"
   check_eq "$n: the stub refused nothing" "$(wc -c < "$d/refused" | tr -d ' ')" "0"
 }
 
@@ -330,6 +401,19 @@ one_record b1 "failed to push ghcr.io/jikig-ai/soleur-web-platform:v0.402.0: den
 run_case b1
 expect_case b1 push_denied "denied: permission_denied: write_package"
 check_eq "b1: inspect was called with the bare record id" "$(grep -c '^buildx history inspect a1b2c3d4e5f6g7h8i9j0k1l2m --format json$' "$TMP_ROOT/b1/calls")" "1"
+# Positive controls for the field validation: valid values print verbatim (the negatives are B17).
+check_eq "b1: image is printed verbatim" "$(field_of b1 image)" "ghcr.io/jikig-ai/soleur-web-platform"
+check_eq "b1: version is printed verbatim" "$(field_of b1 version)" "0.402.0"
+check_eq "b1: run is printed verbatim" "$(field_of b1 run)" "https://github.com/jikig-ai/soleur/actions/runs/123456789/attempts/1"
+# The runbook's log read, applied to a synthetic log holding the step's own script (Actions prints it) and its output:
+# it keeps exactly the two emitted marker lines and drops the script's copy of the prefix.
+RUNBOOK_GREP="gh run view <run-id> --log | grep -F 'SOLEUR_GHCR_PUSH_FAILED image=' | grep -vF '\${image}'"
+check "b1: the runbook documents the full-log marker read" grep -qF "$RUNBOOK_GREP" "$REPO_ROOT/$RUNBOOK_REL"
+check "b1: the runbook no longer documents the --log-failed read" not grep -qF -- "--log-failed | grep" "$REPO_ROOT/$RUNBOOK_REL"
+cat "$BODY" "$TMP_ROOT/b1/stdout" > "$TMP_ROOT/b1/synthetic.log"
+grep -F 'SOLEUR_GHCR_PUSH_FAILED image=' "$TMP_ROOT/b1/synthetic.log" | grep -vF '${image}' > "$TMP_ROOT/b1/log-read" || true
+check_eq "b1: the runbook's log read yields exactly the two emitted marker lines" "$(cat "$TMP_ROOT/b1/log-read")" "$(cat "$TMP_ROOT/b1/stdout")"
+check "b1: the step's script really carries the prefix the second grep drops (control)" grep -qF 'SOLEUR_GHCR_PUSH_FAILED image=${image}' "$BODY"
 
 # B1b — the same denial with the CLI's `ERROR: ` prefix still classifies.
 one_record b1b "ERROR: failed to push ghcr.io/jikig-ai/soleur-web-platform:v0.402.0: denied: permission_denied: write_package"
@@ -351,6 +435,7 @@ expect_case b3 not_push see-step-log
 mkdir -p "$TMP_ROOT/b4"
 CASE_LS_RC=1 run_case b4
 expect_case b4 unknown see-step-log
+check_eq "b4: exactly one docker call (no unbounded fallback read)" "$(wc -l < "$TMP_ROOT/b4/calls" | tr -d ' ')" "1"
 
 # B5 — the no-build-ref fallback: `ls` returns nothing (measured: rc 0, empty output).
 mkdir -p "$TMP_ROOT/b5"
@@ -391,6 +476,31 @@ run_case b10
 expect_case b10 push_other withheld
 check_absent "b10: the remainder is not copied" "token=abc" "$TMP_ROOT/b10/stdout" "$TMP_ROOT/b10/summary"
 
+# B10n — near misses: each remainder starts like an allowed denial but sits just outside `denied: [a-z_]+: [a-z_]+`.
+# Each must give push_other/withheld and its remainder must not be copied. Kills a widened reason class
+# (`[^[:cntrl:]]+`, `[A-Za-z0-9_.]+`) that the CR fixture alone does not reach.
+near_misses=(
+  "denied: Permission_Denied: write_package"
+  "denied: permission_denied: Write_Package"
+  "denied: permission_denied: write_package2"
+  "denied: permission_denied2: write_package"
+  "denied: permission_denied: write package"
+  "denied: permission_denied: The token provided does not match expected scopes."
+  "denied: permission_denied: https://x/y?token=abc"
+  "denied: permission_denied: write_package: extra"
+  "denied:permission_denied: write_package"
+  "denied: permission_denied:write_package"
+)
+nm=0
+for rem in "${near_misses[@]}"; do
+  nm=$((nm + 1))
+  one_record "b10n$nm" "failed to push r:v1: $rem"
+  run_case "b10n$nm"
+  expect_case "b10n$nm" push_other withheld
+  check_absent "b10n$nm: the near-miss remainder '$rem' is not copied" "$rem" "$TMP_ROOT/b10n$nm/stdout" "$TMP_ROOT/b10n$nm/summary"
+done
+check_eq "b10n: every near-miss fixture ran" "$nm" "10"
+
 # B11 — the build-arg token fixture: the record carries a synthesized SENTRY_AUTH_TOKEN build-arg and stack echo.
 one_record b11 "failed to push ghcr.io/jikig-ai/soleur-web-platform:v0.402.0: denied: permission_denied: write_package"
 check "b11: the fixture really carries the token (control)" grep -qF "$SYNTH_TOKEN_TAIL" "$TMP_ROOT/b11/inspect/a1b2c3d4e5f6g7h8i9j0k1l2m.json"
@@ -422,6 +532,24 @@ one_record b14 "failed to push r:v1: denied: permission_denied: $long_reason"
 run_case b14
 expect_case b14 push_other withheld
 
+# B14b — the cap boundary on both sides: a remainder of exactly 300 characters is copied, 301 is withheld.
+cap_prefix="denied: permission_denied: "
+rem300="${cap_prefix}$(printf 'b%.0s' $(seq 1 $((300 - ${#cap_prefix}))))"
+rem301="${rem300}b"
+check_eq "b14b: the 300 fixture is exactly 300 characters (control)" "${#rem300}" "300"
+check_eq "b14b: the 301 fixture is exactly 301 characters (control)" "${#rem301}" "301"
+one_record b14b "failed to push r:v1: $rem300"
+run_case b14b
+expect_case b14b push_denied "$rem300"
+one_record b14c "failed to push r:v1: $rem301"
+run_case b14c
+expect_case b14c push_other withheld
+
+# B14d — a second allowed denial of a different shape (both segments differ from the v0.402.0 text).
+one_record b14d "failed to push ghcr.io/jikig-ai/soleur-web-platform:v0.402.0: denied: insufficient_scope: read_package"
+run_case b14d
+expect_case b14d push_denied "denied: insufficient_scope: read_package"
+
 # B15 — a ref whose id is not the measured shape is never passed to inspect.
 mkdir -p "$TMP_ROOT/b15"
 jq -cn '{ref:"builder0/builder00/BAD;ID $(x)",status:"Error"}' > "$TMP_ROOT/b15/ls"
@@ -435,6 +563,28 @@ CASE_IMAGE=$'ghcr.io/x\n::warning::injected' run_case b16
 expect_case b16 push_denied "denied: permission_denied: write_package"
 check_eq "b16: image=invalid" "$(marker_line b16 | sed -nE 's/^SOLEUR_GHCR_PUSH_FAILED image=([^ ]+) .*/\1/p')" "invalid"
 check_absent "b16: the injected line never reaches any output" "::warning::" "$TMP_ROOT/b16/stdout" "$TMP_ROOT/b16/summary"
+
+# B17 — every other printed field is validated too: a value outside its shape prints `invalid`, never itself.
+# b17_row <name> <field> <knob> <value>: runs one case with that knob set and expects <field>=invalid.
+b17_row() {
+  local n="$1" field="$2" knob="$3" val="$4"
+  one_record "$n" "failed to push r:v1: denied: permission_denied: write_package"
+  case "$knob" in
+    IMAGE) CASE_IMAGE="$val" run_case "$n" ;;
+    VERSION) CASE_VERSION="$val" run_case "$n" ;;
+    RUN_URL) CASE_RUN_URL="$val" run_case "$n" ;;
+  esac
+  expect_case "$n" push_denied "denied: permission_denied: write_package"
+  check_eq "$n: $field='$val' prints invalid" "$(field_of "$n" "$field")" "invalid"
+}
+b17_row b17v1 version VERSION "0.402.0 ::warning::x"
+b17_row b17v2 version VERSION "v0.402.0"
+b17_row b17v3 version VERSION "0.402"
+b17_row b17r1 run RUN_URL "javascript:x"
+b17_row b17r2 run RUN_URL "https://github.com/x y"
+b17_row b17r3 run RUN_URL "https://github.com/x?token=abc"
+b17_row b17i1 image IMAGE "ghcr.io/x y"
+b17_row b17i2 image IMAGE "GHCR.io/jikig-ai/soleur-web-platform"
 
 # Row 5 (own dispatch): the stub was actually invoked by the body.
 check "R5 the docker stub was invoked by the run body" test "$STUB_INVOCATIONS" -ge 10
@@ -453,7 +603,7 @@ fi
 # above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_PASSES=280
+MIN_PASSES=575
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' "$REAL_PASSES" "$MIN_PASSES" >&2
   exit 1
