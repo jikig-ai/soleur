@@ -102,7 +102,8 @@ json.dump({"workspace": ws, "home": "/home/soleur", "routerPort": int(rp),
            "routerCredentialFile": f"/run/spike/{sess}/secrets/router-session.cred",
            "caBundle": f"/run/spike-pub/{sess}/bundle.pem", "arm": arm, "denyReadExtra": ["/run/spike"],
            "declaredFiles": [{"id": f"{s}-{k}", "file": f"/run/spike/{s}/secrets/{f}"}
-                             for s in ("sessA", "sessB", "sessC")
+                             # Every session (Guard 1 row 3, run 42820800719: session E's decoy went unscanned).
+                             for s in ("sessA", "sessB", "sessC", "sessE")
                              for k, f in (("decoy", "decoy.token"), ("router-session", "router-session.cred"),
                                           ("router-injector", "router-injector.cred"), ("forwarder", "forwarder.token"))],
            "script": steps, "timeoutMs": 300000}, open(out, "w"))
@@ -469,6 +470,7 @@ def reasons(sess):
 def vends(sess, cls):
     return [x for x in m if x.startswith("SOLEUR_EGRESS_VEND ") and f"session={sess} " in x and f"class={cls} " in x]
 ra, rc, re_ = reasons("sessA"), reasons("sessC"), reasons("sessE")
+hookreqs = [x for x in m if f"session=sessA " in x and " method=CONNECT" not in x and x.startswith("SOLEUR_EGRESS_VEND")]
 pend = lambda s: int(dict(p.split(":") for p in s.split()).get("pending", 0)) if s.strip() else 0
 checks = {
   "no row: push refused pending, one pending row": o["push1"] != "push_rc=0" and "pending" in ra and pend(o["rows1"]) == 1,
@@ -482,6 +484,9 @@ checks = {
   "approved X consumed once, Idempotency-Key stripped": o["rest_x2"] == "x2=201" and o["x_status"] == "consumed" and '"idempotency_key":false' in o["stub_x2"] and o["rest_x3"] == "x3=403",
   "flag off: refused flag-off, no row": o["push_flag_off"] != "push_rc=0" and "flag-off" in rc and o["rows_c"].strip() == "",
   "expiry: pending at ~50 s, then REJECT expired": o["exp_at_50s"] == "pending" and "expired" in re_ and o["exp_final"] == "expired",
+  # Guard 2 row 8: no client in this arm sends an Authorization header, so every request the hook saw must carry
+  # none; one there means header replacement ran before the hook.
+  "the hook ran before header replacement (client_auth=0 on every request)": bool(hookreqs) and all(" client_auth=0" in x or x.endswith("client_auth=0") for x in hookreqs),
 }
 json.dump({"observations": o, "reasons": {"sessA": ra, "sessC": rc, "sessE": re_}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]

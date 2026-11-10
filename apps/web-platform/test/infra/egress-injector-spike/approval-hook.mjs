@@ -147,7 +147,12 @@ export function createDecider(deps) {
 
   async function decideInner(request, session, ctl) {
     const n = policyLib.normalizeRequest(request);
-    const base = { session: session.sessionId, request_id: ctl.requestId, source: "hook", host: n.ok ? n.host : "invalid", method: n.ok ? n.method : "invalid" };
+    // client_auth: how many Authorization headers reached the hook (a count, never a value). The hook runs before
+    // the secrets transform, so a client that sent none shows 0; a reordered pipeline would show the injected one
+    // (Guard 2 row 8, run 42820864911).
+    let clientAuth = 0;
+    for (const [k, v] of Object.entries(request?.headers ?? {})) if (k.toLowerCase() === "authorization") clientAuth += Array.isArray(v) ? v.length : 1;
+    const base = { session: session.sessionId, request_id: ctl.requestId, source: "hook", host: n.ok ? n.host : "invalid", method: n.ok ? n.method : "invalid", client_auth: clientAuth };
     const refuse = (reason, extra = {}) => {
       if (!REASONS.has(reason)) throw new Error(`decide: unknown reason ${reason}`);
       const fields = { ...base, class: extra.class ?? "unknown", rule: extra.rule, reason, subreason: extra.subreason, approval_id: extra.approvalId, action_sha256: extra.hash?.slice(0, 12) };

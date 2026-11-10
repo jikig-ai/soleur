@@ -403,6 +403,21 @@ function setup(over: Record<string, unknown> = {}) {
 const PUSH = () => req({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
 const READ = () => req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" });
 
+describe("approval-hook.mjs decide() — client_auth marker field (Guard 2 row 8)", () => {
+  // The hook must run before the secrets transform, so it sees only the Authorization headers the CLIENT sent.
+  // Its markers carry the COUNT (never a value); a reordered pipeline shows up as client_auth>0 for a client that
+  // sent none (run 42820864911: with secrets first, nothing reached the stub, so only the hook could see it).
+  it("counts the Authorization headers the hook received, in every marker", async () => {
+    const { decider } = setup();
+    const none = await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" }), SESSION);
+    expect(none.marker.fields.client_auth).toBe(0);
+    const two = await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", headers: { Authorization: ["a", "b"] } }), SESSION);
+    expect(two.marker.fields.client_auth).toBe(2);
+    const refused = await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/other/repo", headers: { authorization: "x" } }), SESSION);
+    expect(refused.marker.fields.client_auth).toBe(1);
+  });
+});
+
 describe("approval-hook.mjs decide() — tunnel guard (CTO R28)", () => {
   // Measured 2026-11-10: a request sent straight to iron-proxy's http_listen (absolute form, no tunnel) reached the
   // hook with no tunnel context and was vended. Every non-CONNECT request must come from a tunnel to <host>:443.
