@@ -1592,8 +1592,10 @@ Appended; nothing above is edited. ADR-282's recurring protection check (its add
 volume too. The `sole-copy-protection-check` job in `.github/workflows/scheduled-terraform-drift.yml` is a two-row
 `strategy.matrix` (`fail-fast: false`), and its `web1` row checks `hcloud_volume.workspaces_luks` (name
 `soleur-web-platform-data-luks`) against the `delete_protection` declared in `apps/web-platform/infra/workspaces-luks.tf`.
-The row reuses the Inngest row's steps unchanged: the same verdicts, the same 90-minute grace (read from the last commit of
-its own `.tf` file), the same read-only `HCLOUD_TOKEN_READONLY` read with no fallback, one GET per attempt. Its issues are
+Both rows run one set of steps, parameterised per entry: the pin, the `.tf` path and resource, and the subject text come
+from the include row, and the Inngest row's behaviour, verdicts, titles and outputs are unchanged by that. The `web1` row
+gets the same verdicts, the same 90-minute grace (read from the last commit of its own `.tf` file), the same read-only
+`HCLOUD_TOKEN_READONLY` read with no fallback, one GET per attempt. Its issues are
 titled under "web-1 workspaces volume": a p1 finding (`lifted-outside-terraform`, `volume-not-found`) and a p2
 could-not-perform issue (`no-token`, `could-not-read`, or no verdict at all), plus the ops email. The Inngest row's titles,
 verdicts and outputs are unchanged.
@@ -1605,23 +1607,35 @@ and to the read-only read-back in runbook `workspaces-luks-cutover-6604.md` ("Re
 (read-only token)").
 
 **Correction of the 2026-07-23 addendum.** That addendum names the volume `106406962` for `hcloud_volume.workspaces_luks`.
-That volume is the orphaned one the same addendum's re-cut destroyed and replaced; the live volume is the one pinned above.
-The 2026-07-23 text stays as the dated record.
+That volume is the orphaned one the same addendum's re-cut was built to replace (a `-replace` of the address), and the
+record says the first provision was re-cut under #6812/#6855 (`knowledge-base/operations/expenses.md`, id corrected
+2026-10-01); the repo cites no destroy record for `106406962` itself. The live volume is the one pinned above. The
+2026-07-23 text stays as the dated record.
 
 **The pin bump.** If `hcloud_volume.workspaces_luks` is ever recreated, its new id moves in the same PR as the `.tf` change,
-in four places: the `web1` row's `volume_id`, the id this section states, runbook 6604's read-back, and the suite's
-`use_entry web1` `VOL_ID`. N1c reds the suite on a partial bump; the first scheduled run reads `volume-not-found
-reason=id-mismatch` (a p1 issue) on a missed one. The incident owner owns the bump, as ADR-282 states for the Inngest pin.
+at every site `git grep -n 106443278` lists (do not trust a remembered count): among them the `web1` row's `volume_id`,
+the id this section states, runbook 6604 (its read-back and its "Verify the retired end state" block), and the suite's
+literals. Historical records keep the id they were written with. N1c reds the suite on a partial bump of the row, this
+section or the read-back; the first scheduled run reads `volume-not-found reason=id-mismatch` (a p1 issue) on a missed
+one. The incident owner owns the bump, as ADR-282 states for the Inngest pin.
 
 **What the check does not defend.** A single diff that changes the `.tf`, the row and this addendum together passes the
 suite: the pins prove consistency, not integrity. The outside anchor is the live Hetzner state, which no diff can edit. A
-mis-minted read-only token is undetectable here (control O5 of `infra-credential-tiers-8209.md`).
+mis-minted read-only token is undetectable here (control O5 of `infra-credential-tiers-8209.md`). A detach is not observed:
+`delete_protection` does not stop a detach (the `workspaces-luks.tf` comment says so), and the volume's attached server is
+not pinned, because every sanctioned web-1 replace changes the server id. Outside this job, an unmounted `/mnt/data` fails
+the daily `luks-monitor` probe's `not_mounted` assert (`apps/web-platform/infra/luks-monitor.sh`), which emits through
+`workspaces-luks-emit.sh` and pages by email through the Sentry alert `workspaces-luks-drift`; whether a detach that leaves
+the mount in place fails that probe is not measured.
 
 **Accepted windows.** (i) The grace keys on the last commit to the whole `workspaces-luks.tf`, so an unrelated edit to that
 file within 90 minutes of a real lift reads `lift-pending-apply` (green, warned only) and the issue lands one 12-hour cycle
-later. (ii) A reviewed lift reads `unprotected-as-declared` (green); its forcing function is Guard B4 in
-`apps/web-platform/infra/workspaces-luks.test.sh`, which pins `delete_protection = true`, so the lift PR must edit that guard
-in review.
+later. (ii) A reviewed lift reads `unprotected-as-declared` (green). Guard B4 in
+`apps/web-platform/infra/workspaces-luks.test.sh` pins `delete_protection = true`, so it makes the lift reviewed: the lift PR
+must edit that guard. Nothing in B4 forces the volume back to protected. The lift PR must open a
+dated re-protect follow-through issue before it merges (ADR-282 step 1, the same as for the Inngest volume), and that
+issue is the only forcing function. No check stops a lift PR that merges without it, the same residual as for the
+Inngest volume.
 
 **What reports a check that does not run.** This job has no Sentry check-in of its own (#10430, held while #6590 is open).
 A workflow that never runs is caught by the `scheduled-terraform-drift` monitor (the drift-check job's check-in). This job

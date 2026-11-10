@@ -307,6 +307,7 @@ p_b4_sentinel() {
 }
 
 p_b4_prevent_destroy() { _b4_prevent_destroy_of "$1" hcloud_volume workspaces_luks; }
+# A PR that lifts delete_protection edits this guard and must open a dated re-protect follow-through issue before it merges (ADR-119 addendum 2026-11-10; ADR-282 step 1).
 p_b4_delete_protection() { _b4_attr_true "$1" hcloud_volume workspaces_luks delete_protection; }
 # B4-9: the ATTACHMENT carries prevent_destroy too. Its server_id and volume_id are both ForceNew,
 # so any replace of it (a web-1 server replace, a volume address that fell out of state, a re-pointed

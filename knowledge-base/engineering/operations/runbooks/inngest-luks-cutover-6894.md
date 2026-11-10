@@ -414,7 +414,7 @@ doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no
 | --- | --- | --- |
 | `protected` (0) | delete protection is on | The pass when `protected` was expected; a mismatch when `not-protected` was expected (the lift did not land): report it. |
 | `not-protected` (1) | delete protection is off | The pass for a sanctioned lift. Otherwise a red status: recommend the `manual-rerun` dispatch in "Delivery route" (owner go-ahead), never run it unprompted. |
-| `volume-gone` (4) | HTTP 404 on the volume | NOT a read problem: the volume no longer exists. Incident (`soleur:incident`); follow "After a total loss". |
+| `volume-gone` (4) | HTTP 404 on the volume | Either the volume no longer exists or `HCLOUD_TOKEN_READONLY` was minted in another Hetzner project: a 404 does not separate the two. First run the read-only server-name listing under `orphan_sweep_project_identity_unproven` ("Triage — the orphan sweeps") in `infra-credential-tiers-8209.md` and compare it with the production server names. Names that do not match mean a wrong-project token (re-mint it, step **O5**), not a loss. Names that match mean the volume is gone: incident (`soleur:incident`); follow "After a total loss". |
 | `read-failed` (2) | an HTTP error other than 404 (a 401, say), a network error, a non-JSON body, or a body without the field | The read did not happen; it is not a lifted protection. Fix the read; never dispatch on its account. |
 | `missing-token` (3) | `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform` | Minting it is operator step **O5** in `infra-credential-tiers-8209.md` (console-minted, no API). The agent reports `missing-token` and files an issue; it does not fall back to `HCLOUD_TOKEN`. |
 | no word printed | the read did not happen (`doppler` missing or unauthenticated, an error before the command ran) | Report it; never dispatch on its account. |
@@ -756,14 +756,26 @@ merges in the same cycle as the `.tf` change that recreates the volume; the foun
 below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10-24 it names these places:
 
 - **Pins enforced by `plugins/soleur/test/sole-copy-drift-check.test.sh` (rows N1 and N1b; a stale one reds the suite):** every
-  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly two: the two orphan sweeps), plus
-  the `volume_id:` of the `inngest` row in the `sole-copy-protection-check` matrix; the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
+  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly three: the sole-copy probe and the
+  two orphan sweeps); the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
   (`plugins/soleur/skills/postmerge/SKILL.md`); the section-5c one-liner in this runbook; and the `VOL_ID` constant in the suite itself.
 - **Pins enforced by `plugins/soleur/test/token-drift-workflow-causes.test.sh` (rows R9; a stale one reds the suite):** the id in the `curl` shim
   and in the grep patterns of the project-identity cases. Change every occurrence in that file in the same edit.
 - **Record-only places, updated by hand (nothing compares them):** `scripts/encryption-posture-ledger.json`,
   `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, and the dated audit records under
   `knowledge-base/legal/audits/` (historical records keep the id they were written with; add a dated line, do not rewrite them).
+
+**Regenerated 2026-11-10 (#10432).** The list above stays as the 2026-10-24 record. `git grep -n 106903269` on 2026-11-10
+changes it in three ways; the `git grep` output stays the source of truth:
+
+- In `.github/workflows/scheduled-terraform-drift.yml` there are now exactly two `readonly VOLUME_ID_PIN=` lines (the two orphan
+  sweeps). The sole-copy probe's pin moved to the `volume_id:` of the `inngest` include row of the `sole-copy-protection-check`
+  matrix (ADR-282, addendum of 2026-11-10). Row N1 pins that row to ADR-282, and row N1b pins the two sweep copies equal to that row.
+- `plugins/soleur/test/sole-copy-drift-check.test.sh` carries the id in more places than the one `VOL_ID`: the `use_entry
+  inngest` `VOL_ID`, the Python harness's `INNGEST_ID` constant, and test-data literals. Change every occurrence in that file in
+  the same edit.
+- One more record-only place: a dated live-probe comment in `apps/web-platform/infra/betterstack-logs-alerts.tf` (the
+  wrong-volume alert's quiet control, 2026-10-29).
 
 ### Revert recipe
 

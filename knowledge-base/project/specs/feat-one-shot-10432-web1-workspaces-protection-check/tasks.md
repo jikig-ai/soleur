@@ -1,7 +1,7 @@
 # Tasks: feat-one-shot-10432-web1-workspaces-protection-check
 
 Plan: `knowledge-base/project/plans/2026-11-10-infra-web1-workspaces-volume-protection-check-plan.md`.
-Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions: `decision-challenges.md` (19 rows).
+Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions: `decision-challenges.md` (27 rows; 20-27 from review round 1).
 
 ## Phase 1 — Setup and suite (tests first)
 
@@ -57,6 +57,16 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
 - [x] 4.6b Confirm read-only that the `scheduled-terraform-drift` Sentry monitor still routes to a person
 - [x] 4.7 `lint-guard-contract.py` on the plan; `git diff --name-only origin/main...HEAD` lists no `.tf`/cloud-init/user_data
 - [ ] 4.8 CI `merge_group` run is the Guard 1 evidence
+
+## Review round 1 (PR #12563, CTO rulings 20-27)
+
+- [x] R.1 Docs: decision-challenges rows 20-27; ADR-119 addendum (re-protect issue as the forcing function, detach not
+  observed, pin bump by `git grep -n 106443278`, steps parameterised, correction worded to the record); B4 comment line in
+  `workspaces-luks.test.sh`; runbook 6604 verify block (`jq` inside the guarded wrapper, `--max-time 30`), read-back
+  `--max-time 30`, `volume-gone` rows (6604, 6894) point at the 8209 project listing; 6894 pin list regenerated as a
+  dated note; 6604 stale-example note; 8209 row date and attempt count; plan rulings 20-23 and 26
+- [ ] R.2 Code: workflow, suite, `gha-expr.py` revert, `mutation-proofs.md` (rulings 20 item 2, 21-23, 26, 27; R1, R3,
+  R4 code half, R6 workflow copies, R7-R10)
 
 ## Phase 5 — After merge
 

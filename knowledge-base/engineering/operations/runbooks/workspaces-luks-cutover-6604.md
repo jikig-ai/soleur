@@ -70,6 +70,10 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    of state), just re-dispatch with the same inputs — the gate's recovery arm accepts the bare create
    that a re-dispatch then plans, completing the raw-volume create.
 
+   > **Note (2026-11-10, #10432).** The example id `106406962` above is the 2026-07 orphaned volume and stays as the
+   > record. The live `hcloud_volume.workspaces_luks` is `106443278` (ADR-119, addendum of 2026-11-10). It holds the only
+   > copy of every workspace and is never the `<ID>` this retired step names.
+
 1. **Provision the encrypted volume (additive, zero downtime).** *(FIRST cutover only — skip if you
    ran Step 0, which already leaves the five resources in state.)*
    `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-cutover -f reason='#6604 cutover volume'`
@@ -354,16 +358,17 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    - **Verify the retired end state (read-only, any time after D; no SSH, GETs only):**
 
      ```bash
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - https://api.hetzner.cloud/v1/servers/123931471' | jq -c '.server.volumes'   # expect [106443278]
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data"' | jq -c '[.volumes[].id]'   # expect []
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - https://api.hetzner.cloud/v1/volumes/106443278' | jq '.volume.protection.delete'   # expect true after the SSH-stage apply
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'   # expect [106443278]
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'   # expect []
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/106443278 | jq ".volume.protection.delete"'   # expect true after the SSH-stage apply
      ```
 
      (`sh -c` so the token expands inside Doppler's environment. The block reads the Read-permission token
      `HCLOUD_TOKEN_READONLY` only: `--only-secrets` keeps the read/write token out of the process, an absent token prints
-     `missing-token` instead of sending an empty bearer header, and the header reaches curl on stdin, never on its argument
-     list. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
+     `missing-token` (exit 3) instead of sending an empty bearer header, and the header reaches curl on stdin, never on its
+     argument list. `jq` runs inside the wrapper, after the token check, so the `missing-token` word is printed as is rather
+     than fed to `jq`. Each request is bounded by `--max-time 30`. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
      delete-protection flag (read-only token)" at the end of this runbook.)
 
    > **web-1 lost (note, 2026-10-01, #6604 PR B).** web-1 is not replaceable by automation (ADR-148;
@@ -1214,15 +1219,15 @@ Read-permission token, the token passed to curl as a config on stdin, and one wo
 section 5c step 3 read-back in `inngest-luks-cutover-6894.md`.
 
 ```
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106443278) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106443278) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 | Word (exit) | Meaning | Action |
 | --- | --- | --- |
 | `protected` (0) | delete protection is on | The pass. |
 | `not-protected` (1) | delete protection is off | Outside a reviewed lift, a red status: recommend the owner-approved `manual-rerun` dispatch of the per-merge apply, whose SSH stage re-applies the flag (ADR-119 D1, addendum of 2026-10-08); never run it unprompted. |
-| `volume-gone` (4) | HTTP 404 on the volume | NOT a read problem: the volume no longer exists. Incident (`soleur:incident`); ADR-119 (addendum of 2026-10-08) names the loss modes. |
-| `read-failed` (2) | an HTTP error other than 404 (a 401, say), a network error, a non-JSON body, or a body without the field | The read did not happen; it is not a lifted protection. Fix the read; never dispatch on its account. |
+| `volume-gone` (4) | HTTP 404 on the volume | Either the volume no longer exists or `HCLOUD_TOKEN_READONLY` was minted in another Hetzner project: a 404 does not separate the two. First run the read-only server-name listing under `orphan_sweep_project_identity_unproven` ("Triage — the orphan sweeps") in `infra-credential-tiers-8209.md` and compare it with the production server names. Names that do not match mean a wrong-project token (re-mint it, step **O5**), not a loss. Names that match mean the volume is gone: incident (`soleur:incident`); ADR-119 (addendum of 2026-10-08) names the loss modes. |
+| `read-failed` (2) | an HTTP error other than 404 (a 401, say), a network error or no answer within 30 seconds, a non-JSON body, or a body without the field | The read did not happen; it is not a lifted protection. Fix the read; never dispatch on its account. |
 | `missing-token` (3) | `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform` | Minting it is operator step **O5** in `infra-credential-tiers-8209.md`. The agent reports `missing-token`; it does not fall back to `HCLOUD_TOKEN`. |
 | no word printed | the read did not happen (`doppler` missing or unauthenticated, an error before the command ran) | Report it; never dispatch on its account. |
 

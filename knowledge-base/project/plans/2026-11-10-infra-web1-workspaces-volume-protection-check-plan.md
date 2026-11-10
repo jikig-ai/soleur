@@ -35,9 +35,12 @@ consult, a sharp-edges catalogue pass, DHH, Kieran, code-simplicity and the CTO 
 2. Runbook 6604 gets a top-level read-only read-back section (`--only-secrets HCLOUD_TOKEN_READONLY`, token to
    `curl --config -`, one named word per outcome). Its "Verify the retired end state" block is rewritten in the same
    shape, not just renamed. N3 bans a fallback, an argv header and a second `--only-secrets` on that line.
-3. Per-row RED evidence comes from a scaffold-only workflow copy (Phase 1b.6). There is also a selected-entry
-   invariant, so a no-op `use_entry` cannot turn W rows into passing Inngest cases. H11b/c run against an evaluator copy
-   without its strict branch.
+3. Per-row RED evidence comes from a scaffold-only workflow copy (Phase 1b.6). A no-op `use_entry web1` cannot turn
+   the W rows into passing Inngest cases: on that sandbox mutant (`mutation-proofs.md`, row "harness: `use_entry web1`
+   a no-op") N1c, WF1, WF12, WV1, WX5, WX9, C3, C4-C6 and C9 go RED. (H13 and WX7 also went RED there and are deleted
+   by CTO ruling 23, which also merges C4 and C5. The selected-entry invariant is deleted by ruling 22: it compared
+   ENTRY with ENTRY and drew no failure from that mutant.) H11b/c run against `gha-expr.py` itself, which stays as on
+   `main` (ruling 21).
 4. Byte-identity now covers the templated titles, the `TITLES` list, the `file_unreadable` body and the `finish()`
    notes, by substitution and diff (Phase 4.8, second half). Before, it covered only LEAD/REMEDY/email.
 
@@ -82,7 +85,7 @@ Terraform state.
 | "the job's name-filtered query guarantees zero contact with the web-1 volume by construction" (D2 of #10424) | True today, and the suite enforces it: `WEB1 = "1064" + "43278"` drives a `web1-id` shape violation banning the web-1 id anywhere in the job, and `invariants()` bans it from every stream. | Narrow, never delete (CTO Fork 2): the web-1 id is allowed only as the `web1` row's `volume_id`; the Inngest id only as the `inngest` row's; neither id in any step, title, body or comment. Each narrowed rule gets its own mutation row. |
 | "Keep it read-only with the same `HCLOUD_TOKEN_READONLY` read and no fallback; no new credential." | The probe reads `HCLOUD_TOKEN_READONLY` from `soleur/prd_terraform` with `DOPPLER_TOKEN` bound in the probe step only. | Unchanged; both legs run the same probe body. No new secret, no `environment:`, no loader. |
 | Likely files include `token-drift-workflow-causes.test.sh` "if it keys on the job name" | It keys on the job id (unchanged) AND on the literal step name `Probe the Inngest store volume protection flag at Hetzner` (R3b). | Rename to entry-neutral step names and update R3b's literal (CTO Fork 3). |
-| ADR-119 carries id 106406962 for `hcloud_volume.workspaces_luks` | The 2026-07-23 addendum names 106406962; that volume was destroyed by that addendum's re-cut. ADR-148, the cutover runbook and the 2026-10-08 addendum carry 106443278, which the CTO read live at 2026-11-10T10:57:41Z. | Appended correction note in the new ADR-119 addendum; the 2026-07-23 text is not edited. |
+| ADR-119 carries id 106406962 for `hcloud_volume.workspaces_luks` | The 2026-07-23 addendum names 106406962, the orphaned volume that addendum's re-cut was built to replace; `expenses.md` (corrected 2026-10-01) records that the first provision was re-cut under #6812/#6855. No destroy record for 106406962 is cited in the repo. ADR-148, the cutover runbook and the 2026-10-08 addendum carry 106443278, which the CTO read live at 2026-11-10T10:57:41Z. | Appended correction note in the new ADR-119 addendum; the 2026-07-23 text is not edited. |
 | Possible `.tf` / boot-byte change (CTO stop condition 6) | `workspaces-luks.tf` already declares `delete_protection = true` inside a block the probe's awk parses as-is: one top-level `name`, one top-level `delete_protection`, no `/*` anywhere in the file (`grep -c '/\*'` = 0). | No `.tf` or boot-byte change. The stop condition did not fire. |
 | The web-1 re-protect route | ADR-119 (2026-10-08 addendum, D1) and runbook `workspaces-luks-cutover-6604.md`: the Hetzner-side flag is delivered by the `apply` job's SSH stage (`manual-rerun` dispatch, or a push); `terraform_data.workspaces_boot_unlock_install` is in that stage's `-target` list (`apply-web-platform-infra.yml`) and its precondition references `hcloud_volume.workspaces_luks.id` (`workspaces-luks.tf`), which puts the volume in the target closure. | The web-1 REMEDY names that route and the runbook's read-only read-back, prints no command, and says an agent reports and does not dispatch. |
 
@@ -193,7 +196,7 @@ row moves.
   FLOOR and TABLE_ROWS move to the REALIZED numbers in the same commit as the new rows; prove the floor fires by
   deleting a new row block on a copy.
 - `instrument-answers-instead-of-failing.md` (patterns) — a missing matrix value must fail, not evaluate to a clean
-  empty string (the gha-expr `matrix` strictness).
+  empty string (`check()` in the harness refuses an unknown `matrix` key; CTO ruling 21).
 - `2026-07-29-every-guard-i-fixed-this-session-was-narrower-than-the-claim-it-carried.md` — every stub and shim keeps
   `#!/usr/bin/env bash` (CI `/bin/sh` is dash).
 - `2026-03-21-github-actions-heredoc-yaml-and-credential-masking.md` — exact-title dedupe via `select(.title == $t)`,
@@ -237,8 +240,10 @@ only `merge_group` or `workflow_dispatch` runs count as Guard 1 evidence.
             adr: ADR-119
 ```
 
-`fail-fast: false` is load-bearing (P6): with the default `true`, a red Inngest leg cancels an in-progress web-1 leg
-before its filers run. Each leg keeps the 10-minute ceiling and every step timeout.
+`fail-fast: false` is load-bearing (P6): with the default `true`, a red leg cancels the other, still-running leg. That
+leg's filers are `always()`, so they still run, but its probe is skipped or killed: it never reaches its own verdict,
+and with an empty verdict its could-not-perform filer files a false `(name-unreadable)` p2 issue and its gate goes red.
+Each leg keeps the 10-minute ceiling and every step timeout.
 
 ### Step-by-step changes (every per-entry value reaches a `run:` body only through `env:`)
 
@@ -272,11 +277,12 @@ The web-1 strings (public-safe: no id, no command, no API answer, no "sole copy"
 
 ### `gha-expr.py` — the `matrix` context
 
-In `primary()`, an identifier equal to `matrix` or starting with `matrix.` that is not a key of the context raises
-`ExprError("unknown matrix key ...")` (exit 3 on the CLI). Every other context keeps today's "absent is null"
-semantics, so `steps.*` and `github.*` behave exactly as before. The docstring states the deliberate divergence: the
-runner renders an unknown matrix key as an empty string; the test evaluator refuses it, because an empty value would
-silently select the wrong row's data. Only `sole-copy-drift-check.test.sh` imports the module (stays true).
+Superseded by CTO ruling 21 (review round 1): `gha-expr.py` is unchanged from `main`. The refusal of an unknown
+`matrix` key lives in the harness: `h.py`'s `check()`, called by `refs()` from `render()` and `evif()`, refuses
+`matrix.<key>` absent from the selected row (`unresolvable reference`, exit 3) on every expression it renders, so an
+empty value can never silently select the wrong row's data. The runner itself renders an unknown matrix key as an
+empty string; the harness refuses it. `gha-expr.py` keeps today's "absent is null" semantics for every context. Only
+`sole-copy-drift-check.test.sh` imports the module (stays true), so no other consumer depended on a strict branch.
 
 ### Suite structure
 
@@ -366,7 +372,8 @@ silently select the wrong row's data. Only `sole-copy-drift-check.test.sh` impor
   strings either way.
 - `plugins/soleur/test/sole-copy-drift-check.test.sh` — harness, stubs, per-entry constants, web-1 table, cross-entry
   rows, shape checks and mutants, N1/N1b/N1c/N3, H1 extension, harness rows H11/H12, FLOOR, TABLE_ROWS, header.
-- `plugins/soleur/test/lib/gha-expr.py` — the `matrix` context and docstring.
+- `plugins/soleur/test/lib/gha-expr.py` — not edited: the strict `matrix` branch was reverted to `main` (CTO ruling
+  21); `check()` in the harness refuses an unknown `matrix` key.
 - `plugins/soleur/test/token-drift-workflow-causes.test.sh` — R3b's probe literal becomes
   `sole-copy-protection-check/Probe the volume protection flag at Hetzner` (nothing else; its FLOOR is unchanged
   because R3b stays one assertion).
@@ -426,7 +433,8 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
 
 1. `gha-expr.py` negative controls in S0b first: `python3 gha-expr.py value "matrix.nope" '{}'` must exit 3 and
    `python3 gha-expr.py value "matrix.entry" '{"matrix.entry":"web1"}'` must print `web1`. RED against today's module
-   (it prints an empty line).
+   (it prints an empty line). Reverted in review round 1 (CTO ruling 21): the S0b matrix clauses and H11a are deleted
+   and `gha-expr.py` stays as on `main`; `check()` in the harness is the one refusal.
 2. Harness: `rows.json`, row selection by `entry`, `matrix` in `refs()`/`check()`. The extractor floor (E1) also
    requires `strategy.matrix.include` with the two entries; against today's workflow it is a FATAL ("job lacks the
    matrix rows"), which is the RED.
@@ -448,7 +456,8 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
 
 ### Phase 2 — GREEN: `gha-expr.py` and the workflow
 
-1. `gha-expr.py` `matrix` strictness; S0b green.
+1. `gha-expr.py` `matrix` strictness; S0b green. (Reverted in review round 1, CTO ruling 21: `gha-expr.py` is
+   unchanged from `main`.)
 2. The workflow job per the Design table. Inngest strings: copy them, never retype them; diff the rendered Inngest
    titles, LEAD, REMEDY and email subject against `git show origin/main:.github/workflows/scheduled-terraform-drift.yml`
    (the existing V/F/X rows assert most of them exactly).
@@ -460,10 +469,11 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    same verdicts and grace, its titles under "web-1 workspaces volume", p1 finding / p2 could-not-perform, the email);
    the pin sentence written exactly as `Hetzner id 106443278` with the live read (2026-11-10T10:57:41Z: name
    `soleur-web-platform-data-luks`, protection.delete=true, attached to server 123931471; ADR-148 carries the same id);
-   the correction note (the 2026-07-23 addendum's `106406962` is the orphaned volume that addendum's re-cut destroyed
-   and replaced; the 2026-07-23 text stays as the dated record; the note writes "the volume `106406962`", never the
-   `Hetzner id <digits>` form, so N1c's exactly-one bound stays true); the pin-bump list for the web-1 id (the `web1`
-   row, this addendum, runbook 6604's read-back subsection, and the suite's `use_entry web1` `VOL_ID`); what the check does not defend (a single diff that
+   the correction note (the 2026-07-23 addendum's `106406962` is the orphaned volume that addendum's re-cut was built
+   to replace, and the record says the first provision was re-cut (`expenses.md`, corrected 2026-10-01); the 2026-07-23
+   text stays as the dated record; the note writes "the volume `106406962`", never the
+   `Hetzner id <digits>` form, so N1c's exactly-one bound stays true); the pin bump for the web-1 id points at
+   `git grep -n 106443278` rather than a fixed list (review round 1, R4); what the check does not defend (a single diff that
    changes the `.tf`, the row and this addendum proves consistency, not integrity; the outside anchor is live Hetzner
    state; a mis-minted read-only token is undetectable here, control O5); no Sentry check-in of this job's own (#10430, held
    while #6590 is open): a workflow that never runs is caught by the `scheduled-terraform-drift` monitor (the
@@ -474,8 +484,9 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    Inngest pin. Two accepted windows, stated plainly: (i) the grace keys on the last commit to the whole
    `workspaces-luks.tf` (CTO ruling 5: the same 90-minute grace per entry), so an unrelated edit to that file within 90
    minutes of a real lift reads `lift-pending-apply` (green, warning only) and the issue lands one 12-hour cycle later;
-   (ii) a reviewed lift reads `unprotected-as-declared` (green), and its forcing function is Guard B4 in
-   `apps/web-platform/infra/workspaces-luks.test.sh`, which the lift PR must edit.
+   (ii) a reviewed lift reads `unprotected-as-declared` (green). Guard B4 in `apps/web-platform/infra/workspaces-luks.test.sh`
+   only makes the lift reviewed (the lift PR must edit it); the lift PR must also open a dated re-protect follow-through
+   issue before it merges (ADR-282 step 1), and that issue is the only forcing function back to protected (CTO ruling 20).
 2. `infra-credential-tiers-8209.md` register row, the ADR-282 appended note, the runbook 6894 checklist and both runbook
    6604 edits (Files to Edit). Run the new 6604 one-liner once, read-only, and record its word (`protected` expected)
    in `mutation-proofs.md`; a `missing-token` or `read-failed` answer is reported, never worked around with the
@@ -565,24 +576,24 @@ are cross-entry; `N*` are pins.
 
 | Path | Inngest arm (I): loosened mutant -> RED row | web-1 arm (W): loosened mutant -> RED row |
 |---|---|---|
-| Name + flag derivation | probe reads the other row's `TF_PATH` -> V1 (could-not-read: no `inngest-redis-luks.tf` resource in the fixture) | probe regex hard-codes `inngest_redis_luks`, ignoring `TF_RESOURCE` -> WV1, WT1 (could-not-read) |
+| Name + flag derivation | probe reads the other row's `TF_PATH` -> V1 (could-not-read: no `inngest-redis-luks.tf` resource in the fixture) | probe regex hard-codes `inngest_redis_luks`, ignoring `TF_RESOURCE` -> WV1 (could-not-read), WR1, WT3 (WT1 deleted, CTO ruling 23) |
 | Derivation, real file | `R1`/`R2` unchanged; R1 now exercises the parameterized awk | `WR1` (REAL `workspaces-luks.tf` vs an independent python derivation; the shared traps stay single-run in R2) |
-| Id pin | Inngest pin re-hard-coded as a literal -> S2/`id-placement`; swapped row ids -> V1 (id-mismatch) and N1 | web-1 row carries the Inngest id -> WV1 (id-mismatch), N1c; jq pin compare dropped -> C2 (W leg) |
+| Id pin | Inngest pin re-hard-coded as a literal -> S2/`id-placement`; swapped row ids -> V1 (id-mismatch) and N1 | web-1 row carries the Inngest id -> WV1 (id-mismatch), N1c; jq pin compare dropped -> V8/WV8 (C2 deleted, ruling 23) |
 | Pin anchors | ADR-282 / skill / runbook 5c disagree -> N1; a third or missing sweep copy -> N1b | ADR-119 addendum or runbook 6604 disagree -> N1c; the id stated only outside the addendum section -> N1c |
-| Request URL | `name=` filter dropped -> L2, invariants | request carries the other name -> C1, invariants |
-| 90-minute grace | `tf_commit` path hard-coded to the other file -> C3 (I leg) | `tf_commit` path hard-coded to `inngest-redis-luks.tf` -> C3 (W leg: a 5-minute-old Inngest commit hides a 3-hour-old web-1 lift), WV3b |
-| Grace boundary | 89/91 -> V3b | 89/91 on its own file -> WV3b |
+| Request URL | `name=` filter dropped -> L2, invariants | request carries the other name -> the per-case request-URL invariant (C1 deleted, ruling 23) |
+| 90-minute grace | `tf_commit` path hard-coded to the other file -> C3 (I leg) | `tf_commit` path hard-coded to `inngest-redis-luks.tf` -> C3 (W leg: a 5-minute-old Inngest commit hides a 3-hour-old web-1 lift), WV3 (WV3b deleted, ruling 23) |
+| Grace boundary | 89/91 -> V3b | the 90-minute constant is shared, so 89/91 -> V3b (WV3b deleted, ruling 23) |
 | Finding filer | title reverts to the Inngest literal -> renders identically on the I leg, so only WF1 sees it; p1 label dropped -> F1 | `web1` arms deleted (falls to `*)` or to Inngest strings) -> WF1, WF12 (body contains "Inngest"); p1 dropped -> WF1 |
-| Could-not-perform filer | titles revert to the Inngest literal -> invisible on the I leg; C5, C6, WX7 catch it | web-1 titles collide with Inngest's -> C5, C6; `ADR` literal -> WX9 |
-| Clear step | `TITLES` lists both subjects -> C4 (a clean Inngest run closes the web-1 finding) | same mutant -> C4 (a clean web-1 run closes the Inngest finding); `(name-unreadable)` forms shared -> C5 |
+| Could-not-perform filer | titles revert to the Inngest literal -> invisible on the I leg; the merged C4/C5 row and C6 catch it (WX7 deleted, ruling 23) | web-1 titles collide with Inngest's -> the merged C4/C5 row, C6; `ADR` literal -> WX9 |
+| Clear step | `TITLES` lists both subjects -> the merged C4/C5 row (a clean Inngest run closes the web-1 finding) | same mutant -> the merged C4/C5 row (a clean web-1 run closes the Inngest finding); `(name-unreadable)` forms shared -> the merged C4/C5 row |
 | Email | subject reverts to the Inngest literal -> invisible on the I leg; WF1 catches it | subject literal "Inngest store volume" -> WF1; ADR literal `ADR-282` -> WF1 |
 | Public safety | Inngest id in a body -> F12, invariants (issues.json ban) | web-1 id in a body -> WF12, invariants (issues.json ban); `recipe_vocab` gains `106443278` -> F13 extension |
 | Token | fallback to the read/write name -> H9, S2 (rw-token-named) | same code edit (the read names one literal on both legs) -> H9 |
 | Row values | a value outside its pattern (e.g. a `tf_resource` with a metacharacter) -> S2/`matrix-shape` | same |
 | Matrix plumbing | `fail-fast` true or absent -> S2/`matrix-shape`; a third row, a renamed or missing key -> S2/`matrix-shape`; an unknown `matrix.*` ref -> H11 | same |
 | Finding filer catch-all | `*)` arm deleted or made non-failing -> WX16 | same |
-| Expression strictness | gha-expr returns `null` for an unknown matrix key -> S0b, H11 | same |
-| Row order (must PASS) | rows in swapped order -> V1 still green (C8) | rows in swapped order -> WV1 still green (C8) |
+| Expression strictness | `check()` lets an unknown matrix key through -> H11b, H11c (`gha-expr.py` unchanged from `main`, CTO ruling 21) | same |
+| Row selection | zero or two rows match the entry -> H11d (C8, the swapped-order must-PASS, deleted by ruling 23) | same |
 
 ## Guard Contract
 
@@ -594,8 +605,9 @@ that file's last commit, or that is absent or ambiguous, files that row's own p1
 row's request, pin, expected flag, grace, titles, clear step or email depends on the other row's data.
 
 **Assembly.** The chokepoint is the job's `strategy.matrix.include` list: it is the only source of per-entry data, and
-it reaches the steps only through `env:` bindings (`expr-in-run` forbids any other route). The bindings live in six
-steps (`tf_commit`, `probe`, `file_finding`, `file_unreadable`, `clear`, `notify` via `with:`). Title text is built at
+it reaches the `run:` bodies only through `env:` bindings (`expr-in-run` forbids an expression inside `run:`); the
+`notify` step reads `matrix.*` in its `with:` inputs instead. The bindings live in six steps (`tf_commit`, `probe`,
+`file_finding`, `file_unreadable`, `clear`, and `notify` via `with:`). Title text is built at
 three sites (`file_finding` TITLE, `file_unreadable` TITLE, `clear` TITLES), per-entry prose at one (`file_finding`'s
 `case "${ENTRY}:${VERDICT}"`), the request at one (`bc_curl` in `probe`), the pin compare at one (the probe's jq). In the
 suite, every case enters through one harness function (`cmd_run`), which selects exactly one row by `entry`.
@@ -604,25 +616,26 @@ suite, every case enters through one harness function (`cmd_run`), which selects
 
 | # | Edit (derived from the design) | Must turn RED |
 |---|---|---|
-| 1 | Dispatch: `cmd_run` ignores `entry` and always loads the first row | every W row (each asserts web-1 titles, name and id) and C1-C6 |
+| 1 | Dispatch: `cmd_run` ignores `entry` and always loads the first row | every W row (each asserts web-1 titles, name and id) and C3-C6 (C1 and C2 deleted and C4/C5 merged, ruling 23) |
 | 2 | Second member after a compliant first: the `web1` row is correct, a third row `entry: web2` is appended | S2/`matrix-shape` (exactly 2 rows) |
 | 3 | Swap `volume_id` between the rows | V1 and WV1 (id-mismatch), N1, N1c |
 | 4 | `tf_commit` hard-codes `inngest-redis-luks.tf` (a window property: the grace) | C3 W leg (a 5-minute-old Inngest commit must not open the web-1 grace), invariants (`gh api commits path=` mismatch) |
-| 5 | `clear` builds `TITLES` for both subjects | C4 |
+| 5 | `clear` builds `TITLES` for both subjects | the merged C4/C5 row |
 | 6 | `fail-fast` removed (defaults to true) | S2/`matrix-shape` |
 | 7 | The `web1:` case arms deleted | WF1, WF12, WX5 |
 | 8 | The probe ignores `PIN` and keeps a literal | S2/`id-placement`, WV1 |
-| 10 | The probe ignores `TF_RESOURCE` (regex hard-codes `inngest_redis_luks`) | WV1, WT1, WR1 |
+| 10 | The probe ignores `TF_RESOURCE` (regex hard-codes `inngest_redis_luks`) | WV1, WR1, WT3 (WT1 deleted, ruling 23) |
 | 11 | The notify subject made the literal "Inngest store volume" | WF1 |
 | 9 | `id-placement` relaxed back to "the web-1 id appears somewhere in the job" (a second copy in a comment passes) | S2 row "the web-1 id in a comment" |
 
-**Harness rows.** RED edits to the SUITE: `use_entry web1` made a no-op -> the `use_entry` harness row, the
-selected-entry invariant (`cmd_run` writes the selected row's `entry` into `result.json`; `invariants()` asserts it
-equals `$ENTRY`, and the W table opens with a literal `a "entry" "$ENTRY" web1`), WF1 and WX9 (a full no-op otherwise
-turns every W case into a passing Inngest case); WR1's independent derivation takes its path and resource from
-`use_entry`, never from `rows.json`; `invariants()` stops reading `issues.json` for ids -> H12; gha-expr's strict branch removed
--> S0b, H11; the gh stub serves one commits answer for every path -> C3. Must-PASS non-canonical inputs: the include rows
-in swapped order (C8); it differs from the canonical in a way the contract permits (row order carries no meaning).
+**Harness rows.** RED edits to the SUITE: `use_entry web1` made a no-op -> N1c, WF1, WF12, WV1, WX5, WX9, C3, C4-C6
+and C9 (observed, `mutation-proofs.md` row "harness: `use_entry web1` a no-op"; a full no-op otherwise turns every W
+case into a passing Inngest case; the selected-entry invariant is deleted by CTO ruling 22, H13 by ruling 23); WR1's
+independent derivation takes its path and resource from `use_entry`, never from `rows.json`; `invariants()` stops
+reading `issues.json` for ids -> H12; `check()` stops refusing an unknown `matrix` key -> H11b, H11c; the gh stub
+serves one commits answer for every path -> C3. Must-PASS non-canonical inputs: none kept. C8 (the include rows in
+swapped order) is deleted by ruling 23: rows are selected by `entry`, so row order carries no meaning and C8 could
+never go red; H11d covers row selection.
 
 **Anchor.** The `web1` pin is compared to ADR-119's 2026-11-10 addendum and runbook 6604's read-back; the `inngest` pin
 to ADR-282, the postmerge skill and runbook 5c. One diff can edit a pin and its documents together, so the N rows prove
@@ -635,20 +648,22 @@ reason=id-mismatch` on the first scheduled run (a p1 issue), and acceptance (f) 
 **Property.** An expression that names a `matrix.<key>` absent from the selected row is a harness error (exit 3),
 never an empty value.
 
-**Assembly.** One chokepoint in `gha-expr.py` (`primary()`'s identifier branch) and one in `h.py` (`check()` called by
-`refs()` from `render()` and `evif()`); every `if:`, `env:` and `with:` expression of every case passes through both.
+**Assembly.** One chokepoint, in the harness: `h.py`'s `check()`, called by `refs()` from `render()` and `evif()`;
+every `if:`, `env:` and `with:` expression of every case passes through it. `gha-expr.py` is unchanged from `main`
+(CTO ruling 21, amending ruling 1): its strict-matrix branch only duplicated `check()`, and only the strictness
+self-tests went red without it (`mutation-proofs.md` row G2 r1).
 
 **Mutation matrix.**
 
 | # | Edit | Must turn RED |
 |---|---|---|
-| 1 | `primary()` returns `ctx.get()` for `matrix.*` (today's null) | S0b, H11a |
-| 2 | `check()` stops treating `matrix` refs (dispatch) | H11b (a job whose step env names `matrix.nope` must exit exactly 3 with `unresolvable reference: matrix.nope`) |
-| 3 | Strictness applied only to the first `matrix.*` ref of an expression (second member) | H11c (`matrix.entry == 'web1' && matrix.nope == 'x'`, exact rc 3 and the same stderr line) |
+| 1 | `check()` stops treating `matrix` refs (dispatch) | H11b (a job whose step env names `matrix.nope` must exit exactly 3 with `unresolvable reference: matrix.nope`) |
+| 2 | Strictness applied only to the first `matrix.*` ref of an expression (second member) | H11c (`matrix.entry == 'web1' && matrix.nope == 'x'`, exact rc 3 and the same stderr line) |
+| 3 | Row selection loosened: `cmd_run` takes the first include row when zero or two rows match `entry` (the "selected row" the refusal is judged against is then the wrong one) | H11d (zero or two matches must exit 3; one match renders that row) |
 
-H11b and H11c run against a copy of `gha-expr.py` with its strict branch removed, so `check()` alone is under test
-(otherwise the evaluator's own strictness kills the run with a traceback, rc 1, and masks both mutants); an
-instrument control runs the same spec on the pristine harness (rc 3) and with `matrix.nope` removed (rc 0).
+H11b and H11c run against `$EXPRLIB` itself, with no stripped evaluator copy, so `check()` is the only strictness
+under test; an instrument control runs the same spec on the pristine harness (rc 3) and with `matrix.nope` removed
+(rc 0). H11a and the S0b matrix clauses are deleted with the evaluator branch (ruling 21).
 
 **Harness rows.** RED: H11 run through its own `printf` + `exit` reporting (not through the helpers under test).
 Must-PASS: `matrix.entry` present renders its value; a `steps.*` ref absent from the context still renders empty (no
@@ -720,7 +735,7 @@ not a user incident; a pattern of silent detectors is.
 
 ```yaml
 liveness_signal:
-  what: each leg's gate line "sole-copy-check verdict=<verdict> (clean)" and the conclusion of jobs "sole-copy-protection-check (inngest)" and "sole-copy-protection-check (web1)"
+  what: each leg's gate line "sole-copy-check verdict=<verdict> entry=<entry> (clean)" (the probe's verdict line also carries entry=<entry> directly after verdict=<v>, CTO ruling 26) and the conclusion of jobs "sole-copy-protection-check (inngest)" and "sole-copy-protection-check (web1)"
   cadence: twice daily (06:00 and 18:00 UTC), dispatched by apps/web-platform/server/inngest/functions/cron-terraform-drift.ts
   alert_target: an infra-drift issue per leg (p1 finding, p2 could-not-perform) plus the notify-ops-email message
   configured_in: .github/workflows/scheduled-terraform-drift.yml, job sole-copy-protection-check, strategy.matrix.include
@@ -853,18 +868,18 @@ None: the addendum is true on merge (the check runs from the first scheduled run
 |---|---------------------|-----------|--------|
 | 1 | "add the web-1 workspaces_luks delete-protection check to the sole-copy-protection-check job" [brief] | Design: the `web1` include row and step changes | mapped |
 | 2 | "A second table entry (resource name, Hetzner id pin, expected flag derived from the `.tf`) in the same job, reusing the verdict taxonomy, the 90-minute grace, the id pin and the could-not-perform filer." [issue #10432] | Design table; Phase 2 | mapped |
-| 3 | "Extend the executed suite with the second entry, including a case proving the two entries never query each other's id." [issue #10432] | Suite structure; W rows; C1, C2 | mapped |
+| 3 | "Extend the executed suite with the second entry, including a case proving the two entries never query each other's id." [issue #10432] | Suite structure; W rows; the per-case request invariant plus V8/WV8 (C1 and C2 deleted, CTO ruling 23) | mapped |
 | 4 | "Keep it read-only with the same `HCLOUD_TOKEN_READONLY` read and no fallback; no new credential." [issue #10432] | Design (probe unchanged); H9; shape `rw-token-*` | mapped |
 | 5 | "State the web-1 coverage in ADR-119 or ADR-282 as an append-only addendum." [issue #10432] | Phase 3.1 (ADR-119 addendum) | mapped |
 | 6 | "A lifted flag on the web-1 volume produces its own issue within one drift cycle." [issue #10432] | AC1; WV2, WF1 | mapped |
 | 7 | "Existing Inngest-volume verdicts are unchanged and their suite rows stay green." [issue #10432] | AC2 | mapped |
 | 8 | "Also close #11163 with an evidence comment" [brief] | Phase 6 | mapped |
-| 9 | "Extend plugins/soleur/test/lib/gha-expr.py with a `matrix` context that fails on an unknown key." [brief] | Design (gha-expr); Guard 2 | mapped |
+| 9 | "Extend plugins/soleur/test/lib/gha-expr.py with a `matrix` context that fails on an unknown key." [brief] | Guard 2: `check()` in the harness refuses an unknown `matrix` key; `gha-expr.py` unchanged from `main` (CTO ruling 21 amends ruling 1) | mapped |
 | 10 | "Pin web-1 at volume id 106443278 ... The suite checks the workflow pin against a new ADR-119 addendum; that addendum also corrects ADR-119's stale id 106406962" [brief] | Phase 3.1; N1c; Guard 3 | mapped |
 | 11 | "Web-1 titles replace \"Inngest store volume\" with \"web-1 workspaces volume\"; same labels, p1-high." [brief] | Design (titles); WF1 | mapped |
 | 12 | "keep the \"tracked: #10430\" comment" [brief] | Design (job comment block) | mapped |
 | 13 | "raise its count floor from 195" [brief] | Suite structure (Counting); AC5 | mapped |
-| 14 | "(c) cross-entry case proves neither entry requests the other's id" [brief] | C1, C2 | mapped |
+| 14 | "(c) cross-entry case proves neither entry requests the other's id" [brief] | the per-case request invariant plus V8/WV8 (C1 and C2 deleted, CTO ruling 23) | mapped |
 | 15 | "(d) issue body stays public-safe incl. 106443278" [brief] | invariants issues.json ban; WF12; F13 extension | mapped |
 | 16 | "(f) post-merge, a workflow_dispatch of scheduled-terraform-drift.yml (read-only) or the first scheduled run on main reads matches-declared for both entries." [brief] | Phase 5; AC8 | mapped |
 | 17 | "have the plan include that table for this change's arms" [brief] | Arm x loosening table | mapped |
@@ -905,14 +920,16 @@ None: the addendum is true on merge (the check runs from the first scheduled run
   decision line equals today's sentence (`Decision record: ADR-282. Loss modes and the reviewed route: ...`), spelled
   out in full in the suite, and the Phase 4.8 byte-identity check prints nothing
   beyond its two listed exceptions.
-- AC3 (c): C1 and C2 pass in both directions: no request of a leg carries the other leg's name, and a same-name volume
-  carrying the other leg's id is `volume-not-found reason=id-mismatch` for each leg.
+- AC3 (c): the per-case request invariant plus V8/WV8: no request of a leg carries the other leg's name, and a
+  same-name volume carrying the other leg's id is `volume-not-found reason=id-mismatch` for each leg. (C1 and C2, which
+  restated these, are deleted by CTO ruling 23.)
 - AC4 (d): no rendered issue title, body or comment in any case contains `106443278` or `106903269`, and `recipe_vocab`
   flags an injected `106443278` (F13 extension).
 - AC5 (e): the suite's realized count equals the new `FLOOR` (above 195), `TABLE_ROWS` equals the executed rows (H3),
   the harness rows H1-H7, H11 and H12 pass, table rows H1-H10 are unchanged, and deleting one new row block on a copy fails the outer count.
-- AC6: the mutation proofs of Phase 4.2 each turn the named row RED (and the swapped-order copy stays green); results are
-  listed in `mutation-proofs.md`, and the PR body carries them.
+- AC6: H11d (row selection: zero or two rows matching the entry is exit 3); the mutation proofs of Phase 4.2 each turn
+  the named row RED; results are listed in `mutation-proofs.md`, and the PR body carries them. (The swapped-order copy,
+  C8, is deleted by CTO ruling 23.)
 - AC7: `token-drift-workflow-causes.test.sh`, the ratchets of Phase 4.5, and every test-file hit of the Phase 4.6
   census pass (the named list there is a floor); `lint-guard-contract.py` passes on this plan.
 - AC9: the PR body carries `Closes #10432` and `Ref #9927` (never `Closes #9927`).
@@ -932,6 +949,11 @@ None: the addendum is true on merge (the check runs from the first scheduled run
 - AC12: #11163 is closed with the evidence comment (grep re-run on the then-current `origin/main`); #9927 stays open.
 
 ## Test Scenarios
+
+Review round 1 (CTO rulings 21-23) changes the list below: WV3b, WT1, WF3, WX7, C1, C2, C8, H11a and H13 are deleted, the
+selected-entry invariant is deleted, C4 and C5 become one row that seeds all six titles of the other leg (and takes WF3's
+"one cleared comment" check), and H11b/H11c run against `gha-expr.py` itself, which stays as on `main`. C9 is kept.
+Ruling 23 names the rows that cover each deleted one.
 
 Web-1 table (`use_entry web1`): WV1 matches-declared (clear runs); WV2 lifted-outside-terraform (finding, email, red);
 WV3 lift-pending-apply at 5 minutes; WV3b 89/91 minutes on its own file; WV4 unprotected-as-declared; WV5
