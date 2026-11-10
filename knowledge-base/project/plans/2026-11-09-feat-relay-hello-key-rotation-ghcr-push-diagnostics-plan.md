@@ -855,11 +855,16 @@ At work time, `git grep` must show no other caller of `computeMac` with a loaded
 
 **Note, 2026-11-10 (review round 2; Ruled by CTO agent, 2026-11-10, option b).** The call-site scan (the source scan of
 signers and `acceptAlso` readers in `proxy-hello-key-call-sites.test.ts`) is deleted, and the work-time `git grep`
-sentence above is superseded by this note. Guard 1 now rests on: the hello MAC domain string
-`soleur-proxy-hello-v1` appearing in no tracked non-test, non-knowledge-base file except
-`apps/web-platform/server/proxy-hello.ts`; `buildHelloMacInput` made private to that module; the module's export list
-pinned; `acceptAlso` read only inside `verifyProxyHello` (an AST check); and the behavioural rows above. A new signer
-added elsewhere is a review-time property. ADR-323's 2026-11-10 amendment owns the statement
+sentence above is superseded by this note. Guard 1 now rests on what the tests pin, and on review for the rest. The
+structural rows pin the hello MAC domain string `soleur-proxy-hello-v1` spelled literally in no file except
+`apps/web-platform/server/proxy-hello.ts` (test roots and the top-level `knowledge-base/` excluded), the module's export
+list (with `buildHelloMacInput` private), and proxy-hello.ts's internal structure: within that file, `acceptAlso` is
+read only inside `verifyProxyHello` (an AST check), and the signer MACs only the key it is handed. `session-proxy.ts`
+also reads `acceptAlso`, for the fingerprint line, and hands the key set to `verifyProxyHello` in the listener. The
+sender and listener rows in `session-proxy-hello.test.ts` run under both `NODE_ENV=test` and `NODE_ENV=production`.
+Review-time residuals: a new caller
+passing the slot to the exported `signProxyHello`, the domain string re-spelled elsewhere, and a slot choice gated on a
+production-only signal other than `NODE_ENV`. ADR-323's 2026-11-10 amendment owns the statement
 ("What keeps the slot verify-only"), and `decision-challenges.md` row G1-scan records the ruling.
 
 ### Guard 2 — rotation phases are pairwise compatible

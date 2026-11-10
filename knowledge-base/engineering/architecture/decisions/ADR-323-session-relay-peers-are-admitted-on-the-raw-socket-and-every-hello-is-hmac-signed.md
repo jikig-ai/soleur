@@ -294,10 +294,18 @@ reviewed route and removing the `REQUIRED` entry in the same change. The slot it
 hard check).
 
 **What keeps the slot verify-only** (CTO ruling of 2026-11-10 on Guard 1, option b; this paragraph owns it). The property "the
-accept-only slot never signs" rests on: the hello MAC domain string `soleur-proxy-hello-v1` appearing in no tracked non-test,
-non-knowledge-base file except `apps/web-platform/server/proxy-hello.ts`; `buildHelloMacInput` being private to that module; the
-module's export list being pinned; `acceptAlso` being read only inside `verifyProxyHello` (an AST check); and the behavioural
-tests. The earlier call-site scan is deleted. A new signer added elsewhere is a review-time property, not a test-time one.
+accept-only slot never signs" rests on what `proxy-hello-key-call-sites.test.ts` and the behavioural tests pin, and on review
+for the rest. The structural rows pin three things. The hello MAC domain string `soleur-proxy-hello-v1` is spelled literally in
+no file except `apps/web-platform/server/proxy-hello.ts` (the test roots and the top-level `knowledge-base/` are excluded). The
+module's export list is pinned, with `buildHelloMacInput` private. And proxy-hello.ts's internal structure is pinned by AST
+checks: within that file, `acceptAlso` is read only inside `verifyProxyHello`, and the signer MACs only the key it is handed.
+Outside proxy-hello.ts the slot is read on purpose: `session-proxy.ts` reads `acceptAlso` for the `relay_hello_key_fp` line and
+hands the whole key set to `verifyProxyHello` in the listener. The behavioural rows (the sender signs with `current` only, the
+listener verifies with both) run under both `NODE_ENV=test` and `NODE_ENV=production`, so a slot choice gated on `NODE_ENV` is
+caught. The earlier call-site scan is deleted. Three classes stay review-time properties, not test-time ones: a new caller that
+passes the slot to the exported `signProxyHello` (it signs with whatever `Buffer` it is given); the domain string re-spelled
+elsewhere (fragments, escapes, an encoding) to feed a new HMAC; and an edit to the existing call site or the loader gated on a
+production-only signal other than `NODE_ENV`.
 
 Named residuals added by this amendment:
 
