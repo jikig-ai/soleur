@@ -10,58 +10,60 @@ CI is the gate. Scratch and logs go under `/var/tmp`.
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Re-read ADR-323 Decisions 2, 6, 8 and 9, and `decision-challenges.md` rows A, B, B-a to B-e, E, C1 to C3, F.
-- [ ] 1.2 Run `git grep -n 'verifyProxyHello\|loadProxyHelloKey\|signProxyHello' -- apps/web-platform` and record every
+- [x] 1.1 Re-read ADR-323 Decisions 2, 6, 8 and 9, and `decision-challenges.md` rows A, B, B-a to B-e, E, C1 to C3, F.
+- [x] 1.2 Run `git grep -n 'verifyProxyHello\|loadProxyHelloKey\|signProxyHello' -- apps/web-platform` and record every
       consumer (`hr-type-widening-cross-consumer-grep`).
-- [ ] 1.3 Re-run the R3 grep (measured 2026-11-10: no test pins the HALT remediation text).
+- [x] 1.3 Re-run the R3 grep (measured 2026-11-10: no test pins the HALT remediation text).
+      Re-run 2026-11-10: the R3 grep is empty, but `terraform-target-parity.test.ts` (`relayHelloHaltViolations`)
+      required `_PREVIOUS` in the HALT text; 2.9.3 updated that pin.
 
 ## Phase 2: Core Implementation
 
 Each task starts with failing tests (`cq-write-failing-tests-before`).
 
-- [ ] 2.1 B.1 loader `loadProxyHelloKeys` (`server/proxy-tls.ts`): one cache, no wrapper.
-  - [ ] 2.1.1 Write failing rows in `test/proxy-tls.test.ts`:
+- [x] 2.1 B.1 loader `loadProxyHelloKeys` (`server/proxy-tls.ts`): one cache, no wrapper.
+  - [x] 2.1.1 Write failing rows in `test/proxy-tls.test.ts`:
     - the AC-B4 loader states, including well-formed-and-distinct (`accept-also-active`), malformed with current absent,
       and call-twice;
     - named `reportSilentFallback` and `warnSilentFallback` spies;
     - deletion of both names (the malformed-value deletion row lives here);
     - the frozen key-set object redacts under `JSON.stringify` and `util.inspect`.
-  - [ ] 2.1.2 Implement. Rename the three production callers: the `server/index.ts` boot call (same position), and the
+  - [x] 2.1.2 Implement. Rename the three production callers: the `server/index.ts` boot call (same position), and the
         sender and server key reads in `server/session-proxy.ts`. Keep `__resetProxyHelloKeyForTests`. Update
         `test/server-index-boot-pin-line.test.ts`.
-- [ ] 2.2 B.2 key-set verifier and `helloKeyFingerprint` (`server/proxy-hello.ts`).
-  - [ ] 2.2.1 Write Guard 1 and Guard 5 rows in `test/proxy-hello.test.ts`. The known-answer vector and the success
+- [x] 2.2 B.2 key-set verifier and `helloKeyFingerprint` (`server/proxy-hello.ts`).
+  - [x] 2.2.1 Write Guard 1 and Guard 5 rows in `test/proxy-hello.test.ts`. The known-answer vector and the success
         result shape stay unchanged.
-  - [ ] 2.2.2 Implement. Both `timingSafeEqual` calls always run when the slot is set. Extend the existing spy row:
+  - [x] 2.2.2 Implement. Both `timingSafeEqual` calls always run when the slot is set. Extend the existing spy row:
         2 calls when the slot is set, 1 when it is null.
-- [ ] 2.3 B.3 call sites in `server/session-proxy.ts`. The sender signs with the current key only. The server starts
+- [x] 2.3 B.3 call sites in `server/session-proxy.ts`. The sender signs with the current key only. The server starts
       only when a current key exists. The verifier receives the key set. Update the rows in
       `test/session-proxy-hello.test.ts` and `test/session-proxy.test.ts` (CPO conditions 1-3).
-- [ ] 2.4 B.5 `relay_hello_key_fp` warn line, emitted once from `createProxyServer` after the key check.
-- [ ] 2.5 B.6 add the name to `server/sensitive-keys.ts`, and parametrize `test/proxy-hello-key-isolation.test.ts` over both
+- [x] 2.4 B.5 `relay_hello_key_fp` warn line, emitted once from `createProxyServer` after the key check.
+- [x] 2.5 B.6 add the name to `server/sensitive-keys.ts`, and parametrize `test/proxy-hello-key-isolation.test.ts` over both
       names (Guard 3).
 - [ ] 2.6 Bump `BASELINE_DECLARED_PROBES` 96 → 97 in `plugins/soleur/test/preflight-discoverability-test.test.ts`. Add
       the `AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS` entry to
       `scripts/lib/test-affected-paths.sh`.
-- [ ] 2.7 Create `test/proxy-hello-rotation-phases.test.ts` (Guard 2), including the code-mutation row "the verifier
+- [x] 2.7 Create `test/proxy-hello-rotation-phases.test.ts` (Guard 2), including the code-mutation row "the verifier
       ignores `acceptAlso`". It covers 6 adjacent round trips and 4
       skip-case directions:
   - P2→P0 refused (`mac`);
   - P0→P2 accepted;
   - P1→P3 refused (`mac`);
   - P3→P1 accepted.
-- [ ] 2.9 B.7 records.
-  - [ ] 2.9.1 ADR-323 amendment:
+- [x] 2.9 B.7 records.
+  - [x] 2.9.1 ADR-323 amendment:
     - Decision 9: the slot, routine three phases, confirmed-leak single-phase (T4), "not executable until #12538", and
       no leak response or kill switch until then;
     - the normative #12538 phase-gate requirements (a) to (e) (T3);
     - Decision 6 and Decision 2;
     - the renamed consequence;
     - the Considered Options rows.
-  - [ ] 2.9.2 `infra/proxy-hello-hmac.tf` header comment only.
-  - [ ] 2.9.3 The HALT's "Intended rotation" line in `.github/workflows/apply-web-platform-infra.yml`, plus any test
+  - [x] 2.9.2 `infra/proxy-hello-hmac.tf` header comment only.
+  - [x] 2.9.3 The HALT's "Intended rotation" line in `.github/workflows/apply-web-platform-infra.yml`, plus any test
         that pins its text.
-  - [ ] 2.9.4 `runbooks/apply-web-platform-infra-job-rationale.md` and the relay section of
+  - [x] 2.9.4 `runbooks/apply-web-platform-infra-job-rationale.md` and the relay section of
         `runbooks/betterstack-log-query.md` (the fingerprint query, the `accept_also!=none` alarm rule and the AC-P1
         failure branches).
 - [ ] 2.10 C.1 marker step in `.github/workflows/reusable-release.yml`.
