@@ -18,6 +18,7 @@
  * full), the non-interactive fast deny, and the pending-card cap.
  */
 import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
+import { ExecutionGrants } from "@/server/approval/grants";
 
 const { log, mockWarn, mockLogDecision } = vi.hoisted(() => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -291,7 +292,13 @@ describe("gated platform tool: verdicts", () => {
   test.each(["crm_note_append", "workstream_issue_close", "github_push_branch"])(
     "a gated tool outside the probed eight (%s) takes the identical expiry path",
     async (tool) => {
-      const { ctx, deps } = makeCtx(() => Promise.reject(new Error("timeout")));
+      // The push card needs the workspace Owner when the approval flow gives no verdict (#12197 D1): give it an Owner whose
+      // flag is off, so it reaches the same in-memory card as the other two.
+      const ownerApproval = { isEnabled: vi.fn(async () => false), viewerRole: vi.fn(async () => "owner" as const), grants: new ExecutionGrants() };
+      const { ctx, deps } = makeCtx(
+        () => Promise.reject(new Error("timeout")),
+        tool === "github_push_branch" ? { extra: { approval: ownerApproval } } : {},
+      );
       const res = await callTool(ctx, tool, {}, { contactId: "c1", number: 1, branch: "b" });
       expect(res.behavior).toBe("deny");
       expect(res.message).toBe(EXPIRED_DENY);

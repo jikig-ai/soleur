@@ -35,7 +35,7 @@ import {
   type AgentSession,
 } from "./review-gate";
 import { getToolTier, buildGateCard, buildOfflineGateMessage, pluginToolPrefix, type ToolTier } from "./tool-tiers";
-import { isApprovalRequiredTool } from "./approval/tools";
+import { GITHUB_PUSH_BRANCH_TOOL, isApprovalRequiredTool } from "./approval/tools";
 import { APPROVAL_UNAVAILABLE_DENY, runApprovalGate } from "./approval/gate-flow";
 import { reportApprovalOp } from "./approval/ops";
 import type { ApprovalGateDeps } from "./approval/gate-types";
@@ -1602,6 +1602,42 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
           logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "approval flow gave no verdict");
           return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
+        }
+
+        // #12197 (CTO ruling D1, 2026-11-10): the legacy runner, push only. The approval flow gave no verdict (flag off or
+        // unreadable, or no dependency), so the card below would go to the session's own user. Only the workspace Owner may
+        // answer it: a member, a failed role read or a missing dependency is a static deny (no card, no status write, no
+        // offline notification). The Settings sentence PUSH_DISCLOSURE relies on this. Other approval-required tools keep the
+        // in-memory card (ADR-309, legacy runner divergence).
+        if (toolName === GITHUB_PUSH_BRANCH_TOOL) {
+          let role: "owner" | "member" | "unavailable" = "unavailable";
+          if (deps.approval) {
+            try {
+              role = await deps.approval.viewerRole();
+            } catch (err) {
+              reportApprovalOp("viewerRoleFailed", err, {
+                toolName,
+                conversationId: ctx.conversationId,
+                userId: ctx.userId,
+                tags: { stage: "legacy-push-owner-check" },
+              });
+            }
+          }
+          if (role !== "owner") {
+            log.warn(
+              {
+                sec: true,
+                tool: toolName,
+                tier,
+                decision: "platform-gate-push-owner-required",
+                role,
+                repo: `${ctx.repoOwner}/${ctx.repoName}`,
+              },
+              "Platform tool gate refused: only the workspace Owner may approve a push when the approval flow gives no verdict",
+            );
+            logPermissionDecision("canUseTool-platform-gated", toolName, "deny", `push owner required (${role})`);
+            return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
+          }
         }
 
         const gateId = randomUUID();

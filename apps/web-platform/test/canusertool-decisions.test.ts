@@ -15,6 +15,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { vi, describe, test, expect, beforeEach } from "vitest";
+import { ExecutionGrants } from "@/server/approval/grants";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 
 // Mock pure helpers imported directly by permission-callback so tests can
@@ -218,6 +219,11 @@ describe("createCanUseTool — allow branches (#2335)", () => {
       platformToolNames: ["mcp__soleur_platform__github_push_branch"],
     });
     ctx.deps.abortableReviewGate = vi.fn().mockResolvedValue("Approve");
+    // With no approval verdict the push card needs the workspace Owner (#12197 D1): an Owner, flag off.
+    (ctx.deps as unknown as Record<string, unknown>).approval = {
+      isEnabled: vi.fn(async () => false),
+      viewerRole: vi.fn(async () => "owner" as const), grants: new ExecutionGrants(),
+    };
     const canUseTool = createCanUseTool(ctx);
     const result = await canUseTool(
       "mcp__soleur_platform__github_push_branch",
