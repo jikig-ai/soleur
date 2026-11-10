@@ -9,7 +9,8 @@
 //                        the suite creates; push is enabled per repository (http.receivepack)
 //   api.github.com       a REST and GraphQL stub (fixed JSON; no real content)
 //   uploads/codeload     a fixed small body
-//   api.anthropic.com    GET /sse streams 50 server-sent events (criterion 2's non-inject SSE); never an inject host
+//   api.anthropic.com    GET /sse streams 50 server-sent events; GET /api/web/domain_info answers WebFetch's preflight
+//   sse.open-web.spike.test  GET /sse streams 50 events: the open-web SSE for criterion 2 (not in NO_PROXY)
 //
 // Every request appends one JSON line to the record file: host, method, path (no query values), the Authorization
 // CLASS (`real-decoy | other | none`), which session's decoy arrived (by decoy id, never its value), the number of
@@ -24,6 +25,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import http2 from "node:http2";
 import { pathToFileURL } from "node:url";
 
+export const OPEN_WEB_HOST = "sse.open-web.spike.test";
 const GITHUB_HOSTS = new Set(["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"]);
 
 /** Classify the Authorization header(s) a request carried, against the declared decoys. Exported for the suite. */
@@ -142,7 +144,16 @@ export function createStub(cfg) {
     appendFileSync(cfg.recordFile, JSON.stringify(rec) + "\n");
     if (host === "api.anthropic.com") {
       if (url.pathname === "/sse") return sse(res);
+      // The CLI's WebFetch domain-safety preflight (measured in the pinned binary: it allows on `can_fetch === true`).
+      // Production reaches the real endpoint directly (api.anthropic.com is in NO_PROXY); the stub answers it here.
+      if (url.pathname === "/api/web/domain_info") return json(res, 200, { domain: url.searchParams.get("domain") ?? "", can_fetch: true });
       return json(res, 404, { message: "Not Found" });
+    }
+    // The open-web streaming destination for criterion 2: a non-inject name that is NOT in production NO_PROXY, so a
+    // sandboxed client reaches it only through the session's proxy chain (the router's forwarder branch).
+    if (host === OPEN_WEB_HOST) {
+      if (url.pathname === "/sse") return sse(res);
+      return json(res, 200, { stub: true, host });
     }
     if (!GITHUB_HOSTS.has(host)) return json(res, 421, { message: "Misdirected Request" });
     if (a.cls !== "real-decoy") {

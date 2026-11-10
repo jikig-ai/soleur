@@ -8,6 +8,7 @@
 #              route out). The stub destinations container answers by DNS alias for the four inject hosts and
 #              api.anthropic.com. Squid resolves through docker's embedded resolver 127.0.0.11 (the real conf).
 #   spike-int  docker --internal network joining squid and the app container (the production soleur-egress0 role).
+#              The app container is ALSO on spike-ext: production's app tier reaches its NO_PROXY hosts directly.
 #   app        the production base image plus the runner stage's packages, run with the prod tuple's posture
 #              (lib/docker-run-tuple.py), uid 1001. Per session it runs, outside bwrap: the real egress-forwarder.mjs,
 #              connect-router.mjs and iron-proxy (the static binary copied out of the digest-pinned image).
@@ -192,6 +193,7 @@ spike_start_stub() {
   _spike_docker_run "$SPIKE_STUB_CTR" --network "$SPIKE_NET_EXT" \
     --network-alias github.com --network-alias api.github.com --network-alias uploads.github.com \
     --network-alias codeload.github.com --network-alias api.anthropic.com --network-alias gist.github.com \
+    --network-alias sse.open-web.spike.test \
     --sysctl net.ipv4.ip_unprivileged_port_start=443 -u "$SPIKE_APP_UID" \
     -v "$WP:/app:ro" -v "$d:/stub" "$SPIKE_IMG" node /app/test/infra/egress-injector-spike/stub-github/server.mjs /stub/config.json \
     || harness_fail STUB_START "docker run: $(head -c 300 "$SPIKE_WORK/docker-run-$SPIKE_STUB_CTR.err")"
@@ -202,7 +204,7 @@ spike_upstream_root() {
   mkdir -p "$SPIKE_WORK/stub" || harness_fail STUB_START "mkdir"
   mint_plain_root "$SPIKE_WORK/upstream-root" "spike test upstream root" || harness_fail STUB_START "upstream root"
   mint_leaf "$SPIKE_WORK/upstream-root" "$SPIKE_WORK/stub/leaf" \
-    "DNS:github.com,DNS:api.github.com,DNS:uploads.github.com,DNS:codeload.github.com,DNS:api.anthropic.com,DNS:gist.github.com" \
+    "DNS:github.com,DNS:api.github.com,DNS:uploads.github.com,DNS:codeload.github.com,DNS:api.anthropic.com,DNS:gist.github.com,DNS:sse.open-web.spike.test" \
     || harness_fail STUB_START "stub leaf"
 }
 
@@ -247,6 +249,10 @@ spike_start_app() {
     -v "$SPIKE_WORK/run:/run/spike" -v "$SPIKE_WORK/bin:/run/spike-bin:ro" -v "$SPIKE_WORK/pub:/run/spike-pub:ro" \
     -e HOME=/home/soleur "$SPIKE_IMG" sleep 7200 \
     || harness_fail CONTAINER_START_FAILED "docker run: $(head -c 300 "$SPIKE_WORK/docker-run-$SPIKE_APP_CTR.err")"
+  # A direct route for the app tier, as production's app container has for its NO_PROXY hosts (the CLI process's own
+  # Messages API and WebFetch preflight). Sandboxed processes never use it: bwrap leaves them only the SDK's proxy.
+  docker network connect "$SPIKE_NET_EXT" "$SPIKE_APP_CTR" 2>"$SPIKE_WORK/net.err" \
+    || harness_fail CONTAINER_START_FAILED "connect app to ext: $(head -c 200 "$SPIKE_WORK/net.err")"
   local i
   for ((i = 0; i < 60; i++)); do
     docker exec "$SPIKE_APP_CTR" bash -c "exec 3<>/dev/tcp/$SPIKE_SQUID_IP/8443" >/dev/null 2>&1 && return 0
