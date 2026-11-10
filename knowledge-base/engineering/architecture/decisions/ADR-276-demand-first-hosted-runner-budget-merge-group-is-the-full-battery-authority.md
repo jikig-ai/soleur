@@ -691,6 +691,7 @@ Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-re
 | (d) reader audit | kb-consumers 31/31; edge:consumed sel=0 | **pass** |
 
 Notes: commits and ejections halves of n=444 were enumerated on bases differing by ~3 edge commits (relaunch/ejections resolved a drifted `origin/main`; corrected-and-disclosed, bound unaffected — receipts provenance note). First window exercising the 2026-11-09 corroboration + classifier changes — corroboration found zero drops (merge_group_on_landed=293/300, missing=0, refused=0), the `unclassified-job` bucket stays at 0 (R3 also 0), flake-cleared=32. Remaining bound driver: `failed-job-without-fail-line` (22) + `queue-oracle-shortfall` synthetic units (40) + unsettled legs (4) — measurement coverage, not escapes. Retire-vs-schedule stays operator-owned.
+
 - 2026-11-09 S4 retired, verdict NO-GO (#9729; see `## Amendment 2026-11-09 (S4 retirement, #9729)` below): the stage and its evidence layer are torn out after the fourth ruling window — `S4 live` is NEVER recorded, the `pr-selection` lever, the `affected-index-ratchet` required context and the whole replay/preactivation/accept-table evidence layer are removed; the full battery is restored on every event and `oracle-review-required` is re-scoped onto the committed `scripts/ci-oracle-surface.txt`
 
 ## Amendment 2026-11-09 (S4 retirement, #9729)
