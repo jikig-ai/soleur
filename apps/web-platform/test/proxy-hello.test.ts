@@ -1,5 +1,8 @@
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+// #8211: the accept-only slot (Guard 1) and fingerprint (Guard 5) rows below.
+import { createHash } from "node:crypto";
+import { afterAll } from "vitest";
 
 // #12289 — the signed relay hello. Pure module tests with an injected clock (no fake timers, no
 // sockets). The known-answer vector is assembled BY HAND from the spec string and node:crypto in the
