@@ -1,0 +1,1048 @@
+{
+  "verdict": "GO",
+  "meta": {
+    "run_url": "https://github.com/jikig-ai/soleur/actions/runs/42883871262",
+    "commit": "1cd31393584347896f774e8ff01d409a6acf4ab7",
+    "date": "2026-11-10T19:25:40Z",
+    "machine": "Linux 7.0.0-1017-azure x86_64 cpus=4",
+    "sdk_pin": "0.3.311",
+    "iron_proxy_digest": "sha256:727da0cc35a6d73ed2913a38d56c4b9b4476c075149492e4fbf75552e83361ff",
+    "app_image": "node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da+runner-packages claude-code@2.1.311 gh@2.103.3 (pin 2.96.0) bubblewrap 0.8.0"
+  },
+  "records": [
+    {
+      "criterion": 1,
+      "verdict": "pass",
+      "observation": "all checks held: every declared secret surface was scanned (declaredCount equals the declared files, none dropped); the sandbox scan is live (planted control found in the scanned file); no session secret in anything the sandbox or the tools returned; sandboxed Bash cannot connect() the hook socket; control: the Read tool returns a planted workspace file; control: the same uid outside the sandbox reads the injector's /proc environ; every CLI-tier Read/WebFetch of a secret surface is refused"
+    },
+    {
+      "criterion": 2,
+      "verdict": "pass",
+      "observation": "all checks held: git clone and fetch through the injector; gh REST through the injector (placeholder token replaced); gh GraphQL through the injector; Node fetch with NODE_USE_ENV_PROXY=1 through the injector (R29); curl through the injector; open-web SSE untouched on the router's forwarder branch (50/50); sandboxed push with no row: refused pending, one pending row, no real token (R32); sandboxed push after approval: vended, row approved -> consumed (R32); claude CLI streaming 50/50 on its own path, never the injector, router log live (R30/R33) (claude route: direct)"
+    },
+    {
+      "criterion": 3,
+      "verdict": "pass",
+      "observation": "all checks held: no row: push refused pending, one pending row; no real token on the refused POST git-receive-pack; retry before decision keeps one row; owner deny -> rejected reported on the next push, then a new pending row; approve -> vend, consumed exactly once; a new hash after consume needs a new row; REST X pending, then approved; binding: body Y and another path are new pending actions, another repo is not allowlisted, none gets a real token; approved X consumed once, Idempotency-Key stripped, a replay is a new pending action; GraphQL mutation: pending with one new row, no real token; GraphQL mutation: approved, the identical body vends once and consumes the row; GraphQL mutation: a replay after consume is refused, no real token; flag off: a push from an existing copy and a listed REST write are refused flag-off, no row, no real token; expiry: pending at ~50 s, then REJECT expired; the hook ran before header replacement (client_auth=0 on every request); R39 large push: git sent the 0000 probe and it vended with no row (git-receive-pack-probe); R39 large push: the real push is refused pending (one new row, no write body at the stub); R39 large push: after approval it is consumed once and the stub receives the decoy with the whole body (>= 2 MiB); R40 a ~4 MiB push is refused body-over-cap, with no row and no decoy on the write; R40 same connection, HTTP/1.1: a reused connection's unapproved POST is pending, no real token; R40 same connection, HTTP/2: a reused connection's unapproved POST is pending, no real token; no conversation reached the 5-pending cap and no request was refused reason=cap"
+    },
+    {
+      "criterion": 4,
+      "verdict": "pass",
+      "observation": "all checks held: allowlisted REST read vended; git clone vended; GraphQL query vended; read outside the allowlist refused; flag off refuses every read; the reads created no approval row"
+    },
+    {
+      "criterion": 5,
+      "verdict": "pass",
+      "observation": "all checks held: control: B reaches the stub with B's own token; A carrying B's token: the injector replaces it with A's own; A carrying B's token to B's repository is refused; B's proxy credential at A's router: 407; A's credential at B's router: 407; A's router credential at B's injector: 407; A's CA does not verify B's injector (TLS refused); A's hook client certificate on B's socket is refused (client identity); control: B's own hook certificate is accepted; a certificate from another root is refused at TLS; the stub never recorded B's token during A's probes"
+    },
+    {
+      "criterion": 6,
+      "verdict": "pass",
+      "observation": "all checks held: deny-CIDR, localhost and link-local targets refused at squid; port-80 targets refused on both router branches; the forwarder refuses a bad token (407); an unentitled session has no route: every probe ends in a sandbox deny, nothing reaches router, squid or stub (R34); control: the entitled session reaches the open-web stub in the same run; the entitled sandbox cannot reach container loopback, directly or through the SDK proxy (NO_PROXY rule denies); tunnel_listen refuses no credential, the session credential and session B's router credential (407); http_listen and https_listen yield no vend (R28 tunnel guard); no real token reached the stub from any listener probe; metrics listener serves /healthz only (v0.56.0): /metrics 404, /healthz 200 and its body carries no secret; R36 a CONNECT with the router credential to http_listen is refused no-sni, no real token at the stub; R36 a CONNECT with the router credential over TLS to https_listen is refused (by the hook or by iron-proxy), no real token at the stub; R36 the same over TLS with SNI equal to the CONNECT host: passed by the hook, it reaches the stub as one CONNECT with no credential (the secrets method list), or reaches nothing; R36 no CONNECT record with a real token in any probe window; R36 a CONNECT with the router credential inside an established tunnel is refused (subreason recorded), no real token at the stub; R37 a plain-HTTP GET inside a 443 tunnel is refused no-tls, no real token at the stub; R37 a plain-HTTP POST inside a 443 tunnel is refused no-tls, no real token at the stub; every log holds its known positive line and its control copy (a planted decoy and the canary) is found by the same scan; no log carries a secret or the body canary"
+    },
+    {
+      "criterion": 7,
+      "verdict": "pass",
+      "observation": "all checks held: control: pass 1 refuses the request not-allowlisted, with no row; approval-hook.mjs and policy.mjs are byte-identical across passes; pass 2 gates the same request (pending row); pass 2 consumes once and vends after approval; binding across verbs: an approved create-pull row does not authorize create-issue with the same body"
+    },
+    {
+      "criterion": 9,
+      "verdict": "pass",
+      "observation": "all checks held: control: every client accepts a session-CA leaf for an inject host; every client rejects a session-CA leaf for a non-inject name; gist.github.com is accepted (within the documented *.github.com scope); an IP-address leaf is rejected; a common-name-only leaf for a non-inject name is rejected (CN fallback stays constrained); session B's CA is not trusted in session A; the two sessions have distinct CAs, and A's is not in B's bundle; a non-inject CONNECT forced at the injector is refused 403 by the allowlist; the non-inject SSE took the router's forwarder branch, never the injector; the CA key exists during the session and is absent after it ends"
+    },
+    {
+      "criterion": 8,
+      "verdict": "pass",
+      "observation": "all checks held: control: the read vends and the SSE streams through a healthy hook; control: writes are refused promptly (pending), not hung; stalled hook: writes exit non-zero within 10 s, hook-timeout emitted, no real token on a write; frozen hook: no real token at the stub, and the non-inject SSE is uninterrupted; killed hook: every inject-host client exits non-zero within 10 s, no real token, iron-proxy's audit names the failed call; killed router: all of the session's egress fails; killed iron-proxy: inject-host clients exit non-zero within 10 s, no real token, the forwarder branch still streams; killed iron-proxy: claude streaming continues 50/50 on its own path (R30/R33)"
+    }
+  ],
+  "observations": [
+    {
+      "arm": "c1",
+      "steps": {
+        "sandboxScan": {
+          "isError": false,
+          "hits": [],
+          "content": "scan-written"
+        },
+        "sandboxHookConnect": {
+          "isError": false,
+          "hits": [],
+          "content": "error ENOENT"
+        },
+        "readPlanted": {
+          "isError": false,
+          "hits": [
+            "planted-control"
+          ],
+          "content": "1\t<declared:planted-control>\n2\t"
+        },
+        "readDecoy": {
+          "isError": true,
+          "hits": [],
+          "content": "Access denied: outside workspace"
+        },
+        "readCaKey": {
+          "isError": true,
+          "hits": [],
+          "content": "Access denied: outside workspace"
+        },
+        "readHookSocket": {
+          "isError": true,
+          "hits": [],
+          "content": "Access denied: outside workspace"
+        },
+        "readHookClientKey": {
+          "isError": true,
+          "hits": [],
+          "content": "Access denied: outside workspace"
+        },
+        "readIronYaml": {
+          "isError": true,
+          "hits": [],
+          "content": "Access denied: outside workspace"
+        },
+        "readInjectorEnviron": {
+          "isError": true,
+          "hits": [],
+          "content": "<tool_use_error>Cannot read '/proc/51/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+        },
+        "readInjectorCmdline": {
+          "isError": true,
+          "hits": [],
+          "content": "<tool_use_error>Cannot read '/proc/51/cmdline': this path names a device or process file that this tool does not read.</tool_use_error>"
+        },
+        "readForwarderEnviron": {
+          "isError": true,
+          "hits": [],
+          "content": "<tool_use_error>Cannot read '/proc/22/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+        },
+        "webfetchDecoy": {
+          "isError": true,
+          "hits": [],
+          "content": "Invalid URL"
+        },
+        "scan:/home/soleur/spike-sessA-B-206e61add3cf/ws/.spike-scan.txt": {
+          "isError": false,
+          "hits": [
+            "planted-control"
+          ],
+          "content": "bytes=552284 readable=true"
+        }
+      },
+      "leaks": {},
+      "cli_refused": {
+        "readDecoy": true,
+        "readCaKey": true,
+        "readHookSocket": true,
+        "readHookClientKey": true,
+        "readIronYaml": true,
+        "readInjectorEnviron": true,
+        "readInjectorCmdline": true,
+        "readForwarderEnviron": true,
+        "webfetchDecoy": true
+      },
+      "proc_environ_control_bytes": "239",
+      "declared": {
+        "files": 73,
+        "scanned": 73,
+        "dropped": [],
+        "list": 73,
+        "pinned": 73,
+        "matches_list": true
+      },
+      "checks": {
+        "every declared secret surface was scanned (declaredCount equals the declared files, none dropped)": true,
+        "the sandbox scan is live (planted control found in the scanned file)": true,
+        "no session secret in anything the sandbox or the tools returned": true,
+        "sandboxed Bash cannot connect() the hook socket": true,
+        "control: the Read tool returns a planted workspace file": true,
+        "control: the same uid outside the sandbox reads the injector's /proc environ": true,
+        "every CLI-tier Read/WebFetch of a secret surface is refused": true
+      }
+    },
+    {
+      "arm": "c2",
+      "A": {
+        "env": {
+          "noProxy": "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com",
+          "proxyVars": [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy"
+          ]
+        },
+        "steps": {
+          "clone": "fatal: could not read Username for 'https://github.com': No such device or address\ncloned=no",
+          "fetch": "fatal: cannot change to '/home/soleur/spike-sessA-A-bdb72fe1577a/ws/c': No such file or directory\nfetch_rc=128",
+          "ghRest": "unexpected end of JSON input",
+          "ghGraphql": "gh: HTTP 401",
+          "nodeFetch": "err=EAI_AGAIN",
+          "nodeFetchEnvProxy": "status=401",
+          "curlRest": "code=401",
+          "openSse": "events=50",
+          "tlsLibs": "curl 7.88.1 (x86_64-pc-linux-gnu) libcurl/7.88.1 OpenSSL/3.0.22 zlib/1.2.13 brotli/1.0.9 zstd/1.5.4 libidn2/2.3.3 libpsl/0.21.2 (+libidn2/2.3.3) libssh2/1.10.0 nghttp2/1.52.0 librtmp/2.3 OpenLDAP/2.5.13\ngit version 2.39.5\nlibcurl-gnutls.so.4 libgnutls.so.30"
+        },
+        "stub": [
+          "api.github.com GET /repos/spike/alpha/c2-curl none None None",
+          "api.github.com GET /repos/spike/alpha/c2-gh other None None",
+          "api.github.com GET /repos/spike/alpha/c2-node-envproxy none None None",
+          "api.github.com POST /graphql other None None",
+          "github.com GET /spike/alpha.git/info/refs none None None",
+          "sse.open-web.spike.test GET /sse none None None"
+        ],
+        "router": [
+          "branch=forwarder host=sse.open-web.spike.test"
+        ]
+      },
+      "B": {
+        "env": {
+          "noProxy": "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com",
+          "proxyVars": [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy"
+          ]
+        },
+        "steps": {
+          "clone": "cloned=yes",
+          "fetch": "fetch_rc=0",
+          "ghRest": "spike/alpha",
+          "ghGraphql": "{\"data\":{\"stub\":true}}",
+          "nodeFetch": "err=EAI_AGAIN",
+          "nodeFetchEnvProxy": "status=200",
+          "curlRest": "code=200",
+          "openSse": "events=50",
+          "tlsLibs": "curl 7.88.1 (x86_64-pc-linux-gnu) libcurl/7.88.1 OpenSSL/3.0.22 zlib/1.2.13 brotli/1.0.9 zstd/1.5.4 libidn2/2.3.3 libpsl/0.21.2 (+libidn2/2.3.3) libssh2/1.10.0 nghttp2/1.52.0 librtmp/2.3 OpenLDAP/2.5.13\ngit version 2.39.5\nlibcurl-gnutls.so.4 libgnutls.so.30"
+        },
+        "stub": [
+          "api.github.com GET /repos/spike/alpha/c2-curl real-decoy token sessA",
+          "api.github.com GET /repos/spike/alpha/c2-gh real-decoy token sessA",
+          "api.github.com GET /repos/spike/alpha/c2-node-envproxy real-decoy token sessA",
+          "api.github.com POST /graphql real-decoy token sessA",
+          "github.com GET /spike/alpha.git/info/refs real-decoy Basic sessA",
+          "github.com POST /spike/alpha.git/git-upload-pack real-decoy Basic sessA",
+          "sse.open-web.spike.test GET /sse none None None"
+        ],
+        "router": [
+          "branch=forwarder host=sse.open-web.spike.test",
+          "branch=injector host=api.github.com",
+          "branch=injector host=github.com"
+        ]
+      },
+      "push": {
+        "rows": {
+          "rows_before": "",
+          "rows_after_push1": "pending:1 ",
+          "approve_http": "200",
+          "status_after_approve": "approved",
+          "status_after_push2": "consumed",
+          "row": "present"
+        },
+        "push1": "error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\npush_rc=1",
+        "push2": "push_rc=0",
+        "pending_message_reached_agent_R15": "error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\npush_rc=1"
+      },
+      "claude_streaming": {
+        "deltas": 50,
+        "route": "direct",
+        "router_alive": true,
+        "message_peers": [
+          "11.12.13.3"
+        ],
+        "app_ip": "11.12.13.3",
+        "squid_ip": "11.12.13.2",
+        "side_calls": [
+          "/api/claude_code/policy_limits 11.12.13.3",
+          "/api/claude_code/settings 11.12.13.3"
+        ],
+        "liveness_events": "50",
+        "stub_own_certificate": true,
+        "stderr_tls": [],
+        "ok": true
+      },
+      "checks": {
+        "git clone and fetch through the injector": true,
+        "gh REST through the injector (placeholder token replaced)": true,
+        "gh GraphQL through the injector": true,
+        "Node fetch with NODE_USE_ENV_PROXY=1 through the injector (R29)": true,
+        "curl through the injector": true,
+        "open-web SSE untouched on the router's forwarder branch (50/50)": true,
+        "sandboxed push with no row: refused pending, one pending row, no real token (R32)": true,
+        "sandboxed push after approval: vended, row approved -> consumed (R32)": true,
+        "claude CLI streaming 50/50 on its own path, never the injector, router log live (R30/R33)": true
+      }
+    },
+    {
+      "arm": "c3",
+      "observations": {
+        "push1": "push_rc=1",
+        "rows1": "pending:1 ",
+        "stub1_receivepack": "0",
+        "push1_retry": "push_rc=1",
+        "rows1_retry": "pending:1 ",
+        "p1": "present",
+        "deny": "200",
+        "push1_after_deny": "push_rc=1",
+        "rows_after_deny": "pending:1 rejected:1 ",
+        "push1_after_deny_reason": "rejected",
+        "p2_new": "yes",
+        "approve": "200",
+        "push1_approved": "push_rc=0",
+        "p2_status": "consumed",
+        "stub_after_approve": "1",
+        "push2_new_hash": "push_rc=1",
+        "rows_end": "consumed:1 pending:1 rejected:1 ",
+        "stub_push2": "0",
+        "pend_after_push": "consumed:1 pending:1 rejected:1 ",
+        "rest_x1": "x1=403",
+        "rest_x1_reason": "pending",
+        "approve_x": "200",
+        "rest_y1": "y1=403",
+        "rest_y1_reason": "pending",
+        "rest_zpath": "zpath=403",
+        "rest_zpath_reason": "pending",
+        "rest_zrepo": "zrepo=403",
+        "rest_zrepo_reason": "not-allowlisted",
+        "stub_binding_misses": "0",
+        "rest_x2": "x2=201",
+        "rest_x2_reason": "",
+        "x_status": "consumed",
+        "stub_x2": "{\"seq\":40,\"ts\":\"2026-11-10T19:29:06.398Z\",\"host\":\"api.github.com\",\"method\":\"POST\",\"path\":\"/repos/spike/alpha/pulls\",\"query_keys\":[],\"auth_class\":\"real-decoy\",\"auth_count\":1,\"decoy_id\":\"sessD\",\"auth_scheme\":\"token\",\"idempotency_key\":false,\"sni\":\"api.github.com\"}",
+        "rest_x3": "x3=403",
+        "rest_x3_reason": "pending",
+        "pend_after_rest": "consumed:2 pending:3 rejected:2 ",
+        "gql_rows0": "consumed:2 rejected:5 ",
+        "gql_g1": "g1=403",
+        "gql_g1_reason": "pending",
+        "gql_rows1": "consumed:2 pending:1 rejected:5 ",
+        "gql_vend_pending": "0",
+        "gql_row": "present",
+        "gql_approve": "200",
+        "gql_g2": "g2=200",
+        "gql_g2_reason": "",
+        "gql_status": "consumed",
+        "gql_vend_approved": "1",
+        "gql_g3": "g3=403",
+        "gql_g3_reason": "pending",
+        "gql_vend_replay": "0",
+        "pend_after_gql": "consumed:3 pending:1 rejected:5 ",
+        "a4_rows0": "consumed:3 rejected:6 ",
+        "a4_push1": "push_rc=1",
+        "a4_rows1": "consumed:3 pending:1 rejected:6 ",
+        "a4_row": "present",
+        "a4_approve": "200",
+        "a4_push2": "push_rc=0",
+        "a4_status": "consumed",
+        "a4_pack": "pack_bytes=1k loose=2060k",
+        "pend_after_a4": "consumed:4 rejected:6 ",
+        "a5_rows0": "consumed:4 rejected:6 ",
+        "a5_push": "push_rc=124",
+        "a5_rows1": "consumed:4 rejected:6 ",
+        "a5_client": "cx_rc=0 elapsed_s=101",
+        "pend_after_a5": "consumed:4 rejected:6 ",
+        "pend_after_a6": "consumed:4 pending:2 rejected:6 ",
+        "off_clone": "cloned=yes",
+        "push_flag_off": "push_rc=128",
+        "off_push_markers": "GET:flag-off ",
+        "rest_offpost": "offpost=403",
+        "rest_offpost_reason": "flag-off",
+        "off_stub_real": "0",
+        "rows_c": "",
+        "exp_at_50s": "pending",
+        "push_after_expiry": "push_rc=1",
+        "exp_final": "expired",
+        "exp1_out": "send-pack: unexpected disconnect while reading sideband packet fatal: the remote end hung up unexpectedly push_rc=1 ",
+        "exp2_out": "send-pack: unexpected disconnect while reading sideband packet fatal: the remote end hung up unexpectedly push_rc=1 ",
+        "exp_id": "present",
+        "exp_rows": "expired:1 pending:1 ",
+        "exp_markers": "SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT client_auth=0 outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST client_auth=0 class=write rule=git-push reason=pending approval_id=<id>|SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT client_auth=0 outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST client_auth=0 class=write rule=git-push reason=expired approval_id=<id>|",
+        "exp_iron": "CONNECT github.com:443  allow 200  | GET github.com /spike/alpha.git/info/refs allow 200  | POST github.com /spike/alpha.git/git-receive-pack reject 403  | CONNECT github.com:443  allow 200  | GET github.com /spike/alpha.git/info/refs allow 200  | POST github.com /spike/alpha.git/git-receive-pack reject 403 "
+      },
+      "reasons": {
+        "sessD": [
+          "pending",
+          "pending",
+          "rejected",
+          "pending",
+          "pending",
+          "pending",
+          "pending",
+          "not-allowlisted",
+          "pending",
+          "pending",
+          "pending",
+          "pending",
+          "guard-refused",
+          "pending",
+          "pending"
+        ],
+        "sessC": [
+          "flag-off",
+          "flag-off"
+        ],
+        "sessE": [
+          "expired"
+        ]
+      },
+      "max_pending": 3,
+      "cap_hits": [],
+      "large_push": {
+        "push1_markers": [
+          "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=github.com method=CONNECT client_auth=0 outcome=continue",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=GET client_auth=0 class=read rule=git-upload-pack-advert approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=read rule=git-upload-pack approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=read rule=git-upload-pack approval_id=read-allowlist",
+          "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=github.com method=CONNECT client_auth=0 outcome=continue",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=push-advert rule=git-receive-pack-probe approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND_REFUSED session=sessD source=hook host=github.com method=POST client_auth=0 class=write rule=git-push reason=pending approval_id=<id>"
+        ],
+        "push2_markers": [
+          "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=github.com method=CONNECT client_auth=0 outcome=continue",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=push-advert rule=git-receive-pack-probe approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=write rule=git-push approval_id=<id>"
+        ],
+        "push1_receive_pack_bodies": [
+          4
+        ],
+        "push2_receive_pack_bodies": [
+          4,
+          2098227
+        ],
+        "probe_seen": true
+      },
+      "over_cap_push": {
+        "markers": [
+          "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=github.com method=CONNECT client_auth=0 outcome=continue",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=GET client_auth=0 class=read rule=git-upload-pack-advert approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=read rule=git-upload-pack approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=read rule=git-upload-pack approval_id=read-allowlist",
+          "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=github.com method=CONNECT client_auth=0 outcome=continue",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND session=sessD source=hook host=github.com method=POST client_auth=0 class=push-advert rule=git-receive-pack-probe approval_id=read-allowlist",
+          "SOLEUR_EGRESS_VEND_REFUSED session=sessD source=hook host=github.com method=POST client_auth=0 class=unknown reason=guard-refused subreason=body-over-cap"
+        ],
+        "receive_pack_bodies": [
+          4
+        ],
+        "client": "cx_rc=0 elapsed_s=101"
+      },
+      "same_connection": {
+        "http1.1": {
+          "get": "n=1 code=200 v=1.1",
+          "post": "n=0 code=403 v=1.1",
+          "markers": [
+            "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue",
+            "SOLEUR_EGRESS_VEND session=sessD source=hook host=api.github.com method=GET client_auth=0 class=read rule=rest-repo-read approval_id=read-allowlist",
+            "SOLEUR_EGRESS_VEND_REFUSED session=sessD source=hook host=api.github.com method=POST client_auth=0 class=write rule=rest-create-pull reason=pending approval_id=<id>"
+          ]
+        },
+        "http2": {
+          "get": "n=1 code=200 v=2",
+          "post": "n=0 code=403 v=2",
+          "markers": [
+            "SOLEUR_EGRESS_CONNECT session=sessD source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue",
+            "SOLEUR_EGRESS_VEND session=sessD source=hook host=api.github.com method=GET client_auth=0 class=read rule=rest-repo-read approval_id=read-allowlist",
+            "SOLEUR_EGRESS_VEND_REFUSED session=sessD source=hook host=api.github.com method=POST client_auth=0 class=write rule=rest-create-pull reason=pending approval_id=<id>"
+          ]
+        }
+      },
+      "checks": {
+        "no row: push refused pending, one pending row": true,
+        "no real token on the refused POST git-receive-pack": true,
+        "retry before decision keeps one row": true,
+        "owner deny -> rejected reported on the next push, then a new pending row": true,
+        "approve -> vend, consumed exactly once": true,
+        "a new hash after consume needs a new row": true,
+        "REST X pending, then approved": true,
+        "binding: body Y and another path are new pending actions, another repo is not allowlisted, none gets a real token": true,
+        "approved X consumed once, Idempotency-Key stripped, a replay is a new pending action": true,
+        "GraphQL mutation: pending with one new row, no real token": true,
+        "GraphQL mutation: approved, the identical body vends once and consumes the row": true,
+        "GraphQL mutation: a replay after consume is refused, no real token": true,
+        "flag off: a push from an existing copy and a listed REST write are refused flag-off, no row, no real token": true,
+        "expiry: pending at ~50 s, then REJECT expired": true,
+        "the hook ran before header replacement (client_auth=0 on every request)": true,
+        "R39 large push: git sent the 0000 probe and it vended with no row (git-receive-pack-probe)": true,
+        "R39 large push: the real push is refused pending (one new row, no write body at the stub)": true,
+        "R39 large push: after approval it is consumed once and the stub receives the decoy with the whole body (>= 2 MiB)": true,
+        "R40 a ~4 MiB push is refused body-over-cap, with no row and no decoy on the write": true,
+        "R40 same connection, HTTP/1.1: a reused connection's unapproved POST is pending, no real token": true,
+        "R40 same connection, HTTP/2: a reused connection's unapproved POST is pending, no real token": true,
+        "no conversation reached the 5-pending cap and no request was refused reason=cap": true
+      }
+    },
+    {
+      "arm": "c4",
+      "observations": {
+        "A.restRead": "code=200",
+        "A.clone": "cloned=yes",
+        "A.graphqlQuery": "code=200",
+        "A.outsideRead": "code=403",
+        "C.restRead": "code=403",
+        "C.clone": "fatal: unable to access 'https://github.com/spike/alpha.git/': The requested URL returned error: 403\ncloned=no",
+        "C.graphqlQuery": "code=403",
+        "stub.A.rest": true,
+        "stub.A.git": true,
+        "stub.A.graphql": true,
+        "stub.A.outside": false,
+        "stub.C.anyRealDecoy": false,
+        "rows.before": "1",
+        "rows.after": "1"
+      },
+      "checks": {
+        "allowlisted REST read vended": true,
+        "git clone vended": true,
+        "GraphQL query vended": true,
+        "read outside the allowlist refused": true,
+        "flag off refuses every read": true,
+        "the reads created no approval row": true
+      },
+      "recorded_unscored_graphql_outside_allowlist": {
+        "out": "code=200",
+        "vended": true,
+        "note": "R38: recorded only; GraphQL queries are not repository-scoped, so this does not affect the verdict"
+      }
+    },
+    {
+      "arm": "c5",
+      "observations": {
+        "bControl": {
+          "http": "200",
+          "connect": "200",
+          "exit": 0
+        },
+        "aCarriesBToken": {
+          "http": "200",
+          "connect": "200",
+          "exit": 0
+        },
+        "aCarriesBTokenToB": {
+          "http": "403",
+          "connect": "200",
+          "exit": 0
+        },
+        "bProxyCredAtARouter": {
+          "http": "000",
+          "connect": "407",
+          "exit": 56
+        },
+        "aCredAtBRouter": {
+          "http": "000",
+          "connect": "407",
+          "exit": 56
+        },
+        "aRouterCredAtBInjector": {
+          "http": "000",
+          "connect": "407",
+          "exit": 56
+        },
+        "aCaAtBInjector": {
+          "http": "000",
+          "connect": "200",
+          "exit": 60
+        },
+        "aHookCertOnB": "HOOK_CLIENT action=REJECT status=403 reason=",
+        "bHookCertOnB": "HOOK_CLIENT action=CONTINUE status= reason=",
+        "otherRootOnB": "HOOK_CLIENT error=UNAVAILABLE"
+      },
+      "checks": {
+        "control: B reaches the stub with B's own token": true,
+        "A carrying B's token: the injector replaces it with A's own": true,
+        "A carrying B's token to B's repository is refused": true,
+        "B's proxy credential at A's router: 407": true,
+        "A's credential at B's router: 407": true,
+        "A's router credential at B's injector: 407": true,
+        "A's CA does not verify B's injector (TLS refused)": true,
+        "A's hook client certificate on B's socket is refused (client identity)": true,
+        "control: B's own hook certificate is accepted": true,
+        "a certificate from another root is refused at TLS": true,
+        "the stub never recorded B's token during A's probes": true
+      }
+    },
+    {
+      "arm": "c6",
+      "probes": {
+        "denyCidr": [
+          "000",
+          "403"
+        ],
+        "localhost": [
+          "000",
+          "403"
+        ],
+        "linkLocal": [
+          "000",
+          "403"
+        ],
+        "port80Open": [
+          "000",
+          "403"
+        ],
+        "port80Inject": [
+          "000",
+          "403"
+        ],
+        "forwarderBadToken": [
+          "000",
+          "407"
+        ],
+        "canaryOpen": [
+          "200",
+          "200"
+        ],
+        "canaryInject": [
+          "403",
+          "200"
+        ],
+        "tunnelNoCred": [
+          "000",
+          "407"
+        ],
+        "tunnelSessionCred": [
+          "000",
+          "407"
+        ],
+        "tunnelSessionBRouterCred": [
+          "000",
+          "407"
+        ],
+        "httpListenConnect": [
+          "000",
+          "407"
+        ],
+        "httpListenAbsolute": [
+          "403",
+          "000"
+        ],
+        "httpsListen": [
+          "403",
+          "000"
+        ],
+        "metrics": {
+          "note": "metrics listener serves /healthz only (v0.56.0)",
+          "metrics_http": "404",
+          "healthz_http": "200",
+          "healthz_bytes": 2,
+          "healthz_hits": []
+        },
+        "connect_probes": {
+          "a1-http-listen": {
+            "out": "CONNECT_PROBE mode=http-listen status=407",
+            "connect_refusals": [
+              "no-sni"
+            ],
+            "real_decoy_at_stub": false,
+            "hook_markers": [
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=refused-407 subreason=no-sni"
+            ],
+            "iron_audit": [
+              "CONNECT api.github.com:443  reject 407"
+            ],
+            "stub_connects": [],
+            "forwarder": "unmeasured: egress-forwarder.mjs logs no request content",
+            "squid_lines": []
+          },
+          "a1-https-listen": {
+            "out": "CONNECT_PROBE mode=https-listen status=error:ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR",
+            "connect_refusals": [],
+            "real_decoy_at_stub": false,
+            "hook_markers": [],
+            "iron_audit": [],
+            "stub_connects": [],
+            "forwarder": "unmeasured: egress-forwarder.mjs logs no request content",
+            "squid_lines": []
+          },
+          "a1-https-listen-sni": {
+            "out": "CONNECT_PROBE mode=https-listen status=405",
+            "connect_refusals": [],
+            "real_decoy_at_stub": false,
+            "hook_markers": [
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue"
+            ],
+            "iron_audit": [
+              "CONNECT api.github.com:443  allow 405"
+            ],
+            "stub_connects": [
+              {
+                "host": "api.github.com",
+                "auth_class": "none",
+                "protocol": "h2"
+              }
+            ],
+            "forwarder": "unmeasured: egress-forwarder.mjs logs no request content",
+            "squid_lines": [],
+            "outcome": "1 CONNECT record(s) at the stub, auth ['none'], hook continue True"
+          },
+          "a1-in-tunnel": {
+            "out": "CONNECT_PROBE mode=in-tunnel outer=200 status=407",
+            "connect_refusals": [
+              "in-tunnel"
+            ],
+            "real_decoy_at_stub": false,
+            "hook_markers": [
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue",
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=refused-407 subreason=in-tunnel"
+            ],
+            "iron_audit": [
+              "CONNECT api.github.com:443  allow 200 ",
+              "CONNECT api.github.com:443  reject 407"
+            ],
+            "stub_connects": [],
+            "forwarder": "unmeasured: egress-forwarder.mjs logs no request content",
+            "squid_lines": []
+          }
+        },
+        "plain_http_in_tunnel": {
+          "a2-get": {
+            "out": "a2 http=403 connect=200",
+            "markers": [
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue",
+              "SOLEUR_EGRESS_VEND_REFUSED session=sessA source=hook host=api.github.com method=GET client_auth=0 class=unknown reason=guard-refused subreason=no-tls"
+            ],
+            "real_decoy_at_stub": false
+          },
+          "a2-post": {
+            "out": "a2 http=403 connect=200",
+            "markers": [
+              "SOLEUR_EGRESS_CONNECT session=sessA source=hook host=api.github.com method=CONNECT client_auth=0 outcome=continue",
+              "SOLEUR_EGRESS_VEND_REFUSED session=sessA source=hook host=api.github.com method=POST client_auth=0 class=unknown reason=guard-refused subreason=no-tls"
+            ],
+            "real_decoy_at_stub": false
+          }
+        }
+      },
+      "listener_reachability_recorded": {
+        "18080": "open",
+        "18081": "open",
+        "18082": "open",
+        "18083": "open"
+      },
+      "unentitled": "https://sse.open-web.spike.test/ 000\nhttps://api.github.com/repos/spike/alpha 000\nhttps://127.0.0.1:18082/ 000\n<sandbox_violations>\ndeny network-outbound sse.open-web.spike.test:443 (user denied)\ndeny network-outbound api.github.com:443 (user denied)\n</sandbox_violations>",
+      "unentitled_decisions": [
+        {
+          "host": "sse.open-web.spike.test",
+          "decision": "deny"
+        },
+        {
+          "host": "api.github.com",
+          "decision": "deny"
+        }
+      ],
+      "unentitled_traces_stub_router_squid": [
+        0,
+        0,
+        0
+      ],
+      "entitled_control": "https://sse.open-web.spike.test/ 200",
+      "loopback_direct": "https://127.0.0.1:18082/ 000\nhttp://localhost:18081/ 000",
+      "loopback_forced": "forced http://127.0.0.1:18081/ 403\nforced http://localhost:18081/ 403\n<sandbox_violations>\ndeny network-outbound 127.0.0.1:18081 (user denied)\ndeny network-outbound localhost:18081 (user denied)\n</sandbox_violations>",
+      "entitled_decisions": [
+        {
+          "host": "sse.open-web.spike.test",
+          "decision": "allow"
+        },
+        {
+          "host": "127.0.0.1",
+          "decision": "deny"
+        },
+        {
+          "host": "localhost",
+          "decision": "deny"
+        }
+      ],
+      "recorded_only_unentitled_with_network_allowed": "https://sse.open-web.spike.test/ 200\nhttps://api.github.com/repos/spike/alpha 401\nhttps://127.0.0.1:18082/ 000",
+      "log_sizes": {
+        "app.log": 143881,
+        "hook.log": 29181,
+        "squid.log": 3782,
+        "stub-stdout.log": 26,
+        "stderr/hook.stderr.log": 0,
+        "stderr/stub.stderr.log": 0
+      },
+      "log_positive_line": {
+        "app.log": true,
+        "hook.log": true,
+        "squid.log": true,
+        "stub-stdout.log": true
+      },
+      "log_leaks": {},
+      "checks": {
+        "deny-CIDR, localhost and link-local targets refused at squid": true,
+        "port-80 targets refused on both router branches": true,
+        "the forwarder refuses a bad token (407)": true,
+        "an unentitled session has no route: every probe ends in a sandbox deny, nothing reaches router, squid or stub (R34)": true,
+        "control: the entitled session reaches the open-web stub in the same run": true,
+        "the entitled sandbox cannot reach container loopback, directly or through the SDK proxy (NO_PROXY rule denies)": true,
+        "tunnel_listen refuses no credential, the session credential and session B's router credential (407)": true,
+        "http_listen and https_listen yield no vend (R28 tunnel guard)": true,
+        "no real token reached the stub from any listener probe": true,
+        "metrics listener serves /healthz only (v0.56.0): /metrics 404, /healthz 200 and its body carries no secret": true,
+        "R36 a CONNECT with the router credential to http_listen is refused no-sni, no real token at the stub": true,
+        "R36 a CONNECT with the router credential over TLS to https_listen is refused (by the hook or by iron-proxy), no real token at the stub": true,
+        "R36 the same over TLS with SNI equal to the CONNECT host: passed by the hook, it reaches the stub as one CONNECT with no credential (the secrets method list), or reaches nothing": true,
+        "R36 no CONNECT record with a real token in any probe window": true,
+        "R36 a CONNECT with the router credential inside an established tunnel is refused (subreason recorded), no real token at the stub": true,
+        "R37 a plain-HTTP GET inside a 443 tunnel is refused no-tls, no real token at the stub": true,
+        "R37 a plain-HTTP POST inside a 443 tunnel is refused no-tls, no real token at the stub": true,
+        "every log holds its known positive line and its control copy (a planted decoy and the canary) is found by the same scan": true,
+        "no log carries a secret or the body canary": true
+      },
+      "secret_list": {
+        "declared": 73,
+        "pinned": 73,
+        "scanned": 73,
+        "missing": [],
+        "short": []
+      },
+      "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"
+    },
+    {
+      "arm": "c7",
+      "hashes_pass1": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f d0d849443e9ecc36e350c52d8c869f6191bf9c92018f93cf90e9de90b188a8c6 ",
+      "hashes_pass2": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f d0d849443e9ecc36e350c52d8c869f6191bf9c92018f93cf90e9de90b188a8c6 ",
+      "pass1_marker": "reason=not-allowlisted subreason=unlisted-write ",
+      "checks": {
+        "control: pass 1 refuses the request not-allowlisted, with no row": true,
+        "approval-hook.mjs and policy.mjs are byte-identical across passes": true,
+        "pass 2 gates the same request (pending row)": true,
+        "pass 2 consumes once and vends after approval": true,
+        "binding across verbs: an approved create-pull row does not authorize create-issue with the same body": true
+      },
+      "comparison": "one data file (policy.add-verb.yaml) against #12188's 9 source files; the overlay leaves out tests and approval-card text; the claim is limited to REST verbs that fit the generic recipe (CTO R4)"
+    },
+    {
+      "arm": "c9",
+      "libraries": {
+        "curl": "OpenSSL/3.0.22",
+        "git": "libgnutls.so.30",
+        "node": "openssl/3.5.9"
+      },
+      "results": {
+        "inject.curl": "accept",
+        "inject.git": "accept last=fatal: https://api.github.com:19401/x.git/info/refs not valid: is this a git repository_",
+        "inject.node": "accept",
+        "mixedcase.curl": "accept",
+        "mixedcase.git": "accept last=fatal: https://API.GitHub.com:19402/x.git/info/refs not valid: is this a git repository_",
+        "mixedcase.node": "accept",
+        "noninject.curl": "reject rc=60",
+        "noninject.git": "reject last=fatal: unable to access _https://evil.example:19403/x.git/_: server certificate verification failed. CAfile: /run/spike-pub/sessA/bundle.pem CRLfile: none",
+        "noninject.node": "reject UNSPECIFIED:permitted-subtree-violation",
+        "gist.curl": "accept",
+        "gist.git": "accept last=fatal: https://gist.github.com:19404/x.git/info/refs not valid: is this a git repository_",
+        "gist.node": "accept",
+        "ip.curl": "reject rc=60",
+        "ip.git": "reject last=fatal: unable to access _https://127.0.0.1:19405/x.git/_: server certificate verification failed. CAfile: /run/spike-pub/sessA/bundle.pem CRLfile: none",
+        "ip.node": "reject UNSPECIFIED:excluded-subtree-violation",
+        "cnonly.curl": "accept",
+        "cnonly.git": "accept last=fatal: https://api.github.com:19406/x.git/info/refs not valid: is this a git repository_",
+        "cnonly.node": "accept",
+        "cnonlynon.curl": "reject rc=60",
+        "cnonlynon.git": "reject last=fatal: unable to access _https://evil.example:19407/x.git/_: server certificate verification failed. CAfile: /run/spike-pub/sessA/bundle.pem CRLfile: none",
+        "cnonlynon.node": "reject UNSPECIFIED:permitted-subtree-violation",
+        "crossb.curl": "reject rc=60",
+        "crossb.git": "reject last=fatal: unable to access _https://api.github.com:19408/x.git/_: server certificate verification failed. CAfile: /run/spike-pub/sessA/bundle.pem CRLfile: none",
+        "crossb.node": "reject UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+      },
+      "mixed_case_gnutls": {
+        "git": "accept last=fatal: https://API.GitHub.com:19402/x.git/info/refs not valid: is this a git repository_"
+      },
+      "cn_only_inject_host": {
+        "curl": "accept",
+        "git": "accept last=fatal: https://api.github.com:19406/x.git/info/refs not valid: is this a git repository_",
+        "node": "accept"
+      },
+      "forced_connect": "403",
+      "checks": {
+        "control: every client accepts a session-CA leaf for an inject host": true,
+        "every client rejects a session-CA leaf for a non-inject name": true,
+        "gist.github.com is accepted (within the documented *.github.com scope)": true,
+        "an IP-address leaf is rejected": true,
+        "a common-name-only leaf for a non-inject name is rejected (CN fallback stays constrained)": true,
+        "session B's CA is not trusted in session A": true,
+        "the two sessions have distinct CAs, and A's is not in B's bundle": true,
+        "a non-inject CONNECT forced at the injector is refused 403 by the allowlist": true,
+        "the non-inject SSE took the router's forwarder branch, never the injector": true,
+        "the CA key exists during the session and is absent after it ends": true
+      }
+    },
+    {
+      "arm": "c8",
+      "results": {
+        "control.gitPush": {
+          "rc": 1,
+          "elapsed": 0.21
+        },
+        "control.curlPost": {
+          "rc": 22,
+          "elapsed": 0.08
+        },
+        "control.ghPost": {
+          "rc": 1,
+          "elapsed": 0.09
+        },
+        "control.curlGet": {
+          "rc": 0,
+          "elapsed": 0.07
+        },
+        "control.sse": {
+          "rc": 0,
+          "elapsed": 1.04
+        },
+        "stalled.gitPush": {
+          "rc": 1,
+          "elapsed": 5.19
+        },
+        "stalled.curlPost": {
+          "rc": 22,
+          "elapsed": 5.04
+        },
+        "stalled.ghPost": {
+          "rc": 1,
+          "elapsed": 5.05
+        },
+        "stalled.curlGet": {
+          "rc": 0,
+          "elapsed": 0.07
+        },
+        "stalled.sse": {
+          "rc": 0,
+          "elapsed": 1.04
+        },
+        "frozen.gitPush": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "frozen.curlPost": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "frozen.ghPost": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "frozen.curlGet": {
+          "rc": 124,
+          "elapsed": 15.01
+        },
+        "frozen.sse": {
+          "rc": 0,
+          "elapsed": 1.05
+        },
+        "hookKilled.gitPush": {
+          "rc": 128,
+          "elapsed": 0.01
+        },
+        "hookKilled.curlPost": {
+          "rc": 22,
+          "elapsed": 0.01
+        },
+        "hookKilled.ghPost": {
+          "rc": 1,
+          "elapsed": 0.04
+        },
+        "hookKilled.curlGet": {
+          "rc": 22,
+          "elapsed": 0.0
+        },
+        "hookKilled.sse": {
+          "rc": 0,
+          "elapsed": 1.05
+        },
+        "routerKilled.gitPush": {
+          "rc": 128,
+          "elapsed": 0.0
+        },
+        "routerKilled.curlPost": {
+          "rc": 7,
+          "elapsed": 0.0
+        },
+        "routerKilled.ghPost": {
+          "rc": 1,
+          "elapsed": 0.03
+        },
+        "routerKilled.curlGet": {
+          "rc": 7,
+          "elapsed": 0.01
+        },
+        "routerKilled.sse": {
+          "rc": 1,
+          "elapsed": 0.01
+        },
+        "ironKilled.gitPush": {
+          "rc": 128,
+          "elapsed": 0.02
+        },
+        "ironKilled.curlPost": {
+          "rc": 56,
+          "elapsed": 0.01
+        },
+        "ironKilled.ghPost": {
+          "rc": 1,
+          "elapsed": 0.03
+        },
+        "ironKilled.curlGet": {
+          "rc": 56,
+          "elapsed": 0.01
+        },
+        "ironKilled.sse": {
+          "rc": 0,
+          "elapsed": 1.04
+        }
+      },
+      "hook_timeouts": 3,
+      "iron_hook_errors": 4,
+      "frozen_client_wait_recorded_not_scored": {
+        "gitPush": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "curlPost": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "ghPost": {
+          "rc": 124,
+          "elapsed": 15.0
+        },
+        "curlGet": {
+          "rc": 124,
+          "elapsed": 15.01
+        }
+      },
+      "claude_streaming_after_iron_killed": {
+        "deltas": 50,
+        "route": "direct",
+        "router_alive": true,
+        "message_peers": [
+          "11.12.13.3"
+        ],
+        "app_ip": "11.12.13.3",
+        "squid_ip": "11.12.13.2",
+        "side_calls": [
+          "/api/claude_code/policy_limits 11.12.13.3",
+          "/api/claude_code/settings 11.12.13.3"
+        ],
+        "liveness_events": "50",
+        "stub_own_certificate": true,
+        "stderr_tls": [],
+        "ok": true
+      },
+      "iron_proxy_dead": "yes",
+      "checks": {
+        "control: the read vends and the SSE streams through a healthy hook": true,
+        "control: writes are refused promptly (pending), not hung": true,
+        "stalled hook: writes exit non-zero within 10 s, hook-timeout emitted, no real token on a write": true,
+        "frozen hook: no real token at the stub, and the non-inject SSE is uninterrupted": true,
+        "killed hook: every inject-host client exits non-zero within 10 s, no real token, iron-proxy's audit names the failed call": true,
+        "killed router: all of the session's egress fails": true,
+        "killed iron-proxy: inject-host clients exit non-zero within 10 s, no real token, the forwarder branch still streams": true,
+        "killed iron-proxy: claude streaming continues 50/50 on its own path (R30/R33)": true
+      }
+    }
+  ]
+}
