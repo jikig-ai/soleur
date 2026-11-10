@@ -292,20 +292,20 @@ Ruled by CTO agent, 2026-11-10 (B3, amended; plan-review rulings T1 to T6).
 - `acceptAlso` resolves as follows:
   - **Unset or empty:** `null`, silently. This is the default.
   - **Set but not `^[0-9a-f]{64}$`:** `null`, plus **one** Sentry event through `reportSilentFallback` (`feature:
-    "control_plane_route"`, `op: "proxy-hello.accept-also-ignored"`, extra `{ reason: "malformed" }`).
-  - **Byte-equal to `current`:** **kept**, plus one **warn-level** Sentry event (`op: "proxy-hello.accept-also-equals-current"`).
+    "control_plane_route"`, `op: "loadProxyHelloKeys.accept-also-ignored"`, extra `{ reason: "malformed" }`).
+  - **Byte-equal to `current`:** **kept**, plus one **warn-level** Sentry event (`op: "loadProxyHelloKeys.accept-also-equals-current"`).
     Accepting the current key twice is harmless, and `relay_hello_key_fp` then shows `accept_also == current`, which
     exposes the mistake (T2).
   - **Well-formed and distinct from `current`:** kept, plus one **warn-level** event per boot,
-    `op: "proxy-hello.accept-also-active"`, with constant text and no value or fingerprint (Ruled by CTO agent,
+    `op: "loadProxyHelloKeys.accept-also-active"`, with constant text and no value or fingerprint (Ruled by CTO agent,
     2026-11-10, D3). The slot sits outside Terraform, so without this event a planted slot would be a silent second
     key. The event is expected during a legitimate rotation.
   - **Set while `current` is `null`:** no extra event. The listener refuses to start and reports the existing
     `createProxyServer.no-hello-key`, and `acceptAlso` is never consulted (T6, dropping `no_current`).
 - Every event text is constant, with no value, length or prefix (`cq-silent-fallback-must-mirror-to-sentry`).
   - Each op has its **own distinct message text**, because Sentry groups by message.
-  - `accept-also-ignored` goes through `reportSilentFallback`.
-  - `accept-also-equals-current` goes through `warnSilentFallback` (`server/observability.ts`) with `err = null`.
+  - `loadProxyHelloKeys.accept-also-ignored` goes through `reportSilentFallback`.
+  - `loadProxyHelloKeys.accept-also-equals-current` and `loadProxyHelloKeys.accept-also-active` go through `warnSilentFallback` (`server/observability.ts`) with `err = null`.
   - Each fires once per process: the loader runs once and caches. A call-twice test row pins that.
 - **The returned key set is frozen and redacting** (security review). It defines `toJSON() { return "[proxy-hello-keys]" }`
   and `[util.inspect.custom]`, so a stray log of the object never serializes the Buffers. An isolation-test row asserts
@@ -389,8 +389,10 @@ after the key check passes):
     planted slot is otherwise silent).
 - **ADR-323, other sections:**
   - Decision 6 gains `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`; Decision 2 gains the fingerprint line.
-  - Rename the "No rotation route" consequence to "Rotation route: verifier half built". It must say that a Terraform
-    `-replace` is rejected because it writes the new key into the same Tier-A-readable state.
+  - The 2026-11-09 "No rotation route" consequence and Decision 9's `_PREVIOUS`/ADR-320 parenthetical stay verbatim
+    (review, 2026-11-10); the "verifier half built" statement goes in an appended `## Amendment — 2026-11-10 (#8211)`
+    block in the ADR-118 style. It must say that a Terraform `-replace` is rejected because it writes the new key into
+    the same Tier-A-readable state.
   - Named residuals gain: each rotation phase is a rolling restart, so every host's in-process replay cache is cleared
     once per phase.
   - "Considered Options" gains: `_PREVIOUS` two-phase (splits the hosts; each host both signs and verifies); a
@@ -735,17 +737,17 @@ liveness_signal:
   alert_target: "Better Stack Logs source 2457081 (read via scripts/betterstack-query.sh); existing relay_listener_down alert covers the no-key path"
   configured_in: "apps/web-platform/server/session-proxy.ts (createProxyServer)"
 error_reporting:
-  destination: "Sentry via reportSilentFallback (feature control_plane_route, ops proxy-hello.accept-also-ignored and proxy-hello.accept-also-equals-current (warn); existing op createProxyServer.no-hello-key); GitHub Actions ::error:: annotation + step summary + the existing release-failed email for SOLEUR_GHCR_PUSH_FAILED"
+  destination: "Sentry via reportSilentFallback (feature control_plane_route, ops loadProxyHelloKeys.accept-also-ignored, loadProxyHelloKeys.accept-also-equals-current (warn) and loadProxyHelloKeys.accept-also-active (warn); existing op createProxyServer.no-hello-key); GitHub Actions ::error:: annotation + step summary + the existing release-failed email for SOLEUR_GHCR_PUSH_FAILED"
   fail_loud: true
 failure_modes:
   - mode: "hosts hold different CURRENT keys after a deploy (key drift)"
     detection: "layer 2 pino warn -> layer 3 vector app_container_warn_filter -> Better Stack: the two hosts' newest relay_hello_key_fp current= values (grouped by host_name) differ; layer 2 pino -> Sentry: bounded deny events with reason mac"
     alert_route: "Sentry bounded deny event (existing); fingerprint read in betterstack-log-query.md relay section; these events page no one"
   - mode: "accept-also slot set but malformed"
-    detection: "layer 2 pino -> Sentry: one event op proxy-hello.accept-also-ignored reason=malformed; layer 3 Better Stack: relay_hello_key_fp accept_also=none"
+    detection: "layer 2 pino -> Sentry: one event op loadProxyHelloKeys.accept-also-ignored reason=malformed; layer 3 Better Stack: relay_hello_key_fp accept_also=none"
     alert_route: "Sentry issue (pages no one; #12538 phase gate (e) reads it before each phase)"
   - mode: "accept-also slot equal to current (a rotation mistake)"
-    detection: "layer 2 pino -> Sentry: one warn event op proxy-hello.accept-also-equals-current; layer 3 Better Stack: relay_hello_key_fp shows accept_also equal to current"
+    detection: "layer 2 pino -> Sentry: one warn event op loadProxyHelloKeys.accept-also-equals-current; layer 3 Better Stack: relay_hello_key_fp shows accept_also equal to current"
     alert_route: "Sentry issue (pages no one; #12538 phase gate (e) reads it before each phase)"
   - mode: "accept-also slot set outside a rotation window (a stale or planted slot)"
     detection: "layer 3 Better Stack: relay_hello_key_fp accept_also!=none outside a recorded rotation; layer 2 pino -> Sentry: the per-boot slot-set event (decision row D3)"
@@ -791,7 +793,11 @@ discoverability_test:
 - **Future rotations (scope-out to #12538):** a single-phase leak rotation accepts one stagger of 4014 loops for users
   whose lease sits on the host not yet restarted. A routine single-phase rotation at `agent_sessions_live=0` carries a
   check-then-act race with the same effect. Each rotation phase also clears every host's replay cache, a named ADR-323
-  residual: a hello captured before a restart can be replayed inside the skew window.
+  residual: a hello captured before a restart can be replayed inside the skew window. A malformed slot leaves that host
+  single-key (it reads `accept_also=none`), so when a peer moves to P2 its hellos are refused `mac` on that host;
+  #12538's P1 to P2 gate must refuse on `accept_also=none`. Rolling back below this release requires the slot unset
+  first: an older image neither accepts the slot nor deletes it from `process.env` (ADR-323 Decision 9, requirement
+  (c)), and #12538 owns that check.
 - **A failed image push:** users stay on the previous image, and fixes are delayed, until the owner re-runs the failed
   jobs. A fresh dispatch would also lose the semver label. A cancelled or timed-out push job emits neither the marker
   nor the email (C.2 residual).
@@ -1037,15 +1043,15 @@ only consumer.
 - [ ] **AC-B4** (CPO 3): each loader state has its own test, which asserts relay behaviour and the exact Sentry events.
       Each event payload is scanned for the fixture key's hex and base64 forms, and they must be absent.
   - **Slot unset:** 0 events.
-  - **Slot malformed:** exactly 1 `proxy-hello.accept-also-ignored` event with `reason: "malformed"`, and the slot is
+  - **Slot malformed:** exactly 1 `loadProxyHelloKeys.accept-also-ignored` event with `reason: "malformed"`, and the slot is
     absent.
-  - **Slot equal to current:** exactly 1 warn-level `proxy-hello.accept-also-equals-current` event, the slot is kept, and
+  - **Slot equal to current:** exactly 1 warn-level `loadProxyHelloKeys.accept-also-equals-current` event, the slot is kept, and
     the fingerprint line shows equal values.
-  - **Slot well-formed and distinct:** exactly 1 warn-level `proxy-hello.accept-also-active` event, with no value or
+  - **Slot well-formed and distinct:** exactly 1 warn-level `loadProxyHelloKeys.accept-also-active` event, with no value or
     fingerprint in its payload.
   - **Slot set and well-formed, current absent:** exactly 1 `createProxyServer.no-hello-key` event, 0 accept-also
     events, and no listener.
-  - **Slot malformed, current absent:** exactly 1 `proxy-hello.accept-also-ignored` event (the loader runs first, at
+  - **Slot malformed, current absent:** exactly 1 `loadProxyHelloKeys.accept-also-ignored` event (the loader runs first, at
     boot) plus 1 `createProxyServer.no-hello-key` event, and no listener.
   - **Call twice:** each state's events fire exactly once (cached loader).
   - **Named spies:** `reportSilentFallback` and `warnSilentFallback` are named spies in both `proxy-tls.test.ts` and
@@ -1064,8 +1070,9 @@ only consumer.
 - [ ] **AC-B8**: ADR-323 is amended as in B.7 and cites #12538 and #12539. The `.tf` header, the HALT remediation line,
       `apply-web-platform-infra-job-rationale.md` and `betterstack-log-query.md` say the same. Check:
       `git grep -n '_PREVIOUS' -- apps/web-platform/infra/proxy-hello-hmac.tf .github/workflows/apply-web-platform-infra.yml knowledge-base/engineering/architecture/decisions/ADR-323-*.md knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
-      prints only ADR-323 lines that fall between its `## Considered Options` heading and the next level-2 heading. A small
-      awk over the hit line numbers checks this mechanically.
+      prints only ADR-323 lines that fall between its `## Considered Options` heading and the next level-2 heading, plus
+      the two restored 2026-11-09 sentences (Decision 9's parenthetical and the "No rotation route" consequence), which
+      stay verbatim. A small awk over the hit line numbers checks this mechanically.
 - [ ] **AC-B9**: the `relay_hello_key_changes` HALT's addresses, counter, forget/move counting and position are
       unchanged. `bash tests/scripts/test-destroy-guard-counter-web-platform.sh` and
       `bun test plugins/soleur/test/terraform-target-parity.test.ts` pass.
@@ -1129,17 +1136,21 @@ only consumer.
       never runs it. Note: with no proxied session in the
       window this read is empty, which is expected, not a pass signal. AC-P3 is the positive proof.
 
-- [ ] **AC-P1**: after the release deploys, run
-      `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep relay_hello_key_fp`.
-      Group the rows by `host_name` with `CONTAINER_NAME='soleur-web-platform'`, using the query shape of the relay
-      section of `betterstack-log-query.md` (archive union included). Each web host's newest row must be **newer than
-      that host's deploy time** (taken from the deploy-arm run's per-host deploy timestamps, not the time of the read), and all rows must show the same `current=` value and `accept_also=none`.
-      Failure branches:
+- [ ] **AC-P1**: after the release deploys, run the fingerprint query in the relay section of
+      `betterstack-log-query.md` (archive union included, `CONTAINER_NAME='soleur-web-platform'`, window
+      `INTERVAL 30 DAY` or bounded by the deploy time, one row per host with `argMax(line, dt)` and `max(dt)`). Each
+      web host's newest row must be **newer than that host's deploy time** (taken from the deploy-arm run's per-host
+      deploy timestamps, not the time of the read), and each host's newest row must show the same `current=` value and
+      `accept_also=none`. Failure branches:
   - **Two `current=` values differ:** stop. File an issue referencing #8211. Do not roll back, because the key value did
     not change in this PR; it is pre-existing drift.
-  - **A host has no row:** check its `relay_probe proxy_state=` line. If it is `error`, look for
-    `createProxyServer.no-hello-key` in Sentry. If the line is absent, the host has not restarted onto this image yet.
+  - **A host has no row:** check its `relay_probe proxy_state=` line.
+    - `listening` with no fingerprint row: the host runs an older image, or its boot is outside the window.
+    - `disabled`, `no_bind`, `no_allowlist` or `error`: no fingerprint row is expected (the line comes after those
+      checks). For `error`, look for `createProxyServer.no-hello-key`.
+    - No `relay_probe` row: the container is down or its log path is broken (see `relay_probe_silent`).
   - **`accept_also!=none` anywhere:** a slot is set outside any rotation. Treat it as an alarm and escalate on #12538.
+    This is a manual read: no automated alert exists until #12538 requirement (e).
 - [ ] **AC-P2**: if any host shows `accept_also!=none`, Sentry has exactly the AC-B4 event for that state, and the
       canary may add one more. With the slot unset there is nothing to read; that is expected, not a pass signal.
 - [ ] **AC-P3**: #8211 item 1 stays open until the owner host shows a `relay_hello_window accepted=<n>` row with `n>0`
