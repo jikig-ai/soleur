@@ -153,8 +153,9 @@ the second host:
    key outside Terraform per ADR-320 decision 2), not a runbook step; it is recorded on #8211 as an open item before external users are
    served from the second host.
 
-   *Amended 2026-11-10 (#8211):* this block owns the rotation rationale; other files point here. The 2026-11-09 parenthetical above
-   (dual-key verification, or ADR-320 decision 2) is superseded by the accept-only slot and #12538 below.
+   *Amended 2026-11-10 (#8211):* this block owns the rotation rationale; other files point here. The open choice in the 2026-11-09
+   parenthetical above is settled: an accept-only slot instead of dual-key verification, plus #12538's move of the key out of
+   Terraform (ADR-320 decision 2).
 
    - **The slot.** One accept-only slot, `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, verify-only and dark by default (no new secret is minted).
      The sender never signs with it.
