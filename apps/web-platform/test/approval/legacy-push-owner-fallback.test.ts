@@ -23,6 +23,7 @@ vi.mock("@/server/approval/ops", async (orig) => ({
 }));
 
 import { createCanUseTool, PUSH_ROLE_READ_DEADLINE_MS, type CanUseToolContext } from "@/server/permission-callback";
+import { logPermissionDecision } from "@/server/permission-log";
 import { APPROVAL_UNAVAILABLE_DENY } from "@/server/approval/gate-flow";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
 import { ExecutionGrants } from "@/server/approval/grants";
@@ -34,6 +35,7 @@ beforeEach(() => {
   clearAllWaiters();
   reports.length = 0;
   log.warn.mockClear();
+  vi.mocked(logPermissionDecision).mockClear();
   process.env.SENTRY_USERID_PEPPER = "legacy-push-owner-fallback-test-pepper";
 });
 
@@ -130,7 +132,7 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     expect(h.notifyOfflineUser).not.toHaveBeenCalled();
     expect(h.updateConversationStatus).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ decision: "platform-gate-push-owner-required", role: "member" }),
+      expect.objectContaining({ sec: true, decision: "platform-gate-push-owner-required", role: "member" }),
       expect.any(String),
     );
   });
@@ -161,6 +163,11 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
     expect(reports).toHaveLength(1);
     expect(reports[0][0]).toBe("viewerRoleFailed");
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sec: true, decision: "platform-gate-push-owner-required", role: "unavailable" }),
+      expect.any(String),
+    );
+    expect(logPermissionDecision).toHaveBeenCalledWith("canUseTool-platform-gated", TOOLS.pushBranch, "deny", "push owner required (unavailable)");
     expect(reports[0][2]).toEqual(
       expect.objectContaining({ tags: { stage: "legacy-push-owner-check" }, workspaceId: WORKSPACE_ID, extra: { outcome: "denied-no-card" } }),
     );
@@ -206,6 +213,8 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     const h = setup("no-approval");
     const res = await h.call(TOOLS.pushBranch, push());
     expect(reports.map((r) => [r[0], (r[2] as { extra?: unknown }).extra])).toEqual([["gateFailed", { stage: "wiring-absent" }]]);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ sec: true, role: "unavailable" }), expect.any(String));
+    expect(logPermissionDecision).toHaveBeenCalledWith("canUseTool-platform-gated", TOOLS.pushBranch, "deny", "push owner required (unavailable)");
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
     h.expectNoWrites();
     expect(h.sendToClient).not.toHaveBeenCalled();

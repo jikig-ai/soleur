@@ -56,9 +56,12 @@ describe("isLegalSurfaceEnabled (founder id only)", () => {
     const src = readFileSync(resolve(__dirname, "../../server/legal-acceptance/surface.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
-    const imports = src.match(/^import .* from "([^"]+)";$/gm) ?? [];
-    expect(imports.map((l) => l.replace(/^.* from "([^"]+)";$/, "$1")).sort()).toEqual(["@/lib/is-uuid", "@/server/approval/ops"]);
-    expect(src).not.toMatch(/isApprovalQueueEnabled|approval\/flag|getFlag|flagsmith/i);
+    // every module specifier, single- or multi-line, static or dynamic
+    const specifiers = [...src.matchAll(/\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g)].map(
+      (m) => m[1] ?? m[2] ?? m[3],
+    );
+    expect(specifiers.sort()).toEqual(["@/lib/is-uuid", "@/server/approval/ops"]);
+    expect(src).not.toMatch(/isApprovalQueueEnabled|approval\/flag|getFlag|getRuntimeFlag|feature-flags|flagsmith/i);
   });
 
   it("another user: disabled, and no report", async () => {

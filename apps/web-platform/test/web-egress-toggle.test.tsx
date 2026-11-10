@@ -224,14 +224,38 @@ describe("WebEgressToggle — push and gh disclosures (#12469, #12197)", () => {
     const dlgParas = Array.from(screen.getByRole("alertdialog").querySelectorAll("p")).map((p) => norm(p.textContent ?? ""));
     expect(dlgParas.filter((t) => t === norm(PUSH_DISCLOSURE))).toHaveLength(1);
     expect(dlgParas.filter((t) => t === norm(GH_DISCLOSURE))).toHaveLength(1);
-    // closed set: any paragraph that talks about pushing, credentials or `gh` IS one of the two ruled constants, so an added or
-    // rewritten claim beside them fails here
-    const ruled = new Set([norm(PUSH_DISCLOSURE), norm(GH_DISCLOSURE)]);
-    const claims = (paras: string[]) => paras.filter((t) => /push|credential|\bgh\b|\bgit\b|repositor|token/i.test(t));
-    expect(claims(onParas).filter((t) => !ruled.has(t))).toEqual([]);
-    expect(claims(dlgParas).filter((t) => !ruled.has(t))).toEqual([]);
-    expect(claims(onParas)).toHaveLength(2);
-    expect(claims(dlgParas)).toHaveLength(2);
+  });
+
+  it("closed set: the ON block and the enable dialog carry exactly these texts, in any element", () => {
+    // Every text node, whatever element holds it, so an added <span>, <li> or reworded claim fails here.
+    const texts = (root: Element) => {
+      const out: string[] = [];
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const t = norm(n.textContent ?? "");
+        if (t) out.push(t);
+      }
+      return out;
+    };
+    const { container } = card({ initialWebEgress: true });
+    const pushP = Array.from(container.querySelectorAll("p")).find((p) => norm(p.textContent ?? "") === norm(PUSH_DISCLOSURE));
+    expect(pushP?.parentElement).toBeTruthy();
+    expect(texts(pushP!.parentElement!)).toEqual([
+      "On. Applies to sessions started after enabling; turning off revokes live access on the session's next dispatch.",
+      norm(PUSH_DISCLOSURE),
+      norm(GH_DISCLOSURE),
+    ]);
+    cleanup();
+    card({ initialWebEgress: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Agent web access" }));
+    expect(texts(screen.getByRole("alertdialog"))).toEqual([
+      "Turn on web access for this workspace?",
+      "Agents will reach the public internet over HTTPS and could send data to external hosts if compromised or prompt-injected.",
+      norm(PUSH_DISCLOSURE),
+      norm(GH_DISCLOSURE),
+      "Cancel",
+      "I understand — turn it on",
+    ]);
   });
 
   it("neither the ON block nor the enable dialog carries a retired 'can't push to git remotes' phrase", () => {
@@ -282,7 +306,18 @@ describe("push and gh disclosures: the Scope Grants page carries the identical s
     expect(code).toMatch(/\{PUSH_DISCLOSURE\}/);
     expect(code).toMatch(/\{GH_DISCLOSURE\}/);
     // each constant is the whole of its own paragraph, PUSH first, nothing appended or interleaved
-    expect(code).toMatch(/<p className="?"?>\{PUSH_DISCLOSURE\}<\/p>\s*<p className="?"?>\{GH_DISCLOSURE\}<\/p>/);
+    expect(code).toMatch(/<p[^>]*>\s*\{PUSH_DISCLOSURE\}\s*<\/p>\s*<p[^>]*>\s*\{GH_DISCLOSURE\}\s*<\/p>/);
+    // closed set for the page's callout: exactly three paragraphs (the risk line, then the two constants) and no other
+    // element or text, so an added claim beside them fails here
+    const start = code.indexOf("{PUSH_DISCLOSURE}");
+    expect(start).toBeGreaterThan(-1);
+    const callout = code.slice(code.lastIndexOf("<div", start), code.indexOf("</div>", start));
+    const tags = (callout.match(/<([a-zA-Z]+)/g) ?? []).map((t) => t.slice(1));
+    expect(tags).toEqual(["div", "p", "strong", "p", "p"]);
+    const loose = norm(callout.replace(/<[^>]*>/g, " ").replace(/\{""\}/g, " "));
+    expect(loose).toBe(
+      norm("Widens the security boundary. A compromised or prompt-injected agent could send workspace data to external hosts. {PUSH_DISCLOSURE} {GH_DISCLOSURE}"),
+    );
     expect(code.match(/\{PUSH_DISCLOSURE\}/g)).toHaveLength(1);
     expect(code.match(/\{GH_DISCLOSURE\}/g)).toHaveLength(1);
     // and the page no longer carries its own copy of either sentence, nor any hand-written push claim
