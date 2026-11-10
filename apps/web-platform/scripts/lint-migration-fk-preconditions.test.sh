@@ -45,6 +45,9 @@ assert_fixture_dir() {
 tmp=$(mktemp -d -t fkprecond.XXXXXXXX) || { echo "harness: mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$tmp"
 trap 'rm -rf "$tmp"' EXIT
+# Fixture env (author/committer identity, no developer config) in THIS shell: the mk_* helpers run in command substitutions, so
+# exports made there never reach the parent's later `git commit` calls, which fail on a runner with no global identity.
+git_fixture_env "$tmp" || { echo "harness: git_fixture_env refused $tmp" >&2; exit 2; }
 
 # ----------------------------------------------------------------------
 # T1: unguarded cross-file FK → exit 1, names the table

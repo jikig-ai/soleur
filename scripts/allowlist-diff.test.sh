@@ -76,6 +76,10 @@ done
 WORK="$(mktemp -d -t allowdiff.XXXXXXXX)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK"' EXIT
+# The fixture env (author/committer identity, no developer config) must be set in THIS shell: mk_repo runs inside a
+# command substitution, so exports made there never reach the parent's later `git commit` calls, which then fail on a
+# runner with no global identity ("Author identity unknown", `HEAD~1` unresolvable).
+git_fixture_env "$WORK" || { echo "harness: git_fixture_env refused $WORK" >&2; exit 2; }
 
 # mk_repo <name> — a git repo carrying the real parser + .gitleaks.toml in one base commit.
 mk_repo() {

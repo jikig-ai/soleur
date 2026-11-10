@@ -39,6 +39,9 @@ assert_fixture_dir() {
 T="$(mktemp -d -t sdkgate.XXXXXXXX)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$T"
 trap 'rm -rf "$T"' EXIT
+# Fixture env (author/committer identity, no developer config) in THIS shell: the mk_* helpers run in command substitutions, so
+# exports made there never reach the parent's later `git commit` calls, which fail on a runner with no global identity.
+git_fixture_env "$T" || { echo "harness: git_fixture_env refused $T" >&2; exit 2; }
 
 PASS=0
 FAIL=0
