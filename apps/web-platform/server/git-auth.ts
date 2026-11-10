@@ -146,7 +146,8 @@ export interface GitExecOptions {
    * (never `process.env`), `GIT_DIR` = the isolated directory, the workspace object store as the only alternate, and
    * `HOME` = the isolated directory (the askpass script is written inside it). The value is validated at runtime BEFORE any
    * token is minted (a stray `true`, an unbranded object or an unsafe path refuses), and a caller-supplied `cwd` is refused:
-   * the child's cwd is the isolated directory. Unset keeps the exact legacy argv and environment.
+   * the child's cwd is the isolated directory. Unset uses the shared host-git invocation (hardening arguments, a
+   * scrubbed environment, https-only transport); it still reads the workspace `.git` (ADR-050 2026-11-09 addendum).
    */
   hardened?: IsolatedPushDir;
 }
@@ -327,9 +328,9 @@ export async function gitWithInstallationAuth(
       GIT_TERMINAL_PROMPT: "0",
       GIT_TERMINAL_PROGRESS: "0",
       GIT_CONFIG_NOSYSTEM: "1",
-      // Defense-in-depth: ignore any attacker-controlled user gitconfig
-      // that could slip a `credential.helper` past HELPER_RESET if an
-      // unexpected `$HOME` sibling ever becomes writeable.
+      // Hardened (isolated) arm only: ignore any attacker-controlled user gitconfig that could slip a
+      // `credential.helper` past HELPER_RESET if an unexpected `$HOME` sibling ever becomes writeable. The legacy arm
+      // does not forward this (see below): the shared host-git invocation pins the image identity file instead.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
     // Legacy: the shared host-git invocation (hardening arguments before the credential-helper reset, a scrubbed
@@ -337,8 +338,6 @@ export async function gitWithInstallationAuth(
     // `authEnv` on this arm: the helper owns them (the image identity file), and `/dev/null` there would drop the fallback
     // identity. The hardened arm below keeps its own argv and env exactly as before.
     const { GIT_CONFIG_GLOBAL: _global, GIT_CONFIG_NOSYSTEM: _nosystem, ...legacyAuthEnv } = authEnv;
-    void _global;
-    void _nosystem;
     const legacy = hardened
       ? undefined
       : hostGitInvocation([...HELPER_RESET, ...args], {

@@ -68,8 +68,8 @@ type PlumbingResult = { ok: boolean; stdout: string; stderr: string };
  * `_cron-safe-commit.ts runGit`: async `promisify(execFile)`, no-throw
  * `{ ok, stdout, stderr }` return, host-config isolation.
  *
- * Identity is supplied via env (config is nulled) so `commit-tree` works in the
- * isolated environment without depending on the clone's user.name/email.
+ * Identity is supplied via env (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`) so `commit-tree` works without depending on the
+ * clone's user.name/email; the global config is the image identity file, not a nulled one.
  */
 async function runPlumbingGit(
   cwd: string,
@@ -84,8 +84,7 @@ async function runPlumbingGit(
   const execFileP = promisify(execFile);
   try {
     // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox. It goes through
-    // the shared host-git invocation (hardening arguments + a SCRUBBED environment; before #9601 follow-on it spread
-    // `process.env`, so a planted helper saw the server's secrets). NOT covered: `filter.*` drivers,
+    // the shared host-git invocation (hardening arguments + a SCRUBBED environment). NOT covered: `filter.*` drivers,
     // `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
     const h = hostGitInvocation(args, {
       cwd,

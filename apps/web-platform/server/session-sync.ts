@@ -359,7 +359,8 @@ async function runProtectedFallback(
 }
 
 /**
- * Connected-repo git wrapper. Wraps `execFileSync("git", argv, opts)` with
+ * Connected-repo git wrapper. Runs `execFileSync("git", ...)` through the shared host-git invocation
+ * (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) with
  * an argv-shape guard that rejects:
  *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`,
  *     `branch`, `tag`, `cherry-pick`, ...) — categorically destructive or

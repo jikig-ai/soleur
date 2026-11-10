@@ -112,6 +112,10 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Module-level state a row can leave behind: reset so a row never depends on which row ran before it.
+  H.keepProductionProtocol = false;
+  H.fetchImpl = async () => {};
+  currentPlanters = [];
   saved[SENTINEL_VAR] = process.env[SENTINEL_VAR];
   process.env[SENTINEL_VAR] = SENTINEL;
   w = newWorld();
