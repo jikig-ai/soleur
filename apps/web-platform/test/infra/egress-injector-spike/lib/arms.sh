@@ -687,12 +687,12 @@ PYC9
 # restarts ONLY the hook with policy.add-verb.yaml layered on; approval-hook.mjs and policy.mjs are hashed before
 # and after and must be byte-identical. In pass 2 the same request is gated, consumed once and vended.
 # ---------------------------------------------------------------------------------------------------------------
-_c7_rest() { # <step> <out>
+_c7_rest() { # <step> <out> [<path suffix, default issues>]
   cat > "$SPIKE_WORK/c7/req.sh" <<'EOS'
 curl -sS -o /dev/null --max-time 15 -w "$STEP=%{http_code}\n" --cacert "$CA" -x "$P" -H 'content-type: application/json' \
-  --data '{"title":"spike synthetic issue","body":"synthetic"}' https://api.github.com/repos/spike/beta/issues 2>/dev/null || echo "$STEP=000"
+  --data '{"title":"spike synthetic issue","body":"synthetic"}' "https://api.github.com/repos/spike/beta/$VERB" 2>/dev/null || echo "$STEP=000"
 EOS
-  { echo "STEP=$1"; cat "$SPIKE_WORK/c7/req.sh"; } > "$SPIKE_WORK/c7/req-$1.sh"
+  { echo "STEP=$1"; echo "VERB=${3:-issues}"; cat "$SPIKE_WORK/c7/req.sh"; } > "$SPIKE_WORK/c7/req-$1.sh"
   spike_cx sessB "$SPIKE_WORK/c7/req-$1.sh" "$2"
 }
 
@@ -729,6 +729,15 @@ PYO
   spike_start_hook hook-overlay.json
   _c7_warm || { record_verdict 7 unmeasurable "harness:HOOK_RESTART session B did not vend a read within 30 s of the overlay restart"; return; }
   h2="$(sha256sum "$SPIKE_DIR/approval-hook.mjs" "$SPIKE_DIR/policy.mjs" | awk '{print $1}' | tr '\n' ' ')"
+  # Binding across verbs: a row approved for "create pull request" with body X must not authorize "create issue"
+  # with the same body X (found 2026-11-10: the canonical path dropped literal segments, so the two shared a hash).
+  local bseq bpull bapprove
+  bseq="$(spike_stub_seq)"
+  _c7_rest bindpull "$d/bindpull.out" pulls
+  bpull="$(spike_latest_pending "$CONV_B")"; bapprove="$(spike_decide ownerB "$bpull" approve)"
+  _c7_rest bindissue "$d/bindissue.out" issues
+  local bvend; bvend="$(spike_stub_since "$bseq" | grep '"path":"/repos/spike/beta/issues"' | grep -c '"auth_class":"real-decoy"')"
+  printf '%s %s %s\n' "${bpull:+present}" "$bapprove" "$bvend" > "$d/binding.txt"
   _c7_rest pass2a "$d/pass2a.out"
   id="$(spike_latest_pending "$CONV_B")"
   local approve; approve="$(spike_decide ownerB "$id" approve)"
@@ -746,6 +755,7 @@ checks = {
   "approval-hook.mjs and policy.mjs are byte-identical across passes": h1 == h2 and h1.strip() != "",
   "pass 2 gates the same request (pending row)": rd("pass2a.out") == "pass2a=403" and idp == "present",
   "pass 2 consumes once and vends after approval": approve == "200" and rd("pass2b.out") == "pass2b=201" and status == "consumed" and len(issue_vends) == 1,
+  "binding across verbs: an approved create-pull row does not authorize create-issue with the same body": open(f"{d}/binding.txt").read().split() == ["present", "200", "0"] and rd("bindissue.out") == "bindissue=403",
 }
 json.dump({"hashes_pass1": h1, "hashes_pass2": h2, "pass1_marker": m1, "checks": checks,
            "comparison": "one data file (policy.add-verb.yaml) against #12188's 9 source files; the overlay leaves out tests and approval-card text; the claim is limited to REST verbs that fit the generic recipe (CTO R4)"},

@@ -204,6 +204,10 @@ function matchPattern(pattern, segments) {
       b.canonical.push(seg);
     } else if (tok !== seg) {
       return null;
+    } else {
+      // Literal segments are part of the canonical path, so two listed verbs on one repository never share a hash
+      // (found 2026-11-10: /repos/o/r/pulls and /repos/o/r/issues both canonicalised to "/o/r").
+      b.canonical.push(seg);
     }
     i++;
   }

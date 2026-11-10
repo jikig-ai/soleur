@@ -260,6 +260,20 @@ describe("policy.mjs — action hash recipe (CTO R6)", () => {
   const push = (path: string, updates: Array<[string, string, string]>) => ({ method: "POST", host: "github.com", path, body: receivePack(updates) });
   const rest = (path: string, body: string) => ({ method: "POST", host: "api.github.com", path, body: Buffer.from(body) });
 
+  // Found 2026-11-10 while generating the results note's canonical_action samples: the REST canonical path kept only
+  // the captured segments, so /repos/o/r/pulls and /repos/o/r/issues (the overlay verb) both canonicalised to "/o/r"
+  // and, with the same body, shared a hash. A row approved for one verb would then authorize the other.
+  it("two listed REST writes with the same body but different paths hash differently (literal segments are hashed)", () => {
+    const body = '{"title":"same"}';
+    const pull = classify(req(rest("/repos/acme-synth/widget/pulls", body)), OVERLAY_POLICY);
+    const issue = classify(req(rest("/repos/acme-synth/widget/issues", body)), OVERLAY_POLICY);
+    expect(pull).toMatchObject({ verdict: "write", rule: "rest-create-pull" });
+    expect(issue).toMatchObject({ verdict: "write", rule: "rest-create-issue" });
+    expect(pull.canonical.path).toBe("/repos/acme-synth/widget/pulls");
+    expect(issue.canonical.path).toBe("/repos/acme-synth/widget/issues");
+    expect(policyMod.actionHash(pull.canonical, KEY)).not.toBe(policyMod.actionHash(issue.canonical, KEY));
+  });
+
   it("each single hashed-field change produces a different hash", () => {
     const base = hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_A, OID_B, "refs/heads/main"]]));
     expect(hashOf(push("/acme-synth/widget/git-receive-pack", [[OID_C, OID_B, "refs/heads/main"]]))).not.toBe(base);
