@@ -521,14 +521,14 @@ core_rows_quiet() { # run the named rows against $PROBE_UNDER, counting reds wit
   passes=$p0; fails=$f0; asserted=$a0; FAILURES=("${FAILURES[@]:0:$n0}")
 }
 mutant m-min-elided   '(( elided < MIN_ELIDED || age_days < MIN_DAYS ))' '(( 0 ))' r_nine r_six r_zero
-mutant m-no-voucher   'if ! [ "${covered:-0}" -gt 0 ] 2>/dev/null; then' 'if false; then' r_unmatched1 r_unmatched3
+mutant m-no-voucher   'select(($m | index($p[1])) == null)' 'select(false)' r_unmatched1 r_unmatched3
 mutant m-first-only   'elided=$((elided + 1))' 'elided=$((elided + 1)); [ "$elided" -gt 1 ] && continue' r_unmatched3
 mutant m-elided-mean  'n=$((n + 1)); total_s=$((total_s + secs))' 'n=$((n + 1)); [ "$is_elided" = "yes" ] && total_s=$((total_s + secs))' r_allmean r_over
 mutant m-boundary     'total_s * 100 > MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n' 'total_s * 100 >= MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n' r_pass
 mutant m-api-quiet    'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }' 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 0; }' r_jobsfail r_commentsfail
 mutant m-precedence   'if (( wrong > 0 )); then' 'if (( wrong > 0 && elided >= MIN_ELIDED )); then' r_precedence
 mutant m-no-marker    'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_noperm_marker r_nonurl_marker
-mutant m-unmatched-ok 'covered="$(jq -r --arg sha "$sha" '"'"'map(select(. == $sha)) | length'"'"' <<<"$mg_json" 2>/dev/null)" || fail_api "voucher lookup"' 'covered=1' r_unmatched1
+mutant m-unmatched-ok 'elided_pairs+=("$id"$'"'"'\t'"'"'"$sha")' ':' r_unmatched1
 mutant m-trusted      'trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"' 'trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")"' r_commentsfail r_permfail
 mutant m-adr-status   '[ "$adr_status" = "proposed" ]' '[ "$adr_status" = "never" ]' r_adr_proposed
 mutant m-registered   'if (( suite_registered == 0 )); then' 'if false; then' r_unregistered
