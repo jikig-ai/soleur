@@ -252,7 +252,7 @@ printf 'export const a = 1;\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "empty scan refuses"
 else
   no "empty scan refuses (rc=$rc line=$first)"
@@ -281,7 +281,7 @@ printf 'export const b = 2;\n' >"$arm/work/b.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/b.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "short paths.scanned refuses"
 else
   no "short paths.scanned refuses (rc=$rc line=$first)"
@@ -289,7 +289,7 @@ fi
 
 # --- files=0 rules=2 shape is not an ok receipt ---
 bad_line="SOLEUR_REVIEW_SCAN_GATE ok engine=semgrep files=0 rules=2 findings=0"
-if printf '%s\n' "$bad_line" | grep -q 'files=0'; then
+if grep -q 'files=0' <<<"$bad_line"; then
   ok "files=0 on an ok semgrep line is a rejected shape"
 else
   no "files=0 on an ok semgrep line is a rejected shape"
@@ -359,7 +359,7 @@ printf 'export const u = 2;\n' >"$arm/work/test/u.ts"
 out="$(run_gate "$arm" "$arm/work/test/t.ts" "$arm/work/test/u.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "a short test-file scan refuses"
 else
   no "a short test-file scan refuses (rc=$rc line=$first)"
@@ -373,7 +373,7 @@ printf 'export const a = 1;\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "semgrep exit 7 refuses"
 else
   no "semgrep exit 7 refuses (rc=$rc line=$first)"
@@ -388,7 +388,7 @@ out="$(run_gate "$arm" "$arm/work/a.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
 scan_lines="$(grep -c -- '--json' "$arm/semgrep.args" || true)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' && [ "$scan_lines" -ge 2 ]; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first" && [ "$scan_lines" -ge 2 ]; then
   ok "io_uring retry that stays empty refuses"
 else
   no "io_uring retry that stays empty refuses (rc=$rc scans=$scan_lines line=$first)"
@@ -403,7 +403,7 @@ out="$(run_gate "$arm" "$arm/work/a.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
 second="$(printf '%s\n' "$out" | sed -n '2p')"
-if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=semgrep files=1 rules=2 findings=1" ] && [ "$second" = "$arm/work/a.ts:4 rule.id" ] && ! printf '%s\n' "$out" | grep -q 'SECRETVALUE'; then
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=semgrep files=1 rules=2 findings=1" ] && [ "$second" = "$arm/work/a.ts:4 rule.id" ] && ! grep -q 'SECRETVALUE' <<<"$out"; then
   ok "findings are file:line rule-id and do not stop"
 else
   no "findings are file:line rule-id and do not stop (rc=$rc out=$out)"
@@ -416,7 +416,7 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "shell-only without shellcheck refuses"
 else
   no "shell-only without shellcheck refuses (rc=$rc line=$first)"
@@ -445,7 +445,7 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
   ok "mixed range without shellcheck refuses"
 else
   no "mixed range without shellcheck refuses (rc=$rc line=$first)"
