@@ -537,40 +537,60 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
   `verify-doppler-secrets` job (presence only; the shape is checked by the app startup guard).
 - **Bad port.** A `SOLEUR_PROXY_PORT` that is not 1-5 ASCII digits in 1..65535 stops only the relay (`createProxyServer.bad-port`,
   `proxy_state=error`); the sender never dials with it (`proxyClientToOwner.bad-port`). Production pins the literal 8443.
-- **Rotation route: verifier half built (#8211, ADR-323 Decision 9 amended 2026-11-10).** The verifier also accepts a verify-only slot,
-  `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, absent by default, so a routine rotation is three phases with no host split. No phase can run
-  yet: a replace, update, delete or forget of the key pair is still blocked by the non-ackable `relay_hello_key_changes` HALT on the
-  per-merge apply (see the apply job rationale runbook), and the rotate mode is #12538. Treat a suspected key leak as an incident for
-  the owner: until #12538 lands neither a kill switch nor a leak rotation is a built route (flipping `host_proxy_tls_enabled` means
-  editing its default, the per-merge HALT refuses both, containers read Doppler only at start, and users on the other host retry on
-  4014 while the relay is down). Do NOT restore the previous value for a leak: that re-installs the leaked key.
-- **Key fingerprint line (#8211).** Each web host's relay listener prints one warn row per container start, right after its key
-  check: `relay_hello_key_fp current=<8hex> accept_also=<8hex|none>`. The values are domain-separated HMAC prefixes of the keys
-  (never key bytes); equal `current=` values mean the hosts hold the same key. The row proves the key state loaded, not a serving
-  relay (read `relay_probe proxy_state=listening` for that), and the canary prints none. Read both hosts' newest rows:
+- **Rotation and leak response (#8211).** Neither is a runnable route until #12538 lands: the route, its rationale and the leak
+  requirements are ADR-323 Decision 9 (as amended 2026-11-10). A replace, update, delete or forget of the key pair is blocked by the
+  non-ackable `relay_hello_key_changes` HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak
+  as an incident for the owner, and do NOT restore the previous value for a leak: that re-installs the leaked key.
+- **Key fingerprint line (#8211).** Each web host's relay listener prints one warn row per listener start (once per boot), right
+  after its key check: `relay_hello_key_fp current=<8hex> accept_also=<8hex|none>`. The values are domain-separated HMAC prefixes of
+  the keys (never key bytes); equal `current=` values mean the hosts hold the same key. The row proves the key state loaded, not a
+  serving relay (read `relay_probe proxy_state=listening` for that), and the canary prints none. Read each host's newest row over
+  30 days (the row is written once per boot, so a short window misses a host that has not restarted recently; to bound the read by
+  the deploy instead, replace `now() - INTERVAL 30 DAY` with the deploy time):
 
   ```bash
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-    "SELECT JSONExtractString(raw,'host_name') AS host, JSONExtractString(raw,'message','msg') AS line, max(dt) AS last
+    "SELECT JSONExtractString(raw,'host_name') AS host,
+            argMax(JSONExtractString(raw,'message','msg'), dt) AS line, max(dt) AS last
      FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
            UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-     WHERE dt > now() - INTERVAL 2 HOUR
+     WHERE dt > now() - INTERVAL 30 DAY
        AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
        AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_hello_key_fp ')
-     GROUP BY host, line ORDER BY last DESC FORMAT JSONEachRow"
+     GROUP BY host ORDER BY host FORMAT JSONEachRow"
   ```
 
   Each host's newest row must be newer than that host's deploy time (take it from the deploy-arm run's per-host deploy timestamps,
-  not from the time of the read), and every row must show the same `current=` and `accept_also=none`. **Reading rule:**
-  `accept_also!=none` outside a recorded rotation is an alarm, because the slot sits outside Terraform and a planted value causes no
-  drift and no HALT (its only other signal is one warn-level `proxy-hello.accept-also-active` Sentry event per boot). Failure branches:
+  not from the time of the read), and each host's newest row must show the same `current=` and `accept_also=none`. **Reading
+  rule:** `accept_also!=none` outside a recorded rotation is an alarm, because the slot sits outside Terraform and a planted value
+  causes no drift and no HALT. This is a manual read: no automated alert exists until #12538 requirement (e) adds one. The slot's
+  other signal is one warn-level `loadProxyHelloKeys.accept-also-active` event per boot. Failure branches:
   - **Two `current=` values differ:** stop and file an issue referencing #8211. Do not roll back: a release that adds this line
     does not change the key value, so the split is pre-existing drift (a sustained `reason=mac` stream is its other symptom).
-  - **A host has no row:** read its `relay_probe proxy_state=` line (query above). `error` means look for
-    `createProxyServer.no-hello-key` in Sentry; no `relay_probe` row at all means the host has not restarted onto this image yet.
+  - **A host has no row:** read its `relay_probe proxy_state=` line (query above), then:
+    - `listening` with no fingerprint row: the host runs an image older than this line, or its last boot is outside the window.
+    - `disabled`, `no_bind`, `no_allowlist` or `error`: no fingerprint row is expected, because the line comes after those checks.
+      For `error`, look for `createProxyServer.no-hello-key` (the key check refused).
+    - No `relay_probe` row at all: the container is down or its log path is broken; see `relay_probe_silent` above.
   - **`accept_also!=none` on any host:** a slot is set outside any rotation. Treat it as the alarm above and escalate on #12538.
-    `accept_also` equal to `current` is the same mistake made visible (one `proxy-hello.accept-also-equals-current` event), and a
-    malformed slot reads `accept_also=none` with one `proxy-hello.accept-also-ignored` event.
+    `accept_also` equal to `current` is the same mistake made visible (one `loadProxyHelloKeys.accept-also-equals-current` event),
+    and a malformed slot reads `accept_also=none` with one `loadProxyHelloKeys.accept-also-ignored` event.
+- **The loader's slot events in Better Stack.** The three `loadProxyHelloKeys.accept-also-*` events are also pino rows (warn for
+  `active` and `equals-current`, error for `ignored`). Only the serving container's rows ship (Vector reads
+  `CONTAINER_NAME = soleur-web-platform`); the canary's copies reach Sentry only:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, JSONExtractString(raw,'message','op') AS op,
+            count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','op'), 'loadProxyHelloKeys.accept-also-')
+     GROUP BY host, op ORDER BY host, last DESC FORMAT JSONEachRow"
+  ```
+
 - **Restart and clocks.** The replay cache is per process, so a container restart clears it for up to about 61 s (a hello captured before
   the restart stays skew-valid). A backward clock step can re-admit a purged nonce.
 
