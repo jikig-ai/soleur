@@ -13,6 +13,8 @@ build is in cache the launcher resolves it at runtime with NO override, so
 the override stays out of the run command and can never leak onto a
 supported host like CI's Jammy container):
 
+**Node 26 stalls the install above instead of failing it** (0% CPU after the download reaches 100%, the zip extractor stops mid-file), so the `||` fallback never fires: no output for 60 s while the process sits idle means stalled, so kill it. Bound the install with `timeout 300` and, from `apps/web-platform` (where `bunx` resolves the local `playwright`), run it under Bun: `timeout 300 bunx --bun playwright install chromium`, with `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64` in front on an unsupported host as below. Without Bun: unzip the archive into `~/.cache/ms-playwright/<revision directory>` and create an empty `INSTALLATION_COMPLETE` there (`knowledge-base/project/learnings/2026-11-09-playwright-browser-install-stalls-under-node-26-and-completes-under-bun.md`).
+
 ```bash
 cd apps/web-platform
 QA_PW_LOG=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
@@ -20,5 +22,3 @@ npx playwright install chromium >"$QA_PW_LOG" 2>&1 \
   || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
 # on failure read it for the diagnosis, then `rm -f "$QA_PW_LOG"` (#10017).
 ```
-
-On Node 26 the install can stall with 0% CPU after the download reaches 100% (the zip extractor stops mid-file); run it under Bun instead: `bunx --bun playwright install chromium`.

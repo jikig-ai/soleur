@@ -78,7 +78,7 @@
 # and the `--list` mode: exits 64 and 78 write one fixed line to stderr only (nothing was sent). Messages are fixed,
 # single-line and value-free, with ONE stated exception: on an analytics api-error the FIRST GraphQL error message is printed as
 # `api-error (graphql: <msg>)` only when it passes a fixed in-full check (letters, digits, space and . _ ' " ( ) -, 1 to 160
-# characters; no credential word, no copy of the live token, no dotted quad); otherwise plain `api-error`. It is vendor text, so data.
+# characters; no credential word, no copy or 8-character piece of the live token, no id or other long hex or alphanumeric run, no address in any spelling); otherwise plain `api-error`. It is vendor text, so data.
 # A response body, a rule expression, a description, a page-rule pattern, an actor or an IP
 # is never printed; every vendor string that is printed is enum- or regex-checked first. curl and jq diagnostics are
 # captured and reduced to `curl exit <n>` / `jq exit <n>` (the one stated exception to "stderr is never discarded":
@@ -123,16 +123,29 @@
 #   E change-history    figures rows, truncated, by_action_type (every type with its count) and by_resource_type. Never a
 #                       `Checked:` line: always `Unverified: ..., other: window-7d-only` unless it yields a positive change
 #                       finding. Evidence only, never a gate.
-#   F analytics-health  figures rows and the per-hour count, avg_ms, p50_ms and p90_ms; evidence only, never a gate, `Unverified:` until
-#                       the first sanctioned read. G analytics-edge-errors  figures by_status (counts per observed 5xx status) and
-#                       truncated; same rule. Neither computes an exact error rate (counts are sampled).
-#   What to do next, by reason: `api-error (graphql: unknown field ...)` -> a wrapper fix PR (at most two in total across both
-#   queries); `no-zone-access` -> check the zone id and the token's zone; `token-invalid` -> the token (expires 2027-02-07) was
-#   rotated or expired, which is the owner's credential change; `no-credential` -> the Doppler config lacks the token.
-# Reasons to Records vocabulary: exit 10 -> no-credential; exits 11 and 14 -> `other: <reason token>` (the vocabulary includes no-zone-access); exit 64 for a
+#   F analytics-health  figures rows and the per-hour count, avg_ms, p50_ms and p90_ms. Evidence only, never a gate: ALWAYS an
+#                       `Unverified:` line (like E), never `Checked:`, even after the first sanctioned read. `rows: 0` is not
+#                       "no data problem" and never "no errors": a wrong filter returns nothing too.
+#   G analytics-edge-errors  figures by_status (counts per observed 5xx status) and truncated. Same rule: ALWAYS `Unverified:`;
+#                       `rows: 0` and `by_status: {}` are never recorded as "no edge 5xx" (blank edge-generated 502/503/504 pages
+#                       may be under-reported by this dataset). Neither computes an exact error rate (counts are sampled).
+#   What to do next, by wrapper output (the same table is in the runbook origin-tls-strict-flip.md, keep both in step):
+#     `api-error (graphql: unknown field ...)`        -> a wrapper fix PR (at most two in total across both queries)
+#     plain `api-error` (the message gate refused it) -> re-run once; if it repeats it counts as a wrapper fix PR (same cap)
+#     `bad-response (shape)` or `(jq exit n)`         -> the vendor shape differs from the query's assumptions: a wrapper fix PR (same cap)
+#     `upstream-error` (429, 5xx, curl exit)          -> one re-run after a pause, then record; not a fix PR
+#     `no-zone-access`                                -> check the zone id and the token's zone
+#     `token-invalid`                                 -> the token (expires 2027-02-07) was rotated or expired: the owner's credential change
+#     `no-credential (<name>)`                        -> the Doppler config lacks that variable
+#     `no-tool (jq|date)`                             -> record `no-tool`; the host lacks the tool
+# Reasons to Records vocabulary: exit 10 -> no-credential; `no-tool (...)` -> `no-tool`; every other exit 11 and 14 reason -> `other: <the
+# leading reason token only>` (for example `other: no-zone-access`, `other: api-error`); anything in parentheses is DATA and is never copied
+# into a Records line, an issue, a pull request or a commit message, and for `api-error (graphql: ...)` that means the vendor text above all
+# (a fix PR names the query F or G and the field, not the vendor wording); exit 64 for a
 # usage error records nothing (re-run correctly); exit 64 for a refused source or token shape -> `other: refused-source`;
 # status 78 -> `other: xtrace`; a checkout whose diff against origin/main for this file is non-empty -> `other: wrapper-drift`
 # (fetch, rebase, re-diff, re-run); 429 / 5xx -> one re-run after a pause is allowed, the newest line governs.
+# Needs bash 4+ (${var,,}) and GNU date (-d @epoch); both are present on the operator's Linux host.
 # Cloud (Devin) sessions: the session-level cloud-ack-before-secrets obligation applies and is not implemented here.
 set -uo pipefail
 
@@ -163,7 +176,7 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]+$'
 ID_RE='^[0-9a-f]{32}$'
 STAMP_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 LIMIT=50
-QLIMIT=0
+QLIMIT=0   # the edge query's row cap; set to the row cap in GQL_EDGE_TPL (a suite row ties them) so `truncated` fires at the cap
 HOURS=0
 MAX_HOURS=216
 GQL_MSG_RE='^[A-Za-z0-9 ._'"'"'"()-]{1,160}$'
@@ -176,7 +189,8 @@ TOK=""
 BODY=""
 STATUS=""
 
-# The two fixed GraphQL query bodies (compiled in; the only substitutions are the zone id and the two window stamps, each validated
+# The health query's row limit (300) covers one row per hour for up to MAX_HOURS (216) hours (a suite row ties MAX_HOURS to it); the edge
+# query's cap (1000) is ordered DESC so the oldest rows drop first. The two fixed GraphQL query bodies (compiled in; the only substitutions are the zone id and the two window stamps, each validated
 # upstream). Read-only by construction: no mutation, no subscription, no introspection. Placeholders: @ZONE@ @START@ @END@.
 GQL_HEALTH_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:300,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestPath:\"/health\"},orderBy:[datetimeHour_ASC]){count dimensions{datetimeHour} avg{originResponseDurationMs} quantiles{originResponseDurationMsP50 originResponseDurationMsP90}}}}}"}'
 GQL_EDGE_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:1000,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestHTTPHost:\"app.soleur.ai\",edgeResponseStatus_geq:500,edgeResponseStatus_lt:600},orderBy:[datetimeHour_DESC]){count dimensions{datetimeHour edgeResponseStatus}}}}}"}'
@@ -203,10 +217,11 @@ bad_shape() { # jq succeeded but the body is not the expected shape (or is empty
 JQ_DEFS='def enum: if type == "string" and test("\\A(off|flexible|full|strict)\\z") then . else "other" end;
 def sslv: if . == null then null else enum end;
 def idv: if type == "string" and test("\\A[A-Za-z0-9_-]{1,64}\\z") then . else "invalid" end;
-def rfc: "\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z\\z";
+def rfc: "\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z\\z";
 def tsn: if . == null then null elif type == "string" and test(rfc) then . else "invalid" end;
 def gk: if type == "string" and test("\\A[a-z_.]{1,64}\\z") then . else "invalid" end;
 def tkey: sub("Z$"; "") | if contains(".") then . else . + ".0" end;
+# sanity ceilings, not semantics: a value outside them is a bad-response, never printed (1e7 ms is about 2.8 h; 1e12 counts)
 def dur: . == null or (type == "number" and . >= 0 and . <= 1e7);
 def cnt: type == "number" and . == floor and . >= 0 and . <= 1e12;
 def r1: if . == null then null else ((. * 10 | round) / 10) end;
@@ -263,7 +278,7 @@ load_credential() { # $1 = zone | account ; needs TOKVAR ; sets TOK (never expor
   esac
 }
 
-# --- the ONE request chokepoint: GET only, one call, empty curl environment ---
+# --- the GET request chokepoint (cf_get): GET only, one call, empty curl environment (the POST twin is cf_graphql, below) ---
 # The credential travels on curl's stdin as a config line, fed by a PROCESS SUBSTITUTION (never a pipe: SIGPIPE 141
 # under pipefail; never a here-string: older bash writes it to a temp file). curl's stderr is merged into the capture
 # only so it can be reduced to its exit status.
@@ -324,9 +339,10 @@ cf_graphql() { # $1 = the finished one-line JSON body ; sets BODY, or exits with
 # gql_message: sets GQL_MSG to the FIRST error message only when it passes a fixed in-full check (one short plain-text line), else "".
 # The whole gate runs in bash (jq's ^ and $ are line anchors, so a multi-line message would pass a jq regex). Vendor text, so data.
 gql_message() {
-  local m jrc lm
+  local m jrc lm i
   GQL_MSG=""
-  m=$(/usr/bin/env -i /usr/bin/jq -j 'if (.errors | type) == "array" and (.errors[0].message | type) == "string" then .errors[0].message else empty end' < <(printf '%s' "$BODY") 2>&1)
+  # a message holding any control character (NUL included: $() would silently drop it) is refused inside jq, before bash sees it
+  m=$(/usr/bin/env -i /usr/bin/jq -j 'if (.errors | type) == "array" and (.errors[0].message | type) == "string" and ((.errors[0].message | explode | any(. < 32 or . == 127)) | not) then .errors[0].message else empty end' < <(printf '%s' "$BODY") 2>&1)
   jrc=$?
   if [ "$jrc" -ne 0 ]; then return 0; fi
   if [[ "$m" =~ [[:cntrl:]] ]]; then return 0; fi
@@ -334,7 +350,14 @@ gql_message() {
   lm="${m,,}"
   case "$lm" in *bearer* | *token* | *authorization*) return 0 ;; esac
   if [ -n "$TOK" ] && [[ "$m" == *"$TOK"* ]]; then return 0; fi
-  if [[ "$m" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then return 0; fi
+  # a partial copy of the live token (any 8 consecutive characters), a 16+ hex run (every configured id is 32 hex) or a 40+ alphanumeric
+  # run (a token; the longest legitimate field name is under 40) is refused
+  for ((i = 0; ${#TOK} >= 8 && i <= ${#TOK} - 8; i++)); do
+    if [[ "$m" == *"${TOK:i:8}"* ]]; then return 0; fi
+  done
+  if [[ "$m" =~ [0-9A-Fa-f]{16} ]] || [[ "$m" =~ [A-Za-z0-9]{40} ]]; then return 0; fi
+  # an address in any spelling: a dotted, spaced or hyphenated quad, or any run of 8 or more digits
+  if [[ "$m" =~ [0-9]{1,3}([ .-]+[0-9]{1,3}){3} ]] || [[ "$m" =~ [0-9]{8} ]]; then return 0; fi
   GQL_MSG="$m"
 }
 gql_api_error() { # an api-error, with the bounded vendor message when it passes the gate

@@ -752,7 +752,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     whole: (raw) => flatten(stripLive(raw)),
     rule: (raw) => flatten(stripLive(ruleLine(raw))),
   };
-  const PAIRS_FLOOR = 65; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS_FLOOR = 67; // the table's length at write time; raise it in the same edit as any added row
   const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
     [SD, "sd9", "## 9. Class R: acts needing no delegation"],
     [SD, "sd9", "Class R is not a delegation"],
@@ -949,13 +949,26 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     expect(arrNames.length, "the wrapper SUBCOMMANDS array must hold six names").toBe(6);
     expect(arrNames, "wrapper SUBCOMMANDS array vs item 2 text").toEqual(names);
 
-    // Every one of the six is a dispatcher case label (a fifth arm is caught by the wrapper suite's unknown-endpoint rows).
+    // Every one of the six is a dispatcher case label (an extra seventh arm is caught by the wrapper suite's arm census and unknown-endpoint rows).
     const labels = new Set([...src.matchAll(/^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)/gm)].flatMap((m) => m[1].split("|")));
     for (const n of names) expect(labels.has(n), `the wrapper dispatcher has no case label for "${n}"`).toBe(true);
 
     const r = spawnSync("bash", [WRAPPER, "--list"], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf-8", timeout: 10000 });
     expect(r.status, `--list exit (stderr: ${r.stderr})`).toBe(0);
     expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
+  });
+
+  test("the numeric bounds section 9 item 2 states are the wrapper's own: hours 1 to MAX_HOURS and the message cap", () => {
+    const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
+    const max = /^MAX_HOURS=(\d+)$/m.exec(src);
+    const cap = /^GQL_MSG_RE=.*\{1,(\d+)\}\$'$/m.exec(src);
+    expect(max, "the wrapper has no MAX_HOURS=<n> line").not.toBeNull();
+    expect(cap, "the wrapper GQL_MSG_RE has no {1,<n>} bound").not.toBeNull();
+    const item = sdItem(2);
+    expect(item, "item 2 hours bound vs the wrapper MAX_HOURS").toContain(`a whole number of hours from 1 to ${max![1]}`);
+    expect(item, "item 2 message cap vs the wrapper GQL_MSG_RE").toContain(`of at most ${cap![1]} characters`);
+    const adr = readFileSync(resolve(REPO, "knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md"), "utf-8");
+    expect(adr, "the ADR-289 addendum message cap vs the wrapper").toContain(`at most ${cap![1]} characters`);
   });
 
   test("Cloudflare Credentials clause names exactly the five bound token variables, and CF_API_TOKEN is never one of them", () => {
@@ -977,7 +990,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
 
   const VENDOR_SENTENCE =
     "Class R is read-only on the operator's own vendor accounts (Sentry, Better Stack and Cloudflare, the last added by a CTO-agent ruling of 2026-11-04 that the owner reviews on the draft pull request, " +
-    "and widened to two analytics reads by a CTO-agent ruling of 2026-11-09 that the owner reviews on the draft pull request; any further vendor still needs a CTO ruling and a test row)";
+    "and widened to two analytics reads by a CTO-agent ruling of 2026-11-09 on the mechanism and a CLO-agent ruling of 2026-11-09 that the POST read stays Class R, both of which the owner reviews on the draft pull request; any further vendor still needs a CTO ruling and a test row)";
 
   test("the Boundary sentence pins the vendor list whole: exactly Sentry, Better Stack, Cloudflare, a CTO-agent ruling the owner reviews, and the further-vendor gate", () => {
     const b = paragraph(sectionRaw(readRel(SD), "## 9."), "Boundary.");

@@ -60,9 +60,12 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 - 6.1 Run the suites, markdown lint, `technical-ruling-gate.sh` on `decision-challenges.md`
 - 6.2 `prepush-secret-scan.sh`, push, update the draft PR #12515 body (`Ref` only; `closingIssuesReferences` is `[]`; four owner-review items; descoped 5xx histogram first; justification lines for any filed issue, none expected)
 - 6.3 Comment on #12441 with the expiry date 2027-02-07 and the post-merge handoff
-- 6.4 After GREEN measure the suite wall time and update `scripts/suite-durations.tsv` through `scripts/regenerate-shard-manifest.py` (`--allow-growth` if needed)
-- 6.5 Run the review panel; do NOT mark ready, arm auto-merge or merge
+- [ ] 6.4 After GREEN measure the suite wall time and update `scripts/suite-durations.tsv` through `scripts/regenerate-shard-manifest.py` (`--allow-growth` if needed)
+  - Deferred (review of #12515, perf F1): the regenerator reads suite timings from CI artifacts of green runs on main (`--runs`/`--run`/`--timings-dir`), and no such artifact exists for this suite's new weight before the merge. Measured locally under load 14-24: about 120 s wall (about 40 s before the change); the row stays `1261 floor` until the first green main run after the merge, when `python3 scripts/regenerate-shard-manifest.py --incremental` (with `--allow-growth` if the growth gate fires) re-prices it. Tracked on #12441 as post-merge item P.2; the tsv is never hand-edited.
+- [x] 6.5 Run the review panel; do NOT mark ready, arm auto-merge or merge
+  - Panel of 9 seats returned at 6a33687759; findings fixed inline in the review-fix commit; a targeted fix-round review follows.
 
 ## Post-merge (after the owner's typed go on the merge; tracked by #12441)
 
+- P.2 After the first green main run that includes the merge, re-price `plugins/soleur/test/cloudflare-readonly.test.sh` in `scripts/suite-durations.tsv` through `scripts/regenerate-shard-manifest.py` (see 6.4)
 - P.1 From a fresh checkout with `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` empty, run both subcommands at 216 hours; record `Checked:`/`Unverified:`; append a SECOND dated addendum with the 5xx histogram (never edit the first addendum's `not yet read` row); commit the evidence files only on exit 0, line 2 only (line 1 must equal `cloudflare-readonly: <sub> ok`, line 2 must parse with `jq -e .`, no stderr); at most two fix PRs in total across both queries
