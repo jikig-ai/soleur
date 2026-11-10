@@ -66,8 +66,8 @@ Follow-ups to PR #12462 (signed relay hello, ADR-323), merged as 289dcf6662 and 
    amended. The second half moves the key out of Tier-A-readable state and adds a three-phase rotate mode; it is
    follow-up #12538, which blocks onboarding external users.
 3. **(C) GHCR push denials report themselves.** A failure-gated step after the image push emits one
-   `SOLEUR_GHCR_PUSH_FAILED` line carrying the denial class, the text and the run attempt. A new runbook says: check
-   Billing > Packages first, then re-run the failed jobs of both runs, never a fresh dispatch.
+   `SOLEUR_GHCR_PUSH_FAILED` line carrying the denial class, the text and the run attempt. A new runbook says: run the
+   Packages budget and usage API reads first, then re-run the failed jobs of both runs, never a fresh dispatch.
 4. **(D) and (E) are not built here.** D is the red `deploy-script-tests (4/4)` job, which #12489 owns; it gets a
    post-merge read. E, a signed hello sent by the deploy probe, is deferred to #12539. Its smaller variant, the
    fingerprint line, is part of B.
@@ -163,7 +163,7 @@ Serve run 42488889045 read "relay evidence GREEN live".
   accept-also key loaded.
 - **P5.** A recurrence of the GHCR denial names itself in the run log, with its class, text and run attempt, and
   points at the runbook.
-- **P6.** One runbook entry covers that failure: Billing > Packages first, then re-run the failed jobs of both runs,
+- **P6.** One runbook entry covers that failure: the Packages budget and usage API reads first, then re-run the failed jobs of both runs,
   never a fresh dispatch. Raising the budget is an operator decision about money.
 - **P7.** `accepted` keeps meaning "a real session's hello was accepted".
 
@@ -292,7 +292,7 @@ Ruled by CTO agent, 2026-11-10 (B3, amended; plan-review rulings T1 to T6).
 - `acceptAlso` resolves as follows:
   - **Unset or empty:** `null`, silently. This is the default.
   - **Set but not `^[0-9a-f]{64}$`:** `null`, plus **one** Sentry event through `reportSilentFallback` (`feature:
-    "control_plane_route"`, `op: "loadProxyHelloKeys.accept-also-ignored"`, extra `{ reason: "malformed" }`).
+    "control_plane_route"`, `op: "loadProxyHelloKeys.accept-also-ignored"`, a constant `message`, and no `extra`).
   - **Byte-equal to `current`:** **kept**, plus one **warn-level** Sentry event (`op: "loadProxyHelloKeys.accept-also-equals-current"`).
     Accepting the current key twice is harmless, and `relay_hello_key_fp` then shows `accept_also == current`, which
     exposes the mistake (T2).
@@ -300,7 +300,7 @@ Ruled by CTO agent, 2026-11-10 (B3, amended; plan-review rulings T1 to T6).
     `op: "loadProxyHelloKeys.accept-also-active"`, with constant text and no value or fingerprint (Ruled by CTO agent,
     2026-11-10, D3). The slot sits outside Terraform, so without this event a planted slot would be a silent second
     key. The event is expected during a legitimate rotation.
-  - **Set while `current` is `null`:** no extra event. The listener refuses to start and reports the existing
+  - **Set and well-formed while `current` is `null`:** no extra event. The listener refuses to start and reports the existing
     `createProxyServer.no-hello-key`, and `acceptAlso` is never consulted (T6, dropping `no_current`).
 - Every event text is constant, with no value, length or prefix (`cq-silent-fallback-must-mirror-to-sentry`).
   - Each op has its **own distinct message text**, because Sentry groups by message.
@@ -489,7 +489,7 @@ Ruled by CTO agent, 2026-11-10 (C1-C3).
     CTO T6).
   - **One new conditional sentence.** It renders only when `steps.push_failed_marker.outputs.class` is non-empty:
     "Image step failed (class `<class>`, attempt `<n>`); see the runbook `web-platform-release-image-push-failed.md`;
-    for `push_denied` first check Billing > Packages." It carries the class and the attempt only, never `denial`. Build
+    for `push_denied` first run its read-only Packages budget and usage API reads." It carries the class and the attempt only, never `denial`. Build
     it with `format()` inside the existing single-quoted YAML scalar, with doubled `''`.
 
   The step's `if: failure()` is unchanged.
@@ -499,11 +499,13 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
 
 - **Triggers.**
   - The `[BLOCKED] Soleur Web Platform release failed` email.
-  - A `SOLEUR_GHCR_PUSH_FAILED` annotation, or `gh run view <run> --log-failed | grep -F SOLEUR_GHCR_PUSH_FAILED`.
+  - A `SOLEUR_GHCR_PUSH_FAILED` annotation, read with `gh run view <run>` (the `ANNOTATIONS` block), or the marker
+    line from `gh run view <run> --log | grep -F 'SOLEUR_GHCR_PUSH_FAILED image='`. The marker step is
+    `continue-on-error` and exits 0, so `--log-failed` never shows it.
   - A deploy-arm run whose `resolve-target` failed with `release=skipped`. It carries no marker of its own.
   - During the gap, the prod version-drift alert is expected; it is not a separate incident.
   - The classes:
-    - `push_denied` is a registry denial: check Billing > Packages first.
+    - `push_denied` is a registry denial: run the Packages budget and usage API reads first (First read, below).
     - `push_other` is a push failure whose registry text is withheld: read the step log.
     - `not_push` is not an image-push failure, so this runbook does not apply and Billing is not the cause.
     - `unknown` means the history was unreadable: read the step log.
@@ -511,7 +513,8 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
   run's `cancelled` conclusion is the only signal. Read the push step's log before any re-run.
 - **First read, before anything else** (read-only; an agent can run it):
   `gh api /orgs/jikig-ai/settings/billing/budgets --jq '.budgets[] | select(.budget_product_sku=="packages")'` and the
-  Billing > Packages page. Record whether usage shows as blocked. Include the 2026-11-09 measurement, and state that a
+  monthly `gh api "orgs/jikig-ai/settings/billing/usage?year=<y>&month=<m>"` read filtered to Packages. Record what they
+  show; when the usage read has no Packages line, record the usage as unmeasured, not as zero. Include the 2026-11-09 measurement, and state that a
   block is a lead, not a finding.
 - **What a failed push did not do.** It consumed no semver, created no tag and published no notes.
 - **Recovery.** Release re-runs are owner-gated: the agent prepares both run ids, then reads the outcome. In order:
@@ -526,7 +529,9 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
 - **Operator decision (money): the GitHub Packages budget for private GHCR images.** The runbook names this decision
   and does not prescribe a value. The agent stops and reports at this point, and does not work around the budget
   (CPO condition 7).
-- **Retry re-evaluation trigger** (CTO C1): a second, separate run is denied while Billing > Packages shows no block.
+- **Retry re-evaluation trigger** (CTO C1, restated 2026-11-10 in review round 2): a `push_denied` while the Packages
+  budget is above 0 or `prevent_further_usage` is false. The earlier wording ("a second run denied while Billing >
+  Packages shows no block") could never fire under the measured budget (0, `prevent_further_usage: true`).
 - **Out of scope:** pointing the release at Zot (prior CTO ruling).
 
 ### D — note only
@@ -744,7 +749,7 @@ failure_modes:
     detection: "layer 2 pino warn -> layer 3 vector app_container_warn_filter -> Better Stack: the two hosts' newest relay_hello_key_fp current= values (grouped by host_name) differ; layer 2 pino -> Sentry: bounded deny events with reason mac"
     alert_route: "Sentry bounded deny event (existing); fingerprint read in betterstack-log-query.md relay section; these events page no one"
   - mode: "accept-also slot set but malformed"
-    detection: "layer 2 pino -> Sentry: one event op loadProxyHelloKeys.accept-also-ignored reason=malformed; layer 3 Better Stack: relay_hello_key_fp accept_also=none"
+    detection: "layer 2 pino -> Sentry: one event op loadProxyHelloKeys.accept-also-ignored (payload exactly feature, op, message; no extra); layer 3 Better Stack: relay_hello_key_fp accept_also=none"
     alert_route: "Sentry issue (pages no one; #12538 phase gate (e) reads it before each phase)"
   - mode: "accept-also slot equal to current (a rotation mistake)"
     detection: "layer 2 pino -> Sentry: one warn event op loadProxyHelloKeys.accept-also-equals-current; layer 3 Better Stack: relay_hello_key_fp shows accept_also equal to current"
@@ -844,6 +849,15 @@ At work time, `git grep` must show no other caller of `computeMac` with a loaded
   suite's fixture-distinctness assertion must go RED.
 - **Must-PASS (not the canonical vector):** a hello signed with a different synthetic 64-hex key, accepted with that
   key as CURRENT. The suite must not depend on the known-answer key alone.
+
+**Note, 2026-11-10 (review round 2; Ruled by CTO agent, 2026-11-10, option b).** The call-site scan (the source scan of
+signers and `acceptAlso` readers in `proxy-hello-key-call-sites.test.ts`) is deleted, and the work-time `git grep`
+sentence above is superseded by this note. Guard 1 now rests on: the hello MAC domain string
+`soleur-proxy-hello-v1` appearing in no tracked non-test, non-knowledge-base file except
+`apps/web-platform/server/proxy-hello.ts`; `buildHelloMacInput` made private to that module; the module's export list
+pinned; `acceptAlso` read only inside `verifyProxyHello` (an AST check); and the behavioural rows above. A new signer
+added elsewhere is a review-time property. ADR-323's 2026-11-10 amendment owns the statement
+("What keeps the slot verify-only"), and `decision-challenges.md` row G1-scan records the ruling.
 
 ### Guard 2 — rotation phases are pairwise compatible
 
@@ -1043,8 +1057,8 @@ only consumer.
 - [ ] **AC-B4** (CPO 3): each loader state has its own test, which asserts relay behaviour and the exact Sentry events.
       Each event payload is scanned for the fixture key's hex and base64 forms, and they must be absent.
   - **Slot unset:** 0 events.
-  - **Slot malformed:** exactly 1 `loadProxyHelloKeys.accept-also-ignored` event with `reason: "malformed"`, and the slot is
-    absent.
+  - **Slot malformed:** exactly 1 `loadProxyHelloKeys.accept-also-ignored` event whose payload is exactly
+    `{ feature, op, message }` (no `extra`), and the slot is absent.
   - **Slot equal to current:** exactly 1 warn-level `loadProxyHelloKeys.accept-also-equals-current` event, the slot is kept, and
     the fingerprint line shows equal values.
   - **Slot well-formed and distinct:** exactly 1 warn-level `loadProxyHelloKeys.accept-also-active` event, with no value or
