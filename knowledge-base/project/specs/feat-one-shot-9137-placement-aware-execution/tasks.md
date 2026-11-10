@@ -50,7 +50,7 @@ Issue: #9137 (closes). Branch: `feat-one-shot-9137-placement-aware-execution`.
       `c4-code-syntax.test.ts`, `c4-render.test.ts`, `c4-count-parity.test.sh`.
 - [x] 3.3 `knowledge-base/engineering/operations/runbooks/inngest-server.md`:
       `placement.exec_identity_missing` recovery (redeploy, no SSH) + `forward_failed`
-      diagnosis (8443 publish state, cert expiry).
+      diagnosis (8445 publish state, cert expiry).
 - [x] 3.4 `reportSilentFallback` wiring: refuse + forward-failure paths report to Sentry.
 
 ## Phase 4 — Optional unpin (gated)

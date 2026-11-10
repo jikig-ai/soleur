@@ -237,7 +237,7 @@ PUT and `?probe=` requests bypass the forwarder entirely):
 | Not a step call (GET/PUT/`?probe=`) | `execute` locally — unchanged semantics on any host |
 | Class `portable` | `execute` locally |
 | Class `host-affine`/`volume-bound`, host IS exec (`SOLEUR_HOST_PRIVATE_IP === "10.0.1.10"`) | `execute` locally |
-| Same, host NOT exec | `forward` to `https://10.0.1.10:8443/api/inngest` with `EXEC_FORWARD_HEADER` set, raw body + all headers + query preserved, streamed response |
+| Same, host NOT exec | `forward` to `https://10.0.1.10:8445/api/inngest` with `EXEC_FORWARD_HEADER` set, raw body + all headers + query preserved, streamed response |
 | Same, marked `EXEC_FORWARD_HEADER`, host NOT exec | `refuse` — loop-guard, never re-forward |
 | `SOLEUR_HOST_PRIVATE_IP` unset/empty | `refuse` — HTTP 503 (retriable, NEVER a `NonRetriable` shape: a late-NIC deploy must stall ticks, not kill runs) with the distinct `placement.exec_identity_missing` error |
 | fnId absent-but-step-shaped, or unknown after prefix/suffix strip | treated as pinned (fail-closed direction) |
@@ -255,7 +255,7 @@ PUT and `?probe=` requests bypass the forwarder entirely):
   reach web-1's private listener through web-2 — a surface that today admits only peers
   (plan-review P5). A forged-but-present signature still cannot execute — the exec host
   verifies.
-- **Receiver: a sibling `https.createServer` on a dedicated port** (e.g. 8444) using
+- **Receiver: a sibling `https.createServer` on dedicated port 8445** using
   `loadProxyTlsServerOptions()` material, bound to the private IP, reusing the relay's
   peer admission (`isAllowedProxyPeer` / `SOLEUR_PROXY_PEER_ALLOWLIST`), published like
   :8443 in ci-deploy.sh. It invokes the app's own `/api/inngest` handler **in-process**
@@ -397,7 +397,7 @@ forwarder live), not a future state.
 - The five ADR edits and `model.c4` edge edit above.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` (or a sibling
   runbook): `placement.exec_identity_missing` recovery — re-deploy (no SSH) after the NIC
-  is up; `placement.forward_failed` diagnosis — the 8443 publish state
+  is up; `placement.forward_failed` diagnosis — the 8445 publish state
   (`net.ipv4.ip_nonlocal_bind`) and proxy-cert expiry are the two named causes.
 
 ### Phase 4 — Optional unpin (gated, may defer)
@@ -532,7 +532,7 @@ error_reporting:
   destination: Sentry (reportSilentFallback) + journald -> Vector -> Better Stack
   fail_loud: "refusals (exec_identity_missing, marked-on-nonexec) and forward failures are error-level + Sentry; they are never swallowed into the step response"
 failure_modes:
-  - mode: "exec host unreachable (8443 publish degraded to loopback / cert expired)"
+  - mode: "exec host unreachable (8445 publish degraded to loopback / cert expired)"
     detection: "placement.forward_failed error rows + per-function missed Sentry check-ins"
     alert_route: Sentry + per-function cron monitors (existing)
   - mode: "SOLEUR_HOST_PRIVATE_IP empty after NIC-late deploy"
@@ -659,7 +659,7 @@ existing route.
 ## Acceptance Criteria
 
 - [ ] AC1: A synthesized step POST carrying `fnId=soleur-runtime-<host-affine-fn>` reaching a
-  non-exec host is forwarded verbatim to `https://10.0.1.10:8443/api/inngest` with the marker
+  non-exec host is forwarded verbatim to `https://10.0.1.10:8445/api/inngest` with the marker
   header, pinned-CA TLS, all original headers/query/body, and the response streamed back —
   asserted end-to-end against a fixture receiver.
 - [ ] AC2: The same call reaching the exec host (`SOLEUR_HOST_PRIVATE_IP=10.0.1.10`)
@@ -715,10 +715,10 @@ existing route.
 
 - **web-1 remains SPOF for pinned classes** (CTO dissent, accepted): already true via the
   ADR-119 sole-copy volume; this plan makes it visible in the model, not new.
-- **8443 publish degradation** (loopback fallback when `ip_nonlocal_bind` ≠ 1): forwarding
+- **8445 publish degradation** (loopback fallback when `ip_nonlocal_bind` ≠ 1): forwarding
   fails closed → pinned-fns stall visibly; recovery is a redeploy (runbook). Accepted per
   T2/T3 — the alternative (exec-side blind spot) is worse.
-- **Receiver-choice residual:** if the 8443 `request`-handler shape proves awkward at work
+- **Receiver-choice residual:** the sibling listener on :8445 was chosen (the :8443 wss `request` handler was rejected at plan-review — `HELLO_DEADLINE_MS` kills streamed step calls); if it had proven awkward at work
   time, a sibling listener is the fallback (same material); the plan does not pin which —
   noted for `soleur:work` to decide with the diff in hand.
 - **Phase 4 unpin** may defer to a scope-out if `resolveCurrentWorkspaceId`'s consumers

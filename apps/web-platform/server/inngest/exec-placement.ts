@@ -115,7 +115,10 @@ export type PlacementDecision =
 export interface PlacementFacts {
   /** HTTP method — only POST is a step call (GET/PUT are registration). */
   method: string;
-  /** `?probe=` present (signature probes answer on any host). */
+  /** `?probe=<non-empty>` — the SDK's own probe test is truthiness
+   *  (`url.searchParams.get(queryKeys.Probe) || void 0` in InngestCommHandler):
+   *  an EMPTY `?probe=`/`?probe` is a run request to the SDK, so a presence
+   *  check here would execute a pinned call on the wrong host (review #12554). */
   hasProbe: boolean;
   /** `?fnId=` query key, raw — the SDK's own routing key. */
   fnId: string | null;
@@ -222,7 +225,7 @@ export function gatherPlacementFacts(req: Request): PlacementFacts {
   const url = new URL(req.url);
   return {
     method: req.method,
-    hasProbe: url.searchParams.has("probe"),
+    hasProbe: Boolean(url.searchParams.get("probe")),
     fnId: url.searchParams.get("fnId"),
     marked: req.headers.has(EXEC_FORWARD_HEADER),
     isExec: isExecHost(EXEC_HOST_PRIVATE_IP),

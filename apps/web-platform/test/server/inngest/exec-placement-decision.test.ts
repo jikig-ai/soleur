@@ -305,6 +305,43 @@ describe("gatherPlacementFacts", () => {
     expect(f.hostIp).toBeNull();
     expect(f.marked).toBe(false);
   });
+
+  it("an EMPTY ?probe= is a run request to the SDK — never the probe bypass (review #12554 P1)", () => {
+    // The SDK tests `get(queryKeys.Probe) || void 0` (truthiness): `?probe=` and
+    // bare `?probe` fall through to fnId processing and EXECUTE the function.
+    // A presence check would let a signed pinned call execute on a non-exec
+    // host and would bypass the marked loop-guard — the defect this PR closes.
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", NONEXEC);
+    for (const shape of ["probe=", "probe", "probe=&fnId="] as const) {
+      const req = new Request(
+        `https://app.soleur.ai/api/inngest?fnId=${PINNED_VOLUME}&${shape}`,
+        { method: "POST", headers: { "x-inngest-signature": "t=1&s=a" } },
+      );
+      const f = gatherPlacementFacts(req);
+      expect(f.hasProbe, `${shape} must not read as a probe`).toBe(false);
+      expect(
+        decidePlacement(f),
+        `${shape} must take the pinned direction on a non-exec host`,
+      ).toEqual({ action: "forward", target: EXEC_FORWARD_URL });
+    }
+    // …and the empty-probe loop-guard bypass: marked + `?probe=` still refuses.
+    const marked = new Request(
+      `https://app.soleur.ai/api/inngest?fnId=${PINNED_VOLUME}&probe=`,
+      {
+        method: "POST",
+        headers: {
+          "x-inngest-signature": "t=1&s=a",
+          [EXEC_FORWARD_HEADER]: "1",
+        },
+      },
+    );
+    expect(decidePlacement(gatherPlacementFacts(marked))).toEqual({
+      action: "refuse",
+      reason: "marked_on_nonexec",
+      status: 403,
+      error: "placement.marked_on_nonexec",
+    });
+  });
 });
 
 describe("recordPlacementDecision — observability wiring (3.4)", () => {

@@ -329,6 +329,21 @@ describe("Guard 1 — served-set/classifier parity", () => {
     }
   });
 
+  it("the app-id prefix is the client's real id — never a drifted literal (review #12554 P3)", () => {
+    // Replicated-literal parity (replicated literals across >=2 source files
+    // need a parity pin): client.ts `new Inngest({ id: "soleur-runtime" })` is
+    // the SDK-side app id and `classifyFnId` keys on `${id}-`. Guard 1 builds
+    // wire ids FROM the constant, so only a source assertion ties them — a
+    // client-id rename would otherwise silently unclassify every step call.
+    const client = stripComments(
+      appFile("server/inngest/client.ts"),
+      "client.ts",
+    );
+    const m = client.match(/new\s+Inngest\(\{[^}]*\bid:\s*"([^"]+)"/);
+    expect(m, "client.ts must declare the Inngest app id").not.toBeNull();
+    expect(`${m![1]}-`).toBe(INNGEST_APP_ID_PREFIX);
+  });
+
   it("exec-placement.ts binds EXECUTION_PLACEMENT from ./execution-placement — never a re-declared table", () => {
     const src = stripComments(appFile(EXEC_PLACEMENT_REL), "exec-placement.ts");
     expect(src).toMatch(
