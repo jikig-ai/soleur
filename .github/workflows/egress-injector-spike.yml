@@ -1,0 +1,86 @@
+# Egress injector spike (#12517, plan knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md).
+#
+# An on-demand recorded measurement, never a required lane (CTO F-g): it runs the injector spike suite on the
+# production run tuple and uploads the raw results JSON. Its own workflow file (CTO D2) because
+# infra-validation.yml's workflow-level cancellation would kill a running spike on every push.
+#
+# Credential isolation (deepen pass): the job holds no real token. `persist-credentials: false`, no secrets, no
+# Doppler token, no registry login (a docker login would write GITHUB_TOKEN into ~/.docker/config.json for the
+# whole job), `permissions: contents: read`. Image pulls are anonymous through the existing retry and cache helpers.
+# Every credential the suite uses is a synthesized decoy generated per run.
+#
+# Triggers: pull_request on the spike paths and workflow_dispatch only, never push (R22). One job-level concurrency
+# group per pull request with cancel-in-progress false, so a push queues one run and never kills a running spike.
+# The suite never skips itself: a missing tool or daemon is a FAIL.
+name: Egress injector spike
+
+on:
+  pull_request:
+    paths:
+      - "apps/web-platform/test/infra/egress-injector-spike/**"
+      - "apps/web-platform/test/egress-injector-policy.test.ts"
+      - "apps/web-platform/test/egress-injector-router.test.ts"
+      - ".github/workflows/egress-injector-spike.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  injector-spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: sandbox-eval-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
+        with:
+          version: 2.84.2
+
+      - name: Restore Supabase image cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/supabase-img-cache
+          key: supabase-imgs-${{ hashFiles('.github/scripts/supabase-pre-pull-images.sh', 'apps/web-platform/supabase/config.toml') }}
+          restore-keys: supabase-imgs-
+
+      - name: Pre-pull Supabase image set (anonymous, serial, per-image retry)
+        working-directory: apps/web-platform
+        env:
+          SUPABASE_IMG_CACHE_DIR: ${{ runner.temp }}/supabase-img-cache
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/supabase-pre-pull-images.sh"
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        working-directory: apps/web-platform
+        run: npm ci --ignore-scripts
+
+      - name: Run the injector spike suite
+        env:
+          INJECTOR_SPIKE_OUT: ${{ runner.temp }}/injector-spike-results.json
+          INJECTOR_SPIKE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash apps/web-platform/test/infra/egress-injector-spike/injector-spike-docker.test.sh
+
+      - name: Upload raw results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: injector-spike-results
+          path: ${{ runner.temp }}/injector-spike-results.json
+          if-no-files-found: error
+          retention-days: 90
