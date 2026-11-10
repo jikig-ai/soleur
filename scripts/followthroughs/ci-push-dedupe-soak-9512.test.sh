@@ -123,9 +123,19 @@ chmod +x "$TMP/bin/gh"
 #   collabact: the activation is by collab-op (decoy association COLLABORATOR) holding `write`   noneact: by maint-op (decoy association NONE) holding `maintain`
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
 #   nocreated: no comment carries a createdAt (the BODIES view must not need it; the comments view would be rc 2)
+declare -A FX_SEEN   # build_fx memoization: signature -> fixture already built this run
 build_fx() {
-  local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"; shift 5
-  assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
+  local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"
+  local sig="$fx|$*"; shift 5
+  assert_fixture_dir "$fx"
+  # STALE-FIXTURE INVARIANT: the signature covers every arg (dir, counts, seconds, every kv flag
+  # including the fail* touch-file set), so a repeated signature must serve the identical fixture —
+  # the only post-build mutable state inside a fixture dir is requests.log/refused.log (reset here).
+  # A row MUST NOT mutate fixture files after building (none do today): a mutation would silently
+  # leak into every later same-signature build_fx hit and corrupt the rows that follow it.
+  if [ -n "${FX_SEEN[$sig]+x}" ]; then rm -f "$fx/requests.log" "$fx/refused.log"; return 0; fi
+  FX_SEEN[$sig]=1
+  rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
   local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 latebatch=0 regcomment=0 nostatus=0 nocreated=0 cr=
   for kv in "$@"; do
@@ -398,7 +408,7 @@ r_twoact()    { build_fx "$TMP/f11" 10 15 510 2568 twoact;           expect "the
 r_twodeact()  { build_fx "$TMP/f12" 0 25 510 2568 twodeact;          expect "NOT YET: the LATEST of two DEACTIVATED markers ends the activation" 2 "not activated" "$TMP/f12"; }
 r_latebatch() { build_fx "$TMP/f13" 0 25 510 2568 deact latebatch;   expect "NOT YET: a DEACTIVATED marker staged in a second fixture batch is read (the probe does not slice the comment list; gh's own paging is measured 220/220 on #9777, not modelled here)" 2 "not activated" "$TMP/f13"; }
 r_idle_cap()  { build_fx "$TMP/f14" 0 12 510 2568 noact early=1;     expect "NOT YET: while idle only the newest 10 runs are sampled (an elided run at position 13 is outside)" 2 "not activated" "$TMP/f14"; }
-r_max_cap()   { build_fx "$TMP/f15" 10 60 510 2000;                  expect "FAIL: all 70 runs (the cap is 100) set the mean; the newest 30 alone would pass" 1 "over 29.08" "$TMP/f15"; }
+r_max_cap()   { build_fx "$TMP/f15" 10 40 510 2200;                  expect "FAIL: all 50 runs (the cap is 100) set the mean; the newest 30 alone would pass" 1 "over 29.08" "$TMP/f15"; }
 r_would()     { build_fx "$TMP/f16" 10 15 510 2568;                  expect "the 'Proof holds for this SHA' step conclusions are counted" 0 "would_elide_runs=10 " "$TMP/f16"; }
 r_marker_write()    { build_fx "$TMP/f17" 10 15 510 2568 marker=collab;    expect "PASS: an exit-census comment by an author holding write counts" 0 "PASS" "$TMP/f17"; }
 r_marker_read()   { build_fx "$TMP/f18" 10 15 510 2568 marker=contrib;   expect "NOT YET: an exit-census comment by an author holding only read does not count" 2 "S2-EXIT-CENSUS" "$TMP/f18"; }
@@ -420,6 +430,18 @@ ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_
           r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools r_markers r_deact_healthy r_needcomplete)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
+
+# CONTROL_ROWS — the named subset the three harness controls (identity copy, no-lib copy,
+# always-PASS probe) iterate instead of ALL_ROWS. The controls test harness integrity (tree
+# resolution, verdict plumbing, red-reporting), not probe coverage; the subset spans every
+# verdict class (rc 0/1/2/3, voucher, mean, marker, trust-permission, ADR, registration,
+# lib-presence) while bounding the re-enumeration the suite pays.
+# RED-IMMUNE under the always-PASS control: r_pass and r_needcomplete — an always-PASS probe
+# emits rc=0 + "PASS" and both rows' expectations are exactly that shape, so they stay green
+# and the always-PASS floor below is 12 - 2 = 10. An edit to either row's expectation
+# re-tallies the floor.
+CONTROL_ROWS=(r_pass r_unmatched1 r_unmatched3 r_over r_nomarker r_zero r_jobsfail r_noperm_act
+              r_adr_proposed r_unregistered r_deact r_needcomplete)
 
 # --- the rest of the contract (not mutated below) -----------------------------------------------------------------
 build_fx "$TMP/d1" 5 20 510 2568 noact;                 expect "FAIL: elided runs with nothing activated on the tracker (an org-level or unrecorded flip)" 1 "no activation on record" "$TMP/d1"
@@ -590,10 +612,10 @@ if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-cr
 else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
 # the mirrored tree itself: an IDENTITY copy must show zero reds over the full row set (else every mutant verdict is polluted), and a copy
 # whose lib symlink is REMOVED must red at least one row (else the tree is not what resolves the lib)
-PROBE_UNDER="$(mk_tree identity "$PROBE")"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+PROBE_UNDER="$(mk_tree identity "$PROBE")"; core_rows_quiet "${CONTROL_ROWS[@]}"; PROBE_UNDER="$PROBE"
 if [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an identity copy in the mirrored tree turns no row red"
 else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the tree is broken)"; fi
-PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${CONTROL_ROWS[@]}"; PROBE_UNDER="$PROBE"
 if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
 else fail "harness control: a copy without the lib symlink turned no row red"; fi
 # the VERDICT itself: an inert, a PARSE-crashing and an anchor-NOT-LANDED mutant fed through `mutant` must each be REPORTED as what it is (exactly one
@@ -657,8 +679,9 @@ if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, 
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
-PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 76 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${CONTROL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+# floor = CONTROL_ROWS - the two red-immune rows (r_pass, r_needcomplete — see the CONTROL_ROWS comment)
+if [ "$MUT_REDS" -ge 10 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-push-dedupe-soak-9512: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
