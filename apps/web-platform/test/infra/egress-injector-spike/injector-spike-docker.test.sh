@@ -8,13 +8,15 @@
 # NEVER SELF-SKIPS. A missing tool or daemon is `FAIL <TOKEN>` and every criterion without a verdict is recorded
 # `unmeasurable` with that token, so the verdict is INCONCLUSIVE and the exit is 1 (Guard 3). Tokens:
 #   TOOL_UNAVAILABLE DOCKER_UNAVAILABLE SELFTEST SUPABASE_START SUPABASE_STATUS SUPABASE_GUARD MIGRATIONS
-#   CHECK_WIDEN DEADLINE XTRACE_FORBIDDEN
+#   CHECK_WIDEN DEADLINE XTRACE_FORBIDDEN TUPLE_CHECK APPARMOR_UNAVAILABLE SYSCTL_UNAVAILABLE IMAGE_BUILD_FAILED
+#   IMAGE_DRIFT IRON_PROXY NETWORK OWNERSHIP STUB_START SQUID_START CONTAINER_START_FAILED SESSION_PREP HOOK_START
+#   SESSION_UP SEED DRIVER
 #
 # Slice status (2026-11-10). Built: preflight, the harness self-test, the local stack, the R21 guard, the inline
-# CHECK widening (CTO R5, D4). Not built yet, each recorded `unmeasurable` with reason `arm-not-implemented:<what>`:
-# the network, gateway, stubs, hook, router and injector bring-up and every criterion arm. A run of this slice is
-# therefore INCONCLUSIVE by construction; it proves the CI plumbing, never a mechanism. The arms are task 1.8 in
-# knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/tasks.md.
+# CHECK widening (CTO R5, D4), and the topology (lib/bringup.sh: image, prod posture, networks, real squid, stub,
+# app container, hook, three sessions) with synthetic seeding (lib/arms.sh). Criterion arms not built yet are each
+# recorded `unmeasurable` with reason `arm-not-implemented:<what>`, so such a run reads INCONCLUSIVE by construction.
+# The arms are task 1.8 in knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/tasks.md.
 #
 # Secrets: every value is a synthesized decoy generated per run, masked in the CI log, kept out of env and argv of
 # the processes under test, and never printed. xtrace is refused (a trace would print them).
@@ -33,8 +35,13 @@ SPIKE_OUT="${INJECTOR_SPIKE_OUT:-${TMPDIR:-/tmp}/injector-spike-results.$$.json}
 export SPIKE_DIR SPIKE_WORK SPIKE_RECORDS SPIKE_OUT
 # shellcheck source=lib/harness.sh
 source "$SPIKE_DIR/lib/harness.sh"
+# shellcheck source=lib/bringup.sh
+source "$SPIKE_DIR/lib/bringup.sh"
+# shellcheck source=lib/arms.sh
+source "$SPIKE_DIR/lib/arms.sh"
 
 cleanup() {
+  spike_teardown
   case "$SPIKE_WORK" in /*/soleur-run.*) rm -rf -- "$SPIKE_WORK" ;; esac
 }
 trap cleanup EXIT
@@ -80,10 +87,11 @@ check_deadline "migrations"
   || harness_fail SUPABASE_STATUS "supabase status -o env failed"
 API_URL="$(sed -n 's/^API_URL="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$SPIKE_WORK/supabase-status.env" | head -1)"
 SERVICE_KEY="$(sed -n 's/^SERVICE_ROLE_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$SPIKE_WORK/supabase-status.env" | head -1)"
-[[ -n "$API_URL" && -n "$SERVICE_KEY" ]] || harness_fail SUPABASE_STATUS "status output carries no API_URL or SERVICE_ROLE_KEY"
-mask "$SERVICE_KEY"
-( umask 077 && printf '%s\n' "$SERVICE_KEY" > "$SPIKE_WORK/service-role.key" )
-unset SERVICE_KEY
+ANON_KEY="$(sed -n 's/^ANON_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$SPIKE_WORK/supabase-status.env" | head -1)"
+[[ -n "$API_URL" && -n "$SERVICE_KEY" && -n "$ANON_KEY" ]] || harness_fail SUPABASE_STATUS "status output carries no API_URL, SERVICE_ROLE_KEY or ANON_KEY"
+mask "$SERVICE_KEY"; mask "$ANON_KEY"
+( umask 077 && printf '%s\n' "$SERVICE_KEY" > "$SPIKE_WORK/service-role.key" && printf '%s\n' "$ANON_KEY" > "$SPIKE_WORK/anon.key" )
+unset SERVICE_KEY ANON_KEY
 
 # R21: the same guard the hook runs, before the suite itself writes to the database.
 # The module path travels in SPIKE_HOOK_MODULE, never argv: under `node -e`, argv[1] is the first extra argument, and
@@ -128,6 +136,88 @@ SQL
 grep -q 'check-widened' "$SPIKE_WORK/check-widen.log" || harness_fail CHECK_WIDEN "widening did not report success"
 echo "SOLEUR_SPIKE_STAGE stage=supabase-ready"
 check_deadline "check widening"
+
+# --- Topology (lib/bringup.sh) ---------------------------------------------------------------------------------------
+spike_posture
+spike_apparmor
+spike_build_image
+spike_iron_proxy_bin
+check_deadline "image build"
+spike_networks
+spike_upstream_root
+spike_hook_roots
+spike_start_squid
+spike_start_app
+
+# --- Seeding: two synthetic owners (A, B), a conversation per hook session (CTO R16: fresh conversations) ----------
+spike_seed_init
+spike_seed_user ownerA WS_A
+spike_seed_user ownerB WS_B
+spike_new_conversation "$WS_A" CONV_A
+spike_new_conversation "$WS_B" CONV_B
+spike_new_conversation "$WS_A" CONV_C
+spike_sign_in ownerA
+spike_sign_in ownerB
+
+# Synthetic bare repositories (CLO: no real content). A's allowlist is spike/alpha, B's is spike/beta.
+mkdir -p "$SPIKE_WORK/stub/repos/spike" || harness_fail STUB_START "mkdir repos"
+for repo in alpha beta outside; do
+  git init -q --bare -b main "$SPIKE_WORK/stub/repos/spike/$repo.git" \
+    && git -C "$SPIKE_WORK/stub/repos/spike/$repo.git" config http.receivepack true \
+    || harness_fail STUB_START "repo $repo"
+  seedw="$SPIKE_WORK/seedrepo-$repo"
+  git init -q -b main "$seedw" \
+    && git -C "$seedw" -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "synthetic $repo" \
+    && git -C "$seedw" push -q "$SPIKE_WORK/stub/repos/spike/$repo.git" main \
+    || harness_fail STUB_START "seed $repo"
+done
+
+# Sessions: A (workspace A, flag on, spike/alpha), B (workspace B, flag on, spike/beta), C (workspace A, flag OFF).
+spike_session_prepare sessA 0 "$WS_A" "$CONV_A"
+spike_session_prepare sessB 1 "$WS_B" "$CONV_B"
+spike_session_prepare sessC 2 "$WS_A" "$CONV_C"
+python3 -I - "$SPIKE_WORK/stub/config.json" "$SPIKE_WORK/run" <<'PYSTUB' || harness_fail STUB_START "stub config"
+import json, sys
+decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC")]
+json.dump({"listen": {"host": "0.0.0.0", "port": 443}, "certFile": "/stub/leaf.pem", "keyFile": "/stub/leaf.key",
+           "repoRoot": "/stub/repos", "recordFile": "/stub/records.jsonl", "decoys": decoys}, open(sys.argv[1], "w"))
+PYSTUB
+spike_start_stub
+spike_wait_log "$SPIKE_STUB_CTR" stub-github-listening 20 \
+  || harness_fail STUB_START "stub did not listen: $(docker logs "$SPIKE_STUB_CTR" 2>&1 | tail -2 | tr '\n' ' ' | head -c 300)"
+
+# The hook: the real local stack, the R21 guard inputs, a spike-only HMAC key, and the three sessions.
+cp "$SPIKE_WORK/service-role.key" "$SPIKE_WORK/hookpriv/service-role.key" \
+  && cp "$SPIKE_WORK/supabase-status.env" "$SPIKE_WORK/hookpriv/status.env" \
+  || harness_fail HOOK_START "copy hook inputs"
+( umask 077 && python3 -I -c 'import secrets; print(secrets.token_hex(32))' > "$SPIKE_WORK/hookpriv/hmac.key" ) \
+  || harness_fail HOOK_START "hmac key"
+python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$API_URL" "$WS_A:$CONV_A" "$WS_B:$CONV_B" "$WS_A:$CONV_C" <<'PYHOOK' || harness_fail HOOK_START "hook config"
+import json, sys
+out, url = sys.argv[1], sys.argv[2]
+specs = [("sessA", sys.argv[3], ["spike/alpha"], True), ("sessB", sys.argv[4], ["spike/beta"], True),
+         ("sessC", sys.argv[5], ["spike/alpha"], False)]
+sessions = []
+for sid, wc, repos, flag in specs:
+    ws, conv = wc.split(":")
+    sessions.append({"sessionId": sid, "conversationId": conv, "workspaceId": ws, "requesterId": ws, "repositories": repos,
+                     "flagOn": flag, "routerCredentialFile": f"/run/spike-hook/{sid}/router.pw",
+                     "serverCertFile": f"/run/spike-hook/{sid}/server.pem", "serverKeyFile": f"/run/spike-hook/{sid}/server.key",
+                     "socketPath": f"/run/spike/{sid}/hook/hook.sock"})
+json.dump({"supabaseUrl": url, "serviceRoleKeyFile": "/run/spike-hook/service-role.key",
+           "supabaseStatusFile": "/run/spike-hook/status.env", "hmacKeyFile": "/run/spike-hook/hmac.key",
+           "policyFiles": ["/app/test/infra/egress-injector-spike/policy.yaml"],
+           "clientRootCertFile": "/run/spike-hook/client-root.pem", "sessions": sessions}, open(out, "w"))
+PYHOOK
+spike_fix_owner "$SPIKE_WORK/run"
+spike_fix_owner "$SPIKE_WORK/hookpriv"
+spike_fix_owner "$SPIKE_WORK/stub"
+spike_start_hook
+spike_session_up sessA
+spike_session_up sessB
+spike_session_up sessC
+echo "SOLEUR_SPIKE_STAGE stage=topology-ready"
+check_deadline "topology"
 
 # --- Arms not built yet (task 1.8) -----------------------------------------------------------------------------------
 # Recorded honestly so the floor reads INCONCLUSIVE rather than a skip or a pass.
