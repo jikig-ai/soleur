@@ -131,7 +131,7 @@ co-occurs with is not enough.
 
 ## Related
 
-- `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md` (R2.1, R2.2, R2.3, Corrections)
+- `knowledge-base/project/specs/archive/20261110-145948-feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md` (R2.1, R2.2, R2.3, Corrections)
 - `knowledge-base/project/plans/archive/20261104-203103-2026-11-04-fix-bump-claude-code-sdk-bun-1-4-4-pair-plan.md` (precedent bump)
 - ADR-083, ADR-182, ADR-191, ADR-284 addenda (2026-11-10)
 - Follow-ups: #12588, #12589, #12590, #12591, #12592, tracker #12595

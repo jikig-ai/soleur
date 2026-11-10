@@ -506,7 +506,7 @@ bump that adds a step surfaces in CI rather than as an unclassified line.
 > **Re-read 2026-11-10 (#12514; SDK 0.3.321 / CLI 2.1.321, one shared binary).** The step counts above were re-read from the
 > 0.3.321 binary and are unchanged: the same 21 helper strings (19 `<step>` literals plus the 2 errno-less lines), so the
 > pre-command set stays 18 and `waitpid` the only post-command step. The bridge anchors are unchanged too (`allowAllUnixSockets:` 12,
-> `network.allowAllUnixSockets` 4, `TCP6-LISTEN:${` 1). Source: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md`
+> `network.allowAllUnixSockets` 4, `TCP6-LISTEN:${` 1). Source: `knowledge-base/project/specs/archive/20261110-145948-feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md`
 > row 1.8. The `LD_PRELOAD` runtime order was not re-run on 0.3.321.
 
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
