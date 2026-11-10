@@ -179,24 +179,70 @@ describe("WebEgressToggle — enable dialog copy", () => {
 });
 
 // #12469 T10 — the toggle must tell the owner what stops working (the command-line `gh`) and what replaces it, in the SAME
-// release that ships the replacement. Independent literal from the CPO ruling (decision-challenges.md), deliberately NOT
-// imported from the component, so a copy edit cannot pass by echo.
+// release that ships the replacement. #12197 (CTO ruling F3, CLO W2, CPO W1, 2026-11-10): both sentences are accurate in
+// both forwarder states, and the push sentence claims approval only for pushes made through Soleur. Independent literals
+// from those rulings (the #12197 leader-rulings plan, Phase 2), deliberately NOT imported from the component, so a copy
+// edit cannot pass by echo.
+const PUSH_DISCLOSURE =
+  "While this is on and a session's web access is running, commands an agent runs in its sandbox have no stored credentials, so they can't push to git remotes or use stored API keys. If web access can't start for a session, that session runs as if this were off: it has no web access, and its commands keep their usual access to your connected repository, which can include pushing. An agent may still ask to push a branch to your connected repository through Soleur; nothing is pushed that way unless the workspace owner approves that push.";
 const GH_DISCLOSURE =
-  "While this is on, the command-line gh tool is unavailable to agents. For public repositories, agents still read your issues, pull requests, and CI status through Soleur, but can't create or edit them; private repositories can't be read.";
+  "While this is on and a session's web access is running, the command-line gh tool is unavailable to agents in that session; for public repositories they still read your issues, pull requests, and CI status through Soleur, but can't create or edit them, and private repositories can't be read.";
+// The retired hand-written phrases (#12197): absolute claims that are false when a session's web access fails to start.
+const RETIRED_PHRASES = [
+  "can't push to git remotes or use stored API keys while this is on",
+  "agents can't push to git remotes",
+];
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+const count = (haystack: string, needle: string) => norm(haystack).split(norm(needle)).length - 1;
 
-describe("WebEgressToggle — gh disclosure (#12469)", () => {
-  it("shows the gh-unavailable sentence exactly once in the ON block and once in the enable dialog (twice per owner flow)", () => {
-    const { container, rerender } = card({ initialWebEgress: true });
-    const onText = norm(container.textContent ?? "");
-    expect(onText.split(norm(GH_DISCLOSURE)).length - 1).toBe(1);
-    rerender(<WebEgressToggle initialWebEgress={false} isOwner lastRequestAt={null} collection={false} />);
-    fireEvent.click(screen.getByRole("switch"));
-    const dialogText = norm(document.body.textContent ?? "");
-    expect(dialogText.split(norm(GH_DISCLOSURE)).length - 1).toBe(1);
+describe("WebEgressToggle — push and gh disclosures (#12469, #12197)", () => {
+  it("shows each disclosure exactly once in the ON block and exactly once in the enable dialog", () => {
+    const { container } = card({ initialWebEgress: true });
+    const onText = container.textContent ?? "";
+    expect(count(onText, PUSH_DISCLOSURE)).toBe(1);
+    expect(count(onText, GH_DISCLOSURE)).toBe(1);
+    cleanup();
+    card({ initialWebEgress: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Agent web access" }));
+    const dialogText = screen.getByRole("alertdialog").textContent ?? "";
+    expect(count(dialogText, PUSH_DISCLOSURE)).toBe(1);
+    expect(count(dialogText, GH_DISCLOSURE)).toBe(1);
+    // the OFF card shows no ON block, so the dialog is the only place on the page that carries them
+    const bodyText = document.body.textContent ?? "";
+    expect(count(bodyText, PUSH_DISCLOSURE)).toBe(1);
+    expect(count(bodyText, GH_DISCLOSURE)).toBe(1);
   });
 
-  it("the disclosure names `gh`, public repositories, and that private repositories can't be read", () => {
+  it("each disclosure is its own paragraph in the ON block and in the dialog", () => {
+    const { container } = card({ initialWebEgress: true });
+    const onParas = Array.from(container.querySelectorAll("p")).map((p) => norm(p.textContent ?? ""));
+    expect(onParas.filter((t) => t === norm(PUSH_DISCLOSURE))).toHaveLength(1);
+    expect(onParas.filter((t) => t === norm(GH_DISCLOSURE))).toHaveLength(1);
+    cleanup();
+    card({ initialWebEgress: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Agent web access" }));
+    const dlgParas = Array.from(screen.getByRole("alertdialog").querySelectorAll("p")).map((p) => norm(p.textContent ?? ""));
+    expect(dlgParas.filter((t) => t === norm(PUSH_DISCLOSURE))).toHaveLength(1);
+    expect(dlgParas.filter((t) => t === norm(GH_DISCLOSURE))).toHaveLength(1);
+  });
+
+  it("neither the ON block nor the enable dialog carries a retired 'can't push to git remotes' phrase", () => {
+    const { container } = card({ initialWebEgress: true });
+    const onText = norm(container.textContent ?? "");
+    cleanup();
+    card({ initialWebEgress: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Agent web access" }));
+    const dialogText = norm(screen.getByRole("alertdialog").textContent ?? "");
+    let seen = 0;
+    for (const phrase of RETIRED_PHRASES) {
+      expect(onText).not.toContain(phrase);
+      expect(dialogText).not.toContain(phrase);
+      seen += 1;
+    }
+    expect(seen).toBe(2);
+  });
+
+  it("the gh disclosure names `gh`, public repositories, and that private repositories can't be read", () => {
     expect(GH_DISCLOSURE).toMatch(/gh tool is unavailable/);
     expect(GH_DISCLOSURE).toMatch(/public repositories/);
     expect(GH_DISCLOSURE).toMatch(/private repositories can't be read/);
@@ -208,24 +254,45 @@ describe("WebEgressToggle — gh disclosure (#12469)", () => {
   });
 });
 
-describe("gh disclosure: the Scope Grants page carries the identical string (#12469, CPO condition)", () => {
-  it("the page renders the SHARED constant (no hand-copied sentence), and the shared constant is the ruled literal", async () => {
+describe("push and gh disclosures: the Scope Grants page carries the identical strings (#12469, #12197, CPO condition)", () => {
+  it("the page renders the SHARED constants (no hand-copied sentence), and the shared constants are the ruled literals", async () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
-    const { GH_DISCLOSURE: shared } = await import("@/lib/web-egress-disclosure");
-    expect(norm(shared)).toBe(norm(GH_DISCLOSURE));
+    const shared = await import("@/lib/web-egress-disclosure");
+    expect(norm(shared.GH_DISCLOSURE)).toBe(norm(GH_DISCLOSURE));
+    expect(norm(shared.PUSH_DISCLOSURE)).toBe(norm(PUSH_DISCLOSURE));
     const page = readFileSync(resolve(__dirname, "../app/(dashboard)/dashboard/settings/scope-grants/page.tsx"), "utf8");
-    // JSX comments and string-literal decoys cannot satisfy this: it needs the import AND the expression container.
-    expect(page).toMatch(/^import \{ GH_DISCLOSURE \} from "@\/lib\/web-egress-disclosure";$/m);
-    // Strip every comment form (JSX `{/* */}`, block, line) and every double-quoted string, so the bare expression container must
-    // survive in code: `{"" /* {GH_DISCLOSURE} */}` and `{"{GH_DISCLOSURE}"}` both lose it.
+    // JSX comments and string-literal decoys cannot satisfy this: it needs the import AND the expression containers.
+    expect(page).toMatch(/^import \{ GH_DISCLOSURE, PUSH_DISCLOSURE \} from "@\/lib\/web-egress-disclosure";$/m);
+    // Strip every comment form (JSX `{/* */}`, block, line) and every double-quoted string, so the bare expression containers
+    // must survive in code: `{"" /* {GH_DISCLOSURE} */}` and `{"{GH_DISCLOSURE}"}` both lose them.
     const code = page
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1")
       .replace(/"[^"\n]*"/g, '""');
+    expect(code).toMatch(/\{PUSH_DISCLOSURE\}/);
     expect(code).toMatch(/\{GH_DISCLOSURE\}/);
-    // and the page no longer carries its own copy of the sentence
-    expect(norm(page.replace(/&apos;/g, "'"))).not.toContain(norm(GH_DISCLOSURE));
+    // and the page no longer carries its own copy of either sentence, nor any hand-written push claim
+    const pageText = norm(page.replace(/&apos;/g, "'"));
+    expect(pageText).not.toContain(norm(GH_DISCLOSURE));
+    expect(pageText).not.toContain(norm(PUSH_DISCLOSURE));
+    expect(pageText).not.toContain("push to git remotes");
+  });
+
+  it("AC5: neither the toggle nor the page source holds 'push to git remotes', even wrapped across JSX lines", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const sources = [
+      "../components/settings/web-egress-toggle.tsx",
+      "../app/(dashboard)/dashboard/settings/scope-grants/page.tsx",
+    ];
+    let seen = 0;
+    for (const rel of sources) {
+      const src = norm(readFileSync(resolve(__dirname, rel), "utf8"));
+      expect(src).not.toContain("push to git remotes");
+      seen += 1;
+    }
+    expect(seen).toBe(2);
   });
 });
