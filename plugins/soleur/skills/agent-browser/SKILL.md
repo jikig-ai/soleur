@@ -676,8 +676,9 @@ sink, so do not suggest it):
 - **On Node 26 the browser install can stall** (0% CPU after the download reaches 100%, the
   extractor stops mid-file; no output for 60 s while idle means stalled, so kill it). Run the
   same pinned install under Bun and bound it: `timeout 300 bunx --bun @playwright/mcp@0.0.78
-  install-browser chromium`. Without Bun, unzip into `~/.cache/ms-playwright/<dir>` and create
-  `INSTALLATION_COMPLETE` (see the 2026-11-09 Playwright learning).
+  install-browser chromium` (on an unsupported host such as Ubuntu 26.04 put
+  `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64` in front). Without Bun, unzip into
+  `~/.cache/ms-playwright/<dir>` and create `INSTALLATION_COMPLETE` (see the 2026-11-09 Playwright learning).
 - **`Chromium sandboxing failed!` / `No usable sandbox!` on the first browser call**
   (bundled Chromium, sandbox kept on): the host does not allow unprivileged user
   namespaces (common on Ubuntu 23.10+/24.04, in containers, or as root). Do NOT try

@@ -253,7 +253,7 @@ The matching `/health` read is the same command with `analytics-health 216`. No 
 - The window maximum is 216 hours, so it cannot reproduce the owner's 217-row window.
 - The status dimension, the status range operators, `_DESC` ordering and the quantile field names for this dataset are not documented publicly; they are unverified until the first sanctioned read returns `ok`.
 
-**Median of the hourly p90, to reproduce the owner's before/after comparison.** The input is the stored second output line of `analytics-health 216` (the evidence file `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-health-216h.json`, which is created by the post-merge follow-up and does not exist in this change). `--arg lo` is the first hour included, `--arg hi` the first hour excluded, both as `YYYY-MM-DDTHH:MM:SSZ` strings that sort as text. Run once for the hours before the flip and once for the hours after it, and exclude the straddling 2026-11-07T23Z hour from both medians (state that in the record). Default pairs: before `--arg lo 2026-10-31T20:00:00Z --arg hi 2026-11-07T23:00:00Z`, after `--arg lo 2026-11-08T00:00:00Z --arg hi <the first hour after the last row>`:
+**Median of the hourly p90, to reproduce the owner's before/after comparison.** The input is the stored second output line of `analytics-health 216` (the evidence file `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-health-216h.json`, which is created by the post-merge follow-up and does not exist in this change). `--arg lo` is the first hour included, `--arg hi` the first hour excluded, both as `YYYY-MM-DDTHH:MM:SSZ` strings that sort as text. Run once for the hours before the flip and once for the hours after it (record the row count each median used: the 216-hour window ends before the read, so the earliest hours of the owner's range may fall outside it), and exclude the straddling 2026-11-07T23Z hour from both medians (state that in the record). Default pairs: before `--arg lo 2026-10-31T20:00:00Z --arg hi 2026-11-07T23:00:00Z`, after `--arg lo 2026-11-08T00:00:00Z --arg hi <the first hour after the last row>`:
 
 ```bash
 jq --arg lo "<first hour included>" --arg hi "<first hour excluded>" \
@@ -267,17 +267,19 @@ jq --arg lo "<first hour included>" --arg hi "<first hour excluded>" \
 Authority: the two reads are Class R and need no typed go from the owner; merging a wrapper fix PR (if the first read fails) is not Class R and does.
 
 1. Preflight, from a checkout rebased onto the merged main: `git fetch origin main`, then `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` must print nothing. If it does, rebase onto `origin/main` and repeat; if it is still non-empty record `other: wrapper-drift` and stop.
-2. Run both reads and keep an output only when the exit code is 0, line 1 is exactly `cloudflare-readonly: <subcommand> ok` and line 2 parses with `jq -e .`; never store stderr or an `unverified` line:
+2. Run both reads and keep an output only when the exit code is 0, line 1 is exactly `cloudflare-readonly: <subcommand> ok` and line 2 parses with `jq -e .`; never store stderr or an `unverified` line. The not-kept line is for the terminal only: record the reason token in the second addendum, never the parenthetical:
 
 ```bash
 d=knowledge-base/engineering/operations/runbooks/evidence; mkdir -p "$d"
 for sub in analytics-health analytics-edge-errors; do
-  out=$(doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh "$sub" 216 2>/dev/null); rc=$?
-  if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | sed -n 1p)" = "cloudflare-readonly: $sub ok" ] && printf '%s\n' "$out" | sed -n 2p | jq -e . >/dev/null; then
-    printf '%s\n' "$out" | sed -n 2p > "$d/$(date -u +%F)-$sub-216h.json"
+  err=$(mktemp); out=$(doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh "$sub" 216 2>"$err"); rc=$?
+  line1=$(printf '%s\n' "$out" | sed -n 1p); f="$d/$(date -u +%F)-$sub-216h.json"
+  if [ "$rc" -eq 0 ] && [ "$line1" = "cloudflare-readonly: $sub ok" ] && printf '%s\n' "$out" | sed -n 2p | jq -e . >/dev/null 2>&1; then
+    printf '%s\n' "$out" | sed -n 2p > "$f" && echo "kept $f"
   else
-    printf '%s\n' "$out" | sed -n 1p   # the unverified line, to be recorded
+    echo "$sub: not kept, rc=$rc, stdout line 1: ${line1:-none}, stderr line 1: $(sed -n 1p "$err")"
   fi
+  rm -f "$err"
 done
 ```
 
@@ -288,12 +290,14 @@ done
 | `unverified - api-error (graphql: unknown field ...)` | a field or filter name in a fixed query is wrong for this dataset | a fix PR to the wrapper (cap two in total across both queries); record `other: api-error` only, the parenthetical is data and is never copied |
 | `unverified - api-error` (plain) | the vendor message did not pass the message gate | re-run once; if it repeats it counts as a fix PR (same cap) |
 | `unverified - bad-response (shape)` or `(jq exit n)` | the vendor shape differs from the query's assumptions | a fix PR to the wrapper (same cap) |
-| `unverified - upstream-error (...)` | 429, 5xx or a curl failure | one re-run after a pause, then record; not a fix PR |
+| `unverified - upstream-error (...)` | 429, 5xx or a curl failure | one re-run after a pause, then record `other: upstream-error`; not a fix PR |
+| `unverified - not-found` or plain `unverified - bad-response` | HTTP 404, or a non-numeric status | re-run once; if it repeats record `other: not-found` or `other: bad-response`; not a fix PR |
+| `unverified - token-lacks-scope` | HTTP 403: the token lacks the zone scope | the owner's credential change; record `other: token-lacks-scope`; never answer with another token |
 | `unverified - no-zone-access` | the zone is not visible to the token, or the zone id is wrong (not told apart) | check the zone id and the token's zone |
 | `unverified - token-invalid` | the token is expired or revoked (it expires 2027-02-07) | rotation is the owner's credential change |
 | `unverified - no-credential (<name>)` | the Doppler config lacks that variable | add it to the config; never borrow another token |
-| `unverified - no-tool (jq|date)` | the host lacks the tool | record `no-tool` |
-| no wrapper line (doppler itself failed) | the Doppler login or config is wrong | record `Unverified: no-credential` |
+| `unverified - no-tool (jq or date)` | the host lacks the tool | record `no-tool` |
+| no wrapper line on stdout | the wrapper wrote one fixed line to stderr only (exit 64 or 78), or doppler itself failed | read the printed `stderr line 1` and `rc`: rc 64 with a refused source or token shape is `other: refused-source` (a usage error records nothing, re-run correctly); rc 78 is `other: xtrace`; a doppler login or config error is `Unverified: no-credential` |
 
 **Reconciliation with Step C and the token description above**
 
@@ -302,7 +306,7 @@ done
 
 **Other results recorded 2026-11-09 (owner-supplied, not re-derived by this change)**
 
-- Live-verify against production passed on 2026-11-09, as reported by the owner: `RESULT: PASS fresh conversation persisted and appeared in the rail via=reload elapsed=48s checks=33`. This change did not re-derive it: the CI log was searched and the line was not found. Search snapshot (the set of runs moves as new runs land): the 20 newest runs of `web-platform-release.yml`, by `gh run view <id> --log` limited to the first matching line per run. First pass on 2026-11-09 (newest run 42693428412): `RESULT: PASS` matched only the workflow's own script text in 8 of 20 runs, and `appeared in the rail via=` over those found no line. Re-run on 2026-11-10 (newest run 42717430338): script-text matches in 7 of 20 runs, no `appeared in the rail via=` line. This is not a failure of the check; it means the line was not located.
+- Live-verify against production passed on 2026-11-09, as reported by the owner: `RESULT: PASS fresh conversation persisted and appeared in the rail via=reload elapsed=48s checks=33`. This change did not re-derive it: the CI log was searched and the line was not found. Search snapshot (the set of runs moves as new runs land): the 20 newest runs of `web-platform-release.yml`, by `gh run view <id> --log` limited to the first matching line per run. First pass on 2026-11-09 (newest run 42693428412): `RESULT: PASS` matched only the workflow's own script text in 8 of 20 runs, and `appeared in the rail via=` over those found no line. Re-run at about 2026-11-09T23:30Z (newest run 42717430338, created 23:04Z): script-text matches in 7 of 20 runs, no `appeared in the rail via=` line. This is not a failure of the check; it means the line was not located.
 - WebSocket upgrade through the strict hop returned `101` (unauthenticated; not a signed-in check). The owner's brief puts it at 2026-11-08T14:49:20Z. The comment on #10479 (issuecomment-6725639019, an agent session, posted 2026-11-08T18:54:17Z) reports the same unauthenticated `101 Switching Protocols` result in its bake re-check at 16:35-16:37Z. The two times conflict and neither was re-derived; this change claims neither as the probe time. It shows an upgrade through the strict hop only: the signed-in WebSocket run is not done.
 
 **What changed in the status tables above.** As of the merge of this change, the token `CF_API_TOKEN_ANALYTICS_READ` exists (per the owner; this change did not read Doppler) and `plugins/soleur/scripts/cloudflare-readonly.sh` has the subcommands `analytics-health` and `analytics-edge-errors` (fixed read-only GraphQL queries sent as a POST; see ADR-289 and `standing-delegation.md` section 9), so Step C is runnable through the wrapper after the merge, from a checkout that matches `origin/main`. Until a sanctioned read is recorded, the "Real 502/520 rate" row stays open and every analytics figure above is the owner's, not the wrapper's.

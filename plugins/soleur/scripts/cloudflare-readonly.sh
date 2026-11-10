@@ -78,7 +78,7 @@
 # and the `--list` mode: exits 64 and 78 write one fixed line to stderr only (nothing was sent). Messages are fixed,
 # single-line and value-free, with ONE stated exception: on an analytics api-error the FIRST GraphQL error message is printed as
 # `api-error (graphql: <msg>)` only when it passes a fixed in-full check (letters, digits, space and . _ ' " ( ) -, 1 to 160
-# characters; no credential word, no copy or 8-character piece of the live token, no id or other long hex or alphanumeric run, no address in any spelling); otherwise plain `api-error`. It is vendor text, so data.
+# characters; no credential word, no exact-case copy or 8-character piece of the live token, no id or other long hex or alphanumeric run, no run of 8 or more digits, no four digit groups separated by 1 to 3 non-digit characters); otherwise plain `api-error`. It is vendor text, so data.
 # A response body, a rule expression, a description, a page-rule pattern, an actor or an IP
 # is never printed; every vendor string that is printed is enum- or regex-checked first. curl and jq diagnostics are
 # captured and reduced to `curl exit <n>` / `jq exit <n>` (the one stated exception to "stderr is never discarded":
@@ -135,13 +135,15 @@
 #     `bad-response (shape)` or `(jq exit n)`         -> the vendor shape differs from the query's assumptions: a wrapper fix PR (same cap)
 #     `upstream-error` (429, 5xx, curl exit)          -> one re-run after a pause, then record; not a fix PR
 #     `no-zone-access`                                -> check the zone id and the token's zone
+#     `token-lacks-scope` (403)                       -> the token lacks the zone scope: the owner's credential change; record `other: token-lacks-scope`
+#     `not-found` (404) or plain `bad-response`       -> re-run once; if it repeats record `other: not-found` / `other: bad-response`; not a fix PR
 #     `token-invalid`                                 -> the token (expires 2027-02-07) was rotated or expired: the owner's credential change
 #     `no-credential (<name>)`                        -> the Doppler config lacks that variable
 #     `no-tool (jq|date)`                             -> record `no-tool`; the host lacks the tool
 # Reasons to Records vocabulary: exit 10 -> no-credential; `no-tool (...)` -> `no-tool`; every other exit 11 and 14 reason -> `other: <the
 # leading reason token only>` (for example `other: no-zone-access`, `other: api-error`); anything in parentheses is DATA and is never copied
 # into a Records line, an issue, a pull request or a commit message, and for `api-error (graphql: ...)` that means the vendor text above all
-# (a fix PR names the query F or G and the field, not the vendor wording); exit 64 for a
+# (a fix PR names the query F or G and the field as written in this file's compiled-in query, never copied from the vendor text); exit 64 for a
 # usage error records nothing (re-run correctly); exit 64 for a refused source or token shape -> `other: refused-source`;
 # status 78 -> `other: xtrace`; a checkout whose diff against origin/main for this file is non-empty -> `other: wrapper-drift`
 # (fetch, rebase, re-diff, re-run); 429 / 5xx -> one re-run after a pause is allowed, the newest line governs.
@@ -176,7 +178,7 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]+$'
 ID_RE='^[0-9a-f]{32}$'
 STAMP_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 LIMIT=50
-QLIMIT=0   # the edge query's row cap; set to the row cap in GQL_EDGE_TPL (a suite row ties them) so `truncated` fires at the cap
+QLIMIT=0   # the edge query's row cap; set to the row cap in GQL_EDGE_TPL (a suite row ties them) so truncated fires at the cap
 HOURS=0
 MAX_HOURS=216
 GQL_MSG_RE='^[A-Za-z0-9 ._'"'"'"()-]{1,160}$'
@@ -189,8 +191,9 @@ TOK=""
 BODY=""
 STATUS=""
 
-# The health query's row limit (300) covers one row per hour for up to MAX_HOURS (216) hours (a suite row ties MAX_HOURS to it); the edge
-# query's cap (1000) is ordered DESC so the oldest rows drop first. The two fixed GraphQL query bodies (compiled in; the only substitutions are the zone id and the two window stamps, each validated
+# Row limits: the health query's (300) covers one row per hour for up to MAX_HOURS (216) hours; the edge query's cap (1000) is ordered DESC so
+# the oldest rows drop first. A suite row ties each to its constant.
+# The two fixed GraphQL query bodies (compiled in; the only substitutions are the zone id and the two window stamps, each validated
 # upstream). Read-only by construction: no mutation, no subscription, no introspection. Placeholders: @ZONE@ @START@ @END@.
 GQL_HEALTH_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:300,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestPath:\"/health\"},orderBy:[datetimeHour_ASC]){count dimensions{datetimeHour} avg{originResponseDurationMs} quantiles{originResponseDurationMsP50 originResponseDurationMsP90}}}}}"}'
 GQL_EDGE_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:1000,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestHTTPHost:\"app.soleur.ai\",edgeResponseStatus_geq:500,edgeResponseStatus_lt:600},orderBy:[datetimeHour_DESC]){count dimensions{datetimeHour edgeResponseStatus}}}}}"}'
@@ -356,8 +359,9 @@ gql_message() {
     if [[ "$m" == *"${TOK:i:8}"* ]]; then return 0; fi
   done
   if [[ "$m" =~ [0-9A-Fa-f]{16} ]] || [[ "$m" =~ [A-Za-z0-9]{40} ]]; then return 0; fi
-  # an address in any spelling: a dotted, spaced or hyphenated quad, or any run of 8 or more digits
-  if [[ "$m" =~ [0-9]{1,3}([ .-]+[0-9]{1,3}){3} ]] || [[ "$m" =~ [0-9]{8} ]]; then return 0; fi
+  # four digit groups separated by 1 to 3 non-digit characters (a dotted, spaced, hyphenated or underscored quad), or a run of 8 or more digits;
+  # other spellings of an address (hex, words) are NOT refused: this gate is best effort and the message is vendor text, so data
+  if [[ "$m" =~ [0-9]{1,3}([^0-9]{1,3}[0-9]{1,3}){3} ]] || [[ "$m" =~ [0-9]{8} ]]; then return 0; fi
   GQL_MSG="$m"
 }
 gql_api_error() { # an api-error, with the bounded vendor message when it passes the gate

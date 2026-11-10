@@ -515,6 +515,27 @@ grp_source() {
   t "source: every constant whose name holds TPL is one of the two query templates" eq "$(grep -cE '^[A-Z_]*TPL[A-Z_]*=' "$STRIPPED")" 2
   tn "source: mutation, subscription or __schema appears nowhere in the code (comments stripped)" src_has 'mutation|subscription|__schema'
   t "source: each analytics subcommand body holds exactly one cf_graphql call" eq "$(sub_calls sub_analytics_health)/$(sub_calls sub_analytics_edge_errors)" "1/1"
+  # every edge into the curl sites and the body is pinned by whole-line equality (each line must occur exactly once)
+  local pl pin_bad=""
+  while IFS= read -r pl; do
+    [[ "$(grep -cxF -- "$pl" "$STRIPPED")" == 1 ]] || pin_bad+=" [${pl:0:48}]"
+  done <<'PINNED'
+  out=$(/usr/bin/env -i "$CURL" --disable --noproxy '*' -X GET -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "$url" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOK") 2>&1)
+  out=$(/usr/bin/env -i "$CURL" --disable --noproxy '*' -X POST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "$GQL_URL" < <(gql_stdin "$esc") 2>&1)
+  TOK="${TOK%"${TOK##*[![:space:]]}"}"
+  b="${b//@ZONE@/$CF_ZONE_ID}"
+  b="${b//@START@/$WIN_START}"
+  b="${b//@END@/$WIN_END}"
+  printf '%s' "$b"
+  esc="${body//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\ndata-raw = "%s"\n' "$TOK" "$1"
+PINNED
+  t "source: the two curl lines, the token trim, the gql_fill substitutions, the two esc lines and the gql_stdin printf are each the exact line, once (not pinned:${pin_bad:- none})" eq "$pin_bad" ""
+  tn "source: no backtick command substitution anywhere in the code" src_has '[`]'
+  tn "source: no += append assignment anywhere in the code" src_has '[+]='
+  tn "source: no interpreter, resolver or probe tool by name (python, perl, openssl, getent, dig, nslookup, ruby)" src_has '(^|[^[:alnum:]_-])(python3?|perl|openssl|getent|dig|nslookup|ruby)([^[:alnum:]_-]|$)'
+  t "source: the header maps every other exit 11 and 14 reason to the leading reason token only" has_file "$SUT_SRC" 'every other exit 11 and 14 reason -> `other: <the'
   t "source: GQL_MSG_RE is the exact line and the only assignment" eq "$(grep -cxF "$MSG_RE_LINE" "$STRIPPED")/$(grep -c '^GQL_MSG_RE=' "$STRIPPED")" "1/1"
   t "source: export LC_ALL=C is the exact line, once (it is what keeps non-ASCII digits and letters out of the grammar)" eq "$(grep -cx 'export LC_ALL=C' "$STRIPPED")" 1
   t "source: MAX_HOURS does not exceed the health query's row limit (one row per hour)" test "$(sed -n 's/^MAX_HOURS=//p' "$STRIPPED")" -le "$(grep -E '^GQL_HEALTH_TPL=' "$STRIPPED" | grep -oE 'limit:[0-9]+' | head -n 1 | cut -d: -f2)"
@@ -650,7 +671,7 @@ grp_wire() {
   stubrc=$?
   t "stub control: any other method is refused" eq "$stubrc" 64
   for s in "${ALLSUBS[@]}"; do check_wire "$s"; done
-  t "wire: the blind-stub floor - at least $((${#ALLSUBS[@]})) wire rows ran" test "$WIRE_ROWS" -ge "${#ALLSUBS[@]}"
+  t "wire: the blind-stub floor - at least ${#ALLSUBS[@]} wire rows ran" test "$WIRE_ROWS" -ge "${#ALLSUBS[@]}"
   # must-pass non-canonical: a different zone id is substituted into the URL
   fixture 200 "$SSL_OK"
   run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" "CF_ZONE_ID=$ZONE_ALT" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" -- ssl-mode
@@ -816,7 +837,7 @@ grp_refuse() {
     REFUSE_ROWS=$((REFUSE_ROWS + 1))
     t "refuse fuzz: name $(printf '%q' "$fz") -> exit 64 and curl never called" bash -c '[[ "$1" == 64 && "$2" == 0 ]]' _ "$RC" "$(ncalls)"
   done
-  t "refuse floor: at least 119 refusal runs were exercised (zero checked is RED)" test "$REFUSE_ROWS" -ge 119
+  t "refuse floor: at least 119 refusal runs were exercised (zero checked is RED; observed $REFUSE_ROWS)" test "$REFUSE_ROWS" -ge 119
 }
 
 # =============================================================================================
@@ -1357,10 +1378,26 @@ grp_proj_an() {
   err_line "with a slash is omitted (outside the charset)" "see /client/v4" "api-error"
   err_line "with non-ASCII text is omitted" "caf$(printf '\xc3\xa9') broken" "api-error"
   err_line "that is empty is omitted" "" "api-error"
-  err_line "holding a 32-hex id is omitted" "zone a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 has no access" "api-error"
+  err_line "holding a 32-hex id is omitted" "zone abcdefabcdefabcdefabcdefabcdefab has no access" "api-error"
   err_line "holding a 16-hex run is omitted" "ref abcdefabcdef1234 seen" "api-error"
   err_line "holding a piece of the live token is omitted" "bad value ${TOK_N_PLAIN:3:10} here" "api-error"
   err_line "holding a 40-character alphanumeric run is omitted" "key $(printf 'Zq%.0s' $(seq 1 20)) here" "api-error"
+  # token-piece boundaries need a live token made only of allowed message characters (the default analytics token holds ~ + / =)
+  SLICE_TOK="qWxYzAbC.dEfGhIjK-lMnOpQrS"
+  tok_row() { # label message want-after-"unverified - "
+    mkenv CF_API_TOKEN_ANALYTICS_READ
+    PROJ_ROWS=$((PROJ_ROWS + 1))
+    fixture 200 "$(gql_err_body "$2")"
+    run "${ENVX[@]}" "CF_API_TOKEN_ANALYTICS_READ=$SLICE_TOK" -- analytics-health 24
+    t "proj[analytics-health]: $1" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - $3|14"
+  }
+  tok_row "a message holding exactly the first 8 token characters is omitted" "see ${SLICE_TOK:0:8} now" "api-error"
+  tok_row "a message holding exactly the last 8 token characters is omitted" "see ${SLICE_TOK: -8} now" "api-error"
+  tok_row "a message holding 8 token characters from the middle is omitted" "see ${SLICE_TOK:9:8} now" "api-error"
+  tok_row "a message holding only 7 token characters is printed" "see ${SLICE_TOK:0:7} now" "api-error (graphql: see ${SLICE_TOK:0:7} now)"
+  err_line "holding a quad with multi-character separators is omitted" "blocked from 203. 0. 113. 7 today" "api-error"
+  err_line "holding an underscore-separated quad is omitted" "blocked from 203_0_113_7 today" "api-error"
+  err_line "holding an uppercase 16-hex run is omitted" "ref ABCDEFABCDEF1234 seen" "api-error"
   err_line "holding a space-separated quad is omitted" "blocked from 203 0 113 7 today" "api-error"
   err_line "holding a hyphen-separated quad is omitted" "blocked from 203-0-113-7 today" "api-error"
   err_line "holding a run of 8 digits is omitted" "code 12345678 seen" "api-error"
@@ -1369,7 +1406,7 @@ grp_proj_an() {
   t "proj[analytics-health]: a message holding a NUL is refused, not stripped" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - api-error|14"
   # every printable ASCII character outside the allowed class (25 of them) is refused; every allowed one is printed (one assertion each)
   local bad=""
-  for k in '!' '#' '$' '%' '&' '*' '+' ',' '/' ':' ';' '<' '=' '>' '?' '@' '[' '\\' ']' '^' '`' '{' '|' '}' '~'; do
+  for k in '!' '#' '$' '%' '&' '*' '+' ',' '/' ':' ';' '<' '=' '>' '?' '@' '[' '\' ']' '^' '`' '{' '|' '}' '~'; do
     pr analytics-health "$(gql_err_body "a${k}b")"
     [[ "$L1" == "cloudflare-readonly: analytics-health unverified - api-error" && "$RC" == 14 ]] || bad+=" [$k]"
     leak_scan "$WORK/comb.txt" || bad+=" leak[$k]"
@@ -1429,6 +1466,16 @@ grp_proj_an() {
     run "${BASE_ENV[@]}" -- analytics-health 24
     t "proj[analytics-health]: HTTP ${k%%:*} -> unverified - ${k#*:}, exit 11, one request" eq "$L1|$RC|$(ncalls)" "cloudflare-readonly: analytics-health unverified - ${k#*:}|11|1"
   done
+  # a non-ASCII digit must stay outside the hours grammar even when the caller runs a UTF-8 locale (the wrapper pins LC_ALL=C);
+  # only where that locale is installed, because an absent locale would make the row meaningless rather than red
+  if locale -a 2> /dev/null | /usr/bin/grep -qix 'en_US.utf-\?8'; then
+    PROJ_ROWS=$((PROJ_ROWS + 1))
+    fixture 200 "$(ok_body analytics-health)"
+    run "${BASE_ENV[@]}" "LC_ALL=en_US.utf8" -- analytics-health "$(printf '\xd9\xa3')"
+    t "proj[analytics-health]: an Arabic-Indic digit hours argument is refused (64) under a UTF-8 caller locale" eq "$RC|$(ncalls)" "64|0"
+  else
+    printf 'info - proj: en_US.utf8 is not installed, the UTF-8 hours row did not run\n'
+  fi
 }
 
 # =============================================================================================
@@ -1592,14 +1639,22 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 srv = http.server.HTTPServer(('127.0.0.1', 0), H)
+srv.timeout = 4
 open(pf, 'w').write(str(srv.server_address[1]))
 srv.handle_request()
 PY
   lp=$!
   for ((i = 0; i < 50; i++)); do [[ -s "$WORK/rc_port" ]] && break; sleep 0.1; done
-  port=$(<"$WORK/rc_port") || port=0
+  if [[ ! -s "$WORK/rc_port" ]]; then
+    kill "$lp" 2> /dev/null
+    vno "gql[real-curl]: the loopback listener did not publish a port"
+    return
+  fi
+  port=$(<"$WORK/rc_port")
   /usr/bin/curl --disable --noproxy '*' -sS --max-time 10 --config - "http://127.0.0.1:$port/" < "$WORK/rc_cfg.txt" > /dev/null 2> "$WORK/rc_err.txt"
+  local crc=$?
   wait "$lp"
+  t "gql[real-curl]: real curl exits 0 against the loopback listener" eq "$crc" 0
   t "gql[real-curl]: real curl delivers the body byte-for-byte equal to the template-filled constant" cmp -s "$WORK/rc_recv" <(printf '%s' "$body")
   t "gql[real-curl]: the delivered body parses as JSON with a string query" bash -c 'jq -e "(.query|type)==\"string\"" < "$1" > /dev/null' _ "$WORK/rc_recv"
 }
@@ -1684,7 +1739,7 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=165
+PROJ_FLOOR=173
 for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
@@ -1887,11 +1942,11 @@ if [[ -z "$INNER" ]] && want all; then
 
   # --- Guard 1: request closure ---
   mutate "G1.1 -X POST" "wire[ssl-mode]: argv has -X GET" wire '-X GET -sS' '-X POST -sS'
-  mutate "G1.2 fifth dispatcher arm" "parity: array == case labels" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
-  mutate "G1.2b fifth arm refused by unknown-endpoint row" "refuse: unknown subcommand raw -> exit 64" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "G1.2 extra dispatcher arm" "parity: array == case labels" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "G1.2b extra arm refused by unknown-endpoint row" "refuse: unknown subcommand raw -> exit 64" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
   mutate "G1.3 refusing arm calls cf_get" "refuse: unknown subcommand raw -> exit 64" refuse '  *) die 64 "refused: unknown subcommand" ;;' '  *) cf_get ssl-mode ;;'
-  mutate "G1.4 second curl site" "source: exactly two curl call sites" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
-  mutate "G1.4b second curl site (403 retried)" "curl called exactly once" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
+  mutate "G1.4 extra curl site" "source: exactly two curl call sites" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
+  mutate "G1.4b extra curl site (403 retried)" "curl called exactly once" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
   mutate "G1.5 host overridable" "URL host is api.cloudflare.com despite a planted CF_API_BASE" wire "BASE='https://api.cloudflare.com/client/v4'" 'BASE="${CF_API_BASE:-https://api.cloudflare.com/client/v4}"'
   mutate "G1.6a add -L" "argv has none of -d" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 -L'
   mutate "G1.6b drop --max-redirs 0" "argv has --max-redirs 0" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-time 21'
@@ -1926,15 +1981,21 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.A11b echo the token in the POST 403 branch" "leak[analytics-health/403]" status $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) echo "$TOK"; unverified token-lacks-scope 11 ;;'
   mutate "G1.A11c POST 400 maps to upstream-error" "status[analytics-health/400]: first line is" status '    400) gql_api_error ;;' '    400) unverified upstream-error 14 ;;'
   mutate "G1.A12 the whole errors array is printed on an api-error" "api-error message ok is printed -> no canary, second message or token in the output" proj '  if [ -n "$GQL_MSG" ]; then unverified "api-error (graphql: $GQL_MSG)" 14; fi' $'  printf \'%s\\n\' "$BODY"\n  if [ -n "$GQL_MSG" ]; then unverified "api-error (graphql: $GQL_MSG)" 14; fi'
-  mutate "G1.A12b address refusal removed" "api-error message with a dotted quad is omitted" proj '  if [[ "$m" =~ [0-9]{1,3}([ .-]+[0-9]{1,3}){3} ]] || [[ "$m" =~ [0-9]{8} ]]; then return 0; fi' '  :'
+  mutate "G1.A12b address refusal removed" "api-error message with a dotted quad is omitted" proj '  if [[ "$m" =~ [0-9]{1,3}([^0-9]{1,3}[0-9]{1,3}){3} ]] || [[ "$m" =~ [0-9]{8} ]]; then return 0; fi' '  :'
   mutate "G1.A12c whole-token refusal removed" "a message holding a 7-character live token is omitted" proj $'  if [ -n "$TOK" ] && [[ "$m" == *"$TOK"* ]]; then return 0; fi\n' ''
   mutate "G1.A12d credential-word refusal removed" "api-error message naming Bearer is omitted" proj '  case "$lm" in *bearer* | *token* | *authorization*) return 0 ;; esac' '  :'
   mutate "G1.A12e charset widened to a colon" "api-error message with a colon is omitted" proj $'GQL_MSG_RE=\'^[A-Za-z0-9 ._\'"\'"\'"()-]{1,160}$\'' $'GQL_MSG_RE=\'^[A-Za-z0-9 ._:\'"\'"\'"()-]{1,160}$\''
   mutate "G1.A12h partial-token check never iterates" "holding a piece of the live token is omitted" proj 'i <= ${#TOK} - 8' 'i < 0'
+  mutate "G1.A12p token-piece loop stops one short (the last 8 characters are never checked)" "exactly the last 8 token characters is omitted" proj 'i <= ${#TOK} - 8' 'i < ${#TOK} - 8'
+  mutate "G1.A12q token-piece loop starts at 1 (the first 8 characters are never checked)" "exactly the first 8 token characters is omitted" proj 'for ((i = 0; ${#TOK} >= 8' 'for ((i = 1; ${#TOK} >= 8'
+  mutate "G1.A12r token piece is 9 characters wide" "8 token characters from the middle is omitted" proj '${TOK:i:8}' '${TOK:i:9}'
+  mutate "G1.Q1 QLIMIT no longer equals the edge template limit" "QLIMIT's value equals the edge query's limit" source $'  QLIMIT=1000\n' $'  QLIMIT=999\n'
+  mutate "G1.Q2 health row limit below MAX_HOURS" "MAX_HOURS does not exceed the health query's row limit" source 'httpRequestsAdaptiveGroups(limit:300,' 'httpRequestsAdaptiveGroups(limit:100,'
+  mutate "G1.Q3 header Records line reverted to the whole reason" "the header maps every other exit 11 and 14 reason to the leading reason token only" source 'every other exit 11 and 14 reason -> `other: <the' 'every other exit 11 and 14 reason -> `other: <a'
   mutate "G1.A12i hex-run refusal widened away" "holding a 32-hex id is omitted" proj '[0-9A-Fa-f]{16}' '[0-9A-Fa-f]{99}'
   mutate "G1.A12j alphanumeric-run refusal widened away" "holding a 40-character alphanumeric run is omitted" proj '[A-Za-z0-9]{40}' '[A-Za-z0-9]{99}'
   mutate "G1.A12k digit-run refusal widened away" "holding a run of 8 digits is omitted" proj '[[ "$m" =~ [0-9]{8} ]]' '[[ "$m" =~ [0-9]{99} ]]'
-  mutate "G1.A12l spaced-quad refusal reduced to a dotted quad" "holding a space-separated quad is omitted" proj '([ .-]+[0-9]{1,3}){3}' '(\.[0-9]{1,3}){3}'
+  mutate "G1.A12l spaced-quad refusal reduced to a dotted quad" "holding a space-separated quad is omitted" proj '([^0-9]{1,3}[0-9]{1,3}){3}' '(\.[0-9]{1,3}){3}'
   mutate "G1.A12m NUL no longer refused" "a message holding a NUL is refused, not stripped" proj 'explode | any(. < 32 or . == 127)' 'explode | any(. < 0)'
   mutate "G1.A12n charset widened to a semicolon" "every excluded printable character is refused" proj $'GQL_MSG_RE=\'^[A-Za-z0-9 ._\'"\'"\'"()-]{1,160}$\'' $'GQL_MSG_RE=\'^[A-Za-z0-9 ._;\'"\'"\'"()-]{1,160}$\''
   mutate "G1.A12o body printed to stderr on an ok edge read" "an ok run writes nothing to stderr" proj $'  QLIMIT=1000\n' $'  QLIMIT=1000\n  printf \'%s\\n\' "$BODY" >&2\n'
@@ -2039,8 +2100,8 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W6.4b xtrace list drops PAGERULES_READ" "xtrace[CF_API_TOKEN_PAGERULES_READ alone]: exit 78" xtrace '${CF_API_TOKEN_PAGERULES_READ:+x}' ''
   mutate "W6.5 xtrace list drops AUDIT" "xtrace[CF_API_TOKEN_AUDIT alone]: exit 78" xtrace '${CF_API_TOKEN_AUDIT:+x}' ''
   mutate "W6.6 xtrace list drops CF_API_TOKEN" "xtrace[CF_API_TOKEN alone]: exit 78" xtrace '${CF_API_TOKEN:+x}' ''
-  mutate "W6.7 3-space quoted fifth arm" "parity: dispatcher case labels" source '  *) die 64 "refused: unknown subcommand" ;;' $'   "raw") sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
-  mutate "W6.8 behavioural fifth arm (purge)" "refuse fuzz: name purge" source,refuse '  *) die 64 "refused: unknown subcommand" ;;' $'  purge) TOKVAR=CF_API_TOKEN_ZONE_SETTINGS; load_credential zone; sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "W6.7 3-space quoted extra arm" "parity: dispatcher case labels" source '  *) die 64 "refused: unknown subcommand" ;;' $'   "raw") sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "W6.8 behavioural extra arm (purge)" "refuse fuzz: name purge" source,refuse '  *) die 64 "refused: unknown subcommand" ;;' $'  purge) TOKVAR=CF_API_TOKEN_ZONE_SETTINGS; load_credential zone; sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
   mutate "W6.9 arm smuggled on an existing line" "census: dispatcher arm terminators == 7" source 'load_credential zone; sub_ssl_mode ;;' 'load_credential zone; sub_ssl_mode ;; hostnames) sub_ssl_mode ;;'
   mutate "W6.10 body-conditional extra request" "census: exactly four cf_get call sites" source,wire $'    ok) : ;;\n    api) unverified api-error 14 ;;' $'    ok) cf_get "$BASE/zones/$CF_ZONE_ID/settings/ssl" ;;\n    api) unverified api-error 14 ;;'
   mutate "W6.11 a URL template tampered" "census: the four cf_get URL templates" source 'pagerules?status=active"' 'pagerules?status=all"'
@@ -2107,7 +2168,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 190 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 190
+  t "mutation floor: at least 196 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 196
 fi
 
 # --- accounting ---
@@ -2115,7 +2176,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 1940 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 1940
+  t "floor: at least 1965 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 1965
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

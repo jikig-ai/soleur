@@ -42,7 +42,7 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 - [x] 3.3 ADR-289 addendum `## Addendum 2026-11-09 (Ref #12441, #10479, #10205)` (CLO text from `clo-ruling-text.md`, with the CLO message sentence); append 12441 to `related:`; no pointer key
 - [x] 3.4 `bun test plugins/soleur/test/components.test.ts`, the cloudflare suite, `bash plugins/soleur/test/c4-count-parity.test.sh`
 
-## Phase 4: Runbook addendum (append-only)
+## Phase 4: Runbook addendum (additions-only)
 
 - 4.1 Insert the addendum before `#### What was NOT run before the flip`; first line "Read this first" naming the superseded paragraph and row by anchor text; owner-supplied figures labelled; no cause claimed
 - 4.2 5xx row `not yet read; first sanctioned read after merge` with the exact command; caveats; median jq one-liner with named input and `--arg lo/hi`; handoff block and reason-to-action table; evidence path `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-health-216h.json` (committed only post-merge)

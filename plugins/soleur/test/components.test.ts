@@ -958,6 +958,24 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
   });
 
+  test("the CLO qualifiers and the attribution reach every site, and the runbook and wrapper reason tables list the same reasons", () => {
+    const sd9 = flatten(readRel(SD));
+    expect(sd9, "section 9 Credentials qualifier").toContain("as described by the owner and not verified by this pull request");
+    expect(sd9, "section 9 Boundary attribution").toContain("a CLO-agent ruling of 2026-11-09 that the POST read stays Class R");
+    expect(sd9, "section 9 must not assert the token cannot write").not.toContain("cannot write");
+    const adr = flatten(readFileSync(resolve(REPO, "knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md"), "utf-8"));
+    expect(adr, "ADR-289 attribution").toContain("a CLO-agent ruling of 2026-11-09 that the POST read stays Class R");
+    expect(adr, "ADR-289 owner-supplied description").toContain("owner-supplied description");
+    expect(adr, "ADR-289 structural fence").toContain("the compiled-in query is the structural fence");
+    expect(adr, "ADR-289 must not assert the token cannot write").not.toContain("the token `CF_API_TOKEN_ANALYTICS_READ` (Analytics:Read, zone soleur.ai only, read-only, no fallback) cannot write");
+    const runbook = readFileSync(resolve(REPO, "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"), "utf-8");
+    const header = readFileSync(WRAPPER, "utf-8").split("\n").filter((l) => l.startsWith("#")).join("\n");
+    const fromRunbook = new Set([...runbook.matchAll(/^\| `unverified - ([a-z-]+)/gm)].map((m) => m[1]));
+    const fromHeader = new Set([...header.matchAll(/^#     `([a-z-]+)/gm)].map((m) => m[1]));
+    expect(fromRunbook.size, "runbook reason table rows").toBeGreaterThanOrEqual(9);
+    expect([...fromHeader].sort(), "wrapper header reason list vs runbook reason table").toEqual([...fromRunbook].sort());
+  });
+
   test("the numeric bounds section 9 item 2 states are the wrapper's own: hours 1 to MAX_HOURS and the message cap", () => {
     const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
     const max = /^MAX_HOURS=(\d+)$/m.exec(src);
