@@ -100,10 +100,12 @@ jobs:
         working-directory: apps/web-platform
         run: npm ci --ignore-scripts
 
-      # The step's own cap; the suite finalizes INCONCLUSIVE at its internal 22-minute deadline first, so the upload
-      # below (which runs after a step timeout: that is a step failure, not a cancellation) has a results file.
+      # The step's own cap: the suite's internal 22-minute deadline plus its longest arm cap (a driver run, 420 s) fits
+      # under it. The suite finalizes INCONCLUSIVE at the deadline, and its TERM trap writes INCONCLUSIVE (TIMEOUT) if
+      # the step is killed first, so the upload below (which runs after a step timeout: that is a step failure, not a
+      # cancellation) has a results file.
       - name: Run the injector spike suite
-        timeout-minutes: 25
+        timeout-minutes: 30
         env:
           INJECTOR_SPIKE_OUT: ${{ runner.temp }}/injector-spike-results.json
           INJECTOR_SPIKE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

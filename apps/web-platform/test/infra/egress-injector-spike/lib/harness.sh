@@ -70,6 +70,8 @@ harness_fail() {
 
 finalize() {
   local draft="$SPIKE_WORK/results.draft.json" verdict rc
+  # shellcheck disable=SC2034 # read by the suite's trap
+  SPIKE_FINALIZED=1  # read by the suite's EXIT/TERM trap (a run that ends before this still writes its results)
   python3 -I - "$SPIKE_RECORDS" "$draft" <<'PY' || { echo "FAIL FINALIZE: cannot assemble results"; exit 1; }
 import json, os, sys
 records = [json.loads(l) for l in open(sys.argv[1]) if l.strip()] if os.path.exists(sys.argv[1]) else []
@@ -174,6 +176,8 @@ _selftest_die() {
   printf 'FAIL SELFTEST: %s\n' "$1"
   [[ "${GITHUB_ACTIONS:-}" == "true" ]] && printf '::error title=injector spike harness::SELFTEST: %s\n' "$1"
   printf '{"verdict": "INCONCLUSIVE", "records": [], "harness": "SELFTEST"}\n' > "$SPIKE_OUT"
+  # shellcheck disable=SC2034 # read by the suite's trap
+  SPIKE_FINALIZED=1  # this file is the result; the suite's exit trap must not overwrite it through the helpers
   exit 1
 }
 

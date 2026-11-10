@@ -925,3 +925,31 @@ describe("review 2026-11-10 — CTO R36, R37, R39, R40", () => {
     expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ reason: "pending" });
   });
 });
+
+describe("verdict.mjs — a pass carrying a failed observation (review F1)", () => {
+  const withNine = (rec: Record<string, unknown>) => [...allPass().filter((r) => r.criterion !== 9), { criterion: 9, ...rec }];
+
+  it("refuses a pass whose observation starts with `failed:` as a harness error (INCONCLUSIVE)", () => {
+    const v = verdictMod.computeVerdict({ records: withNine({ verdict: "pass", observation: "failed: x" }) });
+    expect(v).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+    expect(v.unmeasurable).toEqual([{ criterion: 9, reason: "pass-with-failed-observation" }]);
+    expect(v.harness).toContain("pass-with-failed-observation:9");
+  });
+
+  it("trims the observation before the check", () => {
+    const v = verdictMod.computeVerdict({ records: withNine({ verdict: "pass", observation: "  failed: x" }) });
+    expect(v).toMatchObject({ verdict: "INCONCLUSIVE", exitCode: 1 });
+    expect(v.harness).toContain("pass-with-failed-observation:9");
+  });
+
+  it("keeps a pass whose observation mentions failure without the `failed:` prefix", () => {
+    const v = verdictMod.computeVerdict({ records: withNine({ verdict: "pass", observation: "all checks held: a failed-login probe" }) });
+    expect(v).toMatchObject({ verdict: "GO", exitCode: 0 });
+    expect(v.harness).toEqual([]);
+  });
+
+  it("refuses only a pass: a fail with `failed:` beside eight passes is NO-GO", () => {
+    const v = verdictMod.computeVerdict({ records: withNine({ verdict: "fail", observation: "failed: x" }) });
+    expect(v).toMatchObject({ verdict: "NO-GO", exitCode: 0, failed: [9] });
+  });
+});

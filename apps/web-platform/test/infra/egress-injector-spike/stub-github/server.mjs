@@ -20,7 +20,7 @@
 //
 // Run: server.mjs <config.json>
 //   { "listen": {"host": "0.0.0.0", "port": 443}, "certFile", "keyFile", "repoRoot", "recordFile",
-//     "decoys": [{"id": "sessA", "file": "/run/decoy-a"}, ...] }
+//     "bodyFile"? (one {seq, body_bytes, complete} line per request), "decoys": [{"id": "sessA", "file": "/run/decoy-a"}, ...] }
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import http2 from "node:http2";
@@ -183,6 +183,21 @@ export function createStub(cfg) {
       ...(host === "api.anthropic.com" ? { peer: String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "") } : {}),
     };
     appendFileSync(cfg.recordFile, JSON.stringify(rec) + "\n");
+    // CTO R39: the received body length, by the record's seq, in its own file (the record line is written before the
+    // body arrives, and the windows over the record file count its lines). `complete` is false when the client went
+    // away before the body ended. A length, never content.
+    if (cfg.bodyFile) {
+      let n = 0;
+      let done = false;
+      const put = (complete) => {
+        if (done) return;
+        done = true;
+        appendFileSync(cfg.bodyFile, JSON.stringify({ seq: rec.seq, body_bytes: n, complete }) + "\n");
+      };
+      req.on("data", (c) => { n += c.length; });
+      req.on("end", () => put(true));
+      req.on("close", () => put(false));
+    }
     if (host === "api.anthropic.com") {
       if (url.pathname === "/sse") return sse(res);
       // The CLI's WebFetch domain-safety preflight (measured in the pinned binary: it allows on `can_fetch === true`).

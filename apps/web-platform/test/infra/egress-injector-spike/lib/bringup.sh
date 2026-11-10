@@ -189,8 +189,10 @@ spike_start_stub() {
   local d="$SPIKE_WORK/stub"
   mkdir -p "$d/repos" || harness_fail STUB_START "mkdir"
   [[ -s "$d/leaf.pem" ]] || harness_fail STUB_START "spike_upstream_root must run first"
-  : > "$d/records.jsonl"
+  : > "$d/records.jsonl"; : > "$d/bodies.jsonl"
   SPIKE_STUB_RECORDS="$d/records.jsonl"
+  # shellcheck disable=SC2034 # read by lib/arms.sh (criterion 3)
+  SPIKE_STUB_BODIES="$d/bodies.jsonl"  # the received body length per record seq (CTO R39)
   spike_fix_owner "$d"
   SPIKE_STUB_CTR="${SPIKE_RUN_ID}-stub"
   _spike_docker_run "$SPIKE_STUB_CTR" --network "$SPIKE_NET_EXT" \

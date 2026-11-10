@@ -173,8 +173,13 @@ JSON
   spike_stub_since "$seqC" > "$d/stubC.jsonl"
   local rows1
   rows1="$(spike_psql "c4 row count after" "SELECT count(*) FROM public.approval_request WHERE conversation_id IN ('$CONV_A', '$CONV_C')")"
+  # CTO R38 (recorded, unscored; after the row count, which it cannot affect: a query is a read).
+  printf '%s\n' "curl -sS -o /dev/null --max-time 12 -w 'code=%{http_code}' --cacert \"\$CA\" -x \"\$P\" -H 'content-type: application/json' --data '{\"query\":\"query Q { repository(owner: \\\"other-synth\\\", name: \\\"x\\\") { id } }\",\"operationName\":\"Q\"}' https://api.github.com/graphql 2>&1" > "$d/a3.sh"
+  local seq3; seq3="$(spike_stub_seq)"
+  spike_cx sessA "$d/a3.sh" "$d/a3.out"
+  spike_stub_since "$seq3" > "$d/a3-stub.jsonl"
   python3 -I - "$d" "$rows0" "$rows1" > "$d/verdict.txt" <<'PYC4'
-import json, sys
+import json, os, sys
 d, rows0, rows1 = sys.argv[1], sys.argv[2], sys.argv[3]
 def load(p): return json.load(open(p))
 def lines(p): return [json.loads(l) for l in open(p) if l.strip()]
@@ -202,7 +207,12 @@ checks = {
   # A delta, not an absolute: criterion 2's gated push runs first and leaves a row on conversation A by design.
   "the reads created no approval row": rows0.isdigit() and rows0 == rows1,
 }
-json.dump({"observations": obs, "checks": checks}, open(f"{d}/raw.json", "w"))
+# CTO R38, recorded and NOT scored: a GraphQL query naming a repository outside the allowlist is vended (GraphQL is
+# not repository-scoped in this design; the per-session token is the only enforceable boundary, #11637).
+a3 = {"out": open(f"{d}/a3.out").read().strip()[-200:] if os.path.exists(f"{d}/a3.out") else "",
+      "vended": any(r["host"] == "api.github.com" and r["path"] == "/graphql" and r["auth_class"] == "real-decoy" for r in lines(f"{d}/a3-stub.jsonl")) if os.path.exists(f"{d}/a3-stub.jsonl") else None,
+      "note": "R38: recorded only; GraphQL queries are not repository-scoped, so this does not affect the verdict"}
+json.dump({"observations": obs, "checks": checks, "recorded_unscored_graphql_outside_allowlist": a3}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
 print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
@@ -427,6 +437,29 @@ echo push_rc=\${PIPESTATUS[0]}
 EOS
 }
 
+# A push of one commit adding <bytes> random bytes (synthetic), on its own working copy and branch of session D.
+_c3_big_push_script() { # <name> <bytes> <out script file>
+  cat > "$3" <<EOS
+w=/home/soleur/c3-sessD-$1
+if [ ! -d "\$w/.git" ]; then HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git clone -q https://github.com/spike/alpha.git "\$w" 2>&1 | tail -1; fi
+cd "\$w" || { echo push_rc=clone-failed; exit 0; }
+if [ ! -f "$1.bin" ]; then head -c $2 /dev/urandom > "$1.bin" && git add "$1.bin" && git -c user.email=spike@example.invalid -c user.name=spike commit -q -m "c3 $1 $2 bytes"; fi
+echo "pack_bytes=\$(git count-objects -v | sed -n 's/^size-pack: //p')k loose=\$(git count-objects | cut -d' ' -f3)k"
+HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:refs/heads/spike-sessD-$1 2>&1 | tail -2
+echo push_rc=\${PIPESTATUS[0]}
+EOS
+}
+
+# spike_settle_pending <conversation> <owner label>: the owner denies every pending row of the conversation, so the
+# arm that follows starts at zero pending and never reaches the 5-pending cap (AP429, reason=cap).
+spike_settle_pending() {
+  local id
+  for id in $(spike_psql "pending rows to settle" "SELECT id FROM public.approval_request WHERE conversation_id = '$1' AND status = 'pending'"); do
+    [[ "$id" == PSQL_ERROR ]] && return 0
+    [[ "$(spike_decide "$2" "$id" deny)" == 200 ]] || spike_harness_err "SETTLE deny of a pending row failed"
+  done
+}
+
 # Starts the expiry arm (session E, rows created with a 60 s TTL). Returns at once; arm_c3 finishes it.
 arm_c3_expiry_start() {
   SPIKE_CUR=3
@@ -472,6 +505,8 @@ arm_c3() {
   _c3_push_script sessD life "life 2" "$d/l2.sh"
   spike_cx sessD "$d/l2.sh" "$d/l2.out"; note push2_new_hash "$(prc "$d/l2.out")"; note rows_end "$(spike_rows "$CONV_D")"
   note stub_push2 "$(spike_stub_since "$seq" | grep '"path":"/spike/alpha.git/git-receive-pack"' | grep -c '"auth_class":"real-decoy"')"
+  # Every block below starts at zero pending (A7): no conversation reaches the 5-pending cap.
+  note pend_after_push "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
 
   # REST binding (CPO C4): a row approved for body X does not authorize body Y, another path, or another repo.
   cat > "$d/rest.sh" <<'EOS'
@@ -498,6 +533,7 @@ EOS
   rest x2; note x_status "$(spike_row_status "$x")"
   note stub_x2 "$(spike_stub_since "$seq" | grep '"method":"POST"' | grep '"auth_class":"real-decoy"' | head -1)"
   rest x3
+  note pend_after_rest "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
 
   # GraphQL mutation lifecycle (plan: criterion 3 covers "REST POST and GraphQL mutation"). The top field is in the
   # policy's graphql-mutation rule (mutation_fields: createPullRequest, addComment). Pending with one new row, then
@@ -520,6 +556,55 @@ EOS
   gql g2; note gql_status "$(spike_row_status "$g")"; note gql_vend_approved "$(gvend "$seq")"
   seq="$(spike_stub_seq)"
   gql g3; note gql_vend_replay "$(gvend "$seq")"
+  note pend_after_gql "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
+
+  # Windows for the arms below: session D's hook markers (ids stripped) and the stub records, per probe.
+  win() { # <label> <hook line offset> <stub seq>
+    spike_hook_markers_since "$2" | grep -E '^SOLEUR_EGRESS_' | grep -F 'session=sessD ' \
+      | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' > "$d/$1.markers"
+    spike_stub_since "$3" > "$d/$1.stub"
+  }
+  local hw sw a4
+
+  # CTO R39: a live push of about 2 MiB (one commit adding a 2 MiB random file) on an allowlisted repository with
+  # the flag on. Above http.postBuffer (1 MiB by default; spike_cx reads no git config) git first sends a probe POST
+  # whose body is only a flush-pkt; it must vend with no row (rule git-receive-pack-probe). The real push then waits
+  # for approval, and after approval it is consumed once with the whole body at the stub. A git that sends no probe
+  # fails this arm.
+  _c3_big_push_script big 2097152 "$d/a4.sh"
+  note a4_rows0 "$(spike_rows "$CONV_D")"; hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
+  spike_cx sessD "$d/a4.sh" "$d/a4a.out"; note a4_push1 "$(prc "$d/a4a.out")"; note a4_rows1 "$(spike_rows "$CONV_D")"
+  win a4a "$hw" "$sw"
+  a4="$(spike_latest_pending "$CONV_D")"; note a4_row "${a4:+present}"; note a4_approve "$(spike_decide ownerA "$a4" approve)"
+  hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
+  spike_cx sessD "$d/a4.sh" "$d/a4b.out"; note a4_push2 "$(prc "$d/a4b.out")"; note a4_status "$(spike_row_status "$a4")"
+  win a4b "$hw" "$sw"
+  note a4_pack "$(grep -m1 '^pack_bytes=' "$d/a4a.out")"
+  note pend_after_a4 "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
+
+  # CTO R40: a push of about 4 MiB is over the 3 MiB body cap: refused body-over-cap, no row, no decoy on the write.
+  _c3_big_push_script huge 4194304 "$d/a5.sh"
+  note a5_rows0 "$(spike_rows "$CONV_D")"; hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
+  spike_cx sessD "$d/a5.sh" "$d/a5.out"; note a5_push "$(prc "$d/a5.out")"; note a5_rows1 "$(spike_rows "$CONV_D")"
+  win a5 "$hw" "$sw"
+  note pend_after_a5 "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
+
+  # CTO R40: one curl invocation sends an allowlisted GET and then an unapproved listed REST POST on the SAME
+  # connection (--next keeps curl's connection cache), once over HTTP/1.1 and once over HTTP/2. %{num_connects} of 0
+  # on the second transfer proves the reuse; the POST must still be judged on its own (pending, no real token).
+  local v
+  for v in http1.1 http2; do
+    cat > "$d/a6-$v.sh" <<EOS
+curl -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 get n=%{num_connects} code=%{http_code}\n" https://api.github.com/repos/spike/alpha \\
+  --next -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 post n=%{num_connects} code=%{http_code}\n" \\
+  -H 'content-type: application/json' --data '{"title":"c3 same connection $v","head":"a","base":"main"}' https://api.github.com/repos/spike/alpha/pulls
+EOS
+    hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
+    spike_cx sessD "$d/a6-$v.sh" "$d/a6-$v.out"
+    win "a6-$v" "$hw" "$sw"
+  done
+  note pend_after_a6 "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
+  cp "$SPIKE_STUB_BODIES" "$d/bodies.jsonl" 2>/dev/null || spike_harness_err "STUB_BODIES no body-length file"
 
   # Flag input off (session C): every vend is refused flag-off, with no row. C's own clone is refused like every
   # other vend (it would leave no working copy, and a push from a missing copy measured nothing), so the copy is
@@ -552,7 +637,7 @@ EOS
 
   spike_hook_markers_since "$h0" | grep -E '^SOLEUR_EGRESS_VEND' | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' > "$d/markers.txt"
   python3 -I - "$d" > "$d/verdict.txt" <<'PYC3'
-import json, re, sys
+import json, os, re, sys
 d = sys.argv[1]
 o = {}
 for l in open(f"{d}/obs.jsonl"):
@@ -562,11 +647,37 @@ def reasons(sess):
     return [x.split(" reason=")[1].split()[0] for x in m if f"session={sess} " in x and " reason=" in x]
 ra, rc, re_ = reasons("sessD"), reasons("sessC"), reasons("sessE")
 hookreqs = [x for x in m if "session=sessD " in x and " method=CONNECT" not in x and x.startswith("SOLEUR_EGRESS_VEND")]
-pend = lambda s: int(dict(p.split(":") for p in s.split()).get("pending", 0)) if s.strip() else 0
+pend = lambda s: int(dict(p.split(":", 1) for p in s.split() if ":" in p).get("pending", 0)) if s.strip() else 0
 # A refused push is git's own non-zero exit; a missing or non-numeric push_rc (a script that never reached the
 # push) is never read as refused.
 refused = lambda v: re.fullmatch(r"push_rc=[1-9][0-9]*", v or "") is not None
 off_markers = o["off_push_markers"].split()
+# Per-probe windows (A4-A6): markers, stub records, and the stub's received body length by record seq.
+rd = lambda f: open(f"{d}/{f}").read() if os.path.exists(f"{d}/{f}") else ""
+mk = lambda w: rd(f"{w}.markers").splitlines()
+stub = lambda w: [json.loads(l) for l in rd(f"{w}.stub").splitlines() if l.strip()]
+bodies = {b["seq"]: b for b in (json.loads(l) for l in rd("bodies.jsonl").splitlines() if l.strip())}
+blen = lambda r: (bodies.get(r.get("seq")) or {}).get("body_bytes", -1)
+rpack = lambda w: [r for r in stub(w) if r["method"] == "POST" and r["path"].endswith("/git-receive-pack") and r["auth_class"] == "real-decoy"]
+FLUSH = 4  # the probe's body, "0000"
+def refusal(ms, method, reason, sub=None):
+    return any(x.startswith("SOLEUR_EGRESS_VEND_REFUSED ") and f" method={method} " in x and re.search(rf" reason={reason}( |$)", x)
+               and (sub is None or re.search(rf" subreason={sub}( |$)", x)) for x in ms)
+def vend(ms, cls, rule):
+    return any(x.startswith("SOLEUR_EGRESS_VEND ") and f" class={cls} " in x and re.search(rf" rule={rule}( |$)", x) for x in ms)
+a6 = {}
+for v in ("http1.1", "http2"):
+    t = dict(re.findall(r"^a6 (get|post) (n=\d+ code=\d{3})$", rd(f"a6-{v}.out"), re.M))
+    a6[v] = {"get": t.get("get", ""), "post": t.get("post", ""), "markers": mk(f"a6-{v}"), "stub": stub(f"a6-{v}")}
+def same_conn(v):
+    x = a6[v]
+    posts = [r for r in x["stub"] if r["method"] == "POST" and r["auth_class"] == "real-decoy"]
+    return (x["get"] == "n=1 code=200" and x["post"] == "n=0 code=403" and refusal(x["markers"], "POST", "pending")
+            and any(r["method"] == "GET" and r["auth_class"] == "real-decoy" for r in x["stub"]) and not posts)
+pend_keys = [k for k in o if k.startswith("pend_") or k.endswith(("rows0", "rows1")) or k in ("rows1", "rows1_retry", "rows_after_deny", "rows_end")]
+max_pending = max((pend(o[k]) for k in pend_keys), default=0)
+cap_hits = [x for x in m if re.search(r" reason=cap( |$)", x)]
+a4a, a4b, a5 = mk("a4a"), mk("a4b"), mk("a5")
 checks = {
   "no row: push refused pending, one pending row": refused(o["push1"]) and "pending" in ra and pend(o["rows1"]) == 1,
   "no real token on the refused POST git-receive-pack": o["stub1_receivepack"] == "0",
@@ -589,8 +700,26 @@ checks = {
   # Guard 2 row 8: no client in this arm sends an Authorization header, so every request the hook saw must carry
   # none; one there means header replacement ran before the hook.
   "the hook ran before header replacement (client_auth=0 on every request)": bool(hookreqs) and all(" client_auth=0" in x or x.endswith("client_auth=0") for x in hookreqs),
+  # CTO R39: a live ~2 MiB push. No 0000 probe from git fails the first row: the rule is then unmeasured, not passed.
+  "R39 large push: git sent the 0000 probe and it vended with no row (git-receive-pack-probe)":
+      vend(a4a, "push-advert", "git-receive-pack-probe") and pend(o["a4_rows1"]) == pend(o["a4_rows0"]) + 1,
+  "R39 large push: the real push waits for approval (pending, one new row, no write body at the stub)":
+      refused(o["a4_push1"]) and refusal(a4a, "POST", "pending") and o["a4_row"] == "present" and not [r for r in rpack("a4a") if blen(r) != FLUSH],
+  "R39 large push: after approval it is consumed once and the stub receives the decoy with the whole body (>= 2 MiB)":
+      o["a4_approve"] == "200" and o["a4_push2"] == "push_rc=0" and o["a4_status"] == "consumed" and vend(a4b, "write", "git-push")
+      and len([r for r in rpack("a4b") if blen(r) >= 2 * 1024 * 1024]) == 1,
+  "R40 a ~4 MiB push is refused body-over-cap, with no row and no decoy on the write":
+      refused(o["a5_push"]) and refusal(a5, "POST", "guard-refused", "body-over-cap") and o["a5_rows0"] == o["a5_rows1"]
+      and not [r for r in rpack("a5") if blen(r) != FLUSH],
+  "R40 same connection, HTTP/1.1: a reused connection's unapproved POST is pending, no real token": same_conn("http1.1"),
+  "R40 same connection, HTTP/2: a reused connection's unapproved POST is pending, no real token": same_conn("http2"),
+  "no conversation reached the 5-pending cap and no request was refused reason=cap": max_pending < 5 and not cap_hits,
 }
-json.dump({"observations": o, "reasons": {"sessD": ra, "sessC": rc, "sessE": re_}, "checks": checks}, open(f"{d}/raw.json", "w"))
+json.dump({"observations": o, "reasons": {"sessD": ra, "sessC": rc, "sessE": re_}, "max_pending": max_pending, "cap_hits": cap_hits,
+           "large_push": {"push1_markers": a4a, "push2_markers": a4b, "push1_receive_pack_bodies": [blen(r) for r in rpack("a4a")],
+                          "push2_receive_pack_bodies": [blen(r) for r in rpack("a4b")], "probe_seen": vend(a4a, "push-advert", "git-receive-pack-probe")},
+           "over_cap_push": {"markers": a5, "receive_pack_bodies": [blen(r) for r in rpack("a5")]},
+           "same_connection": {v: {k: x[k] for k in ("get", "post", "markers")} for v, x in a6.items()}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
 print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
@@ -1130,13 +1259,36 @@ c tunnelSessionBRouterCred --cacert \$BUN -x "http://\$binj@127.0.0.1:$SPIKE_SES
 c httpListenConnect --cacert \$BUN -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" https://api.github.com/repos/spike/alpha
 c httpListenAbsolute -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" http://api.github.com/repos/spike/alpha
 c httpsListen -k --resolve "api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2)):127.0.0.1" "https://api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2))/repos/spike/alpha"
-# The metrics listener's /metrics body, kept for the judge: it is graded only when it is a Prometheus exposition (a
-# 404 page carries no metrics, so "no secret in it" would be a vacuous pass), with the same secret list as the logs.
-curl -sS --max-time 8 -o /run/spike/c6-metrics.txt -w 'metrics http=%{http_code}\n' "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/metrics" 2>/dev/null || echo "metrics http=000"
+# The metrics listener: iron-proxy v0.56.0 serves /healthz only (internal/metrics has no Prometheus handler), so
+# /metrics must be a 404 and /healthz a 200 whose body, kept for the judge, is scanned with the full secret list.
+curl -sS --max-time 8 -o /dev/null -w 'metrics http=%{http_code}\n' "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/metrics" 2>/dev/null || echo "metrics http=000"
+curl -sS --max-time 8 -o /run/spike/c6-healthz.txt -w 'healthz http=%{http_code}\n' "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/healthz" 2>/dev/null || echo "healthz http=000"
 EOS
   seq="$(spike_stub_seq)"
   docker exec -i -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" bash -s < "$d/c6.sh" > "$d/probes.out" 2>&1
   spike_stub_since "$seq" > "$d/stub.jsonl"
+  # A1 (CTO R36): three CONNECTs carrying the ROUTER credential (read from router-injector.cred as the router reads
+  # it), sent straight to iron-proxy's listeners: http_listen, https_listen over TLS (no SNI: scored; SNI equal to the
+  # CONNECT host: recorded, scored on no real token only), and inside an established tunnel_listen tunnel. A2 (R37):
+  # plain HTTP inside a 443 tunnel through the router. Each probe has its own window of session A's hook markers,
+  # stub records and squid lines; the forwarder logs no request content, so what it received is recorded unmeasured.
+  local cp=/app/test/infra/egress-injector-spike/probes/connect-probe.mjs cr=/run/spike/sessA/secrets/router-injector.cred
+  local cb=/run/spike-pub/sessA/bundle.pem t="$SPIKE_SESS_sessA_TUNNEL"
+  mkdir -p "$d/win"
+  printf 'node %s http-listen %s %s %s api.github.com\n' "$cp" "$((t + 1))" "$cr" "$cb" > "$d/win/a1-http-listen.sh"
+  printf 'node %s https-listen %s %s %s api.github.com none\n' "$cp" "$((t + 2))" "$cr" "$cb" > "$d/win/a1-https-listen.sh"
+  printf 'node %s https-listen %s %s %s api.github.com api.github.com\n' "$cp" "$((t + 2))" "$cr" "$cb" > "$d/win/a1-https-listen-sni.sh"
+  printf 'node %s in-tunnel %s %s %s api.github.com\n' "$cp" "$t" "$cr" "$cb" > "$d/win/a1-in-tunnel.sh"
+  printf '%s\n' 'curl -sS -o /dev/null --max-time 12 -w "a2 http=%{http_code} connect=%{http_connect}\n" -p -x "$P" http://api.github.com:443/repos/spike/alpha 2>&1' > "$d/win/a2-get.sh"
+  printf '%s\n' 'curl -sS -o /dev/null --max-time 12 -w "a2 http=%{http_code} connect=%{http_connect}\n" -p -x "$P" -H "content-type: application/json" --data "{\"title\":\"c6 plain\",\"head\":\"a\",\"base\":\"main\"}" http://api.github.com:443/repos/spike/alpha/pulls 2>&1' > "$d/win/a2-post.sh"
+  local w h sq
+  for w in a1-http-listen a1-https-listen a1-https-listen-sni a1-in-tunnel a2-get a2-post; do
+    h="$(spike_hook_lines)"; seq="$(spike_stub_seq)"; sq="$(spike_squid_log | wc -l)"
+    spike_cx sessA "$d/win/$w.sh" "$d/win/$w.out"
+    spike_hook_markers_since "$h" | grep -E '^SOLEUR_EGRESS_' | grep -F 'session=sessA ' | sed -E 's/ request_id=[^ ]+//' > "$d/win/$w.markers"
+    spike_stub_since "$seq" > "$d/win/$w.stub"
+    spike_squid_log | tail -n +$((sq + 1)) > "$d/win/$w.squid"
+  done
   # Unentitled session (CTO R34: scored on the driver's deny answer), the entitled positive control, and the sandbox's
   # view of container loopback (direct, and forced through the SDK's proxy where the NO_PROXY rule must deny).
   local hp=$((SPIKE_SESS_sessA_TUNNEL + 2)) hl=$((SPIKE_SESS_sessA_TUNNEL + 1)) nseq nr ns
@@ -1169,7 +1321,7 @@ PYS
   python3 -I - "$d" "$canary" "$SPIKE_WORK/run" "$SPIKE_WORK" > "$d/verdict.txt" <<'PYC6'
 import base64, json, os, re, sys
 d, canary, run, work = sys.argv[1:5]
-o, reach, metrics_http = {}, {}, ""
+o, reach, metrics_http, healthz_http = {}, {}, "", ""
 for line in open(f"{d}/probes.out"):
     m = re.match(r"^(\w+) http=(\d{3}) connect=(\d{3})$", line.strip())
     if m: o[m.group(1)] = (m.group(2), m.group(3))
@@ -1177,6 +1329,8 @@ for line in open(f"{d}/probes.out"):
     if m: reach[m.group(1)] = m.group(2)
     m = re.match(r"^metrics http=(\d{3})$", line.strip())
     if m: metrics_http = m.group(1)
+    m = re.match(r"^healthz http=(\d{3})$", line.strip())
+    if m: healthz_http = m.group(1)
 stub = [json.loads(l) for l in open(f"{d}/stub.jsonl") if l.strip()]
 n, e, aa = (json.load(open(f"{d}/{f}")) for f in ("out-n.json", "out-e.json", "out-n-allowall.json"))
 stepc = lambda o, i: next((s.get("content") or "" for s in o.get("steps", []) if s["id"] == i), "")
@@ -1224,9 +1378,27 @@ for f in sorted(os.listdir(f"{d}/logs")):
     control_hits = hits(text + "\n" + planted + "\n" + canary + "\n") if planted else []
     log_live[f] = len(text) > 0 and planted_id in control_hits and "body-canary" in control_hits
     if hits(text): log_leaks[f] = hits(text)
-metrics_text = open(f"{run}/c6-metrics.txt", errors="replace").read() if os.path.exists(f"{run}/c6-metrics.txt") else ""
-metrics_prom = re.search(r"^# (HELP|TYPE) ", metrics_text, re.M) is not None
-o["metrics"] = {"http": metrics_http, "bytes": len(metrics_text), "prometheus": metrics_prom, "hits": hits(metrics_text)}
+healthz_text = open(f"{run}/c6-healthz.txt", errors="replace").read() if os.path.exists(f"{run}/c6-healthz.txt") else ""
+o["metrics"] = {"note": "metrics listener serves /healthz only (v0.56.0)", "metrics_http": metrics_http, "healthz_http": healthz_http,
+                "healthz_bytes": len(healthz_text), "healthz_hits": hits(healthz_text)}
+# A1 (R36) and A2 (R37): per-probe windows, each judged on its own hook marker and its own stub records.
+rdw = lambda f: open(f"{d}/win/{f}", errors="replace").read() if os.path.exists(f"{d}/win/{f}") else ""
+def window(label):
+    return {"out": rdw(f"{label}.out").strip()[-300:], "markers": rdw(f"{label}.markers").splitlines(),
+            "stub": [json.loads(l) for l in rdw(f"{label}.stub").splitlines() if l.strip()], "squid": rdw(f"{label}.squid").splitlines()}
+W = {k: window(k) for k in ("a1-http-listen", "a1-https-listen", "a1-https-listen-sni", "a1-in-tunnel", "a2-get", "a2-post")}
+no_decoy = lambda w: not any(r["auth_class"] == "real-decoy" for r in W[w]["stub"])
+def connect_refusals(w):  # the subreasons of the CONNECT refusals the hook marked in that window
+    return [m.group(1) for x in W[w]["markers"] if x.startswith("SOLEUR_EGRESS_CONNECT ") and " outcome=refused-407" in x
+            for m in [re.search(r" subreason=([a-z-]+)", x)] if m]
+def no_tls(w, method):
+    return any(x.startswith("SOLEUR_EGRESS_VEND_REFUSED ") and f" method={method} " in x and re.search(r" reason=guard-refused( |$)", x)
+               and re.search(r" subreason=no-tls( |$)", x) for x in W[w]["markers"])
+o["connect_probes"] = {w: {"out": W[w]["out"], "connect_refusals": connect_refusals(w), "real_decoy_at_stub": not no_decoy(w),
+                           # egress-forwarder.mjs logs no request content: what it received is not observable here.
+                           "forwarder": "unmeasured: egress-forwarder.mjs logs no request content", "squid_lines": W[w]["squid"][-4:]}
+                       for w in W if w.startswith("a1-")}
+o["plain_http_in_tunnel"] = {w: {"out": W[w]["out"], "markers": W[w]["markers"][-4:], "real_decoy_at_stub": not no_decoy(w)} for w in W if w.startswith("a2-")}
 no_real_token = not any(r["auth_class"] == "real-decoy" for r in stub)
 checks = {
   "deny-CIDR, localhost and link-local targets refused at squid": all(o.get(k, ("", ""))[1] == "403" for k in ("denyCidr", "localhost", "linkLocal")),
@@ -1238,7 +1410,17 @@ checks = {
   "tunnel_listen refuses no credential, the session credential and session B's router credential (407)": all(o.get(k, ("", ""))[1] == "407" for k in ("tunnelNoCred", "tunnelSessionCred", "tunnelSessionBRouterCred")),
   "http_listen and https_listen yield no vend (R28 tunnel guard)": o.get("httpListenAbsolute", ("", ""))[0] in ("403", "502", "000") and o.get("httpListenConnect", ("", ""))[1] in ("403", "407") and o.get("httpsListen", ("", ""))[0] == "403",
   "no real token reached the stub from any listener probe": no_real_token,
-  "metrics carry no secret (graded on a Prometheus exposition at /metrics)": metrics_http == "200" and metrics_prom and not o["metrics"]["hits"],
+  "metrics listener serves /healthz only (v0.56.0): /metrics 404, /healthz 200 and its body carries no secret":
+      metrics_http == "404" and healthz_http == "200" and not o["metrics"]["healthz_hits"],
+  "R36 a CONNECT with the router credential to http_listen is refused no-sni, no real token at the stub":
+      "no-sni" in connect_refusals("a1-http-listen") and no_decoy("a1-http-listen"),
+  "R36 a CONNECT with the router credential over TLS to https_listen is refused (subreason recorded), no real token at the stub":
+      bool(connect_refusals("a1-https-listen")) and no_decoy("a1-https-listen"),
+  "R36 the same over TLS with SNI equal to the CONNECT host gets no real token at the stub (the secrets method list)": no_decoy("a1-https-listen-sni"),
+  "R36 a CONNECT with the router credential inside an established tunnel is refused (subreason recorded), no real token at the stub":
+      bool(connect_refusals("a1-in-tunnel")) and no_decoy("a1-in-tunnel"),
+  "R37 a plain-HTTP GET inside a 443 tunnel is refused no-tls, no real token at the stub": no_tls("a2-get", "GET") and no_decoy("a2-get"),
+  "R37 a plain-HTTP POST inside a 443 tunnel is refused no-tls, no real token at the stub": no_tls("a2-post", "POST") and no_decoy("a2-post"),
   "every log is non-empty and its control copy (a planted decoy and the canary) is found by the same scan": all(log_live.values()) and len(log_live) >= 4,
   "no log carries a secret or the body canary": not log_leaks,
 }

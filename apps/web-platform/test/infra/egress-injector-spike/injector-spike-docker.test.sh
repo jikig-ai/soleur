@@ -42,13 +42,29 @@ source "$SPIKE_DIR/lib/bringup.sh"
 # shellcheck source=lib/arms.sh
 source "$SPIKE_DIR/lib/arms.sh"
 
+# A run that ends before finalize (the step's timeout signal, or any exit that skips it) still leaves a results file:
+# every criterion with no verdict is recorded unmeasurable with a harness reason (TIMEOUT for a signal) and the
+# verdict is computed as usual, so it reads INCONCLUSIVE. finalize runs in a subshell here (it exits), before teardown
+# removes the work directory it reads.
+spike_finalize_if_needed() { # <harness reason>
+  [[ "${SPIKE_FINALIZED:-0}" == 1 ]] && return 0
+  SPIKE_FINALIZED=1
+  echo "FAIL $1: the suite ended before finalize"
+  local c
+  for c in "${SPIKE_CRITERIA[@]}"; do
+    _spike_has_record "$c" || _spike_json_record "$c" unmeasurable "harness:$1" >> "$SPIKE_RECORDS"
+  done
+  ( finalize ) || true
+}
 cleanup() {
+  spike_finalize_if_needed EXIT_BEFORE_FINALIZE
   spike_teardown
   case "$SPIKE_WORK" in /*/soleur-run.*) rm -rf -- "$SPIKE_WORK" ;; esac
 }
 trap cleanup EXIT
+trap 'spike_finalize_if_needed TIMEOUT; exit 1' TERM INT
 
-# Internal deadline, counted from suite start: the workflow gives this step 25 minutes (the job 45, for the
+# Internal deadline, counted from suite start: the workflow gives this step 30 minutes (the job 45, for the
 # Supabase pre-pull before it); at 22 the suite records what it has and finalizes INCONCLUSIVE, leaving the step
 # time to write the results the upload step needs. Checked between stages and before every arm.
 SPIKE_DEADLINE_S="${INJECTOR_SPIKE_DEADLINE_S:-1320}"
@@ -208,7 +224,7 @@ python3 -I - "$SPIKE_WORK/stub/config.json" "$SPIKE_WORK/run" <<'PYSTUB' || harn
 import json, sys
 decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC", "sessD", "sessE")]
 json.dump({"listen": {"host": "0.0.0.0", "port": 443}, "certFile": "/stub/leaf.pem", "keyFile": "/stub/leaf.key",
-           "repoRoot": "/stub/repos", "recordFile": "/stub/records.jsonl", "decoys": decoys}, open(sys.argv[1], "w"))
+           "repoRoot": "/stub/repos", "recordFile": "/stub/records.jsonl", "bodyFile": "/stub/bodies.jsonl", "decoys": decoys}, open(sys.argv[1], "w"))
 PYSTUB
 spike_start_stub
 spike_wait_log "$SPIKE_STUB_CTR" stub-github-listening 20 \
