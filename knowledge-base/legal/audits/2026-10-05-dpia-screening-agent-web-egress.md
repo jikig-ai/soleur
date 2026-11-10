@@ -68,6 +68,8 @@ gateway destination denies exclude metadata/internal ranges; every CONNECT
 decision is logged with workspace attribution. Phase B (#9543) restores
 credentialed operations through a broker rather than readable secrets.
 
+> **Superseded 2026-11-10 (#12197, PR #12567; recorded by the pull request that carries it), as to "an entitled session has **no readable credentials** in-sandbox (API keys, BYOK service tokens, GH/git auth are all unset/denied for sandboxed commands)":** that holds only for a session whose web access is running. As the code stands at this correction, a toggle-on session whose web access fails to start has no web egress and gets neither the deny census nor the deny-read additions (both apply only under `allowWebEgress`; `server/agent-runner-sandbox-config.ts`, `server/agent-runner-query-options.ts`), so its sandboxed commands keep the credentials of a toggle-off session, which can include a GitHub token. Risk (a) needs open-web egress, which that session does not have, so risk (a) as screened does not arise in that state and the conclusion (full DPIA not required) is unchanged. Whether this was so on 2026-10-05 is not re-measured here. Register: PA-2, marker of the same date. A v1 CLO-agent position, human review owed.
+
 **(b) Control-plane bleed-through.** Measured in the Phase-0 spike (spec
 TR7): the SDK's own control-plane traffic (Anthropic API, MCP proxy,
 telemetry intake) transits the forwarder/gateway even with `NO_PROXY`

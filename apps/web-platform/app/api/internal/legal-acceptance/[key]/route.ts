@@ -32,7 +32,7 @@ import { reportLegalOp, type StoreFailedStage } from "@/server/approval/ops";
  * Observability: a registry read failure, a failed verify or ack_state call and a set-but-malformed configuration value
  * each emit ONE `store_failed` (tags.stage registry | verify | ack_state | config; for `registry`, extra.code says which: read_failed,
  * or a malformed text such as bad_bytes, no_front_matter, bad_version, bad_valid_until). An unset value stays silent: that is
- * the dark state. The configuration report is once per process and names only the variable, never a value or a length.
+ * the dark state. The configuration report is once per process for this module (`surface.ts` reports a malformed founder id on its own, so up to two) and names only the variable, never a value or a length.
  *
  * Auth: a bearer token separate from the Inngest one (LEGAL_ACCEPTANCE_VERIFY_TOKEN, read through
  * lib/internal-auth-named.ts so lib/internal-auth.ts stays byte-identical to the CLO-discharged census sha). The founder

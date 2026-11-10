@@ -8,7 +8,7 @@ you hold that credential, and so does the production migration pipeline (a CI se
 
 Every query below runs in the SQL editor of the **production Supabase project** (prd), signed in with your own login: no ssh,
 no service key. Dev and prd are distinct projects; a row in dev is not a row in prd. Every query is scoped to the one founder id
-the endpoint is configured with, `LEGAL_ACCEPTANCE_FOUNDER_ID`, because the flag is global and the key is
+the endpoint is configured with, `LEGAL_ACCEPTANCE_FOUNDER_ID`, because the endpoint and the screens answer for that one id and the key is
 `(founder_id, key, text_hash)`.
 
 ## Read a note
@@ -82,7 +82,7 @@ the hold). Do not edit the row. Treat it as a possible integrity incident: escal
 | `registry` | The legal text file could not be read, or is malformed (emitted by the verify route and by the counts route) | Read the error `code` on the event (`extra.code`). `read_failed`: the texts directory is missing or unreadable in the image; redeploy a build that contains `server/legal-acceptance/texts`. Any other code: the committed text file is malformed; edit the file. Nothing is wrong with the database either way. |
 | `counts` | The aggregate read behind `scripts/legal-acceptance-counts.sh` (the `[key]/counts` route) failed, threw, or answered an undocumented shape | The helper exited non-zero with `counts: HTTP 503 store_failed` or `HTTP 502 bad_gateway`. Read `extra.code` (the SQLSTATE) and `extra.reason`; the full triage is in "The counts route answered 503" below. Recorded in Sentry, not paged. |
 | 401 (no event) | A caller sent a wrong or missing token | Unthrottled by design and not an event; paging is #12195. A burst of 401s in the request logs is the signal; rotate nothing unless the token is believed leaked. |
-| `config` | The token or the founder id is set but malformed (once per route module, so the verify and the counts route each report it once; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
+| `config` | The token or the founder id is set but malformed (once per reading module per process: a token is reported by the verify and the counts route, a founder id by the verify route and the card surface; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
 
 Read with the `ack` row above: a flush that is slow or answers false is not a Sentry event. It writes one warning log line
 (`legal acceptance ack skipped: flush not confirmed`), the row stays unacknowledged, and the next verify surfaces it.
@@ -96,7 +96,7 @@ sees neither a row nor a hint. This event is the only signal (recorded, not page
 
 | `extra.step` | What stopped | What to do |
 |---|---|---|
-| `gate` | The founder-surface gate threw: the flag read or the `LEGAL_ACCEPTANCE_FOUNDER_ID` check (a refusal is not an event; only a throw is) | Check that the flag provider and the configuration are reachable; read `extra.code` and `extra.errName`. |
+| `gate` | The founder-surface gate threw. Since 2026-11-10 it reads only the `LEGAL_ACCEPTANCE_FOUNDER_ID` variable, so only an unexpected throw (a bug, for example a missing user id) produces this; a refusal is not an event | Read `extra.code` and `extra.errName`, then the stack trace; no configuration or database step fixes it. |
 | `registry` | A declared legal text could not be read (the event carries `extra.key`), or the list of registry keys could not be read (no `extra.key`) | As the `registry` row of the `store_failed` table: the text file is missing, unreadable or malformed in the deployed image; read `extra.code`. Only that key's row is lost. |
 | `read` | The user-session read of `legal_acceptance` (row-level security, columns `key, text_hash, choice`) returned an error | Supabase availability or a policy or grant drift on migration 184; read `extra.code` (the SQLSTATE) and check that Supabase is up. |
 | `shape` | The read answered rows of an unrecognised shape | Treat as a bug or schema drift in migration 184; escalate, do not retry in a loop. |
@@ -150,7 +150,7 @@ It is a rule and not a control: nothing technical stops an agent session from re
 
 ## The decision-row count for a key (`legal-acceptance-counts.sh`)
 
-The `approval-queue` flag is already on in production. This count is therefore a report of the current state, not a go signal:
+A founder id is already configured in production (the card's only gate since 2026-11-10; the `approval-queue` flag no longer gates it). This count is therefore a report of the current state, not a go signal:
 `ok_to_flag=true total=1` is the expected value (one recorded decision, under the registry hash); the first run records it, since the route had not run when this was written. Run it before publishing a text change
 (a new text hash makes every earlier row stale) and whenever you need to know whether any row sits under another hash. The
 check needs no database credential (#12429, ADR-319 amendment 2026-11-08): it asks the web app through the verify bearer.
@@ -178,7 +178,7 @@ production write; those still need the operator's exact go.
 The zero-rows precondition is separate from `ok_to_flag`, and `ok_to_flag=true` does not subsume it: any row that exists
 (`total` above 0, even `total=1` under the registry hash) needs its own acknowledgement (the insert above, once per row, scoped by
 founder id, run in the production SQL editor with your own login), or it raises a false `row_without_event` when verified.
-The flag is already on in production, so this is not a step before turning it on: to see whether an existing row has its
+The founder id is already configured in production, so this is not a step before enabling anything: to see whether an existing row has its
 acknowledgement, run the "Rows with no acknowledgement" query above (the counts route cannot see acknowledgement state). Read
 `total`, not only `ok_to_flag`.
 
@@ -191,8 +191,8 @@ endpoint is dark the probe expects the body `{"error":"Not available"}` with `ca
 Order of the operator-owned steps (each depends on the one before): (1) enter `LEGAL_ACCEPTANCE_FOUNDER_ID` (the Supabase auth user uuid) in
 Doppler `dev` and `prd`, then check, boolean-only, that the uuid exists in that project's `auth.users`; (2) redeploy the web app; (3) the
 unauthenticated probe turns from 503 to 401; (4) an authenticated request with the Doppler token and no `hash` query answers 400, not 401,
-which proves the container holds the current token; (5) the first real acceptance is verified through the gate; (6) only then is the
-`approval-queue` flag turned on.
+which proves the container holds the current token; (5) the first real acceptance is verified through the gate. The card opens for the
+founder at step (2), so step (5) is done by the founder through the card, and the `approval-queue` flag is not a step.
 
 The session that performs the redeploy arms the pulls (they are not left to memory): at +1 hour and +24 hours after the redeploy, run
 
