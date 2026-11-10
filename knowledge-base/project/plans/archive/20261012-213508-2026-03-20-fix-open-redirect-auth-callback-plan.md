@@ -34,7 +34,7 @@ The vulnerability is **trivially exploitable** because:
 
 **OWASP Classification:** Open Redirect falls under [Broken Access Control (A01:2021)](https://owasp.org/Top10/A01_2021-Broken_Access_Control/) in the OWASP Top 10. The [OWASP Unvalidated Redirects and Forwards Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html) recommends allowlist-based validation as the primary mitigation -- which is exactly the approach in this plan.
 
-**Related Next.js Vulnerability:** [CVE-2025-29927](https://projectdiscovery.io/blog/nextjs-middleware-authorization-bypass) (disclosed March 2025) demonstrated that Next.js middleware can be bypassed via the `x-middleware-subrequest` header. While this is a separate vulnerability from the open redirect, it reinforces that header-based security in Next.js requires explicit validation -- the framework does not provide implicit protection. Verify the app is running Next.js >= 15.2.3 or >= 14.2.25 to be patched against CVE-2025-29927.
+**Related Next.js Vulnerability:** [the middleware authorization bypass](https://projectdiscovery.io/blog/nextjs-middleware-authorization-bypass) (disclosed March 2025) demonstrated that Next.js middleware can be bypassed via the `x-middleware-subrequest` header. While this is a separate vulnerability from the open redirect, it reinforces that header-based security in Next.js requires explicit validation -- the framework does not provide implicit protection. Check the app's Next.js release against that advisory's ranges.
 
 ## Problem Statement
 

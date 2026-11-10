@@ -25,7 +25,7 @@ in array filters; `strip_html` infinite loop).
 **Half the issue is already resolved on `main`.** Dependabot PR #7970 (merged
 2026-09-24) bumped `js-yaml` to `4.3.2` (top-level) and `3.15.2` (nested under
 `gray-matter`) — exactly the `first_patched_version`s of
-`GHSA-2883-xcg3-v3hh` (`>=4.0.0 <4.3.2` and `>=3.0.0 <3.15.2`). A live
+the js-yaml advisory (`>=4.0.0 <4.3.2` and `>=3.0.0 <3.15.2`). A live
 `npm audit --json` run today flags **only `liquidjs`**; `js-yaml` no longer
 appears. The residual js-yaml work is not a bump — it is the drain-guard
 ratchet #7970 skipped (`scripts/assert-dependabot-drain.py` still floors
@@ -55,13 +55,13 @@ no `package.json` or `overrides` change is needed on the primary path.
   PR's job (see the 2026-09-29 ratchet learning).
 - **Advisory records re-derived live** via `gh api
   "/advisories?ecosystem=npm&affects=<pkg>"` (2026-09-29):
-  - `js-yaml` `GHSA-2883-xcg3-v3hh` (HIGH): two vulnerable ranges,
+  - `js-yaml`, one HIGH advisory: two vulnerable ranges,
     `>=4.0.0 <4.3.2` **and** `>=3.0.0 <3.15.2` — installed `4.3.2` + `3.15.2`
     are exactly patched on both lines.
-  - `liquidjs`: `GHSA-g357-x5c3-c72p` (`pop` filter `memoryLimit` bypass,
-    `<=10.27.0`, patched 10.27.1), `GHSA-m7fp-h3p4-hr49` (`strip_html`
+  - `liquidjs`: one advisory (`pop` filter `memoryLimit` bypass,
+    `<=10.27.0`, patched 10.27.1), a second (`strip_html`
     infinite loop, `>=10.26.0 <10.27.1`, patched 10.27.1),
-    `GHSA-4r6h-5v86-94p3` (`join` filter resource exhaustion, `<=10.27.1`,
+    a third (`join` filter resource exhaustion, `<=10.27.1`,
     patched 10.27.2). No published advisory covers `>=10.27.2`; latest stable
     is `10.29.0` (`11.0.0-alpha.1` is a prerelease — not a target).
   - `liquidjs` exists in **only** the root lockfile — absent from

@@ -40,21 +40,21 @@ with a patched version available (verified 2026-11-01 via
 
 | Alert | Severity | Package | Advisory | Vulnerable range | Patched | Manifest |
 |---|---|---|---|---|---|---|
-| #284 | medium | `hono` | GHSA-5r4p-p66f-jhc7 — serveStatic double-decodes request path (middleware bypass) | `>=4.12.4 <4.13.11` | 4.13.11 | apps/web-platform |
-| #292 | medium | `@vitest/mocker` | GHSA-xp26-3454-mjgp — Windows backslash traversal bypasses mocker allowlist fix | `>=4.1.11 <4.1.12` | 4.1.12 | apps/web-platform |
-| #293 | medium | `@vitest/mocker` | GHSA-qxg6-89mg-rqv8 — code injection via unauthenticated manual-mock registration | `>=2.1.0-beta.7 <4.1.12` | 4.1.12 | apps/web-platform |
-| #327 | medium | `ip-address` | GHSA-rxp7-6hxx-x8q5 — Address6 ReDoS (quadratic zone-id match) | `<=10.7.3` | 10.7.4 | apps/web-platform |
-| #340 | medium | `ip-address` | GHSA-rxp7-6hxx-x8q5 | `<=10.7.3` | 10.7.4 | pencil-setup/scripts |
-| #346 | low | `fast-uri` | GHSA-333x-w4r6-6crp — scheme injection via unescaped first-segment colon | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
-| #347 | medium | `fast-uri` | GHSA-wjr9-j795-jxcr — host confusion via unchecked WHATWG host canonicalization | `>=3.1.3 <3.1.9` | 3.1.9 | apps/web-platform |
-| #348 | low | `fast-uri` | GHSA-xhq7-xmqj-769h — improper path equivalence in relative-reference normalization | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
-| #349 | medium | `fast-uri` | GHSA-w74x-v6f9-j3xg — URI scheme spoofing via percent-encoded scheme | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
-| #367 | medium | `@hono/node-server` | GHSA-rmxm-3fg6-px4f — serveStatic double-decodes request path (middleware bypass) | `>=1.19.10 <2.1.3` | 2.1.3 | apps/web-platform |
-| #373 | medium | `@hono/node-server` | GHSA-rmxm-3fg6-px4f | `>=1.19.10 <2.1.3` | 2.1.3 | pencil-setup/scripts |
-| #374 | medium | `glob` | GHSA-3g3m-2fjr-6pw4 — AbortSignal cancellation bypass (post-timeout traversal) | `>=9.0.0 <=14.0.1` | 14.0.2 | apps/web-platform |
-| #375 | medium | `minimatch` | GHSA-g3hv-75wg-m249 — globparts-amplification DoS | `<11.0.1` | 11.0.1 | apps/web-platform |
-| #376 | medium | `minimatch` | GHSA-g3hv-75wg-m249 | `<11.0.1` | 11.0.1 | root |
-| #377 | medium | `minimatch` | GHSA-g3hv-75wg-m249 | `<11.0.1` | 11.0.1 | pen-cli |
+| #284 | medium | `hono` | serveStatic double-decodes request path (middleware bypass) | `>=4.12.4 <4.13.11` | 4.13.11 | apps/web-platform |
+| #292 | medium | `@vitest/mocker` | Windows backslash traversal bypasses mocker allowlist fix | `>=4.1.11 <4.1.12` | 4.1.12 | apps/web-platform |
+| #293 | medium | `@vitest/mocker` | code injection via unauthenticated manual-mock registration | `>=2.1.0-beta.7 <4.1.12` | 4.1.12 | apps/web-platform |
+| #327 | medium | `ip-address` | Address6 ReDoS (quadratic zone-id match) | `<=10.7.3` | 10.7.4 | apps/web-platform |
+| #340 | medium | `ip-address` | as #327 | `<=10.7.3` | 10.7.4 | pencil-setup/scripts |
+| #346 | low | `fast-uri` | scheme injection via unescaped first-segment colon | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
+| #347 | medium | `fast-uri` | host confusion via unchecked WHATWG host canonicalization | `>=3.1.3 <3.1.9` | 3.1.9 | apps/web-platform |
+| #348 | low | `fast-uri` | improper path equivalence in relative-reference normalization | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
+| #349 | medium | `fast-uri` | URI scheme spoofing via percent-encoded scheme | `>=3.0.0 <3.1.9` | 3.1.9 | apps/web-platform |
+| #367 | medium | `@hono/node-server` | serveStatic double-decodes request path (middleware bypass) | `>=1.19.10 <2.1.3` | 2.1.3 | apps/web-platform |
+| #373 | medium | `@hono/node-server` | as #367 | `>=1.19.10 <2.1.3` | 2.1.3 | pencil-setup/scripts |
+| #374 | medium | `glob` | AbortSignal cancellation bypass (post-timeout traversal) | `>=9.0.0 <=14.0.1` | 14.0.2 | apps/web-platform |
+| #375 | medium | `minimatch` | globparts-amplification DoS | `<11.0.1` | 11.0.1 | apps/web-platform |
+| #376 | medium | `minimatch` | as #375 | `<11.0.1` | 11.0.1 | root |
+| #377 | medium | `minimatch` | as #375 | `<11.0.1` | 11.0.1 | pen-cli |
 
 Brief-vs-reality corrections found during premise validation (Phase 0.6):
 
@@ -65,7 +65,7 @@ Brief-vs-reality corrections found during premise validation (Phase 0.6):
   fixed state and moves on. (The drain guard is npm-lockfile-scoped, so there
   is no pip-side row to ratchet.)
 - **The hono 2.x migration is not needed.** The brief flagged the serveStatic
-  alerts as possibly closable only via hono 2.x; GHSA-5r4p-p66f-jhc7 patches
+  alerts as possibly closable only via hono 2.x; the `hono` serveStatic advisory patches
   on the 4.x line at 4.13.11, and `@hono/node-server` patches at 2.1.3 —
   which the `@modelcontextprotocol/sdk` parent already sanctions
   (`"^1.19.9 || ^2.0.5"` dependency range). Dependabot's own open PR #11468
@@ -667,7 +667,7 @@ four lockfiles, `scripts/assert-dependabot-drain.{py,test.sh}`,
 - The next body-streams classifier re-evaluation (#11783 — waits on an
   upstream released fix).
 - The likec4 1.60 pin-train bump (#11696).
-- The hono 2.x compat migration — not needed: GHSA-5r4p-p66f-jhc7 patches
+- The hono 2.x compat migration — not needed: the `hono` serveStatic advisory patches
   on the 4.x line at 4.13.11.
 - Pillow / requirements.txt — alert #302 already `fixed` on main.
 - PR #11814's affected-index scope.
@@ -693,8 +693,5 @@ four lockfiles, `scripts/assert-dependabot-drain.{py,test.sh}`,
   `2026-09-29-dependabot-remediation-must-ratchet-drain-guard-floors.md`,
   `2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md`,
   `2026-05-27-npm-update-rewrites-lockfile-name-in-worktrees.md`.
-- Advisories: GHSA-5r4p-p66f-jhc7, GHSA-xp26-3454-mjgp, GHSA-qxg6-89mg-rqv8,
-  GHSA-rxp7-6hxx-x8q5, GHSA-333x-w4r6-6crp, GHSA-wjr9-j795-jxcr,
-  GHSA-xhq7-xmqj-769h, GHSA-w74x-v6f9-j3xg, GHSA-rmxm-3fg6-px4f,
-  GHSA-3g3m-2fjr-6pw4, GHSA-g3hv-75wg-m249, GHSA-vx6w-vv9f-6gvg (fixed).
+- Advisories: the ones named in the alert table above, plus the one behind Pillow alert #302.
 - Umbrella tracking issue: #10857; out-of-scope trackers: #11783, #11696.

@@ -10,7 +10,7 @@
 
 - **js-yaml needs NO lockfile bump.** PR #7970 (merged 2026-09-24, after
   #8065 was filed) already landed `4.3.2`/`3.15.2` — exactly the patched
-  versions of GHSA-2883-xcg3-v3hh on both major lines. Today's
+  versions the js-yaml advisory names on both major lines. Today's
   `npm audit --json` on the root lockfile flags only `liquidjs`. The js-yaml
   residue is the **drain-guard ratchet**: `assert-dependabot-drain.py` floors
   still sit at `4.3.1`/`3.15.1`, below GHSA-2883's patched versions, so a

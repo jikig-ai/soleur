@@ -43,14 +43,14 @@ patched version available (verified 2026-10-31 via
 
 | Alert | Severity | Package | Advisory | Vulnerable range | Patched | Manifest |
 |---|---|---|---|---|---|---|
-| #325 | critical | `next` | GHSA-2464-fhr4-w9xw — unauthenticated RCE in Image Optimization API when SVG files are used | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
-| #328 | critical | `next` | GHSA-673q-mjm6-r5xr — unauthenticated RCE in `use cache` functions returning typed arrays | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
-| #326 | critical | `@sentry/nextjs` | GHSA-mchm-gjx6-7h55 — middleware bypass via tunnel route | `>=10.0.0-alpha.0 <10.75.2` | 10.75.2 | apps/web-platform |
-| #324 | high | `next` | GHSA-p3m5-59mp-jv5r — DoS in App Router Server Actions | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
-| #344 | high | `body-parser` | GHSA-27r3-jxmh-p828 — DoS via trailing bytes after compressed body | `>=2.0.0 <2.4.0` | 2.4.0 | apps/web-platform |
-| #341 | high | `zod` | GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) — memory exhaustion on oversized constrained collections | `<4.6.6` | 4.6.6 | apps/web-platform |
-| #342 | high | `zod` | GHSA-mrhx-c7xc-m3w5 | `<4.6.6` | 4.6.6 | pencil-setup/scripts |
-| #343 | high | `zod` | GHSA-mrhx-c7xc-m3w5 | `<4.6.6` | 4.6.6 | spike |
+| #325 | critical | `next` | unauthenticated RCE in Image Optimization API when SVG files are used | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
+| #328 | critical | `next` | unauthenticated RCE in `use cache` functions returning typed arrays | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
+| #326 | critical | `@sentry/nextjs` | middleware bypass via tunnel route | `>=10.0.0-alpha.0 <10.75.2` | 10.75.2 | apps/web-platform |
+| #324 | high | `next` | DoS in App Router Server Actions | `>=16.0.0 <=16.4.0` | 16.4.1 | apps/web-platform |
+| #344 | high | `body-parser` | DoS via trailing bytes after compressed body | `>=2.0.0 <2.4.0` | 2.4.0 | apps/web-platform |
+| #341 | high | `zod` | memory exhaustion on oversized constrained collections | `<4.6.6` | 4.6.6 | apps/web-platform |
+| #342 | high | `zod` | as #341 | `<4.6.6` | 4.6.6 | pencil-setup/scripts |
+| #343 | high | `zod` | as #341 | `<4.6.6` | 4.6.6 | spike |
 
 Brief-vs-reality corrections found during premise validation (Phase 0.6):
 
