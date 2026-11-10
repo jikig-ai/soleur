@@ -567,3 +567,80 @@ PYC9
   observe c9 "$d/raw.json"
   spike_record_judged 9 "$d/verdict.txt"
 }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 7: one new GitHub verb touches policy data only. Session B (no criterion 3 rows, so clear of the
+# 5-pending cap). Pass 1 (base policy): POST /repos/spike/beta/issues is refused not-allowlisted with no row. Pass 2
+# restarts ONLY the hook with policy.add-verb.yaml layered on; approval-hook.mjs and policy.mjs are hashed before
+# and after and must be byte-identical. In pass 2 the same request is gated, consumed once and vended.
+# ---------------------------------------------------------------------------------------------------------------
+_c7_rest() { # <step> <out>
+  cat > "$SPIKE_WORK/c7/req.sh" <<'EOS'
+curl -sS -o /dev/null --max-time 15 -w "$STEP=%{http_code}\n" --cacert "$CA" -x "$P" -H 'content-type: application/json' \
+  --data '{"title":"spike synthetic issue","body":"synthetic"}' https://api.github.com/repos/spike/beta/issues 2>/dev/null || echo "$STEP=000"
+EOS
+  { echo "STEP=$1"; cat "$SPIKE_WORK/c7/req.sh"; } > "$SPIKE_WORK/c7/req-$1.sh"
+  spike_cx sessB "$SPIKE_WORK/c7/req-$1.sh" "$2"
+}
+
+_c7_warm() { # wait until session B's allowlisted read vends again through iron-proxy (gRPC reconnect backoff)
+  local i
+  printf '%s\n' 'curl -sS -o /dev/null --max-time 10 -w "%{http_code}" --cacert "$CA" -x "$P" https://api.github.com/repos/spike/beta 2>/dev/null' > "$SPIKE_WORK/c7/warm.sh"
+  for ((i = 0; i < 30; i++)); do
+    spike_cx sessB "$SPIKE_WORK/c7/warm.sh" "$SPIKE_WORK/c7/warm.out"
+    [[ "$(cat "$SPIKE_WORK/c7/warm.out")" == "200" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+arm_c7() {
+  local d="$SPIKE_WORK/c7" h1 h2 seq rows0 rows1 id
+  mkdir -p "$d" || harness_fail DRIVER "mkdir c7"
+  h1="$(sha256sum "$SPIKE_DIR/approval-hook.mjs" "$SPIKE_DIR/policy.mjs" | awk '{print $1}' | tr '\n' ' ')"
+  rows0="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'" 2>/dev/null)"
+  seq="$(spike_stub_seq)"
+  _c7_rest pass1 "$d/pass1.out"
+  rows1="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'" 2>/dev/null)"
+  local m1
+  m1="$(docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep 'session=sessB ' | grep 'method=POST' | tail -1 | grep -oE '(sub)?reason=[a-z-]+' | tr '\n' ' ')"
+  # Pass 2: restart only the hook, with the overlay layered on the base policy.
+  python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$SPIKE_WORK/hookpriv/hook-overlay.json" <<'PYO' || { record_verdict 7 unmeasurable "harness:HOOK_START overlay config"; return; }
+import json, sys
+c = json.load(open(sys.argv[1]))
+c["policyFiles"] = c["policyFiles"] + ["/app/test/infra/egress-injector-spike/policy.add-verb.yaml"]
+json.dump(c, open(sys.argv[2], "w"))
+PYO
+  spike_fix_owner "$SPIKE_WORK/hookpriv"
+  docker rm -f "$SPIKE_HOOK_CTR" >/dev/null 2>&1
+  spike_start_hook hook-overlay.json
+  _c7_warm || { record_verdict 7 unmeasurable "harness:HOOK_RESTART session B did not vend a read within 30 s of the overlay restart"; return; }
+  h2="$(sha256sum "$SPIKE_DIR/approval-hook.mjs" "$SPIKE_DIR/policy.mjs" | awk '{print $1}' | tr '\n' ' ')"
+  _c7_rest pass2a "$d/pass2a.out"
+  id="$(spike_latest_pending "$CONV_B")"
+  local approve; approve="$(spike_decide ownerB "$id" approve)"
+  _c7_rest pass2b "$d/pass2b.out"
+  local status; status="$(spike_row_status "$id")"
+  spike_stub_since "$seq" > "$d/stub.jsonl"
+  python3 -I - "$d" "$h1" "$h2" "$rows0" "$rows1" "${id:+present}" "$approve" "$status" "$m1" > "$d/verdict.txt" <<'PYC7'
+import json, sys
+d, h1, h2, rows0, rows1, idp, approve, status, m1 = sys.argv[1:10]
+rd = lambda f: open(f"{d}/{f}").read().strip().splitlines()[-1] if open(f"{d}/{f}").read().strip() else ""
+recs = [json.loads(l) for l in open(f"{d}/stub.jsonl") if l.strip()]
+issue_vends = [r for r in recs if r["method"] == "POST" and r["path"] == "/repos/spike/beta/issues" and r["auth_class"] == "real-decoy" and r["decoy_id"] == "sessB"]
+checks = {
+  "control: pass 1 refuses the request not-allowlisted, with no row": rd("pass1.out") == "pass1=403" and "not-allowlisted" in m1 and rows0 == rows1,
+  "approval-hook.mjs and policy.mjs are byte-identical across passes": h1 == h2 and h1.strip() != "",
+  "pass 2 gates the same request (pending row)": rd("pass2a.out") == "pass2a=403" and idp == "present",
+  "pass 2 consumes once and vends after approval": approve == "200" and rd("pass2b.out") == "pass2b=201" and status == "consumed" and len(issue_vends) == 1,
+}
+json.dump({"hashes_pass1": h1, "hashes_pass2": h2, "pass1_marker": m1, "checks": checks,
+           "comparison": "one data file (policy.add-verb.yaml) against #12188's 9 source files; the overlay leaves out tests and approval-card text; the claim is limited to REST verbs that fit the generic recipe (CTO R4)"},
+          open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC7
+  observe c7 "$d/raw.json"
+  spike_record_judged 7 "$d/verdict.txt"
+}

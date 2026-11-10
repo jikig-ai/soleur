@@ -328,11 +328,11 @@ spike_session_decoy() { tr -d '\n' < "$SPIKE_WORK/run/$1/secrets/decoy.token"; }
 
 # spike_start_hook <hook config json path on host>. Runs with --network host (R21) as the app uid; mounts the shared
 # run dir (sockets) and its private dir (service-role key, HMAC key, server keys, router passwords).
-spike_start_hook() {
+spike_start_hook() { # [config file name under hookpriv, default hook.json]
   SPIKE_HOOK_CTR="${SPIKE_RUN_ID}-hook"
   _spike_docker_run "$SPIKE_HOOK_CTR" --network host -u "$SPIKE_APP_UID" \
     -v "$WP:/app:ro" -v "$SPIKE_WORK/run:/run/spike" -v "$SPIKE_WORK/hookpriv:/run/spike-hook:ro" \
-    "$SPIKE_IMG" node /app/test/infra/egress-injector-spike/approval-hook.mjs /run/spike-hook/hook.json \
+    "$SPIKE_IMG" node /app/test/infra/egress-injector-spike/approval-hook.mjs "/run/spike-hook/${1:-hook.json}" \
     || harness_fail HOOK_START "docker run: $(head -c 300 "$SPIKE_WORK/docker-run-$SPIKE_HOOK_CTR.err")"
   spike_wait_log "$SPIKE_HOOK_CTR" approval-hook-listening 20 \
     || harness_fail HOOK_START "hook did not listen: $(docker logs "$SPIKE_HOOK_CTR" 2>&1 | tail -3 | tr '\n' ' ' | head -c 300)"

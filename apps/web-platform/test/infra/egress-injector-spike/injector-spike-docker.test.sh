@@ -233,7 +233,7 @@ arm_c3
 arm_c4
 arm_c5
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"
-record_verdict 7 unmeasurable "arm-not-implemented:add-verb-overlay"
+arm_c7
 record_verdict 8 unmeasurable "arm-not-implemented:failure-modes"
 arm_c9
 finalize
