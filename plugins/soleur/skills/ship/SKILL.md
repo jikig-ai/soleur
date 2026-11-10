@@ -1304,7 +1304,7 @@ esac
      `plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`,
      `plugins/soleur/test/ship-pir-action-items-gate.test.sh`, or
      `plugins/soleur/test/fixtures/ship-pir-action-items/`.
-  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. Exit 2/127 from the helper = unknown = NOT contained: run the PIR gate. If this file is also
+  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. Exit 2/127 from the helper = unknown = not contained: take the PIR path above. If this file is also
      changed, **every hunk** of `git diff -U0 origin/main...HEAD -- plugins/soleur/skills/ship/SKILL.md`
      must land inside this Phase 5.5 section — a section is not a path, so without that check
      conjunct 2 cannot tell a Phase 5.5 edit from a rewrite of the merge gate below it.
@@ -1658,7 +1658,7 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 # A \b here makes this gate catch zero lines while reading as if it works.
 CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
 plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }
-[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && xargs -d '\n' grep -inE -e "$CLOSE_DEFER_RE" -- <<<"$plan_refs" | head -5; }
+[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && tr '\n' '\0' <<<"$plan_refs" | xargs -0 grep -inE -e "$CLOSE_DEFER_RE" -- | head -5; }
 ```
 
 Any hit or `unverifiable` (exit 2/127) ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.

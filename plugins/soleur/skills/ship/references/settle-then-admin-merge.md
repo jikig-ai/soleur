@@ -28,12 +28,12 @@ done
 
 ```bash
 git fetch -q origin main && files="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only origin/main...HEAD | tr '\n\0' '?\n')" && [[ -n "$files" ]] \
-  && ! printf '%s\n' "$files" | grep -vE '^(knowledge-base/|docs/|plugins/soleur/skills/|.*\.md$)' \
-       | grep -vE '^knowledge-base/(INDEX\.md|kb-(tags|categories)\.txt)$' >/dev/null \
+  && ! printf '%s\n' "$files" | LC_ALL=C grep -vE '^(knowledge-base/|docs/|plugins/soleur/skills/|.*\.md$)' \
+       | LC_ALL=C grep -vE '^knowledge-base/(INDEX\.md|kb-(tags|categories)\.txt)$' >/dev/null \
   && echo "hatch-eligible" || echo "NOT eligible — stay on the normal path"
 ```
 
-It fails closed: a failed fetch or diff, or an empty diff, prints `NOT eligible`; `tr` turns a newline inside a name into `?` so the name stays ONE line (split into fragments, each could pass the allowlist while the real path does not). On a `NOT eligible` diff, an admin-merge is a merge-authority decision that only the operator makes, never the agent, and if the operator authorizes one, steps 2 to 5 still apply verbatim; stay on the normal path meanwhile (#8474 ran about eight syncs this way; see `knowledge-base/project/learnings/2026-06-02-auto-merge-livelock-fast-moving-main.md` §Recurrence).
+It fails closed: a failed fetch or diff, or an empty diff, prints `NOT eligible`; both greps run under `LC_ALL=C` because in a UTF-8 locale grep treats a line holding an invalid-UTF-8 byte as binary, prints nothing to stdout, and the second filter then reads "no offending path"; `tr` turns a newline inside a name into `?` so the name stays ONE line (split into fragments, each could pass the allowlist while the real path does not). On a `NOT eligible` diff, an admin-merge is a merge-authority decision that only the operator makes, never the agent, and if the operator authorizes one, steps 2 to 5 still apply verbatim; stay on the normal path meanwhile (#8474 ran about eight syncs this way; see `knowledge-base/project/learnings/2026-06-02-auto-merge-livelock-fast-moving-main.md` §Recurrence).
 
 The observation point is the poll's `[ship.phase7.hatch_check] 2 BEHIND syncs pushed` line, printed once, when the second sync is actually pushed — an attempt that failed at fetch or was a no-op (`kind=noop`) does not count, so `auto-sync attempt 2/6` alone is not the trigger.
 

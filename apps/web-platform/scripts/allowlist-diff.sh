@@ -60,6 +60,12 @@ fi
 # emits [] for an empty file; that path is exercised below).
 git show "${BASE_SHA}:.gitleaks.toml" > "${TMP_DIR}/base.toml" 2>/dev/null \
   || : > "${TMP_DIR}/base.toml"
+# The path moved away or was deleted at HEAD (--no-renames lists it, so the gate got this far): name the cause with an
+# ::error:: line instead of dying on an opaque `git show` fatal (rc 128) under `set -e`.
+git cat-file -e "${HEAD_SHA}:.gitleaks.toml" 2>/dev/null || {
+  echo "::error::allowlist-diff: .gitleaks.toml is absent at ${HEAD_SHA} (moved or deleted); cannot compare the allowlist" >&2
+  exit 2
+}
 git show "${HEAD_SHA}:.gitleaks.toml" > "${TMP_DIR}/head.toml"
 
 # Fail-loud if either parser invocation errors (exit 3 = malformed, 4 = v8.25+).

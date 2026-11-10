@@ -487,17 +487,18 @@ function main() {
     }
   }
 
-  let candidatePaths: string[];
-  try {
-    candidatePaths =
-      args.paths.length > 0
-        ? expandPaths(args.paths)
-        : expandPaths(defaultPaths());
-  } catch (err) {
-    // Unknown, never "nothing in scope": a failed staged-path read must not look like a clean scan.
-    console.error(`[tier1-scan] cannot list the staged paths: ${(err as Error).message}`);
-    process.exit(2);
+  let rawPaths: string[] = args.paths;
+  if (rawPaths.length === 0) {
+    try {
+      rawPaths = defaultPaths();
+    } catch (err) {
+      // Unknown, never "nothing in scope": a failed staged-path read must not look like a clean scan. Only
+      // the git read is caught here; an expandPaths IO error keeps its own (uncaught, exit 1) contract.
+      console.error(`[tier1-scan] cannot list the staged paths: ${(err as Error).message}`);
+      process.exit(2);
+    }
   }
+  const candidatePaths: string[] = expandPaths(rawPaths);
 
   if (candidatePaths.length === 0) {
     if (args.json) {

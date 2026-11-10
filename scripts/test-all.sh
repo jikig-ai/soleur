@@ -4366,7 +4366,8 @@ _aff_runner_banner() {
 # #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
-_MIN_ALWAYS_ON_DECLARED=113
+# #12494: +1 always-on (scripts/allowlist-diff, the .gitleaks.toml pathspec read; repo-global like its rename-guard sibling); re-pinned at 119-5.
+_MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate

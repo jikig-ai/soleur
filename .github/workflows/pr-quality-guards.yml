@@ -69,7 +69,7 @@ jobs:
           emit() { for v in settings_json worktrees webplat client_pii sweep; do echo "$v=$1"; done >> "$GITHUB_OUTPUT"; }
           # Gate on exit status, not emptiness: --paginate can emit pages
           # 1..N then fail — a truncated list is a false-skip. Failure → all-true.
-          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" \
             --jq '.[] | .filename, .previous_filename, "::ENTRY::"'); then emit true; exit 0; fi
           if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$files" ]; then emit true; exit 0; fi
           # GitHub caps this listing at 3000 files: a listing that reaches the cap may be truncated, and a
@@ -503,7 +503,8 @@ jobs:
             echo "::error::git diff against the PR base failed (rc=$rc) - cannot prove the diff has no .claude/worktrees/ entries. See #2905."
             exit 1
           fi
-          STRAY=$(printf '%s\n' "$CHANGED" | grep -E '^\.claude/worktrees/' || true)
+          # LC_ALL=C: in a UTF-8 locale grep treats a line with an invalid-UTF-8 byte as binary and prints nothing.
+          STRAY=$(printf '%s\n' "$CHANGED" | LC_ALL=C grep -E '^\.claude/worktrees/' || true)
           if [[ -n "$STRAY" ]]; then
             echo "::error::Diff contains .claude/worktrees/ entries — these are agent-runtime markers, never commit them. See #2905."
             echo "Offending paths:"
@@ -883,10 +884,13 @@ jobs:
           # x.json) otherwise reports only the new name and false-skips. The
           # endpoint caps at 3000 files even paginated — beyond the cap a
           # manifest change is missed; documented bound, not a silent gap.
-          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[].filename, .[].previous_filename'); then
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty), "::ENTRY::"'); then
             echo "deps=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # A listing that reaches the 3000-file cap may be truncated: run the gate (mirrors the `detect` job above).
+          entries=$(printf '%s\n' "$files" | grep -c '^::ENTRY::$')
+          if [ "$entries" -ge 3000 ]; then echo "deps=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           # '(^|/)name$' so manifests at any depth count. ANY workflow file
           # self-triggers: dependency-review covers the github-actions
           # ecosystem (`uses:` entries in every .github/workflows/* are

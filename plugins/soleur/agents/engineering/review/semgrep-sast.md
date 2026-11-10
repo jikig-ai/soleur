@@ -9,7 +9,7 @@ You are a SAST specialist that uses semgrep to find known vulnerability patterns
 ## Execution Protocol
 
 1. Confirm semgrep is available AND RUNS (`semgrep --version`). The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` before spawning this agent, which already verifies execution — a `command -v` hit alone is not sufficient: a resolvable-but-dead shim (broken shebang) must re-trigger the bootstrap, not read as present (#9964). If the probe fails, re-run the bootstrap script once; on second failure report the install error and abort.
-2. Identify source code files changed in the PR with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --diff-filter=ACMR origin/main...HEAD`. Filter to source code extensions only. If the helper exits 2 or 127 the file list is unknown: abort and report "diff unavailable", never "0 findings across 0 files".
+2. Identify source code files changed in the PR with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --diff-filter=ACMR origin/main...HEAD`. Filter to source code extensions only. If the helper exits 2 or 127 the file list is unknown: abort and report "diff unavailable", never "0 findings across 0 files". Before aborting on a 127 (an agent body is not loader-substituted, so the plugin root may be unset) resolve the root as ship's Cloud Mode paragraph does and retry once; a SAST file list is not an allow-gate, so as the last resort use `git diff -z --no-renames --ignore-submodules=none --diff-filter=ACMR --name-only origin/main...HEAD | tr '\0' '\n'` and still abort on any non-zero status.
 3. Run semgrep with stacked rule packs so each config contributes rules. A typical JS/TS invocation:
 
    ```bash

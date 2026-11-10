@@ -99,8 +99,12 @@ fi
 declare -a files=()
 if [[ "$1" == "--from-pr-diff" ]]; then
   # Refresh origin/main best-effort (mirrors the fetch in run-migrations.sh's
-  # unmerged-apply gate).
-  git -C "$REPO_ROOT" fetch --no-tags --quiet origin main 2>/dev/null || true
+  # unmerged-apply gate). EXPLICIT refspec: actions/checkout on a PR configures
+  # only `+refs/pull/N/merge:refs/remotes/pull/N/merge` for `origin`, so a bare
+  # `fetch origin main` fills FETCH_HEAD and leaves `refs/remotes/origin/main`
+  # absent (measured on a depth-2 PR-style clone: diff rc 128). The diff below
+  # now exits 2 on failure, so without this every depth-2 CI run would go red.
+  git -C "$REPO_ROOT" fetch --no-tags --quiet origin '+refs/heads/main:refs/remotes/origin/main' 2>/dev/null || true
   # Captured BEFORE the loop so a git failure is exit 2, never "no migration changes" (the old
   # `2>/dev/null || true` read a failed diff as an empty one). -z keeps a name git would C-quote
   # (non-ASCII, tab) exact; --no-renames turns a rename into D+A so the NEW path is linted

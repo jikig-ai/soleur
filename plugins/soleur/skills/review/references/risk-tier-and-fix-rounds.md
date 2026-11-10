@@ -55,9 +55,11 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
 
    ```bash
    files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown (exit 2/127): skip the script, spawn the full class panel
-   bash <plugin-root>/skills/review/scripts/fix-round-seats.sh \
-     --files "$files" \
-     --finding-seats <seats from the dedup ledger>
+   if [ "$files" = unknown ]; then echo 'fix diff unverifiable: spawn the full class panel'; else
+     bash <plugin-root>/skills/review/scripts/fix-round-seats.sh \
+       --files "$files" \
+       --finding-seats <seats from the dedup ledger>
+   fi
    ```
 
    If `files` is `unknown` the fix diff is unverifiable: do not pass it to the script (it would read as one source path); spawn the full class panel. The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `soleur:engineering:review:security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` — that arm is mechanical — OR adds guard/deny-shaped lines, which is lead judgment (the script maps paths only). A source-touching fix never resolves to zero seats — the script emits the `soleur:engineering:review:code-quality-analyst` floor on unmatched source paths, and lists them on stderr as `unmapped-paths:`; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats. Pass `--files` from the fix commits' own range (`git diff $PANEL_SHA <last-fix-sha>`), never `$PANEL_SHA..HEAD` after a merge of `origin/main`: the merge's files are other people's changes, and on #10285 they turned a 9-file fix round into a 147-file seat resolution.
