@@ -67,6 +67,21 @@
 #   R14  the email names a runbook file that does not exist             RED  S18, S18b
 #   R15  a step class outside the grammar                                RED  S17, S17b, behavioural rows
 #   R16  the email sends the reader back to the Billing page             RED  S13d, S13e
+# (R11's S16c was the dead `${RERUN_SCOPE:-this run}` pin; round 2 removed that fallback and re-used the id.)
+# Review round 2, 2026-11-10, same method. Control: unmutated, GREEN 803/803 (idempotency suite 130/130). Every row
+# went RED:
+#   N1   check_absent scans only the first file; greps -x; greps -w      RED  helper self-test (rc 2, each)
+#   N2   check_eq compares unquoted (glob)                               RED  helper self-test (rc 2)
+#   N3   reason class `[a-z_./-]+` / `[a-z_-]+`; code class `[a-z_.-]+`  RED  b10n11-b10n16 (15 / 5 / 10 rows)
+#   N4   `^` dropped from push_re / from denial_re                       RED  b10p / b10n8, b10n17
+#   N5   image `[^[:space:]]`; run `^https?://`; attempt `*`; version
+#        segment uncapped; record id `+`                                 RED  b17i3-4 / b17r4 / b13e / b17v4 / b15c
+#   N6   a no-op `class="$class"`; `printf -v class`                     RED  S17c / S17, S17c
+#   N7   Slack scope and run URL swapped; class and attempt swapped     RED  idempotency T7b (h) / (i)
+#   N8   either re-run scope loses its push-event gate                   RED  S12b / S16 + idempotency env pin
+#   N9   the dead Slack fallback restored; image line ungated            RED  S16c / S16e + idempotency (c), (l)
+#   N10  email: not_push rules Billing out again; names a billing path   RED  S13g, S13h / S13f
+#   N11  runbook: a gh run command without -R; the unmeasured row gone  RED  S17f / S17d
 #
 # Run: bash plugins/soleur/test/reusable-release-push-failed-marker.test.sh
 
@@ -151,8 +166,12 @@ check_absent() { # <desc> <needle> <file>...
 # otherwise hold both the conservation check and the floor below. Counters are unwound afterwards; the verdict is
 # reported with printf + exit, never through a helper under test.
 st_passes=$passes st_fails=$fails st_cases=$cases
-SELFTEST_FILE="$TMP_ROOT/selftest.needle"
-printf 'selftest-needle\n' > "$SELFTEST_FILE"
+# check_absent's fixture is TWO files, and the needle sits mid-word in the SECOND: a helper that scans only the first
+# file, or greps with -x (whole line) or -w (whole word), finds nothing and passes, so the self-test exits 2.
+SELFTEST_FILE_A="$TMP_ROOT/selftest.clean"
+SELFTEST_FILE_B="$TMP_ROOT/selftest.needle"
+printf 'nothing to see\n' > "$SELFTEST_FILE_A"
+printf 'before\nxxselftest-needleyy tail\n' > "$SELFTEST_FILE_B"
 selftest_expect_fail() { # <helper name> <command...>: the command must raise fails by exactly one
   local name="$1" before="$fails"
   shift
@@ -163,12 +182,14 @@ selftest_expect_fail() { # <helper name> <command...>: the command must raise fa
   fi
 }
 selftest_expect_fail check_eq check_eq "selftest check_eq (expected FAIL)" "a" "b"
+# A glob-matching check_eq (`== $3` unquoted) reads "a*" as a pattern and passes "ab".
+selftest_expect_fail check_eq_glob check_eq "selftest check_eq is literal, not a glob (expected FAIL)" "ab" "a*"
 selftest_expect_fail check check "selftest check (expected FAIL)" false
-selftest_expect_fail check_absent check_absent "selftest check_absent (expected FAIL)" "selftest-needle" "$SELFTEST_FILE"
+selftest_expect_fail check_absent check_absent "selftest check_absent (expected FAIL)" "selftest-needle" "$SELFTEST_FILE_A" "$SELFTEST_FILE_B"
 selftest_expect_fail matches check "selftest matches (expected FAIL)" matches "x" '^y$'
 selftest_expect_fail not check "selftest not (expected FAIL)" not true
 selftest_expect_fail in_order check "selftest in_order (expected FAIL)" in_order 1 1
-if [[ "$cases" -ne $((st_cases + 6)) || "$passes" -ne "$st_passes" ]]; then
+if [[ "$cases" -ne $((st_cases + 7)) || "$passes" -ne "$st_passes" ]]; then
   printf 'FATAL: helper self-test accounting broken (cases %s -> %s, passes %s -> %s)\n' "$st_cases" "$cases" "$st_passes" "$passes" >&2
   exit 2
 fi
@@ -255,18 +276,27 @@ EMAIL_BODY="$TMP_ROOT/email-body.txt"
 x '.email_body' > "$EMAIL_BODY"
 check "S11 the failure email never names denial" not grep -qi 'denial' "$EMAIL_BODY"
 check "S12 the old 're-running this workflow is safe' wording is gone" not grep -qF 're-running this workflow is safe' "$EMAIL_BODY"
-check "S12b the email names the deploy-arm run only for an image release and forbids a fresh dispatch" grep -qF "so 'Re-run failed jobs' on \${{ inputs.docker_image != '' && 'both the release run and the deploy-arm run' || 'this run' }} is safe; a fresh 'Run workflow' dispatch is not" "$EMAIL_BODY"
+RERUN_ARMS="inputs.docker_image != '' && github.event_name == 'push' && 'this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA' || 'this run'"
+check "S12b the email names the deploy-arm run only for a push-started image release, after the release run, and forbids a fresh dispatch" grep -qF "so re-running is safe: 'Re-run failed jobs' on \${{ $RERUN_ARMS }}. A fresh 'Run workflow' dispatch is not safe" "$EMAIL_BODY"
 check "S12c the email no longer names the deploy-arm run unconditionally" not grep -qF "(on both the release run and the deploy-arm run)" "$EMAIL_BODY"
+check "S12d the email no longer names both runs without an order" not grep -qF "both the release run and the deploy-arm run" "$EMAIL_BODY"
 check "S13 the email's image paragraph renders whenever docker_build failed (not on the marker's output)" grep -qF "\${{ steps.docker_build.outcome == 'failure' && format('<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>)" "$EMAIL_BODY"
 check "S13b the email paragraph formats only class and attempt, each with an unmeasured fallback" grep -qF "', steps.push_failed_marker.outputs.class || 'unmeasured — the marker step did not report', steps.push_failed_marker.outputs.attempt || 'unmeasured') || '' }}" "$EMAIL_BODY"
-check "S13d the email points push_denied at the read-only budget API read, not a Billing page" grep -qF "first run its read-only Packages budget and usage API reads (<code>gh api orgs/jikig-ai/settings/billing/budgets</code>" "$EMAIL_BODY"
+check "S13d the email points push_denied at the runbook's first-read section, by its heading" grep -qF "For <code>push_denied</code>, start at its section <code>First read, before anything else</code>" "$EMAIL_BODY"
+check "S13d2 the section the email names is a heading of the runbook" grep -qxF "## First read, before anything else" "$REPO_ROOT/$RUNBOOK_REL"
+check "S13f the email repeats no billing API command or org path" not grep -qE "gh api|settings/billing|jikig-ai" "$EMAIL_BODY"
+check "S13g the email's not_push sentence does not rule Billing out, and sends a denied: log to the runbook" grep -qF "<code>not_push</code> means the error was not classified as an image-push failure; if the step log shows <code>denied:</code>, follow the runbook anyway." "$EMAIL_BODY"
+check "S13h the email no longer asserts Billing is not the cause" not grep -qF "Billing is not the cause" "$EMAIL_BODY"
 check "S13e the email no longer sends the reader to the Billing > Packages page" not grep -qF "check Billing &gt; Packages" "$EMAIL_BODY"
-check_eq "S16 the Slack BLOCKED re-run scope names the deploy-arm run only for an image release" "$(x '.slack_rerun_scope')" "\${{ inputs.docker_image != '' && 'this run and, once it succeeds, the deploy-arm (workflow_run) run for the same SHA' || 'this run' }}"
+check_eq "S16 the Slack BLOCKED re-run scope is the email's, arm for arm" "$(x '.slack_rerun_scope')" "\${{ $RERUN_ARMS }}"
 SLACK_RUN="$TMP_ROOT/slack-run.sh"
 x '.slack_run' > "$SLACK_RUN"
-check "S16b the Slack re-run sentence renders that scope" grep -qF 'Re-run failed jobs on %s to retry with the same version' "$SLACK_RUN"
-check "S16c the Slack re-run sentence's argument is RERUN_SCOPE, defaulting to this run" grep -qF '"${RERUN_SCOPE:-this run}"' "$SLACK_RUN"
+# The rendered sentence (both arms, argument order) is pinned by executing this body in
+# reusable-release-idempotency.test.sh T7b (h); these rows pin only its source.
+check "S16b the Slack re-run sentence renders that scope" grep -qF 'To retry with the same version, use "Re-run failed jobs" on %s.' "$SLACK_RUN"
+check "S16c the Slack sentence carries no dead fallback for the always-set scope" not grep -qF 'RERUN_SCOPE:-' "$SLACK_RUN"
 check "S16d the old unconditional Slack re-run advice is gone" not grep -qF 'Re-run failed jobs on this run to retry' "$SLACK_RUN"
+check "S16e the Slack image-step line is gated on IMAGE_CLASS" grep -qF 'if [ -n "${IMAGE_CLASS:-}" ]; then' "$SLACK_RUN"
 check_eq "S13c the email step's if: is still failure()" "$(x '.email_if')" "failure()"
 check_eq "S14 the release job's permissions are unchanged" "$(x '.permissions | tojson')" '{"contents":"write","packages":"write","id-token":"write"}'
 check "S15 the runbook the marker points at exists" test -f "$REPO_ROOT/$RUNBOOK_REL"
@@ -277,6 +307,30 @@ check_eq "S17 the step assigns exactly the four grammar classes" "$body_classes"
 for c in $body_classes; do
   check "S17b the runbook class table has a row for class $c" grep -qE "^\| \`$c\` \|" "$REPO_ROOT/$RUNBOOK_REL"
 done
+# Every occurrence of the word `class` in the body's code is one of five allowed forms; anything else (`class="$x"`,
+# `class=$x`, `class+=`, `printf -v class`, `read class`, `declare class=...`) is refused, so only the four literals
+# can ever be assigned.
+class_forms=$(python3 -I - "$BODY" <<'PY'
+import re, sys
+code = "\n".join(l for l in open(sys.argv[1], encoding="utf-8").read().splitlines() if not re.match(r"\s*#", l))
+allowed = [
+    re.compile(r'(?<![^\s])class="(push_denied|push_other|not_push|unknown)"(?=\s|$)'),  # assignment of a literal
+    re.compile(r'(?<=\$\{)class(?=\})'),                                                # ${class}
+    re.compile(r'(?<="\$)class(?=")'),                                                  # "$class"
+    re.compile(r'(?<= )class=(?=\$\{class\} )'),                                        # the marker line's field label
+    re.compile(r"(?<=')class=(?=%s)"),                                                  # the $GITHUB_OUTPUT format
+]
+hits = list(re.finditer(r"\bclass\b", code))
+bad = [code[m.start():m.start() + 24].replace("\n", " ") for m in hits if not any(a.match(code, m.start()) for a in allowed)]
+print(f"total={len(hits)} bad={len(bad)}" + "".join(f" [{b}]" for b in bad))
+PY
+)
+check "S17c every use of class in the body is a literal assignment or a read (got: $class_forms)" matches "$class_forms" '^total=[1-9][0-9]* bad=0$'
+check "S17d the runbook class table has a row for unmeasured (the email's fallback)" grep -qE '^\| `unmeasured` \|' "$REPO_ROOT/$RUNBOOK_REL"
+gh_run_lines=$(grep -cE '(^|[`[:space:]])gh run (list|view|rerun)( |$)' "$REPO_ROOT/$RUNBOOK_REL" || true)
+gh_run_scoped=$(grep -E '(^|[`[:space:]])gh run (list|view|rerun)( |$)' "$REPO_ROOT/$RUNBOOK_REL" | grep -cE 'gh run (list|view|rerun) ([^ ]+ )?-R jikig-ai/soleur( |$)' || true)
+check "S17e the runbook carries gh run commands (control)" test "$gh_run_lines" -ge 6
+check_eq "S17f every gh run command in the runbook names the repo with -R" "$gh_run_scoped" "$gh_run_lines"
 email_runbook=$(grep -oE '<code>[a-z0-9-]+\.md</code>' "$EMAIL_BODY" | sed -E 's#</?code>##g' | sort -u | tr '\n' ' ')
 check_eq "S18 the email names exactly one runbook file, the marker's" "$email_runbook" "${RUNBOOK_REL##*/} "
 check "S18b the runbook file the email names exists" test -f "$REPO_ROOT/$(dirname "$RUNBOOK_REL")/${email_runbook% }"
@@ -407,7 +461,7 @@ check_eq "b1: version is printed verbatim" "$(field_of b1 version)" "0.402.0"
 check_eq "b1: run is printed verbatim" "$(field_of b1 run)" "https://github.com/jikig-ai/soleur/actions/runs/123456789/attempts/1"
 # The runbook's log read, applied to a synthetic log holding the step's own script (Actions prints it) and its output:
 # it keeps exactly the two emitted marker lines and drops the script's copy of the prefix.
-RUNBOOK_GREP="gh run view <run-id> --log | grep -F 'SOLEUR_GHCR_PUSH_FAILED image=' | grep -vF '\${image}'"
+RUNBOOK_GREP="gh run view <run-id> -R jikig-ai/soleur --log | grep -F 'SOLEUR_GHCR_PUSH_FAILED image=' | grep -vF '\${image}'"
 check "b1: the runbook documents the full-log marker read" grep -qF "$RUNBOOK_GREP" "$REPO_ROOT/$RUNBOOK_REL"
 check "b1: the runbook no longer documents the --log-failed read" not grep -qF -- "--log-failed | grep" "$REPO_ROOT/$RUNBOOK_REL"
 cat "$BODY" "$TMP_ROOT/b1/stdout" > "$TMP_ROOT/b1/synthetic.log"
@@ -490,6 +544,13 @@ near_misses=(
   "denied: permission_denied: write_package: extra"
   "denied:permission_denied: write_package"
   "denied: permission_denied:write_package"
+  "denied: permission_denied: write-package"
+  "denied: permission-denied: write_package"
+  "denied: permission_denied: ghcr.io/x"
+  "denied: permission_denied: a.b"
+  "denied: permission.denied: write_package"
+  "denied: a/b: c"
+  "xdenied: permission_denied: write_package"
 )
 nm=0
 for rem in "${near_misses[@]}"; do
@@ -499,7 +560,12 @@ for rem in "${near_misses[@]}"; do
   expect_case "b10n$nm" push_other withheld
   check_absent "b10n$nm: the near-miss remainder '$rem' is not copied" "$rem" "$TMP_ROOT/b10n$nm/stdout" "$TMP_ROOT/b10n$nm/summary"
 done
-check_eq "b10n: every near-miss fixture ran" "$nm" "10"
+check_eq "b10n: every near-miss fixture ran" "$nm" "17"
+
+# B10p — the push prefix mid-message is not a push failure: push_re is anchored at the start (kills a dropped `^`).
+one_record b10p "step x failed to push r:v1: denied: permission_denied: write_package"
+run_case b10p
+expect_case b10p not_push see-step-log
 
 # B11 — the build-arg token fixture: the record carries a synthesized SENTRY_AUTH_TOKEN build-arg and stack echo.
 one_record b11 "failed to push ghcr.io/jikig-ai/soleur-web-platform:v0.402.0: denied: permission_denied: write_package"
@@ -525,6 +591,13 @@ expect_case b13b push_denied "denied: permission_denied: write_package" 2
 one_record b13c "failed to push r:v1: denied: permission_denied: write_package"
 CASE_ATTEMPT='0' run_case b13c
 expect_case b13c push_denied "denied: permission_denied: write_package" invalid
+# The length cap on both sides: six digits are kept, seven print invalid (kills `{0,5}` widened to `*`).
+one_record b13d "failed to push r:v1: denied: permission_denied: write_package"
+CASE_ATTEMPT='123456' run_case b13d
+expect_case b13d push_denied "denied: permission_denied: write_package" 123456
+one_record b13e "failed to push r:v1: denied: permission_denied: write_package"
+CASE_ATTEMPT='1234567' run_case b13e
+expect_case b13e push_denied "denied: permission_denied: write_package" invalid
 
 # B14 — the 300-char cap: an allowlist-shaped remainder longer than 300 characters is withheld.
 long_reason="$(printf 'a%.0s' $(seq 1 300))"
@@ -557,6 +630,24 @@ run_case b15
 expect_case b15 unknown see-step-log
 check_eq "b15: no inspect is attempted for a malformed id" "$(grep -c 'inspect' "$TMP_ROOT/b15/calls")" "0"
 
+# B15b — the record id length cap on both sides: 64 characters is inspected, 65 is not (kills `{1,64}` widened to `+`).
+id64="$(printf 'c%.0s' $(seq 1 64))"
+id65="${id64}c"
+check_eq "b15b: the 64 id is exactly 64 characters (control)" "${#id64}" "64"
+for pair in "b15b:$id64:push_denied" "b15c:$id65:unknown"; do
+  IFS=: read -r n rid want <<< "$pair"
+  mkdir -p "$TMP_ROOT/$n/inspect"
+  ls_line "$rid" > "$TMP_ROOT/$n/ls"
+  inspect_record "$rid" "failed to push r:v1: denied: permission_denied: write_package" > "$TMP_ROOT/$n/inspect/$rid.json"
+  run_case "$n"
+  if [[ "$want" == push_denied ]]; then
+    expect_case "$n" push_denied "denied: permission_denied: write_package"
+  else
+    expect_case "$n" unknown see-step-log
+  fi
+done
+check_eq "b15c: no inspect is attempted for a 65-character id" "$(grep -c 'inspect' "$TMP_ROOT/b15c/calls")" "0"
+
 # B16 — an injected IMAGE is replaced, never printed.
 one_record b16 "failed to push r:v1: denied: permission_denied: write_package"
 CASE_IMAGE=$'ghcr.io/x\n::warning::injected' run_case b16
@@ -585,6 +676,13 @@ b17_row b17r2 run RUN_URL "https://github.com/x y"
 b17_row b17r3 run RUN_URL "https://github.com/x?token=abc"
 b17_row b17i1 image IMAGE "ghcr.io/x y"
 b17_row b17i2 image IMAGE "GHCR.io/jikig-ai/soleur-web-platform"
+# Second axis for each field: values with no space that sit outside the class (kill a widened `[^[:space:]]`,
+# `^https?://`, an uncapped version segment).
+b17_row b17i3 image IMAGE "ghcr.io/x?y"
+b17_row b17i4 image IMAGE $'ghcr.io/x\x1by'
+b17_row b17i5 image IMAGE $'ghcr.io/x\ty'
+b17_row b17r4 run RUN_URL "http://github.com/jikig-ai/soleur/actions/runs/1"
+b17_row b17v4 version VERSION "1234567.0.0"
 
 # Row 5 (own dispatch): the stub was actually invoked by the body.
 check "R5 the docker stub was invoked by the run body" test "$STUB_INVOCATIONS" -ge 10
@@ -603,7 +701,7 @@ fi
 # above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_PASSES=575
+MIN_PASSES=803
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' "$REAL_PASSES" "$MIN_PASSES" >&2
   exit 1
