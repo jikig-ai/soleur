@@ -359,17 +359,19 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    - **Verify the retired end state (read-only, any time after D; no SSH, GETs only):**
 
      ```bash
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'   # expect [106443278]
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'   # expect []
-     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/106443278 | jq ".volume.protection.delete"'   # expect true after the SSH-stage apply
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'   # expect [106443278]
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'   # expect []
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/106443278 | jq ".volume.protection.delete"'   # expect true after the SSH-stage apply
      ```
 
      (`sh -c` so the token expands inside Doppler's environment. The block reads the Read-permission token
      `HCLOUD_TOKEN_READONLY` only: `--only-secrets` keeps the read/write token out of the process, an absent token prints
      `missing-token` (exit 3) instead of sending an empty bearer header, and the header reaches curl on stdin, never on its
-     argument list. `jq` runs inside the wrapper, after the token check, so the `missing-token` word is printed as is rather
-     than fed to `jq`. Each request is bounded by `--max-time 30`. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
+     argument list. `--disable --noproxy "*"` come first, as in `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and
+     honours no proxy variable from the operator's environment. `jq` runs inside the wrapper, after the token check, so the
+     `missing-token` word is printed as is rather than fed to `jq`. Each request is bounded by `--max-time 30`. Copy the
+     lines exactly: `plugins/soleur/test/sole-copy-drift-check.test.sh` (row N3) pins this block byte for byte. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
      delete-protection flag (read-only token)" at the end of this runbook. Lines 1 and 3 also pass on a token minted in
      another Hetzner project (a 404 and an empty list are what any project answers); only lines 2 and 4 tell the two apart,
      because on another project's token they print `null` instead of the volume list and the flag.)
@@ -1219,10 +1221,11 @@ have no heartbeat here and read `unknown` by design.
 The read-back the web-1 workspaces volume issues of the `sole-copy-protection-check` job point at (ADR-119, addendum of
 2026-11-10). It is read-only: one GET of the volume the command names (`hcloud_volume.workspaces_luks`) with the Hetzner
 Read-permission token, the token passed to curl as a config on stdin, and one word of output. It is the same shape as the
-section 5c step 3 read-back in `inngest-luks-cutover-6894.md`.
+section 5c step 3 read-back in `inngest-luks-cutover-6894.md`, with curl confined by `--disable --noproxy "*"` as its first
+arguments.
 
 ```
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106443278) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106443278) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 | Word (exit) | Meaning | Action |
@@ -1236,5 +1239,8 @@ doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no
 
 The wrapper is single-quoted so the variable expands after Doppler sets it, not in the caller's shell. `--only-secrets`
 injects only the read-only token, so the read/write token in the same config never enters the process, and the bearer
-header reaches curl on stdin, never on its argument list. If the volume is ever recreated, the id here moves with the
-`web1` row of the job and the ADR-119 addendum of 2026-11-10 (the suite's row N1c pins them equal).
+header reaches curl on stdin, never on its argument list. `--disable --noproxy "*"` keep curl from reading a `.curlrc` or
+a proxy variable from the operator's environment, which could otherwise send the request, header included, elsewhere.
+The suite's row N3 pins this line, and the four of "Verify the retired end state", byte for byte. If the volume is ever
+recreated, the id here moves with the `web1` row of the job and the ADR-119 addendum of 2026-11-10 (the suite's row N1c
+pins them equal).

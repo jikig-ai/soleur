@@ -359,12 +359,14 @@ empty string; the harness refuses it. `gha-expr.py` keeps today's "absent is nul
     `## Addendum (2026-10-08): the plaintext backstop is retired`; runbook 6604 contains the top-level heading
     `## Read back the delete-protection flag (read-only token)` exactly once. The rendered web-1 text (`ADR-119 D1`, that subsection's
     name, `workspaces-luks-cutover-6604.md`, `soleur:incident`) is asserted by WF1 and WX5, so N3 checks only the
-    document side for web-1. Over the new subsection's command line only (so the outcome table's prose "does not fall
-    back to `HCLOUD_TOKEN`" stays legal), N3 requires exactly one `--only-secrets`, naming `HCLOUD_TOKEN_READONLY`,
-    and `curl -sS --config -`, and bans `HCLOUD_TOKEN([^_]|$)`, an Authorization header on argv in any spelling (`-H`,
-    `--header`, `--header=`, `-HAuthorization`, bundled `-sSH`, `--proxy-header`, `--oauth2-bearer`; review round 1, H15)
-    and a `:-` fallback expansion; one mutant row per pattern (a second `--only-secrets HCLOUD_TOKEN`, each argv-header
-    spelling, `${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}`).
+    document side for web-1. Over the new subsection's fenced block and the verify block's fenced block only (so the
+    outcome table's prose "does not fall back to `HCLOUD_TOKEN`" stays legal), N3 requires the five read-only lines as
+    EXACT text, byte for byte after the fence's indentation, with only the web1 pin as a slot (review verification pass,
+    V3; it replaced round 2's closed curl grammar, which left the rest of the `sh -c` body open): each line runs curl as
+    `curl --disable --noproxy "*" -sS --config - --max-time 30`. H15 keeps one mutant row per round-1 and round-2
+    pattern (a second `--only-secrets HCLOUD_TOKEN`, each argv-header spelling, `${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}`)
+    and adds the verification-pass ones (`env`/`printenv`/`/proc/self/environ` piped out, a spliced token name, a curlrc
+    redirect, `--disable` or `--noproxy` dropped, a double-quoted wrapper, an extra line in the block).
 - **Counting**: `FLOOR` and `TABLE_ROWS` move to the realized numbers in the same commit as the rows (expected about
   +30 table rows and +50 assertions after the plan-review cuts). The header comment's PROPERTY and COUNTING paragraphs are rewritten for two
   entries.
@@ -408,8 +410,10 @@ empty string; the harness refuses it. `gha-expr.py` keeps today's "absent is nul
   the retired end state (read-only ...)", all four GETs are rewritten in the 6894 section 5c shape, not just renamed:
   `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets --
   sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer
-  %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - ...'` (renaming the variable alone would still inject the
-  read/write token, send an empty bearer header when the read-only one is missing, and put the token in curl's argv). The
+  %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - ...'` (renaming the variable alone would
+  still inject the read/write token, send an empty bearer header when the read-only one is missing, and put the token in
+  curl's argv; `--disable --noproxy "*"` first, as in `scripts/lib/bearer-curl.sh`, so an operator `.curlrc` or proxy
+  variable cannot redirect the request, added in the review verification pass, V3, on all five read-only lines). The
   trailing note "Use `HCLOUD_TOKEN_READONLY` once it is provisioned, #9371." becomes a statement that the block uses it
   (CTO ruling, row 12). The ids, URLs and
   `jq '.volume.protection.delete'` text that N1c reads are unchanged. #9371 stays open (it is about the cutover job).
@@ -609,10 +613,12 @@ are cross-entry; `N*` are pins.
 | Step `if:` and keys | any step's `if:` edited, added (checkout `if: false`) or removed -> S2 `step-if:<id>`, `step-key:<id>:if` | same |
 | Expression contexts | a `runner`/`vars`/`env`/`job` context, or a modelled root read by index, in any `if:`/`env:`/`with:`/`name:` -> S2 `expr-context:<loc>:<root>`; at run time -> H11e | same |
 | Env names | a probe env `DOPPLER_API_HOST`/`HTTPS_PROXY`/`LD_PRELOAD`, a workflow env `HTTPS_PROXY`/`CURL_CA_BUNDLE`/`LD_PRELOAD` -> S2 `step-env:probe`, `wf-env` | same |
-| Checkout and notify actions | checkout on a tag (`@v4`) -> S2 `checkout-uses`; a notify `with:` value changed -> S2 `notify-with` | same |
+| Env values (verification pass, V1) | a value that branches on the fixture `github` context (`github.repository`, `github.run_id`) or on `!` precedence (gha-expr.py binds `!` looser than `==`, GitHub tighter), in the probe's `TF_PATH`/`TF_RESOURCE` or `tf_commit`'s `TF_PATH`; a workflow env value changed -> S2 `step-env-value:<step>:<NAME>`, `wf-env-value:<NAME>` (every step env value and workflow env value is pinned to its exact string) | same |
+| Checkout and notify actions | checkout on a tag (`@v4`) or on any other 40-hex SHA -> S2 `checkout-uses` (the exact SHA is pinned, V2); a notify `with:` value changed -> S2 `notify-with` | same |
 | Verdict lines present | the gate's clean or `::error::` echo stripped of `verdict=`, or the probe's finish echo removed -> the per-case verdict-line count (H5 `_iv_noprobeline`, `_iv_nogateline`, `_iv_twogatelines`) | same |
-| Runbook 6604 read-only lines | an argv header in any spelling, a second token channel (`-u`, `--oauth2-bea`, URL credentials, a second curl in the wrapper), another Doppler config or the wrapper without `--no-exit-on-missing-only-secrets`, `jq` outside the wrapper -> H15 (exact wrapper, exact stdin construct, curl argument grammar, token-name count 3, tail check) | n/a (6604 is the web-1 runbook) |
-| Forcing-function prose | "Guard B4 … forcing function" in either word order, `Re-evaluate by`, the marker removed or moved to another job's comment -> N4 (H17) | same |
+| Verdict lines true (verification pass, V4) | the probe's or the gate's echo printing another verdict than the published one (`${v/unprotected-as-declared/matches-declared}`, a hard-coded `matches-declared` in the gate's clean arm) -> the per-case verdict equality in V4/WV4 and the other rows (H5 `_iv_forgedverdict`, `_iv_forgedgate`) | same |
+| Runbook 6604 read-only lines | any change to the read-back block or the verify block (an argv header in any spelling, a second token channel, `env`/`printenv`/`/proc/self/environ` piped out, a spliced token name, a curlrc written and exported, `--disable` or `--noproxy "*"` dropped, another wrapper or quoting, an extra line) -> H15 / N3 (the five lines pinned as exact text, V3) | n/a (6604 is the web-1 runbook) |
+| Forcing-function prose | "Guard B4 … forcing function" in one sentence (split on a period and a space, so a dotted path does not split it), `Re-evaluate by`/`on`, the marker removed or moved to another job's comment, the past-date exit other than 5, a leg that did not succeed -> N4 (H17) | same |
 
 ## Guard Contract
 
@@ -754,7 +760,7 @@ not a user incident; a pattern of silent detectors is.
 
 ```yaml
 liveness_signal:
-  what: each leg's gate line "sole-copy-check verdict=<verdict> entry=<entry> (clean)" (the probe's verdict line also carries entry=<entry> directly after verdict=<v>, CTO ruling 26) and the conclusion of jobs "sole-copy-protection-check (inngest)" and "sole-copy-protection-check (web1)"
+  what: each leg's gate line "sole-copy-check verdict=<verdict> entry=<entry> (clean)" (the probe's verdict line also carries entry=<entry> directly after verdict=<v>, CTO ruling 26; both lines name the verdict the probe published, the suite's per-case equality, review verification pass V4) and the conclusion of jobs "sole-copy-protection-check (inngest)" and "sole-copy-protection-check (web1)"
   cadence: twice daily (06:00 and 18:00 UTC), dispatched by apps/web-platform/server/inngest/functions/cron-terraform-drift.ts
   alert_target: an infra-drift issue per leg (p1 finding, p2 could-not-perform) plus the notify-ops-email message
   configured_in: .github/workflows/scheduled-terraform-drift.yml, job sole-copy-protection-check, strategy.matrix.include
@@ -955,11 +961,12 @@ None: the addendum is true on merge (the check runs from the first scheduled run
 - AC10: no `.tf`, cloud-init or user_data file is in the diff (`git diff --name-only origin/main...HEAD` lists none).
 - AC11: in runbook 6604's "Verify the retired end state" block
   (`sed -n '/Verify the retired end state/,/^   > /p' knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`),
-  every `doppler run` line carries `--only-secrets HCLOUD_TOKEN_READONLY` (four lines) and `curl -sS --config -`, and
-  the block carries no Authorization header on argv in any spelling (H15) and no `HCLOUD_TOKEN` not followed by `_READONLY`
-  (`grep -cE 'HCLOUD_TOKEN([^_]|$)'` over the command lines prints `0`). The new "Read back the delete-protection flag
-  (read-only token)" subsection's command line passes the same checks and names `v1/volumes/106443278`; N1c and N3
-  are green.
+  every `doppler run` line carries `--only-secrets HCLOUD_TOKEN_READONLY` (four lines) and
+  `curl --disable --noproxy "*" -sS --config -`, and the block carries no Authorization header on argv in any spelling
+  (H15) and no `HCLOUD_TOKEN` not followed by `_READONLY` (`grep -cE 'HCLOUD_TOKEN([^_]|$)'` over the command lines prints
+  `0`). The new "Read back the delete-protection flag (read-only token)" subsection's command line passes the same checks
+  and names `v1/volumes/106443278`; N3 pins all five lines as exact text (review verification pass, V3); N1c and N3 are
+  green.
 
 ### After merge (automated: Phase 5 / ship Phase 6)
 

