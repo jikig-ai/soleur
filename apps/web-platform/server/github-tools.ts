@@ -134,7 +134,7 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
   return tool(
     "github_push_branch",
     "Push the current workspace HEAD to a feature branch on the remote. " +
-      "Requires founder approval via review gate. Force-push and push to " +
+      "Requires the workspace Owner's approval. Force-push and push to " +
       "main/master are blocked unconditionally.",
     {
       branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),

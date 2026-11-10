@@ -393,6 +393,44 @@ export function gateStatusWriteOp(status: string): "updateConversationStatusGate
 const HOLD_GUARD: StatusGuard = { onlyIfStatusIn: ["active", "waiting_for_user"] };
 const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
 
+/** #12197 D1: the legacy push card's Owner check may not hold a turn: it ends at a deadline or on an abort (both throw). */
+export const PUSH_ROLE_READ_DEADLINE_MS = 5_000;
+function readRoleBounded(
+  read: () => Promise<"owner" | "member">,
+  signals: (AbortSignal | undefined)[],
+  ms: number = PUSH_ROLE_READ_DEADLINE_MS,
+): Promise<"owner" | "member"> {
+  return new Promise((resolve, reject) => {
+    const live = signals.filter((x): x is AbortSignal => x !== undefined);
+    const cleanup = () => {
+      clearTimeout(timer);
+      for (const x of live) x.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("viewer role read aborted"));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("viewer role read timed out"));
+    }, ms);
+    for (const x of live) {
+      if (x.aborted) return onAbort();
+      x.addEventListener("abort", onAbort, { once: true });
+    }
+    read().then(
+      (r) => {
+        cleanup();
+        resolve(r);
+      },
+      (err: unknown) => {
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
   // #9600 — one budgeted reporter per session for the `.git` file-tool deny below.
@@ -1611,17 +1649,27 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // in-memory card (ADR-309, legacy runner divergence).
         if (toolName === GITHUB_PUSH_BRANCH_TOOL) {
           let role: "owner" | "member" | "unavailable" = "unavailable";
-          if (deps.approval) {
+          const approvalDeps = deps.approval;
+          if (approvalDeps) {
             try {
-              role = await deps.approval.viewerRole();
+              role = await readRoleBounded(() => approvalDeps.viewerRole(), [options.signal, ctx.controllerSignal]);
             } catch (err) {
-              reportApprovalOp("viewerRoleFailed", err, {
-                toolName,
-                conversationId: ctx.conversationId,
-                userId: ctx.userId,
-                tags: { stage: "legacy-push-owner-check" },
-              });
+              // An abort is not a failed read; it is handled just below.
+              if (!(options.signal?.aborted === true || ctx.controllerSignal.aborted)) {
+                reportApprovalOp("viewerRoleFailed", err, {
+                  toolName,
+                  conversationId: ctx.conversationId,
+                  workspaceId: approvalDeps.workspaceId,
+                  userId: ctx.userId,
+                  tags: { stage: "legacy-push-owner-check" },
+                  extra: { outcome: "denied-no-card" },
+                });
+              }
             }
+          }
+          // Stop pressed (or the session ended) while the role was read: no card, no notification, no status write.
+          if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {
+            return gateExpiredDeny("platform", toolName, "aborted", PLATFORM_GATE_EXPIRED_MESSAGE, { delivered: false });
           }
           if (role !== "owner") {
             log.warn(

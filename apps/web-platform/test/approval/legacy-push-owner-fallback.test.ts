@@ -22,7 +22,7 @@ vi.mock("@/server/approval/ops", async (orig) => ({
   },
 }));
 
-import { createCanUseTool, type CanUseToolContext } from "@/server/permission-callback";
+import { createCanUseTool, PUSH_ROLE_READ_DEADLINE_MS, type CanUseToolContext } from "@/server/permission-callback";
 import { APPROVAL_UNAVAILABLE_DENY } from "@/server/approval/gate-flow";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
 import { ExecutionGrants } from "@/server/approval/grants";
@@ -39,11 +39,14 @@ beforeEach(() => {
 
 type Role = "owner" | "member" | "throws" | "no-approval" | "member-flag-throws";
 
-function setup(role: Role) {
-  const viewerRole = vi.fn(async () => {
-    if (role === "throws") throw new Error("viewer role read failed");
-    return role === "owner" ? ("owner" as const) : ("member" as const);
-  });
+function setup(role: Role, opts: { viewerRole?: () => Promise<"owner" | "member">; callSignal?: AbortSignal } = {}) {
+  const viewerRole = vi.fn(
+    opts.viewerRole ??
+      (async () => {
+        if (role === "throws") throw new Error("viewer role read failed");
+        return role === "owner" ? ("owner" as const) : ("member" as const);
+      }),
+  );
   // The flag is off, so the approval flow answers null (no verdict) and the call reaches the in-memory fallback.
   const approval = {
     isEnabled: vi.fn(async () => {
@@ -82,7 +85,7 @@ function setup(role: Role) {
     },
   } as unknown as CanUseToolContext;
   const call = (tool: string, input: Record<string, unknown>) =>
-    createCanUseTool(ctx)(tool, input, { signal: new AbortController().signal, toolUseID: "t", requestId: "r" } as never) as Promise<{
+    createCanUseTool(ctx)(tool, input, { signal: opts.callSignal ?? new AbortController().signal, toolUseID: "t", requestId: "r" } as never) as Promise<{
       behavior: string;
       message?: string;
     }>;
@@ -138,7 +141,44 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
     expect(reports).toHaveLength(1);
     expect(reports[0][0]).toBe("viewerRoleFailed");
-    expect(reports[0][2]).toEqual(expect.objectContaining({ tags: { stage: "legacy-push-owner-check" } }));
+    expect(reports[0][2]).toEqual(
+      expect.objectContaining({ tags: { stage: "legacy-push-owner-check" }, workspaceId: WORKSPACE_ID, extra: { outcome: "denied-no-card" } }),
+    );
+  });
+
+  test("Stop pressed while the role is read (an Owner answer arrives after): denied as aborted, no card, no notification, no status write, no report", async () => {
+    const call = new AbortController();
+    const h = setup("owner", {
+      callSignal: call.signal,
+      viewerRole: () =>
+        new Promise((resolve) => {
+          call.abort();
+          setTimeout(() => resolve("owner"), 0);
+        }),
+    });
+    const res = await h.call(TOOLS.pushBranch, push());
+    expect(res.behavior).toBe("deny");
+    expect(res.message).not.toBe(APPROVAL_UNAVAILABLE_DENY);
+    expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(h.notifyOfflineUser).not.toHaveBeenCalled();
+    expect(h.updateConversationStatus).not.toHaveBeenCalled();
+    expect(h.abortableReviewGate).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
+  });
+
+  test("a role read that never settles ends at the deadline: static deny, no card, viewerRoleFailed reported", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = setup("owner", { viewerRole: () => new Promise(() => {}) });
+      const pending = h.call(TOOLS.pushBranch, push());
+      await vi.advanceTimersByTimeAsync(PUSH_ROLE_READ_DEADLINE_MS + 1);
+      const res = await pending;
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      expect(h.sendToClient).not.toHaveBeenCalled();
+      expect(reports.map((r) => r[0])).toEqual(["viewerRoleFailed"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("no approval dependency: static deny, no card", async () => {
