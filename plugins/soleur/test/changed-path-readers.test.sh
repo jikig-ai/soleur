@@ -1426,8 +1426,6 @@ scripts/affected-prepass-bench.sh	git -C "$REPO_ROOT" diff -z --diff-filter=A --
 scripts/check-backstop-revision.sh	git diff --no-renames --name-only "${mb}...HEAD"	already rename-free (#12332) and matched with an exact-line grep -Fxq against fixed watched paths, so a quoted name cannot match a watched path
 scripts/ci-battery-gate-replay.sh	git log --first-parent -n "$n" --format='"'"'tformat:@@@'"'"' --name-status -M	offline replay report over historical merges (reads status rows); a failed log exits 2
 scripts/ci-oracle-review.sh	git diff --name-only --no-renames "$base" HEAD --	already rename-free with the status checked (a failure ends in finish fail api)
-scripts/ci-pr-affected-replay.py	"diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--first-parent", "-z", sha	offline replay tooling over historical merge commits; already -z
-scripts/ci-pr-affected-replay.py	"diff", "--name-status", "-z", "--no-renames", sha, "HEAD", "--"	offline replay tooling for the ratchet files a commit adds; already -z and rename-free
 scripts/followthroughs/pr-battery-gate-saving-9323.sh	pulls/$pr/files?per_page=100" --jq '"'"'.[].filename'"'"'	follow-through watcher that reports a row (cut / fail / skip) per PR; a miss changes only a report line
 scripts/lib/tweet-eligibility.sh	gh pr diff "$PR" --name-only	gh offers no NUL output; a failed read and an empty list both exit 1 (excluded, fail closed), and a quoted name can only miss a deny pattern on a path the operator reads in the draft before it is posted
 scripts/lint-art30-reverification.sh	diff --name-status --no-renames --no-textconv	already rename-free over a fixed pathspec list (FILE_PATHS) with a failed read exiting 2
@@ -1480,7 +1478,7 @@ plugins/soleur/skills/postmerge/SKILL.md	git diff --name-status --diff-filter=AM
 SENT_FILE_FLOOR=100
 SENT_SITE_FLOOR=20
 CODE_FILE_FLOOR=800
-CODE_SITE_FLOOR=85
+CODE_SITE_FLOOR=83
 PROSE_FILE_FLOOR=13
 PROSE_SITE_FLOOR=34
 
@@ -2235,7 +2233,7 @@ if [ "$STEP_ROWS" -lt "$MIN_STEP_ROWS" ]; then
   exit 1
 fi
 # Census sites examined across the workflow, code and prose censuses (exact: a removed reader must lower this floor in the same diff).
-MIN_CENSUS_ROWS=139
+MIN_CENSUS_ROWS=137
 if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1

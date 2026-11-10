@@ -184,6 +184,11 @@ scripts/ci-oracle-lane	knowledge-base/engineering/architecture/diagrams
 scripts/ci-oracle-lane	knowledge-base/project
 scripts/ci-oracle-lane	knowledge-base/project/learnings
 scripts/ci-oracle-lane	knowledge-base/project/specs
+scripts/ci-oracle-review	knowledge-base
+scripts/ci-oracle-review	knowledge-base/engineering/architecture/diagrams
+scripts/ci-oracle-review	knowledge-base/project
+scripts/ci-oracle-review	knowledge-base/project/learnings
+scripts/ci-oracle-review	knowledge-base/project/specs
 scripts/ci-push-dedupe	knowledge-base
 scripts/ci-push-dedupe	knowledge-base/engineering/architecture/diagrams
 scripts/ci-push-dedupe	knowledge-base/project/specs
