@@ -7194,7 +7194,7 @@ if want_scripts; then
   run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
   # #12348: the advisory-id/safe-status pairing lint (ADR-322). The unit suite (in-process matrix, CLI rows
   # against temp repos, mutants graded by their named killer) and the -live scan of every knowledge-base/
-  # index entry. Both always-on; registered LAST so no earlier row's positional shard leg moves.
+  # index entry. Both always-on; their shard legs are manifest rows in scripts/suite-shard-legs.tsv.
   run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
   run_suite "scripts/lint-cve-safe-status-live" python3 scripts/lint-cve-safe-status.py
   

@@ -871,23 +871,38 @@ n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.y
 assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
 echo ""
 
-# --- Test 11: the lint-cve-safe-status part of the `test` green is EARNED (#12348) --
+# --- Test 11: the lint-cve-safe-status part of the synthetic greens is EARNED (#12348) --
 #
-# The `test` sweep runs scripts/lint-cve-safe-status.py over every tracked KB index
-# entry, and ALLOWED_PATHS (weakness-digest.md) sits inside that surface, so the synthetic
-# `test` green the action posts is sound only if the action runs the lint over its own
-# staged paths first. Same anchor discipline as Test 8: syntactic (`^\s*if ! python3 …`),
-# never a mention-grep, an `exit [1-9]` before the arm's first `fi`, and ordering before
-# the branch push and the check-run POST. Test 8 has no built-in mutants; this one applies
-# the plan's five Guard 2 mutants to temp copies and requires each to be reported.
-echo "Test 11: action.yml EARNS the lint-cve-safe-status part of the test green (#12348)"
+# scripts/lint-cve-safe-status.py scans every tracked KB index entry as the always-on
+# `guards-ruleset` member `cve-safe-status` (and in the `test` sweep on diffs the oracle
+# lane does not skip), and ALLOWED_PATHS (weakness-digest.md) sits inside that surface, so
+# the synthetic greens the action posts are sound only if the action runs the lint over its
+# own staged paths first. Same anchor discipline as Test 8: syntactic (`^\s*if ! python3 …`),
+# never a mention-grep, a UNIQUE arm, an `exit [1-9]` before the arm's first `fi`, placement
+# AFTER `git add` (--paths reads the staged blobs) at the same block depth (not inside an
+# `if`/loop/function opened in between), and ordering before the branch push and the
+# check-run POST. Test 8 has no built-in mutants; this one applies the ten mutants in the
+# loop below to temp copies and requires each to be reported.
+echo "Test 11: action.yml EARNS the lint-cve-safe-status part of the synthetic greens (#12348)"
 t11_verdict() {
-  local f="$1" arm push post enforce
+  local f="$1" arm narm add push post enforce depth
   arm=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-cve-safe-status\.py --paths "\$\{PATHS\[@\]\}"; then[[:space:]]*$' "$f" | head -1 | cut -d: -f1 || true)
+  narm=$(grep -cE '^[[:space:]]*[^#[:space:]].*scripts/lint-cve-safe-status\.py' "$f" || true)
+  add=$(grep -nE '^[[:space:]]*git add -- "\$\{PATHS\[@\]\}"[[:space:]]*$' "$f" | head -1 | cut -d: -f1 || true)
   push=$(grep -nE '^[[:space:]]*(git push |git_remote push )' "$f" | head -1 | cut -d: -f1 || true)
   post=$(grep -nE '^[[:space:]]*(gh|gh_gate) api "repos/\$\{REPO\}/check-runs"' "$f" | head -1 | cut -d: -f1 || true)
   [[ -n "$arm" ]] || { echo "RED:no-arm"; return 0; }
-  [[ -n "$push" && -n "$post" ]] || { echo "RED:no-side-effect-anchor"; return 0; }
+  [[ "$narm" == "1" ]] || { echo "RED:arm-not-unique:$narm"; return 0; }
+  [[ -n "$add" && -n "$push" && -n "$post" ]] || { echo "RED:no-side-effect-anchor"; return 0; }
+  (( add < arm )) || { echo "RED:before-add"; return 0; }
+  depth=$(awk -v a="$add" -v b="$arm" '
+    NR > a && NR < b && !/^[[:space:]]*#/ {
+      if ($0 ~ /^[[:space:]]*(if|for|while|until|case)([[:space:]]|$)/ || $0 ~ /\(\)[[:space:]]*\{[[:space:]]*$/ || $0 ~ /^[[:space:]]*\{[[:space:]]*$/) d++
+      if ($0 ~ /^[[:space:]]*(fi|done|esac)([[:space:]]*;?[[:space:]]*$|[[:space:]]+#)/ || $0 ~ /^[[:space:]]*\}[[:space:]]*$/) d--
+    }
+    END { print d + 0 }
+  ' "$f" || true)
+  [[ "$depth" == "0" ]] || { echo "RED:nested-depth:$depth"; return 0; }
   enforce=$(awk -v s="$arm" '
     NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
     NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
@@ -899,7 +914,7 @@ t11_verdict() {
 }
 # (11a) H1: the live action passes.
 assert_eq "OK" "$(t11_verdict "$ACTION_YML")" "(11a) the live action runs lint-cve-safe-status --paths over the staged PATHS, enforcing, before push and POST"
-# (11b) the five Guard 2 mutants, each on a temp copy; a mutant that fails to land is itself a failure.
+# (11b) the mutants, each on a temp copy; a mutant that fails to land is itself a failure.
 T11_DIR="$TMP/t11"; mkdir -p "$T11_DIR"
 t11_mutate() {
   python3 - "$ACTION_YML" "$T11_DIR/$1.yml" "$1" <<'T11PY'
@@ -932,6 +947,20 @@ elif kind == "args-single":
     out = lines[:a] + [lines[a].replace('"${PATHS[@]}"', '"${PATHS[0]}"')] + lines[a + 1:]
 elif kind == "args-no-flag":
     out = lines[:a] + [lines[a].replace(' --paths "${PATHS[@]}"', ' "${PATHS[@]}"')] + lines[a + 1:]
+elif kind == "before-add":
+    rest = lines[:a] + lines[b + 1:]
+    p = [i for i, l in enumerate(rest) if re.match(r'^\s*git add -- "\$\{PATHS\[@\]\}"\s*$', l)]
+    if len(p) != 1:
+        sys.exit("t11: git add anchor found %d times" % len(p))
+    out = rest[:p[0]] + arm + rest[p[0]:]
+elif kind == "wrap-if-false":
+    ind = re.match(r"^(\s*)", lines[a]).group(1)
+    out = lines[:a] + [ind + "if false; then"] + arm + [ind + "fi"] + lines[b + 1:]
+elif kind == "uncalled-function":
+    ind = re.match(r"^(\s*)", lines[a]).group(1)
+    out = lines[:a] + [ind + "t11_never_called() {"] + arm + [ind + "}"] + lines[b + 1:]
+elif kind == "true-or":
+    out = lines[:a] + [lines[a].replace("if ! python3", "if ! true || ! python3")] + lines[a + 1:]
 else:
     sys.exit("t11: unknown mutant " + kind)
 result = "\n".join(out)
@@ -940,7 +969,7 @@ if result == text:
 open(dst, "w", encoding="utf-8").write(result)
 T11PY
 }
-for t11_kind in comment-only reorder delete swallow-or-true swallow-inert-body args-single args-no-flag; do
+for t11_kind in comment-only reorder delete swallow-or-true swallow-inert-body args-single args-no-flag before-add wrap-if-false uncalled-function true-or; do
   if t11_mutate "$t11_kind"; then
     t11_v=$(t11_verdict "$T11_DIR/$t11_kind.yml")
     if [[ "$t11_v" == RED:* ]]; then
@@ -957,4 +986,117 @@ for t11_kind in comment-only reorder delete swallow-or-true swallow-inert-body a
 done
 echo ""
 
-print_results 103
+# --- Test 12: the `guards-ruleset` member `cve-safe-status` is a full, enforcing scan (#12348) --
+#
+# The oracle lane skips the `test` sweep on KB-markdown-only diffs, so this ci.yml member
+# is the gate that always runs (CTO ruling D1). The pin is a whole-step property, not a
+# prefix: exactly one step with this id, inside the guards-ruleset job, `if: ${{ !cancelled() }}`,
+# a run line EQUAL to the no-argument full scan (so --paths, --help, `|| true` or any
+# extra argv token fails), no continue-on-error, no sparse-checkout in the job, and an
+# aggregate member line that reads this step's conclusion and outcome.
+echo "Test 12: ci.yml guards-ruleset runs lint-cve-safe-status as an enforcing full scan (#12348)"
+T12_DIR="$TMP/t12"; mkdir -p "$T12_DIR"
+t12_py() {  # t12_py MODE SRC [KIND DST]: MODE=verdict prints OK|RED:<why>; MODE=mutate writes DST
+  python3 - "$@" <<'T12PY'
+import re, sys
+mode, src = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+lines = text.split("\n")
+def job_bounds(ls):
+    s = [i for i, l in enumerate(ls) if re.match(r"^  guards-ruleset:\s*$", l)]
+    if len(s) != 1:
+        return None
+    e = next((i for i in range(s[0] + 1, len(ls)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", ls[i])), len(ls))
+    return s[0], e
+def step_bounds(ls, a, e):
+    ids = [i for i in range(a, e) if re.match(r"^\s*- id: cve-safe-status\s*$", ls[i])]
+    if len(ids) != 1:
+        return None, len(ids)
+    i = ids[0]
+    ind = len(ls[i]) - len(ls[i].lstrip())
+    j = i + 1
+    while j < e and not (ls[j].strip() and (len(ls[j]) - len(ls[j].lstrip())) <= ind):
+        j += 1
+    return (i, j), 1
+if mode == "verdict":
+    jb = job_bounds(lines)
+    if jb is None:
+        print("RED:no-guards-ruleset-job"); sys.exit(0)
+    a, e = jb
+    all_ids = [l for l in lines if re.match(r"^\s*- id: cve-safe-status\s*$", l)]
+    if len(all_ids) != 1:
+        print("RED:step-count:%d" % len(all_ids)); sys.exit(0)
+    sb, n = step_bounds(lines, a, e)
+    if sb is None:
+        print("RED:step-outside-job"); sys.exit(0)
+    body = [l.strip() for l in lines[sb[0] + 1:sb[1]] if l.strip() and not l.strip().startswith("#")]
+    if "if: ${{ !cancelled() }}" not in body:
+        print("RED:if-not-uncancelled"); sys.exit(0)
+    runs = [l for l in body if l.startswith("run:")]
+    if runs != ["run: python3 scripts/lint-cve-safe-status.py"]:
+        print("RED:run-argv"); sys.exit(0)
+    if any(l.startswith("continue-on-error") for l in body):
+        print("RED:continue-on-error"); sys.exit(0)
+    job = [l for l in lines[a:e] if not l.lstrip().startswith("#")]
+    if any("sparse-checkout" in l for l in job):
+        print("RED:sparse-checkout"); sys.exit(0)
+    member = "member cve-safe-status '*' 'cve-safe-status' '${{ steps.cve-safe-status.conclusion }}' '${{ steps.cve-safe-status.outcome }}' || failed=1"
+    if sum(1 for l in job if l.strip() == member) != 1:
+        print("RED:aggregate-member"); sys.exit(0)
+    print("OK"); sys.exit(0)
+kind, dst = sys.argv[3], sys.argv[4]
+a, e = job_bounds(lines)
+(i, j), _ = step_bounds(lines, a, e)
+step = lines[i:j]
+run_i = next(k for k in range(i, j) if lines[k].strip().startswith("run:"))
+if_i = next(k for k in range(i, j) if lines[k].strip().startswith("if:"))
+out = list(lines)
+if kind == "delete-step":
+    out = lines[:i] + lines[j:]
+elif kind == "run-paths":
+    out[run_i] = lines[run_i] + " --paths knowledge-base/README.md"
+elif kind == "run-help":
+    out[run_i] = lines[run_i] + " --help"
+elif kind == "run-or-true":
+    out[run_i] = lines[run_i] + " || true"
+elif kind == "if-pr-only":
+    out[if_i] = lines[if_i].replace("${{ !cancelled() }}", "${{ github.event_name == 'pull_request' }}")
+elif kind == "continue-on-error":
+    out = lines[:j] + [lines[if_i].split("if:")[0] + "continue-on-error: true"] + lines[j:]
+elif kind == "delete-member":
+    out = [l for l in lines if not l.strip().startswith("member cve-safe-status ")]
+elif kind == "sparse-checkout":
+    out = lines[:i] + [lines[i].replace("- id: cve-safe-status", "- uses: actions/checkout@v4"), lines[if_i].split("if:")[0] + "with: { sparse-checkout: scripts }"] + lines[i:]
+elif kind == "move-out-of-job":
+    # into the LAST job of the file (guards-ruleset is not last: guards-advisory follows it)
+    rest = lines[:i] + lines[j:]
+    while rest and not rest[-1].strip():
+        rest.pop()
+    out = rest + step + [""]
+else:
+    sys.exit("t12: unknown mutant " + kind)
+res = "\n".join(out)
+if res == text:
+    sys.exit("t12: mutant %s did not change the file" % kind)
+open(dst, "w", encoding="utf-8").write(res)
+T12PY
+}
+assert_eq "OK" "$(t12_py verdict "$CI_YML")" "(12a) the live ci.yml guards-ruleset job runs lint-cve-safe-status as an uncancelled, enforcing, no-argument full scan with an aggregate member line"
+for t12_kind in delete-step run-paths run-help run-or-true if-pr-only continue-on-error delete-member sparse-checkout move-out-of-job; do
+  if t12_py mutate "$CI_YML" "$t12_kind" "$T12_DIR/$t12_kind.yml"; then
+    t12_v=$(t12_py verdict "$T12_DIR/$t12_kind.yml")
+    if [[ "$t12_v" == RED:* ]]; then
+      echo "  PASS: (12b) mutant $t12_kind is reported ($t12_v)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (12b) mutant $t12_kind survived Test 12 (verdict $t12_v)"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    echo "  FAIL: (12b) mutant $t12_kind did not land"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
+print_results 117

@@ -508,8 +508,8 @@ scripts/lint-anthropic-content-position	356	measured
 scripts/lint-anthropic-content-position-live	222	measured
 scripts/lint-art30-reverification-unit	4374	measured
 scripts/lint-credential-path-literals	2180	measured
-scripts/lint-cve-safe-status	1227	floor
-scripts/lint-cve-safe-status-live	1227	floor
+scripts/lint-cve-safe-status	6913	estimate
+scripts/lint-cve-safe-status-live	7000	estimate
 scripts/lint-diagnosis-claims	1660	measured
 scripts/lint-doppler-description-length-live	84	measured
 scripts/lint-doppler-description-length-unit	1906	measured
