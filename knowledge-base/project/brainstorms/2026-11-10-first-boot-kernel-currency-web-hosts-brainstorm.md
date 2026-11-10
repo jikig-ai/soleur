@@ -69,15 +69,16 @@ Ruled by CTO agent, 2026-11-10 (binding technical ruling):
 5. Later PRs + replaces for inngest, then registry; git-data via its own interlocked route.
 
 **Correction to the CTO ruling's item 2 (verified, `server.tf` lifecycle comment):** committed config keeps the app
-record on web-1 only and pools no LB weight on web-2 ("anti-pooling", ADR-068/ADR-143). So "reboot while web-2
-carries traffic" does not hold: a reboot of web-1 is a full app outage for its duration. The CPO's 24h notice and a
+record on the refused host only and pools no LB weight on the replaceable one ("anti-pooling", ADR-068/ADR-143). So
+"reboot while the other web host carries traffic" does not hold: a reboot of the refused host is a full app outage for
+its duration. The CPO's 24h notice and a
 maintenance page apply to act 4 if the owner chooses the exception.
 
 ## Open Questions
 
 - Does cloud-init's end-of-boot reboot ever fire before the app container is up? `unverified` — needs a rehearsal on
   the replaceable host before any serving replace (CTO dissent).
-- Does the non-replaceable host survive a reboot after its long uptime (volume by-id pins, provisioner-left state)?
+- Does the non-replaceable host survive a reboot (volume by-id pins, provisioner-left state)?
   `unverified` (CTO dissent); only relevant if the owner picks the exception.
 - The replaceable web host reports no reader rows (silent). Why is a plan-time question; the post-replace
   verification depends on its emitter.
@@ -114,5 +115,5 @@ and #12503 narrowed. Verified: stock image on every host class, `ignore_changes`
 ## Capability Gaps
 
 - No sanctioned refresh route for the web host the replace path refuses — evidence:
-  `knowledge-base/engineering/operations/runbooks/web-host-replace.md` §"web-1 is refused"; reboot workflow retired
+  `knowledge-base/engineering/operations/runbooks/web-host-replace.md` (refusal section); reboot workflow retired
   (`web-host-reboot.md`); permanent fix is #9421 (open, p3, last update 2026-10-03).

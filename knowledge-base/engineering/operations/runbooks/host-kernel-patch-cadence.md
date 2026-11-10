@@ -75,6 +75,8 @@ When the owner types a go that names an exact command from the table:
   The reboot workflow that once existed is retired (see [web-host-reboot.md](./web-host-reboot.md), and the ADR-263 addendum
   2026-10-08, "immutability, not reboot": a host is replaced, not rebooted).
   A row with no sanctioned act is an owner decision, not a gap an agent closes: escalate it (see Escalation).
+- Committed config pools no app serving weight on the other web host (anti-pooling; the `server.tf` lifecycle comment,
+  ADR-068, ADR-143), so any outage or reboot of the refused host is a full app outage. Never plan one as "the other web host carries traffic".
 
 ## inngest
 
