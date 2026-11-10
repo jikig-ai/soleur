@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1251
-# generated-at=2026-11-09T23:02:38Z
+# default-weight-ms=1227
+# generated-at=2026-11-10T12:29:44Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -510,6 +510,8 @@ scripts/lint-anthropic-content-position	7
 scripts/lint-anthropic-content-position-live	4
 scripts/lint-art30-reverification-unit	1
 scripts/lint-credential-path-literals	4
+scripts/lint-cve-safe-status	2
+scripts/lint-cve-safe-status-live	2
 scripts/lint-diagnosis-claims	3
 scripts/lint-doppler-description-length-live	7
 scripts/lint-doppler-description-length-unit	7

@@ -149,6 +149,9 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-anthropic-content-position-live"
+  # #12348: the advisory-id/safe-status pairing scan reads every knowledge-base/ index entry, archives
+  # included, so any knowledge-base edit can trip it — repo-global by construction.
+  "scripts/lint-cve-safe-status-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-dedupe-shape-live"
@@ -197,6 +200,7 @@ ALWAYS_ON_SUITES=(
   # no file-based query can ever return it (the #8023/#8092/#8177 class).
   "scripts/lint-agents-enforcement-tags-unit"
   "scripts/lint-credential-path-literals"
+  "scripts/lint-cve-safe-status"
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
   "scripts/lint-infra-no-human-steps"
@@ -966,6 +970,8 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "scripts/lint-supabase-deprecated-endpoints.sh"
   "scripts/lint-diagnosis-claims.sh"
   "scripts/lint-diagnosis-claims.test.sh"
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lint-workflow-step-env-refs.py"
   "scripts/plugin-root-anchor-debt.sh"

@@ -871,4 +871,90 @@ n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.y
 assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
 echo ""
 
-print_results 95
+# --- Test 11: the lint-cve-safe-status part of the `test` green is EARNED (#12348) --
+#
+# The `test` sweep runs scripts/lint-cve-safe-status.py over every tracked KB index
+# entry, and ALLOWED_PATHS (weakness-digest.md) sits inside that surface, so the synthetic
+# `test` green the action posts is sound only if the action runs the lint over its own
+# staged paths first. Same anchor discipline as Test 8: syntactic (`^\s*if ! python3 …`),
+# never a mention-grep, an `exit [1-9]` before the arm's first `fi`, and ordering before
+# the branch push and the check-run POST. Test 8 has no built-in mutants; this one applies
+# the plan's five Guard 2 mutants to temp copies and requires each to be reported.
+echo "Test 11: action.yml EARNS the lint-cve-safe-status part of the test green (#12348)"
+t11_verdict() {
+  local f="$1" arm push post enforce
+  arm=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-cve-safe-status\.py --paths "\$\{PATHS\[@\]\}"; then[[:space:]]*$' "$f" | head -1 | cut -d: -f1 || true)
+  push=$(grep -nE '^[[:space:]]*(git push |git_remote push )' "$f" | head -1 | cut -d: -f1 || true)
+  post=$(grep -nE '^[[:space:]]*(gh|gh_gate) api "repos/\$\{REPO\}/check-runs"' "$f" | head -1 | cut -d: -f1 || true)
+  [[ -n "$arm" ]] || { echo "RED:no-arm"; return 0; }
+  [[ -n "$push" && -n "$post" ]] || { echo "RED:no-side-effect-anchor"; return 0; }
+  enforce=$(awk -v s="$arm" '
+    NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+    NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
+  ' "$f" || true)
+  [[ "$enforce" == "yes" ]] || { echo "RED:inert-body"; return 0; }
+  (( arm < push )) || { echo "RED:after-push"; return 0; }
+  (( arm < post )) || { echo "RED:after-post"; return 0; }
+  echo "OK"
+}
+# (11a) H1: the live action passes.
+assert_eq "OK" "$(t11_verdict "$ACTION_YML")" "(11a) the live action runs lint-cve-safe-status --paths over the staged PATHS, enforcing, before push and POST"
+# (11b) the five Guard 2 mutants, each on a temp copy; a mutant that fails to land is itself a failure.
+T11_DIR="$TMP/t11"; mkdir -p "$T11_DIR"
+t11_mutate() {
+  python3 - "$ACTION_YML" "$T11_DIR/$1.yml" "$1" <<'T11PY'
+import re, sys
+src, dst, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src, encoding="utf-8").read()
+lines = text.split("\n")
+start = [i for i, l in enumerate(lines) if re.match(r'^\s*if ! python3 scripts/lint-cve-safe-status\.py ', l)]
+if len(start) != 1:
+    sys.exit("t11: arm anchor found %d times" % len(start))
+a = start[0]
+b = next(i for i in range(a + 1, len(lines)) if re.match(r"^\s*fi\s*$", lines[i]))
+arm = lines[a:b + 1]
+c = a
+while c > 0 and lines[c - 1].lstrip().startswith("#"):
+    c -= 1
+if kind == "comment-only":
+    out = lines[:a] + lines[b + 1:]
+elif kind == "delete":
+    out = lines[:c] + lines[b + 1:]
+elif kind == "reorder":
+    rest = lines[:a] + lines[b + 1:]
+    p = next(i for i, l in enumerate(rest) if re.match(r"^\s*(git push |git_remote push )", l))
+    out = rest[:p + 1] + arm + rest[p + 1:]
+elif kind == "swallow-or-true":
+    out = lines[:a] + [lines[a].replace('"${PATHS[@]}"; then', '"${PATHS[@]}" || true; then')] + lines[a + 1:]
+elif kind == "swallow-inert-body":
+    out = lines[:a] + [re.sub(r"exit 1", "true", l) for l in arm] + lines[b + 1:]
+elif kind == "args-single":
+    out = lines[:a] + [lines[a].replace('"${PATHS[@]}"', '"${PATHS[0]}"')] + lines[a + 1:]
+elif kind == "args-no-flag":
+    out = lines[:a] + [lines[a].replace(' --paths "${PATHS[@]}"', ' "${PATHS[@]}"')] + lines[a + 1:]
+else:
+    sys.exit("t11: unknown mutant " + kind)
+result = "\n".join(out)
+if result == text:
+    sys.exit("t11: mutant %s did not change the file" % kind)
+open(dst, "w", encoding="utf-8").write(result)
+T11PY
+}
+for t11_kind in comment-only reorder delete swallow-or-true swallow-inert-body args-single args-no-flag; do
+  if t11_mutate "$t11_kind"; then
+    t11_v=$(t11_verdict "$T11_DIR/$t11_kind.yml")
+    if [[ "$t11_v" == RED:* ]]; then
+      echo "  PASS: (11b) mutant $t11_kind is reported ($t11_v)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (11b) mutant $t11_kind survived Test 11 (verdict $t11_v)"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    echo "  FAIL: (11b) mutant $t11_kind did not land"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
+print_results 103

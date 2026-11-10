@@ -250,3 +250,15 @@ recorded in `knowledge-base/project/specs/archive/20261108-210325-feat-one-shot-
 5. **Decisions 1 to 5 and the other addendum items are unchanged.** The journald-path residual, the registry-path residual (the
    holder of the shared ingest token) and the freshness-clock residual of the review addendum stand; the registry-path residual
    applies from the day the follow-up delivers a row.
+
+## Addendum 2026-11-10 (#12348): the cross-skill backstop
+
+**Addendum (#12348).** This addendum takes effect on the merge of the PR that closes #12348; until then the
+Consequences bullet naming #12348 stands unchanged. The cross-skill backstop is `scripts/lint-cve-safe-status.py`,
+which scans every tracked file under `knowledge-base/`, archives included, using file content alone; pairings that
+predate it are rewritten to zero with no baseline, and it exempts no text, including quoted vendor text (Decision
+3). It publishes only path, line range and vocabulary class, and a version beside an identifier is tracked
+separately in #12569. This check is disclosure hygiene for public repository text only; it is not a security
+representation, it does not assess or attest whether Soleur or any dependency is or was exposed to any
+vulnerability, and a passing run means only that no listed phrase was found beside an advisory identifier in the
+files it scanned. Where this section disagrees with that bullet, this section governs.

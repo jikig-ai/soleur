@@ -863,6 +863,7 @@ cat > "$EXPECTED" <<'EOF'
 lint-trap-tempfile-ownership|fast|python3 scripts/lint-trap-tempfile-ownership.py --check-highwater|ci:.github/workflows/ci.yml
 lint-supabase-deprecated-endpoints|fast|bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater|ci:.github/workflows/ci.yml
 lint-diagnosis-claims|fast|bash scripts/lint-diagnosis-claims.test.sh|suite:scripts/lint-diagnosis-claims
+lint-cve-safe-status|fast|bash scripts/lint-cve-safe-status.test.sh|suite:scripts/lint-cve-safe-status
 alarm-issue-filing-guard|fast|bash scripts/alarm-issue-filing-guard.test.sh|suite:scripts/alarm-issue-filing-guard
 lint-workflow-step-env-refs|fast|python3 scripts/lint-workflow-step-env-refs.py|suite:scripts/lint-workflow-step-env-refs-live
 plugin-root-anchor-debt|fast|bash scripts/plugin-root-anchor-debt.sh|probe:scripts/plugin-root-anchor-debt.sh
