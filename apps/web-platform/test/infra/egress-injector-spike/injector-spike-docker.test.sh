@@ -235,5 +235,5 @@ arm_c5
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"
 record_verdict 7 unmeasurable "arm-not-implemented:add-verb-overlay"
 record_verdict 8 unmeasurable "arm-not-implemented:failure-modes"
-record_verdict 9 unmeasurable "arm-not-implemented:ca-scope"
+arm_c9
 finalize

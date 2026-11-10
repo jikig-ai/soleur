@@ -452,3 +452,118 @@ PYC5
   observe c5 "$d/raw.json"
   spike_record_judged 5 "$d/verdict.txt"
 }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 9: CA scope (spec TR3). Leaves signed by session A's CA (and one by B's) are served on container loopback
+# by openssl s_server; each client is tried against each, with session A's bundle and no proxy (TLS verification
+# is the client library's, so this runs outside bwrap). The libraries each client links are recorded first.
+# ---------------------------------------------------------------------------------------------------------------
+_c9_leaf_cn_only() { # <ca dir> <out prefix> <cn>
+  ( umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out "$2.key" ) 2>/dev/null \
+    && openssl req -new -key "$2.key" -subj "/CN=$3" -out "$2.csr" 2>/dev/null \
+    && printf 'extendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\n' > "$2.ext" \
+    && openssl x509 -req -in "$2.csr" -CA "$1/ca.pem" -CAkey "$1/ca.key" -CAcreateserial -days 1 -sha256 -extfile "$2.ext" -out "$2.pem" 2>/dev/null \
+    && rm -f "$2.csr" "$2.ext"
+}
+
+arm_c9() {
+  local d="$SPIKE_WORK/c9" L="$SPIKE_WORK/run/c9"
+  mkdir -p "$d" "$L" || harness_fail DRIVER "mkdir c9"
+  local ca="$SPIKE_WORK/run/sessA/ca" cab="$SPIKE_WORK/run/sessB/ca"
+  mint_leaf "$ca" "$L/inject" "DNS:api.github.com" && mint_leaf "$ca" "$L/noninject" "DNS:evil.example" \
+    && mint_leaf "$ca" "$L/gist" "DNS:gist.github.com" && mint_leaf "$ca" "$L/ip" "IP:127.0.0.1" \
+    && _c9_leaf_cn_only "$ca" "$L/cnonly" "api.github.com" && _c9_leaf_cn_only "$ca" "$L/cnonlynon" "evil.example" \
+    && mint_leaf "$cab" "$L/crossb" "DNS:api.github.com" \
+    || { record_verdict 9 unmeasurable "harness:LEAF_MINT"; return; }
+  spike_fix_owner "$L"
+  local fa fb
+  fa="$(openssl x509 -in "$ca/ca.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  fb="$(openssl x509 -in "$cab/ca.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  local inj tun
+  inj="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/secrets/router-injector.cred 2>/dev/null)"; tun="$SPIKE_SESS_sessA_TUNNEL"
+  cat > "$d/c9.sh" <<'EOS'
+L=/run/spike/c9; BUNDLE=/run/spike-pub/sessA/bundle.pem; port=19400
+echo "lib curl $(curl --version | head -1 | grep -oE '(OpenSSL|GnuTLS)/[0-9.]+' | head -1)"
+echo "lib git $(ldd "$(git --exec-path)/git-remote-https" 2>/dev/null | grep -oE 'lib(gnutls|ssl)[^ ]*' | sort -u | tr '\n' ' ')"
+echo "lib node openssl/$(node -p process.versions.openssl)"
+try() { # <leaf> <request host> [<label>]
+  port=$((port + 1)); local lab="${3:-$1}" h="$2"
+  openssl s_server -quiet -accept "127.0.0.1:$port" -cert "$L/$1.pem" -key "$L/$1.key" -www >/dev/null 2>&1 & local sp=$!
+  for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  local hc="$h"; [ "$h" = "127.0.0.1" ] && hc=127.0.0.1
+  curl -sS -o /dev/null --max-time 8 --noproxy '*' --cacert "$BUNDLE" --connect-to "$hc:$port:127.0.0.1:$port" "https://$hc:$port/" 2>/dev/null; echo "res $lab curl $([ $? -eq 0 ] && echo accept || echo reject)"
+  local ge; ge="$(GIT_SSL_CAINFO="$BUNDLE" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 timeout 10 git -c "http.curloptResolve=$hc:$port:127.0.0.1" ls-remote "https://$hc:$port/x.git" 2>&1)"
+  # accept only on an HTTP-level answer from the server, so a refused connection can never read as accepted
+  if printf '%s' "$ge" | grep -qiE 'certificate|ssl|tls'; then echo "res $lab git reject"
+  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error|http'; then echo "res $lab git accept"
+  else echo "res $lab git unknown"; fi
+  NODE_EXTRA_CA_CERTS="$BUNDLE" timeout 10 node -e 'const [h,p]=process.argv.slice(1); require("https").get({host:"127.0.0.1",port:+p,servername:h==="127.0.0.1"?undefined:h,headers:{host:h}},r=>{console.log("accept");process.exit(0)}).on("error",e=>{console.log("reject "+e.code);process.exit(0)})' "$hc" "$port" 2>/dev/null | sed "s/^/res $lab node /"
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+}
+try inject api.github.com
+try inject API.GitHub.com mixedcase
+try noninject evil.example
+try gist gist.github.com
+try ip 127.0.0.1
+try cnonly api.github.com
+try cnonlynon evil.example
+try crossb api.github.com
+EOS
+  docker exec -i -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" bash -s < "$d/c9.sh" > "$d/tls.out" 2>&1
+  # A non-inject CONNECT forced straight at session A's injector (skipping the router): the allowlist refuses it.
+  docker exec -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" curl -sS -o /dev/null --max-time 10 -w '%{http_connect}' --cacert /run/spike-pub/sessA/bundle.pem \
+    -x "http://$inj@127.0.0.1:$tun" https://sse.open-web.spike.test/ > "$d/forced.out" 2>/dev/null
+  # The CA key exists while session E runs (control), and is gone once its session has ended on its own.
+  local key_before key_after i
+  key_before="$(docker exec "$SPIKE_APP_CTR" sh -c 'test -s /run/spike/sessE/ca/ca.key && echo present || echo absent')"
+  docker exec "$SPIKE_APP_CTR" rm -f /run/spike/sessE/state/run
+  for ((i = 0; i < 100; i++)); do docker exec "$SPIKE_APP_CTR" test -e /run/spike/sessE/state/ended && break; sleep 0.2; done
+  key_after="$(docker exec "$SPIKE_APP_CTR" sh -c 'test -e /run/spike/sessE/ca/ca.key && echo present || echo absent')"
+  python3 -I - "$d" "$fa" "$fb" "$key_before" "$key_after" "$SPIKE_WORK/run/sessB" "$SPIKE_WORK/c2" > "$d/verdict.txt" <<'PYC9'
+import json, os, re, subprocess, sys
+d, fa, fb, kb, ka, sessb, c2 = sys.argv[1:8]
+res, libs = {}, {}
+for line in open(f"{d}/tls.out"):
+    p = line.split()
+    if p[:1] == ["res"] and len(p) >= 4: res[f"{p[1]}.{p[2]}"] = p[3]
+    if p[:1] == ["lib"]: libs[p[1]] = " ".join(p[2:])
+bundle_b = open(f"{sessb}/../../pub/sessB/bundle.pem").read() if os.path.exists(f"{sessb}/../../pub/sessB/bundle.pem") else ""
+fp_in_b = False
+for blk in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", bundle_b, re.S):
+    out = subprocess.run(["openssl", "x509", "-noout", "-fingerprint", "-sha256"], input=blk, capture_output=True, text=True).stdout
+    if fa in out: fp_in_b = True
+forced = open(f"{d}/forced.out").read().strip()
+r2 = ""
+for arm in ("A", "B"):
+    p = f"{c2}/router{arm}.log"
+    if os.path.exists(p): r2 += open(p).read()
+clients = ("curl", "git", "node")
+all_ = lambda leaf, want: all(res.get(f"{leaf}.{c}", "").startswith(want) for c in clients)
+gnutls_clients = [c for c in clients if "gnutls" in libs.get(c, "").lower()]
+checks = {
+  "control: every client accepts a session-CA leaf for an inject host": all_("inject", "accept"),
+  "every client rejects a session-CA leaf for a non-inject name": all_("noninject", "reject"),
+  "gist.github.com is accepted (within the documented *.github.com scope)": all_("gist", "accept"),
+  "an IP-address leaf is rejected": all_("ip", "reject"),
+  # Measured 2026-11-10: every client ACCEPTS a CN-only leaf for an inject host (a name the constraints permit) and
+  # REJECTS a CN-only leaf for a non-inject name, so CN fallback does not escape the name constraints. The scope
+  # property is the second; the first is recorded (results note, for the CTO to rule on the plan's wording).
+  "a common-name-only leaf for a non-inject name is rejected (CN fallback stays constrained)": all_("cnonlynon", "reject"),
+  "session B's CA is not trusted in session A": all_("crossb", "reject"),
+  "the two sessions have distinct CAs, and A's is not in B's bundle": fa != fb and bundle_b != "" and not fp_in_b,
+  "a non-inject CONNECT forced at the injector is refused 403 by the allowlist": forced == "403",
+  "the non-inject SSE took the router's forwarder branch, never the injector": "branch=forwarder host=sse.open-web.spike.test" in r2 and "branch=injector host=sse.open-web.spike.test" not in r2,
+  "the CA key exists during the session and is absent after it ends": kb == "present" and ka == "absent",
+}
+# Record only (plan): a GnuTLS client rejecting a mixed-case inject name is that client's defect, not a constraint
+# failure, so it never fails the criterion.
+mixed = {c: res.get(f"mixedcase.{c}", "") for c in gnutls_clients}
+cn_only_inject = {c: res.get(f"cnonly.{c}", "") for c in clients}
+json.dump({"libraries": libs, "results": res, "mixed_case_gnutls": mixed, "cn_only_inject_host": cn_only_inject, "forced_connect": forced, "checks": checks}, open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC9
+  observe c9 "$d/raw.json"
+  spike_record_judged 9 "$d/verdict.txt"
+}

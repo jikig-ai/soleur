@@ -101,3 +101,8 @@ touch "$S/state/run"
 while [[ -e "$S/state/run" ]]; do sleep 1; done
 for p in forwarder iron router; do kill "$(cat "$S/state/$p.pid")" 2>/dev/null; done
 wait
+# Session end (spec TR3): the session's CA key does not outlive the session. This script stands in for the
+# dispatcher that owns the session's lifetime; criterion 9 checks the key's absence after this exit, and the suite
+# itself never deletes it.
+rm -f "$S/ca/ca.key"
+touch "$S/state/ended"
