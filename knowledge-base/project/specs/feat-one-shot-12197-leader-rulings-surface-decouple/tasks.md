@@ -12,7 +12,7 @@ Plan: `knowledge-base/project/plans/2026-11-10-feat-leader-rulings-legal-surface
 - [ ] 2.1 Change 1: legal surface gates on `LEGAL_ACCEPTANCE_FOUNDER_ID` only
   - [ ] 2.1.1 RED: `surface.test.ts`, `page.test.tsx`, `routes.test.ts` (plan 1.1 to 1.3)
   - [ ] 2.1.2 GREEN: `surface.ts` per CTO F1 (plan 1.5)
-  - [ ] 2.1.3 Comments in the two legal pages, `inbox-rows.ts`, `app/api/inbox/route.ts` (plan 1.6)
+  - [ ] 2.1.3 Comments in the two legal pages, `inbox-rows.ts`, `app/api/inbox/route.ts`, the decide and reauth routes, `reauth.ts`, `legal-acceptance-card.tsx`, the README's other flag lines, the `surface.test.ts` header and `test/feature-map.md` (plan 1.6); `inbox-rows.test.ts` and `inbox-route.test.ts` are not edited (plan 1.4); AC18 grep returns nothing
   - [ ] 2.1.4 `server/legal-acceptance/README.md`, runbook and the ADR-319 amendment with CTO K1 to K3 sentences (plan 1.7, 1.7b, 1.8)
   - [ ] 2.1.5 `model.c4` description strings; re-render `model.likec4.json` with `render-c4-model.sh` (plan 1.9)
 - [ ] 2.2 Change 2: `PUSH_DISCLOSURE` and corrected `GH_DISCLOSURE`
@@ -29,6 +29,8 @@ Plan: `knowledge-base/project/plans/2026-11-10-feat-leader-rulings-legal-surface
 - [ ] 3.1 e2e: second mock founder user, `founder.json`, `e2e-auth` env (`LEGAL_ACCEPTANCE_FOUNDER_ID`, `FLAG_APPROVAL_QUEUE: "0"`, `FLAGSMITH_ENVIRONMENT_KEY: ""`) (plan 7.1 to 7.3)
 - [ ] 3.2 e2e spec `nav-states-inbox-legal.e2e.ts` with negative control and two screenshots (plan 7.4)
 - [ ] 3.3 Run the spec locally; commit the screenshots as frame 23 evidence (plan 7.5)
-- [ ] 3.4 Verification before ship: tsc, vitest file list, hard-constraint checks, lints (plan Phase 8)
+- [ ] 3.4 Verification before ship: tsc, vitest file list, hard-constraint checks (plan Phase 8)
+- [ ] 3.4.1 C4 tests and local `c4-model-freshness.test.sh` (plan 1.9)
+- [ ] 3.4.2 `lint-legal-registers.sh`, `lint-questionnaire-identity.sh --all`, `technical-ruling-gate.sh --branch`, markdownlint
 - [ ] 3.5 Phone-width QA (390×844) of the ON block, dialog and callout at review
 - [ ] 3.6 Archive plan and spec in the PR; merge queue after green CI; post-deploy `build_sha` check and read-only Sentry check

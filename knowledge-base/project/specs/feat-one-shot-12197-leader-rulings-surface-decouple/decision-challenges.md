@@ -1,6 +1,6 @@
 # Decision Classes: feat-one-shot-12197-leader-rulings-surface-decouple
 
-All rulings below were produced by a spawned domain agent on 2026-11-10 with "do NOT use AskUserQuestion" (technical-ruling-delegation). Rows R1 to R11 restate the leader rulings the brief handed to this PR (full replies in the session scratchpad: CLO `agent-acc8fe364f9881424-all.txt`, CTO `agent-a7849fc86812ebd4d-all.txt`, CPO `agent-addee478ca4d0bc23-all.txt`, UX lead `agent-ae4659854f6a8978d-all.txt`, COO `agent-ac6326eb7f7bee799-all.txt`). Rows F1 to F3, W1, W2 and L1 were ruled during planning, on gaps the original rulings did not cover. Operator rows are authorizations this PR does NOT take.
+All rulings below were produced by a spawned domain agent on 2026-11-10 with "do NOT use AskUserQuestion" (technical-ruling-delegation). Rows R1 to R11 restate the leader rulings the brief handed to this PR (full replies in the session scratchpad: CLO `agent-acc8fe364f9881424-all.txt`, CTO `agent-a7849fc86812ebd4d-all.txt`, CPO `agent-addee478ca4d0bc23-all.txt`, UX lead `agent-ae4659854f6a8978d-all.txt`, COO `agent-ac6326eb7f7bee799-all.txt`). Rows F1 to F3, W1, W2 and L1 were ruled during planning, on gaps the original rulings did not cover; rows W3, L2, K1 to K3 and PR1 to PR7 were added at plan review (L2's verbatim marker text is in `clo-register-markers.md` in this directory). Operator rows are authorizations this PR does NOT take.
 
 ## Decision Classes
 
