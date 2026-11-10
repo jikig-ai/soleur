@@ -1,11 +1,17 @@
 // Unit tests for seedWorktreeConfig — the host-side HEAL that removes the harmful
 // extensions.worktreeConfig a prior version wrote, so in-sandbox git (reading a masked
 // .git/config.worktree) stops fataling and `git worktree add` runs natively (#4826).
-import { describe, test, expect, afterEach } from "vitest";
+import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
 import { execFileSync } from "child_process";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+// The refusal of a redirecting `.git` is reported (op git-refused), not only logged: observable here.
+const reportSilentFallback = vi.fn();
+vi.mock("../server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/observability")>()),
+  reportSilentFallback: (...args: unknown[]) => reportSilentFallback(...args),
+}));
 import { seedWorktreeConfig } from "../server/worktree-config-seed";
 // #7849: obtain the fixture environment from the shared helper rather than spelling it here. The
 // runtime tripwire stops git being POINTED elsewhere; it does not stop git WALKING UP into an
@@ -34,6 +40,7 @@ function cfg(dir: string, key: string): string | null {
   }
 }
 
+beforeEach(() => reportSilentFallback.mockClear());
 afterEach(() => {
   for (const d of made.splice(0)) {
     try {
@@ -106,5 +113,9 @@ describe("seedWorktreeConfig (heal)", () => {
     // the victim keeps its own (harmful, but its own) values: the write did not land there
     expect(cfg(victim, "extensions.worktreeConfig")).toBe("true");
     expect(cfg(victim, "core.repositoryformatversion")).toBe("1");
+    // and the refusal is reported once, reason only
+    const reports = reportSilentFallback.mock.calls.filter((c) => (c[1] as { op?: string }).op === "git-refused");
+    expect(reports).toHaveLength(1);
+    expect((reports[0][0] as Error).message).toBe("worktree-config-seed refused: git-dir-shape");
   });
 });
