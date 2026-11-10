@@ -74,7 +74,9 @@ const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
 /**
  * The relay hello keys this process loaded. `current` signs and verifies; `acceptAlso` (the accept-only slot
  * PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO, #8211, ADR-323 Decision 9) is VERIFY-ONLY: no code path signs with it. The
- * object is frozen and redacting: `JSON.stringify` and `util.inspect` print a placeholder, never a key byte.
+ * object is frozen and redacting: `JSON.stringify` and `util.inspect` print a placeholder, and both slots are
+ * non-enumerable, so a copy of the set (spread, Object.assign, structuredClone) carries no key. A Buffer read out of
+ * it (`keys.current`) is a raw key: never log it.
  */
 export interface ProxyHelloKeys {
   readonly current: Buffer | null;
@@ -84,10 +86,14 @@ export interface ProxyHelloKeys {
 const KEYS_PLACEHOLDER = "[proxy-hello-keys]";
 
 function redactingKeySet(current: Buffer | null, acceptAlso: Buffer | null): ProxyHelloKeys {
-  const set = { current, acceptAlso };
-  // Non-enumerable, so the set's own keys stay exactly {current, acceptAlso}.
-  Object.defineProperty(set, "toJSON", { value: () => KEYS_PLACEHOLDER });
-  Object.defineProperty(set, inspect.custom, { value: () => KEYS_PLACEHOLDER });
+  // Every property is non-enumerable: `keys.current` reads work, while a spread, Object.assign, Object.entries,
+  // structuredClone or util.inspect({customInspect: false}) copy or print no key.
+  const set = Object.defineProperties({} as ProxyHelloKeys, {
+    current: { value: current },
+    acceptAlso: { value: acceptAlso },
+    toJSON: { value: () => KEYS_PLACEHOLDER },
+    [inspect.custom]: { value: () => KEYS_PLACEHOLDER },
+  });
   return Object.freeze(set);
 }
 

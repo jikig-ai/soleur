@@ -414,13 +414,37 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     expect(SLOT in process.env).toBe(false);
   });
 
-  test("the key set is frozen and redacting: JSON.stringify and util.inspect never carry a key byte", () => {
+  test("the key set is frozen and redacting: JSON.stringify, util.inspect (customInspect on or off), spread, Object.assign, Object.entries and structuredClone never carry a key byte, while property reads still work", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
     vi.stubEnv(SLOT, ALSO_HEX);
     const keys = loadProxyHelloKeys();
     expect(Object.isFrozen(keys)).toBe(true);
-    expect(Object.keys(keys).sort()).toEqual(["acceptAlso", "current"]);
-    const outputs = [JSON.stringify(keys), JSON.stringify({ nested: keys }), inspect(keys), inspect({ nested: keys }, { depth: 5 })];
+    // The two slots are own, non-enumerable properties: reads work, copies carry nothing.
+    expect(Object.keys(keys)).toEqual([]);
+    expect(Object.getOwnPropertyNames(keys).sort()).toEqual(["acceptAlso", "current", "toJSON"]);
+    expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(keys.acceptAlso?.toString("hex")).toBe(ALSO_HEX);
+    const { current, acceptAlso } = keys; // destructuring reads still work
+    expect(current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(acceptAlso?.toString("hex")).toBe(ALSO_HEX);
+    const outputs = [
+      JSON.stringify(keys),
+      JSON.stringify({ nested: keys }),
+      inspect(keys),
+      inspect({ nested: keys }, { depth: 5 }),
+      inspect(keys, { customInspect: false }),
+      inspect({ nested: keys }, { customInspect: false, depth: 5 }),
+      JSON.stringify({ ...keys }),
+      inspect({ ...keys }),
+      JSON.stringify(Object.assign({}, keys)),
+      inspect(Object.assign({}, keys)),
+      JSON.stringify(Object.entries(keys)),
+      inspect(Object.entries(keys)),
+      JSON.stringify(Object.values(keys)),
+      inspect(structuredClone(keys)),
+      JSON.stringify(structuredClone(keys)),
+      `${String(keys)} ${JSON.stringify([keys])}`,
+    ];
     for (const hex of [CURRENT_HEX, ALSO_HEX]) {
       const bytes = Buffer.from(hex, "hex");
       const spaced = hex.match(/../g)!.join(" ");
@@ -432,5 +456,8 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
       }
     }
     expect(JSON.stringify(keys)).toBe('"[proxy-hello-keys]"');
+    expect(JSON.stringify({ ...keys })).toBe("{}");
+    expect(Object.entries(keys)).toEqual([]);
+    expect(Object.keys(structuredClone(keys))).toEqual([]);
   });
 });
