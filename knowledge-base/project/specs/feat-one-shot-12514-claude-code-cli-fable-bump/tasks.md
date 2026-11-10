@@ -27,6 +27,7 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable
 - 2.3 `scheduled-marketplace-drift.yml` `CLI_VERSION: "2.1.321"`.
 - 2.4 pen-cli `overrides` only -> `0.3.321`; regenerate its lock.
 - 2.5 Integrity proof against `npm view` and the recorded values (re-`npm pack`).
+- 2.5a (CTO F16) Both locks: no `@anthropic-ai/claude-(code|agent-sdk)*` package under two paths (`... | awk -F'node_modules/' '{print $NF}' | sort | uniq -d` empty) and none nested (`grep -cE 'node_modules/.+/node_modules/@anthropic-ai/claude-(code|agent-sdk)'` = 0).
 
 ## Phase R - Re-proof on the installed tree, in a throwaway container (read-only tree, tmpfs HOME, no ~/.doppler ~/.ssh ~/.config/gh, no docker socket)
 
@@ -40,6 +41,8 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable
 - 1.7 Write/Edit allow-path smoke through the real SDK.
 - 1.8 Re-measure argv census, helper step strings, bridge anchors, `default_effort` rows.
 - 1.9 Stop condition: any non-pin-shape red blocks; comment on #12514; re-ask the CTO.
+- 1.1r-a (CTO F16) `npm ci` with scripts exits 0; a fresh copy passes `npm ci --omit=dev` as root (runner stage, Dockerfile line 247); exactly one `claude-code-linux-x64/package.json` and one `claude-agent-sdk-linux-x64/package.json` under `node_modules`; `bin/claude.exe` sha256 = `426c3381...`; `node .../claude-code/cli-wrapper.cjs --version` = 2.1.321.
+- 1.9a (CTO F16) `EDUPLICATEPKG` / `EUNREADABLEPKG` in any install blocks like 1.9; never work around with `--ignore-scripts` or `--omit=optional`.
 
 ## Phase 2 (continued) - re-pin, capture, trailer
 
@@ -47,7 +50,9 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable
 - 2.7 Re-capture `infra/sandbox-canary-argv.json` (Doppler `ci` key, never `prd`, no xtrace); `sdkVersion` 0.3.321.
 - 2.12 `bash plugins/soleur/test/c4-count-parity.test.sh`.
 - 2.13 Affected vitest set; `--replay` and docker replay arms against the re-captured fixture; `docker build --target cli-tools` + Bun and alias probe.
+- 2.13a (CTO F16) `docker build --target deps -f apps/web-platform/Dockerfile apps/web-platform` exits 0; in cli-tools: global `bin/claude.exe` sha256 = `426c3381...` and exactly one `claude-code-linux-x64/package.json` under `npm root -g`.
 - 2.14 Pin commit with the `sdk-bump-verified:` trailer (validated / not validated lists); copy it into the PR body.
+- 2.14a (CTO F16) Trailer + PR body row: installer duplicate/unreadable-manifest refusal - single-copy asserted in both locks; `npm ci`, `npm ci --omit=dev`, `npm i -g`, `--target deps` exit 0; `bin/claude.exe` sha256 asserted; full runner-stage build validated only by the release build (4.1).
 
 ## Phase 3 - PR and CI
 

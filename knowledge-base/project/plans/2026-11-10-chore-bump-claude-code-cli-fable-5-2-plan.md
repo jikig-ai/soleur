@@ -333,6 +333,22 @@ evidence in its body, and ends with `Paused: release-age floor clears 2026-11-12
 prompt. This is a scheduled wait, not an operator step (CTO F3). Only the operator can shorten it
 (decision-challenges F3b).
 
+### CTO F16 added checks (2026-11-10, from the Phase 1.1 installer diff)
+
+Phase 1.1 found claude-code 2.1.321's `install.cjs` and `cli-wrapper.cjs` changed beyond the platform-package
+versions: a new `resolvePlatformPackageDir()` that only reads files and refuses (install exit 1) on two installed
+copies of the platform package or an unreadable manifest. Ruled by CTO agent, 2026-11-10 (decision-challenges
+F16): proceed to G1, with these checks. Each is mirrored in `tasks.md` under the same id.
+
+- **2.5a** (static, both locks): no claude-code / agent-sdk package under two paths, none nested.
+- **R-1.1r-a** (container): `npm ci` with scripts exits 0; a fresh copy passes `npm ci --omit=dev` as root; one
+  copy of each linux-x64 platform package; `bin/claude.exe` sha256 `426c3381...`; `cli-wrapper.cjs --version` =
+  2.1.321 (the path `--ignore-scripts` CI trees take).
+- **R-1.9a**: an `EDUPLICATEPKG` / `EUNREADABLEPKG` error blocks like 1.9; never worked around.
+- **2.13a**: `docker build --target deps` exits 0; in cli-tools the global `bin/claude.exe` sha256 and one platform copy.
+- **2.14a**: one trailer and PR-body row for the installer refusal checks; the runner-stage build is validated only
+  by the release build (4.1).
+
 ### Phase 2 — The pin commit (after G1)
 
 - 2.1 `apps/web-platform/package.json`: `@anthropic-ai/claude-agent-sdk` `0.3.321`, `@anthropic-ai/claude-code`
