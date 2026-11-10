@@ -819,6 +819,24 @@ jobs:
           # every member fetch below is anonymous (public repo).
           persist-credentials: false
 
+      # ── member: cve-safe-status (#12348 / ADR-322 — an advisory id paired
+      # with a safe-status claim in knowledge-base/**). FULL SCAN, no args:
+      # the oracle lane skips the `test` sweep on KB-markdown-only PRs, which
+      # are exactly the PRs this lint exists for, so this member is the gate
+      # that always runs. Same checkout rule as credential-path-guard: no
+      # sparse-checkout, no paths filter, never `--paths`/`|| true` (the lint's
+      # file-count floor refuses a narrowed tree scan; it does not apply to
+      # --paths mode, which scans only the paths it is given). It is the FIRST
+      # step after the checkout, so no earlier step can change its PATH, env or
+      # tree; the aggregate reads member outcomes, so step order costs nothing.
+      # `-I` stops python3 reading PYTHON* variables, user site-packages and the
+      # script's own directory. Keep the job free of `container:`/`services:`.
+      # Pinned by plugins/soleur/test/required-checks-canonical-parity.test.sh. ──
+      - id: cve-safe-status
+        if: ${{ !cancelled() }}
+        name: Lint advisory-id safe-status pairings in knowledge-base (full scan)
+        run: python3 -I scripts/lint-cve-safe-status.py
+
       # ── member: adr-ordinals (PR-B #4379 ADR-040 + ADR-041 sentinel) ──
       - id: adr-ordinals
         if: ${{ !cancelled() }}
@@ -906,20 +924,6 @@ jobs:
         if: ${{ !cancelled() }}
         name: Lint resolvable credential-file paths in docs (full scan)
         run: python3 scripts/lint-credential-path-literals.py
-
-      # ── member: cve-safe-status (#12348 / ADR-322 — an advisory id paired
-      # with a safe-status claim in knowledge-base/**). FULL SCAN, no args:
-      # the oracle lane skips the `test` sweep on KB-markdown-only PRs, which
-      # are exactly the PRs this lint exists for, so this member is the gate
-      # that always runs. Same checkout rule as credential-path-guard: no
-      # sparse-checkout, no paths filter, never `--paths`/`|| true` (the lint's
-      # file-count floor refuses a narrowed tree scan; it does not apply to
-      # --paths mode, which scans only the paths it is given).
-      # Pinned by plugins/soleur/test/required-checks-canonical-parity.test.sh. ──
-      - id: cve-safe-status
-        if: ${{ !cancelled() }}
-        name: Lint advisory-id safe-status pairings in knowledge-base (full scan)
-        run: python3 scripts/lint-cve-safe-status.py
 
       # ── member: lockfile-sync — regenerates the five committed lockfiles
       # under the pinned npm major and diffs (#4014/#4331/#4334/#4337 history;

@@ -7195,10 +7195,10 @@ if want_scripts; then
   # #12348: the advisory-id/safe-status pairing lint (ADR-322). The unit suite (in-process matrix, CLI rows
   # against temp repos, mutants graded by their named killer) and the -live scan of every knowledge-base/
   # index entry. The -live row is always-on and the unit row is edge-selected on its read set
-  # (AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS); their shard legs are manifest rows in
-  # scripts/suite-shard-legs.tsv.
+  # (its edge array is in scripts/lib/test-affected-paths.sh); their shard legs are manifest rows
+  # in scripts/suite-shard-legs.tsv. The -live row runs under `python3 -I` like the CI member step.
   run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
-  run_suite "scripts/lint-cve-safe-status-live" python3 scripts/lint-cve-safe-status.py
+  run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   
 fi
 

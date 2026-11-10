@@ -86,7 +86,7 @@ LANE_MEMBERS=(
   "lint-trap-tempfile-ownership|fast|python3 scripts/lint-trap-tempfile-ownership.py --check-highwater"
   "lint-supabase-deprecated-endpoints|fast|bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater"
   "lint-diagnosis-claims|fast|bash scripts/lint-diagnosis-claims.test.sh"
-  "lint-cve-safe-status|fast|bash scripts/lint-cve-safe-status.test.sh"
+  "lint-cve-safe-status-live|fast|python3 -I scripts/lint-cve-safe-status.py"
   "alarm-issue-filing-guard|fast|bash scripts/alarm-issue-filing-guard.test.sh"
   "lint-workflow-step-env-refs|fast|python3 scripts/lint-workflow-step-env-refs.py"
   "plugin-root-anchor-debt|fast|bash scripts/plugin-root-anchor-debt.sh"

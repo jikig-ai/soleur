@@ -36,12 +36,13 @@ queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
 
 ## 2026-11-10 — lint-cve-safe-status earned green (#12348)
 
-The staged-diff lint chain gains a `lint-cve-safe-status.py --paths` run over the staged paths, after `git add` and
-before the push and the check-run POST: an advisory id beside a listed status word (ADR-322), or a file the lint
+The staged-diff lint chain gains a `python3 -I scripts/lint-cve-safe-status.py --paths` run over the staged paths,
+after `git add` and before the push and the check-run POST (`-I` stops python3 reading `PYTHON*` variables, user
+site-packages and the script's own directory): an advisory id beside a listed status word (ADR-322), or a file the lint
 refuses to read, fails the step before the PR is created. The lint scans every tracked `knowledge-base/` file as the
 `guards-ruleset` member `cve-safe-status` and in the `test` sweep, and `weakness-digest.md` sits inside that surface,
 so both synthetic greens are earned rather than argued. `--paths` takes `knowledge-base/` paths only. The run body
-changed, so `WM_COMPOSITE_PIN` in `tests/scripts/test-weakness-miner.sh` moved `5f6a943e…71c1` → `86c9711a…5710`
+changed, so `WM_COMPOSITE_PIN` in `tests/scripts/test-weakness-miner.sh` moved `5f6a943e…71c1` → `8d799113…3758`
 in the same PR (ADR-285). Pinned by `plugins/soleur/test/required-checks-canonical-parity.test.sh` Test 11.
 
 ## 2026-11-08 — retry the pinned gitleaks download (Ref #10479)

@@ -406,7 +406,7 @@ probe verb allowlisted, <15s, literal `expected_output`; no PAT-shaped vars; no
 UI surface; dep-bump so Encryption/Task-Design conditional gates do not fire;
 single unfenced Scope Check with every ask mapped and the two `inferred` items
 justified; Guard Contract added for the drain-table extension). Verify-the-
-negative sweep: the plan's negative claims (`no
+negative sweep: the plan's negative claims, among them (`no
 'use cache'/'use server' directives`, `zero zod <4.6.6 after batch`) were each
 grepped against the tree — all confirmed with citations in Research Insights.
 Key finding already folded in: the zod alerts are NOT stale — two nested

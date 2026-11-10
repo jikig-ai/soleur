@@ -361,7 +361,6 @@ ALWAYS_ON_SUITES=(
   #   plugins/soleur/test/check-deps-adapter-drift.test.sh   -> AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS
   #   plugins/soleur/test/token-drift-workflow-causes.test.sh -> AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS
   #   .claude/hooks/grep-q-pipe-guard.test.sh                -> AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS
-  #   scripts/lint-cve-safe-status (#12348, CTO ruling E5)   -> AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS
   #   scripts/lint-encryption-posture                        -> AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS
   #   plugins/soleur/test/gitleaks-merge-commit.test.sh      -> AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS
   #   scripts/lint-gh-argv-arg-live                          -> AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS
@@ -989,6 +988,25 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.ts"
   "scripts/lib/test-affected-paths.sh"
 )
+# #12348 (CTO rulings E5, V4 and X16): the lint-cve-safe-status UNIT suite left ALWAYS_ON_SUITES on
+# a read-set argument, not on a weight or an inotify recording, so it sits outside both the
+# #9763 >10s block and the #9307 audit block below. It runs on synthesized fixtures in temp repos
+# plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's phrase anchors
+# in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict changes only when
+# one of those files changes. This array is a superset of that read set (it also lists the
+# suite's own files and this library), so edge selection runs it whenever its result could
+# change and loses no coverage; it stays edge-selected whatever its CI median (V4). The always-on
+# corpus property is carried by the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member
+# `cve-safe-status`.
+AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
+  "scripts/test-all.sh"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
 # under idmap=root; they stand as a deliberate exception until the next edit to the suite's edge array, see ADR-242 decision 19. A skipped arm prints SKIP and
 # rates its row unreliable; a silent skip is the residual risk.) Each suite below left ALWAYS_ON_SUITES because its
@@ -1001,23 +1019,6 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
 # full source-closure derive in the pre-pass -- price it before adding one.
-# #12348 (CTO ruling E5): the lint-cve-safe-status UNIT suite runs on synthesized fixtures in
-# temp repos plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's
-# phrase anchors in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict
-# changes only when one of these files changes: this array is exactly its read set, so edge
-# selection runs it whenever its result could change and loses no coverage (CTO ruling V4,
-# amending E5: it stays edge-selected whatever its CI median). The local timings taken so far
-# were not taken under E5's load rule and are not cited. The always-on corpus property is
-# carried by the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member `cve-safe-status`.
-AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
-  "scripts/lint-cve-safe-status.py"
-  "scripts/lint-cve-safe-status.test.sh"
-  "scripts/test-all.sh"
-  "plugins/soleur/skills/cve-exposure/SKILL.md"
-  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
-  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.sh"
   "scripts/lint-agents-compound-sync.test.sh"

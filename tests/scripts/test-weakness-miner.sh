@@ -1172,7 +1172,7 @@ PYMUTATE
 # defaults, and of the weakness-miner.yml::open-pr job. The regex rules in the guard are diagnostics;
 # these two pins are what makes a differently-spelled bypass red. A deliberate edit to either file
 # re-pins here in the same PR (the C21 / C22 message prints the new digest).
-WM_COMPOSITE_PIN="86c9711a864023e8351606b15a635bdb8f92c850252010bf523e315812a65710"
+WM_COMPOSITE_PIN="8d799113966dc7fa9fca4c74fe0ce1cdecad6cbe32ee8ff9fbb66bfc84fb3758"
 WM_OPENPR_JOB_PIN="2fc9dc34346729c028a71527a8035b7f55a03bdb864901fa0d02a853ad5f19c7"
 _wm_guard() { # $1 = workflows dir, $2 = composite path; prints the guard's lines
   WM_GUARD_WORKFLOWS="$1" WM_GUARD_COMPOSITE="$2" \
