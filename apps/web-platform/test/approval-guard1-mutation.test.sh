@@ -973,7 +973,7 @@ check "harness row (a-anchor): a mutant whose anchor is missing fails the apply 
 # --- Control: the unedited copy, on every distinct test file, must be GREEN with a literal floor of tests, and every test
 # name a row relies on must be among the PASSED tests (so a typo or a renamed test is a harness failure, not a silent no-op).
 declare -A FLOOR=(
-  ["test/approval/gate-flow.test.ts"]=130
+  ["test/approval/gate-flow.test.ts"]=129  # was 130; #12197 D1 drops the push case of "absent, disabled and a throwing flag read behave identically" (pinned in legacy-push-owner-fallback.test.ts)
   ["test/approval/gate-flow-resolver-snapshot.test.ts"]=3
   ["test/approval/canonical.test.ts"]=81
   ["test/approval/waiters.test.ts"]=19

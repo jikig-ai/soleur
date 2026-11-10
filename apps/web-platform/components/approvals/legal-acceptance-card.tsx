@@ -49,13 +49,13 @@ export interface LegalAcceptanceCardProps {
   state: LegalCardStateWire;
   /** The stored row for this card when there is one. */
   row: LegalRowFacts | null;
-  /** The `approval-queue` flag. Off: the card is read-only and says answering is not available yet. */
-  flagEnabled: boolean;
+  /** The surface is open (`isLegalSurfaceEnabled`: the configured founder id; not the `approval-queue` flag). Off: the card is read-only and says answering is not available yet. */
+  surfaceEnabled: boolean;
   /** The signed-in account's email, for the start step of the check. */
   email: string | null;
   /** The registry's current version, for the replaced card. */
   currentVersion: string;
-  /** False when the page does not render the current version's card (flag off, no answer yet): a replaced card then links nowhere. Default true. */
+  /** False when the page does not render the current version's card (surface off, no answer yet): a replaced card then links nowhere. Default true. */
   currentVisible?: boolean;
 }
 
@@ -73,7 +73,7 @@ const STATE_STYLE: Record<LegalCardStateWire, { box: string; badge: string }> = 
 };
 
 export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
-  const { keyName, label, version, body, textHash, validUntil, flagEnabled, email, currentVersion, currentVisible = true } = props;
+  const { keyName, label, version, body, textHash, validUntil, surfaceEnabled, email, currentVersion, currentVisible = true } = props;
 
   // The server's last word about this card. After a recorded answer the same pure derivation gives the new state.
   const [local, setLocal] = useState<{ row: LegalRowFacts; already: boolean } | null>(null);
@@ -121,7 +121,7 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
           textHash={textHash}
           label={label}
           kc={kc}
-          flagEnabled={flagEnabled}
+          surfaceEnabled={surfaceEnabled}
           email={email}
           onRecorded={onRecorded}
         />
@@ -282,7 +282,7 @@ function PendingBody({
   textHash,
   label,
   kc,
-  flagEnabled,
+  surfaceEnabled,
   email,
   onRecorded,
 }: {
@@ -292,7 +292,7 @@ function PendingBody({
   textHash: string;
   label: string;
   kc: LegalKindCopy;
-  flagEnabled: boolean;
+  surfaceEnabled: boolean;
   email: string | null;
   onRecorded: (row: LegalRowFacts, already: boolean) => void;
 }) {
@@ -345,10 +345,10 @@ function PendingBody({
   }, [measure]);
 
   useLayoutEffect(() => {
-    if (flagEnabled) measure();
-  }, [measure, body, flagEnabled]);
+    if (surfaceEnabled) measure();
+  }, [measure, body, surfaceEnabled]);
   useEffect(() => {
-    if (!flagEnabled) return;
+    if (!surfaceEnabled) return;
     const el = regionRef.current;
     window.addEventListener("resize", measure);
     const ro = typeof ResizeObserver === "function" && el ? new ResizeObserver(measure) : null;
@@ -357,7 +357,7 @@ function PendingBody({
       window.removeEventListener("resize", measure);
       ro?.disconnect();
     };
-  }, [measure, flagEnabled]);
+  }, [measure, surfaceEnabled]);
 
   const confirmed = fits || (atEnd && ticked);
   const lockText = confirmed ? LEGAL_COPY.lock.open : atEnd ? LEGAL_COPY.lock.needsTick : LEGAL_COPY.lock.atEnd;
@@ -371,7 +371,7 @@ function PendingBody({
         <p className="mt-1 text-sm text-soleur-text-secondary">{LEGAL_COPY.versionMeta(version)}</p>
       </div>
 
-      {flagEnabled ? (
+      {surfaceEnabled ? (
         <>
           <div>
             <h3 className={KICKER}>{LEGAL_COPY.whatYourAnswerDoes}</h3>
@@ -406,12 +406,12 @@ function PendingBody({
           role="region"
           aria-labelledby={`${uid}-text`}
           tabIndex={0}
-          onScroll={flagEnabled ? onScroll : undefined}
+          onScroll={surfaceEnabled ? onScroll : undefined}
           className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-soleur-border-default bg-soleur-bg-base p-4 text-sm text-soleur-text-primary"
         >
           {body}
         </div>
-        {flagEnabled && (
+        {surfaceEnabled && (
           <div className="mt-2 space-y-2">
             <p className="text-xs text-soleur-text-secondary">{fits ? LEGAL_COPY.scroll.fits : atEnd ? LEGAL_COPY.scroll.reached : LEGAL_COPY.scroll.keep}</p>
             {!fits && (
@@ -435,7 +435,7 @@ function PendingBody({
         )}
       </div>
 
-      {flagEnabled && (
+      {surfaceEnabled && (
         <div className="space-y-3">
           <p className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-3 text-xs text-soleur-text-secondary">{LEGAL_COPY.cardNotice}</p>
 
@@ -544,7 +544,7 @@ function PendingBody({
         </div>
       )}
 
-      {flagEnabled && <p className="text-sm text-soleur-text-secondary">{kc.pendingNothing}</p>}
+      {surfaceEnabled && <p className="text-sm text-soleur-text-secondary">{kc.pendingNothing}</p>}
 
       {dialogOpen && (
         <LegalReauthDialog

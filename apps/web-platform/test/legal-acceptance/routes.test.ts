@@ -1,6 +1,7 @@
 /**
  * #12011 PR-C workstream A: POST /api/legal-acceptance/[key]/{reauth,decide}.
- * Cookie-session routes: CSRF fails closed on an absent Origin, JSON required, flag-gated, unknown key 404, identity from
+ * Cookie-session routes: CSRF fails closed on an absent Origin, JSON required, founder-gated (LEGAL_ACCEPTANCE_FOUNDER_ID only; the
+ * approval-queue flag is not read, CTO ruling 2026-11-10), unknown key 404, identity from
  * getUser() only, a runtime-audience token never opens an intent, the decision is recorded on the USER client only, and
  * the unknown-address 422 looks exactly like a send.
  */
@@ -119,6 +120,7 @@ import { POST as reauth } from "@/app/api/legal-acceptance/[key]/reauth/route";
 import { POST as decide } from "@/app/api/legal-acceptance/[key]/decide/route";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
 import { AttemptCeiling, SendFailureMemory } from "@/server/legal-acceptance/reauth";
+import { resetSurfaceConfigReport } from "@/server/legal-acceptance/surface";
 
 const jwt = (payload: Record<string, unknown>) =>
   `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
@@ -153,6 +155,7 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key-fixture");
   h.verified.value = USER;
   h.flag.value = true;
+  resetSurfaceConfigReport(); // the once-per-process config report must not leak between tests
   h.token.value = webToken();
   h.getUserUser.value = { id: USER, email: EMAIL };
   for (const f of [h.userRpc, h.serviceRpc, h.throwaway.send, h.throwaway.verify, h.throwaway.signOut, h.report]) f.mockReset();
@@ -183,21 +186,21 @@ describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
     expect((await json(await post(req(action, { ...ok, userId: "attacker", email: "x@y.z" })))).status).toBe(401);
   });
 
-  it("flag off and unknown or malformed key are 404 with an error body; nothing is called", async () => {
+  it("founder id unset and unknown or malformed key are 404 with an error body; nothing is called", async () => {
     const post = action === "reauth" ? reauth : decide;
-    h.flag.value = false;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     expect(await json(await post(req(action, ok)))).toEqual({ status: 404, body: { error: "Not found" } });
-    h.flag.value = true;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
     expect((await json(await post(req(action, ok, { key: "no-such-key" })))).status).toBe(404);
     expect((await json(await post(req(action, ok, { key: "Bad_Key" })))).status).toBe(404);
     expect(h.serviceRpc).not.toHaveBeenCalled();
   });
 
-  it("founder gate: with the flag ON only the configured founder gets through; another user, an unset variable and a malformed variable are the same 404 and nothing is called (AC13)", async () => {
+  it("founder gate: only the configured founder gets through; another user, an unset variable and a malformed variable are the same 404 and nothing is called (AC13)", async () => {
     const post = action === "reauth" ? reauth : decide;
     const notFound = { status: 404, body: { error: "Not found" } };
     const OTHER = "00000000-0000-4000-8000-0000000000bb";
-    h.flag.value = true;
+    // control: a non-founder is refused with the flag on and the founder configured
     h.verified.value = OTHER;
     h.getUserUser.value = { id: OTHER, email: EMAIL };
     expect(await json(await post(req(action, ok)))).toEqual(notFound);
@@ -209,11 +212,15 @@ describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
     expect(await json(await post(req(action, ok)))).toEqual(notFound);
     expect(h.serviceRpc).not.toHaveBeenCalled();
     expect(h.userRpc).not.toHaveBeenCalled();
-    // the founder, flag on, variable equal: enabled (the request proceeds past the guard)
+    // the founder, variable equal: enabled (the request proceeds past the guard)
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
     expect((await json(await post(req(action, ok)))).status).not.toBe(404);
-    // flag off with the variable equal: disabled
+    // flag off with the variable equal: STILL enabled (the surface does not read the flag, CTO ruling 2026-11-10)
     h.flag.value = false;
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
+    // and a non-founder is still refused with the flag off
+    h.verified.value = OTHER;
+    h.getUserUser.value = { id: OTHER, email: EMAIL };
     expect(await json(await post(req(action, ok)))).toEqual(notFound);
   });
 
@@ -371,20 +378,27 @@ describe("decide", () => {
     error: null,
   });
 
-  it("a founder who already holds a live intent cannot record once the gate is off: 404, and neither client is called (CTO ruling T4)", async () => {
+  it("a founder who already holds a live intent cannot record once the founder id is unset: 404, and neither client is called (CTO ruling T4)", async () => {
     h.userRpc.mockResolvedValue(recorded("accept"));
     h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
     const notFound = { status: 404, body: { error: "Not found" } };
-    h.flag.value = false; // the operator turned the flag off after the intent was issued
-    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
-    h.flag.value = true;
-    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", ""); // or the founder variable went away
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", ""); // the founder variable went away after the intent was issued
     expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
     expect(h.userRpc).not.toHaveBeenCalled();
     expect(h.serviceRpc).not.toHaveBeenCalled();
-    // control: with the gate open the same request does record (so the 404s above were the gate, not a broken fixture)
+    // control: with the gate open the same request does record (so the 404 above was the gate, not a broken fixture)
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
     expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.userRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("a founder who holds a live intent STILL records after the flag is turned off (CTO ruling 2026-11-10: the flag is not read)", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    h.flag.value = false; // the operator turned the flag off after the intent was issued
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200);
+    expect(out.body.outcome).toBe("recorded");
     expect(h.userRpc).toHaveBeenCalledTimes(1);
   });
 

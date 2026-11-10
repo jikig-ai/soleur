@@ -1,16 +1,14 @@
 /**
- * #12197 (CTO ruling B, 2026-11-07): the founder surface gate. The `approval-queue` flag is global (identifier `role:prd`), so
- * the card is offered only to the configured founder. Fails closed: an unset or malformed `LEGAL_ACCEPTANCE_FOUNDER_ID`
- * disables the surface for everyone.
+ * #12197: the founder surface gate. The card is offered only to the configured founder, and the `approval-queue` flag is not
+ * read (CTO ruling, 2026-11-10, superseding ruling B's flag AND founder). Fails closed: an unset or malformed
+ * `LEGAL_ACCEPTANCE_FOUNDER_ID` disables the surface for everyone. Unset is silent (the kill switch); malformed reports once.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ flag: { value: true }, calls: [] as unknown[], reports: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ reports: [] as unknown[][], flag: vi.fn(async () => false) }));
+// The flag is mocked OFF on purpose: the surface must not depend on it (P1). The old flag AND founder would close every case here.
 vi.mock("@/server/approval/flag", () => ({
-  isApprovalQueueEnabled: async (id: unknown) => {
-    h.calls.push(id);
-    return h.flag.value;
-  },
+  isApprovalQueueEnabled: h.flag,
 }));
 vi.mock("@/server/approval/ops", () => ({
   reportLegalOp: (...args: unknown[]) => {
@@ -24,8 +22,6 @@ const FOUNDER = "00000000-0000-4000-8000-0000000000aa";
 const OTHER = "00000000-0000-4000-8000-0000000000bb";
 
 beforeEach(() => {
-  h.flag.value = true;
-  h.calls.length = 0;
   h.reports.length = 0;
   resetSurfaceConfigReport();
   vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", FOUNDER);
@@ -46,85 +42,70 @@ describe("legalFounderId", () => {
   });
 });
 
-describe("isLegalSurfaceEnabled", () => {
-  it("flag on and the user is the founder: enabled; the flag is read with no workspace", async () => {
+describe("isLegalSurfaceEnabled (founder id only)", () => {
+  it("flag off and the user is the founder: STILL enabled (the case the old flag AND founder would break)", async () => {
     expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(true);
-    expect(h.calls).toEqual([{ userId: FOUNDER, workspaceId: null }]);
-  });
-
-  it("flag on and another user: disabled (the case an OR instead of an AND would break)", async () => {
     expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
+    expect(h.reports).toEqual([]);
+    expect(h.flag).not.toHaveBeenCalled();
   });
 
-  it("flag on, the variable unset or not a UUID: disabled for everyone, including the founder", async () => {
-    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+  it("the module source imports nothing from the approval flag (a flag read cannot come back through an import)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../../server/legal-acceptance/surface.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // every module specifier, single- or multi-line, static or dynamic
+    const specifiers = [...src.matchAll(/\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g)].map(
+      (m) => m[1] ?? m[2] ?? m[3],
+    );
+    expect(specifiers.sort()).toEqual(["@/lib/is-uuid", "@/server/approval/ops"]);
+    expect(src).not.toMatch(/isApprovalQueueEnabled|approval\/flag|getFlag|getRuntimeFlag|feature-flags|flagsmith/i);
   });
 
-  it("flag off and the variable equal: disabled", async () => {
-    h.flag.value = false;
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-  });
-
-  it("flag off and another user: disabled", async () => {
-    h.flag.value = false;
+  it("another user: disabled, and no report", async () => {
     expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
+    expect(h.reports).toEqual([]);
   });
 
-  it("the comparison ignores the case of the user id, and the flag is read with the CALLER's own spelling of it", async () => {
+  it("the comparison ignores the case of the user id", async () => {
     expect(await isLegalSurfaceEnabled(FOUNDER.toUpperCase())).toBe(true);
-    expect(h.calls).toEqual([{ userId: FOUNDER.toUpperCase(), workspaceId: null }]);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", FOUNDER.toUpperCase());
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(true);
   });
 });
 
-describe("the surface order and its one report (CTO ruling T4, review round 1)", () => {
+describe("the config report (CTO ruling F1, 2026-11-10: unset silent, malformed once)", () => {
   const CONFIG_REPORT = [
     "storeFailed",
     null,
     { tags: { stage: "config" }, extra: { step: "config", variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] } },
   ];
 
-  it("a non-founder with the founder id set returns false WITHOUT reading the flag", async () => {
-    expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
-    expect(h.calls).toEqual([]);
-    expect(h.reports).toEqual([]);
-  });
-
-  it("the founder with the flag on is enabled; with the flag off is disabled, and neither reports", async () => {
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(true);
-    h.flag.value = false;
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    expect(h.reports).toEqual([]);
-  });
-
-  it("flag ON and the id UNSET: closed for everyone, and ONE config report across three calls", async () => {
+  it("the id unset (empty): closed for everyone, and NO report (the kill switch is the dark state)", async () => {
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    for (const u of [FOUNDER, OTHER, FOUNDER]) expect(await isLegalSurfaceEnabled(u)).toBe(false);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("the id unset (undefined): closed for everyone, and NO report", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", undefined as unknown as string);
+    for (const u of [FOUNDER, OTHER, FOUNDER]) expect(await isLegalSurfaceEnabled(u)).toBe(false);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("the id MALFORMED: closed for everyone, and exactly ONE config report across repeated calls", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
     for (const u of [FOUNDER, OTHER, FOUNDER]) expect(await isLegalSurfaceEnabled(u)).toBe(false);
     expect(h.reports).toEqual([CONFIG_REPORT]);
   });
 
-  it("flag ON and the id MALFORMED: the same single report", async () => {
+  it("an unset call first does not use up the one report a later malformed value raises", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([]);
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    expect(h.reports).toEqual([CONFIG_REPORT]);
-  });
-
-  it("flag OFF and the id unset: closed and silent (a dormant feature is not a fault)", async () => {
-    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
-    h.flag.value = false;
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    expect(h.reports).toEqual([]);
-  });
-
-  it("flag OFF first and then ON, with the id unset: the dormant first call does not use up the one report", async () => {
-    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
-    h.flag.value = false;
-    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
-    expect(h.reports).toEqual([]);
-    h.flag.value = true;
     expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
     expect(h.reports).toEqual([CONFIG_REPORT]);
   });

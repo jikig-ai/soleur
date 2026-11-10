@@ -24,7 +24,7 @@ import { loadLegalInboxRows } from "@/server/legal-acceptance/inbox-rows";
  * app/api/inbox/**.
  *
  * Founder legal texts (Ref #12197): for the ACTIVE view only (read concurrently with the other sources), `loadLegalInboxRows` adds one derived row per declared legal text
- * behind `isLegalSurfaceEnabled` (flag AND founder). It reads through THIS request's user-context client (RLS) and never
+ * behind `isLegalSurfaceEnabled` (the configured founder id only; the approval-queue flag is not read). It reads through THIS request's user-context client (RLS) and never
  * throws: a failure omits the legal rows, reports pageReadFailed, and the other items still return 200.
  *
  * Ordering (mergeAndRank, load-bearing): non-archived statutory pinned first
