@@ -9,10 +9,8 @@ import { reportLegalOp } from "@/server/approval/ops";
  * Fails closed: an unset or malformed variable disables the surface for everyone, including the founder. The kill switch is
  * unsetting the variable.
  *
- * The `approval-queue` flag is not read. It is read elsewhere with `workspaceId: null` (identifier `role:prd`), so no per-workspace
- * segment can match it, and narrowing or turning off the approval queue would otherwise hide the founder's own screen. CTO ruling
- * 2026-11-10 supersedes ruling B's (2026-11-07) gate on both the flag and the founder, and T4's "flag ON" condition. This module
- * never reads, creates or flips the flag.
+ * This module never reads, creates or flips the `approval-queue` flag. Why the gate no longer reads it, and which rulings this
+ * supersedes: ADR-319 "Amendment 2026-11-10 (#12197)".
  */
 
 /** The configured founder id, lower-cased, or null when the variable is unset or not a UUID. */
@@ -32,8 +30,8 @@ export function resetSurfaceConfigReport(): void {
  *
  * An unset id is the dark state (the kill switch, or a value removed by accident): it is silent here and in the check endpoint, it
  * can take effect only at a process start, and it is found by the unauthenticated probe of the check endpoint answering 503
- * instead of 401. A set-but-malformed id is reported once per process as `store_failed` / stage `config`. CTO ruling 2026-11-10
- * supersedes T4's flag-ON condition.
+ * instead of 401. A set-but-malformed id is reported once per process as `store_failed` / stage `config` (this module's report; the
+ * check endpoint reports its own, so up to two per process).
  *
  * The report never carries the user id or the variable's value. Kept `async` so no caller changes.
  */

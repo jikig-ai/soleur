@@ -41,16 +41,23 @@ covers the esbuild bundle layout; the Next-compiled routes and pages rely on the
 
 The card pages, the Inbox row and the decide and reauth routes require only that the signed-in user id equals
 `LEGAL_ACCEPTANCE_FOUNDER_ID` (`isLegalSurfaceEnabled` in `surface.ts`; an unset or malformed variable disables the surface for
-everyone). Anyone else gets the same 404 as an unknown key. The `approval-queue` flag is not read (it is read with `workspaceId: null`,
-identity `role:prd`, so no per-workspace segment can match it), so narrowing or turning off the approval queue does not hide the
-founder's screen. Turning the flag on or off is the operator's act, and an agent session does not do it.
+everyone). Anyone else gets the same 404 as an unknown key. The `approval-queue` flag is not read, so narrowing or turning off the
+approval queue does not hide the founder's screen (why: ADR-319 "Amendment 2026-11-10 (#12197)"). Turning the flag on or off is the
+operator's act, and an agent session does not do it.
 
-The kill switch is unsetting the variable. It takes effect only after a Doppler edit plus a redeploy: the container's env file is frozen
-at creation, so a restart is not enough (`hr-prod-host-config-change-immutable-redeploy`). It closes the surface for everyone; the
-founder's already-recorded rows still render read-only on the card page and the index. Unsetting it also closes the check endpoint for the same founder (it answers 503), so ship's `web-acceptance` holds stay unevaluated and standing until the value is restored and the app redeployed; the counts route reads no founder id and keeps answering.
-An unset variable is silent; a set-but-malformed one reports one `store_failed` / stage `config` per process. To tell an accidental removal from a working setup, request the check endpoint without a token: 401 means the token and founder id are set and valid, 503 `{"error":"Not available"}` means one of them is unset.
-A founder mid-flow (code sent, not yet decided) gets a 404 on decide after the redeploy, and the intent expires unused. Ruled by CTO
-agent, 2026-11-10.
+Kill switch, operationally:
+- Unset the variable in Doppler, then redeploy; a restart is not enough, because the container's env file is frozen at creation
+  (`hr-prod-host-config-change-immutable-redeploy`).
+- It closes the surface for everyone. Already-recorded rows still render read-only on the card page and the index.
+- It also closes the check endpoint (503), so ship's `web-acceptance` holds stay standing until the value is restored and the app
+  redeployed. The counts route reads no founder id and keeps answering.
+- An unset variable is silent. A set-but-malformed one reports `store_failed` / stage `config` once per reading module per process
+  (the surface and the check endpoint each report, so up to two).
+- To tell an accidental removal from a working setup, request the check endpoint without a token: 401 means the token and founder id
+  are set and valid; 503 `{"error":"Not available"}` means one of them is unset or malformed (malformed also raises the `config` report).
+- A founder mid-flow (code sent, not yet decided) gets a 404 on decide after the redeploy, and the intent expires unused.
+
+Ruled by CTO agent, 2026-11-10.
 
 The card's wording depends on the kind declared for the text key in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`): `terms` or
 `acknowledgement`. There is no default. A registered text with no declared kind renders no card, is a 404 on the card page, the decide route
@@ -64,7 +71,7 @@ Registered in `server/approval/ops.ts` with `feature: "legal-acceptance"`: `acce
 could not read its rows; not paged), `kind_undeclared` (a registered text has no declared card kind, so the page 404s and the index leaves it out; warn; tag `key`; reported only after the founder surface gate; not paged) and `row_without_event` (reconciliation, reported by the check endpoint, see Ack and
 reconciliation). PR-D adds `record_invalid` (a row failed its checksum; error) and `store_failed` (a verify, ack-state or ack
 call failed; error; tag `stage` is `verify`, `ack_state`, `ack`, `registry` (the legal text could not be read, or the committed text is malformed; the on-call reads `extra.code`) or `config` (a token or
-founder id that is set but malformed; once per process, names only the variable)). `record_invalid` and `store_failed` have no paging rule yet
+founder id that is set but malformed; once per reading module per process, names only the variable)). `record_invalid` and `store_failed` have no paging rule yet
 (#12195). Nothing logs the note, the code, the address or the text.
 
 ## Check endpoint (PR-D)
