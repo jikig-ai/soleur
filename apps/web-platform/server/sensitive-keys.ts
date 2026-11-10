@@ -77,7 +77,7 @@ export const SENSITIVE_KEY_NAMES = [
   // PROXY_TLS_CERT is the public certificate and is deliberately NOT listed.
   "PROXY_TLS_KEY",
   // Session-relay hello-signing key (64 lowercase hex, 32 CSPRNG bytes, #12289), minted into Doppler prd by
-  // infra/proxy-hello-hmac.tf and read ONLY by server/proxy-tls.ts (loadProxyHelloKey). It must never reach a
+  // infra/proxy-hello-hmac.tf and read ONLY by server/proxy-tls.ts (loadProxyHelloKeys). It must never reach a
   // log line, a Sentry event, an agent subprocess env or a service-token name (test/proxy-hello-key-isolation).
   "PROXY_HELLO_HMAC_KEY",
   // Inbound email triage (feat-operator-inbox-delegation #5103). The

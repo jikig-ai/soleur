@@ -33,7 +33,7 @@ import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
-import { loadProxyHelloKey, loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
+import { loadProxyHelloKeys, loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
 import { createReplayCache, isCanonicalUuid, signProxyHello, verifyProxyHello } from "./proxy-hello";
 import { verifyProxiedSessionMembership } from "./session-router";
 import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
@@ -125,7 +125,7 @@ export async function proxyClientToOwner(params: {
   // case). 4014 is a TRANSIENT code to the client (lib/ws-client.ts retries with capped backoff and no
   // limit, no terminal state), so each refused session loops until the cause is fixed. Reported through
   // the bounded reporter, no key detail in the event.
-  const helloKey = loadProxyHelloKey();
+  const helloKey = loadProxyHelloKeys().current;
   if (!helloKey) {
     denyReporter.record("no_key");
     safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
@@ -348,7 +348,7 @@ export function createProxyServer(params: {
   // canary does NOT catch this (it runs with an empty SOLEUR_PROXY_BIND, so it stops at `no_bind` first,
   // and ci-deploy.sh never gates on proxy_state): the signals are this event and the `relay_listener_down`
   // alert about 5 minutes later. The event text is a constant: no value, length or state.
-  const helloKey = loadProxyHelloKey();
+  const helloKey = loadProxyHelloKeys().current;
   if (!helloKey) {
     recordProxyNotStarted("error");
     reportSilentFallback(null, {

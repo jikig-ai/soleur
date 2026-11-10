@@ -61,9 +61,9 @@ vi.mock("../server/session-proxy", () => ({
 // #12289 — the hello key is read (and deleted from process.env) at boot, before anything can spawn.
 vi.mock("../server/proxy-tls", () => ({
   logProxyCertExpiryAtStartup: vi.fn(),
-  loadProxyHelloKey: vi.fn(() => {
-    h.order.push("loadProxyHelloKey");
-    return null;
+  loadProxyHelloKeys: vi.fn(() => {
+    h.order.push("loadProxyHelloKeys");
+    return { current: null, acceptAlso: null };
   }),
 }));
 // #12288 — SIGTERM flushes the open deny window before the process goes away.
@@ -163,12 +163,12 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     expect(reporterDeps.readCounts()).toEqual({ ccQueries: 0, legacySessions: expect.any(Number) });
 
     // #12289 — the hello key is loaded exactly once, before the relay listener is created.
-    expect(h.order.filter((x) => x === "loadProxyHelloKey")).toHaveLength(1);
-    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("createProxyServer"));
+    expect(h.order.filter((x) => x === "loadProxyHelloKeys")).toHaveLength(1);
+    expect(h.order.indexOf("loadProxyHelloKeys")).toBeLessThan(h.order.indexOf("createProxyServer"));
     // ...and before next() is even constructed, so no child the framework spawns can inherit the key.
     expect(h.order.indexOf("next")).toBeGreaterThan(-1);
-    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("next"));
-    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("prepare"));
+    expect(h.order.indexOf("loadProxyHelloKeys")).toBeLessThan(h.order.indexOf("next"));
+    expect(h.order.indexOf("loadProxyHelloKeys")).toBeLessThan(h.order.indexOf("prepare"));
 
     // #8495 — the watchdog dispatch clock is armed exactly once, with defaults.
     expect(h.startClock).toHaveBeenCalledTimes(1);
