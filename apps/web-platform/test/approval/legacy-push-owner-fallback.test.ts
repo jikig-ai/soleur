@@ -37,20 +37,20 @@ beforeEach(() => {
   process.env.SENTRY_USERID_PEPPER = "legacy-push-owner-fallback-test-pepper";
 });
 
-type Role = "owner" | "member" | "throws" | "no-approval" | "member-flag-throws";
+type Role = "owner" | "member" | "throws" | "no-approval" | "member-flag-throws" | "owner-flag-throws";
 
 function setup(role: Role, opts: { viewerRole?: () => Promise<"owner" | "member">; callSignal?: AbortSignal } = {}) {
   const viewerRole = vi.fn(
     opts.viewerRole ??
       (async () => {
         if (role === "throws") throw new Error("viewer role read failed");
-        return role === "owner" ? ("owner" as const) : ("member" as const);
+        return role === "owner" || role === "owner-flag-throws" ? ("owner" as const) : ("member" as const);
       }),
   );
   // The flag is off, so the approval flow answers null (no verdict) and the call reaches the in-memory fallback.
   const approval = {
     isEnabled: vi.fn(async () => {
-      if (role === "member-flag-throws") throw new Error("flagsmith down");
+      if (role === "member-flag-throws" || role === "owner-flag-throws") throw new Error("flagsmith down");
       return false;
     }),
     workspaceId: WORKSPACE_ID,
@@ -131,6 +131,13 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     expect(h.viewerRole).toHaveBeenCalledTimes(1);
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
+  });
+
+  test("Owner, and the flag read throws: the card is still emitted (an error is OFF, not a deny for Owners)", async () => {
+    const h = setup("owner-flag-throws");
+    const res = await h.call(TOOLS.pushBranch, push());
+    expect(h.cards()).toHaveLength(1);
+    expect(res.behavior).toBe("allow");
   });
 
   test("the role read throws: static deny, no card, and viewerRoleFailed is reported with its stage", async () => {

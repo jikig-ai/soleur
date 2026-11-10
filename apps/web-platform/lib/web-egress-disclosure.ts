@@ -9,7 +9,8 @@
  * #12197 (CTO ruling F3, CPO W1, CLO W2, 2026-11-10): ADR-309 items 8(a) and 12 bind this copy to be accurate in BOTH forwarder
  * states. A toggle-on session whose web access fails to start runs as if the toggle were off (it keeps its repository credentials
  * and can push), so neither sentence makes an absolute "while this is on" claim; each is scoped to a session whose web access is
- * running. PUSH_DISCLOSURE claims owner approval only for pushes made through Soleur, never for every push. Render each constant
+ * running. PUSH_DISCLOSURE claims owner approval only for a push an agent asks for (`github_push_branch`), never for every push: the
+ * post-session sync push (`syncPush`) is a separate path (#12600). Render each constant
  * in its own paragraph and never split one.
  */
 export const PUSH_DISCLOSURE =

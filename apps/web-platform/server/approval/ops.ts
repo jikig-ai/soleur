@@ -131,7 +131,11 @@ export const APPROVAL_OPS = {
     message: "Approval gate: status reads failed while waiting for the Owner",
     level: "warn",
   },
-  /** The requester's role could not be read; the card falls back to the read-only member view. */
+  /**
+   * The requester's role could not be read; the card falls back to the read-only member view. Also reported, with tag
+   * `stage = legacy-push-owner-check` and `extra.outcome = denied-no-card`, when the legacy push card's Owner check fails: there
+   * the push is refused and no card is shown (#12197 D1).
+   */
   viewerRoleFailed: {
     op: "approval-viewer-role-failed",
     message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
