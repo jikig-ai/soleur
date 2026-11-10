@@ -18,7 +18,7 @@
 //
 // Nothing here logs a body, a header value or a token. Markers carry ids, classes and a 12-hex hash prefix only.
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, readFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -283,14 +283,24 @@ export function supabaseRpc({ url, key, fetchImpl = fetch }) {
 // gRPC server (only when run as a program)
 // ---------------------------------------------------------------------------------------------------------------
 
-/** iron-proxy's HttpRequest -> the decider's request struct. */
+/**
+ * iron-proxy's HttpRequest -> the decider's request struct. iron-proxy v0.56.0 sends `url` in origin form
+ * (`/path?query`, measured 2026-11-10) with the authority in `host`; an absolute `url` is accepted only when its
+ * authority names the same host, otherwise the path is left empty so normalization refuses it (Guard 2 row 14).
+ */
 export function fromTransformRequest(httpReq) {
-  let path = "/";
+  let path = "";
   let query = "";
+  const host = String(httpReq.host ?? "");
   try {
-    const u = new URL(httpReq.url);
-    path = u.pathname;
-    query = u.search.replace(/^\?/, "");
+    const raw = String(httpReq.url ?? "");
+    const absolute = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw);
+    const u = new URL(raw, `https://${host || "invalid.invalid"}`);
+    const sameHost = !absolute || u.host.toLowerCase().replace(/\.$/, "") === host.toLowerCase().replace(/\.$/, "").replace(/:443$/, "");
+    if ((raw.startsWith("/") || absolute) && sameHost) {
+      path = u.pathname;
+      query = u.search.replace(/^\?/, "");
+    }
   } catch {
     path = "";
   }
@@ -395,6 +405,13 @@ async function main(configPath) {
       },
     });
     const creds = grpc.ServerCredentials.createSsl(clientRoot, [{ private_key: readFileSync(s.serverKeyFile), cert_chain: readFileSync(s.serverCertFile) }], true);
+    // A restarted hook (criterion 7's overlay pass, criterion 8) finds its previous socket file still present; remove
+    // it only when it IS a socket, so a misconfigured path can never delete a regular file.
+    try {
+      if (lstatSync(s.socketPath).isSocket()) unlinkSync(s.socketPath);
+    } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
+    }
     await new Promise((resolve, reject) => server.bindAsync(`unix://${s.socketPath}`, creds, (err) => (err ? reject(err) : resolve())));
     chmodSync(s.socketPath, 0o600);
     servers.push(server);

@@ -1,7 +1,7 @@
 # iron-proxy v0.56.0 configuration template for ONE session (#12517). Test path only.
 #
-# The suite renders one copy per session into that session's masked directory, replacing every @@NAME@@ token
-# (an unreplaced token fails the render). The rendered file holds the forwarder credential in the upstream URL, so
+# probes/session-up.sh renders one copy per session into that session's masked directory, replacing every
+# double-at placeholder (an unreplaced placeholder fails the render). The rendered file holds the forwarder credential in the upstream URL, so
 # it lives under the masked path with the CA key and the decoy (CTO F-c, R10); nothing reaches env or argv.
 #
 # Binding (tracer 9b, R26): DNS mode off; explicit-proxy traffic only on tunnel_listen, which only this session's
@@ -18,6 +18,12 @@ proxy:
   http_listen: "127.0.0.1:@@HTTP_PORT@@"
   https_listen: "127.0.0.1:@@HTTPS_PORT@@"
   upstream_response_header_timeout: "30s"
+  # iron-proxy's default deny list includes 127.0.0.0/8 and ::1/128, and it applies the list to the address it DIALS,
+  # which here is only the upstream proxy: the unchanged egress-forwarder.mjs listens on 127.0.0.1 (measured
+  # 2026-11-10: "dial tcp 127.0.0.1:<port>: denied by upstream_deny_cidrs"). So the list is rendered from
+  # infra/egress-deny-cidrs.txt (the single source squid also reads) minus those two loopback ranges. Every
+  # destination still passes squid's full deny list, because iron-proxy reaches nothing except through the forwarder.
+  upstream_deny_cidrs: @@UPSTREAM_DENY_CIDRS@@
   # Chained to the unchanged egress-forwarder.mjs, which chains to the real squid gateway (CTO F-c, tracer item 1).
   upstream_proxy:
     https_proxy: "@@FORWARDER_PROXY_URL@@"

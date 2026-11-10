@@ -555,6 +555,19 @@ describe("approval-hook.mjs — header strip and transform mapping", () => {
     expect(m).toMatchObject({ method: "GET", host: "github.com", path: "/acme-synth/widget/info/refs", query: "service=git-upload-pack", headers: { Accept: ["a", "b"] } });
     expect(policyMod.classify(policyMod.normalizeRequest(m), BASE_POLICY, { repositories: REPOS }).verdict).toBe("read");
   });
+
+  // Measured 2026-11-10 against iron-proxy v0.56.0: a MITM'd request arrives with `url` in ORIGIN form
+  // (`/repos/o/r?x=1`) and the authority in `host`, so a parser that requires an absolute URL refuses every request.
+  it("maps an origin-form url (what iron-proxy sends) against the host field", () => {
+    const m = hookMod.fromTransformRequest({ method: "GET", url: "/acme-synth/widget/info/refs?service=git-upload-pack", host: "github.com", headers: {}, body: Buffer.alloc(0) });
+    expect(m).toMatchObject({ method: "GET", host: "github.com", path: "/acme-synth/widget/info/refs", query: "service=git-upload-pack" });
+    expect(policyMod.classify(policyMod.normalizeRequest(m), BASE_POLICY, { repositories: REPOS }).verdict).toBe("read");
+  });
+
+  it("refuses an absolute url whose authority differs from the host field (Guard 2 row 14)", () => {
+    const m = hookMod.fromTransformRequest({ method: "GET", url: "https://evil.example/acme-synth/widget/info/refs?service=git-upload-pack", host: "github.com", headers: {}, body: Buffer.alloc(0) });
+    expect(policyMod.normalizeRequest(m).ok).toBe(false);
+  });
 });
 
 describe("approval-hook.mjs — Supabase target guard (CTO R21)", () => {

@@ -21,7 +21,7 @@
 //     "decoys": [{"id": "sessA", "file": "/run/decoy-a"}, ...] }
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
-import https from "node:https";
+import http2 from "node:http2";
 import { pathToFileURL } from "node:url";
 
 const GITHUB_HOSTS = new Set(["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"]);
@@ -41,7 +41,7 @@ export function authClass(rawHeaders, decoys) {
 }
 
 function hostOf(req) {
-  const h = String(req.headers.host ?? req.socket.servername ?? "").toLowerCase();
+  const h = String(req.headers[":authority"] ?? req.headers.host ?? req.socket.servername ?? "").toLowerCase();
   return h.replace(/:[0-9]+$/, "").replace(/\.$/, "");
 }
 
@@ -126,7 +126,11 @@ function sse(res) {
 export function createStub(cfg) {
   const decoys = (cfg.decoys ?? []).map((d) => ({ id: d.id, value: d.value ?? readFileSync(d.file, "utf8").trim() }));
   let seq = 0;
-  return https.createServer({ cert: readFileSync(cfg.certFile), key: readFileSync(cfg.keyFile) }, (req, res) => {
+  // HTTP/2 with an HTTP/1.1 fallback, as GitHub serves. Measured 2026-11-10: iron-proxy passes an HTTP/1.1
+  // upstream's Connection and Keep-Alive response headers through to its client (seen on the HTTP/1.1 client leg),
+  // and with an HTTP/1.1-only stub every HTTP/2 client failed with PROTOCOL_ERROR; with this server both legs work.
+  // (A finding for #11637: hop-by-hop headers from an HTTP/1.1 upstream reach the client.)
+  return http2.createSecureServer({ cert: readFileSync(cfg.certFile), key: readFileSync(cfg.keyFile), allowHTTP1: true }, (req, res) => {
     const host = hostOf(req);
     const url = new URL(req.url ?? "/", `https://${host || "stub"}`);
     const a = authClass(req.rawHeaders, decoys);
