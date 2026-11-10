@@ -41,7 +41,8 @@ type Req = {
   host: string;
   path: string;
   query?: string;
-  headers?: Record<string, string>;
+  // A header may repeat (iron-proxy forwards every value; policy.mjs lowerHeaders accepts both shapes).
+  headers?: Record<string, string | string[]>;
   body?: Buffer;
 };
 
