@@ -13,6 +13,22 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). There is no spec.md for this branch; the assessment below found no relevant domain anyway, so the widened fan-out is moot.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-10
+**Sections enhanced:** 3 (Research Insights attribution, Observability added, Plan Review note)
+**Research agents used:** none — no nested-spawn capability on this harness (per `2026-11-01-devin-subagents-cannot-spawn-nested-subagents.md`); all deepen gates ran as inline mechanical passes.
+
+### Key Improvements
+
+1. Attribution verified against the regressing squash itself, not the issue's prose: `b258336e` is an ancestor of `origin/main` and its diff adds the `ci-oracle-lane.*` names into `scripts/ci-oracle-review.test.sh` (+102 lines), removes 7 lines from `scripts/test-affected-kb-consumers.baseline.txt`, and adds the un-blanked ADR-276 bullet — both regressions in one commit.
+2. `## Observability` section added — required by deepen-plan Phase 4.7 (`scripts/*.txt` is not pure-docs); the liveness surface is the gate suites' own verdicts, with a `<15 s` allowlisted probe (`grep -c` → `5`).
+3. deepen-plan gates run: 4.6 User-Brand Impact PASS; 4.7 Observability — section added (this enhancement); 4.8 PAT none; 4.9 UI n/a; 4.10 Encryption skip (no store/connection introduced — "merge queue" is the GitHub feature, not a provisioned store); 4.11 Guard Contract skip (deliverable is fixture rows for an existing guard + a whitespace fix — no guard created); 4.12 Scope Check PASS; 4.13 Task Design skip (no new autonomous task); 4.5 network-outage skip; 4.55 downtime skip; 4.4 precedent-diff: row shape follows the `scripts/ci-oracle-lane` precedent at baseline lines 160-164.
+
+### New Considerations Discovered
+
+- The regressing commit deleted 7 baseline rows while adding the lane-file references — the regression is "touched the oracle's inputs without regenerating its baseline", not new drift.
+
 ## Overview
 
 Canary PR #12557 (a trivial comment-only diff) fails two required checks on `pull_request`, proving the failures are main-line regressions introduced by the S4-retirement squash `b258336e` (PR #12521): (1) the `oracle-index-check` leg reports five un-baselined kb-consumer rows charged to `scripts/ci-oracle-review`, and (2) `markdown-lint --repo-sweep` reports MD032 at ADR-276 line 694. Both root causes are already diagnosed in #12559 and were re-verified in this worktree; the fix is five two-column baseline rows plus one blank line.
@@ -30,7 +46,7 @@ Canary PR #12557 (a trivial comment-only diff) fails two required checks on `pul
 
 **Baseline contract — the precision point.** Per `scripts/test-affected-kb-consumers.test.sh` header §BASELINE and the oracle's `baseline` mode (embedded python, ~lines 375-383): an **`argv-code` row is `label<TAB>path` — two columns, NO classification column**. Only non-argv-code forms (today the 8 `dir-operand-tests` rows) carry `label<TAB>path<TAB>form<TAB>false-positive: <reason>`, and row c1's UNCLASSIFIED check only fires on `NF>=3` rows. The CI failure output names the form: `VIOLATION scripts/ci-oracle-review knowledge-base argv-code`. **Reconciliation — issue vs. contract:** the issue says "extend the baseline with the five rows classified `false-positive: <reason>`"; the contract says argv-code rows carry no classification, and a 4-column argv-code row would fail check b1 (regeneration emits two columns and the diff would not match). The correct fix is the five two-column rows — exactly what `--write-baseline` emits — with the false-positive reasoning carried in the commit message instead of a baseline column.
 
-**Root cause verified in code.** `scripts/ci-oracle-review.test.sh` names `scripts/ci-oracle-lane.sh` and `scripts/ci-oracle-lane.test.sh` at lines 108-109 (a stub-docs file list) and line 134 (`printf 'scripts/ci-oracle-lane.sh\n' > "$FX/diff-oracle.txt"`, fixture data). The oracle's `argv_code_refs` follows one hop into scripts a suite names (FORMS table, ~line 264), so the lane files' `knowledge-base` strings are charged to the review suite — the same five paths already baselined under `scripts/ci-oracle-lane` at `scripts/test-affected-kb-consumers.baseline.txt:160-164`. These are scan false positives (naming a file is not reading it; the kb strings are lane fixture/pattern data).
+**Root cause verified in code.** `scripts/ci-oracle-review.test.sh` names `scripts/ci-oracle-lane.sh` and `scripts/ci-oracle-lane.test.sh` at lines 108-109 (a stub-docs file list) and line 134 (`printf 'scripts/ci-oracle-lane.sh\n' > "$FX/diff-oracle.txt"`, fixture data). The oracle's `argv_code_refs` follows one hop into scripts a suite names (FORMS table, ~line 264), so the lane files' `knowledge-base` strings are charged to the review suite — the same five paths already baselined under `scripts/ci-oracle-lane` at `scripts/test-affected-kb-consumers.baseline.txt:160-164`. These are scan false positives (naming a file is not reading it; the kb strings are lane fixture/pattern data). **Attribution verified against `b258336e` itself** (ancestor of `origin/main`; PR #12521 MERGED): the squash's diff adds those exact `ci-oracle-lane.*` names to `ci-oracle-review.test.sh` (+102 lines), removes 7 rows from the baseline, and adds the un-blanked `- 2026-11-09 S4 retired` bullet to ADR-276 — one commit produced both regressions.
 
 **Regression 2 verified locally.** `node_modules/.bin/markdownlint --config .markdownlint.json knowledge-base/engineering/architecture/decisions/ADR-276-….md` reports exactly `694 error MD032/blanks-around-lists [Context: "- 2026-11-09 S4 retired, verdi..."]` — the bullet at line 694 directly follows the `Notes:` paragraph ending at line 693.
 
@@ -77,6 +93,35 @@ None.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no user-data surface — the diff touches a test-fixture baseline and an ADR markdown file only.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** the diff is CI fixture data plus a docs whitespace fix; the user-facing artifact at stake is CI signal integrity, not user data or workflow.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "the two required check legs whose red state this fix clears: test-affected-kb-consumers (oracle-index-check) and markdown-lint --repo-sweep (quality-guards)"
+  cadence: "every pull_request + merge_group run"
+  alert_target: "red required check on the PR"
+  configured_in: ".github/workflows/ (the legs that invoke scripts/test-affected-kb-consumers.test.sh and scripts/markdown-lint.sh)"
+error_reporting:
+  destination: "suite stdout in the CI job log"
+  fail_loud: "[FAIL] b1: baseline differs from --write-baseline output / VIOLATION rows naming the producer; markdownlint 'error MD032' lines"
+failure_modes:
+  - mode: "a suite's argv gains a new uncovered kb reference (one-hop name charge)"
+    detection: "oracle VIOLATION row + b1 baseline-diff FAIL naming the producer and path"
+    alert_route: "red oracle-index-check leg"
+  - mode: "a stale baseline row survives the read it recorded"
+    detection: "b1 FAIL — regeneration drops the row"
+    alert_route: "red oracle-index-check leg"
+  - mode: "a markdown structural regression lands under a swept root"
+    detection: "markdownlint rule error at file:line"
+    alert_route: "red quality-guards leg"
+logs:
+  where: "GitHub Actions job log for the failing leg"
+  retention: "CI log retention"
+discoverability_test:
+  command: grep -c '^scripts/ci-oracle-review' scripts/test-affected-kb-consumers.baseline.txt
+  expected_output: "5"
+```
 
 ## Open Code-Review Overlap
 
