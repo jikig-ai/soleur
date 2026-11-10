@@ -69,7 +69,7 @@ CHECKOUT_USES = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"   # 
   whose web1 leg succeeded and emitted `sole-copy-check verdict=matches-declared entry=web1`; 2 before its date, 5 after.
 
 Every V-round mutant survived the pre-fix suite (278/278 rc 0) and reds a named label on the fixed one (284/284 rc 0
-control); the table is in `knowledge-base/project/specs/feat-one-shot-10432-web1-workspaces-protection-check/mutation-proofs.md`.
+control); the table is in `knowledge-base/project/specs/archive/20261110-195816-feat-one-shot-10432-web1-workspaces-protection-check/mutation-proofs.md`.
 
 ## Key Insight
 
