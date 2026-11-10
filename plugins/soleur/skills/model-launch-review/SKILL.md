@@ -221,6 +221,7 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 
 ## Sharp edges
 
+- **A "binary knows model id X" guard must check the model-table ROW (`{id:"X",family:`), not a whole-token hit — and the alias target (`latest_per_family`) is a separate table that needs its own guard.** A token also appears in deprecation strings and error text; a pin can carry the new row while still mapping `fable` to the old id. **Why:** #12553 — Guard 4 shipped token-only until review; Guard 6 added for the alias table. See `knowledge-base/project/learnings/2026-11-10-the-bump-risk-was-in-the-changelog-not-the-argv-census.md`.
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
 - **Selection and rewriting must share ONE boundary — and the asymmetry was already live before
