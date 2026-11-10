@@ -59,7 +59,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 - [x] 2.1 Read the job's run (42823659776, GO); the raw results are committed as `injector-spike-results.json`.
 - [x] 2.2 Run each Guard mutation row once by hand and record which reddened the suite, with run URLs. (Eight rows dispatched as one-mutation throwaway branches, since removed, plus Guard 3 row 4 locally: 8 caught, 1 equivalent survivor (Guard 1 row 1). Two first-run survivors were fixture gaps, closed and re-run caught: session E's secrets were undeclared, and the hook had no record of the Authorization headers it received. Table in `injector-spike-results.md`.)
-- [ ] 2.3 Write `injector-spike-results.md` (three plain opening sentences, per-criterion verdicts and raw outcomes, labels, re-measure trigger, `canonical_action` per write class, per-client pending-message record, NO_PROXY arm A finding, `gh` carriage finding, confused-deputy residual, CHECK change for #11637) and commit `injector-spike-results.json`.
+- [x] 2.3 Write `injector-spike-results.md` (three plain opening sentences, per-criterion verdicts and raw outcomes, labels, re-measure trigger, `canonical_action` per write class, per-client pending-message record, NO_PROXY arm A finding, `gh` carriage finding, confused-deputy residual, CHECK change for #11637) and commit `injector-spike-results.json`.
 
 ## Phase 3: Decision record and dispositions
 
