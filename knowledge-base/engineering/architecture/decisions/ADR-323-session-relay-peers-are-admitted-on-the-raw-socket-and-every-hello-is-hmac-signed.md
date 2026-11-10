@@ -154,7 +154,7 @@ the second host:
    served from the second host.
 
    *Amended 2026-11-10 (#8211):* this block owns the rotation rationale; other files point here. The 2026-11-09 parenthetical above
-   (`_PREVIOUS` or ADR-320 decision 2) is superseded by the accept-only slot and #12538 below.
+   (dual-key verification, or ADR-320 decision 2) is superseded by the accept-only slot and #12538 below.
 
    - **The slot.** One accept-only slot, `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, verify-only and dark by default (no new secret is minted).
      The sender never signs with it.
