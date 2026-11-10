@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { createReplayCache, signProxyHello, verifyProxyHello, type HelloVerifyKeys } from "@/server/proxy-hello";
 
-// #8211 (ADR-323 Decision 9, B3) — Guard 2: why a routine rotation of the relay hello key takes THREE phases. Every
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — Guard 2: why a routine rotation of the relay hello key takes THREE phases. Every
 // host both signs and verifies, and a rolling restart leaves two hosts in adjacent phases for one stagger, so every
 // adjacent pair must complete a signed round trip in BOTH directions. A skipped phase splits the hosts in the direction
 // predicted below. The PHASES table is a test fixture (the executable statement the ADR cites), not a production
