@@ -374,13 +374,13 @@ discoverability_test:
 - [ ] Every site in the final convert set (25 groups) reads NUL-delimited, rename-free, submodule-honest names (or the files/compare API with `previous_filename`), and a git or API failure runs or refuses - evidenced by one RED-first suite row per site (`file:test-name` listed in the PR body).
 - [ ] No ALLOW-class reader accepts a fragment of a newline-named path: `allowlist-diff.sh` (pathspec), `check-sweep-completeness.sh` (jq sentinel), ship `ledger_touched` (`unknown` never exempts), the PIR meta-case (`unknown` = not contained), the admin-merge classifier (helper rc 2 = not eligible).
 - [ ] `rename-guard.sh` proves (a)-(f) of task 1.11 (bad SHA -> 2; tab/quote source and target -> 2; `\xff` laundering rename flagged under an exported UTF-8 locale; second-commit rename seen; copy row seen; dropping the `"` check reddens (b)).
-- [ ] `allowlist-diff.sh`'s exit-2 arm prints an `::error::` line (secret-scan smoke case `allowlist-diff-fires`) and the new suite lives at `scripts/allowlist-diff.test.sh` with its own floor.
+- [x] `allowlist-diff.sh`'s exit-2 arm prints an `::error::` line (secret-scan smoke case `allowlist-diff-fires`) and the new suite lives at `scripts/allowlist-diff.test.sh` with its own floor.
 - [ ] ship `ledger_touched` exempts only on exact equality with the ledger path; `plan_refs=unknown` yields an explicit "use `Ref #N`" line; the PIR meta-case treats `unknown` as not contained; ship net bytes <= 0 after trims.
 - [ ] `pre-merge-rebase.sh`'s `git log --name-only` todos read is NOT converted and the suite still passes its todos fixtures; recorded as NC with the fragment-line reason.
-- [ ] `changed-path-readers.test.sh` full run: 0 failures; code census reports `0 unlisted, 0 stale`; floors set to the exact new counts; Guard 1 (13 rows) and Guard 2 (9 rows) mutation rows demonstrated RED with a green unmutated control and a mutation-landed check each (transcript in the PR body).
+- [x] `changed-path-readers.test.sh` full run: 0 failures; code census reports `0 unlisted, 0 stale`; floors set to the exact new counts; Guard 1 (13 rows) and Guard 2 (9 rows) mutation rows demonstrated RED with a green unmutated control and a mutation-landed check each (transcript in the PR body).
 - [ ] The header of `changed-path-readers.test.sh` no longer says "about twenty unconverted sites"; the remainder is a reasoned table whose every row is also an exemption-table row.
-- [ ] `python3 scripts/lint-skill-body-budget.py --base origin/main` is green: ship and one-shot byte deltas <= 0 (or within headroom 18 B / 9 B) and no ceiling raised.
-- [ ] All Phase 5.2 meta-guards pass on the final tree; registry rows (if any) are in sorted position and accept rows re-derived last.
+- [x] `python3 scripts/lint-skill-body-budget.py --base origin/main` is green: ship and one-shot byte deltas <= 0 (or within headroom 18 B / 9 B) and no ceiling raised.
+- [x] All Phase 5.2 meta-guards pass on the final tree; registry rows (if any) are in sorted position and accept rows re-derived last.
 - [ ] PR body: `Ref #12246`, `Ref #12332`, `Ref #6480` (no `Closes`), `Filed: none` (or `Filed: #N` for the single consolidated tracker if and only if a size-driven drop happened), a `## Changelog` section, label `semver:patch`.
 - [ ] Required checks green (`test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`); `infra-validation` and `sandbox-canary-capture-gate` read by hand; merged; `deploy-arm.sh find --wait <sha>`, `served <sha>` = CONTAINS, `/health` ok.
 
