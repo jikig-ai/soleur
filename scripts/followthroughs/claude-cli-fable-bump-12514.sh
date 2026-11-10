@@ -118,10 +118,10 @@ leg_verdict() {
   fi
   local reads=0 line id status concl sha
   while IFS= read -r line; do
-    id=$(printf '%s' "$line" | jq -r '.databaseId')
-    status=$(printf '%s' "$line" | jq -r '.status')
-    concl=$(printf '%s' "$line" | jq -r '.conclusion // ""')
-    sha=$(printf '%s' "$line" | jq -r '.headSha')
+    # One jq call per run; `|` never occurs in an id, status, conclusion or sha (empty fields survive: `|` is not IFS
+    # whitespace, so `1|in_progress||abc` keeps its empty conclusion).
+    IFS='|' read -r id status concl sha < <(printf '%s' "$line" |
+      jq -r '[(.databaseId | tostring), .status, (.conclusion // ""), (.headSha // "")] | join("|")')
     if [[ "$status" != "completed" ]]; then
       echo "NOT YET: ${label}: run ${id} of ${wf} is ${status}"
       LEG_RC=2
@@ -145,11 +145,11 @@ leg_verdict() {
       LEG_RC=3
       return
     fi
-    step_concls=$(printf '%s' "$jobs_json" | jq -r --arg j "$job" --argjson want "$steps_json" \
-      '[.jobs[] | select(.name == $j) | .steps[] | select(.name as $n | $want | index($n) != null) | .conclusion] | join(",")')
-    local want_n got_n
-    want_n=$#
-    got_n=$(printf '%s' "$step_concls" | awk -F, 'NF { print NF; exit } END { if (NR == 0) print 0 }')
+    # A step with no conclusion yet is dropped (`// empty`), so it counts as not measured, never as a match.
+    local want_n=$# got_n
+    IFS='|' read -r got_n step_concls < <(printf '%s' "$jobs_json" | jq -r --arg j "$job" --argjson want "$steps_json" \
+      '[.jobs[] | select(.name == $j) | .steps[] | select(.name as $n | $want | index($n) != null) | .conclusion // empty]
+       | "\(length)|\(join(","))"')
     if [[ ",${step_concls}," == *",failure,"* ]]; then
       echo "FAIL: ${label}: run ${id} of ${wf} (${concl}): a measuring step failed (${step_concls})"
       LEG_RC=1

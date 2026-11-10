@@ -204,3 +204,20 @@ prompt, `save()`, and the removed-tool hints all PASS on 0.3.321.
 **Not run:** the review-gate `AskUserQuestion` allow round trip. The current schema builds a fresh `{questions, answers}` with
 no `afkTimeoutMs`, so the 2.1.321 denial of that field does not apply. This was verified by reading `server/review-gate.ts`;
 no measurement was taken.
+
+**R2.3 Coverage-consult leads** (review synthesis, 2026-11-10).
+
+- **Vendor built-in plugins.** Statically diffed the plugin names bundled in each SDK binary. 0.3.321 adds exactly one,
+  `cc-plugin-privacy`, which is compiled to bytecode and so cannot be read statically. Dynamically, a mod-free
+  hosted-shape session (`phaseR2/mod-probe.mjs` arm `none`, logging every message) behaves the same on both versions:
+  - message types are `system:init` + `assistant` + `result:success`;
+  - no tool result, and `canUseTool` is never asked;
+  - the same non-core tool set at init.
+
+  Not validated: the privacy plugin's behaviour on events this stub turn does not raise.
+- **`~/.claude` layout.** The set of `.claude/<name>` path strings is identical between the two binaries, so the
+  `home-census` known list is not stale on this axis.
+- **Hosts.** The `https://*.anthropic.com|claude.ai|claude.com` host strings differ by one: `preview.claude.ai`, which
+  appears in a string table only. The `--network none` R2 runs completed with no network error, so a plain hosted-shape
+  turn does not need it. Not validated: whether the SDK process contacts it in production. The SDK process runs outside
+  bwrap, so this is not established by the sandbox egress proxy.

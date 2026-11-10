@@ -1513,25 +1513,23 @@ describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
 // logs (runReplay's verdict) and what the soak surface reports, but `--verify`
 // compares only the argv — so a fixture left at an old SDK version after a pin
 // bump would keep reporting the old version as the one the canary proved
-// (#12514 review). Tie it to the app's SDK pin.
+// (#12514 review). Tie it to the app's SDK pin. A range pin (`^0.3.321`) can
+// never equal a captured exact version, so it reds through the sdkVersion check.
+const SDK = "@anthropic-ai/claude-agent-sdk";
+
 function fixtureSdkPinViolation(
   fixture: Record<string, unknown>,
   pkg: { dependencies?: Record<string, string> },
 ): string | null {
-  const SDK = "@anthropic-ai/claude-agent-sdk";
   const pin = pkg.dependencies?.[SDK];
-  if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) {
-    return `package.json ${SDK} is not an exact pin (${String(pin)})`;
-  }
   if (fixture.sdkPackage !== SDK) return `fixture sdkPackage is ${String(fixture.sdkPackage)}, not ${SDK}`;
-  if (fixture.sdkVersion !== pin) {
+  if (typeof fixture.sdkVersion !== "string" || fixture.sdkVersion !== pin) {
     return `fixture sdkVersion is ${String(fixture.sdkVersion)} but package.json pins ${SDK}@${pin}: re-capture the fixture (--capture), never hand-edit it`;
   }
   return null;
 }
 
 describe("committed fixture sdkVersion equals the claude-agent-sdk pin (#12514)", () => {
-  const SDK = "@anthropic-ai/claude-agent-sdk";
   const pkgOf = (v: string) => ({ dependencies: { [SDK]: v } });
 
   it("positive control: a stale, missing or foreign-package fixture is refused", () => {
@@ -1541,7 +1539,6 @@ describe("committed fixture sdkVersion equals the claude-agent-sdk pin (#12514)"
     expect(
       fixtureSdkPinViolation({ sdkPackage: "@anthropic-ai/claude-code", sdkVersion: "0.3.321" }, pkgOf("0.3.321")),
     ).toMatch(/sdkPackage/);
-    expect(fixtureSdkPinViolation({ sdkPackage: SDK, sdkVersion: "0.3.321" }, pkgOf("^0.3.321"))).toMatch(/exact/);
   });
 
   it("infra/sandbox-canary-argv.json sdkVersion == package.json's claude-agent-sdk pin", () => {

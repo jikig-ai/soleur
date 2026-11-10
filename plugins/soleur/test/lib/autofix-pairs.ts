@@ -10,10 +10,11 @@
  * Rules (each one has a synthetic row in claude-cli-pin-knows-models.test.ts):
  *   - The block opens at a line starting `AUTOFIX_PAIRS=(` and ends at the first line that is ONLY `)`.
  *     A `)` inside a comment line does not end it (the old `/AUTOFIX_PAIRS=\(([\s\S]*?)\)/` read stopped there).
- *   - A comment line (first non-blank character `#`) is not a pair, so a commented-out pair is not live.
- *   - On a live line everything from an unquoted `#` on is a comment: `"a=b"  # was "c=d"` is ONE pair (a=b).
- *   - Every live token must be `claude-<id>=claude-<id>` (double-quoted or bare, ids `[0-9a-z-]`); anything else —
- *     a single-quoted pair, a non-claude side, a stray word — throws with its line number instead of being dropped.
+ *   - A `#` at the start of a line or after a blank starts a comment to end of line, so a commented-out pair is not
+ *     live and `"a=b"  # was "c=d"` is ONE pair (a=b).
+ *   - Every remaining blank-separated token must be `claude-<id>=claude-<id>` (double-quoted or bare, ids `[0-9a-z-]`);
+ *     anything else — a single-quoted pair, an unbalanced quote, a non-claude side, a stray word — throws with its line
+ *     number instead of being dropped.
  *   - No block, two blocks, or a block with no closing `)` line throws; it is never read as zero pairs.
  *
  * Floors live in `assertPairFloors`, separate from the parser, so a two-pair synthetic source exercises the
@@ -29,40 +30,8 @@ export const MIN_DISTINCT_TARGETS = 4;
 
 const OPEN_RE = /^[ \t]*AUTOFIX_PAIRS=\((.*)$/;
 const CLOSE_RE = /^[ \t]*\)[ \t]*$/;
-const PAIR_RE = /^(claude-[0-9a-z-]+)=(claude-[0-9a-z-]+)$/;
-
-/** Split one live line into its words, honouring double quotes and stopping at an unquoted `#`. */
-function lineTokens(line: string, lineNo: number): string[] {
-  const tokens: string[] = [];
-  let cur = "";
-  let inWord = false;
-  let quoted = false;
-  for (const ch of line) {
-    if (quoted) {
-      if (ch === '"') quoted = false;
-      else cur += ch;
-      continue;
-    }
-    if (ch === '"') {
-      quoted = true;
-      inWord = true;
-      continue;
-    }
-    if (ch === " " || ch === "\t") {
-      if (inWord) tokens.push(cur);
-      cur = "";
-      inWord = false;
-      continue;
-    }
-    // Bash starts a comment only at the beginning of a word.
-    if (ch === "#" && !inWord) break;
-    cur += ch;
-    inWord = true;
-  }
-  if (quoted) throw new Error(`AUTOFIX_PAIRS_PARSE: unterminated quote on audit-models.sh line ${lineNo}`);
-  if (inWord) tokens.push(cur);
-  return tokens;
-}
+// One table entry: `claude-<id>=claude-<id>`, bare or wrapped in a matched pair of double quotes.
+const PAIR_RE = /^("?)(claude-[0-9a-z-]+)=(claude-[0-9a-z-]+)\1$/;
 
 /** Every live `from=to` pair of the `AUTOFIX_PAIRS=( ... )` block in `src`, in table order. */
 export function parseAutofixPairs(src: string): AutofixPair[] {
@@ -87,13 +56,12 @@ export function parseAutofixPairs(src: string): AutofixPair[] {
 
   const pairs: AutofixPair[] = [];
   for (const [line, lineNo] of body) {
-    if (/^[ \t]*#/.test(line)) continue;
-    for (const tok of lineTokens(line, lineNo)) {
+    const live = line.replace(/(^|[ \t])#.*$/, "").trim();
+    if (live === "") continue;
+    for (const tok of live.split(/[ \t]+/)) {
       const m = PAIR_RE.exec(tok);
-      if (!m) {
-        throw new Error(`AUTOFIX_PAIRS_PARSE: token ${JSON.stringify(tok)} on line ${lineNo} is not claude-<id>=claude-<id>`);
-      }
-      pairs.push([m[1], m[2]] as const);
+      if (!m) throw new Error(`AUTOFIX_PAIRS_PARSE: token ${tok} on line ${lineNo} is not claude-<id>=claude-<id>`);
+      pairs.push([m[2], m[3]] as const);
     }
   }
   return pairs;

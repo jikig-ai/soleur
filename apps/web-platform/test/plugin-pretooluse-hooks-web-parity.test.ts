@@ -167,7 +167,6 @@ const DESTRUCTIVE = bash("terraform destroy");
 // the trusted plugin must declare none. A module here would bypass the deny-by-default
 // permission callback in every tenant's session.
 function declaredHookModules(json: unknown): string[] {
-  if (json === null || typeof json !== "object") return [];
   const found: string[] = [];
   const walk = (v: unknown): void => {
     if (Array.isArray(v)) return v.forEach(walk);
@@ -191,14 +190,16 @@ describe("the trusted plugin declares no hooks module, whose tool calls would sk
   it("plugins/soleur hooks.json and plugin.json declare no module", () => {
     const hooks = JSON.parse(readFileSync(HOOKS_JSON, "utf8"));
     expect(Object.keys(hooks.hooks ?? {}).length, "hooks.json parsed to an empty hook set: the scan below would be vacuous").toBeGreaterThan(0);
-    expect(declaredHookModules(hooks), "a hooks module in the trusted plugin runs $.tool.call past canUseTool in every hosted session (#12514)").toEqual([]);
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, "plugins/soleur/.claude-plugin/plugin.json"), "utf8"));
     expect(declaredHookModules(manifest)).toEqual([]);
-    // Every hook config under hooks/ (other harnesses' configs included), not only the one Claude loads.
+    // Every hook config under hooks/ (other harnesses' configs included), hooks.json among them.
     const hookConfigs = readdirSync(HOOKS_DIR).filter((f) => f.endsWith(".json"));
     expect(hookConfigs).toContain("hooks.json");
     for (const f of hookConfigs) {
-      expect(declaredHookModules(JSON.parse(readFileSync(join(HOOKS_DIR, f), "utf8"))), `hooks/${f} declares a hooks module`).toEqual([]);
+      expect(
+        declaredHookModules(JSON.parse(readFileSync(join(HOOKS_DIR, f), "utf8"))),
+        `hooks/${f} declares a hooks module: it runs $.tool.call past canUseTool in every hosted session (#12514)`,
+      ).toEqual([]);
     }
   });
 });

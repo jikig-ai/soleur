@@ -425,20 +425,19 @@ function assertIdsKnown(
   const problems = coverageProblems("MODEL_ID_COVERAGE", rows, required);
   if (ids.length < minIds) problems.push(`MODEL_ID_FLOOR checked ${ids.length} ids, floor ${minIds} (the id set collapsed)`);
   for (const r of rows) {
-    const absent = sourceAbsentIds(r.src, ids);
-    for (const id of absent) problems.push(`MODEL_ID_ABSENT ${r.label} does not know ${id}`);
-    // A whole-token hit is not a row: `foundry:"<id>"` or `fallback_3p:"<id>"` inside another row, a region map or an
-    // alias map all match (2.1.321 carries claude-opus-4 / claude-sonnet-4 that way, with no row of their own).
-    const present = ids.filter((id) => !absent.includes(id));
+    // The row, not a whole-token hit: `foundry:"<id>"` or `fallback_3p:"<id>"` inside another row, a region map or an
+    // alias map all match a token scan (2.1.321 carries claude-opus-4 / claude-sonnet-4 that way, with no row of their own).
     let found: Record<string, ModelRow | null>;
     try {
-      found = sourceModelRows(r.src, present);
+      found = sourceModelRows(r.src, ids);
     } catch (e) {
       problems.push(`MODEL_ID_ROW_UNREADABLE ${r.label}: ${(e as Error).message}`);
       continue;
     }
-    for (const id of present) {
-      if (found[id] === null) problems.push(`MODEL_ID_NO_ROW ${r.label} ${id}: a token but no model-table row ({id:"${id}",family: anchor)`);
+    for (const id of ids) {
+      if (found[id] === null) {
+        problems.push(`MODEL_ID_NO_ROW ${r.label} ${id}: the binary has no model-table row for ${id} (absent or mentioned only; {id:"${id}",family: anchor)`);
+      }
     }
   }
   if (problems.length === 0) return;
@@ -1086,12 +1085,12 @@ describe("AUTOFIX_PAIRS shared parser — synthetic rows (Guard 4 assembly)", ()
     expect(failureOf(() => parseAutofixPairs(`${table('"claude-a-1=claude-a-2"')}\n${table('"claude-b-1=claude-b-2"')}`))).toMatch(/found 2/);
     expect(failureOf(() => parseAutofixPairs('AUTOFIX_PAIRS=(\n  "claude-a-1=claude-a-2"\n  "claude-b-1=claude-b-2")\n'))).toMatch(/no closing line/);
     expect(failureOf(() => parseAutofixPairs(table('"claude-a-1"')))).toMatch(/is not claude-<id>=claude-<id>/);
-    expect(failureOf(() => parseAutofixPairs(table('"claude-a-1=claude-a-2')))).toMatch(/unterminated quote/);
+    expect(failureOf(() => parseAutofixPairs(table('"claude-a-1=claude-a-2')))).toMatch(/token "claude-a-1=claude-a-2 on line 4 is not/);
   });
 
   it("a single-quoted pair, or a pair whose either side is not a claude- id, throws naming the token and its line", () => {
     // table(): line 1 shebang, 2 set, 3 `AUTOFIX_PAIRS=(`, so the first pair is on line 4.
-    expect(failureOf(() => parseAutofixPairs(table("'claude-a-1=claude-a-2'")))).toMatch(/token "'claude-a-1=claude-a-2'" on line 4 is not/);
+    expect(failureOf(() => parseAutofixPairs(table("'claude-a-1=claude-a-2'")))).toMatch(/token 'claude-a-1=claude-a-2' on line 4 is not/);
     expect(failureOf(() => parseAutofixPairs(table('"claude-a-1=claude-a-2"', '"claude-b-1=gpt-5"')))).toMatch(/token "claude-b-1=gpt-5" on line 5 is not/);
     expect(failureOf(() => parseAutofixPairs(table('"opus-4=claude-a-2"')))).toMatch(/token "opus-4=claude-a-2" on line 4 is not/);
   });
@@ -1141,8 +1140,8 @@ describe("Guard 4 — current model ids known by both binaries: synthetic mutati
     const retargeted = SYNTH_TABLE.replace('"claude-fable-5-1=claude-fable-5-2"', '"claude-fable-5-1=claude-fable-9-9"');
     expect(retargeted).not.toBe(SYNTH_TABLE);
     const msg = failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", KNOWS_ALL), synthBin("claude-code", KNOWS_ALL)], ids(retargeted)));
-    expect(msg).toMatch(/MODEL_ID_ABSENT claude-agent-sdk@synthetic does not know claude-fable-9-9/);
-    expect(msg).toMatch(/MODEL_ID_ABSENT claude-code@synthetic does not know claude-fable-9-9/);
+    expect(msg).toMatch(/MODEL_ID_NO_ROW claude-agent-sdk@synthetic claude-fable-9-9: the binary has no model-table row/);
+    expect(msg).toMatch(/MODEL_ID_NO_ROW claude-code@synthetic claude-fable-9-9: the binary has no model-table row/);
     expect(msg).not.toMatch(/claude-opus-5-5|claude-sonnet-5-5/);
   });
 
@@ -1159,7 +1158,7 @@ describe("Guard 4 — current model ids known by both binaries: synthetic mutati
     const sdkText = KNOWS_ALL.replace('"claude-sonnet-5-5"', '"claude-sonnet-5"');
     expect(sdkText).not.toBe(KNOWS_ALL);
     const msg = failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", sdkText), synthBin("claude-code", KNOWS_ALL)], ids()));
-    expect(msg).toMatch(/MODEL_ID_ABSENT claude-agent-sdk@synthetic does not know claude-sonnet-5-5/);
+    expect(msg).toMatch(/MODEL_ID_NO_ROW claude-agent-sdk@synthetic claude-sonnet-5-5: the binary has no model-table row/);
     expect(msg).not.toMatch(/claude-code@synthetic/);
   });
 
@@ -1195,8 +1194,7 @@ describe("Guard 4 — current model ids known by both binaries: synthetic mutati
     );
     expect(sourceAbsentIds(synthSrc(noOpusRow), ["claude-opus-5-5"])).toEqual([]);
     const msg = failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", noOpusRow), synthBin("claude-code", KNOWS_ALL)], ids()));
-    expect(msg).toMatch(/MODEL_ID_NO_ROW claude-agent-sdk@synthetic claude-opus-5-5/);
-    expect(msg).not.toMatch(/MODEL_ID_ABSENT/);
+    expect(msg).toMatch(/MODEL_ID_NO_ROW claude-agent-sdk@synthetic claude-opus-5-5: the binary has no model-table row for claude-opus-5-5 \(absent or mentioned only/);
     expect(msg).not.toMatch(/claude-code@synthetic/);
   });
 
@@ -1454,9 +1452,7 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
       "Guard 4: every current model id (AUTOFIX_PAIRS targets ∪ tier harvest ∪ SDK default) is known by both binaries",
       () => {
         withInstalledBinaries((rows) => {
-          expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
           const ids = currentModelIds();
-          expect(ids.length).toBeGreaterThanOrEqual(MIN_CHECKED_IDS);
           process.stdout.write(`Guard 4: checked ${ids.length} ids [${ids.join(", ")}] in ${rows.map((r) => r.label).join(", ")}\n`);
           assertIdsKnown(rows, ids);
         });
@@ -1468,7 +1464,6 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
       "Guard 5: each CLI-reaching tier and the fable alias target carry the reviewed default_effort in both binaries",
       () => {
         withInstalledBinaries((rows) => {
-          expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
           assertReviewedEfforts(rows, REVIEWED_EFFORT_ALL);
         });
       },
@@ -1497,7 +1492,6 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
       "Guard 6: each binary's `latest_per_family` table appears once, maps fable to a reviewed key and every family to a current id",
       () => {
         withInstalledBinaries((rows) => {
-          expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
           assertAliasTable(rows, REVIEWED_ADVISOR_EFFORT, currentModelIds());
         });
       },

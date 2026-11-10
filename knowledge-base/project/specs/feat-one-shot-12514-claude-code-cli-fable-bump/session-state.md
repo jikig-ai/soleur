@@ -35,3 +35,19 @@
 - Local verification: targeted vitest 181 pass / 2 fail by design (real-binary rows on 311 pins), tsc rc 0, bun model-launch-review 33/0, orphan lint rc 0.
 - Affected gate: UNRESOLVED, nothing measured - the runner-lib edit forces MODE=full (runner-changed), and the full run was refused (sibling full-gate in flight). Run the full gate after the pin commit, when the 2 by-design rows should be green.
 - Paused: release-age floor clears 2026-11-12T19:04Z. Resume at plan Phase 2.1.
+
+## Work Phase (resumed, 2026-11-10)
+
+- The pause above is superseded: the operator waived the release-age floor ("waive the floor yes and do it now", decision-challenges F3b).
+- Done:
+  - Pin commit d2d4daf85c: package.json, Dockerfile, drift workflow, pen-cli override, both lockfiles.
+  - Phase R re-proof in throwaway containers (phase-r-evidence.md).
+  - Fixture re-capture and the `sdk-bump-verified:` trailer.
+
+## Review Phase (2026-11-10)
+
+- 12 report-only seats ran at d2d4daf85c.
+- Findings: 1 P1, 8 P2, 18 P3 after dedup.
+- Fixed inline in 5ac43dd544, including the R2 probes: the mod tool-call measurement and the pen-cli engine-contract probe (phase-r-evidence.md R2).
+- Pre-existing findings filed: #12588–#12592. Follow-through tracker: #12595.
+- Next: QA, compound, ship (PR body rewrite, ready, merge), postmerge.
