@@ -312,9 +312,13 @@ Named residuals added by this amendment:
   fixed format or scrubs it with `_cred_err_tail`, which replaces every env-file value of 12 or more characters. Examples: the relay
   peer probe drops its stderr and logs only a closed result enum; the canary diagnostics, the workspace-isolation and SDK bash smoke
   error lines and the bwrap probe's error tail pass through `_cred_err_tail`. One exception, found in review: `run_canary_replay`
-  in `ci-deploy.sh` logs the first line of the exec's stderr (and the `.detail` field of its stdout) through only a
-  printable-character filter and a length cap (120 and 200 characters), into the line it echoes and its canary state file. A key
-  printed there would reach both, and so would one from any future exec that skips the rule.
+  in `ci-deploy.sh` never passes the exec's output through `_cred_err_tail`. When the exec fails, the first line of its stderr passes only a
+  printable-character filter and a 120-character cap. When it exits 0, the `.verdict`, `.reason` and `.sdkVersion` fields of
+  its stdout pass with no filter and no length cap, and `.detail` (printable filter, 200-character cap) is appended to `reason`.
+  `verdict` and `reason` are echoed on ci-deploy's output, and all three are written to the canary state file; on a
+  `sandbox_broken` verdict they also go into a journal line and a Sentry event. A key printed into any of these fields would reach
+  each of those, and so would one from any future exec that skips the rule. Routing these fields through `_cred_err_tail` is the
+  follow-up; `ci-deploy.sh` is outside this PR.
 - **No deploy gate detects a hello-key split between hosts.** The serve-gate peer probe sends no signed hello, so it cannot tell a
   split from a healthy pair; the symptom is a stream of `reason=mac` refusals on the owner host. Detection is a #12538 requirement
   (Decision 9, requirement (f)).
