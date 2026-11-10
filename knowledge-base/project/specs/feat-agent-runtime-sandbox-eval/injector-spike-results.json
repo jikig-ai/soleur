@@ -1,9 +1,9 @@
 {
   "verdict": "GO",
   "meta": {
-    "run_url": "https://github.com/jikig-ai/soleur/actions/runs/42816918299",
-    "commit": "8b0d247411065236f1ca3b02b5d41f10ab39b265",
-    "date": "2026-11-10T12:41:51Z",
+    "run_url": "https://github.com/jikig-ai/soleur/actions/runs/42823659776",
+    "commit": "25893fbe7ffc298921e4d3324f5f2fb4cf80a11f",
+    "date": "2026-11-10T13:31:53Z",
     "machine": "Linux 7.0.0-1017-azure x86_64 cpus=4",
     "sdk_pin": "0.3.311",
     "iron_proxy_digest": "sha256:727da0cc35a6d73ed2913a38d56c4b9b4476c075149492e4fbf75552e83361ff",
@@ -23,7 +23,7 @@
     {
       "criterion": 3,
       "verdict": "pass",
-      "observation": "all checks held: no row: push refused pending, one pending row; no real token on the refused POST git-receive-pack; retry before decision keeps one row; owner deny -> rejected reported, then a new pending row; approve -> vend, consumed exactly once; a new hash after consume needs a new row; REST X pending, then approved; binding: body Y, another path, another repo get no real token; approved X consumed once, Idempotency-Key stripped; flag off: refused flag-off, no row; expiry: pending at ~50 s, then REJECT expired"
+      "observation": "all checks held: no row: push refused pending, one pending row; no real token on the refused POST git-receive-pack; retry before decision keeps one row; owner deny -> rejected reported, then a new pending row; approve -> vend, consumed exactly once; a new hash after consume needs a new row; REST X pending, then approved; binding: body Y, another path, another repo get no real token; approved X consumed once, Idempotency-Key stripped; flag off: refused flag-off, no row; expiry: pending at ~50 s, then REJECT expired; the hook ran before header replacement (client_auth=0 on every request)"
     },
     {
       "criterion": 4,
@@ -43,7 +43,7 @@
     {
       "criterion": 7,
       "verdict": "pass",
-      "observation": "all checks held: control: pass 1 refuses the request not-allowlisted, with no row; approval-hook.mjs and policy.mjs are byte-identical across passes; pass 2 gates the same request (pending row); pass 2 consumes once and vends after approval"
+      "observation": "all checks held: control: pass 1 refuses the request not-allowlisted, with no row; approval-hook.mjs and policy.mjs are byte-identical across passes; pass 2 gates the same request (pending row); pass 2 consumes once and vends after approval; binding across verbs: an approved create-pull row does not authorize create-issue with the same body"
     },
     {
       "criterion": 9,
@@ -122,12 +122,12 @@
           "hits": [],
           "content": "Invalid URL"
         },
-        "scan:/home/soleur/spike-sessA-B-60320/ws/.spike-scan.txt": {
+        "scan:/home/soleur/spike-sessA-B-43708/ws/.spike-scan.txt": {
           "isError": false,
           "hits": [
             "planted-control"
           ],
-          "content": "bytes=551191 readable=true"
+          "content": "bytes=550945 readable=true"
         }
       },
       "leaks": {},
@@ -166,7 +166,7 @@
         },
         "steps": {
           "clone": "fatal: could not read Username for 'https://github.com': No such device or address\ncloned=no",
-          "fetch": "fatal: cannot change to '/home/soleur/spike-sessA-A-84438/ws/c': No such file or directory\nfetch_rc=128",
+          "fetch": "fatal: cannot change to '/home/soleur/spike-sessA-A-35220/ws/c': No such file or directory\nfetch_rc=128",
           "ghRest": "unexpected end of JSON input",
           "ghGraphql": "gh: HTTP 401",
           "nodeFetch": "err=EAI_AGAIN",
@@ -294,9 +294,9 @@
         "stub_binding_misses": "0",
         "rest_x2": "x2=201",
         "x_status": "consumed",
-        "stub_x2": "{\"seq\":40,\"ts\":\"2026-11-10T12:44:40.963Z\",\"host\":\"api.github.com\",\"method\":\"POST\",\"path\":\"/repos/spike/alpha/pulls\",\"query_keys\":[],\"auth_class\":\"real-decoy\",\"auth_count\":1,\"decoy_id\":\"sessA\",\"auth_scheme\":\"token\",\"idempotency_key\":false,\"sni\":\"api.github.com\"}",
+        "stub_x2": "{\"seq\":40,\"ts\":\"2026-11-10T13:35:15.004Z\",\"host\":\"api.github.com\",\"method\":\"POST\",\"path\":\"/repos/spike/alpha/pulls\",\"query_keys\":[],\"auth_class\":\"real-decoy\",\"auth_count\":1,\"decoy_id\":\"sessA\",\"auth_scheme\":\"token\",\"idempotency_key\":false,\"sni\":\"api.github.com\"}",
         "rest_x3": "x3=403",
-        "push_flag_off": "push_rc=clone-failed",
+        "push_flag_off": "bash: line 3: cd: /home/soleur/c3-sessC-off: No such file or directory",
         "rows_c": "",
         "exp_at_50s": "pending",
         "push_after_expiry": "push_rc=1",
@@ -305,7 +305,7 @@
         "exp2_out": "send-pack: unexpected disconnect while reading sideband packet fatal: the remote end hung up unexpectedly push_rc=1 ",
         "exp_id": "present",
         "exp_rows": "expired:1 pending:1 ",
-        "exp_markers": "SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST class=write rule=git-push reason=pending approval_id=<id>|SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST class=write rule=git-push reason=expired approval_id=<id>|",
+        "exp_markers": "SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT client_auth=0 outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST client_auth=0 class=write rule=git-push reason=pending approval_id=<id>|SOLEUR_EGRESS_CONNECT session=sessE source=hook host=github.com method=CONNECT client_auth=0 outcome=continue|SOLEUR_EGRESS_VEND session=sessE source=hook host=github.com method=GET client_auth=0 class=push-advert rule=git-receive-pack-advert approval_id=read-allowlist|SOLEUR_EGRESS_VEND_REFUSED session=sessE source=hook host=github.com method=POST client_auth=0 class=write rule=git-push reason=expired approval_id=<id>|",
         "exp_iron": "CONNECT github.com:443  allow 200  | GET github.com /spike/alpha.git/info/refs allow 200  | POST github.com /spike/alpha.git/git-receive-pack reject 403  | CONNECT github.com:443  allow 200  | GET github.com /spike/alpha.git/info/refs allow 200  | POST github.com /spike/alpha.git/git-receive-pack reject 403 "
       },
       "reasons": {
@@ -338,7 +338,8 @@
         "binding: body Y, another path, another repo get no real token": true,
         "approved X consumed once, Idempotency-Key stripped": true,
         "flag off: refused flag-off, no row": true,
-        "expiry: pending at ~50 s, then REJECT expired": true
+        "expiry: pending at ~50 s, then REJECT expired": true,
+        "the hook ran before header replacement (client_auth=0 on every request)": true
       }
     },
     {
@@ -529,8 +530,8 @@
       ],
       "recorded_only_unentitled_with_network_allowed": "https://sse.open-web.spike.test/ 200\nhttps://api.github.com/repos/spike/alpha 401\nhttps://127.0.0.1:18082/ 000",
       "log_sizes": {
-        "app.log": 108779,
-        "hook.log": 18380,
+        "app.log": 108784,
+        "hook.log": 19822,
         "squid.log": 2511,
         "stub-stdout.log": 26
       },
@@ -553,14 +554,15 @@
     },
     {
       "arm": "c7",
-      "hashes_pass1": "558ed58c2492711c255d367f124a2908bf17ef5a0126768c3fac55cb88f12f7d 37a73a17a8bae3d74f28e649bb0bdb2e51a96812a5aa8f792d2667eff5561264 ",
-      "hashes_pass2": "558ed58c2492711c255d367f124a2908bf17ef5a0126768c3fac55cb88f12f7d 37a73a17a8bae3d74f28e649bb0bdb2e51a96812a5aa8f792d2667eff5561264 ",
+      "hashes_pass1": "0f7842e06dc4cebcf5837ec24df895ea630f700ccceb0c0163be3a996cd7058e 4fa4cdba83643f4c82d625bc17fa254f43ef0bfefa73817ef2737d068e98b80b ",
+      "hashes_pass2": "0f7842e06dc4cebcf5837ec24df895ea630f700ccceb0c0163be3a996cd7058e 4fa4cdba83643f4c82d625bc17fa254f43ef0bfefa73817ef2737d068e98b80b ",
       "pass1_marker": "reason=not-allowlisted subreason=unlisted-write ",
       "checks": {
         "control: pass 1 refuses the request not-allowlisted, with no row": true,
         "approval-hook.mjs and policy.mjs are byte-identical across passes": true,
         "pass 2 gates the same request (pending row)": true,
-        "pass 2 consumes once and vends after approval": true
+        "pass 2 consumes once and vends after approval": true,
+        "binding across verbs: an approved create-pull row does not authorize create-issue with the same body": true
       },
       "comparison": "one data file (policy.add-verb.yaml) against #12188's 9 source files; the overlay leaves out tests and approval-card text; the claim is limited to REST verbs that fit the generic recipe (CTO R4)"
     },
@@ -624,43 +626,43 @@
       "results": {
         "control.gitPush": {
           "rc": 1,
-          "elapsed": 0.18
+          "elapsed": 0.24
         },
         "control.curlPost": {
           "rc": 22,
-          "elapsed": 0.07
+          "elapsed": 0.09
         },
         "control.ghPost": {
           "rc": 1,
-          "elapsed": 0.08
+          "elapsed": 0.11
         },
         "control.curlGet": {
           "rc": 0,
-          "elapsed": 0.07
+          "elapsed": 0.06
         },
         "control.sse": {
           "rc": 0,
-          "elapsed": 1.05
+          "elapsed": 1.06
         },
         "stalled.gitPush": {
           "rc": 1,
-          "elapsed": 5.09
+          "elapsed": 5.15
         },
         "stalled.curlPost": {
           "rc": 22,
-          "elapsed": 5.03
+          "elapsed": 5.07
         },
         "stalled.ghPost": {
           "rc": 1,
-          "elapsed": 5.04
+          "elapsed": 5.07
         },
         "stalled.curlGet": {
           "rc": 0,
-          "elapsed": 0.07
+          "elapsed": 0.08
         },
         "stalled.sse": {
           "rc": 0,
-          "elapsed": 1.04
+          "elapsed": 1.05
         },
         "frozen.gitPush": {
           "rc": 124,
@@ -680,7 +682,7 @@
         },
         "frozen.sse": {
           "rc": 0,
-          "elapsed": 1.04
+          "elapsed": 1.07
         },
         "hookKilled.gitPush": {
           "rc": 128,
@@ -700,11 +702,11 @@
         },
         "hookKilled.sse": {
           "rc": 0,
-          "elapsed": 1.04
+          "elapsed": 1.05
         },
         "routerKilled.gitPush": {
           "rc": 128,
-          "elapsed": 0.0
+          "elapsed": 0.01
         },
         "routerKilled.curlPost": {
           "rc": 7,
@@ -712,7 +714,7 @@
         },
         "routerKilled.ghPost": {
           "rc": 1,
-          "elapsed": 0.03
+          "elapsed": 0.04
         },
         "routerKilled.curlGet": {
           "rc": 7,
@@ -724,7 +726,7 @@
         },
         "ironKilled.gitPush": {
           "rc": 128,
-          "elapsed": 0.01
+          "elapsed": 0.02
         },
         "ironKilled.curlPost": {
           "rc": 56,
@@ -732,15 +734,15 @@
         },
         "ironKilled.ghPost": {
           "rc": 1,
-          "elapsed": 0.03
+          "elapsed": 0.04
         },
         "ironKilled.curlGet": {
           "rc": 56,
-          "elapsed": 0.0
+          "elapsed": 0.01
         },
         "ironKilled.sse": {
           "rc": 0,
-          "elapsed": 1.04
+          "elapsed": 1.06
         }
       },
       "hook_timeouts": 3,
