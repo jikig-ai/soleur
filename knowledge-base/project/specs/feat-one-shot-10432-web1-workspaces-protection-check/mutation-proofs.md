@@ -123,3 +123,27 @@ The `WV8` row line deleted on a suite copy (its helper stays; H rows reuse it): 
   no routing workflow) is clean, and the drift monitor is not among the three declared-pending unrouted monitors. Its
   IaC route is `cron-monitor-alerts.tf` email to `issue_owners`, falling through to `ActiveMembers`. `SENTRY_ISSUE_RO_TOKEN`
   answers 403 on the monitors endpoint, as that runbook records.
+
+## Phase 4.4-4.7: ratchets, workflow readers, lints
+
+Ratchets (final tree): `fixture-dir-operand-assert` 71/71 rc 0; `guard-vacuity-floor` 32/32 rc 0; `grep-q-pipe-guard` rc 0
+(after the fix above; the first run flagged the suite's piped `grep -q`); `alarm-issue-filing-guard` 8/8 rc 0;
+`fixture-relative-assert` 61/63 rc 1. Its two reds are one PRE-EXISTING row: `scripts/ci-oracle-review.sh` has 13 live
+sites against a baseline of 12. Neither that file nor the baseline is in this diff, and both are byte-identical between
+the merge base and `origin/main`, so `main` reds the same way. The suite's own 4 rows that the first run added are gone
+(h11_run is guarded). `lint-shell-capture-exit`: 0 new findings on the suite, token-drift and test-affected-paths.
+
+Workflow readers: the census `git grep -l scheduled-terraform-drift -- '*.test.*' 'tests/'`, rerun at work time, has 18
+test files (2 more than the plan's floor: `inngest-luks-wrong-volume-alert.test.sh`, `function-registry-count.test.ts`).
+All rc 0: git-data-rung2-rehearsal 143, inngest-provision-rehearsal 91, inngest-luks-wrong-volume-alert 97,
+c4-count-parity 13, heartbeat-reconcile-issue-step 142/142, terraform-drift-sentry-leg 24, terraform-drift-step-order 7/7,
+token-drift-workflow-causes 402/402, cf-tunnel-liveness-gate-mutations 8, check-cloudflare-token-drift 98/98,
+test-apply-github-infra-mint-shape 126, test-argv-bearer-sweep 832, test-git-data-wipe-wedge 19,
+terraform-target-parity (bun) 400, and under vitest cron-terraform-drift 19, function-registry-count 13,
+sentry-monitor-iac-parity 27.
+
+YAML parse rc 0; `check-workflow-duplicate-keys` OK (114 files); actionlint the same 17 pre-existing findings before and
+after, none in the job. Byte identity (Phase 4.8): the first half lists only the notify `subject:`/`body:` lines; the
+second half compares 15 lines, 0 diff lines; the `TITLE_*` block against `use_entry inngest` diff is empty.
+`lint-guard-contract.py` on the plan: 3 guard entries, rc 0. `git diff --name-only origin/main...HEAD`: no `.tf`,
+cloud-init or user_data file.
