@@ -1650,7 +1650,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         if (toolName === GITHUB_PUSH_BRANCH_TOOL) {
           let role: "owner" | "member" | "unavailable" = "unavailable";
           const approvalDeps = deps.approval;
-          if (approvalDeps) {
+          if (!approvalDeps) {
+            // The legacy runner always builds the dependency, so its absence is a wiring defect (as on the cc branch above).
+            reportApprovalOp("gateFailed", null, {
+              toolName,
+              conversationId: ctx.conversationId,
+              userId: ctx.userId,
+              extra: { stage: "wiring-absent" },
+            });
+          } else {
             try {
               role = await readRoleBounded(() => approvalDeps.viewerRole(), [options.signal, ctx.controllerSignal]);
             } catch (err) {

@@ -14,7 +14,7 @@ required_change_4_sha256: "8a2f6e6c0f00b9e9bf8d3c6c7ecd2be490ca95a21e16f301fa4af
 
 # CLO agent ruling: approval-queue enabling gates and the published status statement (#12365)
 
-> **What this is and is not.** The company has no external counsel. On the operator's instruction, the CLO agent's ruling (`soleur:legal:clo`) stands in for counsel on this matter. It is a v1 internal position, not a lawyer's opinion; no human lawyer has read it, and human-lawyer review is owed. Rulings 3 and 4 below are the CLO agent's reply of 2026-11-10, copied word for word by script, not retyped; `source_sha256` above is the sha256 of that block, from its first heading to the end of this file. They were measured against `origin/main` at `b258336eb5`, not against production. No version bump and no SHA move follow from this record.
+> **What this is and is not.** The company has no external counsel. On the operator's instruction, the CLO agent's ruling (`soleur:legal:clo`) stands in for counsel on this matter. It is a v1 internal position, not a lawyer's opinion; no human lawyer has read it, and human-lawyer review is owed. Rulings 3 and 4 below are the CLO agent's reply of 2026-11-10, copied word for word by script, not retyped; `source_sha256` above is the sha256 of that block, from the heading "## Ruling 3" to the end of this file. They were measured against `origin/main` at `b258336eb5`, not against production. No version bump and no SHA move follow from this record.
 
 ## Required change 4, referenced by Ruling 4
 

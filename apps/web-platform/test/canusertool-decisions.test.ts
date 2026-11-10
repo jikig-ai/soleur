@@ -284,7 +284,14 @@ describe("createCanUseTool — deny branches (#2335)", () => {
     const ctx = buildContext({
       platformToolNames: ["mcp__soleur_platform__github_push_branch"],
     });
-    ctx.deps.abortableReviewGate = vi.fn().mockResolvedValue("Reject");
+    const gate = vi.fn().mockResolvedValue("Reject");
+    ctx.deps.abortableReviewGate = gate;
+    // An Owner, flag off, so the call reaches the in-memory card and is rejected there (#12197 D1).
+    (ctx.deps as unknown as Record<string, unknown>).approval = {
+      isEnabled: vi.fn(async () => false),
+      viewerRole: vi.fn(async () => "owner" as const),
+      grants: new ExecutionGrants(),
+    };
     const canUseTool = createCanUseTool(ctx);
     const result = await canUseTool(
       "mcp__soleur_platform__github_push_branch",
@@ -292,6 +299,8 @@ describe("createCanUseTool — deny branches (#2335)", () => {
       sdkOptions(),
     );
     assertDeny(result);
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect((result as { message?: string }).message).toMatch(/^User rejected the action\./);
   });
 
   test("Platform tool (blocked tier) → deny", async () => {

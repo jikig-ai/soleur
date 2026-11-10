@@ -90,7 +90,17 @@ function setup(role: Role, opts: { viewerRole?: () => Promise<"owner" | "member"
       message?: string;
     }>;
   const cards = () => sendToClient.mock.calls.filter((c) => (c as unknown[])[1] && ((c as unknown[])[1] as { type?: string }).type === "review_gate");
-  return { call, viewerRole, abortableReviewGate, sendToClient, notifyOfflineUser, updateConversationStatus, cards };
+  /** No write of any kind: no card, no status, no notification, no approval row, no bind. */
+  const expectNoWrites = () => {
+    expect(sendToClient).not.toHaveBeenCalled();
+    expect(abortableReviewGate).not.toHaveBeenCalled();
+    expect(notifyOfflineUser).not.toHaveBeenCalled();
+    expect(updateConversationStatus).not.toHaveBeenCalled();
+    const a = approval as unknown as { submit: ReturnType<typeof vi.fn>; resolveServerDerived: ReturnType<typeof vi.fn> };
+    expect(a.submit).not.toHaveBeenCalled();
+    expect(a.resolveServerDerived).not.toHaveBeenCalled();
+  };
+  return { call, viewerRole, abortableReviewGate, sendToClient, notifyOfflineUser, updateConversationStatus, cards, expectNoWrites };
 }
 
 const push = () => SAMPLES[TOOLS.pushBranch].input;
@@ -114,6 +124,7 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     const h = setup("member");
     const res = await h.call(TOOLS.pushBranch, push());
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    h.expectNoWrites();
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
     expect(h.notifyOfflineUser).not.toHaveBeenCalled();
@@ -128,6 +139,7 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     const h = setup("member-flag-throws");
     const res = await h.call(TOOLS.pushBranch, push());
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    h.expectNoWrites();
     expect(h.viewerRole).toHaveBeenCalledTimes(1);
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
@@ -144,6 +156,7 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     const h = setup("throws");
     const res = await h.call(TOOLS.pushBranch, push());
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    h.expectNoWrites();
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
     expect(reports).toHaveLength(1);
@@ -181,6 +194,7 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
       await vi.advanceTimersByTimeAsync(PUSH_ROLE_READ_DEADLINE_MS + 1);
       const res = await pending;
       expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    h.expectNoWrites();
       expect(h.sendToClient).not.toHaveBeenCalled();
       expect(reports.map((r) => r[0])).toEqual(["viewerRoleFailed"]);
     } finally {
@@ -188,10 +202,12 @@ describe("legacy push fallback: only the Owner may answer the in-memory card (#1
     }
   });
 
-  test("no approval dependency: static deny, no card", async () => {
+  test("no approval dependency: static deny, no card, reported as a wiring defect", async () => {
     const h = setup("no-approval");
     const res = await h.call(TOOLS.pushBranch, push());
+    expect(reports.map((r) => [r[0], (r[2] as { extra?: unknown }).extra])).toEqual([["gateFailed", { stage: "wiring-absent" }]]);
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    h.expectNoWrites();
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
   });

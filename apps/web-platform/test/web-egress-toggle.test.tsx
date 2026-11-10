@@ -227,7 +227,7 @@ describe("WebEgressToggle — push and gh disclosures (#12469, #12197)", () => {
     // closed set: any paragraph that talks about pushing, credentials or `gh` IS one of the two ruled constants, so an added or
     // rewritten claim beside them fails here
     const ruled = new Set([norm(PUSH_DISCLOSURE), norm(GH_DISCLOSURE)]);
-    const claims = (paras: string[]) => paras.filter((t) => /push|credential|\bgh\b/i.test(t));
+    const claims = (paras: string[]) => paras.filter((t) => /push|credential|\bgh\b|\bgit\b|repositor|token/i.test(t));
     expect(claims(onParas).filter((t) => !ruled.has(t))).toEqual([]);
     expect(claims(dlgParas).filter((t) => !ruled.has(t))).toEqual([]);
     expect(claims(onParas)).toHaveLength(2);
