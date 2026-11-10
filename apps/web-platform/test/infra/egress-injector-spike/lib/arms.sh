@@ -550,7 +550,9 @@ checks = {
   "A's credential at B's router: 407": g("aCredAtBRouter").get("connect") == "407",
   "A's router credential at B's injector: 407": g("aRouterCredAtBInjector").get("connect") == "407",
   "A's CA does not verify B's injector (TLS refused)": g("aCaAtBInjector").get("exit") == 60,
-  "A's hook client certificate on B's socket is refused": str(o.get("aHookCertOnB", "")).startswith("HOOK_CLIENT action=REJECT status=403"),
+  # The identity refusal carries no soleur_reason annotation; the hook's own guards do. An empty reason is required so
+  # a refusal by any other guard (the tunnel guard, run 42811970877) cannot pass for the identity check.
+  "A's hook client certificate on B's socket is refused (client identity)": str(o.get("aHookCertOnB", "")).strip() == "HOOK_CLIENT action=REJECT status=403 reason=",
   "control: B's own hook certificate is accepted": str(o.get("bHookCertOnB", "")).startswith("HOOK_CLIENT action=CONTINUE"),
   "a certificate from another root is refused at TLS": str(o.get("otherRootOnB", "")).startswith("HOOK_CLIENT error="),
   "the stub never recorded B's token during A's probes": not any(r["decoy_id"] == "sessB" for r in prb),

@@ -19,7 +19,10 @@ const Svc = grpc.loadPackageDefinition(def).transform.v1.TransformService;
 const creds = grpc.credentials.createSsl(readFileSync(root), readFileSync(key), readFileSync(cert));
 const client = new Svc(`unix://${socket}`, creds, { "grpc.ssl_target_name_override": "localhost", "grpc.default_authority": "localhost" });
 const deadline = new Date(Date.now() + 8000);
-client.TransformRequest({ request: { method: "GET", url: path, host, headers: {}, body: Buffer.alloc(0) } }, { deadline }, (err, res) => {
+// The request carries the tunnel context iron-proxy gives a tunnelled request (CTO R28), so a refusal measures the
+// channel's client identity, not the hook's tunnel guard (run 42811970877: without it, B's own control was refused).
+const context = { tunnel: { target: `${host}:443` } };
+client.TransformRequest({ context, request: { method: "GET", url: path, host, headers: {}, body: Buffer.alloc(0) } }, { deadline }, (err, res) => {
   if (err) {
     console.log(`HOOK_CLIENT error=${grpc.status[err.code] ?? err.code}`);
     process.exit(0);
