@@ -330,8 +330,8 @@ on main after PR-1 merges (the overlap is two disjoint line regions).
 
 3.1 Close #10857 with a comment citing: `npm audit --omit=dev` on
 `origin/main`'s lockfile reports 0 vulnerabilities in every severity bucket;
-`next@16.4.3` (GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr + GHSA-p3m5-59mp-jv5r),
-`@sentry/nextjs@10.77.1` (GHSA-mchm-gjx6-7h55), `vite@7.3.7`, `hono@4.13.14`,
+`next@16.4.3`,
+`@sentry/nextjs@10.77.1`, `vite@7.3.7`, `hono@4.13.14`,
 `@hono/node-server@2.1.5`, `gray-matter@4.0.3`, `minimatch` 11.x consolidation,
 `glob@14.0.2` — and the drain guard's REQUIRED rows as the standing
 re-admission ratchet. The pre-close verification is re-run at execution time;

@@ -223,8 +223,8 @@ so a lockfile change reaches an install that is already at the pin.
 overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside the engine's declared range, so it is covered
 by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
 (`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
-floor reaches the overridden version; bump it only after a green probe, as for `undici`.
-Wording amended for disclosure hygiene (#12348); decision unchanged.
+admits a `sharp` release that the `dependency-review` check accepts; bump it only after a green probe, as for `undici`.
+*Amended 2026-11-10 (#12348).* Wording changed for disclosure hygiene; the decision and the drop trigger are unchanged.
 
 **Addendum 2026-11-05 (#12102): a fourth `overrides` entry, `@anthropic-ai/claude-agent-sdk`.** The engine's own range is
 `@anthropic-ai/claude-agent-sdk ^0.3.293`. The lock already resolved 0.3.310, which embeds Bun 1.4.4 too (measured on the linux-x64 package: 0.3.309 to 0.3.311 all read 1.4.4, 0.3.293 reads 1.4.3), so this is pair alignment with the hosted image, not an advisory fix; the lockstep guard `apps/web-platform/test/claude-pin-lockstep.test.ts` carries the Bun reading across by version equality. `pen-cli/package.json`

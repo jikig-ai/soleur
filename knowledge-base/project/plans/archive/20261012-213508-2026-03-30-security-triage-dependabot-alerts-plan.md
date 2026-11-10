@@ -141,7 +141,7 @@ These are dev-scope dependencies. The `dependency-review.yml` workflow already u
 
 1. Dismiss esbuild alert #1 (dev-only, local dev server only)
 2. Dismiss liquidjs alerts #15, #16 if no patch available (dev-only, trusted templates)
-3. Consider adding `allow-ghsas` to `dependency-review.yml` for dismissed advisories only if they cause PR failures (GHSA-67mh-4wv8-2f99 for esbuild, GHSA-6q5m-63h6-5x4v and GHSA-9r5m-9576-7f6x for liquidjs if no patch available). Defer if no PR is actually blocked.
+3. Consider adding `allow-ghsas` to `dependency-review.yml` for dismissed advisories only if they cause PR failures (the esbuild alert, and the liquidjs alerts if no patch is available). Defer if no PR is actually blocked.
 
 #### Phase 4: Verification
 

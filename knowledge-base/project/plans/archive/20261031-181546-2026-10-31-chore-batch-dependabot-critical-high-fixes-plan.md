@@ -147,7 +147,7 @@ mechanism (extend, not invent). No new guard, workflow, or tool is added.
   PPR code-path removal) — none are public-API changes this codebase touches;
   `next build` + `tsc --noEmit` on `next.config.ts` (which uses `NextConfig`
   types) is the verification.
-- The Sentry SDK advisory is closed by this bump.
+- Bumped `@sentry/nextjs` for the Sentry SDK alert.
 - `images.localPatterns: [{ pathname: "/icons/**" }]` is already restricted
   (no `dangerouslyAllowSVG`) — the Image-Optimization RCE path is additionally
   belted, but the bump is the actual fix.
@@ -237,9 +237,7 @@ major of each watched package):
   `env`, `headers`. `next.config.ts` is typechecked against `NextConfig` —
   a renamed/removed key fails `npm run typecheck`; runtime config drift fails
   `npm run build`. The image-optimizer scope test and e2e are the second net.
-- **Sentry advisory reachability:** not exploitable here (no `tunnelRoute`,
-  and webpack-vs-Turbopack condition aside, the skip never installs). Still
-  bump — the alert does not close otherwise.
+- **Sentry SDK alert:** bump `@sentry/nextjs`; the alert closes only on the bump.
 - **Decision fork — `@likec4/core`'s zod-3 copy.** Option A (default, recorded
   `pending - assumed` in `decision-challenges.md`): scoped override — 2 lines,
   no declared-range for likec4 but verified by the ~19 `c4-*` test files +
@@ -408,7 +406,7 @@ probe verb allowlisted, <15s, literal `expected_output`; no PAT-shaped vars; no
 UI surface; dep-bump so Encryption/Task-Design conditional gates do not fire;
 single unfenced Scope Check with every ask mapped and the two `inferred` items
 justified; Guard Contract added for the drain-table extension). Verify-the-
-negative sweep: the plan's negative claims (`no tunnelRoute configured`, `no
+negative sweep: the plan's negative claims (`no
 'use cache'/'use server' directives`, `zero zod <4.6.6 after batch`) were each
 grepped against the tree — all confirmed with citations in Research Insights.
 Key finding already folded in: the zod alerts are NOT stale — two nested
@@ -485,5 +483,5 @@ lockfiles, `scripts/assert-dependabot-drain.{py,test.sh}`,
 - Guard contract: `scripts/assert-dependabot-drain.py`, `scripts/assert-dependabot-drain.test.sh`, `scripts/lint-dual-lockfile.sh`, `scripts/lint-workflow-install-sites.sh`, `scripts/verify-lockfile-guards.sh`.
 - Canonical procedure: `plugins/soleur/skills/work/references/work-lockfile-bumps.md`.
 - Learnings: `2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md`, `2026-05-27-npm-update-rewrites-lockfile-name-in-worktrees.md`.
-- Advisories: GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr, GHSA-p3m5-59mp-jv5r, GHSA-mchm-gjx6-7h55, GHSA-27r3-jxmh-p828, GHSA-mrhx-c7xc-m3w5.
-- [Next.js 16.4 announcement](https://nextjs.org/blog/next-16-4); [GHSA-mchm-gjx6-7h55 advisory](https://github.com/getsentry/sentry-javascript/security/advisories/GHSA-mchm-gjx6-7h55).
+- Advisories: the six behind the alerts in the table above.
+- [Next.js 16.4 announcement](https://nextjs.org/blog/next-16-4).
