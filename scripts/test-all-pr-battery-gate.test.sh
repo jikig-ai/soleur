@@ -80,8 +80,9 @@ L_TAB="scripts/test-all-affected-b"
 L_TAC="scripts/test-all-affected-c"
 L_TAD="scripts/test-all-affected-d"
 TAA_ARMS="$L_TAA|$L_TAB|$L_TAC|$L_TAD"
-ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD")
-ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS)
+L_OPR="scripts/orphan-process-reaper-mutations"
+ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR")
+ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS)
 
 # one file that belongs to exactly one battery's array (its own battery file)
 own_file() {
@@ -91,6 +92,7 @@ own_file() {
     LINT_ORPHAN_BATTERY_PATHS) echo "scripts/lint-orphan-test-suites.test.sh" ;;
     TAG_AUTHORSHIP_BATTERY_PATHS) echo "scripts/battery-tag-authorship-mutations.test.sh" ;;
     TEST_ALL_AFFECTED_BATTERY_PATHS) echo "scripts/test-all-affected.test.sh" ;;
+    AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS) echo "scripts/orphan-process-reaper-mutation.test.sh" ;;
   esac
 }
 
@@ -287,6 +289,7 @@ add_arm own-cf            "$PR" 1 "modify:$(own_file CF_TUNNEL_BATTERY_PATHS)" "
 add_arm own-lint          "$PR" 1 "modify:$(own_file LINT_ORPHAN_BATTERY_PATHS)" "$L_LA|$L_LB"
 add_arm own-tag           "$PR" 1 "modify:$(own_file TAG_AUTHORSHIP_BATTERY_PATHS)" "$L_TAG"
 add_arm own-taa           "$PR" 1 "modify:$(own_file TEST_ALL_AFFECTED_BATTERY_PATHS)" "$TAA_ARMS"
+add_arm own-reaper        "$PR" 1 "modify:$(own_file AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS)" "$L_OPR"
 add_arm ev-push           push 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-merge-group    merge_group 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-dispatch       workflow_dispatch 1 "modify:knowledge-base/note.md" ALL
@@ -297,7 +300,7 @@ add_arm ev-pr-target      pull_request_target 1 "modify:knowledge-base/note.md" 
 add_arm ev-pr-review      pull_request_review 1 "modify:knowledge-base/note.md" ALL
 # CI unset = a local run: the default local mode is the affected gate, which REFUSES (rc=4) a docs-only
 # diff that selects nothing, so these arms name an explicit group (TEST_GROUP=<g> bypasses the affected
-# axis) and a diff that touches one light battery's own file. The light group registers seven of the nine.
+# axis) and a diff that touches one light battery's own file. The light group registers eight of the ten.
 add_arm local-pr-event    "$PR" - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
 add_arm local-no-event    - - "modify:scripts/test-all-affected.test.sh" "$TAA_ARMS" "TEST_GROUP=scripts"
 add_arm force-all         "$PR" 1 "modify:knowledge-base/note.md" ALL "SOLEUR_TEST_FORCE_ALL=1"
@@ -426,11 +429,11 @@ derive_sites() {
 want_sites="$(printf '%s\n' "${ARRAYS[@]}" | LC_ALL=C sort)"
 got_sites="$(derive_sites "$PRISTINE/scripts/test-all.sh")"
 if [[ -n "$got_sites" && "$got_sites" == "$want_sites" ]]; then
-  pass "dispatch: the --pr-gated call sites in the runner are exactly the five expected arrays"
+  pass "dispatch: the --pr-gated call sites in the runner are exactly the ${#ARRAYS[@]} expected arrays"
 else
   fail "dispatch: --pr-gated sites differ. expected: $(echo $want_sites) / derived: $(echo $got_sites)"
 fi
-# the runner must carry a skip_suite for each of the nine labels (a decline is a counted verdict)
+# the runner must carry a skip_suite for each of the ten labels (a decline is a counted verdict)
 for l in "${ALL_LABELS[@]}"; do
   if grep -qF "skip_suite \"$l\" \"relevance\"" "$PRISTINE/scripts/test-all.sh"; then pass "skip_suite else-arm present for $l"; else fail "no skip_suite arm for $l"; fi
 done
@@ -599,6 +602,7 @@ for arr in "${ARRAYS[@]}"; do
     REGISTRY_BATTERY_PATHS) arm_id=own-registry ;; CF_TUNNEL_BATTERY_PATHS) arm_id=own-cf ;;
     LINT_ORPHAN_BATTERY_PATHS) arm_id=own-lint ;; TAG_AUTHORSHIP_BATTERY_PATHS) arm_id=own-tag ;;
     TEST_ALL_AFFECTED_BATTERY_PATHS) arm_id=own-taa ;;
+    AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS) arm_id=own-reaper ;;
   esac
   mutant "array-typo-$arr" 'import re
 m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)

@@ -6012,7 +6012,17 @@ if want_scripts; then
   # launch, and a suite whose verdict depended on what else happened to be
   # running is cq-ac-must-not-depend-on-concurrent-sessions reproduced inside
   # the gate.
-  run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
+  # RELEVANCE-GATED (ADR-262, #9340), ~135 s: declines on pull_request runs when
+  # the diff misses its declared edge set — the already-declared
+  # AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS is consumed, never
+  # duplicated by a second array.
+  if _diff_touches --pr-gated "${AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS[@]}"; then
+    run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "scripts/orphan-process-reaper-mutations" "relevance" \
+      "bash scripts/orphan-process-reaper-mutation.test.sh"
+  fi
   # The Incident-PIR hypothetical-paragraph strip's mutation battery (#7801). The
   # strip is a STATEFUL, ORDERED awk program, so a fixture suite alone cannot tell a
   # load-bearing rule from a decorative one — seven of its ten original fixtures pass on `main`.

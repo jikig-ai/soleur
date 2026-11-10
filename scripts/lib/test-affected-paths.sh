@@ -396,9 +396,11 @@ AFFECTED_CONSUMED_EDGES=(
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
-  # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
+  # ADR-262: the self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
   # halves share one array because they are two --rows ranges of one battery; the four
-  # test-all-affected arms share one array for the same reason (#11562).
+  # test-all-affected arms share one array for the same reason (#11562). The reaper battery's
+  # array lives in test-relevance-paths.sh with the other gated predicates (#9340) — the consumed
+  # mapping does not care which file owns the array it names.
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
@@ -406,6 +408,7 @@ AFFECTED_CONSUMED_EDGES=(
   "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/orphan-process-reaper-mutations|AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
@@ -1587,17 +1590,10 @@ AFFECTED_SCRIPTS_SENTRY_ISSUE_DISCOVER_PATHS=(
   "scripts/sentry-issue.sh"
 )
 
-# scripts/orphan-process-reaper-mutations — derived edges could not reach its subject; declared from the
-# repo paths its suite file names.
-AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
-  "scripts/lib/"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/lib/test-contention.sh"
-  "scripts/orphan-process-reaper-mutation.test.sh"
-  "scripts/orphan-process-reaper.sh"
-  "scripts/orphan-process-reaper.test.sh"
-  "scripts/test-all.sh"
-)
+# scripts/orphan-process-reaper-mutations — declared in scripts/lib/test-relevance-paths.sh since
+# #9340 folded the battery into --pr-gated: every gated array must resolve in that file's scope
+# (the orphan linter's RELEVANCE_ARRAYS expansion reads no other lib), so the long-declared edge
+# set moved there with its name and contents intact rather than being duplicated.
 
 # scripts/lint-workflow-local-action-checkout-live — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
