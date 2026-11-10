@@ -30,6 +30,9 @@ SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WP="$(cd "$SPIKE_DIR/../../.." && pwd)"
 REPO="$(cd "$WP/../.." && pwd)"
 SPIKE_WORK="$(mktemp -d -t soleur-run.$$.XXXXXXXX)" || { echo "FAIL TOOL_UNAVAILABLE: mktemp"; exit 1; }
+# Fixed once: the self-test swaps SPIKE_WORK and SPIKE_RECORDS for scratch, and a signal there must finalize and
+# clean up the real run (verification pass).
+readonly SPIKE_REAL_WORK="$SPIKE_WORK"
 SPIKE_RECORDS="$SPIKE_WORK/records.jsonl"
 SPIKE_OBSERVATIONS="$SPIKE_WORK/observations.jsonl"
 # Outside SPIKE_WORK: the EXIT trap removes the work directory, and the results must outlive it.
@@ -51,7 +54,7 @@ spike_finalize_if_needed() { # <harness reason>
   SPIKE_FINALIZED=1
   # The real records, whatever SPIKE_RECORDS points at: the self-test swaps it to scratch files that hold its own
   # passes, and a signal there must never finalize those into a GO (review H7).
-  SPIKE_RECORDS="$SPIKE_WORK/records.jsonl"
+  SPIKE_WORK="$SPIKE_REAL_WORK"; SPIKE_RECORDS="$SPIKE_REAL_WORK/records.jsonl"
   echo "FAIL $1: the suite ended before finalize"
   local c
   for c in "${SPIKE_CRITERIA[@]}"; do
@@ -62,7 +65,7 @@ spike_finalize_if_needed() { # <harness reason>
 cleanup() {
   spike_finalize_if_needed EXIT_BEFORE_FINALIZE
   spike_teardown
-  case "$SPIKE_WORK" in /*/soleur-run.*) rm -rf -- "$SPIKE_WORK" ;; esac
+  case "$SPIKE_REAL_WORK" in /*/soleur-run.*) rm -rf -- "$SPIKE_REAL_WORK" ;; esac
 }
 trap cleanup EXIT
 trap 'spike_finalize_if_needed TIMEOUT; exit 1' TERM INT

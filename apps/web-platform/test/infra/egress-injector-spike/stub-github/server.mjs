@@ -232,6 +232,8 @@ export function createStub(cfg) {
     const rec = {
       seq: ++seq, ts: new Date().toISOString(), host: hostOf(req), method: "CONNECT", path: "", query_keys: [],
       auth_class: a.cls, auth_count: a.count, decoy_id: a.decoyId, auth_scheme: a.scheme ?? null,
+      // A count only, never the value: the router credential forwarded upstream would show here.
+      proxy_auth_count: (req.rawHeaders ?? []).filter((v, i) => i % 2 === 0 && String(v).toLowerCase() === "proxy-authorization").length,
       idempotency_key: req.headers["idempotency-key"] !== undefined, sni: req.socket?.servername ?? null,
       protocol: typeof second?.writeHead === "function" ? "h2" : "http/1.1",
     };

@@ -972,3 +972,20 @@ describe("review 2026-11-10 fix round — policy holes", () => {
     expect(at(body("report-status push-options=1", "ci.skip"))).not.toBe(at(body("report-status push-options=1", "deploy=prod")));
   });
 });
+
+describe("review 2026-11-10 verification pass — Content-Type is unambiguous", () => {
+  const post = (headers: Record<string, unknown>) => policyMod.classify(policyMod.normalizeRequest({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", query: "", body: Buffer.from("{}"), headers, tunnelTarget: "api.github.com:443", sni: "api.github.com" }), BASE_POLICY, { repositories: REPOS });
+  it("refuses two Content-Type values (one key holding two, or two case variants), however the first is parameterised", () => {
+    expect(post({ "content-type": ["application/json; x", "application/x-www-form-urlencoded"] })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    // Each value valid on its own: only the one-value rule refuses this (a first-wins reader would take the JSON).
+    expect(post({ "content-type": ["application/json", "application/x-www-form-urlencoded"] })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(post({ "Content-Type": "application/json", "content-type": "application/json" })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(post({ "Content-Type": "application/json; a", "content-type": "application/x-www-form-urlencoded" })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+  });
+  it("accepts only charset=utf-8 as a parameter", () => {
+    expect(post({ "content-type": "application/json; charset=utf-16" })).toMatchObject({ verdict: "refused" });
+    expect(post({ "content-type": "application/json; boundary=x" })).toMatchObject({ verdict: "refused" });
+    expect(post({ "content-type": "application/json; charset=UTF-8" }).verdict).toBe("write");
+    expect(post({ "content-type": "application/json" }).verdict).toBe("write");
+  });
+});

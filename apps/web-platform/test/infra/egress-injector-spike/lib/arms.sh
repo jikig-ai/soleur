@@ -682,7 +682,8 @@ hookreqs = [x for x in m if "session=sessD " in x and " method=CONNECT" not in x
 pend = lambda s: int(dict(p.split(":", 1) for p in s.split() if ":" in p).get("pending", 0)) if s.strip() else 0
 # A refused push is git's own non-zero exit; a missing or non-numeric push_rc (a script that never reached the
 # push) is never read as refused.
-refused = lambda v: re.fullmatch(r"push_rc=[1-9][0-9]*", v or "") is not None
+# 124 is the in-container `timeout 100` firing: a hung push, not a refusal (verification pass).
+refused = lambda v: re.fullmatch(r"push_rc=(?!124$)[1-9][0-9]*", v or "") is not None
 off_markers = o["off_push_markers"].split()
 # Per-probe windows (A4-A6): markers, stub records, and the stub's received body length by record seq.
 rd = lambda f: open(f"{d}/{f}").read() if os.path.exists(f"{d}/{f}") else ""
@@ -744,7 +745,8 @@ checks = {
       o["a4_approve"] == "200" and o["a4_push2"] == "push_rc=0" and o["a4_status"] == "consumed" and vend(a4b, "write", "git-push")
       and len([r for r in rpack("a4b") if blen(r) >= 2 * 1024 * 1024]) == 1,
   "R40 a ~4 MiB push is refused body-over-cap, with no row and no decoy on the write":
-      (refused(o["a5_push"]) or (o["a5_push"] == "" and o.get("a5_client", "").startswith("cx_rc=124 ")))
+      # The over-cap client hangs (run 42868332624, 42880042135): its in-container timeout prints push_rc=124.
+      (refused(o["a5_push"]) or o["a5_push"] == "push_rc=124")
       and refusal(a5, "POST", "guard-refused", "body-over-cap") and o["a5_rows0"] == o["a5_rows1"]
       and not [r for r in rpack("a5") if blen(r) != FLUSH],
   "R40 same connection, HTTP/1.1: a reused connection's unapproved POST is pending, no real token": same_conn("http1.1"),
@@ -1410,7 +1412,7 @@ hits = lambda text: [k for k, v in secrets if len(v) >= 8 and v in text] + (["bo
 planted_id, planted = next(((k, v) for k, v in secrets if k == "sessA-decoy"), ("sessA-decoy", ""))
 logs, log_leaks, log_live = {}, {}, {}
 # A known positive line per log: proof that the file is that log, captured, not an empty file or an error message.
-POSITIVE = {"hook.log": r"^SOLEUR_EGRESS_", "app.log": r"^=== sessA/logs/iron-proxy\.log$",
+POSITIVE = {"hook.log": r"^SOLEUR_EGRESS_", "app.log": r'^=== sessA/logs/iron-proxy\.log$(?:\n(?!=== ).*)*?\n\{[^\n]*"audit"',  # the header the harness echoes, then iron-proxy's own audit line
             # infra/egress-gateway-squid.conf logs one soleur_json object per request: ts, decision, requested_host, ...
             "squid.log": r'^\{"ts":"[0-9.]+","decision":"[A-Z_]+",.*"requested_host":"[^"]+"',
             "stub-stdout.log": r"^stub-github-listening \d+$"}
@@ -1454,14 +1456,19 @@ def refused_before_hook(w):  # iron-proxy refused it itself, in one of the shape
 # The stub records a CONNECT that reaches it (method CONNECT, the Authorization class): a credential riding a CONNECT
 # upstream is a CONNECT record with a real decoy, in any window.
 connects = lambda w: [r for r in W[w]["stub"] if r.get("method") == "CONNECT"]
-no_connect_decoy = all(not any(r["auth_class"] == "real-decoy" for r in connects(w)) for w in W)
+# No CONNECT at the stub carries a real token in Authorization, nor any Proxy-Authorization (the router credential
+# forwarded upstream would be one); the stub records the header count, never its value (verification pass).
+no_connect_decoy = all(not any(r["auth_class"] == "real-decoy" or r.get("proxy_auth_count", 0) != 0 for r in connects(w)) for w in W)
+iron_forwarded = lambda w: any(x.startswith("CONNECT ") and " allow " in f" {x} " for x in rdw(f"{w}.iron").strip().split(" | "))
 def sni_variant(w="a1-https-listen-sni"):
     # The hook passes this CONNECT (it looks like tunnel_listen's synthetic one), iron-proxy forwards it upstream, and
     # the method list keeps the credential off it: exactly one CONNECT at the stub with no Authorization, plus the
     # hook's continue marker. If none reached the stub (the forwarder or squid stopped it), that is recorded.
     c = connects(w)
     if not c:
-        return {"ok": True, "outcome": "no CONNECT reached the stub"}
+        # Absence counts only when iron-proxy itself did not forward it: a forwarded CONNECT the stub did not record
+        # means the recorder is blind, not that the credential stayed off (verification pass).
+        return {"ok": not iron_forwarded(w), "outcome": "no CONNECT reached the stub" + (" although iron-proxy forwarded one" if iron_forwarded(w) else "")}
     ok = len(c) == 1 and c[0]["auth_class"] == "none" and connect_continued(w)
     return {"ok": ok, "outcome": f"{len(c)} CONNECT record(s) at the stub, auth {[r['auth_class'] for r in c]}, hook continue {connect_continued(w)}"}
 SNI = sni_variant()

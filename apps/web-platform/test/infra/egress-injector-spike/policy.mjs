@@ -470,8 +470,11 @@ function canonicalFor(rule, n, bind, repo) {
   }
   // rest. The body must be JSON: GitHub's REST API reads JSON, and a form-encoded body is what a method-override
   // middleware reads `_method=` from (review 2026-11-10), so anything else is refused rather than hashed.
-  const ctype = (n.headers["content-type"] ?? []).join(",").trim().toLowerCase();
-  if (!/^application\/(?:vnd\.github(?:\.[a-z0-9.+-]+)?\+)?json(?:\s*;.*)?$/.test(ctype)) return null;
+  // Exactly one Content-Type, like Host: two values could be read first-wins here and last-wins by a server
+  // (verification pass). The only parameter accepted is charset=utf-8, the encoding the approver reads the body in.
+  const ctypes = n.headers["content-type"] ?? [];
+  if (ctypes.length !== 1) return null;
+  if (!/^application\/(?:vnd\.github(?:\.[a-z0-9.+-]+)?\+)?json(?:\s*;\s*charset="?utf-8"?)?$/.test(String(ctypes[0]).trim().toLowerCase())) return null;
   const body = decodedBody(n);
   if (body === null) return null;
   return {
