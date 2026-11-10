@@ -299,6 +299,24 @@ export function fromTransformRequest(httpReq) {
   return { method: httpReq.method, host: httpReq.host, path, query, headers, body: Buffer.from(httpReq.body ?? []) };
 }
 
+/** Headers the hook removes on every request it lets through (criterion 2: a retried POST cannot reuse one approval). */
+export const STRIPPED_HEADERS = Object.freeze(["idempotency-key"]);
+
+/**
+ * iron-proxy's HttpRequest with every STRIPPED_HEADERS name (any case) removed, or null when none was present (the
+ * hook then returns no modified_request). The hook runs before the secrets transform, so this never handles a token.
+ */
+export function withoutStrippedHeaders(httpReq) {
+  const headers = httpReq?.headers ?? {};
+  const keep = {};
+  let removed = false;
+  for (const [k, v] of Object.entries(headers)) {
+    if (STRIPPED_HEADERS.includes(k.toLowerCase())) removed = true;
+    else keep[k] = v;
+  }
+  return removed ? { ...httpReq, headers: keep } : null;
+}
+
 function toHeaderMap(h) {
   const out = {};
   for (const [k, v] of Object.entries(h ?? {})) out[k] = { values: v };
@@ -357,7 +375,12 @@ async function main(configPath) {
         decider.decide(req, session).then((d) => {
           if (d.marker) print(d.marker.name, d.marker.fields);
           if (d.action === "CONTINUE") {
-            cb(null, { action: CONTINUE, annotations: { soleur_request_id: d.requestId, soleur_class: d.class ?? "" } });
+            const modified = d.class === "connect" ? null : withoutStrippedHeaders(call.request.request);
+            cb(null, {
+              action: CONTINUE,
+              ...(modified ? { modified_request: modified } : {}),
+              annotations: { soleur_request_id: d.requestId, soleur_class: d.class ?? "" },
+            });
           } else {
             cb(null, {
               action: REJECT,

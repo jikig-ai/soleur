@@ -542,6 +542,21 @@ describe("approval-hook.mjs decide() — decision order", () => {
   });
 });
 
+describe("approval-hook.mjs — header strip and transform mapping", () => {
+  it("removes every case variant of Idempotency-Key and leaves the rest, or returns null when absent", () => {
+    const r = { method: "POST", url: "https://api.github.com/x", host: "api.github.com", body: Buffer.alloc(0), headers: { "Idempotency-Key": { values: ["k1"] }, "idempotency-key": { values: ["k2"] }, Accept: { values: ["*/*"] } } };
+    const out = hookMod.withoutStrippedHeaders(r);
+    expect(Object.keys(out!.headers)).toEqual(["Accept"]);
+    expect(hookMod.withoutStrippedHeaders({ ...r, headers: { Accept: { values: ["*/*"] } } })).toBeNull();
+  });
+
+  it("maps iron-proxy's HttpRequest to the decider's struct (path, query, header lists, body)", () => {
+    const m = hookMod.fromTransformRequest({ method: "GET", url: "https://github.com/acme-synth/widget/info/refs?service=git-upload-pack", host: "github.com", headers: { Accept: { values: ["a", "b"] } }, body: Buffer.from("x") });
+    expect(m).toMatchObject({ method: "GET", host: "github.com", path: "/acme-synth/widget/info/refs", query: "service=git-upload-pack", headers: { Accept: ["a", "b"] } });
+    expect(policyMod.classify(policyMod.normalizeRequest(m), BASE_POLICY, { repositories: REPOS }).verdict).toBe("read");
+  });
+});
+
 describe("approval-hook.mjs — Supabase target guard (CTO R21)", () => {
   const status = { API_URL: "http://127.0.0.1:54321", SERVICE_ROLE_KEY: "svc-synthetic" };
   it("accepts a loopback URL whose URL and key match supabase status", () => {

@@ -1,0 +1,84 @@
+# iron-proxy v0.56.0 configuration template for ONE session (#12517). Test path only.
+#
+# The suite renders one copy per session into that session's masked directory, replacing every @@NAME@@ token
+# (an unreplaced token fails the render). The rendered file holds the forwarder credential in the upstream URL, so
+# it lives under the masked path with the CA key and the decoy (CTO F-c, R10); nothing reaches env or argv.
+#
+# Binding (tracer 9b, R26): DNS mode off; explicit-proxy traffic only on tunnel_listen, which only this session's
+# connect-router.mjs reaches; http_listen, https_listen and the metrics listener cannot be switched off and default
+# to all interfaces, so each is bound to loopback. A CONNECT sent to http_listen would be forwarded upstream with
+# the credential injected (tracer hazard), so it must stay unreachable.
+
+dns:
+  enabled: false
+
+proxy:
+  tunnel_listen: "@@TUNNEL_LISTEN@@"
+  http_listen: "127.0.0.1:8081"
+  https_listen: "127.0.0.1:8443"
+  upstream_response_header_timeout: "30s"
+  # Chained to the unchanged egress-forwarder.mjs, which chains to the real squid gateway (CTO F-c, tracer item 1).
+  upstream_proxy:
+    https_proxy: "@@FORWARDER_PROXY_URL@@"
+
+metrics:
+  listen: "127.0.0.1:9090"
+
+tls:
+  mode: mitm
+  # The per-session name-constrained CA (spec TR3): the key never enters the sandbox and is deleted at session end.
+  ca_cert: "@@SESSION_CA_CERT@@"
+  ca_key: "@@SESSION_CA_KEY@@"
+  leaf_cert_expiry_hours: 24
+
+# Order matters (Guard 2 row 8): the hook runs BEFORE the secrets transform, so it never sees the real token and a
+# REJECT ends the pipeline before a header is replaced.
+transforms:
+  # Every CONNECT and every request reaches the hook: no `rules` (R26, tracer 7b). The hook requires the
+  # router-only credential on every CONNECT (407 otherwise) and makes the vend decision on every request.
+  - name: grpc
+    config:
+      name: approval-hook
+      target: "unix://@@HOOK_SOCKET@@"
+      send_request_body: true
+      tls:
+        enabled: true
+        ca_cert: "@@HOOK_SERVER_ROOT@@"
+        cert: "@@HOOK_CLIENT_CERT@@"
+        key: "@@HOOK_CLIENT_KEY@@"
+
+  # Only the four inject hosts; a CONNECT that skipped the router to any other host is refused 403 (tracer 2b).
+  - name: allowlist
+    config:
+      domains:
+        - "github.com"
+        - "api.github.com"
+        - "uploads.github.com"
+        - "codeload.github.com"
+
+  # Whole-header replacement in configuration only (CTO R8, D1, tracer item 5): `inject` deletes every case variant
+  # of Authorization and sets exactly one, whether or not the client sent any. Never a substitution inside a header.
+  - name: secrets
+    config:
+      secrets:
+        - source:
+            type: file
+            path: "@@DECOY_TOKEN_FILE@@"
+          inject:
+            header: "Authorization"
+            formatter: 'Basic {{ base64 "x-access-token:" .Value }}'
+          rules:
+            - host: "github.com"
+        - source:
+            type: file
+            path: "@@DECOY_TOKEN_FILE@@"
+          inject:
+            header: "Authorization"
+            formatter: "token {{ .Value }}"
+          rules:
+            - host: "api.github.com"
+            - host: "uploads.github.com"
+            - host: "codeload.github.com"
+
+log:
+  level: "info"
