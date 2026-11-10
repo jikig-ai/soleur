@@ -12,6 +12,41 @@ brand_survival_threshold: none
 
 # ci: bound the ci-push-dedupe-soak-9512 read window (Epic #11556 Lever A)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-10 (soleur:deepen-plan, sequential-fallback inline — this harness has no
+agent tool; all prescribed fan-outs ran as inline passes, not independent agents).
+
+### Gate ledger
+
+- 4.5 network-outage: no trigger patterns — skip. 4.55 downtime/cutover: no infra-reboot /
+  lock / deploy class in Files-to-Edit — skip. 4.6 User-Brand Impact: present, `none`,
+  no sensitive-path match — pass. 4.7 Observability: present, 5 fields non-placeholder, `grep`
+  verb allowlisted, `"1"` literal — pass. 4.8 PAT: zero hits — pass. 4.9 UI wireframe: no
+  UI-surface files — skip. 4.10 Encryption Posture: no new store/connection — skip. 4.11 Guard
+  Contract: `python3 scripts/lint-guard-contract.py` green (2 guard entries) — pass. 4.12 Scope
+  Check: 1 unfenced section, 3 subsections, all asks mapped/descoped-with-justification,
+  `Recommendation: single PR` — pass. 4.13 Task-Design: no new autonomous surface — skip.
+- 4.4 precedent-diff: bounded `&page=$p` loop mirrors `pr-battery-gate-saving-9323.sh:242` and
+  `cron-machinery-soak-9272.sh:136` — precedent exists, diff recorded in Proposed Solution.
+- 4.45 verify-the-negative: "only unbounded read" verified against the probe's full `api()`
+  call census (all other reads are single-page or single-object); "no row asserts the per-run
+  `created_at` failure text" verified — the suite's only `created_at` reference is the fixture
+  producer (`.test.sh:165`).
+- Plan-review standing check: wall-time AC was machine-dependent — rewritten as a structural
+  invocation census; wall time moved to Success Metrics.
+
+### Key verification results
+
+- Citation audit: `f88359a7f8` (sibling retirement), `404e4c626f`/PR #12419 (sibling pace fix),
+  ADR-276 S2 amendment text, `sweep-followthroughs.sh:58-66` (FT_PROBE_TIMEOUT context), all
+  learnings paths, and every `scripts/` path:line cited — resolved live against the tree.
+- `work-test-harness-sharp-edges.md` consulted (added by sibling PR #12419): applicable items
+  are work-time (`assert_fixture_dir` precedent already present at `.test.sh:20-29`; mutation
+  rows must stay killable-by-construction — folded into Phase 2 tasks).
+- No external research needed: mechanism is repo-internal with two committed precedents;
+  Context7/WebSearch add nothing for a bash followthrough probe.
+
 ## Overview
 
 #12017 (Epic #11556 Lever A): the `scripts/followthroughs/ci-push-dedupe-soak-9512` suite measures
@@ -351,9 +386,11 @@ post-loop voucher computation — both chokepoints all sampled runs flow through
 
 - [ ] The probe's `merge_group` read issues at most MG_MAX_PAGES=10 `&page=$p` requests; an
   enumeration reaching the cap with a full last page exits 3 with a message naming the cap.
-- [ ] Per sampled run the probe executes at most one `jq` evaluation plus the `gh` jobs read
-  (measured: `bash -x`/`requests.log` + a process count, or a timing assertion — the suite's
-  `expect` machinery proves the merged program via the unchanged rows).
+- [ ] Per sampled run the probe's `while read` loop body contains exactly one `jq` invocation
+  site and no per-run `date` or voucher `jq` site — verified by a source census:
+  `awk '/while IFS/{f=1} /^done/{f=0} f' scripts/followthroughs/ci-push-dedupe-soak-9512.sh |
+  grep -c 'jq -r'` prints `1` (the loop body excludes the `done < <(jq …)` line; voucher `jq`
+  sites exist only in the post-loop block).
 - [ ] `bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh` exits 0: all rows pass,
   `MUTANTS: N of N caught` with N ≥ 67, assertion count ≥ the adjusted floor.
 - [ ] Every mutation whose anchor moved under the rewrite is re-anchored and still turns its
@@ -365,8 +402,11 @@ post-loop voucher computation — both chokepoints all sampled runs flow through
 - [ ] `scripts/suite-durations.tsv` carries a re-measured price for
   `scripts/followthroughs/ci-push-dedupe-soak-9512`, with the green `merge_group` run IDs named
   in the commit message.
-- [ ] Suite wall time measured ≤ ~120s on the CI-class surface (local `time` on this host and/or
-  the first green `merge_group` suite-timings artifact post-merge).
+- [ ] The suite's probe-invocation census is bounded structurally: the three harness controls
+  each iterate `CONTROL_ROWS` (≤12 entries) — `grep -c 'CONTROL_ROWS' scripts/followthroughs/
+  ci-push-dedupe-soak-9512.test.sh` ≥ 4 (definition + 3 control sites) and no `ALL_ROWS` token
+  remains inside a `core_rows_quiet` control call. (Wall-time is a Success Metric, not an AC —
+  it measures the machine under concurrent load, not the diff.)
 - [ ] No change to `MAX_RUNS`, `IDLE_RUNS`, `MIN_ELIDED`, `MIN_DAYS`, `DEADLINE_DAYS`, or the
   mean limit (ADR-276 S2 contract preserved verbatim).
 
@@ -436,4 +476,4 @@ No cross-domain implications detected — internal CI-cost tooling on `scripts/`
 - Suite: `scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh` (`build_fx` 126–251, `expect` 257–264, `ALL_ROWS` 415–420, mutants 460–578, controls 579–630)
 - Precedent: `scripts/followthroughs/pr-battery-gate-saving-9323.sh:242`, `cron-machinery-soak-9272.sh:136`; PR #12419 (`404e4c626f`); sweeper cap `scripts/sweep-followthroughs.sh:58-66` (Ref #11215)
 - Contract: `knowledge-base/engineering/architecture/decisions/ADR-276-*.md` (S2 amendment, Decision 3(e))
-- Learnings: `2026-09-25-gh-stub-must-mirror-real-cli-flags.md`, `2026-11-08-mutant-killability-and-fixture-key-scoping.md`
+- Learnings: `knowledge-base/project/learnings/2026-09-25-gh-stub-must-mirror-real-cli-flags.md`, `knowledge-base/project/learnings/workflow-issues/2026-11-08-mutant-killability-and-fixture-key-scoping.md`
