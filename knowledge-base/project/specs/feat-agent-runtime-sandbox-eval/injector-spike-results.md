@@ -100,4 +100,4 @@ The hermetic rows run on every push in `egress-injector-policy.test.ts` and `egr
 
 ## Re-measure trigger
 
-These results describe the pinned versions above. Re-measure when any of these changes: the Agent SDK version, the claude-code CLI version, the iron-proxy digest, `buildAgentSandboxConfig` or `buildAgentEnv`, `egress-forwarder.mjs` or `egress-gateway-squid.conf`, the approval RPCs (`create_approval_request`, `decide_approval`, `consume_approval`, `get_approval_status`), or the hook and policy files. The results also go stale when this PR merges, until #11637 owns the job (ADR-324).
+These results describe the pinned versions above. Re-measure when any of these changes: the Agent SDK version, the claude-code CLI version, the iron-proxy digest, `buildAgentSandboxConfig` or `buildAgentEnv`, `egress-forwarder.mjs` or `egress-gateway-squid.conf`, the approval RPCs (`create_approval_request`, `decide_approval`, `consume_approval`, `get_approval_status`), or the hook and policy files. The results also go stale when this PR merges, until #11637 owns the job (ADR-325).

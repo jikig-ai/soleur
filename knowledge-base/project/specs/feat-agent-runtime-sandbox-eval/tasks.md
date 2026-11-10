@@ -63,7 +63,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Phase 3: Decision record and dispositions
 
-- [ ] 3.1 Write ADR-324 via `soleur:architecture` and append `## Measured outcome — injector`; run `soleur:architecture assess` for the NFR register.
+- [ ] 3.1 Write ADR-325 via `soleur:architecture` and append `## Measured outcome — injector`; run `soleur:architecture assess` for the NFR register.
 - [ ] 3.2 GO: append the merge-conditioned ADR-311 addendum. NO-GO: add the ADR-311 see-also.
 - [ ] 3.3 Edit #9845 (linked section) and #9859 (Arm D widened with the Phase 4 trial requirements).
 - [ ] 3.4 File the demand-side session telemetry issue (Phase 4 milestone).

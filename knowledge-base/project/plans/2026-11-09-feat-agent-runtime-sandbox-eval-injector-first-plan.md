@@ -34,7 +34,7 @@ requires_cpo_signoff: true
 
 This plan turns the 2026-11-09 brainstorm into a decision record and one measurement. The decision is that egress credential injection is decided at the egress hop's interface (a CONNECT proxy with per-session authentication), apart from the isolation runtime (bwrap today, the gVisor epic #9842 tomorrow). The measurement is a go/no-go on a self-run TLS-terminating injector (iron-proxy) for GitHub hosts, run in a hermetic suite on the production run tuple, against criteria fixed before the run: the brainstorm's seven, split and extended to nine (criteria 1–9 below; the mapping is in the spec edit). The Cloudflare Sandbox trial, the measured contingency, ships as a sibling PR under widened #9859 (Arm D) on this same spec (CTO ruling F-d). No credential-bearing surface reaches any tenant: the injector, its CA, its policy and its approval hook live under a test path only.
 
-PR #12518 delivers: ADR-324 (provisional ordinal), the injector spike suite and its raw results, a results note with a verdict, the dependent-issue edits, and (only on GO) a merge-conditioned addendum to ADR-311.
+PR #12518 delivers: ADR-325 (provisional ordinal), the injector spike suite and its raw results, a results note with a verdict, the dependent-issue edits, and (only on GO) a merge-conditioned addendum to ADR-311.
 
 ## Problem Statement
 
@@ -42,7 +42,7 @@ Web-egress-entitled hosted sessions hold no credential (ADR-278 Decision 5), so 
 
 ## Research Insights
 
-**Premise Validation (2026-11-09).** Every cited issue is open: #12517, #12467, #11637, #11638, #9842, #9845, #9846, #9843, #9853, #9854, #9852, #9859, #9866, #5274; PR #9832 (the #9842 spec) is open and unmerged; PR #12518 is this branch's draft. ADR-075, -272, -278, -309, -311 and -315 exist on main. The collision pre-check found no open PR naming #12517 other than #12518; its foreign-process hits were unrelated `test-all.sh` runs in other worktrees. ADR-323 was claimed on main the same day; ADR-324 is free across every `origin/*` ref (probed 2026-11-09). Stale premises: the "41 / 14 files" baseline (replaced by measured 36 / 42) and "flag off denies everywhere" (true only in the cc dispatcher).
+**Premise Validation (2026-11-09).** Every cited issue is open: #12517, #12467, #11637, #11638, #9842, #9845, #9846, #9843, #9853, #9854, #9852, #9859, #9866, #5274; PR #9832 (the #9842 spec) is open and unmerged; PR #12518 is this branch's draft. ADR-075, -272, -278, -309, -311 and -315 exist on main. The collision pre-check found no open PR naming #12517 other than #12518; its foreign-process hits were unrelated `test-all.sh` runs in other worktrees. ADR-323 was claimed on main the same day; ADR-325 is free across every `origin/*` ref (probed 2026-11-09). Stale premises: the "41 / 14 files" baseline (replaced by measured 36 / 42) and "flag off denies everywhere" (true only in the cc dispatcher).
 
 **Property List.**
 
@@ -89,9 +89,9 @@ Web-egress-entitled hosted sessions hold no credential (ADR-278 Decision 5), so 
 
 ## Proposed Solution
 
-### Decision record (ADR-324)
+### Decision record (ADR-325)
 
-ADR-324, "Egress credential injection is a property of the hop, decided apart from the isolation runtime", status `adopting`, written now (CTO F-e). Its claim of substrate independence covers the interface only: a CONNECT proxy with per-session authentication that the runtime's network path dials. The carrier (the SDK sandbox runtime chaining from the sandbox's network namespace to a container-loopback proxy) is tied to the runtime (ADR-278 measurement 1) and is the part #9842 must re-measure. It records the options ranked on the operator's criterion, the tiebreak, brainstorm Decisions 3, 6 and 9, the flip facts F1–F4, and the CLO gates verbatim:
+ADR-325, "Egress credential injection is a property of the hop, decided apart from the isolation runtime", status `adopting`, written now (CTO F-e). Its claim of substrate independence covers the interface only: a CONNECT proxy with per-session authentication that the runtime's network path dials. The carrier (the SDK sandbox runtime chaining from the sandbox's network namespace to a container-loopback proxy) is tied to the runtime (ADR-278 measurement 1) and is the part #9842 must re-measure. It records the options ranked on the operator's criterion, the tiebreak, brainstorm Decisions 3, 6 and 9, the flip facts F1–F4, and the CLO gates verbatim:
 
 > "CLO gates for any managed platform: a signed DPA that names the product; an EEA contracting entity or a transfer mechanism covering that product; an acceptable sub-processor list; a transfer impact assessment and DPIA; a successor to the T-1 location gate with fresh operator acknowledgement; published documents changed before any tenant data moves."
 
@@ -169,7 +169,7 @@ The approval hook (`approval-hook.mjs`, importing `policy.mjs`) implements iron-
 
 Timeouts, together: the hook bounds its own work at 5 s; iron-proxy's 30 s upstream header timeout bounds a slow destination; clients must exit within 10 s of a refusal or a dead hook. Each is shorter than the layer above it, so a stall is reported by the innermost layer that can see it. The hook emits `SOLEUR_EGRESS_VEND` (fields: `session`, `host`, `method`, `class`, `rule`, `approval_id` or `read-allowlist`) and `SOLEUR_EGRESS_VEND_REFUSED` (fields: `session`, `host`, `method`, `class`, `reason` in `flag-off | not-allowlisted | pending | rejected | expired | cap | retry | closed | consume-failed | rpc-error | guard-refused | hook-timeout | no-hook-decision`, plus `subreason` for `not-allowlisted` in `unparseable | batched | unlisted-write | read-outside-allowlist` and for `consume-failed` in `already_consumed | decider_not_owner | requester_not_member`). Both markers carry `request_id` (joining the hook marker, iron-proxy's audit line, the client's exit and the stub's record), `source` (`hook | proxy | harness`), and on `_REFUSED` the first 12 hex characters of `action_sha256` and the `approval_id` when one exists. `cap` covers `AP429`/`AP430`, `retry` covers `40001`, `closed` covers an archived conversation. A request whose hash differs from an approved row simply finds no approved row, so the binding is proven by the stub's record, not by a reason code; cross-tenant isolation is likewise proven at the stub. When the hook is dead or frozen it cannot emit anything; the harness then emits `SOLEUR_EGRESS_VEND_REFUSED source=harness reason=no-hook-decision` for every request id with no hook marker, and reads iron-proxy's audit line for the failed call (its format is unverified until the tracer measures it). Nothing logs a body, a header value or a token.
 
-The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts and excluding IP ranges `0.0.0.0/0` and `::/0`, extended key usage `serverAuth`, `pathlen:0`, 24-hour validity, SAN-bearing leaves. A DNS constraint on `github.com` also permits every subdomain (RFC 5280), so the effective scope is the four hosts plus `*.github.com`; ADR-324 states this. Per-session proxy credentials (session-to-router, router-to-iron-proxy) come from `crypto.randomBytes`; each session's hook client certificate is minted by the suite under a hook client root whose key stays with the suite. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
+The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts and excluding IP ranges `0.0.0.0/0` and `::/0`, extended key usage `serverAuth`, `pathlen:0`, 24-hour validity, SAN-bearing leaves. A DNS constraint on `github.com` also permits every subdomain (RFC 5280), so the effective scope is the four hosts plus `*.github.com`; ADR-325 states this. Per-session proxy credentials (session-to-router, router-to-iron-proxy) come from `crypto.randomBytes`; each session's hook client certificate is minted by the suite under a hook client root whose key stays with the suite. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
 
 ### What the suite measures (criteria fixed before the run)
 
@@ -201,7 +201,7 @@ Deepen-pass additions to the criteria (binding, 2026-11-09):
 Verdict, computed by the suite:
 
 - **GO**: criteria 1–9 pass.
-- **NO-GO**: every criterion has a measured verdict and at least one fails. A failure of criterion 2 or 5 means flip fact F1 holds; the managed-platform path still needs the Cloudflare trial and the CLO gates, so ADR-324 records "F1 holds; flip awaits the trial". Any other failure is an injector design defect, and the CTO rules whether to fix and re-run or resume #12467. NO-GO exits 0 only when the outcome floor holds (CTO R3).
+- **NO-GO**: every criterion has a measured verdict and at least one fails. A failure of criterion 2 or 5 means flip fact F1 holds; the managed-platform path still needs the Cloudflare trial and the CLO gates, so ADR-325 records "F1 holds; flip awaits the trial". Any other failure is an injector design defect, and the CTO rules whether to fix and re-run or resume #12467. NO-GO exits 0 only when the outcome floor holds (CTO R3).
 - **INCONCLUSIVE**: any criterion is `unmeasurable` for a harness reason (the Supabase stack cannot run, a dependency is missing). The suite exits non-zero; each unmeasurable criterion carries its own harness reason in the raw JSON so the CTO re-rules on a named defect. A measured failure of criterion 2 or 5 is still recorded as F1 evidence even when the overall verdict is INCONCLUSIVE.
 
 ## Technical Approach
@@ -254,7 +254,7 @@ Any "no" on 1–8 that configuration cannot fix stops the run and goes to the CT
 
 #### Phase 3 — Decision record and dispositions
 
-- Write ADR-324 (above) and append `## Measured outcome — injector`.
+- Write ADR-325 (above) and append `## Measured outcome — injector`.
 - On GO only: append the merge-conditioned ADR-311 addendum (a hook satisfying Decision 4 was measured: exactly-once consumption on the real RPC, flag-off deny, pending-row creation, request binding; the three ADR-309 additions are #11637's scope). On NO-GO: add the ADR-311 see-also.
 - Issue edits (D4):
   - #9845 (S3): append a linked section on generic per-host injection with approval attachment, leaving its Anthropic-key hypothesis unchanged (CTO R19).
@@ -276,7 +276,7 @@ This is the content posted to #9859 in Phase 3; that PR gets its own plan.
 - A new Terraform root (R2 backend) for the Worker and its Durable Object namespace, `wrangler deploy` as a `local-exec` with a destroy-time `wrangler delete` (precedent `infra/rung2-rehearsal/rehearsal.tf`); the existing company account; a token scoped to Workers and Containers only; no route to production zones, Pages or R2 (CLO, CPO C5).
 - Spend: pinned instance type and `max_instances` so that the worst case (instances x hourly vCPU, memory and disk rate x 336 h, plus Workers and Durable Object requests, duration and storage at a stated ceiling, plus USD 5) is at most USD 50; low `sleepAfter`; a billing notification as backstop only.
 - Must not: clone a real repository, use real credentials, expose a public route, enable Logpush or external sinks, write operator email or IP anywhere, receive tenant traffic (CLO).
-- Results in `cf-trial-results.md` in this spec directory; `## Measured outcome — Cloudflare trial` appended to ADR-324 (whichever PR merges second rebases and keeps both sections); expense-ledger row in `knowledge-base/operations/expenses.md` opened `approved-not-billing`, `active` on the operator's go, `retired` at teardown with the measured total.
+- Results in `cf-trial-results.md` in this spec directory; `## Measured outcome — Cloudflare trial` appended to ADR-325 (whichever PR merges second rebases and keeps both sections); expense-ledger row in `knowledge-base/operations/expenses.md` opened `approved-not-billing`, `active` on the operator's go, `retired` at teardown with the measured total.
 - `Operator-authorizes:` the Workers Paid subscription change, after `GET /accounts/{id}/subscriptions` shows whether the account already has it.
 
 ## Alternative Approaches Considered
@@ -290,14 +290,14 @@ This is the content posted to #9859 in Phase 3; that PR gets its own plan.
 | Real GitHub with a test repository and an App installation token | A real credential leaves the suite (CTO F-f) |
 | Required CI lane, or the shared `deploy-script-tests-fixed` job | Nothing serves tenants; the shared job's 15-minute cap cannot hold the stack (CTO F-g, R12) |
 | Cloudflare trial in this PR | Ties this merge to a 14-day window, a spend hold and a teardown (CTO F-d) |
-| Change `egress-forwarder.mjs` to route inject hosts to the injector (forwarder first) | Would put TLS termination on a tenant-serving hop and fire DPIA trigger t3 (CLO); recorded in ADR-324 as #11637's alternative (CTO R17) |
+| Change `egress-forwarder.mjs` to route inject hosts to the injector (forwarder first) | Would put TLS termination on a tenant-serving hop and fire DPIA trigger t3 (CLO); recorded in ADR-325 as #11637's alternative (CTO R17) |
 | Widen the session CA so iron-proxy terminates all egress | Breaks spec TR3, puts an unconstrained root in the sandbox trust store and terminates the Anthropic and open-web path (R24) |
 | iron-proxy `tls.mode: sni-only` | Sees no headers, so it cannot inject (R24) |
 | Upstream per-host passthrough patch to iron-proxy | Cannot land against a digest-pinned image in the spike; recorded as a production option for #11637 (R24) |
 | Stop the spike as NO-GO on tracer item 2 | Discards a measurement a CONNECT shim already in the codebase unblocks (R24) |
 | A hand-written GraphQL operation classifier | Gets fragments, multiple operations and `operationName` wrong, and a wrong answer lets a write through (CTO R23) |
 
-Rejected vendors and set-aside candidates are in the brainstorm's table and carried into ADR-324 unchanged.
+Rejected vendors and set-aside candidates are in the brainstorm's table and carried into ADR-325 unchanged.
 
 ## User-Brand Impact
 
@@ -312,7 +312,7 @@ Artifact and vector pairs (for `soleur:engineering:review:user-impact-reviewer`)
 - Egress hop: a tenant credential attached to another tenant's request (criterion 5).
 - Sandbox and same-uid file tools: the real credential, CA key, hook socket or hook client key readable from inside bwrap or by the CLI-process `Read`/`WebFetch` tools (criterion 1).
 - Approval hook: a sandboxed process connecting to the hook socket and consuming approvals directly (criterion 1, CTO R9).
-- Approval hook custody: the service-role and HMAC keys in one process, recorded in ADR-324 as blast radius for #11637.
+- Approval hook custody: the service-role and HMAC keys in one process, recorded in ADR-325 as blast radius for #11637.
 - Managed platform (sibling PR): a third party holding decrypted tenant traffic and credentials.
 - Approval card: an approval consumed by a different mutation than the one approved (criterion 3 binding).
 - Approval card: an approval the founder cannot read and approves blind (results note records `canonical_action` per class; on GO a #11637 criterion).
@@ -373,7 +373,7 @@ tasks:
   - task: egress-injector-spike (the .github/workflows/egress-injector-spike.yml job)
     trigger: pull_request pushes that change the spike directories, and workflow_dispatch for re-runs
     services: reads the repository checkout (no credentials); starts local containers (app image, squid, iron-proxy, stubs) and a local Supabase stack; writes the raw JSON artifact
-    next: nothing; the results note and ADR-324 are written by a person or agent reading the artifact
+    next: nothing; the results note and ADR-325 are written by a person or agent reading the artifact
     human_reentry: cancel the run from the Actions UI or gh run cancel; re-run by workflow_dispatch; the job never runs on push to main
     dedupe: one job-level concurrency group per pull request with cancel-in-progress false, so GitHub keeps one pending run and never two concurrent spikes; each run's JSON carries its commit SHA and run id, so a stale artifact cannot be read as current
     source_dedupe: not a ticket source
@@ -385,15 +385,15 @@ The 2026-11-30 reminder reuses the existing schedule-reminder endpoint and creat
 
 ### ADR
 
-Create ADR-324 (provisional; free across all `origin/*` refs on 2026-11-09) via `soleur:architecture`: "Egress credential injection is a property of the hop, decided apart from the isolation runtime". Conditional: the ADR-311 addendum on GO, or its see-also on NO-GO (Phase 3). If the ordinal collides, renumber and sweep this plan, `tasks.md`, the results note and every AC with `grep -rn 'ADR-324' knowledge-base/project/{plans,specs}/` in the same edit.
+Create ADR-325 (provisional; free across all `origin/*` refs on 2026-11-09) via `soleur:architecture`: "Egress credential injection is a property of the hop, decided apart from the isolation runtime". Conditional: the ADR-311 addendum on GO, or its see-also on NO-GO (Phase 3). If the ordinal collides, renumber and sweep this plan, `tasks.md`, the results note and every AC with `grep -rn 'ADR-325' knowledge-base/project/{plans,specs}/` in the same edit.
 
 ### C4 views
 
-No `.c4` change in this PR. Checked against all three model files: external actors (the founder as approver is the existing user actor; no new human actor); external systems (`github` and `cloudflare` exist in `model.c4`); containers (`platform.webapp.egressForwarder` and `platform.infra.egressGw` exist and are unchanged; `publicInternet` exists); access relationships (none change; the `claude -> egressForwarder -> egressGw -> publicInternet` edges model the carrier the suite reuses). The injector is test-only here; ADR-324's C4 section names `egressInjector` as a pending container assigned to #11637. Known gap carried forward, not widened: the egress elements are in no view. Gate: `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` stay green.
+No `.c4` change in this PR. Checked against all three model files: external actors (the founder as approver is the existing user actor; no new human actor); external systems (`github` and `cloudflare` exist in `model.c4`); containers (`platform.webapp.egressForwarder` and `platform.infra.egressGw` exist and are unchanged; `publicInternet` exists); access relationships (none change; the `claude -> egressForwarder -> egressGw -> publicInternet` edges model the carrier the suite reuses). The injector is test-only here; ADR-325's C4 section names `egressInjector` as a pending container assigned to #11637. Known gap carried forward, not widened: the egress elements are in no view. Gate: `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` stay green.
 
 ### Sequencing
 
-ADR-324 is `adopting` now and describes the target state; the measured outcome is appended in this PR and the Cloudflare outcome in the sibling PR.
+ADR-325 is `adopting` now and describes the target state; the measured outcome is appended in this PR and the Cloudflare outcome in the sibling PR.
 
 ## Guard Contract
 
@@ -463,9 +463,9 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
-| 1 | "agent runtime sandbox evaluation (injector-first)" [brief] | Whole plan; ADR-324 + injector spike | mapped |
+| 1 | "agent runtime sandbox evaluation (injector-first)" [brief] | Whole plan; ADR-325 + injector spike | mapped |
 | 2 | "Brainstorm complete with 11 key decisions, plan next." [brief] | Proposed Solution carries Decisions 1–11; Phase 3 | mapped |
-| 3 | "A decision record states that injection is a substrate-independent hop gated by ADR-309 approvals, lists the options ranked on the operator's criterion, and carries the flip facts and the CLO gates for a managed platform." [doc spec FR1] | ADR-324, Phase 3 | mapped |
+| 3 | "A decision record states that injection is a substrate-independent hop gated by ADR-309 approvals, lists the options ranked on the operator's criterion, and carries the flip facts and the CLO gates for a managed platform." [doc spec FR1] | ADR-325, Phase 3 | mapped |
 | 4 | "A results note records pass or fail for each of the seven criteria in the brainstorm's \"Spike go/no-go criteria\", with raw outcomes, on the production run tuple." [doc spec FR2] | Phases 1–2, injector-spike-results.md (criteria 1–9 cover the seven; mapping in the spec edit) | mapped |
 | 5 | "A results note records each item in the brainstorm's \"Cloudflare trial must measure\" list, the amount spent, and confirmation that the trial resources were torn down." [doc spec FR3] | — | descoped — justification: CTO ruling F-d moves the trial to a sibling PR under widened #9859 Arm D on this spec; Phase 4 records its requirements |
 | 6 | "On a spike pass, #12467 is closed as superseded and #11637 proceeds from the measured mechanism. On a fail, #12467 resumes and the flip facts are evaluated." [doc spec FR4] | Phase 3 dispositions | mapped |
@@ -476,7 +476,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
-| ADR-324 | asks 3 | asked |
+| ADR-325 | asks 3 | asked |
 | `injector-spike-docker.test.sh`, stub, hook, `policy.mjs`, policy data, config, probe | asks 4, 8 | asked |
 | `connect-router.mjs` and `egress-injector-router.test.ts` | — | inferred — justification: CTO R24; iron-proxy cannot leave a non-inject tunnel unterminated (tracer item 2) |
 | `print-verdict.sh` | — | inferred — justification: the discoverability probe cannot contain a pipe and must fail on a missing verdict (preflight Check 10) |
@@ -502,7 +502,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-324-egress-credential-injection-is-a-property-of-the-hop.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-325-egress-credential-injection-is-a-property-of-the-hop.md`
 - `apps/web-platform/test/infra/egress-injector-spike/injector-spike-docker.test.sh`
 - `apps/web-platform/test/infra/egress-injector-spike/print-verdict.sh`
 - `apps/web-platform/test/infra/egress-injector-spike/verdict.mjs`
@@ -541,7 +541,7 @@ None. Re-checked 2026-11-09 after the deepen pass moved the job out of `infra-va
 
 ### Pre-merge (PR)
 
-- [ ] ADR-324 exists with status `adopting`, the interface-scoped independence claim, the ranked options, flip facts F1–F4, the CLO gates quoted verbatim, the T-1 mapping marked unverified, the hook key custody and forwarder-first alternative, `egressInjector` named as pending in its C4 section, and a `## Measured outcome — injector` section citing `injector-spike-results.md`.
+- [ ] ADR-325 exists with status `adopting`, the interface-scoped independence claim, the ranked options, flip facts F1–F4, the CLO gates quoted verbatim, the T-1 mapping marked unverified, the hook key custody and forwarder-first alternative, `egressInjector` named as pending in its C4 section, and a `## Measured outcome — injector` section citing `injector-spike-results.md`.
 - [ ] `injector-spike-results.md` opens with three plain sentences and records a verdict (`pass | fail | unmeasurable`) and raw outcome for criteria 1–9, the run URL, commit SHA, image digests, SDK pin, machine class, date, each claim's label, the re-measure trigger, the guard-matrix by-hand results, and GO or NO-GO (an INCONCLUSIVE run is not shipped).
 - [ ] `bash apps/web-platform/test/infra/egress-injector-spike/print-verdict.sh` prints `verdict=GO` or `verdict=NO-GO` and exits 0.
 - [ ] The PR body's first line states that merging redeploys unchanged runtime code via `web-platform-release.yml` and changes no infrastructure.

@@ -39,7 +39,7 @@ For a design that sits on an existing hop, the facts that decide feasibility liv
 7. **Read of the sharp-edges catalogue exceeded the per-call token cap.** Recovery: smaller page limits. Prevention: page that file at about 60 lines.
 8. **Ran `lint-encryption-posture.py` with a positional path it does not accept.** Recovery: none needed (section skipped). Prevention: read a lint's `--help` before invoking it.
 9. **A research subagent left a downloaded file (`gitprotocol-http.adoc`) in the worktree root.** Recovery: inspected and removed before commit. Prevention: research agents save downloads under the session scratchpad, never the working tree (routed to the agent definition).
-10. **ADR-323 was claimed on main the same day.** Recovery: probed all `origin/*` refs; ADR-324. Prevention: already covered by the ship ordinal gate.
+10. **ADR-323 was claimed on main the same day.** Recovery: probed all `origin/*` refs; ADR-325. Prevention: already covered by the ship ordinal gate.
 
 ## Tags
 
