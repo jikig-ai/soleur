@@ -507,7 +507,9 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
   - The classes:
     - `push_denied` is a registry denial: run the Packages budget and usage API reads first (First read, below).
     - `push_other` is a push failure whose registry text is withheld: read the step log.
-    - `not_push` is not an image-push failure, so this runbook does not apply and Billing is not the cause.
+    - `not_push` means the error was not classified as an image-push failure (for example a failed build step). It
+      does not prove the push was not refused: read the build step's log, and treat a `denied:` or `failed to push`
+      line as `push_denied`.
     - `unknown` means the history was unreadable: read the step log.
 - **Residual: a cancelled or timed-out job emits neither the marker nor the email,** because `failure()` is false. The
   run's `cancelled` conclusion is the only signal. Read the push step's log before any re-run.
@@ -529,8 +531,9 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
 - **Operator decision (money): the GitHub Packages budget for private GHCR images.** The runbook names this decision
   and does not prescribe a value. The agent stops and reports at this point, and does not work around the budget
   (CPO condition 7).
-- **Retry re-evaluation trigger** (CTO C1, restated 2026-11-10 in review round 2): a `push_denied` while the Packages
-  budget is above 0 or `prevent_further_usage` is false. The earlier wording ("a second run denied while Billing >
+- **Retry re-evaluation trigger** (CTO C1, restated 2026-11-10 in review round 2): a `push_denied` while the first read
+  rules billing out (the runbook's billing rule 2 applies, or its rule 4 reads not blocked). A denial that rule 3 or
+  rule 4 reads as possible or blocked does not trigger it. The earlier wording ("a second run denied while Billing >
   Packages shows no block") could never fire under the measured budget (0, `prevent_further_usage: true`).
 - **Out of scope:** pointing the release at Zot (prior CTO ruling).
 
@@ -1153,13 +1156,16 @@ only consumer.
 - [ ] **AC-P1**: after the release deploys, run the fingerprint query in the relay section of
       `betterstack-log-query.md` (archive union included, `CONTAINER_NAME='soleur-web-platform'`, window
       `INTERVAL 30 DAY` or bounded by the deploy time, one row per host with `argMax(line, dt)` and `max(dt)`). Each
-      web host's newest row must be **newer than that host's deploy time** (taken from the deploy-arm run's per-host
-      deploy timestamps, not the time of the read), and each host's newest row must show the same `current=` value and
-      `accept_also=none`. Failure branches:
+      web host's newest row must be **newer than that host's deploy time**, and each host's newest row must show the
+      same `current=` value and `accept_also=none`. The deploy time is that host's newest
+      `CRON_DRAIN: waited ... before prod stop` row (the runbook's deploy-time query), not the deploy-arm run's job
+      logs, which say when ci-deploy finished, after the new container started, and not the time of the read.
+      Failure branches:
   - **Two `current=` values differ:** stop. File an issue referencing #8211. Do not roll back, because the key value did
     not change in this PR; it is pre-existing drift.
-  - **A host has no row:** check its `relay_probe proxy_state=` line.
-    - `listening` with no fingerprint row: the host runs an older image, or its boot is outside the window.
+  - **A host has no row newer than its deploy time (or no row):** a newest row older than the deploy is from an earlier
+    boot, so read it as no row. Check the host's `relay_probe proxy_state=` line.
+    - `listening` with no fingerprint row: the host runs an image older than this line.
     - `disabled`, `no_bind`, `no_allowlist` or `error`: no fingerprint row is expected (the line comes after those
       checks). For `error`, look for `createProxyServer.no-hello-key`.
     - No `relay_probe` row: the container is down or its log path is broken (see `relay_probe_silent`).
