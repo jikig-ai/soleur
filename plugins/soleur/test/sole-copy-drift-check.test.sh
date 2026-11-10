@@ -2,11 +2,14 @@
 # Guard 1 (#9927 item 9 plan) -- the `sole-copy-protection-check` job of
 # `.github/workflows/scheduled-terraform-drift.yml`.
 #
-# PROPERTY. A live Hetzner object whose id is the pinned Inngest store volume and whose
-# `protection.delete` differs from the committed Terraform declaration (beyond the 90-minute apply
-# grace), or that is absent or ambiguous, always produces an issue of its own and a red run; a probe
-# that could not read Hetzner (including one that produced no verdict at all) never reports clean; the
-# job is read-only, prints no write recipe, and never holds the read/write Hetzner token.
+# PROPERTY. The job is a two-row matrix (#10432): `inngest` (the Inngest store volume) and `web1` (the web-1 workspaces
+# volume). For EACH row, a live Hetzner object carrying that row's name and pinned id whose `protection.delete` differs
+# from that row's own committed Terraform declaration (beyond 90 minutes of that file's last commit), or that is absent
+# or ambiguous, always produces that row's own issue and a red leg; a probe that could not read Hetzner (including one
+# that produced no verdict at all) never reports clean; no row's request, pin, expected flag, grace, titles, clear step or
+# email depends on the other row's data; the job is read-only, prints no write recipe, and never holds the read/write
+# Hetzner token. The full table runs on the `inngest` entry; the web-1 table (W rows) covers every arm where a row value
+# changes the outcome, the cross-entry rows (C) run both directions on one shared issue store, and use_entry is the oracle.
 #
 # HOW. Every step is EXTRACTED from the workflow by job id and step id (yaml.safe_load, never
 # re-implemented here) and EXECUTED under stubs: the real scripts/lib/bearer-curl.sh sits behind a stub
@@ -20,7 +23,11 @@
 # summary (conservation) and the FLOOR, so a helper that stops counting, or a deleted row, cannot turn
 # the run green. Rows that need a weaker stub, a weaker comparison or a neutered helper (H1-H7) prove the suite can see
 # them: end_row, invariants, want_steps, want_req and want_out each have a negative control. The invariants run for EVERY
-# case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one.
+# case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one, and under the entry of the
+# case they belong to (switch_entry folds before the constants move). H11-H15 are the negative controls of the matrix
+# context, the issue-store id ban, use_entry and the N1c/N3 document bounds. FLOOR and TABLE_ROWS are the realized counts
+# of the two-entry suite (250 assertions, 157 table rows). Edits to ADR-119, runbook 6604 and workspaces-luks.tf select
+# this suite too (scripts/lib/test-affected-paths.sh), because N1c, N3 and WR1 read them.
 #
 # EQUIVALENT MUTANTS and known limits (each proven in a sandbox, none a gap in a row):
 #   * exactly 90 minutes of age is deliberately unpinned (V3b brackets 89 and 91): the age is wall-clock.
@@ -40,10 +47,10 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=195
+FLOOR=250
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
-TABLE_ROWS=126
+TABLE_ROWS=157
 
 if [[ -z "${_SC_DRIFT_INNER:-}" ]]; then
   _log=$(mktemp "$TMPDIR/sole-copy-drift.XXXXXX") || { printf 'FATAL: mktemp for the suite log\n' >&2; exit 2; }
@@ -1870,11 +1877,11 @@ PYP
 ) || _dl=error
 if [[ "$_dl" == same ]] && grep -qxF -- 'echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -' "$TMP/x/steps/doppler_cli.sh" && grep -qxF -- 'echo "$d" >> "$GITHUB_PATH"' "$TMP/x/steps/doppler_cli.sh"; then pass "N2 the job's Doppler CLI version and sha256 equal the loader's, and the tarball is verified with sha256sum -c"
 else fail "N2 Doppler CLI pin: $_dl"; fi
-# The read-back's command line (the --only-secrets line of the subsection, so the outcome table's prose may still say it does not
-# fall back): exactly one --only-secrets, naming the read-only token; the token to curl on stdin; no read/write name, no argv header,
-# no fallback expansion.
+# The read-back's command line (the one `doppler run` line of the subsection, so the outcome table and the prose may still name
+# the flags and say it does not fall back): exactly one --only-secrets, naming the read-only token; the token to curl on stdin; no
+# read/write name, no argv header, no fallback expansion.
 rb_cmdline_ok() { # rb_cmdline_ok <runbook-6604>: 0 when the subsection's command line has that shape
-  local l; l=$(rb_section "$1" | grep -F -e '--only-secrets') || return 1
+  local l; l=$(rb_section "$1" | grep -E '^[[:space:]]*doppler run ') || return 1
   [[ "$(grep -c . <<<"$l")" == 1 && "$(grep -oF -e '--only-secrets' <<<"$l" | wc -l | tr -d ' ')" == 1 ]] || return 1
   grep -qF -e '--only-secrets HCLOUD_TOKEN_READONLY ' <<<"$l" || return 1
   grep -qF -e 'curl -sS --config -' <<<"$l" || return 1
@@ -2099,7 +2106,7 @@ else fail "H14 N1c section-bound self-test: not caught:$_h14"; fi
 # H15: the read-back command-line check, one mutant per banned pattern (each on a copy; each must fail rb_cmdline_ok).
 _h15=""
 rb_mut() { # rb_mut <label> <sed-expression applied to the --only-secrets line of the read-back section>
-  awk '/^## Read back the delete-protection flag \(read-only token\)$/{f=1} /^## /&&!/^## Read back the delete-protection flag/{f=0} {print (f && /--only-secrets/ ? "@@CMD@@" $0 : $0)}' "$RB6604" \
+  awk '/^## Read back the delete-protection flag \(read-only token\)$/{f=1} /^## /&&!/^## Read back the delete-protection flag/{f=0} {print (f && /^[ \t]*doppler run / ? "@@CMD@@" $0 : $0)}' "$RB6604" \
     | sed -e "/^@@CMD@@/{$2}" -e 's/^@@CMD@@//' > "$TMP/n1c/rb.$1.md"
   if cmp -s "$TMP/n1c/rb.$1.md" "$RB6604"; then _h15+=" $1(did-not-land)"; return; fi
   if rb_cmdline_ok "$TMP/n1c/rb.$1.md"; then _h15+=" $1"; fi
