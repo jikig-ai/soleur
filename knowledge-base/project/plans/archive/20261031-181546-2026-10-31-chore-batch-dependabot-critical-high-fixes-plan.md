@@ -147,13 +147,7 @@ mechanism (extend, not invent). No new guard, workflow, or tool is added.
   PPR code-path removal) — none are public-API changes this codebase touches;
   `next build` + `tsc --noEmit` on `next.config.ts` (which uses `NextConfig`
   types) is the verification.
-- GHSA-mchm-gjx6-7h55 ([advisory](https://github.com/getsentry/sentry-javascript/security/advisories/GHSA-mchm-gjx6-7h55)):
-  exploitable only when `tunnelRoute` is set AND the app builds with webpack AND
-  a route resolves under the tunnel path AND middleware is the sole authz. This
-  repo sets **no** `tunnelRoute` (grepped `next.config.ts`,
-  `instrumentation.ts`, `sentry.*.config.ts`) — the middleware skip is never
-  installed, so the alert is not currently exploitable, but the bump is still
-  required to close it.
+- The Sentry SDK advisory is closed by this bump.
 - `images.localPatterns: [{ pathname: "/icons/**" }]` is already restricted
   (no `dangerouslyAllowSVG`) — the Image-Optimization RCE path is additionally
   belted, but the bump is the actual fix.

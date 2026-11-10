@@ -77,7 +77,7 @@ Brief-vs-reality corrections found during premise validation (Phase 0.6):
   (`3fd8ba5e70`, the branch merge-base). The earlier failure report appears
   stale or environment-specific; the work phase re-verifies and only fixes
   in a distinct commit if the suite is actually red.
-- **minimatch has no patched release on any installed major.** GHSA-g3hv's
+- **minimatch has no patched release on any installed major.** the minimatch advisory's
   range is `< 11.0.1` — unbounded below — and the versions list shows no
   backport (10.x tops at 10.2.6, 9.x and 3.x untouched). Every copy in the
   three flagged lockfiles is in range: web-platform carries minimatch@3.1.5,
@@ -270,7 +270,7 @@ Following the zod (scoped) / undici (exact) precedents:
   `"@sentry/bundler-plugins": { "glob": "^14.0.2" }` — scoped, matching the
   zod idiom; the glob advisory does NOT cover majors <9, so a blanket would
   over-reach a legitimately-fine older line.
-  and `"minimatch": "^11.0.1"` — **blanket**, deliberately: GHSA-g3hv names
+  and `"minimatch": "^11.0.1"` — **blanket**, deliberately: the minimatch advisory names
   EVERY version below 11.0.1 vulnerable, so there is no legitimately
   vulnerable-free old line to preserve; eight-plus parents pin <11 today and
   any future addition would reintroduce a copy the drain guard's
@@ -289,7 +289,7 @@ Following the zod (scoped) / undici (exact) precedents:
 - `WATCHED_PACKAGES` += `minimatch`, `glob`, `@vitest/mocker` (14→17).
 - `REQUIRED` — retarget 2 rows and raise 7 floors, add 5 rows (36→41):
   - `("web-platform","@hono/node-server",1,"1.19.15")` →
-    `("web-platform","@hono/node-server",2,"2.1.3")` — GHSA-rmxm has no
+    `("web-platform","@hono/node-server",2,"2.1.3")` — the @hono/node-server advisory has no
     patched 1.x; the line is evacuated, not patched.
   - `("pencil-setup","@hono/node-server",1,"1.19.15")` → same retarget.
   - Floor raises on the same major: web-platform+pencil-setup `hono` 4
@@ -693,5 +693,5 @@ four lockfiles, `scripts/assert-dependabot-drain.{py,test.sh}`,
   `2026-09-29-dependabot-remediation-must-ratchet-drain-guard-floors.md`,
   `2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md`,
   `2026-05-27-npm-update-rewrites-lockfile-name-in-worktrees.md`.
-- Advisories: the ones named in the alert table above, plus the one behind Pillow alert #302.
+- Advisories: the advisories behind the alerts in the table above.
 - Umbrella tracking issue: #10857; out-of-scope trackers: #11783, #11696.

@@ -223,7 +223,7 @@ so a lockfile change reaches an install that is already at the pin.
 overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside the engine's declared range, so it is covered
 by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
 (`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
-reaches a patched `sharp`; bump it only after a green probe, as for `undici`.
+floor reaches the overridden version; bump it only after a green probe, as for `undici`.
 Wording amended for disclosure hygiene (#12348); decision unchanged.
 
 **Addendum 2026-11-05 (#12102): a fourth `overrides` entry, `@anthropic-ai/claude-agent-sdk`.** The engine's own range is

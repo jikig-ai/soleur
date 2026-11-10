@@ -46,7 +46,7 @@ These are runtime dependencies with available patches. Upgrade immediately.
 
 - **Package:** `next` in `apps/web-platform/package.json`
 - **Current:** 15.5.12, **Target:** latest 15.5.x (>=15.5.14)
-- **Alerts in scope:** HTTP request smuggling in rewrites; unbounded next/image disk cache
+- **Alerts this upgrade addresses:** HTTP request smuggling in rewrites; unbounded next/image disk cache
 - **Applicability:** Both are runtime in a production web platform. Request smuggling is exploitable if rewrites are configured. Disk cache exhaustion is a DoS vector. Both warrant patching.
 - **Action:** `cd apps/web-platform && npm install next@latest` then regenerate lockfiles in order: `bun install` first, then `npm install` to regenerate `package-lock.json` (Dockerfile uses `npm ci`).
 - **Risk:** Minor -- patch-level Next.js update within the 15.5.x line.
@@ -56,7 +56,7 @@ These are runtime dependencies with available patches. Upgrade immediately.
 
 - **Package:** `pillow` in `plugins/soleur/skills/gemini-imagegen/requirements.txt`
 - **Current:** 11.3.0, **Target:** >=12.1.1
-- **Alert in scope:** OOB write when loading PSD images
+- **Alert this upgrade addresses:** OOB write when loading PSD images
 - **Applicability:** Runtime dependency used for image processing. Although PSD loading may not be a primary use case, the OOB write is a memory safety issue. Major version bump (11->12) requires testing.
 - **Action:** Update `requirements.txt` pin from `Pillow==11.3.0` to `Pillow==12.1.1`.
 - **Risk:** Medium -- major version bump. Test `gemini-imagegen` skill after upgrade. Review [Pillow 12.x release notes](https://pillow.readthedocs.io/en/stable/releasenotes/) for breaking API changes before upgrading.
@@ -66,7 +66,7 @@ These are runtime dependencies with available patches. Upgrade immediately.
 
 - **Package:** `path-to-regexp` in `plugins/soleur/skills/pencil-setup/scripts/package-lock.json`
 - **Current:** 8.3.0, **Target:** 8.4.0
-- **Alerts in scope:** DoS via sequential optional groups; ReDoS via multiple wildcards
+- **Alerts this upgrade addresses:** DoS via sequential optional groups; ReDoS via multiple wildcards
 - **Applicability:** Runtime dependency of the pencil-setup MCP adapter. Transitive via `@modelcontextprotocol/sdk`. Both are DoS vectors through crafted route patterns.
 - **Action:** `cd plugins/soleur/skills/pencil-setup/scripts && npm update path-to-regexp` to pull 8.4.0. If the lockfile pins it transitively, delete lockfile and regenerate.
 - **Risk:** Low -- minor patch within 8.x.

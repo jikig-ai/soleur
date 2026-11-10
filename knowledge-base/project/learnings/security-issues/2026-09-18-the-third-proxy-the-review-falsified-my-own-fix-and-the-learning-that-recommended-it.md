@@ -132,7 +132,7 @@ and after the fix pins nothing; write the stub that passes it before believing i
 3. **Three `X_RC=$?` readings were the rc of a trailing `echo`/`tail`.** — Recovery: re-ran with
    the rc captured immediately after the command. — **Prevention:** `$?` binds to the immediately
    preceding command; never put a pipe or a second command between the command and its rc read.
-4. **The Edit tool interpolated ``-style escapes into literal control bytes**, producing an
+4. **The Edit tool interpolated `\0`-style escapes into literal control bytes**, producing an
    unterminated regex. — Recovery: rewrote the line via python with a landing assertion. —
    **Prevention:** write escape-bearing regexes through a quoted heredoc, and grep the file for
    the literal backslash afterwards.
