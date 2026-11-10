@@ -87,7 +87,7 @@ const log = createChildLogger("startup");
 // OnUncaughtException/OnUnhandledRejection integrations so these report once.
 installCrashHandlers();
 
-// #12289 — read the relay hello keys (the current key and the accept-only slot, #8211) into module memory and
+// #12289 — read the relay hello keys (current and the verify-only slot, ADR-323 Decision 9) into module memory and
 // delete both from process.env NOW, before the server can spawn any child process (a child spawned with the
 // default or a spread environment would inherit them). Null values when the relay is not configured (dev / single host).
 loadProxyHelloKeys();

@@ -5,7 +5,7 @@
 //   mac = HMAC-SHA256(key, "soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce)
 // `ts` is Unix SECONDS as a decimal string, `nonce` 32 lowercase hex, `mac` 64 lowercase hex, both ids
 // strict lowercase UUIDs. The key is a dedicated secret (PROXY_HELLO_HMAC_KEY), distinct from the TLS key. The
-// verifier also accepts the verify-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO when it is set (#8211, ADR-323 D9).
+// verifier also accepts the verify-only slot when set (ADR-323 Decision 9).
 //
 // One canonical-string builder serves the sender and the verifier (no second copy to drift). The
 // verifier is fail-closed on EVERY input and checks, in this order, the cheapest unauthenticated gates

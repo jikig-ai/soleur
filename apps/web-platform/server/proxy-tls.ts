@@ -73,9 +73,8 @@ export function loadProxyTlsClientCa(): string | null {
 const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
 
 /**
- * The relay hello keys this process loaded. `current` signs and verifies; `acceptAlso` (the accept-only slot
- * PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO, #8211, ADR-323 Decision 9) is VERIFY-ONLY: no code path signs with it. The
- * object is frozen and redacting: `JSON.stringify` and `util.inspect` print a placeholder, and both slots are
+ * The relay hello keys this process loaded. `current` signs and verifies; `acceptAlso` (PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO)
+ * is verify-only (ADR-323 Decision 9). The object is frozen and redacting: `JSON.stringify` and `util.inspect` print a placeholder, and both slots are
  * non-enumerable, so a copy of the set (spread, Object.assign, structuredClone) carries no key. A Buffer read out of
  * it (`keys.current`) is a raw key: never log it.
  */
@@ -114,8 +113,8 @@ let helloKeys: ProxyHelloKeys | null = null;
  *   `current` is loaded;
  * - byte-equal to `current`: kept (accepting one key twice is harmless), plus one warn-level
  *   `loadProxyHelloKeys.accept-also-equals-current` event; `relay_hello_key_fp` then shows equal values;
- * - well-formed and distinct: kept, plus one warn-level `loadProxyHelloKeys.accept-also-active` event (the slot sits
- *   outside Terraform, so a planted slot must not be silent; the event is expected during a rotation);
+ * - well-formed and distinct: kept, plus one warn-level `loadProxyHelloKeys.accept-also-active` event (a planted slot
+ *   must not be silent);
  * - well-formed while `current` is null: no extra event (the listener refuses to start and reports no-hello-key).
  * Every event text is a constant: no value, length or prefix. Each fires once per process (cached).
  */

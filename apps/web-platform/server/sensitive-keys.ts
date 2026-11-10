@@ -80,9 +80,7 @@ export const SENSITIVE_KEY_NAMES = [
   // infra/proxy-hello-hmac.tf and read ONLY by server/proxy-tls.ts (loadProxyHelloKeys). It must never reach a
   // log line, a Sentry event, an agent subprocess env or a service-token name (test/proxy-hello-key-isolation).
   "PROXY_HELLO_HMAC_KEY",
-  // Its verify-only accept slot (64 lowercase hex, absent by default; #8211, ADR-323 Decision 9), read ONLY by
-  // server/proxy-tls.ts (loadProxyHelloKeys) and deleted from process.env at boot. It must never reach a log line, a
-  // Sentry event, an agent subprocess env or a service-token name (test/proxy-hello-key-isolation).
+  // Its verify-only slot (ADR-323 Decision 9): same rules as the key above.
   "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO",
   // Inbound email triage (feat-operator-inbox-delegation #5103). The
   // Inngest sentry-correlation middleware ships ctx.event.data to Sentry as
