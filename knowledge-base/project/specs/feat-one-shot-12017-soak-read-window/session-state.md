@@ -28,3 +28,6 @@
 - constraint: ADR-276 S2 contract — MAX_RUNS=100 trailing-sample cannot shrink; bound applies to enumeration/pagination cost only.
 - constraint: Full last page at the page cap exits 3 CANNOT ESTABLISH — never degrade vouchers into a wrong-elision FAIL.
 - constraint: jq programs copied verbatim into merged form — jq-internal mutant anchors must survive byte-identical.
+
+## Technical Rulings
+- cto_spawns=1 (batched, 4 rows): all assumed defaults APPROVED — CONTROL_ROWS 12-row subset; merged-jq batching (worker model = fallback); MG_MAX_PAGES=10 + rc-3-on-exhaustion; epoch-in-slice. Rows rewritten to `Ruled by CTO agent, 2026-11-10` in decision-challenges.md.
