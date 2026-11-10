@@ -97,10 +97,12 @@ The usage read is the same endpoint `scripts/lib/watch-notify-once.sh` reads (`w
 Packages instead of code quality. `--paginate` makes `jq` run once per page; the usage read prints one object per
 page, so add them up if it prints more than one.
 
-**Rule.** Read the two results in this order and stop at the first that applies:
+**Rule.** Rule 1 only sets the usage state and always applies. Then read rules 2 to 4 in order and stop at the first
+that applies; each of those three is decisive on its own:
 
-1. **Usage unmeasured.** If the usage read gives `lines: 0`, this endpoint does not report Packages for this org, and
-   its `net: 0` is not a measurement of zero. Carry `unmeasured` into the next rules.
+1. **Usage state.** If the usage read gives `lines: 0`, this endpoint does not report Packages for this org, and its
+   `net: 0` is not a measurement of zero, so usage is **unmeasured**. Otherwise usage is measured. Only rule 4 reads
+   this state.
 2. **No refusal.** If `prevent_further_usage` is `false`, or no Packages budget comes back, the budget refuses
    nothing, so it is not the cause.
 3. **Possible.** If the budget is `0` with `prevent_further_usage: true`, a billing block is possible: any Packages
@@ -110,8 +112,9 @@ page, so add them up if it prints more than one.
    unmeasured, and as not blocked otherwise.
 
 Measured on 2026-11-09: the Packages budget was `0` with `prevent_further_usage: true`, and the usage read returned no
-Packages line. Rules 1 and 3 apply: a block is possible and unconfirmed, and the cause of the v0.402.0 denial is still
-open. Each read is a snapshot of the moment it runs. It cannot show whether a block was in force when the push ran.
+Packages line. Rule 1 reads usage as unmeasured, and rule 3 decides: a block is possible and unconfirmed, and the
+cause of the v0.402.0 denial is still open. Each read is a snapshot of the moment it runs. It cannot show whether a
+block was in force when the push ran.
 
 **Owner-only step (the fallback).** If either API read fails (a 401, 403 or 404 means the token cannot read org
 billing), or usage is unmeasured and the decision needs the number, an org owner opens Billing > Packages and records
@@ -154,10 +157,12 @@ work around the budget, by any route (CPO condition 7).
 
 ## When to reconsider a retry
 
-Re-evaluate the no-retry ruling (C1) when a run is classified `push_denied` while the Packages budget is above `0` or
-its `prevent_further_usage` is `false` (read with the [first read](#first-read-before-anything-else)). Under the
-measured budget (`0`, `prevent_further_usage: true`) a denial cannot rule billing out, so it does not trigger this.
-The change then is one bounded retry that still prints the marker on the first denial.
+Re-evaluate the no-retry ruling (C1) when a run is classified `push_denied` while the
+[first read](#first-read-before-anything-else) rules billing out, that is, when its Rule result is rule 2's "the
+budget refuses nothing". Any other result leaves billing in play: "blocked" and "possible" name it as a cause, and
+"not blocked" is a snapshot under a budget that can still refuse. Under the measured budget (`0`,
+`prevent_further_usage: true`) the result is "possible", so a denial does not trigger this. The change then is one
+bounded retry that still prints the marker on the first denial.
 
 ## Out of scope
 
