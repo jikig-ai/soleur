@@ -98,15 +98,6 @@ The C4 model gains no element in this PR. An `egressInjector` container (the per
 
 ## Measured outcome — injector
 
-GO: on run [42823659776](https://github.com/jikig-ai/soleur/actions/runs/42823659776), the production run tuple, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it.
+GO: on run [42871893115](https://github.com/jikig-ai/soleur/actions/runs/42871893115), the production run tuple's flags on a GitHub-hosted runner, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it. An earlier GO (run 42823659776) was withdrawn by the PR review (CTO R40): one criterion was reported pass with required items unmeasured, and several checks could not fail.
 
-- The real credential was not observable in the sandbox or by the agent's file tools (criterion 1).
-- git, gh, curl and Node fetch reached GitHub with the real credential through the injector, and the open-web stream was untouched (criterion 2).
-- Writes waited for an owner's approval and spent it once, bound to the exact request (criterion 3); allowlisted reads vended with no row (criterion 4).
-- Sessions could not obtain each other's credential (criterion 5).
-- ADR-278's controls did not regress, and no log carried a secret (criterion 6).
-- A new GitHub verb took one policy data file (criterion 7).
-- Failures were visible and closed (criterion 8).
-- The CA scope held for OpenSSL, GnuTLS and Node clients (criterion 9).
-
-Flip fact F1 does not hold. The measurement found and fixed two hook defects and a policy defect: the hook refused iron-proxy's origin-form request targets, it vended a request sent straight to one of iron-proxy's other listeners, and the canonical path dropped literal segments so two verbs could share an approval. The production changes #11637 needs are listed in the results note and above; the `SandboxNetworkAccess` denial is filed as #12585.
+The verdict carries two limits: GraphQL is not repository-scoped by the hook (R38), and request bodies of 3 MiB or more are refused (R40). Flip fact F1 does not hold. What was measured, what was not, and the defects the measurement and its review found and fixed are in the results note; the production changes #11637 needs are listed in Consequences above, and the `SandboxNetworkAccess` denial is filed as #12585.

@@ -1,36 +1,36 @@
 # Egress injector spike: results
 
-The injector works: on the production run tuple, an agent's git, gh, curl and Node clients reached GitHub with the real credential while the sandbox and the agent's file tools never saw it, and every write waited for an owner's approval and spent it once. All nine criteria passed, so the verdict is **GO**. The mechanism needs production changes before it can carry real traffic, each owned by #11637 or by #12585, and they are listed below.
+The injector works, within the limits below. On the production run tuple's flags on a GitHub-hosted runner, an agent's git, gh, curl and Node clients reached hermetic stubs of the GitHub hosts with the real credential while the sandbox and the agent's Read and WebFetch tools never saw it. Every write was refused until an owner approved it and then spent the approval once. All nine criteria passed, so the verdict is **GO**. Two limits are part of that verdict: GraphQL is not repository-scoped by the hook (CTO R38), and request bodies of 3 MiB or more are refused (R40). The mechanism needs production changes before it can carry real traffic, each owned by #11637 or by #12585, and they are listed below.
 
 ## Run
 
 | Field | Value | Label |
 |---|---|---|
 | Verdict | GO (criteria 1 to 9 pass) | measured |
-| Run | [42823659776](https://github.com/jikig-ai/soleur/actions/runs/42823659776), workflow `egress-injector-spike.yml` | measured |
-| Commit | head `3396c158474bbf425397e10c4b6adc28d9b3a304`, merge ref `25893fbe7ffc298921e4d3324f5f2fb4cf80a11f` | measured |
-| Date | 2026-11-10T13:31:53Z | measured |
+| Run | [42871893115](https://github.com/jikig-ai/soleur/actions/runs/42871893115), workflow `egress-injector-spike.yml` | measured |
+| Commit | head `173577a59c` (merge ref `f3d1795c43ab7792dbaed04e215dabaabfe25433`) | measured |
+| Date | 2026-11-10T18:14:45Z | measured |
 | Machine | GitHub-hosted `ubuntu-latest`, Linux 7.0.0-1017-azure x86_64, 4 CPUs, AppArmor profile `soleur-bwrap` loaded | measured |
 | App image | `node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da` plus the runner stage's packages, claude-code 2.1.311, gh 2.103.3 (Dockerfile pins 2.96.0, no longer in the rolling repo; the image falls back to the newest, as production's build does), bubblewrap 0.8.0, prod tuple posture from `lib/docker-run-tuple.py` | measured |
 | Agent SDK | `@anthropic-ai/claude-agent-sdk` 0.3.311 | measured |
-| iron-proxy | `docker.io/ironsh/iron-proxy@sha256:727da0cc35a6d73ed2913a38d56c4b9b4476c075149492e4fbf75552e83361ff` (v0.56.0) | measured |
+| iron-proxy | `docker.io/ironsh/iron-proxy@sha256:727da0cc35a6d73ed2913a38d56c4b9b4476c075149492e4fbf75552e83361ff` (v0.56.0), `max_request_body_bytes` 3 MiB | measured |
 | Raw results | `injector-spike-results.json` beside this note (`print-verdict.sh` prints `verdict=GO`, exit 0) | measured |
 
-An earlier GO (run 42816918299) is superseded: it predates the fix for the hash defect in "Defects found and fixed" below.
+Earlier runs are superseded. Run 42823659776 (GO) predates the PR review: criterion 3 was reported pass with two required items unmeasured, and several checks could not fail (CTO R40 withdrew it). Runs 42864371897 and 42868332624 (NO-GO) failed on harness judges the review's own changes broke, fixed as listed below; the mechanism behaved the same in both.
 
 ## Per-criterion verdicts
 
 | # | Criterion | Verdict | Raw outcome (from the results JSON) |
 |---|---|---|---|
-| 1 | Real credential not observable in the sandbox or by the same-uid file tools | pass | The sandbox scan (env, `ps`, `/proc/self`, every file under HOME, the workspace and `/tmp`) found the planted control and no session secret. Read and WebFetch of the decoy, CA key, hook socket, hook client key, rendered config and the injector's and forwarder's `/proc` files were all refused (file-tool containment, or the Read tool's own `/proc` refusal); a planted workspace file read back. The harness, as the same uid outside the sandbox, read 239 bytes of the injector's `/proc` environ (the outside control). Sandboxed `connect()` on the hook socket failed. |
-| 2 | Clients through the injector on the production run tuple | pass | Arm B: git clone and fetch, gh REST and GraphQL, Node fetch with `NODE_USE_ENV_PROXY=1`, and curl each carried the real decoy to the stub (`Basic` for git, `token` for the API). The open-web SSE streamed 50 of 50 events on the router's forwarder branch with the stub's own certificate. A sandboxed push with no row was refused pending (one new row); after the owner approved, the same push vended and the row moved approved to consumed. The CLI's own streaming received 50 of 50 deltas on a direct route (below). |
-| 3 | Listed writes gated; consumed once; flag off denies | pass | Git push lifecycle: refused pending with one row and no receive-pack request at the stub; a retry kept one row; owner deny reported `rejected` then a new pending row; approve vended and consumed once; a new commit needed a new row. REST: a row approved for body X gave no real token to body Y, another path or another repository; X was consumed once with `Idempotency-Key` stripped. Flag off: refused, no row. Expiry: pending at about 50 s, then refused `expired`. Every request the hook saw carried no `Authorization` header (`client_auth=0`). |
-| 4 | Allowlisted reads vend without a row | pass | REST read, git clone and GraphQL query vended with no row; a read outside the allowlist and every read with the flag off were refused. |
-| 5 | Session A cannot obtain session B's credential | pass | B's token carried by A was replaced with A's own; B's proxy credential at A's router, A's credential at B's router and A's router credential at B's injector were each refused 407; A's CA did not verify B's injector; A's hook client certificate on B's socket was refused (client identity), B's own was accepted, and one from another root failed TLS. The stub recorded no B token during A's probes. |
-| 6 | ADR-278 controls; no secret or body logged | pass | Deny-CIDR, localhost and link-local targets refused at squid; port 80 refused on both router branches; the forwarder refused a bad token (407). An unentitled session had no route (every probe ended in a sandbox deny; nothing at router, squid or stub). The entitled sandbox reached no container loopback address, directly or through the SDK proxy. iron-proxy's four listeners were reachable from container loopback (recorded) and yielded no vend or credential: 407 on `tunnel_listen` without the router credential, the tunnel guard on `http_listen` and `https_listen`. No log carried a secret or the body canary. |
-| 7 | One new verb touches policy data only | pass | `approval-hook.mjs` and `policy.mjs` were byte-identical across passes. Pass 1 refused `POST /repos/spike/beta/issues` not-allowlisted with no row; pass 2 (overlay) gated it, consumed it once and vended. A row approved for "create pull request" did not authorize "create issue" with the same body. |
-| 8 | Failure is visible and closed | pass | Stalled hook (RPC blocked): writes exited in about 5.1 s, `hook-timeout` emitted 3 times, no real token. Frozen hook: no real token, the SSE uninterrupted; the client's wait (15 s, ended by `timeout -k`) is recorded, not scored (R27). Killed hook: every client exited within 0.04 s, and iron-proxy's audit named the failed call 4 times. Killed router: all of that session's egress failed. Killed iron-proxy: inject-host clients exited within 0.04 s, the forwarder branch still streamed, and the CLI's own streaming received 50 of 50 deltas. |
-| 9 | CA scope | pass | Clients link curl/OpenSSL 3.0.22, git/GnuTLS (`libgnutls.so.30`) and Node/OpenSSL 3.5.9. Each rejected session-CA leaves for a non-inject name, an IP literal and another session's CA, and accepted `api.github.com` and `gist.github.com`. A common-name-only leaf for a non-inject name was rejected, so the constraints cover the CN fallback. The two sessions' CAs were distinct, and the CA key was gone after the session ended. Recorded: git (GnuTLS) accepted a mixed-case inject name; every client accepted a CN-only leaf for an inject host (within the permitted names, R31). |
+| 1 | Real credential not observable in the sandbox or by the same-uid file tools | pass | All 73 declared secret files were scanned, none dropped. The sandbox scan (env, `ps`, `/proc/self`, every file under HOME, the workspace and `/tmp`) found the planted control and no session secret. Read and WebFetch of the decoy, CA key, hook socket, hook client key, rendered config and the injector's and forwarder's `/proc` files were all refused; a planted workspace file read back. Grep, Glob and LS were not probed, and WebFetch's `file://` probe proves only that the tool refused the scheme. The harness, as the same uid outside the sandbox, read 239 bytes of the injector's `/proc` environ (the outside control). |
+| 2 | Clients through the injector | pass | Arm B: git clone and fetch, gh REST and GraphQL, Node fetch with `NODE_USE_ENV_PROXY=1`, and curl each carried the real decoy to the stub. The open-web SSE streamed 50 of 50 events on the router's forwarder branch. A sandboxed push with no row was refused pending; after approval the same push vended and the row was consumed. The CLI's own streaming received 50 of 50 deltas on a direct route. |
+| 3 | Listed writes gated; consumed once; flag off denies | pass | On its own session and conversation (R16). Git push lifecycle: refused pending with one row; retry kept one row; deny reported `rejected` then a new row; approve vended and consumed once. REST: a row approved for body X gave no real token to body Y, another path or another repository (each refused `pending`, or `not-allowlisted` for the repository). GraphQL `addComment`: pending with one row, approved, vended once, the replay refused. Flag off: the push advertisement and a listed POST were refused `flag-off`, no row. Expiry refused `expired`. Large push (R39): git's flush-only probe vended with no row, the 2 MiB push waited, was approved, consumed once, and the stub received the whole body (2,098,225 bytes). Over-cap push (R40): refused `body-over-cap`, no row, no write body at the stub; the client did not fail fast but hung until the 120 s harness timeout (recorded). Same connection (R40): an allowlisted GET then an unapproved POST on one reused connection reached the hook as `pending` over HTTP/1.1 and HTTP/2. No conversation reached the 5-pending cap. |
+| 4 | Allowlisted reads vend without a row | pass | REST read, git clone and GraphQL query vended with no row; a REST read outside the allowlist and every read with the flag off were refused. Recorded, unscored (R38): a GraphQL query for a non-allowlisted repository also vended, because the hook does not scope GraphQL to repositories. |
+| 5 | Session A cannot obtain session B's credential | pass | B's token carried by A was replaced with A's own; B's proxy credential at A's router, A's credential at B's router and A's router credential at B's injector were each refused 407; A's CA did not verify B's injector; A's hook client certificate on B's socket was refused (client identity), B's own was accepted, and one from another root failed TLS. |
+| 6 | ADR-278 controls; no secret or body logged | pass | Deny-CIDR, localhost and link-local targets refused at squid; port 80 refused; the forwarder refused a bad token. An unentitled session had no route. Router-credential CONNECTs (R36): to `http_listen` refused 407 `no-sni`; over TLS to `https_listen` refused by iron-proxy itself (no SNI: handshake aborted; with SNI: 405); inside a tunnel refused 407 `in-tunnel`; no real token at the stub in any of them (what the forwarder received is not observable). Plain HTTP inside a 443 tunnel (R37): GET and POST refused `no-tls`. The metrics listener serves `/healthz` only in v0.56.0. No log, nor the healthz body, carried any of the 73 secret forms; each log's planted control was found by the same scan. |
+| 7 | One new verb touches policy data only | pass | `approval-hook.mjs` and `policy.mjs` were byte-identical across passes; pass 1 refused `POST /repos/spike/beta/issues` with no row; pass 2 (overlay) gated it and consumed it once. A row approved for "create pull request" did not authorize "create issue" with the same body. |
+| 8 | Failure is visible and closed | pass | Stalled hook: writes exited in 5.04 to 5.18 s, `hook-timeout` emitted 3 times in that window, no real token. Frozen hook: no real token, the SSE uninterrupted; the clients' 15 s wait is recorded, not scored (R27). Killed hook: inject-host clients exited within 0.04 s, iron-proxy's audit named the failed call 4 times. Killed router: all of that session's egress failed. Killed iron-proxy: inject-host clients exited within 0.03 s, the forwarder branch still streamed, and the CLI's streaming received 50 of 50 deltas. |
+| 9 | CA scope | pass | curl/OpenSSL, git/GnuTLS and Node/OpenSSL each rejected session-CA leaves for a non-inject name (curl exit 60, Node `permitted-subtree-violation`), an IP literal and another session's CA, and accepted `api.github.com` and `gist.github.com`. A CN-only leaf for a non-inject name was rejected. `gh` (Go TLS) and the CLI were not tested. Recorded: git accepted a mixed-case inject name; every client accepted a CN-only leaf for an inject host (R31). |
 
 ## Defects found and fixed during the measurement
 
@@ -40,6 +40,14 @@ Each was found by the suite or while preparing this note, fixed with a hermetic 
 - iron-proxy sends the request target in origin form (`/path?query`) with the host in a separate field; the hook expected an absolute URL and refused every request. Fixed in `fromTransformRequest`.
 - A request sent straight to iron-proxy's `http_listen` (absolute form, no tunnel) was vended. The hook now refuses any request whose tunnel context is not its own host on 443 (CTO R28).
 - The hook could not rebind its socket after a restart, so it now removes a stale socket file first.
+
+Found by the PR review (13 seats, then CTO rulings R36 to R42), each fixed with a hermetic row that fails when the fix is mutated out (17 of 17):
+
+- The hook classified the URL-parser-cleaned path: `..`, `%2e%2e`, `\`, `//authority` and `#` were resolved before `canonicalSegments` could refuse them, while iron-proxy forwards the raw target. The target is now split by hand.
+- GraphQL ignored the query string (`?operationName=` could select a mutation the hook classified as a query), and JSON with duplicate keys or unsafe integers could be read differently by the hook and a server; both are refused. Lowercase methods and method-override headers are refused; the REST query string and git push capabilities and options are hashed.
+- A consume still in flight when the hook's deadline fired was answered `hook-timeout` after the approval was spent; the deadline no longer races a started consume.
+- A CONNECT on any listener could carry the credential (iron-proxy forwards a CONNECT sent to `http_listen` with the secret injected): every `secrets` rule now carries a method list, and the hook passes only tunnel_listen's own CONNECT (R36). Plain HTTP inside a tunnel was vended: refused `no-tls` (R37).
+- iron-proxy cuts request bodies above `max_request_body_bytes` (default 1 MiB) with no error and forwards the cut copy, so a large push would have spent an approval on a truncated pack. The cap is now 3 MiB and the hook refuses at it (R40); git's flush-only large-push probe vends with no row (R39).
 
 ## Findings for #11637 (production changes the mechanism needs)
 
@@ -55,13 +63,17 @@ Each is labelled; "production change" means this PR measured it with the change 
 - **Hook key custody (read from code).** One hook process holds the service-role and HMAC keys for every session, as the dispatcher does; that is part of the blast radius.
 - **CHECK change (measured; #11637 owns the migration).** The suite widened `approval_request`'s `tool_name` CHECK in the throwaway database to `(<existing expression>) OR tool_name = 'egress_injector_spike__credential_vend'`, looking the constraint up in `pg_constraint`; production needs a migration that adds the vend tool name.
 - **Confused-deputy residual (inferred from the design).** Reads on the allowlist vend with no row, so an agent can read any allowlisted repository it was granted without a human seeing each read; only writes are gated.
+- **GraphQL is not repository-scoped (measured; R38).** A GraphQL query for a non-allowlisted repository vended, and a GraphQL mutation's approval row names no repository. The enforceable boundary is the token: #11637 mints per-session tokens with `repositories` set to the allowlist, refuses GraphQL until then, and shows a resolved repository on a mutation's card or refuses it.
+- **Body cap (measured; R39, R40).** Bodies of 3 MiB or more are refused; a push above the cap cannot be approved. A refused over-cap push hung its client until the harness timeout instead of failing fast; #11637 decides the cap and the client-facing failure.
+- **`consumed` is not `delivered` (read from code).** An RPC abort after the server commits leaves the approval spent with nothing sent (ADR-311 Decision 5).
 
 ## Pending-approval message (recorded only, CTO R15)
 
 | Client | What the agent saw when a write was refused pending |
 |---|---|
 | git | `The requested URL returned error: 403`, then `send-pack: unexpected disconnect while reading sideband packet` and `fatal: the remote end hung up unexpectedly`; the hook's message naming the pending approval did not reach the agent |
-| curl, gh | HTTP 403 (measured; the probes recorded the status, not the body). The refusal body is the hook's JSON `egress_vend_refused` with reason `pending` and the approval id (read from `approval-hook.mjs`); whether a given client shows it to the agent was not measured |
+| curl | HTTP 403 (measured; the probes recorded the status, not the body). The refusal body is the hook's JSON `egress_vend_refused` with reason `pending` and the approval id (read from `approval-hook.mjs`); whether the client shows it to the agent was not measured |
+| gh | a non-zero exit (measured, `rc=1`); the HTTP status and message were not captured, so a 403 is inferred |
 | claude | not applicable: the CLI's own traffic does not pass the injector |
 
 ## What an approval card could show (`canonical_action` per write class)
@@ -70,11 +82,11 @@ Generated by `policy.mjs` on synthetic requests; the hook stores exactly these f
 
 | Class | `canonical_action` |
 |---|---|
-| git push | `{"kind":"git-push","host":"github.com","repository":"spike/alpha","updates":[{"old":"<sha>","new":"<sha>","ref":"refs/heads/main"}]}` |
-| REST create pull request | `{"kind":"rest","method":"POST","host":"api.github.com","repository":"spike/alpha","path":"/repos/spike/alpha/pulls","query":[],"body_sha256":"<hex>"}` |
+| git push | `{"kind":"git-push","host":"github.com","repository":"spike/alpha","updates":[{"old":"<sha>","new":"<sha>","ref":"refs/heads/main"}],"capabilities":"<sorted list>","push_options":[]}` |
+| REST create pull request | `{"kind":"rest","method":"POST","host":"api.github.com","repository":"spike/alpha","path":"/repos/spike/alpha/pulls","query":"","body_sha256":"<hex>"}` |
 | REST issue comment | same shape, `path` `/repos/spike/alpha/issues/1/comments` |
 | REST create issue (overlay) | same shape, `path` `/repos/spike/alpha/issues` |
-| GraphQL mutation | host, operation name, operation type and the sha256 of the normalised document and variables (rule `graphql-mutation`) |
+| GraphQL mutation | host, operation name, operation type and the sha256 of the normalised document and variables (rule `graphql-mutation`); no repository (R38) |
 
 A REST card can show the verb and repository but not the body, which is hashed; showing what the write will do needs the body itself, decided under #11637.
 
@@ -84,7 +96,7 @@ Adding the verb took one data file, `policy.add-verb.yaml` (6 data lines, 11 wit
 
 ## Guard Contract rows run by hand (task 2.2)
 
-The hermetic rows run on every push in `egress-injector-policy.test.ts` and `egress-injector-router.test.ts` (93 tests). The rows below each ran once, as a single mutation on a throwaway branch (since removed) dispatched through the spike workflow; a row counts as caught only when the suite failed with the expected message.
+The hermetic rows run on every push in `egress-injector-policy.test.ts` and `egress-injector-router.test.ts` (113 tests). The rows below each ran once, as a single mutation on a throwaway branch (since removed) dispatched through the spike workflow; a row counts as caught only when the suite failed with the expected message.
 
 | Row | Mutation | Run | Outcome |
 |---|---|---|---|

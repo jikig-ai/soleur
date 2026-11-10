@@ -4,12 +4,9 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Where it stands
 
-- Phases 1 to 3 done. The GO recorded on run 42823659776 is **withdrawn** (CTO R40): review found criterion 3 reported pass with two required items unmeasured, and that iron-proxy cuts request bodies above 1 MiB with no error.
-- Review (13 seats) fixed inline on this branch: hook raw request-target parsing, GraphQL/method ambiguity refusals, consume no longer raced by the deadline, CONNECT and plaintext guards, the 3 MiB body cap, git's flush-only push probe (commits from 5bf076b697 on), and harness fixes (verdict instrument, unmeasurable harness inputs, criterion 3/6/8/9 probes, deadline, local-run DB guard).
-- Each new hook/policy guard is mutation-proven in a sandbox (17/17 killed against a green control).
+- Verdict **GO** on run 42871893115 (head 173577a59c), measured after the PR review's fixes. The earlier GO (run 42823659776) was withdrawn by CTO R40; runs 42864371897 and 42868332624 read NO-GO on harness judges the review's changes broke (fixed, the mechanism unchanged).
+- Review (13 seats, rulings R36 to R42) fixed inline; every new hook/policy guard mutation-proven (17/17). Results note, results JSON, ADR-325 measured outcome and the ADR-311 addendum rewritten from run 42871893115.
 
 ## Next
 
-1. Land the harness patch and the new arms the review rulings require (R36 and R37 c6 probes; R38 recorded GraphQL out-of-allowlist probe; R39 about-2-MiB live push; R40 about-4-MiB refused push and the HTTP/1.1 plus HTTP/2 same-connection arm; the live GraphQL mutation lifecycle in criterion 3).
-2. Push; the spike workflow re-runs. Rewrite `injector-spike-results.{json,md}`, ADR-325 "Measured outcome" and the ADR-311 addendum's measurement paragraph from the new run only.
-3. `soleur:compound`, then `soleur:ship`. The PR body's first line names both merge effects (CTO R41). Re-merge main once #12559 and #12562 land.
+1. Re-merge main (#12594 landed the ADR-276 MD032 fix; #12562, the inngest pin, is still open), then `soleur:ship`: the PR body's first line names both merge effects (CTO R41); issue lines from `print-verdict.sh` (GO: `Closes #12517`, `Closes #12467` with ADR-325's reopen triggers); on merge, the #11637 comment.
