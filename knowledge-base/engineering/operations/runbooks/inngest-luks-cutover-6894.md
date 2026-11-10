@@ -756,8 +756,8 @@ merges in the same cycle as the `.tf` change that recreates the volume; the foun
 below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10-24 it names these places:
 
 - **Pins enforced by `plugins/soleur/test/sole-copy-drift-check.test.sh` (rows N1 and N1b; a stale one reds the suite):** every
-  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly three: the sole-copy probe and the
-  two orphan sweeps); the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
+  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly two: the two orphan sweeps), plus
+  the `volume_id:` of the `inngest` row in the `sole-copy-protection-check` matrix; the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
   (`plugins/soleur/skills/postmerge/SKILL.md`); the section-5c one-liner in this runbook; and the `VOL_ID` constant in the suite itself.
 - **Pins enforced by `plugins/soleur/test/token-drift-workflow-causes.test.sh` (rows R9; a stale one reds the suite):** the id in the `curl` shim
   and in the grep patterns of the project-identity cases. Change every occurrence in that file in the same edit.
