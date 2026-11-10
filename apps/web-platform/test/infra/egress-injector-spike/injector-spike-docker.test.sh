@@ -231,7 +231,7 @@ record_verdict 1 unmeasurable "arm-not-implemented:sandbox-scan-and-cli-tier-pro
 arm_c2
 arm_c3
 arm_c4
-record_verdict 5 unmeasurable "arm-not-implemented:cross-session"
+arm_c5
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"
 record_verdict 7 unmeasurable "arm-not-implemented:add-verb-overlay"
 record_verdict 8 unmeasurable "arm-not-implemented:failure-modes"

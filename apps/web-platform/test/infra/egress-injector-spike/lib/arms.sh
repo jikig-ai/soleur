@@ -380,3 +380,75 @@ PYC3
   observe c3 "$d/raw.json"
   spike_record_judged 3 "$d/verdict.txt"
 }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 5: session A cannot obtain session B's credential. Run as the harness in the app container (outside
+# bwrap), presenting every A-side identity at every B-side door; B's own read is the control that B's chain works.
+# ---------------------------------------------------------------------------------------------------------------
+arm_c5() {
+  local d="$SPIKE_WORK/c5" seqB seqA ra rb tb
+  mkdir -p "$d" || harness_fail DRIVER "mkdir c5"
+  ra="$(cat "$SPIKE_WORK/run/sessA/state/router.port")"; rb="$(cat "$SPIKE_WORK/run/sessB/state/router.port")"
+  tb="$SPIKE_SESS_sessB_TUNNEL"
+  cat > "$d/c5.sh" <<EOS
+A=/run/spike/sessA; B=/run/spike/sessB; H=/app/test/infra/egress-injector-spike/probes/hook-client.mjs
+acred=\$(cat \$A/secrets/router-session.cred); bcred=\$(cat \$B/secrets/router-session.cred); ainj=\$(cat \$A/secrets/router-injector.cred)
+bdecoy=\$(cat \$B/secrets/decoy.token)
+c() { curl -sS -o /dev/null --max-time 15 -w "\$1=%{http_code} connect=%{http_connect} exit=" "\${@:2}" 2>/dev/null; echo \$?; }
+case "\$PHASE" in
+control)
+  c bControl --cacert /run/spike-pub/sessB/bundle.pem -x "http://\$bcred@127.0.0.1:$rb" https://api.github.com/repos/spike/beta ;;
+probes)
+  c aCarriesBToken --cacert /run/spike-pub/sessA/bundle.pem -x "http://\$acred@127.0.0.1:$ra" -H "Authorization: token \$bdecoy" https://api.github.com/repos/spike/alpha
+  c aCarriesBTokenToB --cacert /run/spike-pub/sessA/bundle.pem -x "http://\$acred@127.0.0.1:$ra" -H "Authorization: token \$bdecoy" https://api.github.com/repos/spike/beta
+  c bProxyCredAtARouter --cacert /run/spike-pub/sessA/bundle.pem -x "http://\$bcred@127.0.0.1:$ra" https://api.github.com/repos/spike/beta
+  c aCredAtBRouter --cacert /run/spike-pub/sessB/bundle.pem -x "http://\$acred@127.0.0.1:$rb" https://api.github.com/repos/spike/beta
+  c aRouterCredAtBInjector --cacert /run/spike-pub/sessB/bundle.pem -x "http://\$ainj@127.0.0.1:$tb" https://api.github.com/repos/spike/beta
+  c aCaAtBInjector --cacert /run/spike-pub/sessA/bundle.pem -x "http://\$bcred@127.0.0.1:$rb" https://api.github.com/repos/spike/beta
+  echo "aHookCertOnB \$(node \$H \$B/hook/hook.sock \$A/hookclient/client.pem \$A/hookclient/client.key \$B/hookclient/server-root.pem api.github.com /repos/spike/beta)"
+  echo "bHookCertOnB \$(node \$H \$B/hook/hook.sock \$B/hookclient/client.pem \$B/hookclient/client.key \$B/hookclient/server-root.pem api.github.com /repos/spike/beta)"
+  cd /tmp && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout c5o.key -out c5o.pem -days 1 -subj "/CN=$CONV_B" 2>/dev/null
+  echo "otherRootOnB \$(node \$H \$B/hook/hook.sock /tmp/c5o.pem /tmp/c5o.key \$B/hookclient/server-root.pem api.github.com /repos/spike/beta)"
+  rm -f /tmp/c5o.key /tmp/c5o.pem ;;
+esac
+EOS
+  seqB="$(spike_stub_seq)"
+  docker exec -i -u "$SPIKE_APP_UID" -e PHASE=control "$SPIKE_APP_CTR" bash -s < "$d/c5.sh" > "$d/control.out" 2>&1
+  spike_stub_since "$seqB" > "$d/stubControl.jsonl"
+  seqA="$(spike_stub_seq)"
+  docker exec -i -u "$SPIKE_APP_UID" -e PHASE=probes "$SPIKE_APP_CTR" bash -s < "$d/c5.sh" > "$d/probes.out" 2>&1
+  spike_stub_since "$seqA" > "$d/stubProbes.jsonl"
+  python3 -I - "$d" > "$d/verdict.txt" <<'PYC5'
+import json, re, sys
+d = sys.argv[1]
+o = {}
+for f in ("control.out", "probes.out"):
+    for line in open(f"{d}/{f}"):
+        m = re.match(r"^([A-Za-z]+)=(\d{3}) connect=(\d{3}) exit=(\d+)$", line.strip())
+        if m: o[m.group(1)] = {"http": m.group(2), "connect": m.group(3), "exit": int(m.group(4))}
+        m2 = re.match(r"^([A-Za-z]+) (HOOK_CLIENT .*)$", line.strip())
+        if m2: o[m2.group(1)] = m2.group(2)
+ctl = [json.loads(l) for l in open(f"{d}/stubControl.jsonl") if l.strip()]
+prb = [json.loads(l) for l in open(f"{d}/stubProbes.jsonl") if l.strip()]
+g = lambda k: o.get(k, {}) if isinstance(o.get(k), dict) else {}
+checks = {
+  "control: B reaches the stub with B's own token": g("bControl").get("http") == "200" and any(r["decoy_id"] == "sessB" for r in ctl),
+  "A carrying B's token: the injector replaces it with A's own": g("aCarriesBToken").get("http") == "200" and any(r["decoy_id"] == "sessA" and r["path"] == "/repos/spike/alpha" for r in prb),
+  "A carrying B's token to B's repository is refused": g("aCarriesBTokenToB").get("http") == "403",
+  "B's proxy credential at A's router: 407": g("bProxyCredAtARouter").get("connect") == "407",
+  "A's credential at B's router: 407": g("aCredAtBRouter").get("connect") == "407",
+  "A's router credential at B's injector: 407": g("aRouterCredAtBInjector").get("connect") == "407",
+  "A's CA does not verify B's injector (TLS refused)": g("aCaAtBInjector").get("exit") == 60,
+  "A's hook client certificate on B's socket is refused": str(o.get("aHookCertOnB", "")).startswith("HOOK_CLIENT action=REJECT status=403"),
+  "control: B's own hook certificate is accepted": str(o.get("bHookCertOnB", "")).startswith("HOOK_CLIENT action=CONTINUE"),
+  "a certificate from another root is refused at TLS": str(o.get("otherRootOnB", "")).startswith("HOOK_CLIENT error="),
+  "the stub never recorded B's token during A's probes": not any(r["decoy_id"] == "sessB" for r in prb),
+}
+json.dump({"observations": o, "checks": checks}, open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC5
+  observe c5 "$d/raw.json"
+  spike_record_judged 5 "$d/verdict.txt"
+}
