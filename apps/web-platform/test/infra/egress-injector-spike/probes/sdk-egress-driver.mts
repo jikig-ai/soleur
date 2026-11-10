@@ -25,7 +25,7 @@
 // Output: exactly one line `SDK_EGRESS_RESULT <json>` with { arm, env: {proxy vars present, NO_PROXY}, steps: [{id,
 // tool, isError, content, hits}] }. Every declared secret value is replaced by `<declared:ID>` in `content` and
 // reported in `hits` (Guard 1 records surfaces by id, never by value). Exit 0 unless the driver itself failed.
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 
@@ -38,7 +38,15 @@ import { patternEscapesWorkspace } from "/app/server/tool-pattern-checker.ts";
 type Step = { id: string; tool: "Bash" | "Read" | "WebFetch"; input: Record<string, unknown> };
 type Spec = {
   workspace: string; home: string; routerPort: number; routerCredentialFile: string; caBundle: string;
-  arm: "A" | "B"; denyReadExtra: string[]; script: Step[]; declaredFiles: { id: string; file: string }[]; timeoutMs?: number;
+  arm: "A" | "B"; denyReadExtra: string[]; script: Step[]; timeoutMs?: number;
+  // transform: "pem-body" declares the longest base64 line of a PEM (a leak rarely carries the armour lines);
+  // "basic-b64" declares base64("x-access-token:" + value), the form git carries.
+  declaredFiles: { id: string; file: string; transform?: "pem-body" | "basic-b64" }[];
+  // A control string the driver writes into the workspace before the run; the scan must find it (Guard 1 row 2).
+  planted?: { id: string; value: string; path: string };
+  // Files a sandboxed step wrote with everything it observed; scanned IN FULL after the run (tool output reaching
+  // the model is truncated, so a scan of tool results alone would silently drop coverage; Guard 1 row 3).
+  scanFiles?: string[];
 };
 
 const INJECT_HOSTS = ["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"];
@@ -95,7 +103,14 @@ function startStub(script: Step[], results: Map<string, { isError: boolean; cont
 
 async function main() {
   const spec: Spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
-  const declared = spec.declaredFiles.map((d) => ({ id: d.id, value: readFileSync(d.file, "utf8").trim() })).filter((d) => d.value.length >= 8);
+  const derive = (d: Spec["declaredFiles"][number]) => {
+    const raw = readFileSync(d.file, "utf8").trim();
+    if (d.transform === "pem-body") return raw.split("\n").filter((l) => !l.startsWith("-----")).sort((a, b) => b.length - a.length)[0] ?? "";
+    if (d.transform === "basic-b64") return Buffer.from(`x-access-token:${raw}`).toString("base64");
+    return raw;
+  };
+  const declared = spec.declaredFiles.map((d) => ({ id: d.id, value: derive(d) })).filter((d) => d.value.length >= 8);
+  if (spec.planted) declared.push({ id: spec.planted.id, value: spec.planted.value });
   const redact = (s: string) => {
     let t = s;
     const hits: string[] = [];
@@ -107,6 +122,7 @@ async function main() {
   const cfgDir = `${spec.home}/.spike-claude-config`;
   mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
   process.env.HOME = spec.home;
+  if (spec.planted) writeFileSync(spec.planted.path, `${spec.planted.value}\n`, { mode: 0o600 });
 
   const sandbox = buildAgentSandboxConfig(spec.workspace, { allowWebEgress: true, denyReadExtra: spec.denyReadExtra });
   const routerPw = readFileSync(spec.routerCredentialFile, "utf8").trim().split(":").slice(1).join(":");
@@ -155,12 +171,19 @@ async function main() {
     controller.abort();
     server.close();
   }
-  const steps = spec.script.map((s) => {
+  const steps: any[] = spec.script.map((s) => {
     const r = results.get(`toolu_${s.id}`);
     if (!r) return { id: s.id, tool: s.tool, isError: null, content: null, hits: [] };
     const { text, hits } = redact(r.content);
     return { id: s.id, tool: s.tool, isError: r.isError, content: text, hits };
   });
+  for (const f of spec.scanFiles ?? []) {
+    let text = "";
+    let readable = true;
+    try { text = readFileSync(f, "utf8"); } catch { readable = false; }
+    const hits = declared.filter((d) => text.includes(d.value)).map((d) => d.id);
+    steps.push({ id: `scan:${f}`, tool: "Bash", isError: !readable, content: `bytes=${Buffer.byteLength(text)} readable=${readable}`, hits });
+  }
   const envSummary = { noProxy: env.NO_PROXY, proxyVars: ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].filter((k) => env[k]) };
   out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps });
   process.exit(0);

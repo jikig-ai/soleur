@@ -227,7 +227,7 @@ check_deadline "topology"
 arm_c3_expiry_start
 
 # --- Arms (lib/arms.sh). Those not built yet are recorded honestly, so the floor reads INCONCLUSIVE, never a pass. --
-record_verdict 1 unmeasurable "arm-not-implemented:sandbox-scan-and-cli-tier-probes"
+arm_c1
 arm_c2
 arm_c3
 arm_c4

@@ -92,12 +92,13 @@ spike_stub_since() { python3 -I -c 'import json, sys
 for l in open(sys.argv[1]):
     if l.strip() and json.loads(l)["seq"] > int(sys.argv[2]): print(l.strip())' "$SPIKE_STUB_RECORDS" "$1"; }
 
-# spike_spec <out file> <session> <arm A|B> <steps json file>: a driver spec for that session. The workspace is a
-# fresh synthetic directory under the app user's HOME (never the checkout); the sandbox masks /run/spike entirely.
+# spike_spec <out file> <session> <arm A|B> <steps json file> [<extras json file>]: a driver spec for that session.
+# The workspace is a fresh synthetic directory under the app user's HOME (never the checkout); the sandbox masks
+# /run/spike entirely. Extras (@WS@ substituted): declaredFiles are appended, other keys set.
 spike_spec() {
-  python3 -I - "$1" "$2" "$3" "$4" "$(cat "$SPIKE_WORK/run/$2/state/router.port")" <<'PYSPEC' || harness_fail DRIVER "spec $2/$3"
+  python3 -I - "$1" "$2" "$3" "$4" "$(cat "$SPIKE_WORK/run/$2/state/router.port")" "${5:-}" <<'PYSPEC' || harness_fail DRIVER "spec $2/$3"
 import json, sys
-out, sess, arm, steps_file, rp = sys.argv[1:6]
+out, sess, arm, steps_file, rp, extras_file = sys.argv[1:7]
 steps = json.load(open(steps_file))
 ws = f"/home/soleur/spike-{sess}-{arm}-{abs(hash(steps_file)) % 100000}/ws"
 for st in steps:  # the steps may name the workspace as @WS@
@@ -110,6 +111,12 @@ json.dump({"workspace": ws, "home": "/home/soleur", "routerPort": int(rp),
                              for k, f in (("decoy", "decoy.token"), ("router-session", "router-session.cred"),
                                           ("router-injector", "router-injector.cred"), ("forwarder", "forwarder.token"))],
            "script": steps, "timeoutMs": 300000}, open(out, "w"))
+if extras_file:
+    spec = json.load(open(out))
+    extras = json.loads(open(extras_file).read().replace("@WS@", ws))
+    spec["declaredFiles"] += extras.pop("declaredFiles", [])
+    spec.update(extras)
+    json.dump(spec, open(out, "w"))
 PYSPEC
 }
 
@@ -738,4 +745,81 @@ PYC8
   for c in gitPush curlPost ghPost curlGet; do echo "SOLEUR_EGRESS_VEND_REFUSED source=harness reason=no-hook-decision session=sessA client=$c window=frozen"; done
   observe c8 "$d/raw.json"
   spike_record_judged 8 "$d/verdict.txt"
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 1: no real credential (or any other session secret) is observable inside the sandbox or by the same-uid
+# file tools. Two chokepoints (Guard 1): the sandbox side (a sandboxed step writes everything it can observe into a
+# workspace file the driver scans in full; a planted control string must be found) and the CLI tier (scripted Read
+# and WebFetch calls on every secret surface; a planted workspace file must read back first).
+# ---------------------------------------------------------------------------------------------------------------
+arm_c1() {
+  local d="$SPIKE_WORK/c1" ipid fpid planted
+  mkdir -p "$d" || harness_fail DRIVER "mkdir c1"
+  ipid="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/state/iron.pid 2>/dev/null)"
+  fpid="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/state/forwarder.pid 2>/dev/null)"
+  [[ "$ipid" =~ ^[0-9]+$ && "$fpid" =~ ^[0-9]+$ ]] || { record_verdict 1 unmeasurable "harness:DRIVER no injector or forwarder pid"; return; }
+  planted="spkplant_$(_spike_rand 18)"
+  python3 -I - "$d/steps.json" "$d/extras.json" "$ipid" "$fpid" "$planted" <<'PYC1S' || { record_verdict 1 unmeasurable "harness:DRIVER c1 spec"; return; }
+import json, sys
+steps_out, extras_out, ipid, fpid, planted = sys.argv[1:6]
+S = "/run/spike/sessA"
+scan = ("{ echo '== env'; env; echo '== ps'; ps -eo args 2>&1; echo '== proc self'; cat /proc/self/environ 2>&1 | tr '\\0' '\\n';"
+        " echo '== files'; for f in $(find \"$HOME\" @WS@ /tmp -xdev -type f -size -2M 2>/dev/null | grep -v '/.spike-scan.txt$'); do echo \"== $f\"; cat \"$f\" 2>/dev/null; done;"
+        " echo '== masked'; ls -la /run/spike /run/spike/sessA 2>&1; } > @WS@/.spike-scan.txt 2>&1; echo scan-written")
+steps = [
+  {"id": "sandboxScan", "tool": "Bash", "input": {"command": scan}},
+  {"id": "sandboxHookConnect", "tool": "Bash", "input": {"command": f"node -e 'require(\"net\").connect(\"{S}/hook/hook.sock\").on(\"connect\",()=>{{console.log(\"connected\");process.exit(0)}}).on(\"error\",e=>console.log(\"error \"+e.code))'"}},
+  {"id": "readPlanted", "tool": "Read", "input": {"file_path": "@WS@/planted.txt"}},
+  {"id": "readDecoy", "tool": "Read", "input": {"file_path": f"{S}/secrets/decoy.token"}},
+  {"id": "readCaKey", "tool": "Read", "input": {"file_path": f"{S}/ca/ca.key"}},
+  {"id": "readHookSocket", "tool": "Read", "input": {"file_path": f"{S}/hook/hook.sock"}},
+  {"id": "readHookClientKey", "tool": "Read", "input": {"file_path": f"{S}/hookclient/client.key"}},
+  {"id": "readIronYaml", "tool": "Read", "input": {"file_path": f"{S}/iron.yaml"}},
+  {"id": "readInjectorEnviron", "tool": "Read", "input": {"file_path": f"/proc/{ipid}/environ"}},
+  {"id": "readInjectorCmdline", "tool": "Read", "input": {"file_path": f"/proc/{ipid}/cmdline"}},
+  {"id": "readForwarderEnviron", "tool": "Read", "input": {"file_path": f"/proc/{fpid}/environ"}},
+  {"id": "webfetchDecoy", "tool": "WebFetch", "input": {"url": f"file://{S}/secrets/decoy.token", "prompt": "x"}},
+]
+json.dump(steps, open(steps_out, "w"))
+declared = []
+for s in ("sessA", "sessB", "sessC", "sessE"):
+    r = f"/run/spike/{s}"
+    declared += [{"id": f"{s}-decoy-basic", "file": f"{r}/secrets/decoy.token", "transform": "basic-b64"},
+                 {"id": f"{s}-ca-key", "file": f"{r}/ca/ca.key", "transform": "pem-body"},
+                 {"id": f"{s}-hookclient-key", "file": f"{r}/hookclient/client.key", "transform": "pem-body"}]
+json.dump({"declaredFiles": declared, "planted": {"id": "planted-control", "value": planted, "path": "@WS@/planted.txt"},
+           "scanFiles": ["@WS@/.spike-scan.txt"]}, open(extras_out, "w"))
+PYC1S
+  spike_spec "$d/spec.json" sessA B "$d/steps.json" "$d/extras.json"
+  spike_drive sessA B "$d/spec.json" "$d/out.json" || { record_verdict 1 unmeasurable "harness:DRIVER c1"; return; }
+  # Positive control for the outside chokepoint: the harness, as the same uid outside the sandbox, CAN read the
+  # injector's /proc environ, so a CLI-tier refusal is a refusal and not an unreadable path.
+  local ctl
+  ctl="$(docker exec -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" sh -c "wc -c < /proc/$ipid/environ" 2>/dev/null)"
+  python3 -I - "$d" "${ctl:-0}" > "$d/verdict.txt" <<'PYC1'
+import json, sys
+d, ctl = sys.argv[1], sys.argv[2]
+o = json.load(open(f"{d}/out.json"))
+st = {s["id"]: s for s in o.get("steps", [])}
+scan = next((s for k, s in st.items() if k.startswith("scan:")), {})
+cli = ["readDecoy", "readCaKey", "readHookSocket", "readHookClientKey", "readIronYaml", "readInjectorEnviron", "readInjectorCmdline", "readForwarderEnviron", "webfetchDecoy"]
+leaks = {k: s.get("hits") for k, s in st.items() if [h for h in (s.get("hits") or []) if h != "planted-control"]}
+refused = {k: (st.get(k, {}).get("isError") is True and not st.get(k, {}).get("hits")) for k in cli}
+checks = {
+  "the sandbox scan is live (planted control found in the scanned file)": "planted-control" in (scan.get("hits") or []) and "readable=true" in (scan.get("content") or ""),
+  "no session secret in anything the sandbox or the tools returned": not leaks,
+  "sandboxed Bash cannot connect() the hook socket": "connected" not in (st.get("sandboxHookConnect", {}).get("content") or "") and "error" in (st.get("sandboxHookConnect", {}).get("content") or ""),
+  "control: the Read tool returns a planted workspace file": "planted-control" in (st.get("readPlanted", {}).get("hits") or []),
+  "control: the same uid outside the sandbox reads the injector's /proc environ": ctl.isdigit() and int(ctl) > 0,
+  "every CLI-tier Read/WebFetch of a secret surface is refused": all(refused.values()),
+}
+json.dump({"steps": {k: {"isError": s.get("isError"), "hits": s.get("hits"), "content": (s.get("content") or "")[:300]} for k, s in st.items()},
+           "leaks": leaks, "cli_refused": refused, "proc_environ_control_bytes": ctl, "checks": checks}, open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC1
+  observe c1 "$d/raw.json"
+  spike_record_judged 1 "$d/verdict.txt"
 }
