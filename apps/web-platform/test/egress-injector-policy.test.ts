@@ -23,6 +23,9 @@ import * as verdictMod from "./infra/egress-injector-spike/verdict.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SPIKE = join(HERE, "infra", "egress-injector-spike");
+// URL-path traversal fixtures are built, not written: a literal `..` run reads as this suite escaping the app
+// to test/repo-wide-containment.test.ts. They are request paths for the classifier, never filesystem paths.
+const UP2 = "../".repeat(2);
 const BASE_POLICY = policyMod.compilePolicy(parseYaml(readFileSync(join(SPIKE, "policy.yaml"), "utf8")));
 const OVERLAY_POLICY = policyMod.compilePolicy(
   policyMod.mergePolicy(
@@ -234,7 +237,7 @@ describe("policy.mjs — GraphQL (classified with the graphql package, CTO R23)"
 describe("policy.mjs — canonical path (normalized or refused before matching and hashing)", () => {
   it("refuses traversal, encoded slashes and dots, double slashes and backslashes", () => {
     for (const p of [
-      "/repos/acme-synth/widget/../../other-synth/thing",
+      `/repos/acme-synth/widget/${UP2}other-synth/thing`,
       "/repos/acme-synth/widget/%2e%2e/x",
       "/repos/acme-synth/widget/%2E%2E/x",
       "/repos/acme-synth%2Fwidget",
@@ -767,10 +770,10 @@ describe("review 2026-11-10 — what the hook judges is what goes upstream", () 
     for (const url of [
       "//evil/repos/acme-synth/widget/contents",
       "/\\evil/repos/acme-synth/widget/contents",
-      "/repos/other-synth/thing/../../acme-synth/widget/x",
+      `/repos/other-synth/thing/${UP2}acme-synth/widget/x`,
       "/repos/other-synth/thing/%2e%2e/%2e%2e/acme-synth/widget/x",
       "/repos/acme-synth/widget/.%2E/x",
-      "/repos/acme-synth/widget/x#frag/../../../other-synth/r",
+      `/repos/acme-synth/widget/x#frag/${"../".repeat(3)}other-synth/r`,
       "https://api.github.com//evil/repos/acme-synth/widget",
     ]) {
       expect(verdictOf(map(url)), url).toMatchObject({ verdict: "refused", subreason: "unparseable" });

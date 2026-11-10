@@ -6,13 +6,18 @@ import sys
 
 n = int(sys.argv[1]) if len(sys.argv) > 1 else 6
 out = []
+skipped = 0
 for line in sys.stdin:
     try:
         j = json.loads(line)
     except ValueError:
-        continue
-    a = j.get("audit") or {}
+        # iron-proxy's log stream mixes plain-text lines with the JSON audit lines; count them, say so on stderr.
+        skipped += 1
+        j = {}
+    a = (j.get("audit") if isinstance(j, dict) else None) or {}
     if a:
         err = str(j.get("error", ""))[:120]
         out.append(" ".join(str(x) for x in (a.get("method"), a.get("host"), a.get("path"), a.get("action"), a.get("status_code"), err)))
 print(" | ".join(out[-n:]))
+if skipped:
+    print(f"iron-audit: {skipped} non-JSON line(s) skipped", file=sys.stderr)
