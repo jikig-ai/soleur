@@ -63,12 +63,12 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Phase 3: Decision record and dispositions
 
-- [ ] 3.1 Write ADR-325 via `soleur:architecture` and append `## Measured outcome — injector`; run `soleur:architecture assess` for the NFR register.
-- [ ] 3.2 GO: append the merge-conditioned ADR-311 addendum. NO-GO: add the ADR-311 see-also.
-- [ ] 3.3 Edit #9845 (linked section) and #9859 (Arm D widened with the Phase 4 trial requirements).
-- [ ] 3.4 File the demand-side session telemetry issue (Phase 4 milestone).
-- [ ] 3.5 Edit `spec.md`: FR3 to the sibling PR, criteria mapping 7 to 1–9, TR1 and TR2 wording, the 36/42 baseline, the verdict set.
-- [ ] 3.6 Leave the roadmap handoff note (row 4.6 citing #9842; #12517 and the telemetry issue unplaced; stale Current State) for the next `soleur:product-roadmap` workshop.
+- [x] 3.1 Write ADR-325 via `soleur:architecture` and append `## Measured outcome — injector`; run `soleur:architecture assess` for the NFR register. (ADR-325: ADR-324 was claimed by a sibling branch first; rich shape; NFR assessment recorded in its NFR Impacts)
+- [x] 3.2 GO: append the merge-conditioned ADR-311 addendum. NO-GO: add the ADR-311 see-also. (GO: merge-conditioned addendum appended to ADR-311)
+- [x] 3.3 Edit #9845 (linked section) and #9859 (Arm D widened with the Phase 4 trial requirements). (both bodies carry the linked section, 2026-11-10)
+- [x] 3.4 File the demand-side session telemetry issue (Phase 4 milestone). (#12601, Phase 4)
+- [x] 3.5 Edit `spec.md`: FR3 to the sibling PR, criteria mapping 7 to 1–9, TR1 and TR2 wording, the 36/42 baseline, the verdict set.
+- [x] 3.6 Leave the roadmap handoff note (row 4.6 citing #9842; #12517 and the telemetry issue unplaced; stale Current State) for the next `soleur:product-roadmap` workshop. (posted as a comment on #12517, the durable place, since this plan never edits `roadmap.md` and spec directories are archived at ship)
 
 ## Phase 4: Verification and ship
 

@@ -11,7 +11,7 @@ brainstorm: knowledge-base/project/brainstorms/2026-11-09-agent-runtime-sandbox-
 
 ## Problem Statement
 
-Web-egress-entitled hosted sessions hold no credential, so they cannot push, call `gh`, or use a connected provider from inside the sandbox. The route in progress, one approval-gated server-side tool per verb (#12467), costs about 41 files per gated write tool and grows with every verb. Egress-side credential injection would cover every HTTPS-credentialed tool with one mechanism, but nothing on our egress hop terminates TLS, the only in-SDK candidate did not substitute on our carrier (ADR-311), and a 2026-11-09 ruling to keep our own sandbox was made without a vendor comparison.
+Web-egress-entitled hosted sessions hold no credential, so they cannot push, call `gh`, or use a connected provider from inside the sandbox. The route in progress, one approval-gated server-side tool per verb (#12467), grows with every verb: the first gated write tool (PR #12188) touched 36 files (9 source, 17 test, 10 knowledge-base), and six read tools (PR #12465) touched 42. Egress-side credential injection would cover every HTTPS-credentialed tool with one mechanism, but nothing on our egress hop terminates TLS, the only in-SDK candidate did not substitute on our carrier (ADR-311), and a 2026-11-09 ruling to keep our own sandbox was made without a vendor comparison.
 
 ## Goals
 
@@ -38,11 +38,11 @@ A decision record states that injection is a substrate-independent hop gated by 
 
 ### FR2: Injector spike result
 
-A results note records pass or fail for each of the seven criteria in the brainstorm's "Spike go/no-go criteria", with raw outcomes, on the production run tuple.
+A results note records pass or fail for each of the plan's criteria 1 to 9, with raw outcomes, on the production run tuple. They cover the brainstorm's seven "Spike go/no-go criteria": criterion 8 (failure is visible and closed) and criterion 9 (CA scope) are added, and criterion 3 is extended with binding (an approval authorizes only the request it was approved for). The verdict is GO (every criterion passes), NO-GO (every criterion is measured and one fails) or INCONCLUSIVE (any criterion is unmeasurable for a harness reason).
 
 ### FR3: Cloudflare trial result
 
-A results note records each item in the brainstorm's "Cloudflare trial must measure" list, the amount spent, and confirmation that the trial resources were torn down.
+Moved to a sibling PR under #9859 Arm D (CTO F-d). Its results note records each item in the brainstorm's "Cloudflare trial must measure" list, the amount spent, and confirmation that the trial resources were torn down; this PR records the trial's requirements on #9859.
 
 ### FR4: Disposition of dependent work
 
@@ -56,11 +56,11 @@ S3 (#9845) is widened to generic per-host injection with approval attachment, an
 
 ### TR1: No credential observable in the sandbox
 
-The real credential never appears in the sandbox's environment, files or process list. Only a placeholder is present.
+The sandbox holds no credential: the real one never appears in its environment, files or process list, and the injector replaces the whole `Authorization` header on the inject hosts, whatever the client sent.
 
 ### TR2: Approval attachment
 
-Every mutating request consumes exactly one unconsumed ADR-309 action-bound row before the credential is attached. With the `approval-queue` flag off, every vend is denied. A denied mutating request creates the pending row. Allowlisted reads (GET/HEAD on a per-workspace path allowlist, repo-scoped token) vend without a row.
+Every mutating request consumes exactly one unconsumed ADR-309 action-bound row before the credential is attached. With the `approval-queue` flag off, every vend is denied. A denied mutating request creates the pending row. Allowlisted reads vend without a row, classified by protocol on a per-workspace repository allowlist: REST `GET`/`HEAD`, git upload-pack (the `info/refs` advertisement and the `git-upload-pack` POST), GraphQL queries, and the push ref advertisement.
 
 ### TR3: CA scope
 
