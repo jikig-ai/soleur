@@ -982,20 +982,29 @@ EOS
   seq="$(spike_stub_seq)"
   docker exec -i -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" bash -s < "$d/c6.sh" > "$d/probes.out" 2>&1
   spike_stub_since "$seq" > "$d/stub.jsonl"
-  # Unentitled session (no egress at all) and the sandbox's view of the listeners.
-  cat > "$d/steps-n.json" <<'JSON'
-[ {"id": "openWeb", "tool": "Bash", "input": {"command": "curl -sS -o /dev/null --max-time 10 -w 'code=%{http_code}' https://sse.open-web.spike.test/ 2>&1; echo; curl -sS -o /dev/null --max-time 10 -w 'code=%{http_code}' https://api.github.com/ 2>&1"}} ]
-JSON
+  # Unentitled session (CTO R34: scored on the driver's deny answer), the entitled positive control, and the sandbox's
+  # view of container loopback (direct, and forced through the SDK's proxy where the NO_PROXY rule must deny).
+  local hp=$((SPIKE_SESS_sessA_TUNNEL + 2)) hl=$((SPIKE_SESS_sessA_TUNNEL + 1)) nseq nr ns
+  python3 -I - "$d/steps-n.json" "$d/steps-e.json" "$hp" "$hl" <<'PYS' || { record_verdict 6 unmeasurable "harness:DRIVER c6 specs"; return; }
+import json, sys
+hp, hl = sys.argv[3], sys.argv[4]
+probe = lambda urls: " ; ".join(f"echo \"{u} $(curl -sS -o /dev/null --max-time 10 -w '%{{http_code}}' {u} 2>/dev/null)\"" for u in urls)
+json.dump([{"id": "unentitled", "tool": "Bash", "input": {"command": probe(["https://sse.open-web.spike.test/", "https://api.github.com/repos/spike/alpha", f"https://127.0.0.1:{hp}/"])}}], open(sys.argv[1], "w"))
+forced = " ; ".join(f"echo \"forced {u} $(curl -sS -o /dev/null --max-time 10 --noproxy '' -x \"$HTTPS_PROXY\" -w '%{{http_code}}' {u} 2>/dev/null)\"" for u in (f"http://127.0.0.1:{hl}/", f"http://localhost:{hl}/"))
+json.dump([{"id": "entitledControl", "tool": "Bash", "input": {"command": probe(["https://sse.open-web.spike.test/"])}},
+           {"id": "loopbackDirect", "tool": "Bash", "input": {"command": probe([f"https://127.0.0.1:{hp}/", f"http://localhost:{hl}/"])}},
+           {"id": "loopbackForced", "tool": "Bash", "input": {"command": forced}}], open(sys.argv[2], "w"))
+PYS
+  nseq="$(spike_stub_seq)"; nr="$(docker exec "$SPIKE_APP_CTR" sh -c 'wc -l < /run/spike/sessA/logs/router.log' 2>/dev/null)"; ns="$(spike_squid_log | wc -l)"
   spike_spec "$d/spec-n.json" sessA N "$d/steps-n.json"
   spike_drive sessA N "$d/spec-n.json" "$d/out-n.json" || { record_verdict 6 unmeasurable "harness:DRIVER unentitled"; return; }
-  python3 -I - "$d/steps-sb.json" "$SPIKE_SESS_sessA_TUNNEL" <<'PYS'
-import json, sys
-t = int(sys.argv[2])
-cmd = "; ".join(f"(exec 3<>/dev/tcp/127.0.0.1/{p}) 2>/dev/null && echo 'sbreach {p} open' || echo 'sbreach {p} closed'" for p in range(t, t + 4))
-json.dump([{"id": "sandboxListeners", "tool": "Bash", "input": {"command": cmd}}], open(sys.argv[1], "w"))
-PYS
-  spike_spec "$d/spec-sb.json" sessA B "$d/steps-sb.json"
-  spike_drive sessA B "$d/spec-sb.json" "$d/out-sb.json" || { record_verdict 6 unmeasurable "harness:DRIVER sandbox listeners"; return; }
+  printf '%s\n%s\n%s\n' "$(spike_stub_since "$nseq" | wc -l)" "$(docker exec "$SPIKE_APP_CTR" sh -c "tail -n +$((nr + 1)) /run/spike/sessA/logs/router.log" 2>/dev/null | wc -l)" "$(spike_squid_log | tail -n +$((ns + 1)) | wc -l)" > "$d/unentitled-traces.txt"
+  spike_spec "$d/spec-e.json" sessA B "$d/steps-e.json"
+  spike_drive sessA B "$d/spec-e.json" "$d/out-e.json" || { record_verdict 6 unmeasurable "harness:DRIVER entitled control"; return; }
+  # Recorded only (R34): the same unentitled probe with every SandboxNetworkAccess request allowed.
+  printf '{"networkAllowAll": true}\n' > "$d/allowall-extras.json"
+  spike_spec "$d/spec-n-allowall.json" sessA N "$d/steps-n.json" "$d/allowall-extras.json"
+  spike_drive sessA N "$d/spec-n-allowall.json" "$d/out-n-allowall.json" || printf '{"error": "driver"}\n' > "$d/out-n-allowall.json"
   # Log grep (deepen pass): every log is non-empty and a control copy carrying the canary is found first.
   mkdir -p "$d/logs"
   docker exec "$SPIKE_APP_CTR" sh -c 'cd /run/spike && for s in sess*; do for f in $s/logs/*.log; do [ -f "$f" ] && { echo "=== $f"; tr -d "\000" < "$f"; }; done; done' > "$d/logs/app.log" 2>/dev/null
@@ -1014,9 +1023,12 @@ for line in open(f"{d}/probes.out"):
     m = re.match(r"^metrics bytes=(\d+) secrets=(\S+)$", line.strip())
     if m: o["metrics"] = (m.group(1), m.group(2))
 stub = [json.loads(l) for l in open(f"{d}/stub.jsonl") if l.strip()]
-n = json.load(open(f"{d}/out-n.json")); sb = json.load(open(f"{d}/out-sb.json"))
-ncontent = next((s.get("content") or "" for s in n.get("steps", []) if s["id"] == "openWeb"), "")
-sbcontent = next((s.get("content") or "" for s in sb.get("steps", []) if s["id"] == "sandboxListeners"), "")
+n, e, aa = (json.load(open(f"{d}/{f}")) for f in ("out-n.json", "out-e.json", "out-n-allowall.json"))
+stepc = lambda o, i: next((s.get("content") or "" for s in o.get("steps", []) if s["id"] == i), "")
+ncontent, econtrol, ldirect, lforced = stepc(n, "unentitled"), stepc(e, "entitledControl"), stepc(e, "loopbackDirect"), stepc(e, "loopbackForced")
+traces = [int(x) for x in open(f"{d}/unentitled-traces.txt").read().split()]
+ndec, edec = n.get("networkDecisions") or [], e.get("networkDecisions") or []
+codes = lambda txt: [ln.split()[-1] for ln in txt.splitlines() if ln.startswith(("http", "forced"))]
 secrets = []
 for s in os.listdir(run):
     sec = f"{run}/{s}/secrets"
@@ -1040,8 +1052,9 @@ checks = {
   "deny-CIDR, localhost and link-local targets refused at squid": all(o.get(k, ("", ""))[1] == "403" for k in ("denyCidr", "localhost", "linkLocal")),
   "port-80 targets refused on both router branches": o.get("port80Open", ("", ""))[1] == "403" and o.get("port80Inject", ("", ""))[1] == "403",
   "the forwarder refuses a bad token (407)": o.get("forwarderBadToken", ("", ""))[1] == "407",
-  "an unentitled session has no route": "code=000" in ncontent and "code=200" not in ncontent,
-  "the sandbox cannot reach any iron-proxy listener": sbcontent.count("closed") == 4 and "open" not in sbcontent,
+  "an unentitled session has no route: every probe ends in a sandbox deny, nothing reaches router, squid or stub (R34)": codes(ncontent) == ["000", "000", "000"] and "deny network-outbound sse.open-web.spike.test:443" in ncontent and all(x["decision"] == "deny" for x in ndec) and len(ndec) >= 2 and traces == [0, 0, 0],
+  "control: the entitled session reaches the open-web stub in the same run": codes(econtrol) == ["200"] and any(x["host"] == "sse.open-web.spike.test" and x["decision"] == "allow" for x in edec),
+  "the entitled sandbox cannot reach container loopback, directly or through the SDK proxy (NO_PROXY rule denies)": codes(ldirect) == ["000", "000"] and all(c in ("000", "403") for c in codes(lforced)) and len(codes(lforced)) == 2 and "deny network-outbound 127.0.0.1" in lforced and {x["host"] for x in edec if x["decision"] == "deny"} >= {"127.0.0.1", "localhost"},
   "tunnel_listen refuses no credential, the session credential and session B's router credential (407)": all(o.get(k, ("", ""))[1] == "407" for k in ("tunnelNoCred", "tunnelSessionCred", "tunnelSessionBRouterCred")),
   "http_listen and https_listen yield no vend (R28 tunnel guard)": o.get("httpListenAbsolute", ("", ""))[0] in ("403", "502", "000") and o.get("httpListenConnect", ("", ""))[1] in ("403", "407") and o.get("httpsListen", ("", ""))[0] == "403",
   "no real token reached the stub from any listener probe": no_real_token,
@@ -1049,7 +1062,10 @@ checks = {
   "every log is non-empty and its control copy finds the canary": all(log_live.values()) and len(log_live) >= 4,
   "no log carries a secret or the body canary": not log_leaks,
 }
-json.dump({"probes": o, "listener_reachability_recorded": reach, "unentitled": ncontent, "sandbox_listeners": sbcontent,
+json.dump({"probes": o, "listener_reachability_recorded": reach, "unentitled": ncontent, "unentitled_decisions": ndec,
+           "unentitled_traces_stub_router_squid": traces, "entitled_control": econtrol, "loopback_direct": ldirect,
+           "loopback_forced": lforced, "entitled_decisions": edec,
+           "recorded_only_unentitled_with_network_allowed": stepc(aa, "unentitled"),
            "log_sizes": logs, "log_leaks": log_leaks, "checks": checks, "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"},
           open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]

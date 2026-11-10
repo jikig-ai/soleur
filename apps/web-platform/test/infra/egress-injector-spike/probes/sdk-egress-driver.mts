@@ -47,12 +47,27 @@ type Spec = {
   // Files a sandboxed step wrote with everything it observed; scanned IN FULL after the run (tool output reaching
   // the model is truncated, so a scan of tool results alone would silently drop coverage; Guard 1 row 3).
   scanFiles?: string[];
+  // Recorded-only control (CTO R34): answer every SandboxNetworkAccess request with allow.
+  networkAllowAll?: boolean;
   // CTO R30: the CLI's OWN Messages API traffic under production's env. No in-process stub and no
   // ANTHROPIC_BASE_URL, so the CLI reaches api.anthropic.com however production's env sends it; one tool-less query,
   // counting the streamed text deltas.
   streaming?: boolean;
 };
 
+const DRIVER_TOOLS = new Set(["Bash", "Read", "WebFetch"]);
+
+/** NO_PROXY semantics for a host: an exact entry, or a `*.suffix` / `.suffix` entry covering it (R34). */
+export function noProxyMatches(host: string, noProxy: string): boolean {
+  for (const raw of noProxy.split(",")) {
+    const e = raw.trim().toLowerCase();
+    if (!e) continue;
+    if (e === host) return true;
+    const suffix = e.startsWith("*.") ? e.slice(1) : e.startsWith(".") ? e : null;
+    if (suffix && host.endsWith(suffix)) return true;
+  }
+  return false;
+}
 const INJECT_HOSTS = ["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"];
 const out = (o: unknown) => process.stdout.write(`SDK_EGRESS_RESULT ${JSON.stringify(o)}\n`);
 
@@ -130,7 +145,9 @@ async function main() {
 
   // Arm "N" is an UNENTITLED session (criterion 6): no egress proxy and no web-egress sandbox posture.
   const entitled = spec.arm !== "N";
-  const sandbox = buildAgentSandboxConfig(spec.workspace, { allowWebEgress: entitled, denyReadExtra: spec.denyReadExtra });
+  // Entitled arms also carry allowGithubEgress: production derives it from the GitHub token a #11637 session holds
+  // (CTO R34).
+  const sandbox = buildAgentSandboxConfig(spec.workspace, { allowWebEgress: entitled, allowGithubEgress: entitled, denyReadExtra: spec.denyReadExtra });
   const routerPw = readFileSync(spec.routerCredentialFile, "utf8").trim().split(":").slice(1).join(":");
   // buildAgentEnv only exports CLAUDE_PLUGIN_ROOT and requires it under /app/; the spike loads no plugin from it.
   const pluginDir = "/app/test/infra/egress-injector-spike";
@@ -153,6 +170,10 @@ async function main() {
     delete env.ANTHROPIC_BASE_URL;
   }
   let deltas = 0;
+  // Every permission request the SDK raised, by tool name (a network request outside the sandbox's allowlist
+  // reaches canUseTool too; recording them shows which decisions came from the callback rather than the sandbox).
+  const permissionCalls: string[] = [];
+  const networkDecisions: { host: string; decision: string }[] = [];
   const stderrTls: string[] = [];
 
   const require = createRequire("/app/package.json");
@@ -167,9 +188,26 @@ async function main() {
         abortController: controller, cwd: spec.workspace, env, sandbox,
         permissionMode: "default", disallowedTools: entitled ? ["WebSearch"] : ["WebSearch", "WebFetch"],
         canUseTool: async (name: string, input: Record<string, unknown>) => {
+          permissionCalls.push(`${name} ${redact(JSON.stringify(input)).text.slice(0, 160)}`);
+          // CTO R34: the SDK raises SandboxNetworkAccess for every host outside the sandbox's allowedDomains.
+          // Production's callback has no arm for it and denies it as an unknown tool (#11637 owns the change). The
+          // driver answers as that change would have to: deny for an unentitled session; for an entitled one, deny a
+          // host the session's NO_PROXY matches (it would go direct, e.g. to the app container's loopback) and allow
+          // any other host, so the gateway or the injector is the policy boundary. IP literals not in NO_PROXY are
+          // allowed, so squid's deny list is what refuses them.
+          if (name === "SandboxNetworkAccess") {
+            const host = String((input as { host?: unknown })?.host ?? "").toLowerCase().replace(/\.$/, "");
+            const allow = spec.networkAllowAll === true || (entitled && !noProxyMatches(host, String(env.NO_PROXY ?? "")));
+            networkDecisions.push({ host, decision: allow ? "allow" : "deny" });
+            return allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "network access denied" };
+          }
           if (isFileTool(name) && (pathFieldsEscape(input, (p: string) => isPathInWorkspace(p, spec.workspace)) || patternEscapesWorkspace(name, input))) {
             return { behavior: "deny", message: "Access denied: outside workspace" };
           }
+          // Production's createCanUseTool ends deny-by-default ("block unrecognized tools", permission-callback.ts);
+          // the SDK's SandboxNetworkAccess request is one such name (measured 2026-11-10: allowing it gave an
+          // unentitled session a route). Only the tools these probes script are allowed.
+          if (!DRIVER_TOOLS.has(name)) return { behavior: "deny", message: "unrecognized tool" };
           return { behavior: "allow", updatedInput: input };
         },
         maxTurns: spec.streaming ? 1 : spec.script.length + 2, model: "claude-haiku-5-5", settingSources: [],
@@ -201,7 +239,7 @@ async function main() {
     steps.push({ id: `scan:${f}`, tool: "Bash", isError: !readable, content: `bytes=${Buffer.byteLength(text)} readable=${readable}`, hits });
   }
   const envSummary = { noProxy: env.NO_PROXY, proxyVars: ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].filter((k) => env[k]) };
-  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps, ...(spec.streaming ? { streaming: { deltas, stderrTls } } : {}) });
+  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps, permissionCalls: permissionCalls.slice(0, 40), networkDecisions, ...(spec.streaming ? { streaming: { deltas, stderrTls } } : {}) });
   process.exit(0);
 }
 
