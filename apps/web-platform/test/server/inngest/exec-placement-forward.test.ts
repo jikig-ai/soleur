@@ -853,6 +853,25 @@ describe("Guard 4 — pin-target drift", () => {
     ).toEqual(new Set(["10.0.1.10"]));
   });
 
+  it("the dev script's SOLEUR_HOST_PRIVATE_IP default IS the pin — replicated literal (review #12554 fix-round)", () => {
+    // package.json's `dev` script carries ${SOLEUR_HOST_PRIVATE_IP:-<ip>} — a
+    // second literal copy of EXEC_HOST_PRIVATE_IP, same class as the P3 app-id
+    // pin above. An exec-IP move would otherwise silently turn `npm run dev`
+    // into a non-exec host: every pinned call forwards to an unreachable IP
+    // and the dev-loop defect this pin guards returns with nothing red.
+    const pkg = JSON.parse(appFile("package.json")) as {
+      scripts: Record<string, string>;
+    };
+    const m = pkg.scripts.dev.match(
+      /SOLEUR_HOST_PRIVATE_IP=\$\{SOLEUR_HOST_PRIVATE_IP:-([^}]+)\}/,
+    );
+    expect(
+      m,
+      "dev script must default SOLEUR_HOST_PRIVATE_IP for the dev loop",
+    ).not.toBeNull();
+    expect(m![1]).toBe(EXEC_HOST_PRIVATE_IP);
+  });
+
   it("no TOTAL read deadline on the forward — only a connect bound plus a per-chunk idle bound", () => {
     // RED row: a TOTAL read deadline (streamed steps outlive any total
     // deadline — ADR-243's CF-524 class). The two named bounds stand; any

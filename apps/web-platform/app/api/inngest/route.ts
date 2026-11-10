@@ -233,7 +233,9 @@ const handlers = serve({
 // host), forwarded verbatim to the exec host over pinned TLS (pinned on a
 // non-exec host), or refused fail-closed (unestablished exec identity, a marked
 // call on a non-exec host, or an unsigned forward attempt). GET/PUT
-// registration and `?probe=` requests bypass the dispatcher entirely — the
+// registration bypasses the dispatcher entirely and a `?probe=<non-empty>`
+// POST short-circuits to local execution inside it (an empty `?probe=` is a
+// run request to the SDK — truthiness parity, review #12554) — the
 // composition below is the ONLY placement hook, so the registration semantics
 // pinned by #5159 (SERVE_HOST) are untouched on any host.
 // dispatchPlacementAwarePost reads env at call time (module-load throws would

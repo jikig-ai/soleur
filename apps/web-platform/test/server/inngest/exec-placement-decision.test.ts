@@ -311,8 +311,11 @@ describe("gatherPlacementFacts", () => {
     // bare `?probe` fall through to fnId processing and EXECUTE the function.
     // A presence check would let a signed pinned call execute on a non-exec
     // host and would bypass the marked loop-guard — the defect this PR closes.
+    // `probe=&probe=1` pins FIRST-value semantics: `get` returns "" (and so does
+    // the SDK's queryStringWithDefaults), so the duplicated key is a run
+    // request — a `getAll().some(Boolean)` "hardening" would read it as a probe.
     vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", NONEXEC);
-    for (const shape of ["probe=", "probe", "probe=&fnId="] as const) {
+    for (const shape of ["probe=", "probe", "probe=&probe=1"] as const) {
       const req = new Request(
         `https://app.soleur.ai/api/inngest?fnId=${PINNED_VOLUME}&${shape}`,
         { method: "POST", headers: { "x-inngest-signature": "t=1&s=a" } },

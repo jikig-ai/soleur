@@ -21,7 +21,7 @@ Issue: #9137 (closes). Branch: `feat-one-shot-9137-placement-aware-execution`.
       — never false; reuse the relay's identity check, never a new one); verbatim
       method/path/query/header/body forward; streamed response pass-through; bounded timeouts;
       `placement.forward_failed` error → fail-closed (never local fallback).
-- [x] 1.2 `app/api/inngest/route.ts`: wrap `handlers.POST` in the forwarder (GET/PUT/`?probe=`
+- [x] 1.2 `app/api/inngest/route.ts`: wrap `handlers.POST` in the forwarder (GET/PUT/`?probe=<non-empty>`
       bypass; http-only exports per `cq-nextjs-route-files-http-only-exports`); module load
       must not throw without env (`IS_BUILD_PHASE` / inert-when-absent pattern).
 - [x] 1.3 Receiver (implementer picks, per CTO T3): (i) `request` handler for `/api/inngest`

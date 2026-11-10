@@ -128,8 +128,8 @@ deploy-verify are untouched because no function identity moves.
 - Step-execution POSTs require `?fnId=<absolute-id>`; `this.fns` is keyed by app-scoped ids
   `<appId>-<fnId>` and `<appId>-<fnId>-failure` (onFailure handlers inherit the parent's
   client and class).
-- `?probe=` (signature probes) and `forceExecution` POSTs carry no fnId; registration
-  GET/PUT carries no fnId.
+- `?probe=<non-empty>` (signature probes) and `forceExecution` POSTs carry no fnId;
+  registration GET/PUT carries no fnId.
 - The forwarder must therefore classify ONLY step calls and let probe/registration traffic
   through untouched on any host.
 
@@ -230,11 +230,12 @@ async function forwardStepCall(req: Request, target: string, ca: string): Promis
 ```
 
 Decision table (evaluated in `app/api/inngest/route.ts` around the SDK `POST` handler; GET,
-PUT and `?probe=` requests bypass the forwarder entirely):
+PUT and `?probe=<non-empty>` requests are never forwarded — an empty `?probe=` is a run
+request to the SDK, review #12554):
 
 | Condition | Decision |
 |---|---|
-| Not a step call (GET/PUT/`?probe=`) | `execute` locally — unchanged semantics on any host |
+| Not a step call (GET/PUT/`?probe=<non-empty>`) | `execute` locally — unchanged semantics on any host |
 | Class `portable` | `execute` locally |
 | Class `host-affine`/`volume-bound`, host IS exec (`SOLEUR_HOST_PRIVATE_IP === "10.0.1.10"`) | `execute` locally |
 | Same, host NOT exec | `forward` to `https://10.0.1.10:8445/api/inngest` with `EXEC_FORWARD_HEADER` set, raw body + all headers + query preserved, streamed response |
@@ -367,9 +368,9 @@ forwarder live), not a future state.
 
 ### Phase 1 — Forwarder + receiver wiring
 
-- `app/api/inngest/route.ts`: wrap `handlers.POST` with the forwarder (GET/PUT/`?probe=`
-  bypass; `cq-nextjs-route-files-http-only-exports` — handler composition only, no new
-  exports).
+- `app/api/inngest/route.ts`: wrap `handlers.POST` with the forwarder (GET/PUT bypass it;
+  `?probe=<non-empty>` short-circuits inside; `cq-nextjs-route-files-http-only-exports` —
+  handler composition only, no new exports).
 - `server/inngest/exec-forward-client.ts`: the pinned-TLS outbound dial
   (`loadProxyTlsClientCa` + relay dial shape), verbatim body/header/query forwarding,
   streamed response pass-through, a bounded connect timeout plus per-chunk idle timeout with a distinct
@@ -478,7 +479,7 @@ forwarder live), not a future state.
   | `SOLEUR_HOST_PRIVATE_IP` = `10.0.1.11` (web-2) + pinned call | `forward` to `10.0.1.10`, marker set |
   | Marked call arriving on non-exec host | `refuse` — never re-forward (loop) |
   | POST with no `fnId` and no `probe` | `forward` — the receiving SDK on the exec host rejects it; direction stays fail-closed |
-  | `?probe=` request on non-exec host | `execute` locally (must-PASS — probes answer anywhere) |
+  | `?probe=<non-empty>` request on non-exec host | `execute` locally (must-PASS — probes answer anywhere) |
   | GET/PUT registration on non-exec host | `execute` locally (must-PASS) |
   | Forwarder removed from the route (serve() exposed directly) | suite RED — a test asserts the POST export is wrapped, e.g. via a request-shaped probe asserting marker behavior |
 
@@ -669,7 +670,7 @@ existing route.
   distinct `placement.exec_identity_missing` error — never executed locally.
 - [ ] AC5: A marked call arriving on a non-exec host is refused — no second forward hop
   (loop-guard).
-- [ ] AC6: GET/PUT registration and `?probe=` requests bypass the forwarder on any host —
+- [ ] AC6: GET/PUT registration and `?probe=<non-empty>` requests bypass the forwarder on any host —
   registration semantics unchanged (`#5159` invariants intact: `serveOrigin`/`servePath`
   still report `https://app.soleur.ai` only).
 - [ ] AC7: Every route-served function id (including `-failure` ids) resolves through the
@@ -718,9 +719,7 @@ existing route.
 - **8445 publish degradation** (loopback fallback when `ip_nonlocal_bind` ≠ 1): forwarding
   fails closed → pinned-fns stall visibly; recovery is a redeploy (runbook). Accepted per
   T2/T3 — the alternative (exec-side blind spot) is worse.
-- **Receiver-choice residual:** the sibling listener on :8445 was chosen (the :8443 wss `request` handler was rejected at plan-review — `HELLO_DEADLINE_MS` kills streamed step calls); if it had proven awkward at work
-  time, a sibling listener is the fallback (same material); the plan does not pin which —
-  noted for `soleur:work` to decide with the diff in hand.
+- **Receiver-choice residual:** the sibling listener on :8445 was chosen (the :8443 wss `request` handler was rejected at plan-review — `HELLO_DEADLINE_MS` kills streamed step calls).
 - **Phase 4 unpin** may defer to a scope-out if `resolveCurrentWorkspaceId`'s consumers
   block the move.
 - **ADR-248 reversal trigger 1 fires** with this PR — the amendment records the re-derivation.

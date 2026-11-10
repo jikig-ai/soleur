@@ -185,7 +185,7 @@ export function classifyFnId(
  * The decision table (plan "Proposed Solution"), evaluated in this order —
  * every row below is pinned by a Guard-2 mutation-matrix test:
  *
- *   1. not a step call (non-POST or `?probe=`)          → execute locally
+ *   1. not a step call (non-POST/`?probe=<non-empty>`)  → execute locally
  *   2. marked + host IS exec                            → execute locally
  *   3. marked + host NOT exec / unidentifiable          → refuse (loop-guard)
  *   4. class `portable` (unmarked)                      → execute locally
