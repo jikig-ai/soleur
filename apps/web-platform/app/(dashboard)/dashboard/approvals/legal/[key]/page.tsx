@@ -6,8 +6,8 @@
 //   - A malformed key and an unknown key end in the SAME notFound().
 //   - The card gets the registry text body and its hash from here; nothing is hashed in the browser and the browser never
 //     sends text back. The row for the CURRENT hash gives the state; rows for older hashes render as "replaced" cards.
-//   - The surface gate is read first: the `approval-queue` flag (effectively global: `workspaceId: null`) AND the founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`;
-//     anyone else behaves as if the flag were off). With it off the founder's own
+//   - The surface gate is read first: the configured founder id only (`LEGAL_ACCEPTANCE_FOUNDER_ID`; the `approval-queue` flag is
+//     not read, CTO ruling 2026-11-10; anyone else behaves as if the surface were off). With it off the founder's own
 //     recorded rows still render, but a pending or expired current card never does, so neither the registry text nor an
 //     unreleased key is shown: with no recorded row for the key the page is the same not-found as an unknown key.
 //   - A failed read is reported and throws a generic error: never a silent empty page.
@@ -43,7 +43,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent(`/dashboard/approvals/legal/${key}`)}`);
 
-  // The surface gate first (flag AND founder): it decides what this page may show at all.
+  // The surface gate first (the founder id only): it decides what this page may show at all.
   const flagOn = await isLegalSurfaceEnabled(user.id);
 
   let entry;
@@ -79,7 +79,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
   }
 
   const currentRow = rows.find((r) => r.text_hash === entry.textHash);
-  // Flag off: only a recorded answer for the CURRENT text may render it; anything else (pending, expired) stays hidden.
+  // Surface off: only a recorded answer for the CURRENT text may render it; anything else (pending, expired) stays hidden.
   const showCurrent = flagOn || currentRow !== undefined;
   const older = rows.filter((r) => r.text_hash !== entry.textHash);
   if (!showCurrent && older.length === 0) notFound();

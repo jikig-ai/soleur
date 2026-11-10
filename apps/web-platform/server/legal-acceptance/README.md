@@ -9,10 +9,10 @@ Server side of the founder legal-acceptance card (#12011, ADR-319).
 Routes: `app/api/legal-acceptance/[key]/reauth` and `.../decide`.
 
 **Who gates what.** The `service.ts` exports (`issueIntent`, `claimAttempt`, `markVerified`, `recordAcceptance`, `decideLegal`) are
-deliberately UNGATED: they check neither the surface gate (`surface.ts`: the `approval-queue` flag AND `LEGAL_ACCEPTANCE_FOUNDER_ID`) nor the
+deliberately UNGATED: they check neither the surface gate (`surface.ts`: `LEGAL_ACCEPTANCE_FOUNDER_ID` only; the `approval-queue` flag is not read) nor the
 declared card kind. Only the two routes gate, through `guardLegalRequest` (surface gate first, then key, registry, kind). A new caller of these
 functions (an Inngest function, a script) bypasses the gate; route every new entry point through `guardLegalRequest`. The database does not
-check founder, flag or kind either: `record_legal_acceptance` needs a live server-issued intent, and a founder who holds one (30 minutes) cannot
+check the founder id or the kind either: `record_legal_acceptance` needs a live server-issued intent, and a founder who holds one (30 minutes) cannot
 record through the route once the gate is off (the decide route re-checks the gate on every request; a test pins it).
 
 ## How the texts reach the production image
@@ -39,12 +39,18 @@ covers the esbuild bundle layout; the Next-compiled routes and pages rely on the
 
 ## Who sees the card, and what it says
 
-The `approval-queue` flag is global (`workspaceId: null`), so the card pages and the decide and reauth routes require the flag AND
-the configured founder: `isLegalSurfaceEnabled` in `surface.ts` (flag on, and the user id equals `LEGAL_ACCEPTANCE_FOUNDER_ID`; an unset or
-malformed variable disables the surface for everyone). Anyone else gets the same 404 as with the flag off. The flag is ON in production
-for every workspace on its only listing (2026-11-08 23:51 +01:00: Doppler prd `FLAG_APPROVAL_QUEUE=1`, Flagsmith segment `role-prd` enabled,
-and every server read evaluates with role `prd`), so the configured founder id, not the flag, is what keeps the card to one account.
-Turning the flag on or off is the operator's act, and an agent session does not do it.
+The card pages, the Inbox row and the decide and reauth routes require only that the signed-in user id equals
+`LEGAL_ACCEPTANCE_FOUNDER_ID` (`isLegalSurfaceEnabled` in `surface.ts`; an unset or malformed variable disables the surface for
+everyone). Anyone else gets the same 404 as an unknown key. The `approval-queue` flag is not read (it is read with `workspaceId: null`,
+identity `role:prd`, so no per-workspace segment can match it), so narrowing or turning off the approval queue does not hide the
+founder's screen. Turning the flag on or off is the operator's act, and an agent session does not do it.
+
+The kill switch is unsetting the variable. It takes effect only after a Doppler edit plus a redeploy: the container's env file is frozen
+at creation, so a restart is not enough (`hr-prod-host-config-change-immutable-redeploy`). It closes the surface for everyone; the
+founder's already-recorded rows still render read-only on the card page and the index. Unsetting it also closes the check endpoint for the same founder (it answers 503), so ship's `web-acceptance` holds stay unevaluated and standing until the value is restored and the app redeployed; the counts route reads no founder id and keeps answering.
+An unset variable is silent; a set-but-malformed one reports one `store_failed` / stage `config` per process. To tell an accidental removal from a working setup, request the check endpoint without a token: 401 means the token and founder id are set and valid, 503 `{"error":"Not available"}` means one of them is unset.
+A founder mid-flow (code sent, not yet decided) gets a 404 on decide after the redeploy, and the intent expires unused. Ruled by CTO
+agent, 2026-11-10.
 
 The card's wording depends on the kind declared for the text key in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`): `terms` or
 `acknowledgement`. There is no default. A registered text with no declared kind renders no card, is a 404 on the card page, the decide route
@@ -100,7 +106,7 @@ before the deploy, so the functions exist when the code that calls them runs.
   The note is not readable through the endpoint or any `service_role` path; a database-owner credential could read it; it is held by
   the operator and by the production migration pipeline (a CI secret), and no agent session is meant to use either, so "not shown to an
   agent" is a policy, not a control.
-- A row whose ack was lost is reconciled through the same runbook after confirming with the founder. Before the `approval-queue`
-  flag is on in the production project, the runbook's pre-flip count check must pass.
+- A row whose ack was lost is reconciled through the same runbook after confirming with the founder. Before a text change is
+  published, the runbook's count check must pass.
 - Hard limits, the token, the accepted residuals and the open items: ADR-319 (PR-D amendment).
 - The founder page still shows an `invalid` row as recorded (no card state for it, #12193).

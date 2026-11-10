@@ -49,13 +49,13 @@ export interface LegalAcceptanceCardProps {
   state: LegalCardStateWire;
   /** The stored row for this card when there is one. */
   row: LegalRowFacts | null;
-  /** The `approval-queue` flag. Off: the card is read-only and says answering is not available yet. */
+  /** The surface is open (`isLegalSurfaceEnabled`: the configured founder id; not the `approval-queue` flag). Off: the card is read-only and says answering is not available yet. */
   flagEnabled: boolean;
   /** The signed-in account's email, for the start step of the check. */
   email: string | null;
   /** The registry's current version, for the replaced card. */
   currentVersion: string;
-  /** False when the page does not render the current version's card (flag off, no answer yet): a replaced card then links nowhere. Default true. */
+  /** False when the page does not render the current version's card (surface off, no answer yet): a replaced card then links nowhere. Default true. */
   currentVisible?: boolean;
 }
 
