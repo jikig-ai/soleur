@@ -52,6 +52,7 @@ the card only for that user id in the dev Supabase project, which is a separate 
 ship's holds, which query only `https://app.soleur.ai`.
 
 Kill switch, operationally:
+
 - Unset the variable in Doppler, then redeploy; a restart is not enough, because the container's env file is frozen at creation
   (`hr-prod-host-config-change-immutable-redeploy`).
 - It closes the surface for everyone. Already-recorded rows still render read-only on the card page and the index.

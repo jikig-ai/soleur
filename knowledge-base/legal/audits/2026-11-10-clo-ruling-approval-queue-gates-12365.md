@@ -52,6 +52,7 @@ One more ADR-309 precondition is also not met: checklist item 8(a). The web-egre
 ## Ruling 4: the published "on for every workspace" statement
 
 **Ruled by CLO agent, 2026-11-10:** It stays as published, unchanged, while the flag is on.
+
 - It is the true, dated correction of a false statement. Taking it down while the flag is on would bring back an untrue notice (Art. 5(1)(a), 13 and 14).
 - No wording change is needed now. The missing "Draft, pending counsel review." in DPD 2.3(ah) is a marking difference I have put to the reviewer, not an error.
 - It must change in the same cycle as any change to the flag (required change 4 below).
