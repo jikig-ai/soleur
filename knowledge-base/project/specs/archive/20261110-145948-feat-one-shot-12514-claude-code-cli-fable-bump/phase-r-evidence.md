@@ -182,7 +182,7 @@ prompt"). Setup:
 Verdict: the regression is real, but it reaches only a module inside the trusted plugin.
 
 - The workspace and user skills folders never load mods under `settingSources: []`, so there is no agent-writable path.
-- Writing to the trusted plugin directory (`/opt/soleur/plugin`, image content) already lets a `hooks.json` command hook run
+- Writing to the trusted plugin directory (`SOLEUR_PLUGIN_PATH`, default `/app/shared/plugins/soleur`, `:ro` from host `/mnt/data/plugins/soleur`; seeded from the image's `/opt/soleur/plugin`) already lets a `hooks.json` command hook run
   in-process on 0.3.311. 0.3.321 adds no new reach past that boundary.
 - Defense in depth: `plugin-pretooluse-hooks-web-parity.test.ts` now fails if any hook config of `plugins/soleur` (or its
   `plugin.json`) declares a hooks module. Shown red with the detector disabled, then green at 35/35.

@@ -38,13 +38,14 @@ Three further gaps, all in guards this PR wrote itself:
 
 - **Measure the changelog claim with the hosted option shape, in a throwaway container.** The
   shape was `permissionMode: "default"`, `settingSources: []`, `plugins: [{type: "local"}]`, and
-  a deny-by-default `canUseTool`. The driver is `phaseR2/mod-probe.mjs`; the results are in
-  `phase-r-evidence.md` R2.1.
+  a deny-by-default `canUseTool`. The driver was an untracked throwaway (`phaseR2/mod-probe.mjs`, described in
+  `phase-r-evidence.md` R2.1 with the results).
   - A mod bound through `plugins:` ran Bash and Write on 0.3.321 with `canUseTool` called
     **zero** times. On 0.3.311 the same calls reached the callback and were denied.
   - A mod in workspace or user `.claude/skills` never loads under `settingSources: []`, at
     start or added mid-session.
-  - So the only reachable path is a module inside the trusted plugin dir (`/opt/soleur/plugin`).
+  - So the only reachable path is a module inside the deployed plugin root (`SOLEUR_PLUGIN_PATH`,
+    default `/app/shared/plugins/soleur`, mounted `:ro` from host `/mnt/data/plugins/soleur`).
     That boundary is already crossed by a planted `hooks.json` command hook on 311. Nothing
     new is exposed, and a test now pins it:
     `plugin-pretooluse-hooks-web-parity.test.ts` asserts that no `plugins/soleur/hooks/*.json`
@@ -84,8 +85,8 @@ co-occurs with is not enough.
    **Prevention:** none needed; it was disclosed.
 3. **The planning host ran the 2.1.321/0.3.321 binaries once, for a fake-key init probe, before
    the CTO F15 ruling.** Recovery: disclosed as F15, with F15b rotation on trigger.
-   **Prevention:** a bump plan states its containment rule *before* the first probe. The new
-   `plan-sharp-edges.md` bullet below carries it.
+   **Prevention:** a bump plan states its containment rule *before* the first probe. The new bullet in
+   `plugins/soleur/skills/plan/references/plan-sharp-edges.md` carries it.
 4. **The `gh issue create` hook blocked three times.** The causes were a missing milestone, a
    `$D` variable in `--body-file`, and User-Impact lines it did not accept. Recovery: added
    `--milestone`, a literal path, and `--label meta/machinery`. **Prevention:** already
@@ -118,11 +119,11 @@ co-occurs with is not enough.
 11. **Step 2.7 ran outside the stated containment.** Recovery: disclosed in "Corrections".
     **Prevention:** same as item 3.
 12. **Guard 4 accepted a bare token hit with no model-table row**, so it was weaker than its
-    name. Recovery: it now requires a row. **Prevention:** the `model-launch-review` Sharp-edges
-    bullet below.
+    name. Recovery: it now requires a row. **Prevention:** the new bullet in
+    `plugins/soleur/skills/model-launch-review/SKILL.md` §Sharp edges.
 13. **The pen-cli customer lockfile moved without the engine-contract-probe.** Recovery: ran it
     at review. Both arms gave identical results (38/16/4), and all 16 FAILs were quota blocks on
-    both. **Prevention:** the `plan-sharp-edges.md` bullet below. A customer-engine lockfile
+    both. **Prevention:** the new bullet in `plan-sharp-edges.md`. A customer-engine lockfile
     move must have its engine probe run before review.
 14. **A stale local `node_modules` made 4 real-binary guard rows fail** with a misleading
     message. Recovery: added `PIN_INSTALL_SKEW`. **Prevention:** that check is now in the guard.
