@@ -2836,9 +2836,9 @@ _diff_edge_hit() {
       # _affected_add_edge and _affected_add_declared_edge, this in-flight revalidation, the census arm in
       # scripts/lint-orphan-test-suites.sh, and materialise() in
       # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
-      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
-      # differential fixtures; GLOBENT (registration-only classifier) is a
+      # scripts/test-affected-kb-consumers.test.sh is the surviving Python
+      # mirror pinned by differential fixtures (the edge_hit() mirror retired
+      # with the S4 evidence layer, 2026-11-09); GLOBENT (registration-only classifier) is a
       # deliberate superset — admission can only widen, never narrow (see the
       # mint arm).
       # Every malformed shape returns MATCH here — a glob edge can only widen a
@@ -3572,9 +3572,9 @@ _affected_add_edge() {
       # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
       # scripts/lint-orphan-test-suites.sh, and materialise() in
       # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
-      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
-      # differential fixtures. The GLOBENT line shape in the registration-only
+      # scripts/test-affected-kb-consumers.test.sh is the surviving Python
+      # mirror pinned by differential fixtures (the edge_hit() mirror retired
+      # with the S4 evidence layer, 2026-11-09). The GLOBENT line shape in the registration-only
       # classifier is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
       # only marks a diff registration-only, a malformed member still mints
       # always-match here, and the census REDs it — the superset can never narrow.
@@ -5648,9 +5648,6 @@ if want_scripts; then
   # the battery must land in the same commit as a re-split of these ranges.
   # Literal path in argv, never "$f": the totality checker resolves each arm's
   # battery from the run_suite command token and dies on <unresolved>.
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-167
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 168-333
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 334-499
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
@@ -7153,10 +7150,6 @@ if want_scripts; then
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
   run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
-  # #9729 (ADR-276 S4, PR B): the pr-selection driver EXECUTED (real merge-commit fixture repos, a stub test-all.sh replaying
-  # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
-  # reasons as above. Declared edge set, not always-on.
-  run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
   # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
@@ -7570,13 +7563,6 @@ if want_scripts; then
           "bash plugins/soleur/test/c4-from-components.test.sh"
         continue
       fi
-    fi
-    # The replay arms register at the top of this shard (start-first block); this arm
-    # keeps the bare suite file out of the plain registration below. The test on the
-    # next line is read by lint-orphan-test-suites.sh and scripts-shard-totality, so
-    # the `if` stays.
-    if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
-      continue
     fi
     run_suite "$f" bash "$f"
   done

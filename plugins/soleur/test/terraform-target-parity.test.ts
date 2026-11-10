@@ -10841,7 +10841,7 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
 // required `test` context reaches through `test-scripts`. It is ALSO covered by the infra runner's glob, so scripts/lint-orphan-test-suites.sh sees
 // two surfaces and a single-surface de-registration is a silent no-op there (hence its DOUBLE_COVERED_ACK entry). THIS pin turns a dropped, stubbed,
 // shadowed or neutered registration RED, in a different required leg (`test-bun`) from the one it protects (`test-scripts`). A diff that edits
-// scripts/test-all.sh is a full-battery trigger (scripts/ci-pr-selection.sh), so the pin always runs for it.
+// scripts/test-all.sh is a full-battery trigger (the retired S4 driver; it also sits on the oracle lane's exclusion list), so the pin always runs for it.
 // What it proves: CONSISTENCY of the registration text and its wiring, not integrity: one diff can still edit the registration and this pin together
 // (ADR-282 addendum records that residual). Dead-code wrappers are closed by NEIGHBOURHOOD, not by enumerating spellings: the registration's previous
 // and next code lines must themselves be plain `run_suite` registrations, so no `&& \`, heredoc, `if`/`while`/`case`/function wrapper, `exit` or

@@ -66,9 +66,9 @@ except ImportError:
 # canonical's, derived below.
 SYNTHETIC_WORKFLOW = "merge-queue-cla-synthetics.yml"
 # Floor on the number of contexts examined: an empty or relocated canonical must not read
-# as "all covered". 14 = 12 CI (post-#12089 umbrella consolidation 23 -> 10, +affected-index-ratchet
-# and oracle-review-required made required by PR3b, #10859) + 2 CLA.
-MIN_CONTEXTS_DEFAULT = 14
+# as "all covered". 13 = 11 CI (post-#12089 umbrella consolidation 23 -> 10, +two S4/PR3b
+# contexts made required by #10859, -1 for the S4 ratchet context retired 2026-11-09) + 2 CLA.
+MIN_CONTEXTS_DEFAULT = 13
 
 root = sys.argv[1]
 wf_dir = os.environ.get("MGC_WORKFLOWS_DIR") or os.path.join(root, ".github", "workflows")

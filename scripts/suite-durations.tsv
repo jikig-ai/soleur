@@ -194,10 +194,6 @@ plugins/soleur/test/ci-concurrency-key.test.sh	2117	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-plugins/soleur/test/ci-pr-affected-replay-a	160004	measured
-plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
-plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1222	floor
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	948	measured
 plugins/soleur/test/claude-code-action-auth.test.sh	1132	measured
@@ -399,7 +395,6 @@ scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
 scripts/ci-parked-hold	7000	floor
-scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
 scripts/compound-promote	1076	measured

@@ -196,10 +196,6 @@ plugins/soleur/test/ci-concurrency-key.test.sh	8
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-head-verdict.test.sh	5
 plugins/soleur/test/ci-path-gating.test.sh	5
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1
-plugins/soleur/test/ci-pr-affected-replay-a	2
-plugins/soleur/test/ci-pr-affected-replay-b	7
-plugins/soleur/test/ci-pr-affected-replay-c	4
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/claude-code-action-auth.test.sh	5
@@ -401,7 +397,6 @@ scripts/ci-leg-balance-9232	8
 scripts/ci-oracle-lane	4
 scripts/ci-oracle-review	5
 scripts/ci-parked-hold	5
-scripts/ci-pr-selection	2
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
