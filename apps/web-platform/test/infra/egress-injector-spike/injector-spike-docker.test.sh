@@ -86,21 +86,27 @@ mask "$SERVICE_KEY"
 unset SERVICE_KEY
 
 # R21: the same guard the hook runs, before the suite itself writes to the database.
-node --input-type=module -e '
-import { readFileSync } from "node:fs";
-const hook = await import(process.argv[1]);
-const status = hook.parseStatusEnv(readFileSync(process.argv[3], "utf8"));
-const r = hook.checkSupabaseTarget({ url: process.argv[2], key: readFileSync(process.argv[4], "utf8").trim(), status });
+# The module path travels in SPIKE_HOOK_MODULE, never argv: under `node -e`, argv[1] is the first extra argument, and
+# each spike module runs its program when argv[1] names it, so passing the hook path there ran the hook's main()
+# (which then read the next argument as its config file; CI run 42795274079).
+SPIKE_HOOK_MODULE="$SPIKE_DIR/approval-hook.mjs"
+export SPIKE_HOOK_MODULE
+hook_eval() { node --input-type=module -e "const hook = await import(process.env.SPIKE_HOOK_MODULE); $1" "${@:2}"; }
+hook_eval '
+const { readFileSync } = await import("node:fs");
+const status = hook.parseStatusEnv(readFileSync(process.argv[2], "utf8"));
+const r = hook.checkSupabaseTarget({ url: process.argv[1], key: readFileSync(process.argv[3], "utf8").trim(), status });
 if (!r.ok) { console.log(`guard refused: ${r.reason}`); process.exit(1); }
-' "$SPIKE_DIR/approval-hook.mjs" "$API_URL" "$SPIKE_WORK/supabase-status.env" "$SPIKE_WORK/service-role.key" \
+console.log("guard ok");' "$API_URL" "$SPIKE_WORK/supabase-status.env" "$SPIKE_WORK/service-role.key" \
   > "$SPIKE_WORK/guard.log" 2>&1 || harness_fail SUPABASE_GUARD "$(head -1 "$SPIKE_WORK/guard.log")"
+grep -qx 'guard ok' "$SPIKE_WORK/guard.log" || harness_fail SUPABASE_GUARD "guard printed no verdict: $(head -1 "$SPIKE_WORK/guard.log")"
 
 # CTO R5 / D4: widen the closed tool_name CHECK for the one spike tool name, inside the database container, looking
 # the constraint up in pg_constraint rather than assuming its name. The new expression is the old one OR the spike
 # name, so every existing name keeps its meaning. Recorded as input for the migration #11637 owns.
 DB_CTR="$(docker ps --filter 'name=supabase_db' --format '{{.Names}}' | head -1)"
 [[ -n "$DB_CTR" ]] || harness_fail CHECK_WIDEN "no supabase_db container"
-TOOL_NAME="$(node --input-type=module -e 'const h = await import(process.argv[1]); console.log(h.SPIKE_TOOL_NAME)' "$SPIKE_DIR/approval-hook.mjs")"
+TOOL_NAME="$(hook_eval 'console.log(hook.SPIKE_TOOL_NAME)')"
 [[ "$TOOL_NAME" =~ ^[a-z_]+$ ]] || harness_fail CHECK_WIDEN "unexpected spike tool name"
 docker exec -i "$DB_CTR" psql --no-psqlrc -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
   -v tool="$TOOL_NAME" > "$SPIKE_WORK/check-widen.log" 2>&1 <<'SQL' || harness_fail CHECK_WIDEN "$(tail -2 "$SPIKE_WORK/check-widen.log" | tr '\n' ' ')"
