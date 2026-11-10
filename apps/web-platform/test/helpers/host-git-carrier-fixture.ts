@@ -21,6 +21,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+// the shared fixture-env builder the fixture-env-adoption ratchet requires of any suite that runs git
+import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,13 +47,22 @@ const IDENT = {
   GIT_COMMITTER_EMAIL: "fixture@example.invalid",
 };
 
-/** The fixture's own (setup-time) git env: scratch-built, nothing inherited. */
+/**
+ * The fixture's own (setup-time) git env: SCRATCH-BUILT, nothing inherited. It takes the shared fixture builder's hermeticity
+ * fields (discovery ceiling, XDG and attributes isolation) but not its inherited `process.env` or its signing override: the
+ * battery's planted helpers dump the environment they run under and assert the server sentinel is absent, and the signing carrier
+ * must stay live under the fixture's own raw runs.
+ */
 export function fixtureGitEnv(home: string): NodeJS.ProcessEnv {
+  const shared = gitFixtureEnv(home);
   return {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     HOME: home,
     LANG: "C",
     LC_ALL: "C",
+    GIT_CEILING_DIRECTORIES: shared.GIT_CEILING_DIRECTORIES,
+    GIT_ATTR_NOSYSTEM: shared.GIT_ATTR_NOSYSTEM,
+    XDG_CONFIG_HOME: shared.XDG_CONFIG_HOME,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",

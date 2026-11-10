@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "../server/inngest/functions/_git-hardening";
+// the shared fixture-env builder the fixture-env-adoption ratchet requires of any suite that runs git
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 import { AGENT_GIT_GLOBAL_CONFIG, ALLOW_PROTOCOL_NONE, buildScrubbedEnv, HostGitRefusedError, hostGitInvocation } from "../server/host-git";
 import { AGENT_GIT_GLOBAL_CONFIG as FROM_AGENT_ENV } from "../server/agent-env";
 import { buildScrubbedEnv as FROM_GATES } from "../server/compound-promote-create-gates";
@@ -26,9 +28,9 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A minimal environment for the fixture's OWN git calls (nothing inherited). */
+/** The environment for the fixture's OWN git calls: the repo's shared fixture builder (identity, discovery ceiling, no inherited GIT_* names). */
 function plainEnv(): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as unknown as NodeJS.ProcessEnv;
+  return gitFixtureEnv(root);
 }
 
 /** Run real git with the helper's argv and env (the env is the whole environment, nothing inherited). */
