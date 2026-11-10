@@ -14,8 +14,11 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - A defect found after the GO run: the REST canonical action dropped literal path segments, so `POST /repos/o/r/pulls` and `POST /repos/o/r/issues` with the same body shared a hash. Fixed in `policy.mjs` (hermetic row, RED before the fix) and probed in criterion 7. The GO of run 42816918299 predates the fix; the re-measure on the fixed head replaces `injector-spike-results.json`.
 - Task 2.2 in flight: eight Guard mutation runs dispatched on `spike-mut/*` branches (base 6b9a0cb43b, scratch worktree `/var/tmp/spike-mut-wt`; remove both when recorded). Guard 3 row 4 measured locally: caught (FAIL DOCKER_UNAVAILABLE, exit 1, INCONCLUSIVE).
 
+## Phase 2 done (2026-11-10)
+
+- Final GO: run 42823659776 (head 3396c15847): criteria 1 to 9 pass; `injector-spike-results.json` and `injector-spike-results.md` committed. Guard rows: 8 caught, 1 equivalent survivor; throwaway `spike-mut/*` branches and the scratch worktree removed.
+
 ## Next
 
-1. Task 2.2: run each by-hand Guard row once (Guard 1 rows 1 to 5, Guard 2 rows 2, 6, 8, Guard 3 row 4) as a mutated copy dispatched through `egress-injector-spike.yml` (`workflow_dispatch` on a throwaway branch, one mutation per branch; Guard 3 row 4 can run locally with `docker` shadowed on PATH). Record which reddened, the run URL and the message. Expected survivors to label: Guard 1 row 1 (the Read tool refuses `/proc` files and bwrap hides `/proc`), Guard 2 row 8 (the hook still rejects; check what it observes).
-2. Task 2.3: write `injector-spike-results.md` (three plain opening sentences, per-criterion verdicts and raw outcomes, labels, re-measure trigger, `canonical_action` per write class, per-client pending-message record (R15: git shows only "remote end hung up"), NO_PROXY arm A finding, `gh` carriage finding, confused-deputy residual, CHECK change for #11637, the findings list in `tasks.md`, #12585).
-3. Phase 3 (ADR-324 via `soleur:architecture`, GO addendum to ADR-311 worded "on merge of PR #12518", issue edits #9845 and #9859, demand-side telemetry issue, `spec.md` edits, roadmap handoff note), then Phase 4 and the review, compound and ship pipeline.
+1. Phase 3: ADR-324 via `soleur:architecture` (status `adopting`, the plan's "Decision record (ADR-324)" content, `## Measured outcome — injector` citing the results note, `soleur:architecture assess` for the NFR register); the GO addendum to ADR-311 worded "on merge of PR #12518"; edit #9845 (linked section) and #9859 (Arm D widened with the Phase 4 trial requirements); file the demand-side session telemetry issue (Phase 4 milestone); edit `spec.md` (FR3 to the sibling PR, criteria mapping 7 to 1-9, TR1 and TR2 wording, the 36/42 baseline, the verdict set); leave the roadmap handoff note.
+2. Phase 4: tasks 4.1 to 4.4, then `soleur:review`, `soleur:compound`, `soleur:ship`. Re-merge main once #12559 (ADR-276 MD032) and #12562 (inngest pin) land.
