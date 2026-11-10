@@ -387,6 +387,23 @@ function setup(over: Record<string, unknown> = {}) {
 const PUSH = () => req({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
 const READ = () => req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" });
 
+describe("approval-hook.mjs decide() — per-session TTL (criterion 3's expiry arm)", () => {
+  it("a session's ttlSeconds overrides the hook default for the rows it creates", async () => {
+    const { fake, decider } = setup();
+    await decider.decide(PUSH(), { ...SESSION, ttlSeconds: 60 });
+    await decider.decide(PUSH(), { ...SESSION, conversationId: "00000000-0000-4000-8000-0000000000c2" });
+    const [short, normal] = fake.rows;
+    expect(Date.parse(short.expires_at) - Date.parse("2026-11-10T00:00:00Z")).toBe(60_000);
+    expect(Date.parse(normal.expires_at) - Date.parse("2026-11-10T00:00:00Z")).toBe(600_000);
+  });
+
+  it("a non-integer or out-of-range session TTL is ignored (the hook default applies)", async () => {
+    const { fake, decider } = setup();
+    await decider.decide(PUSH(), { ...SESSION, ttlSeconds: "60" as unknown as number });
+    expect(Date.parse(fake.rows[0].expires_at) - Date.parse("2026-11-10T00:00:00Z")).toBe(600_000);
+  });
+});
+
 describe("approval-hook.mjs decide() — decision order", () => {
   it("1. flag off REJECTs every vend, reads included, and creates no row (CTO R2)", async () => {
     const { fake, decider } = setup();

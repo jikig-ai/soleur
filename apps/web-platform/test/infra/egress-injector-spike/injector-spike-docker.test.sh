@@ -157,6 +157,7 @@ spike_seed_user ownerB WS_B
 spike_new_conversation "$WS_A" CONV_A
 spike_new_conversation "$WS_B" CONV_B
 spike_new_conversation "$WS_A" CONV_C
+spike_new_conversation "$WS_A" CONV_E
 spike_sign_in ownerA
 spike_sign_in ownerB
 
@@ -173,13 +174,15 @@ for repo in alpha beta outside; do
     || harness_fail STUB_START "seed $repo"
 done
 
-# Sessions: A (workspace A, flag on, spike/alpha), B (workspace B, flag on, spike/beta), C (workspace A, flag OFF).
+# Sessions: A (workspace A, flag on, spike/alpha), B (workspace B, flag on, spike/beta), C (workspace A, flag OFF),
+# E (workspace A, flag on, rows created with a 60 s TTL: criterion 3's expiry arm).
 spike_session_prepare sessA 0 "$WS_A" "$CONV_A"
 spike_session_prepare sessB 1 "$WS_B" "$CONV_B"
 spike_session_prepare sessC 2 "$WS_A" "$CONV_C"
+spike_session_prepare sessE 3 "$WS_A" "$CONV_E"
 python3 -I - "$SPIKE_WORK/stub/config.json" "$SPIKE_WORK/run" <<'PYSTUB' || harness_fail STUB_START "stub config"
 import json, sys
-decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC")]
+decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC", "sessE")]
 json.dump({"listen": {"host": "0.0.0.0", "port": 443}, "certFile": "/stub/leaf.pem", "keyFile": "/stub/leaf.key",
            "repoRoot": "/stub/repos", "recordFile": "/stub/records.jsonl", "decoys": decoys}, open(sys.argv[1], "w"))
 PYSTUB
@@ -193,18 +196,18 @@ cp "$SPIKE_WORK/service-role.key" "$SPIKE_WORK/hookpriv/service-role.key" \
   || harness_fail HOOK_START "copy hook inputs"
 ( umask 077 && python3 -I -c 'import secrets; print(secrets.token_hex(32))' > "$SPIKE_WORK/hookpriv/hmac.key" ) \
   || harness_fail HOOK_START "hmac key"
-python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$API_URL" "$WS_A:$CONV_A" "$WS_B:$CONV_B" "$WS_A:$CONV_C" <<'PYHOOK' || harness_fail HOOK_START "hook config"
+python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$API_URL" "$WS_A:$CONV_A" "$WS_B:$CONV_B" "$WS_A:$CONV_C" "$WS_A:$CONV_E" <<'PYHOOK' || harness_fail HOOK_START "hook config"
 import json, sys
 out, url = sys.argv[1], sys.argv[2]
-specs = [("sessA", sys.argv[3], ["spike/alpha"], True), ("sessB", sys.argv[4], ["spike/beta"], True),
-         ("sessC", sys.argv[5], ["spike/alpha"], False)]
+specs = [("sessA", sys.argv[3], ["spike/alpha"], True, None), ("sessB", sys.argv[4], ["spike/beta"], True, None),
+         ("sessC", sys.argv[5], ["spike/alpha"], False, None), ("sessE", sys.argv[6], ["spike/alpha"], True, 60)]
 sessions = []
-for sid, wc, repos, flag in specs:
+for sid, wc, repos, flag, ttl in specs:
     ws, conv = wc.split(":")
     sessions.append({"sessionId": sid, "conversationId": conv, "workspaceId": ws, "requesterId": ws, "repositories": repos,
                      "flagOn": flag, "routerCredentialFile": f"/run/spike-hook/{sid}/router.pw",
                      "serverCertFile": f"/run/spike-hook/{sid}/server.pem", "serverKeyFile": f"/run/spike-hook/{sid}/server.key",
-                     "socketPath": f"/run/spike/{sid}/hook/hook.sock"})
+                     "socketPath": f"/run/spike/{sid}/hook/hook.sock", **({"ttlSeconds": ttl} if ttl else {})})
 json.dump({"supabaseUrl": url, "serviceRoleKeyFile": "/run/spike-hook/service-role.key",
            "supabaseStatusFile": "/run/spike-hook/status.env", "hmacKeyFile": "/run/spike-hook/hmac.key",
            "policyFiles": ["/app/test/infra/egress-injector-spike/policy.yaml"],
@@ -217,13 +220,16 @@ spike_start_hook
 spike_session_up sessA
 spike_session_up sessB
 spike_session_up sessC
+spike_session_up sessE
 echo "SOLEUR_SPIKE_STAGE stage=topology-ready"
 check_deadline "topology"
+# The expiry arm's 60 s wait overlaps the other arms (deepen pass, criterion 3).
+arm_c3_expiry_start
 
 # --- Arms (lib/arms.sh). Those not built yet are recorded honestly, so the floor reads INCONCLUSIVE, never a pass. --
 record_verdict 1 unmeasurable "arm-not-implemented:sandbox-scan-and-cli-tier-probes"
 arm_c2
-record_verdict 3 unmeasurable "arm-not-implemented:approval-lifecycle"
+arm_c3
 arm_c4
 record_verdict 5 unmeasurable "arm-not-implemented:cross-session"
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"

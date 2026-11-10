@@ -164,7 +164,8 @@ checks = {
   "GraphQL query vended": "code=200" in obs["A.graphqlQuery"] and obs["stub.A.graphql"],
   "read outside the allowlist refused": "code=403" in obs["A.outsideRead"] and not obs["stub.A.outside"],
   "flag off refuses every read": "code=403" in obs["C.restRead"] and "cloned=no" in obs["C.clone"] and "code=403" in obs["C.graphqlQuery"] and not obs["stub.C.anyRealDecoy"],
-  "zero approval rows": rows0 == rows1 == "0",
+  # A delta, not an absolute: criterion 3 runs first and leaves rows on conversation A by design.
+  "the reads created no approval row": rows0.isdigit() and rows0 == rows1,
 }
 json.dump({"observations": obs, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
@@ -231,4 +232,151 @@ print(json.dumps(out))
 PYC2
   observe c2 "$d/summary.json"
   record_verdict 2 unmeasurable "arm-not-implemented:git-push-with-seeded-approval-and-claude-streaming (raw client outcomes recorded under observations c2)"
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 3: gating. Clients run in the app container through the session's router, OUTSIDE bwrap: this arm
+# measures the vend decision and the approval lifecycle; transport through the sandbox is criterion 2's.
+# ---------------------------------------------------------------------------------------------------------------
+
+# spike_cx <session> <script file> <out file>: run a bash script in the app container with the session's proxy
+# (P), CA bundle (CA) and a git config that names no credential helper.
+spike_cx() {
+  local cred port
+  cred="$(docker exec "$SPIKE_APP_CTR" cat "/run/spike/$1/secrets/router-session.cred" 2>/dev/null)" || harness_fail DRIVER "router cred $1"
+  port="$(cat "$SPIKE_WORK/run/$1/state/router.port")"
+  timeout -k 5 120 docker exec -i -u "$SPIKE_APP_UID" -e "P=http://$cred@127.0.0.1:$port" -e "CA=/run/spike-pub/$1/bundle.pem" \
+    -e GIT_CONFIG_GLOBAL=/dev/null -e GIT_CONFIG_NOSYSTEM=1 -e HOME=/home/soleur "$SPIKE_APP_CTR" bash -s < "$2" > "$3" 2>&1
+}
+
+spike_rows() { # conversation -> "status:count status:count ..."
+  psql "$DB_URL" -X -At -F: -c "SELECT status, count(*) FROM public.approval_request WHERE conversation_id = '$1' GROUP BY status ORDER BY status" 2>/dev/null | tr '\n' ' '
+}
+spike_latest_pending() { psql "$DB_URL" -X -At -c "SELECT id FROM public.approval_request WHERE conversation_id = '$1' AND status = 'pending' ORDER BY created_at DESC LIMIT 1" 2>/dev/null; }
+spike_row_status() { psql "$DB_URL" -X -At -c "SELECT status FROM public.approval_request WHERE id = '$1'" 2>/dev/null; }
+
+# spike_decide <owner label> <approval id> <approve|deny>: decide_approval with the owner's JWT from a real sign-in.
+spike_decide() {
+  local h="$SPIKE_WORK/seed/$1.decide.headers"
+  ( umask 077 && printf 'apikey: %s\nauthorization: Bearer %s\ncontent-type: application/json\n' "$(cat "$SPIKE_WORK/anon.key")" "$(cat "$SPIKE_WORK/seed/$1.jwt")" > "$h" )
+  curl -sS --max-time 20 -H @"$h" --data "{\"p_id\":\"$2\",\"p_decision\":\"$3\"}" "$API_URL/rest/v1/rpc/decide_approval" -o "$SPIKE_WORK/decide.out" -w '%{http_code}' 2>/dev/null
+}
+
+spike_hook_markers_since() { # line offset -> hook output after it
+  docker logs "$SPIKE_HOOK_CTR" 2>&1 | tail -n +"$(( $1 + 1 ))"
+}
+spike_hook_lines() { docker logs "$SPIKE_HOOK_CTR" 2>&1 | wc -l; }
+
+# The push script: one working copy per (session, name); `MSG` names the commit; a new MSG is a new hash.
+_c3_push_script() { # <session> <name> <msg> <out script file>
+  cat > "$4" <<EOS
+w=/home/soleur/c3-$1-$2
+if [ ! -d "\$w/.git" ]; then HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git clone -q https://github.com/spike/alpha.git "\$w" 2>&1 | tail -1; fi
+cd "\$w" || { echo push_rc=clone-failed; exit 0; }
+if ! git log --format=%s | grep -qx "$3"; then git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "$3"; fi
+HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:main 2>&1 | tail -2
+echo push_rc=\${PIPESTATUS[0]}
+EOS
+}
+
+# Starts the expiry arm (session E, rows created with a 60 s TTL). Returns at once; arm_c3 finishes it.
+arm_c3_expiry_start() {
+  mkdir -p "$SPIKE_WORK/c3" || harness_fail DRIVER "mkdir c3"
+  _c3_push_script sessE exp "expiry e1" "$SPIKE_WORK/c3/exp.sh"
+  spike_cx sessE "$SPIKE_WORK/c3/exp.sh" "$SPIKE_WORK/c3/exp1.out"
+  C3_EXP_ID="$(spike_latest_pending "$CONV_E")"
+  C3_EXP_T0="$(date +%s)"
+}
+
+arm_c3() {
+  local d="$SPIKE_WORK/c3" seq h0 p1 p2 x id obs="$SPIKE_WORK/c3/obs.jsonl"
+  mkdir -p "$d" && : > "$obs" || harness_fail DRIVER "mkdir c3"
+  note() { python3 -I -c 'import json, sys; print(json.dumps({"k": sys.argv[1], "v": sys.argv[2]}))' "$1" "$2" >> "$obs"; }
+  h0="$(spike_hook_lines)"
+  seq="$(spike_stub_seq)"
+
+  # Push lifecycle on session A (CTO R16).
+  _c3_push_script sessA life "life 1" "$d/l1.sh"
+  spike_cx sessA "$d/l1.sh" "$d/l1a.out"; note push1 "$(tail -1 "$d/l1a.out")"; note rows1 "$(spike_rows "$CONV_A")"
+  note stub1_receivepack "$(spike_stub_since "$seq" | grep -c '"path":"/spike/alpha.git/git-receive-pack"')"
+  spike_cx sessA "$d/l1.sh" "$d/l1b.out"; note push1_retry "$(tail -1 "$d/l1b.out")"; note rows1_retry "$(spike_rows "$CONV_A")"
+  p1="$(spike_latest_pending "$CONV_A")"; note p1 "${p1:+present}"
+  note deny "$(spike_decide ownerA "$p1" deny)"
+  spike_cx sessA "$d/l1.sh" "$d/l1c.out"; note push1_after_deny "$(tail -1 "$d/l1c.out")"; note rows_after_deny "$(spike_rows "$CONV_A")"
+  p2="$(spike_latest_pending "$CONV_A")"; note p2_new "$([[ -n "$p2" && "$p2" != "$p1" ]] && echo yes || echo no)"
+  seq="$(spike_stub_seq)"
+  note approve "$(spike_decide ownerA "$p2" approve)"
+  spike_cx sessA "$d/l1.sh" "$d/l1d.out"; note push1_approved "$(tail -1 "$d/l1d.out")"; note p2_status "$(spike_row_status "$p2")"
+  note stub_after_approve "$(spike_stub_since "$seq" | grep '"path":"/spike/alpha.git/git-receive-pack"' | grep -c '"auth_class":"real-decoy"')"
+  seq="$(spike_stub_seq)"
+  _c3_push_script sessA life "life 2" "$d/l2.sh"
+  spike_cx sessA "$d/l2.sh" "$d/l2.out"; note push2_new_hash "$(tail -1 "$d/l2.out")"; note rows_end "$(spike_rows "$CONV_A")"
+  note stub_push2 "$(spike_stub_since "$seq" | grep '"path":"/spike/alpha.git/git-receive-pack"' | grep -c '"auth_class":"real-decoy"')"
+
+  # REST binding (CPO C4): a row approved for body X does not authorize body Y, another path, or another repo.
+  cat > "$d/rest.sh" <<'EOS'
+post() { curl -sS -o /dev/null -w "$1=%{http_code}\n" --cacert "$CA" -x "$P" -H 'content-type: application/json' ${3:+-H "$3"} --data "$2" "https://api.github.com$4"; }
+case "$STEP" in
+  x1) post x1 '{"title":"spike X","head":"a","base":"main"}' '' /repos/spike/alpha/pulls ;;
+  y1) post y1 '{"title":"spike Y","head":"a","base":"main"}' '' /repos/spike/alpha/pulls ;;
+  zpath) post zpath '{"title":"spike X","head":"a","base":"main"}' '' /repos/spike/alpha/issues/1/comments ;;
+  zrepo) post zrepo '{"title":"spike X","head":"a","base":"main"}' '' /repos/spike/outside/pulls ;;
+  x2) post x2 '{"title":"spike X","head":"a","base":"main"}' 'Idempotency-Key: spike-1' /repos/spike/alpha/pulls ;;
+  x3) post x3 '{"title":"spike X","head":"a","base":"main"}' 'Idempotency-Key: spike-1' /repos/spike/alpha/pulls ;;
+esac
+EOS
+  rest() { { echo "STEP=$1"; cat "$d/rest.sh"; } > "$d/rest-$1.sh"; spike_cx sessA "$d/rest-$1.sh" "$d/rest-$1.out"; note "rest_$1" "$(tail -1 "$d/rest-$1.out")"; }
+  seq="$(spike_stub_seq)"
+  rest x1; x="$(spike_latest_pending "$CONV_A")"; note approve_x "$(spike_decide ownerA "$x" approve)"
+  rest y1; rest zpath; rest zrepo
+  note stub_binding_misses "$(spike_stub_since "$seq" | grep '"method":"POST"' | grep -c '"auth_class":"real-decoy"')"
+  rest x2; note x_status "$(spike_row_status "$x")"
+  note stub_x2 "$(spike_stub_since "$seq" | grep '"method":"POST"' | grep '"auth_class":"real-decoy"' | head -1)"
+  rest x3
+
+  # Flag input off (session C): a listed write is refused flag-off, with no row.
+  _c3_push_script sessC off "flag off" "$d/off.sh"
+  spike_cx sessC "$d/off.sh" "$d/off.out"; note push_flag_off "$(tail -1 "$d/off.out")"; note rows_c "$(spike_rows "$CONV_C")"
+
+  # Expiry (session E, 60 s TTL started at topology-ready): pending near 50 s, then expired, then REJECT expired.
+  local waited=$(( $(date +%s) - C3_EXP_T0 ))
+  (( waited < 50 )) && sleep $(( 50 - waited ))
+  note exp_at_50s "$(spike_row_status "$C3_EXP_ID")"
+  waited=$(( $(date +%s) - C3_EXP_T0 )); (( waited < 66 )) && sleep $(( 66 - waited ))
+  spike_cx sessE "$d/exp.sh" "$d/exp2.out"; note push_after_expiry "$(tail -1 "$d/exp2.out")"; note exp_final "$(spike_row_status "$C3_EXP_ID")"
+
+  spike_hook_markers_since "$h0" | grep -E '^SOLEUR_EGRESS_VEND' | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' > "$d/markers.txt"
+  python3 -I - "$d" > "$d/verdict.txt" <<'PYC3'
+import json, sys
+d = sys.argv[1]
+o = {}
+for l in open(f"{d}/obs.jsonl"):
+    r = json.loads(l); o[r["k"]] = r["v"]
+m = open(f"{d}/markers.txt").read().splitlines()
+def reasons(sess):
+    return [x.split(" reason=")[1].split()[0] for x in m if f"session={sess} " in x and " reason=" in x]
+def vends(sess, cls):
+    return [x for x in m if x.startswith("SOLEUR_EGRESS_VEND ") and f"session={sess} " in x and f"class={cls} " in x]
+ra, rc, re_ = reasons("sessA"), reasons("sessC"), reasons("sessE")
+pend = lambda s: int(dict(p.split(":") for p in s.split()).get("pending", 0)) if s.strip() else 0
+checks = {
+  "no row: push refused pending, one pending row": o["push1"] != "push_rc=0" and "pending" in ra and pend(o["rows1"]) == 1,
+  "no real token on the refused POST git-receive-pack": o["stub1_receivepack"] == "0",
+  "retry before decision keeps one row": o["push1_retry"] != "push_rc=0" and o["rows1"] == o["rows1_retry"],
+  "owner deny -> rejected reported, then a new pending row": o["deny"] == "200" and "rejected" in ra and o["p2_new"] == "yes",
+  "approve -> vend, consumed exactly once": o["approve"] == "200" and o["push1_approved"] == "push_rc=0" and o["p2_status"] == "consumed" and o["stub_after_approve"] == "1",
+  "a new hash after consume needs a new row": o["push2_new_hash"] != "push_rc=0" and o["stub_push2"] == "0",
+  "REST X pending, then approved": o["rest_x1"] == "x1=403" and o["approve_x"] == "200",
+  "binding: body Y, another path, another repo get no real token": o["rest_y1"] == "y1=403" and o["rest_zpath"] == "zpath=403" and o["rest_zrepo"] == "zrepo=403" and o["stub_binding_misses"] == "0",
+  "approved X consumed once, Idempotency-Key stripped": o["rest_x2"] == "x2=201" and o["x_status"] == "consumed" and '"idempotency_key":false' in o["stub_x2"] and o["rest_x3"] == "x3=403",
+  "flag off: refused flag-off, no row": o["push_flag_off"] != "push_rc=0" and "flag-off" in rc and o["rows_c"].strip() == "",
+  "expiry: pending at ~50 s, then REJECT expired": o["exp_at_50s"] == "pending" and "expired" in re_ and o["exp_final"] == "expired",
+}
+json.dump({"observations": o, "reasons": {"sessA": ra, "sessC": rc, "sessE": re_}, "checks": checks}, open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC3
+  observe c3 "$d/raw.json"
+  spike_record_judged 3 "$d/verdict.txt"
 }

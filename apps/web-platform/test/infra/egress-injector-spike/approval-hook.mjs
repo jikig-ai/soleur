@@ -103,6 +103,11 @@ function proxyAuthPassword(headerValues) {
   return colon === -1 ? null : decoded.slice(colon + 1);
 }
 
+/** A session may shorten its rows' TTL (criterion 3's expiry arm); only an integer in the RPC's own range counts. */
+function sessionTtl(v) {
+  return Number.isInteger(v) && v >= 60 && v <= 172800 ? v : undefined; // create_approval_request accepts 60..172800
+}
+
 function rpcFailureReason(err) {
   const code = String(err?.code ?? "");
   if (code === "AP429" || code === "AP430") return "cap";
@@ -124,7 +129,7 @@ function body(reason, extra = {}) {
 
 /**
  * deps: { policy (compiled), hmacKey, rpc: {create, consume, status}, toolName, ttlSeconds, deadlineMs, now }.
- * session: { sessionId, conversationId, workspaceId, requesterId, repositories, flagOn, routerCredential }.
+ * session: { sessionId, conversationId, workspaceId, requesterId, repositories, flagOn, routerCredential, ttlSeconds? }.
  * request: { method, host, path, query, headers, body, requestId? } (headers: name -> string | string[]).
  */
 export function createDecider(deps) {
@@ -184,7 +189,7 @@ export function createDecider(deps) {
     try {
       res = await rpc.create({
         workspaceId: session.workspaceId, conversationId: session.conversationId, requesterId: session.requesterId,
-        toolName, hash, canonical: c.canonical, ttlSeconds,
+        toolName, hash, canonical: c.canonical, ttlSeconds: sessionTtl(session.ttlSeconds) ?? ttlSeconds,
       });
     } catch (err) {
       return refuse(rpcFailureReason(err), w);
@@ -371,6 +376,7 @@ async function main(configPath) {
     const session = {
       sessionId: s.sessionId, conversationId: s.conversationId, workspaceId: s.workspaceId, requesterId: s.requesterId,
       repositories: s.repositories, flagOn: s.flagOn === true, routerCredential: read(s.routerCredentialFile),
+      ttlSeconds: s.ttlSeconds,
     };
     const server = new grpc.Server();
     server.addService(svc, {
