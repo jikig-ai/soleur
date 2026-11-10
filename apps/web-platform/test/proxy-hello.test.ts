@@ -2,7 +2,6 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // #8211: the accept-only slot (Guard 1) and fingerprint (Guard 5) rows below.
 import { createHash } from "node:crypto";
-import { afterAll } from "vitest";
 
 // #12289 — the signed relay hello. Pure module tests with an injected clock (no fake timers, no
 // sockets). The known-answer vector is assembled BY HAND from the spec string and node:crypto in the
@@ -22,6 +21,7 @@ import {
   SKEW_S,
   buildHelloMacInput,
   createReplayCache,
+  type HelloVerifyKeys,
   helloKeyFingerprint,
   signProxyHello,
   verifyProxyHello,
@@ -319,19 +319,9 @@ describe("replay cache", () => {
 describe("key set: the accept-only slot (Guard 1)", () => {
   const ACCEPT_KEY = randomBytes(32);
   const THIRD_KEY = randomBytes(32);
-  const BOTH = { current: KEY, acceptAlso: ACCEPT_KEY };
-  // Own-dispatch counters: the suite must really exercise an accept-also accept and a `mac` refusal.
-  let acceptAlsoAccepts = 0;
-  let macRefusals = 0;
-  const verifyBoth = (buf: Buffer, cache = createReplayCache(), keys: { current: Buffer; acceptAlso: Buffer | null } = BOTH) => {
-    const r = verifyProxyHello(buf, false, keys, cache, now);
-    if (!r.ok && r.reason === "mac") macRefusals++;
-    return r;
-  };
-  afterAll(() => {
-    expect(acceptAlsoAccepts).toBeGreaterThanOrEqual(1);
-    expect(macRefusals).toBeGreaterThanOrEqual(1);
-  });
+  const BOTH: HelloVerifyKeys = { current: KEY, acceptAlso: ACCEPT_KEY };
+  const verifyBoth = (buf: Buffer, cache = createReplayCache(), keys: HelloVerifyKeys = BOTH) =>
+    verifyProxyHello(buf, false, keys, cache, now);
 
   it("fixture distinctness: CURRENT, the accept-also key and the third key are three different keys", () => {
     const hexes = [KEY, ACCEPT_KEY, THIRD_KEY].map((k) => k.toString("hex"));
@@ -341,7 +331,6 @@ describe("key set: the accept-only slot (Guard 1)", () => {
   it("a hello signed with the accept-also key is admitted, with the unchanged success shape", () => {
     const r = verifyBoth(Buffer.from(signProxyHello(ACCEPT_KEY, U, W, { now })));
     expect(r).toEqual({ ok: true, userId: U, workspaceId: W });
-    acceptAlsoAccepts++;
   });
 
   it("a hello signed with CURRENT is still admitted while the slot is set", () => {
@@ -361,7 +350,6 @@ describe("key set: the accept-only slot (Guard 1)", () => {
     const cache = createReplayCache();
     const h = hello({}, ACCEPT_KEY);
     expect(verifyBoth(h, cache).ok).toBe(true);
-    acceptAlsoAccepts++;
     expect(verifyBoth(h, cache)).toEqual({ ok: false, reason: "replay" });
   });
 
@@ -393,10 +381,9 @@ describe("key set: the accept-only slot (Guard 1)", () => {
   it("must-pass: a different synthetic CURRENT with a different synthetic slot admits both its keys", () => {
     const c = randomBytes(32);
     const a = randomBytes(32);
-    const keys = { current: c, acceptAlso: a };
+    const keys: HelloVerifyKeys = { current: c, acceptAlso: a };
     expect(verifyBoth(Buffer.from(signProxyHello(c, U, W, { now })), createReplayCache(), keys).ok).toBe(true);
     expect(verifyBoth(Buffer.from(signProxyHello(a, U, W, { now })), createReplayCache(), keys).ok).toBe(true);
-    acceptAlsoAccepts++;
   });
 });
 

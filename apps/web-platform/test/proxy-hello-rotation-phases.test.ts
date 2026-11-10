@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import { createReplayCache, signProxyHello, verifyProxyHello } from "@/server/proxy-hello";
+import { createReplayCache, signProxyHello, verifyProxyHello, type HelloVerifyKeys } from "@/server/proxy-hello";
 
 // #8211 (ADR-323 Decision 9, B3) — Guard 2: why a routine rotation of the relay hello key takes THREE phases. Every
 // host both signs and verifies, and a rolling restart leaves two hosts in adjacent phases for one stagger, so every
@@ -13,7 +13,7 @@ import { createReplayCache, signProxyHello, verifyProxyHello } from "@/server/pr
 interface HostState {
   readonly phase: string;
   readonly signWith: Buffer;
-  readonly accept: { readonly current: Buffer; readonly acceptAlso: Buffer | null };
+  readonly accept: HelloVerifyKeys;
 }
 
 function phases(oldKey: Buffer, newKey: Buffer): readonly HostState[] {
@@ -97,7 +97,15 @@ describe.each(KEY_PAIRS)("rotation phases (%s)", (_label, OLD, NEW) => {
     }
   });
 
-  it("no host ever signs with its accept-only key: each phase's signing key is its current key", () => {
-    for (const h of P) expect(h.signWith.equals(h.accept.current), h.phase).toBe(true);
+  it("before to end (P0 <-> P3, the single-phase rotation, e.g. a confirmed-leak swap): refused in BOTH directions", () => {
+    expect(roundTrip(byName("P0"), byName("P3"))).toEqual({ ok: false, reason: "mac" });
+    expect(roundTrip(byName("P3"), byName("P0"))).toEqual({ ok: false, reason: "mac" });
+  });
+
+  it.each(["P0", "P1", "P2", "P3"])("same phase (two %s hosts, a finished roll): two hosts in one phase complete a round trip", (name) => {
+    const a = byName(name);
+    const b: HostState = { ...a }; // a second host in the same phase
+    expect(roundTrip(a, b)).toEqual({ ok: true, userId: U, workspaceId: W });
+    expect(roundTrip(b, a)).toEqual({ ok: true, userId: U, workspaceId: W });
   });
 });

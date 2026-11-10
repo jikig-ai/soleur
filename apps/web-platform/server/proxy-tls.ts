@@ -16,6 +16,7 @@
 import { X509Certificate } from "node:crypto";
 import { inspect } from "node:util";
 import { createChildLogger } from "./logger";
+import type { HelloVerifyKeys } from "./proxy-hello";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
 const log = createChildLogger("proxy-tls");
@@ -78,10 +79,7 @@ const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
  * non-enumerable, so a copy of the set (spread, Object.assign, structuredClone) carries no key. A Buffer read out of
  * it (`keys.current`) is a raw key: never log it.
  */
-export interface ProxyHelloKeys {
-  readonly current: Buffer | null;
-  readonly acceptAlso: Buffer | null;
-}
+export type ProxyHelloKeys = Omit<HelloVerifyKeys, "current"> & { readonly current: Buffer | null };
 
 const KEYS_PLACEHOLDER = "[proxy-hello-keys]";
 

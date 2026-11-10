@@ -41,8 +41,9 @@ export function buildHelloMacInput(userId: string, workspaceId: string, ts: stri
   return HELLO_DOMAIN + "\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce;
 }
 
-function computeMac(key: Buffer, userId: string, workspaceId: string, ts: string, nonce: string): Buffer {
-  return createHmac("sha256", key).update(buildHelloMacInput(userId, workspaceId, ts, nonce)).digest();
+/** HMAC-SHA256 of one canonical MAC input (built once per hello by the caller). */
+function macOf(key: Buffer, input: string): Buffer {
+  return createHmac("sha256", key).update(input).digest();
 }
 
 /** Sign a hello for `userId`/`workspaceId`. Throws on a non-canonical id (the caller closes the client). */
@@ -57,7 +58,7 @@ export function signProxyHello(
   }
   const ts = String(Math.floor((opts.now ?? Date.now)() / 1000));
   const nonce = opts.nonce ?? randomBytes(16).toString("hex");
-  const mac = computeMac(key, userId, workspaceId, ts, nonce).toString("hex");
+  const mac = macOf(key, buildHelloMacInput(userId, workspaceId, ts, nonce)).toString("hex");
   return JSON.stringify({ type: "proxy_hello", userId, workspaceId, ts, nonce, mac });
 }
 
@@ -105,9 +106,9 @@ function toBuffer(data: unknown): Buffer | null {
 }
 
 /**
- * The keys a verifier accepts (#8211, ADR-323 Decision 9). `current` is the signing key and a verifying key;
- * `acceptAlso` (PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO) is VERIFY-ONLY and `null` by default. `signProxyHello` takes a
- * single Buffer, so passing this set to the signer is a type error; the sender is only ever given `current`.
+ * The keys a verifier accepts. `current` is the signing key and a verifying key; `acceptAlso` is verify-only and
+ * `null` by default (ADR-323 Decision 9). `signProxyHello` takes a single Buffer, so passing this set to the signer is
+ * a type error. The loaded set (`ProxyHelloKeys` in proxy-tls.ts) is derived from this type.
  */
 export interface HelloVerifyKeys {
   readonly current: Buffer;
@@ -158,9 +159,9 @@ export function verifyProxyHello(
   // Both compares ALWAYS run when the slot is set (no short-circuit), so the timing does not tell which key
   // matched. `mac` only when neither matches; skew, replay and AP-2 then apply whichever key matched.
   const given = Buffer.from(mac, "hex");
-  const matchesCurrent = timingSafeEqual(given, computeMac(keys.current, userId, workspaceId, ts, nonce));
-  const matchesAlso =
-    keys.acceptAlso !== null && timingSafeEqual(given, computeMac(keys.acceptAlso, userId, workspaceId, ts, nonce));
+  const input = buildHelloMacInput(userId, workspaceId, ts, nonce);
+  const matchesCurrent = timingSafeEqual(given, macOf(keys.current, input));
+  const matchesAlso = keys.acceptAlso !== null && timingSafeEqual(given, macOf(keys.acceptAlso, input));
   if (!matchesCurrent && !matchesAlso) return { ok: false, reason: "mac" };
 
   const nowS = Math.floor(now() / 1000);

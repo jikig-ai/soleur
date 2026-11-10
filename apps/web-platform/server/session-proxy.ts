@@ -35,7 +35,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { loadProxyHelloKeys, loadProxyTlsClientCa, loadProxyTlsServerOptions, type ProxyHelloKeys } from "./proxy-tls";
-import { createReplayCache, helloKeyFingerprint, isCanonicalUuid, signProxyHello, verifyProxyHello } from "./proxy-hello";
+import { createReplayCache, helloKeyFingerprint, isCanonicalUuid, signProxyHello, verifyProxyHello, type HelloVerifyKeys } from "./proxy-hello";
 import { verifyProxiedSessionMembership } from "./session-router";
 import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
 import { denyReporter } from "./proxy-deny-report";
@@ -48,7 +48,7 @@ const log = createChildLogger("session-proxy");
 export const DEFAULT_PROXY_PORT = 8443;
 
 /** The listener starts only with a CURRENT hello key; the accept-only slot is verify-only (#8211). */
-function hasCurrentHelloKey(keys: ProxyHelloKeys): keys is ProxyHelloKeys & { readonly current: Buffer } {
+function hasCurrentHelloKey(keys: ProxyHelloKeys): keys is HelloVerifyKeys {
   return keys.current !== null;
 }
 
