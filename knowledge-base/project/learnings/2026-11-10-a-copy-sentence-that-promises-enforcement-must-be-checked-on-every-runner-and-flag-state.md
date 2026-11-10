@@ -28,10 +28,12 @@ check) had no recorded status.
 
 - D1 (CTO ruling): `github_push_branch` on the legacy fallback now requires the workspace Owner. The role is read with a
   5 s deadline and abort handling; a member, a failed or timed-out read, or a missing dependency gets the static deny with
-  no card, no status write and no notification, each with a `sec: true` log and a Sentry op. Other approval-required tools
-  keep the in-memory card (narrow scope, pinned by a test). Mutation: disabling the owner gate reds 5 tests.
+  no card, no status write and no notification, each with a `sec: true` log; the failed read and the missing dependency
+  also emit a Sentry op (`viewerRoleFailed`, `gateFailed` stage `wiring-absent`). Other approval-required tools keep the
+  in-memory card (narrow scope, pinned by a test). Mutation: neutralizing the `role !== "owner"` deny reds 5 tests.
 - D2 (CTO/CLO ruling): the amendment states each enabling condition with its measured status ((1) to (4)) instead of
-  claiming it already applies. The CTO agent measured `sessions_single_per_user: false` and `mailer_otp_exp: 600` read-only.
+  claiming it already applies. The CTO agent measured `sessions_single_per_user: false` read-only (the separate
+  `mailer_otp_exp: 600` reading belongs to decision row R9).
 - Copy tests: the ON block, the dialog and the Scope Grants callout are asserted as the exact array of their text nodes
   (closed sets), not as `<p>` elements or keywords.
 
