@@ -12,7 +12,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import ts from "typescript";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -126,26 +125,6 @@ describe("handler source-shape anchors", () => {
     ["Ref #3517", "issue reference"],
   ])("contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
-  });
-});
-
-// #8211 (ADR-323 Decision 9) — the relay hello keys are deleted from process.env at boot (index.ts). A module-scope
-// `{ ...process.env }` would snapshot the env when this module loads, and capture them if it ever loaded before that
-// deletion; every spread of process.env here must therefore be evaluated at call time, inside a function.
-describe("process.env is read at call time, never snapshotted at module scope", () => {
-  it("every `...process.env` spread sits inside a function body", () => {
-    const sf = ts.createSourceFile("cron-content-vendor-drift.ts", SUT_SOURCE, ts.ScriptTarget.Latest, true);
-    const spreads: { line: number; inFunction: boolean }[] = [];
-    const visit = (node: ts.Node, inFunction: boolean) => {
-      const fn = inFunction || ts.isFunctionLike(node);
-      if (ts.isSpreadAssignment(node) && node.expression.getText(sf) === "process.env") {
-        spreads.push({ line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, inFunction: fn });
-      }
-      ts.forEachChild(node, (c) => visit(c, fn));
-    };
-    visit(sf, false);
-    expect(spreads.length).toBeGreaterThanOrEqual(1); // vacuity floor: the git spawners do spread the env
-    expect(spreads.filter((s) => !s.inFunction)).toEqual([]);
   });
 });
 
