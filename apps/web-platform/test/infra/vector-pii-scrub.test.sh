@@ -627,7 +627,7 @@ EXPECTED_TAGS=$(
 # vice versa — fails AC3; they are a lockstep pair.
 SYSTEMD_UNIT_IDENTIFIERS="webhook
 sshd"
-EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u)
+EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u) || true
 # AC3 PRIORITY-arm exemption registry (#9963) — tags the census above derives from a real
 # `logger -t` call site that must NOT join the Source 4 include_matches.SYSLOG_IDENTIFIER
 # allowlist, because their rows already ship through Source 1's include_matches.PRIORITY
@@ -679,7 +679,7 @@ fi
 # the `logger -t` gate), removing the dark arm silently drops this tag from EXPECTED and
 # AC3 starts demanding its deletion from vector.toml. Assert the channel yields the tag
 # on its own, with no reference to any logger call.
-SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
+SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u) || true
 CASES=$((CASES + 1))
 if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -cx >/dev/null 'inngest-heartbeat'; then
   pass "inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
@@ -741,7 +741,7 @@ for svc in "$INFRA_DIR"/*.service; do
   grep -qE '^[[:space:]]*SyslogIdentifier=' "$svc" && continue
   # Effective identifier = basename of the ExecStart binary (first non-space token). `^ExecStart=`
   # does NOT match ExecStartPre= (needs '=' right after ExecStart).
-  binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//')
+  binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//') || true
   [[ -z "$binpath" ]] && continue
   tag="$(basename "$binpath")"
   SERVICE_BASENAMES+="$tag"$'\n'

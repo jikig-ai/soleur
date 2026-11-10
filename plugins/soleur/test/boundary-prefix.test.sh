@@ -234,7 +234,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 #     `gh pr merge 123 --squash --admin`), test data not a gate pattern.
 #   delegation-verify.test.sh:1371 — a mutation-kill row: the mutant replacement text for CMDPOS_RE
 #     and the `gh workflow run` command it is run against, both test data not a gate pattern.
-#   ship-operator-step-gate.sh:457 — the parked-barrier PREFILTER (`(^|[^[:alnum:]_-])gh[[:space:]]`).
+#   ship-operator-step-gate.sh:461 — the parked-barrier PREFILTER (`(^|[^[:alnum:]_-])gh[[:space:]]`).
 #     It only decides whether the barrier runs, and it is deliberately WIDER than the wrapper atoms
 #     (any non-word character may precede `gh`: `(`, `$(`, a backtick, `/usr/bin/`); the barrier's
 #     own command-position matcher (PARKED_AWK) decides what counts as a merge. Interpolating the
@@ -244,7 +244,7 @@ EXEMPTIONS=(
   ".claude/hooks/git-commit-secret-scan.sh:254"
   ".claude/hooks/guardrails.sh:231"
   ".claude/hooks/guardrails.sh:705"
-  ".claude/hooks/ship-operator-step-gate.sh:457"
+  ".claude/hooks/ship-operator-step-gate.sh:461"
   ".claude/hooks/lib/incidents.sh:305"
   ".claude/hooks/lib/incidents.sh:311"
   ".claude/hooks/lib/incidents.sh:316"

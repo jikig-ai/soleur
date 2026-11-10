@@ -7,6 +7,8 @@
 
 ## Context
 
+> **Superseded 2026-11-09:** the "$10/$50 per MTok — 2× Opus 4.8" below is the Fable 5 basis this decision was made on. Fable 5.2 lists at $8/$40, 2× Opus 5.5 ($4/$20); see the Fable 5.2 addendum below and the 2026-11-09 addendum in [ADR-053](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md).
+
 Fable 5 prices at $10/$50 per MTok — 2× Opus 4.8 (per ADR-053). Two ways to get Fable-grade judgment at a task's decision points:
 
 1. **Claude Code's built-in [advisor tool](https://code.claude.com/docs/en/advisor)** — `advisorModel: "fable"` in settings. It is a *server-side* tool: on every call it re-sends the **full conversation transcript** to the advisor, **uncached** (each call reprocesses the whole transcript anew), at the advisor's rates. Timing is model-driven (no config to force/cap), and **subagents inherit it** — so on Soleur's high-fan-out skills (`/review` ≥ 8 agents; `/one-shot`, `/drain` many more) every spawn can fire a full-transcript Fable call. On a long autonomous run the transcript is huge, making each advisor call very expensive. Its internal context-packaging is fixed by Anthropic; it cannot be reimplemented to send less.
@@ -70,3 +72,21 @@ Each consult ≈ curated payload in + short advice out, once per gate. Executed 
 ## Addendum — 2026-10-11 (#10055)
 
 > **Superseded 2026-10-11 (#10055), in part:** "`one-shot` ... is deliberately **not** edited" (Decision, and the "Edit `one-shot` too" row of Alternatives) no longer holds for two narrow changes recorded in ADR-084's 2026-10-11 addendum: an inline technical-ruling rule in one-shot's plan-subagent prompt, and a technical-ruling gate step after the plan phase. The consult gates themselves still sit in `plan` Step 4.5 and `ship` Phase 5.5 and one-shot still inherits them transitively; the text above is kept as the dated record.
+
+## Addendum — 2026-11-09 (Fable 5.2 launch)
+
+Ruled by CTO agent, 2026-11-09. Claude Fable 5.2 (`claude-fable-5-2`) launched at $8/$40 per MTok. Pricing and
+the re-tier verdict are recorded in the [ADR-053 addendum](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md);
+this addendum records what the launch article offered and was **not** adopted, so the next launch does not re-derive it.
+
+| Article item | Ruling | Reason |
+|---|---|---|
+| Advisor role | Unchanged | Already this ADR: the two gates (`plan` Step 4.5, `ship` Phase 5.5) stay the only Fable sites. |
+| Orchestrator role | Not adopted | Would add Fable sites beyond the gate admission rule above. |
+| Fast mode (vendor-stated up to 2.5× faster; price in the ADR-053 addendum) | Not adopted | Doubles the per-token price; a spend increase is an operator authorization, not a launch-day edit. |
+| Preserved thinking (all accounts) | Not adopted | No Soleur consumer reads a prior thinking block. |
+| `AUDIT_EFFORT` / effort default | No change | `AUDIT_EFFORT` pins effort for the Opus 5.5 audit tier (`AUDIT_MODEL`). The article states a Medium default for Fable 5.2 in Claude Code; that is vendor-stated and not checked against the pinned CLI's model table. |
+| Mythos 5.2 | Not usable | No public API id; vetted-organization access only (vendor-stated). |
+
+The `fable` alias is version-agnostic, but whether it resolves to 5.2 on the pinned CLI 2.1.311 is unverified and
+tracked in #12514. Nothing in this addendum claims 5.2 is in effect for the consult gates.

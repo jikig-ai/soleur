@@ -30,11 +30,15 @@
 #   - PR body contains operator-step accretions without OPEN
 #     `deferred-automation` / `automation gap` companion issues
 #
-# The `parked` barrier (#12197, CTO rulings 2026-11-07 and 2026-11-08), a SEPARATE branch that runs first. It is a BEST-EFFORT
-# GUARDRAIL against accidental merges by agent sessions working in a checkout that carries this file. It is NOT an access
-# control: the real hold on a parked PR is its DRAFT status (GitHub refuses to merge a draft; drain-prs excludes drafts), and this
-# hook is absent from origin/main until the pull request that adds it merges, so a session on a main-based checkout does not run
-# it. While a PR carries the existing `parked` label ("Reviewed draft held until an approved window; do not merge or arm
+# The `parked` barrier (#12197, CTO rulings 2026-11-07 and 2026-11-08), a SEPARATE branch that runs first. The server-side
+# enforcement is the `parked-hold` member step of the required `secret-guards` check (scripts/ci-parked-hold.sh, #12396, ADR-032
+# amendment 2026-11-08): it fails while the PR carries the label and so binds auto-merge, the merge queue and every identity that is
+# subject to the required checks. It does not bind a bypass actor running `gh pr merge --admin` (admin-merge-ready.sh grades every
+# required context, so a parked PR is red there), and any identity with triage access can remove the label. This hook is LOCAL
+# DEFENCE IN DEPTH: a guardrail against accidental merges by agent sessions working in a checkout that carries this file, not the
+# access control. A DRAFT PR stays the first hold (GitHub refuses to merge a draft; drain-prs excludes drafts); the check covers
+# parked-and-ready. A session on a main-based checkout that lacks this file does not run the hook, and the check still holds.
+# While a PR carries the existing `parked` label ("Reviewed draft held until an approved window; do not merge or arm
 # auto-merge"), a `gh pr merge` that is not `--disable-auto` (plain, --auto, --admin, chained, quoted, wrapped in `bash -c`, a
 # PR URL, `-R/--repo`, a `gh api` merge or a GraphQL merge/enqueue mutation) is denied, and so is anything that removes or
 # replaces the label (`gh pr|issue edit --remove-label`, `gh label delete|edit`, a `gh api` write on the labels). A merge whose
@@ -44,7 +48,7 @@
 # hold line is rewritten. Limits, stated plainly: it matches command TEXT, so a merge hidden in a script file, built from `$GH`,
 # run from a GitHub Actions job (schedule), or made by a human or an admin UI merge is not seen; the other merge sites in skills
 # and scripts do not check `parked`. `xargs` before a gh write holds while ANY PR is parked (its targets come from stdin).
-# Accepted limits, deliberate and not planned for further hardening (server-side enforcement in #12396 supersedes all of them):
+# Accepted limits, deliberate and not planned for further hardening (the server-side check, #12396, is the enforcement that does not parse text):
 #   - wrappers that take an option value or are not in the prefix list (`env -u X gh ...`, `sudo -u root gh ...`, `doppler run --
 #     gh ...`, `stdbuf`, `ionice`, `script -c`, `ssh host gh ...`);
 #   - a shell fed from a heredoc, process substitution or a pipe (`bash <<EOF ... EOF`, `bash <(...)`, `source <(...)`,

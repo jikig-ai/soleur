@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-09T19:08:04Z
+# generated-at=2026-11-09T23:02:38Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -108,6 +108,7 @@ plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/merge-effect-class.test.sh	1
 plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
+plugins/soleur/scripts/required-set-report.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	6
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	3
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8
@@ -195,10 +196,6 @@ plugins/soleur/test/ci-concurrency-key.test.sh	8
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-head-verdict.test.sh	5
 plugins/soleur/test/ci-path-gating.test.sh	5
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1
-plugins/soleur/test/ci-pr-affected-replay-a	2
-plugins/soleur/test/ci-pr-affected-replay-b	7
-plugins/soleur/test/ci-pr-affected-replay-c	4
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/claude-code-action-auth.test.sh	5
@@ -398,7 +395,7 @@ scripts/ci-draft-light	6
 scripts/ci-leg-balance-9232	8
 scripts/ci-oracle-lane	4
 scripts/ci-oracle-review	5
-scripts/ci-pr-selection	2
+scripts/ci-parked-hold	5
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
@@ -452,6 +449,8 @@ scripts/git-data-reboot-evidence-landed-8210	6
 scripts/git-data-rehearsal-evidence-8211	1
 scripts/git-data-replication-signal-11704	3
 scripts/guard-vacuity-floor	7
+scripts/host-kernel-cadence-12008	2
+scripts/host-tcp-exposure	2
 scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
 scripts/image-cve-db-pin	5
@@ -480,6 +479,7 @@ scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/jobs1-stopgap-7432	1
 scripts/learning-retrieval-bench	7
+scripts/legal-acceptance-counts	5
 scripts/lib/bearer-curl.test.sh	7
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1

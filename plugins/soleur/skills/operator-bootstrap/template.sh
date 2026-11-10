@@ -354,7 +354,8 @@ read_account() {
 example_resource_exists() {
   # REPLACE with the vendor read. The stand-in consults the local record only
   # because this template has no vendor to ask.
-  [[ -f "$ENV_FILE" ]] && grep -aq '^EXAMPLE_PROVISIONED=' "$ENV_FILE"
+  [[ -f "$ENV_FILE" ]] || return 1
+  grep -aq '^EXAMPLE_PROVISIONED=' "$ENV_FILE"
 }
 
 plan_provision() {

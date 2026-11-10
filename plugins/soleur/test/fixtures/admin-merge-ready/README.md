@@ -6,12 +6,15 @@ on 2026-09-22 and trimmed with `jq` to the fields the script reads.
 - `rules-branches-main.json`: `gh api --paginate --slurp repos/jikig-ai/soleur/rules/branches/main`,
   keeping every rule's `type` and `ruleset_id`, and `parameters` for `required_status_checks` only
   (the live set is two `required_status_checks` rules plus `deletion` and `non_fast_forward`).
-  Rulesets 14145388 (CI Required, 13 contexts) and 13304872 (CLA Required, 2 contexts): 15 in total.
+  Rulesets 14145388 (CI Required, 12 contexts) and 13304872 (CLA Required, 2 contexts): 14 in total.
   2026-11-07 (#12276): the 16 folded context names were rewritten to the 3 umbrella names
   (`guards-ruleset`, `quality-guards`, `secret-guards`) that replaced them under the #12089
   consolidation — contexts are entries, so 24 − 16 + 3 = 11.
-- 2026-11-07 (#10859, PR3b): `affected-index-ratchet` and `oracle-review-required` appended to the
+- 2026-11-07 (#10859, PR3b): the S4 audit ratchet context and `oracle-review-required` appended to the
   CI Required set — the two new required contexts PR3b lands (11 + 2 = 13).
+- 2026-11-09 (#9729, S4 retirement): the retired S4 ratchet context removed from the CI Required set and
+  its synthetic check-run dropped — the stage retired at NO-GO having never activated
+  (13 − 1 = 12; 68 → 67 runs).
 - `check-runs.json`: `gh api --paginate --slurp "repos/jikig-ai/soleur/commits/319c22bffa4c1785da52dd9af9471a9d8eef1310/check-runs?per_page=100&filter=all"`,
   the head of merged PR #8534. 79 runs; every required context is present and green. Fields
   kept: `id`, `name`, `head_sha`, `status`, `conclusion`, `started_at`, `app.id`, `check_suite.id`.

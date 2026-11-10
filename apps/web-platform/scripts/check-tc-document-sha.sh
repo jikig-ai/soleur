@@ -252,7 +252,7 @@ done
 
 CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE_TC" \
                        | head -n 1 \
-                       | sed -E 's/.*"([^"]+)".*/\1/')
+                       | sed -E 's/.*"([^"]+)".*/\1/') || true
 
 if [ -z "$CANONICAL_TC_VERSION" ]; then
   echo "::error::TC_VERSION literal not found in $LITERAL_FILE_TC" >&2
@@ -286,7 +286,7 @@ if [ -n "$CANONICAL_TC_VERSION" ]; then
     if grep -qE '^TC_VERSION="\$\(sed' "$seed" && grep -q 'lib/legal/tc-version.ts' "$seed"; then
       continue
     fi
-    SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/') || true
     if [ -z "$SEED_VERSION" ]; then
       echo "::error::$seed neither restates TC_VERSION=\"…\" nor derives it from lib/legal/tc-version.ts" >&2
       FAILED=$((FAILED+1)); FAILURES+=("$(basename "$seed"): TC_VERSION missing")

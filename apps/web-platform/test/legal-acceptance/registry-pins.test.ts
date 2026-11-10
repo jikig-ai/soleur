@@ -11,9 +11,10 @@
  * of the file bytes, so a wrong loader and a wrong pin cannot agree by accident.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TEXTS_DIR, loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { LEGAL_TEXT_KIND } from "@/lib/legal-acceptance-copy";
 
@@ -76,6 +77,71 @@ export function checkPins(served: Served[], pins: Record<string, Pin>, declared:
     if (kind !== undefined && kind !== pin.kind) out.push(`${e.key}: declared kind ${kind} differs from the pinned kind ${pin.kind}`);
   }
   return out;
+}
+
+/** Repo-root-relative path of the base-SHA pin guard that must exist once a second text is served (CTO ruling T6, #12366 item 3). */
+export const BASE_GUARD_PATH = "scripts/check-registry-pin-base.sh";
+
+/** The workflow that must name the guard. Intended home: a member step of the `guards-ruleset` umbrella; the probe checks only that the script is NAMED on a non-comment line. */
+export const BASE_GUARD_CI_PATH = ".github/workflows/ci.yml";
+
+/** What is on disk for the guard: null when there is no regular file at `BASE_GUARD_PATH`. */
+export interface GuardProbe {
+  size: number;
+  mode: number;
+  /** `ci.yml` names the script on a line that is not a comment (naming, not step membership: the probe does not parse the workflow). */
+  referencedByCi: boolean;
+}
+
+/** Probe `repoRoot` for the guard script: a `touch`ed file is not a guard, so size, mode and the CI reference are read too. */
+export function probeGuard(repoRoot: string): GuardProbe | null {
+  let st;
+  try {
+    st = statSync(path.join(repoRoot, BASE_GUARD_PATH));
+  } catch {
+    return null;
+  }
+  if (!st.isFile()) return null;
+  let ci = "";
+  try {
+    ci = readFileSync(path.join(repoRoot, BASE_GUARD_CI_PATH), "utf8");
+  } catch {
+    ci = "";
+  }
+  const name = path.basename(BASE_GUARD_PATH);
+  // A comment cannot count as a reference: drop full-line comments and trailing ` # ...` before looking for the name.
+  const referencedByCi = ci.split("\n").some((l) => !/^\s*#/.test(l) && l.replace(/\s#.*$/, "").includes(name));
+  return { size: st.size, mode: st.mode, referencedByCi };
+}
+
+/** Why the probed guard does not count, or null when it is a non-empty, executable file that ci.yml runs. */
+function guardDefect(g: GuardProbe | null): string | null {
+  if (g === null) return "does not exist";
+  if (g.size === 0) return "is empty (a zero-byte file is not a guard)";
+  if ((g.mode & 0o111) === 0) return "is not executable (chmod +x)";
+  if (!g.referencedByCi) return `is not named on a non-comment line of ${BASE_GUARD_CI_PATH} (a guard CI never runs guards nothing)`;
+  return null;
+}
+
+/**
+ * The deferral of the base-SHA pin guard (#12366 item 3) ends when a second text is served. Pure: `served` is what the registry serves,
+ * `guard` is `probeGuard`'s answer for `BASE_GUARD_PATH`. Empty when fine; one problem with the guard shape when two or more texts are
+ * served and the guard is absent, empty, not executable, or not run by ci.yml. Zero texts are not this check's concern (`checkPins`
+ * reports an empty registry).
+ */
+export function needsBaseGuard(served: readonly Served[], guard: GuardProbe | null): string[] {
+  if (served.length < 2) return [];
+  const defect = guardDefect(guard);
+  if (defect === null) return [];
+  return [
+    `${served.length} texts are served and ${BASE_GUARD_PATH} ${defect}: the one-text deferral of the base-SHA pin guard (#12366 item 3) has ended. ` +
+      "Build the guard as a member step of the `guards-ruleset` umbrella in `.github/workflows/ci.yml` " +
+      "(this check only requires that file to name the script on a non-comment line; that the step belongs to the umbrella is for review to confirm): " +
+      "resolve the base with `git merge-base origin/main HEAD` on a pull request and from `MERGE_GROUP_BASE_SHA` on a merge_group run; " +
+      "hard-fail on an unresolvable base (never fall through to exit 0); " +
+      "for each served text compare the sha256 of `git show <base>:<file>` with the working file; " +
+      "when the bytes differ, require a changed `version`, a retained old pin row (the old `version: sha256` entry still in PUBLISHED) and a new row.",
+  ];
 }
 
 /** What the registry serves, with an independent hash of the file bytes. `fileFor` lets a harness row point the independent read at the wrong file. */
@@ -168,6 +234,105 @@ describe("the pin check bites (synthetic rows through the same function)", () =>
     const bad = readServed(TEXTS_DIR, () => "README.md");
     expect(bad.length).toBeGreaterThan(0);
     only(checkPins(bad, PUBLISHED, LEGAL_TEXT_KIND), "the independent file hash");
+  });
+});
+
+describe("tripwire: a second served text needs the base-SHA pin guard (#12366 item 3, CTO ruling T6)", () => {
+  const h = (c: string): string => c.repeat(64);
+  const one: Served[] = [{ key: "a-text", version: "2026-11-07", textHash: h("a"), fileHash: h("a") }];
+  const two: Served[] = [...one, { key: "b-text", version: "2026-12-01", textHash: h("b"), fileHash: h("b") }];
+
+  const GOOD: GuardProbe = { size: 120, mode: 0o100755, referencedByCi: true };
+
+  it("row 1: one served text and no guard passes (the deferral still holds)", () => {
+    expect(needsBaseGuard(one, null)).toEqual([]);
+  });
+
+  it("row 2: two served texts and no guard fails, and the message carries the guard shape", () => {
+    const problems = needsBaseGuard(two, null);
+    expect(problems.length).toBe(1);
+    const msg = problems.join("\n");
+    expect(msg).toContain(BASE_GUARD_PATH);
+    expect(msg).toContain("does not exist");
+    for (const part of [
+      "guards-ruleset",
+      "git merge-base origin/main HEAD",
+      "MERGE_GROUP_BASE_SHA",
+      "hard-fail",
+      "unresolvable",
+      "git show <base>:<file>",
+      "sha256",
+      "changed `version`",
+      "retained old pin row",
+      "new row",
+    ]) {
+      expect(msg, part).toContain(part);
+    }
+  });
+
+  it("row 3: two served texts with a non-empty, executable guard that ci.yml runs passes", () => {
+    expect(needsBaseGuard(two, GOOD)).toEqual([]);
+  });
+
+  it.each([
+    ["a zero-byte file (touch)", { ...GOOD, size: 0 }, "is empty"],
+    ["a non-executable file", { ...GOOD, mode: 0o100644 }, "is not executable"],
+    ["a guard ci.yml never runs", { ...GOOD, referencedByCi: false }, "is not named on a non-comment line of .github/workflows/ci.yml"],
+  ])("row 4: two served texts and %s fails, naming the defect", (_n, probe, defect) => {
+    const problems = needsBaseGuard(two, probe);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(defect);
+    expect(problems[0]).toContain("git merge-base origin/main HEAD");
+  });
+
+  it("zero served texts do not trip it (that is the registry-empty check's job)", () => {
+    expect(needsBaseGuard([], null)).toEqual([]);
+  });
+
+  describe("probeGuard reads the real file system state (a touched file is not a guard)", () => {
+    let tmp = "";
+    beforeAll(() => {
+      tmp = mkdtempSync(path.join(tmpdir(), "pin-guard-"));
+    });
+    afterAll(() => {
+      if (tmp) rmSync(tmp, { recursive: true, force: true });
+    });
+    const mk = (name: string, o: { content?: string | null; mode?: number; ci?: string | null }) => {
+      const root = path.join(tmp, name);
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      mkdirSync(path.join(root, ".github", "workflows"), { recursive: true });
+      if (o.content !== null) writeFileSync(path.join(root, BASE_GUARD_PATH), o.content ?? "#!/bin/bash\nexit 0\n", { mode: o.mode ?? 0o755 });
+      if (o.ci !== null) writeFileSync(path.join(root, BASE_GUARD_CI_PATH), o.ci ?? "jobs:\n  guards:\n    steps:\n      - run: bash scripts/check-registry-pin-base.sh\n");
+      return root;
+    };
+    const problemsFor = (root: string) => needsBaseGuard(two, probeGuard(root));
+
+    it("a real guard (non-empty, executable, run by ci.yml) is accepted", () => {
+      expect(problemsFor(mk("good", {}))).toEqual([]);
+    });
+    it("absent, zero-byte, non-executable and unreferenced files each fail with two texts served", () => {
+      expect(problemsFor(mk("absent", { content: null }))[0]).toContain("does not exist");
+      expect(problemsFor(mk("empty", { content: "" }))[0]).toContain("is empty");
+      expect(problemsFor(mk("noexec", { mode: 0o644 }))[0]).toContain("is not executable");
+      expect(problemsFor(mk("noci", { ci: null }))[0]).toContain("is not named on a non-comment line of");
+    });
+    it("a comment in ci.yml naming the script is not a reference", () => {
+      const ci = "# run scripts/check-registry-pin-base.sh later\njobs:\n  guards:\n    steps:\n      - run: echo hi # check-registry-pin-base.sh\n";
+      expect(problemsFor(mk("comment", { ci }))[0]).toContain("is not named on a non-comment line of");
+    });
+    it("LIMIT: a bare mention on a non-comment line counts as naming (the probe does not check step membership of the umbrella)", () => {
+      const ci = "jobs:\n  other:\n    steps:\n      - run: echo scripts/check-registry-pin-base.sh\n";
+      expect(problemsFor(mk("echo-only", { ci }))).toEqual([]);
+    });
+    it("a directory at the guard path is not a guard", () => {
+      const root = mk("dir", { content: null });
+      mkdirSync(path.join(root, BASE_GUARD_PATH));
+      expect(problemsFor(root)[0]).toContain("does not exist");
+    });
+  });
+
+  it("the real registry: today's served texts and the real guard script (if any) agree with the tripwire", () => {
+    expect(needsBaseGuard(readServed(), probeGuard(path.join(__dirname, "../../../..")))).toEqual([]);
   });
 });
 

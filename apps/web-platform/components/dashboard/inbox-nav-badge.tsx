@@ -28,10 +28,21 @@ import {
 function hasUnreadFyi(items: MergedInboxItem[]): boolean {
   return items.some((m) => {
     if (m.severity === "action_required") return false;
-    // Native rows track read_at; email rows are "unread" while status is new.
-    return m.kind === "inbox"
-      ? m.inbox.read_at === null
-      : m.email.status === "new";
+    switch (m.kind) {
+      // Native rows track read_at.
+      case "inbox":
+        return m.inbox.read_at === null;
+      // Email rows are "unread" while status is new.
+      case "email":
+        return m.email.status === "new";
+      // A legal-text row has no read state to clear, so an answered one must never light the dot (Ref #12197).
+      case "legal":
+        return false;
+      default: {
+        const _exhaustive: never = m;
+        return _exhaustive;
+      }
+    }
   });
 }
 

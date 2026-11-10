@@ -2433,7 +2433,7 @@ _halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf"
 # pattern matched zero lines in the workflow (inside single quotes grep saw a BRE
 # with a literal backslash), so it was dead code that read as protective while a
 # fallback silently did all the work.
-_ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
+_ack_line=$(grep -n 'ALL_MSGS.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
 if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
   _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
 else
@@ -2514,6 +2514,93 @@ t_relay_hello_mutant_normalization_dropped
 t_relay_hello_mutant_create_list_removed
 t_apply_job_relay_hello_halt_executes
 
+# ── T67 — coalesced-commit feed for the kill-switch + [ack-destroy] gates (#12403). ────
+#
+# The merge-queue coalesce that buried [ack-deploy-policy] one squash below the tip
+# (#12404) left the same tip-only blind spot on two sibling readers of
+# github.event.head_commit.message: the preflight kill-switch (fail-UNSAFE — a buried
+# [skip-web-platform-apply] is silently ignored and the apply runs inside the window the
+# token was holding open) and the apply step's [ack-destroy] test (fail-closed — a buried
+# ack refuses the apply). Both now read ALL_MSGS = tip + every event.commits[*].message,
+# the identical idiom #12404 shipped for deploy_policy_gate (any-commit reach, CTO-ruled
+# 2026-11-09).
+
+_t67_kill_switch_run() {
+  awk '
+    /^      - id: kill_switch/ { instep = 1; next }
+    instep && /^        run: \|/ { inrun = 1; next }
+    inrun && /^          / { print; next }
+    inrun { exit }
+    instep && /^      [^ ]/ { instep = 0 }
+  ' "$WORKFLOW_YML"
+}
+
+t67_coalesced_gate_feeds() {
+  local blk
+  blk="$(_job_block "$WORKFLOW_YML" "preflight" | grep -vE '^[[:space:]]*#' || true)"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && _report "T67a: the preflight job carries the EVENT_MSGS_JSON feed env" ok \
+    || _report "T67a: the preflight job carries the EVENT_MSGS_JSON feed env" FAIL \
+       "env line absent in comment-stripped preflight block"
+  grep -nE '\$ALL_MSGS.*skip-web-platform-apply' <<<"$blk" >/dev/null \
+    && _report "T67b: the kill_switch token test reads ALL_MSGS" ok \
+    || _report "T67b: the kill_switch token test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-skip-token line in comment-stripped preflight block"
+  blk="$(_job_block "$WORKFLOW_YML" "apply" | grep -vE '^[[:space:]]*#' || true)"
+  grep -nE '\$ALL_MSGS.*ack-destroy' <<<"$blk" >/dev/null \
+    && _report "T67c: the [ack-destroy] test reads ALL_MSGS" ok \
+    || _report "T67c: the [ack-destroy] test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-ack-token line in comment-stripped apply block"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && grep -qF 'jq -r '"'"'join("\n")'"'"'' <<<"$blk" \
+    && grep -qE 'ALL_MSGS=.*more_msgs' <<<"$blk" \
+    && _report "T67h: the apply job carries the EVENT_MSGS_JSON feed + concat" ok \
+    || _report "T67h: the apply job carries the EVENT_MSGS_JSON feed + concat" FAIL \
+       "apply block lost the feed env, the jq concat, or the append line — consumer name alone reverts to tip-only"
+}
+
+t67_executed_kill_switch_span() {
+  local run_body out log rc
+  run_body="$(_t67_kill_switch_run)"
+  out="$(mktemp -t t66-goutput.XXXXXX)"
+  log="$(mktemp -t t66-runlog.XXXXXX)"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: infra\n\n[skip-web-platform-apply]"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
+    && _report "T67d executed: a line-anchored token buried in event.commits arms the kill-switch" ok \
+    || _report "T67d executed: a line-anchored token buried in event.commits arms the kill-switch" FAIL \
+       "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: see [skip-web-platform-apply] note"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
+    && _report "T67e executed: a mid-line token does not arm (anchor preserved through the concat)" ok \
+    || _report "T67e executed: a mid-line token does not arm" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
+    && _report "T67f executed: EVENT_MSGS_JSON absent (dispatch shape) degrades to tip-only" ok \
+    || _report "T67f executed: EVENT_MSGS_JSON absent degrades to tip-only" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG=$'chore\n\n[skip-web-platform-apply]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
+    && _report "T67g executed: a tip-carried token still arms (baseline preserved)" ok \
+    || _report "T67g executed: a tip-carried token still arms" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  rm -f "$out" "$log"
+}
+
+t67_coalesced_gate_feeds
+t67_executed_kill_switch_span
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -2539,15 +2626,17 @@ _ran=$((pass + fail))
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
 # T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
 # T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 15 relay hello-key counter rows (PR A of #8211 / #12167, F1: T66a-T66o, one
-# _report call per id: a-j behaviour, k-n the four mutant rows, o the executed HALT segment) = 136. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 135 assertions ran, floor is 136". The floor sits at the
+# _report call per id: a-j behaviour, k-n the four mutant rows, o the executed HALT segment) = 136, + 8 coalesced-feed rows (#12403:
+# T67a-c feed pins + T67d-g executed kill-switch span + T67h apply-side feed pin; renumbered from T66 on the
+# hello-key merge collision) = 144. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 143 assertions ran, floor is 144". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 136 ]]; then
+if [[ "$_ran" -lt 144 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 136. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 144. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 136)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 144)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

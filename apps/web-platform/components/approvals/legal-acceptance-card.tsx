@@ -15,6 +15,7 @@
 //     success. An answer is final: there is no undo here (task 6.10); a new version of the text is the way to change it.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
@@ -28,6 +29,7 @@ import {
   type LegalKindCopy,
 } from "@/lib/legal-acceptance-copy";
 import { interpretDecide, postLegalDecide, type LegalRowFacts } from "@/lib/legal-acceptance-client";
+import { swrKeys } from "@/lib/swr-config";
 import { REQUEST_CHANGES_MAX, codePointLength, truncateCodePoints, type LegalCardStateWire, type LegalChoiceWire } from "@/lib/legal-acceptance-wire";
 import { LegalReauthDialog } from "@/components/approvals/legal-reauth-dialog";
 
@@ -86,7 +88,17 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
       })
     : props.state;
 
-  const onRecorded = useCallback((r: LegalRowFacts, already: boolean) => setLocal({ row: r, already }), []);
+  // The nav badge (mounted in the dashboard shell, so it stays mounted on this page) and the Inbox list share one SWR key:
+  // refresh it once a decision is recorded so the badge clears without a reload (Ref #12197). The Inbox list itself
+  // (InboxSurface) is mounted only on the Inbox page, so it re-reads that key when the founder opens it. Only a recorded decision calls this.
+  const { mutate } = useSWRConfig();
+  const onRecorded = useCallback(
+    (r: LegalRowFacts, already: boolean) => {
+      setLocal({ row: r, already });
+      void mutate(swrKeys.inbox("active"));
+    },
+    [mutate],
+  );
 
   // A text with no declared kind has no wording, so no card (CTO ruling 2026-11-07, no default). Placed after the last hook.
   const kc = legalKindCopy(keyName);
