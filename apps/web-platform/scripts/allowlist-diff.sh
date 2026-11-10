@@ -26,6 +26,15 @@
 # Trailer key is case-sensitive (`Allowlist-Widened-By`).
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}${TRAILER_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 : "${BASE_SHA:?BASE_SHA must be set}"
 : "${HEAD_SHA:?HEAD_SHA must be set}"
 PR_LABELS="${PR_LABELS:-[]}"
