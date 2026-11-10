@@ -19,6 +19,41 @@ PR body: `Ref #12514` (it closes only after the post-merge alias and binary evid
 `Closes #8643` (its acceptance, an SDK-binary model-id row plus the raw default routed through a named
 constant, is fully pre-merge). Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-10 (plan-review round, then deepen-plan round).
+**Gates run:** deepen-plan 4.6 (User-Brand Impact), 4.7 (Observability; `probe-verb-gate.sh` rc 0 on the
+discoverability command), 4.8 (no PAT-shaped variable), 4.9 (no UI surface), 4.10 (no store / connection; no
+`.tf` in Files to Edit), 4.11 (`lint-guard-contract.py` green, 2 entries), 4.12 (Scope Check present, one live
+section, three subsections, `Recommendation:` present), 4.13 (no new autonomous task); 4.5 / 4.55 not
+triggered (no network symptom; the deploy mechanism itself is unchanged).
+**Agents used:** plan-review panel (dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer,
+architecture-strategist, spec-flow-analyzer), CPO sign-off, the scoped advisor consult (fable tier), and in the
+deepen round security-sentinel, test-design-reviewer and a verify-the-negative pass (10 of 10 claims
+confirmed). The deepen round ran this bounded panel, not every available agent.
+
+### Key Improvements
+
+1. No code from 2.1.321 / 0.3.321 runs before the release-age floor clears; the re-proof runs after Gate G1 on
+   the installed tree inside a throwaway container, and every real-key run uses a 0600 key file through a
+   wrapper (CTO F15, security review).
+2. An authenticated alias probe closes the gap the invalid-key probes cannot see (CTO F12).
+3. Guards 4 and 5 are specified as pure functions with every mutation row a standing synthetic test, a literal
+   `REVIEWED_ADVISOR_EFFORT` key cross-checked against `AUTOFIX_PAIRS`, and parser edge rows (test-design review).
+4. Evidence and lockfile proof survive the two-day pause (integrity and sha256 recorded in the PR body), and
+   the non-pin commits are pushed to the draft PR instead of staying local (spec-flow, DHH, simplicity).
+5. Corrected facts: pen-cli has the SDK only under `overrides`; the CI stand-in for the docker arm is
+   `infra-validation`'s `deploy-script-tests-fixed` job, not `sandbox-canary-verify-in-image`; two more real
+   sandbox suites (`agent-sandbox-credential-deny-behavioural`, `bwrap-userns-seccomp`) join the evidence set.
+
+### New Considerations Discovered
+
+- The consult's bundled default effort moves "high" -> "medium" with the alias (CTO F9).
+- `server/agent-runner-query-options.ts` is a capture input, so the non-pin draft push runs the capture gate.
+- No faster no-SSH rollback than a revert PR exists (`web-platform-release.yml` dispatch has no older-tag input).
+- The planning session ran the new binaries once on its host for the zero-cost invalid-key probe; disclosed in
+  decision-challenges F15, with an operator rotation item (F15b) only if an advisory hits 2.1.321.
+
 ## Overview
 
 Both web-platform Claude runtimes are pinned at a release (claude-code 2.1.311, claude-agent-sdk 0.3.311,
@@ -31,7 +66,7 @@ is 2.1.321 / 0.3.321 (again one byte-identical binary, `sha256 426c3381...`), on
 This plan moves the **pair** (CTO F2: the hosted consult runs on the Agent SDK's own bundled binary, so a
 CLI-only bump would not reach the place where `fable` is spent), re-proves the sandbox and cron containment
 on the real binary (CTO F4, the #12026 evidence set), respects the 3-day release-age floor (CTO F3: the pin
-commit lands only after 2026-11-12T19:04Z; everything before it is rehearsal against the packed tarballs),
+commit lands only after 2026-11-12T19:04Z; before it only static supply-chain checks run, and no new-package code executes - CTO F15),
 turns the one-time measurements into standing guards (CTO F6/F6r/F9), folds in #8643, and corrects the four
 places that still call the alias target "unverified" (CTO F7). Every ruling is recorded in
 `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable-bump/decision-challenges.md`.
@@ -43,7 +78,7 @@ places that still call the alias target "unverified" (CTO F7). Every ruling is r
 | Bump the CLI pin (package.json + Dockerfile) | The hosted consumer of `fable` is the Agent SDK's bundled binary (`agent-runner-query-options.ts` sets no `pathToClaudeCodeExecutable`); the CLI copy only serves the crons, which never send `fable` | Move the SDK in lockstep, pen-cli with it (CTO F2) |
 | "2.1.321 measured to contain it" (10 hits) | 25 occurrences by `grep -a -o`; 10 was a line count. 2.1.317-2.1.319 have 0; 2.1.320 was never published | Pin 2.1.321 / 0.3.321, the minimum pair (CTO F1) |
 | "confirm that the `fable` alias resolves to 5.2 on the chosen version" | init-event probe: 5.1 on 2.1.311 / 0.3.311, 5.2 on 2.1.321 / 0.3.321 (bundled path; a server-side override for authenticated sessions is not ruled out) | One-time probe in PR body + trailer, image re-probe post-merge (CTO F6, F8) |
-| Needs a lockfile regeneration | `min-release-age=3` blocks fresh resolution of both packages until 2026-11-12T19:03:36Z | Wait, no waiver (CTO F3); rehearse on packed tarballs now |
+| Needs a lockfile regeneration | `min-release-age=3` blocks fresh resolution of both packages until 2026-11-12T19:03:36Z | Wait, no waiver (CTO F3); before the floor only static checks run, no new-package code (CTO F15) |
 | The `sdk-bump-verified:` ack | Required for a version change of EITHER package; a CLI-only ack must name the cron hook control | Full #12026 evidence set plus the cron hook probe (CTO F4) |
 | Prose: "whether `fable` resolves to 5.2 on the pinned CLI 2.1.311 is unverified" | It is measured: 5.1 | Correct the four sites (CTO F7) |
 | (not in the issue) | The consult's bundled default effort moves "high" (5.1) -> "medium" (5.2) | Accept and record; standing effort row (CTO F9) |
@@ -223,13 +258,12 @@ places that still call the alias target "unverified" (CTO F7). Every ruling is r
 
 ## Proposed Solution
 
-1. **Rehearse now (no committed pin moves).** In a scratch worktree from `origin/main`, `npm ci` the current
-   lock, then replace the four `@anthropic-ai` packages (`claude-agent-sdk`, `claude-agent-sdk-linux-x64`,
-   `claude-code`, `claude-code-linux-x64`) with the 2.1.321 / 0.3.321 tarballs fetched by `npm pack` into a
-   directory outside the repo, record the sha256 each suite spawns, and run the CTO F4 evidence set. Red rows
-   that trace to a pin shape (measured counts, `measuredVersion`, the classifier census) are re-measured; any
-   other red stops the bump.
-2. **Gate G1 (time).** The pin commit is not made before 2026-11-12T19:04:00Z.
+1. **Before the floor, run none of the new code (CTO F15).** Author and push the non-pin changes; do static
+   supply-chain checks only (manifest and `install.cjs` diff, integrity, sha256).
+2. **Gate G1 (time).** Nothing from 2.1.321 / 0.3.321 is installed, run or committed as a pin before
+   2026-11-12T19:04:00Z. After it: regenerate the lock, then run the CTO F4 evidence set on the installed tree
+   inside a throwaway container (Phase R). Red rows that trace to a pin shape are re-measured; any other red
+   stops the bump.
 3. **Two commit groups.** Before G1, the non-pin commits (guards, parser, constant, test-selection edge, prose,
    ADR addenda) are pushed to the draft PR; their Guard 4 red against the old pins is the expected draft state.
    After G1, ONE pin commit moves everything that is version-bearing: both pins, Dockerfile, drift-workflow
@@ -265,7 +299,11 @@ No deferral is created by this table: every rejected item is rejected, not postp
   2026-11-10). The fixture capture (2.7) runs only locally - CI's capture gate runs `--verify`, never capture -
   so without docker the PR stays draft and the work phase stops with the reason.
 
-### Phase 1 — Rehearsal against the packed tarballs (no committed pin moves)
+### Phase 1 — Before Gate G1: non-pin work and static supply-chain checks (CTO F15)
+
+No code from 2.1.321 / 0.3.321 runs before Gate G1: the release-age floor exists so a bad release is caught
+before it runs on a host that holds credentials. Only acts that execute none of the new packages' code happen
+here.
 
 - 1.0 Author the non-pin changes first, on the branch, and push them to the draft PR (Guard 4 reds against the
   old pins by design; the PR is draft). Note that the runner edit touches a capture input
@@ -277,63 +315,15 @@ No deferral is created by this table: every rejected item is rejected, not postp
   itself), Guards 4 and 5 with their mutation matrices written as standing synthetic tests before the guard bodies (2.9), the
   test-selection edge (2.10), and the prose and ADR edits (2.11, 2.12). None of this depends on Gate G1.
   Build the Guard 5 synthetic rows from the real 2.1.321 row text (measured, not modelled).
-- 1.1 `git worktree add --detach <scratch> HEAD` (the branch head carrying 1.0) outside the repo; `npm ci` in
-  its `apps/web-platform`. Create a second, untouched control tree the same way (`<control>`, 2.1.311 /
-  0.3.311 as locked): 1.5's control run and 1.2's "red on the old binaries" check use it. Fetch the four tarballs with `npm pack <pkg>@<v>` into a fresh empty directory
-  outside every repo tree and unpack them; run nothing from inside the unpacked directory. Rehearsal
-  fidelity (advisor): (a) `rm -rf` each `node_modules/@anthropic-ai/<pkg>` before copying `package/` in, so no
-  311 file survives; (b) diff `dependencies`, `optionalDependencies`, `peerDependencies` and `scripts` of the
-  311 and 321 `package.json` for both parent packages and record the diff - any change beyond the
-  platform-package versions means the scratch tree is not the 321 tree, so stop and re-plan the rehearsal;
-  (c) `@anthropic-ai/claude-code` has a postinstall that places the native binary (Dockerfile comment: without
-  it the CLI reports "claude native binary not installed"), so run it in the scratch tree
-  (`npm rebuild @anthropic-ai/claude-code`) and confirm `node_modules/.bin/claude --version` prints `2.1.321`.
-- 1.2 `sha256sum` both installed `claude` binaries and every binary a suite spawns (including
-  `node_modules/.bin/claude`'s resolved target): each must EQUAL
-  `426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f`, asserted, not just recorded - a
-  recorded-but-wrong hash is how this rehearsal would pass vacuously. Run Guards 4 and 5 from the scratch tree
-  here: both pass, and Guard 4 reds in the control tree. Record the scratch and control HEAD SHAs, the four tarball
-  `dist.integrity` strings and the binary sha256 in the draft PR body now: the session scratchpad does not
-  survive a pause at G1. Bun probe
-  `grep -a -m1 -o -E 'Bun v[0-9]+\.[0-9]+\.[0-9]+ \(' <bin>` on both: `Bun v1.4.4 (` or newer.
-- 1.3 RED baseline, unchanged tests against the scratch tree: `sandbox-vendored-argv-tail`,
-  `sandbox-startup-classifier`, `claude-cli-pin-knows-models`, `broker-mechanism-spike`,
-  `adhoc-npm-install-pin-table`, `claude-pin-lockstep`, `sandbox-canary`, `sandbox-credential-deny-argv`,
-  `test/server/home-census.test.ts` (it describes the 2.1.311 plugin-store layout under HOME).
-  Record which rows red and why (expected: `measuredVersion`, version literals, lockstep; anything else is a
-  finding).
-- 1.4 CTO F4 runtime evidence against the scratch tree, each asserting the sha256 of the spawned binary and a
-  NON-skipped run (a skipped credential-deny suite reads like a pass): `agent-sandbox-credential-deny-behavioural`
-  (real SDK, GH_TOKEN visibility, #12469; gated on `SANDBOX_OK`), the real-bwrap rows of
-  `bwrap-userns-seccomp` (production BPF and unix-deny filters; gated on `BWRAP_OK`),
-  `sandbox-wrapped-command-runtime` (production-config block, the AF_UNIX-deny variant and its negative
-  control), `sandbox-credential-deny-runtime`, `sandbox-proc-mask-runtime`,
-  `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh` (not optional; without local docker/sudo the PR
-  stays draft and only a CI `sandbox-canary-verify-in-image` run on the pushed head stands in, for that arm
-  alone), and `node apps/web-platform/scripts/sandbox-canary.mjs --replay` (verdict `pass`, not
-  `canary_infra_error`).
-- 1.5 Cron containment (model-launch-review step 2b), using the `<control>` tree's 2.1.311 as the control: settings = `DEFAULT_CLAUDE_SETTINGS` plus
-  `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` copied under its ORIGINAL filename under a
-  `*` matcher; spawn the 2.1.321 CLI `-p --output-format json --model claude-sonnet-5-5` asking for a
-  non-allowlisted `echo`; require it in `.permission_denials[]`; repeat on 2.1.311 as the control; include a
-  known-deny control so a vacuous probe cannot pass.
-- 1.6 Alias probe (zero cost) on both installed binaries:
-  `env -i PATH=/usr/bin:/bin HOME=<tmp> ANTHROPIC_API_KEY=sk-ant-invalid-probe <bin> -p hi --model fable --output-format stream-json --verbose --max-turns 1`
-  must show `"model":"claude-fable-5-2"` and `"claude_code_version":"2.1.321"` in the `system/init` event.
-- 1.6b Authenticated alias probe (CTO F12): one `-p hi --model fable --max-turns 1 --output-format json` turn on
-  the scratch tree's 2.1.321 binary (sha256 asserted), `env -i HOME=<tmp>`, the Doppler config `ci`
-  `ANTHROPIC_API_KEY` read-only (exported for this one run, never printed, no xtrace, never `prd`). Pass only
-  if the `modelUsage` keys contain `claude-fable-5-2`. It proves the ci key's account at that time; production
-  and tenant accounts stay "not validated" in the trailer.
-- 1.7 Write/Edit allow-path smoke through the real SDK (`canUseTool` allow shape, learning 2026-04-15): an
-  existing suite that drives an approved Write end to end, or the `scheduled-real-sdk-ask-probe` recipe run
-  locally; record which.
-- 1.8 Re-measure from the scratch binaries: the argv-tail census (`MEASURED_SHAPE`), the helper step strings
-  (classifier census), the bridge anchors, and the `default_effort` rows for every id the new effort guard
-  reads. Expected from the planning measurement: 19 `apply-seccomp:` strings unchanged, bwrap vocabulary
-  unchanged, opus-5-5 / sonnet-5-5 "medium", fable-5-2 "medium".
-- 1.9 Stop condition: any red not explained by a pin shape blocks the bump; post the failing rows on #12514
-  the same day and re-ask the CTO. The PR stays draft.
+- 1.1 Static checks only: `npm pack` the four 321 tarballs and the two 311 parent tarballs into a fresh empty
+  directory outside every repo tree (download and unpack; run nothing from it); diff `install.cjs`,
+  `package.json` (`dependencies`, `optionalDependencies`, `peerDependencies`, `scripts`) of claude-code and
+  agent-sdk 311 vs 321 and record the diff in the draft PR body - any change beyond the platform-package
+  versions is a finding to bring to the CTO before G1; record each tarball's `dist.integrity` (from `npm view`
+  and from `openssl dgst -sha512 -binary <tgz> | base64`) and each `claude` binary's sha256 (expect
+  `426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f`) in the PR body, since the session
+  scratchpad does not survive the pause. If an advisory or an unpublish hits 2.1.321 before G1, stop and
+  record `Operator-authorizes:` rotation of this host's credentials (decision-challenges F15b).
 
 ### Gate G1 — release-age floor (time)
 
@@ -355,9 +345,73 @@ prompt. This is a scheduled wait, not an operator step (CTO F3). Only the operat
   in a user-facing install prefix); `cd plugins/soleur/skills/pencil-setup/scripts/pen-cli && npx --yes npm@11 install --package-lock-only`.
 - 2.5 Lockfile proof (CTO F5): for `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64` and
   `node_modules/@anthropic-ai/claude-code-linux-x64`, lock `integrity` == `npm view <pkg>@<v> dist.integrity`
-  == the integrity recorded in the PR body in 1.2 (re-run `npm pack` after G1 and assert
+  == the integrity recorded in the PR body in 1.1 (re-run `npm pack` after G1 and assert
   `sha512-` + `openssl dgst -sha512 -binary <tgz> | base64` equals it; the Phase 1 tarballs may be gone); a scratch `npm ci` installs
   binaries with sha256 `426c3381...`. Every platform entry of both packages (all eight) is at the new version.
+### Phase R — Re-proof (after Gate G1 and steps 2.1-2.5), in a throwaway container (CTO F4, F15)
+
+- 1.1r `npm ci` from the regenerated lock (the step 2.5 tree) and a control tree at 2.1.311 / 0.3.311
+  (`git worktree add --detach <control> origin/main`, `npm ci`). The claude-code postinstall (`node install.cjs`)
+  and every non-docker spawn below run inside a throwaway container: repository tree read-only, tmpfs `HOME`, no
+  `~/.doppler`, `~/.ssh`, `~/.config/gh`, no docker socket. `npm audit signatures` on the installed tree.
+  Confirm `node_modules/.bin/claude --version` prints `2.1.321`.
+- 1.2 `sha256sum` both installed `claude` binaries and every binary a suite spawns (including
+  `node_modules/.bin/claude`'s resolved target): each must EQUAL
+  `426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f`, asserted, not just recorded - a
+  recorded-but-wrong hash is how this re-proof would pass vacuously. Run Guards 4 and 5 from this tree
+  here: both pass, and Guard 4 reds in the control tree. Record both HEAD SHAs in the PR body. Bun probe
+  `grep -a -m1 -o -E 'Bun v[0-9]+\.[0-9]+\.[0-9]+ \(' <bin>` on both: `Bun v1.4.4 (` or newer.
+- 1.3 RED baseline, unchanged tests against the installed tree: `sandbox-vendored-argv-tail`,
+  `sandbox-startup-classifier`, `claude-cli-pin-knows-models`, `broker-mechanism-spike`,
+  `adhoc-npm-install-pin-table`, `claude-pin-lockstep`, `sandbox-canary`, `sandbox-credential-deny-argv`,
+  `test/server/home-census.test.ts` (it describes the 2.1.311 plugin-store layout under HOME).
+  Record which rows red and why (expected: `measuredVersion`, version literals, lockstep; anything else is a
+  finding).
+- 1.4 CTO F4 runtime evidence against the installed tree, each asserting the sha256 of the spawned binary and a
+  NON-skipped run (a skipped credential-deny suite reads like a pass): `agent-sandbox-credential-deny-behavioural`
+  (real SDK, GH_TOKEN visibility, #12469; gated on `SANDBOX_OK`), the real-bwrap rows of
+  `bwrap-userns-seccomp` (production BPF and unix-deny filters; gated on `BWRAP_OK`),
+  `sandbox-wrapped-command-runtime` (production-config block, the AF_UNIX-deny variant and its negative
+  control), `sandbox-credential-deny-runtime`, `sandbox-proc-mask-runtime`,
+  `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh` (not optional; without local docker/sudo the PR
+  stays draft; the only CI stand-in is `infra-validation`'s `deploy-script-tests-fixed` job, which runs
+  `sudo bash apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`, and it counts only on a head that
+  carries the pin commit - `sandbox-canary-verify-in-image` is a plain `docker run` without the seccomp /
+  AppArmor / uid posture and is NOT a stand-in), and `node apps/web-platform/scripts/sandbox-canary.mjs --replay`
+  (verdict `pass`, not `canary_infra_error`). Seccomp proof: `seccomp-bwrap.json` against 0.3.321 is proven by
+  the docker suite's `wrapped` arm (control and treatment run the real SDK under the profile) and the egress arm
+  of `sandbox-wrapped-command-runtime.test.ts`; `--replay` and the docker replay arm replay the committed
+  fixture, so they count only from the 2.13 run after the 2.7 re-capture. The trailer names them that way.
+- 1.5 Cron containment (model-launch-review step 2b), using the `<control>` tree's 2.1.311 as the control: settings = `DEFAULT_CLAUDE_SETTINGS` plus
+  `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` copied under its ORIGINAL filename under a
+  `*` matcher; spawn the 2.1.321 CLI `-p --output-format json --model claude-sonnet-5-5` asking for a
+  non-allowlisted `echo`; require it in `.permission_denials[]`; repeat on 2.1.311 as the control; include a
+  known-deny control so a vacuous probe cannot pass.
+- 1.6 Alias probe (zero cost) on both installed binaries:
+  `env -i PATH=/usr/bin:/bin HOME=<tmp> ANTHROPIC_API_KEY=sk-ant-invalid-probe <bin> -p hi --model fable --output-format stream-json --verbose --max-turns 1`
+  must show `"model":"claude-fable-5-2"` and `"claude_code_version":"2.1.321"` in the `system/init` event.
+- 1.6b Credential handling for every real-key run (security review): the key is written to a 0600 file in a
+  fresh temp dir and exported by a `bash -c` wrapper that reads it (never `ANTHROPIC_API_KEY=<value>` on a command
+  line, which shows in `/proc/<pid>/cmdline`); `env -i`, temp `HOME`, `PATH=/usr/bin:/bin`; only
+  `jq '.modelUsage|keys'` (or `.permission_denials`) is recorded; the temp `HOME` and key file are `rm -rf`'d
+  after the run. Authenticated alias probe (CTO F12): one `-p hi --model fable --max-turns 1 --output-format json` turn on
+  the installed 2.1.321 binary (sha256 asserted), `env -i HOME=<tmp>`, the Doppler config `ci`
+  `ANTHROPIC_API_KEY` read-only (exported for this one run, never printed, no xtrace, never `prd`). Pass only
+  if the `modelUsage` keys contain `claude-fable-5-2`. It proves the ci key's account at that time; production
+  and tenant accounts stay "not validated" in the trailer.
+- 1.7 Write/Edit allow-path smoke through the real SDK (`canUseTool` allow shape, learning 2026-04-15): an
+  existing suite that drives an approved Write end to end, or the `scheduled-real-sdk-ask-probe` recipe run
+  locally; record which.
+- 1.8 Re-measure from the installed binaries: the argv-tail census (`MEASURED_SHAPE`), the helper step strings
+  (classifier census), the bridge anchors, and the `default_effort` rows for every id the new effort guard
+  reads. Expected from the planning measurement: 19 `apply-seccomp:` strings unchanged, bwrap vocabulary
+  unchanged, opus-5-5 / sonnet-5-5 "medium", fable-5-2 "medium".
+- 1.9 Stop condition: any red not explained by a pin shape blocks the bump; post the failing rows on #12514
+  the same day and re-ask the CTO. The PR stays draft.
+
+
+### Phase 2 (continued) — re-pin, capture, guards, trailer
+
 - 2.6 Version-literal pin sites (sweep set from 0.2, plus `test/server/home-census.test.ts` if 1.3 reds it): `test/adhoc-npm-install-pin-table.test.ts`,
   `test/broker-mechanism-spike.test.ts`, `test/sandbox-vendored-argv-tail.test.ts` `PINS` (both
   `measuredVersion` rows, re-measured counts, new measured date), `test/helpers/vendored-bwrap-tail.ts`
@@ -403,10 +457,10 @@ prompt. This is a scheduled wait, not an operator step (CTO F3). Only the operat
   "medium" (never "the consult runs at medium"). Leave the 2026-11-09 learning untouched.
 - 2.12 ADR-079 short addendum dated on the commit day (`## Architecture Decision (ADR/C4)`), then
   `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- 2.13 `npm ci` in the branch worktree's `apps/web-platform` after the 2.1 regeneration, then re-run on the
-  branch head, against that installed tree: 1.2, 1.4, 1.5, 1.6, 1.6b and the full
-  affected vitest set; `docker build --target cli-tools -f apps/web-platform/Dockerfile apps/web-platform` and
-  the Bun + alias probe on that stage's global `claude`.
+- 2.13 After 2.6-2.12, on the branch head's installed tree (inside the same throwaway container): the full
+  affected vitest set; the `--replay` and docker replay arms again, now against the 2.7 re-captured fixture
+  (they count only from this run); `docker build --target cli-tools -f apps/web-platform/Dockerfile
+  apps/web-platform` and the Bun banner + invalid-key alias probe on that stage's global `claude`.
 - 2.14 Commit with a `sdk-bump-verified:` trailer (CTO amendment 3) listing, each with the binary sha256 it
   ran: the runtime arms (including the two 1.4 additions), `--replay`, capture, the census re-measure, the cron
   hook probe and its control, the invalid-key and authenticated alias probes; and as NOT validated: a server-side alias override for production or tenant accounts, the non-x64
@@ -458,7 +512,7 @@ prompt. This is a scheduled wait, not an operator step (CTO F3). Only the operat
 - `apps/web-platform/package-lock.json` — regenerated (npm@11).
 - `apps/web-platform/Dockerfile` — global CLI install line.
 - `.github/workflows/scheduled-marketplace-drift.yml` — `CLI_VERSION`.
-- `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json` — SDK override and dependency.
+- `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json` — SDK override only.
 - `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json` — regenerated (npm@11).
 - `apps/web-platform/infra/sandbox-canary-argv.json` — re-captured, never hand-edited.
 - `apps/web-platform/server/agent-runner-query-options.ts` — default model through `AGENT_DEFAULT_MODEL`.
@@ -576,7 +630,7 @@ install (pin agreement row; read in 4.1). These names avoid the file's existing 
 | 2 | Dispatch (shared with Guard 5): the package list resolves zero binaries, or only the claude-code one | RED (`checked` binary count must equal 2; "0 checked" cannot pass) |
 | 3 | Second member after a compliant first: the SDK binary path pointed at a synthetic buffer that lacks `claude-sonnet-5-5` while the CLI binary is real | RED naming only `claude-agent-sdk` |
 | 4 | Parser: the `AUTOFIX_PAIRS` block emptied, or every pair commented out | RED on the distinct-RHS floor (>= 4 today) and the raw pair floor, never "0 ids checked" |
-| 5 | `agent-runner-query-options.ts` reverts to the raw `"claude-sonnet-5-5"` literal | RED (a source assertion that the runner's default is `AGENT_DEFAULT_MODEL`, comments stripped) |
+| 5 | `agent-runner-query-options.ts` keeps or regains a raw `"claude-sonnet-5-5"` literal, even beside an `AGENT_DEFAULT_MODEL` import | RED (the tier harvest regex over the comment-stripped runner source must return `[]`) |
 
 **Harness rows.** (a) Edit the suite, not the guard: make the shared parser return an empty list and require
 row 4's floor to fire; make `absentIds` receive an empty id list and require a `checked ids >= floor`
@@ -618,6 +672,34 @@ extra capabilities and a different field order that still carries `default_effor
 **Anchor.** The reviewed values are constants in the test, so one diff can move a default and the map
 together; the guard forces the move to be visible in review and to name the ADR-083 / ADR-053 decision.
 Outside the commit: the trailer requirement on any pin move.
+
+### Implementation shape for Guards 4 and 5 (deepen-plan, test-design review)
+
+- **Pure functions, so every mutation row is a standing synthetic test** (the file's existing
+  `embedded Bun floor — synthetic mutation rows` pattern): `parseAutofixPairs(src: string)` (no disk read; the
+  callers read `audit-models.sh`), a separate `assertPairFloors(pairs)` (>= 11 pairs, >= 4 distinct RHS), and
+  `assertIdsKnown(rows, ids, required = BUN_FLOOR_PACKAGES)` modelled on `assertEmbeddedBunFloor`, fed
+  `bufferSource` blobs in the synthetic rows and the two resolved binaries in the real row. Synthetic parser
+  inputs of two or three pairs then exercise the parser without tripping the floors.
+- **Coverage lives inside the shared per-binary function**, so both Guard 4 and Guard 5 call it and each has its
+  own row-2 test (a Guard 5 loop over `[]` must red on its own, not only through Guard 4).
+- **Harness row (a) of Guard 4 is a standing test:** `assertIdsKnown(rows, [])` throws on the checked-ids floor.
+- **Parser edge rows:** a trailing `# was "a=b"` comment after a live pair is NOT a pair; a `)` inside a comment
+  does not end the block (end the block at a line that is only `)`); one must-RED row for each. A literal
+  `)` rule change must keep `model-launch-review.test.ts`'s existing rows green.
+- **Guard 5 keys:** `REVIEWED_ADVISOR_EFFORT` is a LITERAL `{ "claude-fable-5-2": "medium" }`, never keyed at
+  runtime from the derived value (that would carry "medium" to an unreviewed `claude-fable-5-3`); a separate
+  assertion requires the set of distinct `^claude-fable-` RHS values in `AUTOFIX_PAIRS` to EQUAL that key set
+  (reds on zero, two, or a moved value).
+- **Guard 5 must-PASS row** reorders only fields AFTER `family:` (e.g. `default_effort` before `capabilities`),
+  because `modelRow()` anchors on `{id:"<id>",family:`; add a must-RED row with `family` before `id` so the
+  anchor is stated behaviour. Measured: the `claude-fable-5-2` row in 2.1.321 is ~1015 bytes, inside the
+  3000-byte window.
+- **Guard 4 row 5** is a function over a source string: with comments stripped, the tier harvest regex run over
+  `agent-runner-query-options.ts` returns `[]` (an import of `AGENT_DEFAULT_MODEL` beside a surviving
+  `args.model ?? "claude-sonnet-5-5"` still reds); fed the reverted synthetic source in the synthetic row.
+- **Cost:** one `grep -aoE` per binary carrying every id pattern (not one 290 MB scan per id), or the 180 s
+  timeout the Bun row uses; skip rule `shouldSkipRealBinaryRows`.
 
 ### Existing guards re-pinned, not redesigned
 
@@ -708,7 +790,7 @@ consult quality signal - recorded as decision-challenges F11 (spot read in Phase
 | Pin edits, lockfiles, Dockerfile | asks 1, 4 | asked |
 | SDK + pen-cli move | ask 6 | asked |
 | Drift workflow `CLI_VERSION` | — | inferred — justification: `claude-pin-lockstep.test.ts` reds the required `test` check unless it equals the package.json pin |
-| Phase 1 rehearsal and the runtime evidence set | ask 3 | asked |
+| Phase 1 static checks and the Phase R runtime evidence set | ask 3 | asked |
 | Gate G1 (time) | ask 2 | asked |
 | Guard 4 (both-binary ids, `AUTOFIX_PAIRS`-derived), shared parser, `agent-model-defaults.ts` | ask 5 | asked; #8643 fold-in inferred — justification: CTO F6, its re-evaluation trigger ("the next claude-agent-sdk bump") fires on this PR |
 | Guard 5 (effort rows) | — | inferred — justification: CTO F9; the bump moves the consult's bundled default from high to medium, and without a row a later flip is invisible |
@@ -757,9 +839,9 @@ consult quality signal - recorded as decision-challenges F11 (spot read in Phase
 
 ### Acceptance Tests (RED phase targets)
 
-- Given the scratch tree on 2.1.311 / 0.3.311 binaries, when Guard 4 runs, then it reds naming
+- Given the control tree on 2.1.311 / 0.3.311 binaries, when Guard 4 runs, then it reds naming
   `claude-fable-5-2` in both packages (the property the bump fixes).
-- Given the scratch tree with the 2.1.321 / 0.3.321 tarballs installed, when Guards 4 and 5 run, then both pass.
+- Given the regenerated lock installed (2.1.321 / 0.3.321), when Guards 4 and 5 run, then both pass.
 - Given a synthetic `AUTOFIX_PAIRS` retarget to an unknown id, when Guard 4 runs, then it reds.
 
 ### Regression Tests
@@ -791,8 +873,9 @@ consult quality signal - recorded as decision-challenges F11 (spot read in Phase
 - **Newer releases keep arriving** (2.1.322 already exists): F1 re-targets only on a pull or an advisory.
 - **Fixture capture can refuse new tokens** (`normalizeCapturedArgv` fails loud on unknown options): fix the
   projection with measured evidence; if capture cannot run the PR stays draft; the trailer never substitutes.
-- **Docker / sudo unavailable locally:** PR stays draft; CI `sandbox-canary-verify-in-image` stands in for the
-  docker arm only.
+- **Docker / sudo unavailable locally:** PR stays draft; `infra-validation`'s `deploy-script-tests-fixed` job on
+  the pin-commit head stands in for the docker arm only (security review: `sandbox-canary-verify-in-image` is not
+  a stand-in).
 - **Server-side alias override:** an authenticated session could resolve `fable` differently from the bundled
   path; stated as not validated; Phase 4.1 re-probes the shipped image (still unauthenticated).
 - **Consult quality:** the hosted consult moves from 5.1 at bundled-default high to 5.2 at bundled-default

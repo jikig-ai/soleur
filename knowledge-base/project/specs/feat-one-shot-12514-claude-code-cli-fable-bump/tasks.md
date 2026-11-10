@@ -11,41 +11,48 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable
 - 0.3 Confirm 2.1.311 / 0.3.311 still resolve (rollback pair).
 - 0.4 `docker info` and `command -v bwrap` succeed; otherwise stop with the PR draft.
 
-## Phase 1 - Non-pin work and rehearsal (before Gate G1)
+## Phase 1 - Before Gate G1: non-pin work and static checks only (CTO F15: no 2.1.321 / 0.3.321 code runs)
 
-- 1.0 Author and push to the draft PR: `server/agent-model-defaults.ts` + runner default; shared parser `plugins/soleur/test/lib/autofix-pairs.ts` (pair floor >= 11 and distinct-RHS floor >= 4 moved in; `model-launch-review.test.ts` imports it); Guards 4 and 5 with every mutation row as a standing synthetic test, written before the guard bodies (Guard 5 rows cut from the real 2.1.321 row text); test-selection edge for `audit-models.sh`; prose (AGENTS.md, ADR-053, ADR-083, model-launch-review SKILL.md incl. release-age note); ADR-079 addendum incl. the cross-boundary contract.
-- 1.1 Scratch tree from branch HEAD (`npm ci`, then `rm -rf` and replace the four `@anthropic-ai` packages with the 321 tarballs, `npm rebuild @anthropic-ai/claude-code`, manifest diff recorded) and an untouched control tree (311).
-- 1.2 Assert sha256 `426c33815ca6645a...` for every spawned binary; Bun banner >= 1.4.4; Guards 4/5 pass in scratch, Guard 4 reds in control; record SHAs, integrity strings and hashes in the PR body.
-- 1.3 RED baseline of the unchanged pin suites (incl. `home-census`); classify each red as pin-shape or not.
-- 1.4 Runtime evidence (non-skipped, sha256 asserted): wrapped-command (prod config, AF_UNIX-deny + negative control), credential-deny runtime, credential-deny behavioural, bwrap-userns-seccomp real rows, proc-mask runtime, docker masked-/proc, canary `--replay`.
-- 1.5 Cron hook probe (original filename, `*` matcher, known-deny control), 2.1.311 control from the control tree.
-- 1.6 Invalid-key alias probe on both binaries -> `claude-fable-5-2`.
-- 1.6b Authenticated alias probe (Doppler `ci` key, read-only, one turn) -> `modelUsage` has `claude-fable-5-2`.
-- 1.7 Write/Edit allow-path smoke through the real SDK.
-- 1.8 Re-measure argv census, helper step strings, bridge anchors, `default_effort` rows.
-- 1.9 Stop condition: any non-pin-shape red blocks; comment on #12514; re-ask the CTO.
+- 1.0 Author and push to the draft PR: `server/agent-model-defaults.ts` + runner default; shared parser `plugins/soleur/test/lib/autofix-pairs.ts` as pure `parseAutofixPairs(src)` + `assertPairFloors` (>= 11 pairs, >= 4 distinct RHS; `model-launch-review.test.ts` imports it); Guards 4 and 5 (`assertIdsKnown`, literal `REVIEWED_ADVISOR_EFFORT = {"claude-fable-5-2": "medium"}` cross-checked against `AUTOFIX_PAIRS`), every mutation row a standing synthetic test, written before the guard bodies; test-selection edge for `audit-models.sh`; prose (AGENTS.md, ADR-053, ADR-083, model-launch-review SKILL.md incl. release-age note); ADR-079 addendum incl. the cross-boundary contract.
+- 1.1 Static checks: `npm pack` (download only) the 321 tarballs and the 311 parents outside the repo; diff `install.cjs` and manifests; record `dist.integrity`, tarball sha512 and binary sha256 (`426c33815ca6645a...`) in the PR body. Advisory or unpublish before G1 -> stop, record `Operator-authorizes:` host credential rotation (F15b).
 
 ## Gate G1 - release-age floor
 
-- G1 `date -u +%s` >= `date -u -d '2026-11-12T19:04:00Z' +%s`. Earlier: commit nothing pin-bearing, PR stays draft, end with `Paused: release-age floor clears 2026-11-12T19:04Z` and a resume prompt naming the PR, the recorded SHAs and integrity strings.
+- G1 `date -u +%s` >= `date -u -d '2026-11-12T19:04:00Z' +%s`. Earlier: install, run or commit nothing from the new versions; PR stays draft; end with `Paused: release-age floor clears 2026-11-12T19:04Z` and a resume prompt naming the PR and the recorded integrity values.
 
-## Phase 2 - The pin commit (after G1)
+## Phase 2 - Pins and lock (after G1)
 
 - 2.1 package.json pins; `npx --yes npm@11 install --package-lock-only` in `apps/web-platform`.
 - 2.2 Dockerfile global install `2.1.321`.
 - 2.3 `scheduled-marketplace-drift.yml` `CLI_VERSION: "2.1.321"`.
 - 2.4 pen-cli `overrides` only -> `0.3.321`; regenerate its lock.
-- 2.5 Integrity proof against `npm view` and the recorded values (re-`npm pack`); scratch `npm ci` yields sha256 `426c3381...`.
+- 2.5 Integrity proof against `npm view` and the recorded values (re-`npm pack`).
+
+## Phase R - Re-proof on the installed tree, in a throwaway container (read-only tree, tmpfs HOME, no ~/.doppler ~/.ssh ~/.config/gh, no docker socket)
+
+- 1.1r `npm ci` (postinstall inside the container) + control tree at 2.1.311 / 0.3.311; `npm audit signatures`; `claude --version` = 2.1.321.
+- 1.2 Assert sha256 `426c3381...` for every spawned binary; Bun banner >= 1.4.4; Guards 4/5 pass, Guard 4 reds in control.
+- 1.3 RED baseline of the unchanged pin suites (incl. `home-census`); classify each red.
+- 1.4 Runtime evidence (non-skipped, sha256 asserted): wrapped-command (prod config, AF_UNIX-deny + negative control, egress arm), credential-deny runtime, credential-deny behavioural, bwrap-userns-seccomp real rows, proc-mask runtime, docker masked-/proc (`wrapped` arm = seccomp proof); CI stand-in for the docker arm is `infra-validation` `deploy-script-tests-fixed` on the pin-commit head only.
+- 1.5 Cron hook probe (original filename, `*` matcher, known-deny control), 2.1.311 control; key via 0600 file + wrapper, `env -i`, temp HOME deleted; record only `.permission_denials`.
+- 1.6 Invalid-key alias probe on both binaries -> `claude-fable-5-2`.
+- 1.6b Authenticated alias probe (Doppler `ci` key, same key handling, one turn) -> `.modelUsage|keys` has `claude-fable-5-2`.
+- 1.7 Write/Edit allow-path smoke through the real SDK.
+- 1.8 Re-measure argv census, helper step strings, bridge anchors, `default_effort` rows.
+- 1.9 Stop condition: any non-pin-shape red blocks; comment on #12514; re-ask the CTO.
+
+## Phase 2 (continued) - re-pin, capture, trailer
+
 - 2.6 Re-pin version-literal sites and `PINS` (`measuredVersion`, counts, date); comment rule (history stays, current-pin claims move).
 - 2.7 Re-capture `infra/sandbox-canary-argv.json` (Doppler `ci` key, never `prd`, no xtrace); `sdkVersion` 0.3.321.
 - 2.12 `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- 2.13 `npm ci` in the branch worktree; re-run 1.2, 1.4, 1.5, 1.6, 1.6b and the affected vitest set; `docker build --target cli-tools` + Bun and alias probe.
-- 2.14 Commit with the `sdk-bump-verified:` trailer (validated / not validated lists); copy it into the PR body.
+- 2.13 Affected vitest set; `--replay` and docker replay arms against the re-captured fixture; `docker build --target cli-tools` + Bun and alias probe.
+- 2.14 Pin commit with the `sdk-bump-verified:` trailer (validated / not validated lists); copy it into the PR body.
 
 ## Phase 3 - PR and CI
 
 - 3.1 Push (check the real exit code); PR body per plan; `semver:patch`.
-- 3.2 Required `test` + `guards-ruleset` green; read `sandbox-canary-capture-gate` (in-image `--verify`, no drift) and `infra-validation` runs on the head, record run ids, then mark ready.
+- 3.2 Required `test` + `guards-ruleset` green; `npx --yes npm@11.21.1 install --package-lock-only && git diff --exit-code` in both lock dirs; read `sandbox-canary-capture-gate` (in-image `--verify`, no drift) and `infra-validation` runs on the head, record run ids, then mark ready.
 - 3.3 After any rebase: `npx --yes npm@11.21.1 install --package-lock-only && git diff --exit-code` in both dirs, fixture byte-diff; never push to a queued PR.
 
 ## Phase 4 - Post-merge (image and telemetry, no SSH)
@@ -53,5 +60,5 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable
 - 4.1 Image sha256 of the three `claude` binaries; invalid-key alias probe in the image.
 - 4.2 web-1 / web-2 deploy status: canary ok, `sdk_version` 0.3.321, smoke ok; no classifier unknown-step events.
 - 4.3 Next audit cron run and `scheduled-real-sdk-ask-probe` green.
-- 4.4 Rollback on any trigger: revert PR with its own trailer; leave #12514 open.
+- 4.4 Rollback on any named trigger: revert PR with its own trailer (no faster no-SSH path exists); leave #12514 open.
 - 4.5 Comment evidence on #12514 and close it.
