@@ -42,7 +42,7 @@ Each task starts with failing tests (`cq-write-failing-tests-before`).
 - [x] 2.4 B.5 `relay_hello_key_fp` warn line, emitted once from `createProxyServer` after the key check.
 - [x] 2.5 B.6 add the name to `server/sensitive-keys.ts`, and parametrize `test/proxy-hello-key-isolation.test.ts` over both
       names (Guard 3).
-- [ ] 2.6 Bump `BASELINE_DECLARED_PROBES` 96 → 97 in `plugins/soleur/test/preflight-discoverability-test.test.ts`. Add
+- [x] 2.6 Bump `BASELINE_DECLARED_PROBES` 96 → 97 in `plugins/soleur/test/preflight-discoverability-test.test.ts`. Add
       the `AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS` entry to
       `scripts/lib/test-affected-paths.sh`.
 - [x] 2.7 Create `test/proxy-hello-rotation-phases.test.ts` (Guard 2), including the code-mutation row "the verifier
@@ -66,20 +66,20 @@ Each task starts with failing tests (`cq-write-failing-tests-before`).
   - [x] 2.9.4 `runbooks/apply-web-platform-infra-job-rationale.md` and the relay section of
         `runbooks/betterstack-log-query.md` (the fingerprint query, the `accept_also!=none` alarm rule and the AC-P1
         failure branches).
-- [ ] 2.10 C.1 marker step in `.github/workflows/reusable-release.yml`.
-  - [ ] 2.10.1 Measure locally, never by dispatch. Use a throwaway docker-container builder under `/var/tmp`, and push to
+- [x] 2.10 C.1 marker step in `.github/workflows/reusable-release.yml`.
+  - [x] 2.10.1 Measure locally, never by dispatch. Use a throwaway docker-container builder under `/var/tmp`, and push to
         a local `registry:2` with htpasswd and wrong credentials, so you see a real 401/403. Measure the shape and order
         of `ls` over two failed builds, and save sanitized fixtures. Inspect artifacts by metadata only. Then find the error-message field in
         `docker buildx history inspect <ref> --format json` (buildx 0.38.1, the runner's version). Fall back to
         `see-step-log` if the field is absent.
-  - [ ] 2.10.2 Write `plugins/soleur/test/reusable-release-push-failed-marker.test.sh` red first (Guard 4). Run it with a
+  - [x] 2.10.2 Write `plugins/soleur/test/reusable-release-push-failed-marker.test.sh` red first (Guard 4). Run it with a
         strict-argv `docker` stub and `bash --noprofile --norc -eo pipefail`, with per-rule fixtures. Classes:
         `push_denied`, `push_other`, `not_push`, `unknown`. Include:
     - the build-arg token fixture;
     - the LF-injection fixture;
     - the no-build-ref fallback;
     - the v0.402.0 error text.
-  - [ ] 2.10.3 Add `DOCKER_BUILD_RECORD_UPLOAD: "false"` and `DOCKER_BUILD_SUMMARY: "false"` as env on `docker_build`
+  - [x] 2.10.3 Add `DOCKER_BUILD_RECORD_UPLOAD: "false"` and `DOCKER_BUILD_SUMMARY: "false"` as env on `docker_build`
         (CTO D1). Then add the step, with `timeout-minutes: 1`, the JSON error field only and the allowlist
         `denial=`. `denial` never goes to `GITHUB_OUTPUT` or the email; the summary line sits in a code span; `attempt`
         is validated. In the failure email:
@@ -88,7 +88,7 @@ Each task starts with failing tests (`cq-write-failing-tests-before`).
     - add the conditional sentence.
 
     The `permissions:` block stays byte-identical.
-- [ ] 2.11 C.2 runbook `runbooks/web-platform-release-image-push-failed.md`:
+- [x] 2.11 C.2 runbook `runbooks/web-platform-release-image-push-failed.md`:
   - Billing > Packages first;
   - re-run the failed jobs of both runs, using the deploy-arm lookup `gh run list --workflow web-platform-release.yml --commit <sha> --event workflow_run`, and never a fresh dispatch;
   - the cancelled or timed-out job residual, and `class=unknown` meaning "read the step log";
