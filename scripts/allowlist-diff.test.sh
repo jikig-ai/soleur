@@ -55,6 +55,17 @@ ROWS=0
 pass() { printf 'PASS: %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf 'FAIL: %s\n  detail: %s\n' "$1" "${2:-}"; FAIL=$((FAIL + 1)); }
 
+# Instrument controls. pass()/fail() must each move their own counter, and expect() (the verdict-owning helper every row goes through) must
+# FAIL a wrong rc and PASS a right one: a neutered fail() or an expect() that always says yes would otherwise leave every row green. The
+# counters are unwound afterwards so the row floor stays exact; a broken instrument exits directly, never through fail().
+_p0=$PASS; _f0=$FAIL
+pass "instrument (expected)" >/dev/null
+fail "instrument (expected, subtracted)" >/dev/null
+if [ "$PASS" -ne $((_p0 + 1)) ] || [ "$FAIL" -ne $((_f0 + 1)) ]; then
+  echo "FATAL: pass()/fail() did not each move their counter" >&2; exit 1
+fi
+PASS=$_p0; FAIL=$_f0
+
 for tool in node jq git python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "harness: $tool missing; this suite would assert nothing" >&2; exit 2; }
 done
@@ -120,6 +131,15 @@ expect() {
   fi
   pass "$label"
 }
+
+_p0=$PASS; _f0=$FAIL; _r0=$ROWS; SUT_RC=0; SUT_OUT=""
+expect "instrument: a wrong rc (expected FAIL)" 1 >/dev/null
+_df=$((FAIL - _f0)); _dp=$((PASS - _p0))
+expect "instrument: a right rc (expected PASS)" 0 >/dev/null
+if [ "$_df" -ne 1 ] || [ "$_dp" -ne 0 ] || [ "$((PASS - _p0))" -ne 1 ] || [ "$((FAIL - _f0))" -ne 1 ]; then
+  echo "FATAL: expect() did not FAIL a wrong rc and PASS a right one (fail+$_df pass+$_dp); the verdict helper is inert" >&2; exit 1
+fi
+PASS=$_p0; FAIL=$_f0; ROWS=$_r0
 
 # Copy the SUT into every fixture so it resolves REPO_ROOT (git rev-parse) and the parser from the fixture.
 install_sut() {
@@ -189,12 +209,7 @@ git -C "$R6" commit -q -m "install sut"
 git -C "$R6" mv .gitleaks.toml legacy.toml
 git -C "$R6" commit -q -m "move the config away"
 run_sut "$R6" "$(git -C "$R6" rev-parse HEAD~1)" "$(git -C "$R6" rev-parse HEAD)"
-ROWS=$((ROWS + 1))
-if [[ "$SUT_RC" != "0" ]] && ! grep -qF 'unchanged; skipping' <<<"$SUT_OUT"; then
-  pass "AD-6 moving .gitleaks.toml away is not read as unchanged (rc=$SUT_RC)"
-else
-  fail "AD-6 moving .gitleaks.toml away is not read as unchanged" "rc=$SUT_RC output: $(printf '%s' "$SUT_OUT" | head -3 | tr '\n' ' ')"
-fi
+expect "AD-6 moving .gitleaks.toml away exits 2 naming the cause (never read as unchanged)" 2 "::error::allowlist-diff: .gitleaks.toml is absent at"
 
 # ---------------------------------------------------------------------------
 # AD-7: a rename INTO .gitleaks.toml carrying a widening is still detected.

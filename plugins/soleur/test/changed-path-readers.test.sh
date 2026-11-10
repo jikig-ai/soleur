@@ -24,7 +24,12 @@
 # out by construction); the prose pins check SPELLING and the failure arm, they do not execute prose; `--raw` readers (ci.yml e2e / shard-totality
 # classifiers fail closed, executed by ci-classify-step-exec.test.sh); `git ls-files` / `ls-tree` readers; a reader built from a launcher array the
 # scanner does not know. A conversion that leaves --no-renames off a `-z` site stays GREEN by the ruled predicate (D1); the PINNED_Z rows hold the
-# three-flag form for the sites that matter.
+# three-flag form for the sites that matter. THE CENSUS IS A REGRESSION RATCHET ON THE READERS IT CAN SEE, NOT AN ENUMERATION OF EVERY READER
+# IN THE REPOSITORY. Outside its window by construction (a reviewer mapped these; each is either pinned by a PINNED_Z row, executed by its own
+# suite, or an open observation in the PR body): extension-less hooks (scripts/hooks/pre-push is pinned), lefthook.yml, .github/actions,
+# *.template files, tests/scripts/lib/*-gate.sh gates, the apps/web-platform/server runtime readers, plugins/soleur/hooks, `.cjs`/`.js`/`.pl`
+# sources, other verbs and flags (`--numstat`, `--stat`, `status --porcelain`, `ls-files -m`), argv lists that put an option before the
+# verb (`["git", "-C", d, "diff", ...]`), string-form commands in py/ts, and the `gh api` readers inside workflows (pinned, not scanned).
 #
 # THE REMAINDER, reasoned (class | site | converted? | why). Every row is also a row of the exemption table named last; none is a deferral.
 #   status letters are the data | ship-kb-archive-gate.sh, founder-check.py, lint-ratchet.py, battery-refusal-wait.sh/test-all.sh `-M` rows, review:118, preflight:304 | NC | the R/C row IS the input; --no-renames would erase it | CODE/PROSE
@@ -244,7 +249,7 @@ case "$mode" in
     esac
     bad "$@" ;;
   files)
-    if [ "$#" -eq 5 ] && [ "$1" = api ] && [ "$2" = --paginate ] && [ "$3" = "repos/$GH_STUB_REPO/pulls/$GH_STUB_PR/files" ] && [ "$4" = --jq ]; then
+    if [ "$#" -eq 5 ] && [ "$1" = api ] && [ "$2" = --paginate ] && { [ "$3" = "repos/$GH_STUB_REPO/pulls/$GH_STUB_PR/files" ] || [ "$3" = "repos/$GH_STUB_REPO/pulls/$GH_STUB_PR/files?per_page=100" ]; } && [ "$4" = --jq ]; then
       [ "${GH_STUB_FAIL:-0}" = 1 ] && { echo "gh: HTTP 500" >&2; exit 1; }
       exec jq -r "$5" "$GH_STUB_FIX"
     fi
@@ -1317,10 +1322,56 @@ detect_rows() {
   detect_case "control-no-marker" '[{"filename":"docs/x.md"}]' 0 false false
 }
 
+# ── the admin-merge hatch classifier (settle-then-admin-merge.md), EXECUTED: a spelling pin cannot tell a classifier that refuses a hostile name
+# from one that merely contains the right words. The ONE fenced block that prints `hatch-eligible` is extracted and run in a fixture repo.
+CLS_MD="$REPO_ROOT/plugins/soleur/skills/ship/references/settle-then-admin-merge.md"
+CLS_ROWS=0
+cls_expect() { # <label> <hatch-eligible|NOT eligible> <script> <row-dir>
+  local label="$1" want="$2" out
+  out="$(cd "$4" && LC_ALL="$HELPER_LC" bash "$3" 2>/dev/null)"
+  CLS_ROWS=$((CLS_ROWS + 1))
+  case "$out" in
+    "$want"*) pass "classifier: $label ($want)" ;;
+    *) fail "classifier: $label: want '$want', got '${out:-<empty>}'" ;;
+  esac
+}
+section_classifier() {
+  local script="$WORK_ROOT/classifier.sh" mut="$WORK_ROOT/classifier-mut.sh" d
+  awk '/^```bash$/{b=1;buf="";next} /^```$/{if(b && buf ~ /hatch-eligible/){printf "%s", buf; exit} b=0; next} b{buf=buf $0 "\n"}' "$CLS_MD" > "$script"
+  if ! grep -q 'hatch-eligible' "$script" || ! grep -q 'LC_ALL=C grep' "$script"; then
+    fail "classifier: the fenced block with the hatch-eligible verdict and its LC_ALL=C greps was not found in settle-then-admin-merge.md"
+    return
+  fi
+  # The mutant: the same block with the byte-locale pin removed from both greps (the regression the UTF-8 rows exist to catch).
+  sed 's/LC_ALL=C grep/grep/g' "$script" > "$mut"
+  if cmp -s "$script" "$mut"; then fail "classifier: the LC_ALL=C mutation did not land"; return; fi
+  new_row || { fail "classifier: could not build a row"; return; }
+  put_in "$ROW_DIR" docs/classifier-ok.md; commit_row
+  cls_expect "a docs-only diff is eligible" "hatch-eligible" "$script" "$ROW_DIR"; free_row
+  new_row || { fail "classifier: could not build a row"; return; }
+  d="$ROW_DIR/a.md${NL}docs"; mkdir -p "$d" && printf 'x\n' > "$d/f"; commit_row
+  cls_expect "a name holding a newline whose fragments each pass the allowlist (a.md / docs/f) is refused" "NOT eligible" "$script" "$ROW_DIR"; free_row
+  new_row || { fail "classifier: could not build a row"; return; }
+  mkdir -p "$ROW_DIR/src" && printf 'x\n' > "$ROW_DIR/src/"$'\xff'".sh"; commit_row
+  cls_expect "a changed path holding an invalid UTF-8 byte is refused under a UTF-8 locale" "NOT eligible" "$script" "$ROW_DIR"
+  cls_expect "MUTANT (no LC_ALL=C on the greps) reads the same path as eligible, so the row above is load-bearing" "hatch-eligible" "$mut" "$ROW_DIR"; free_row
+  new_row || { fail "classifier: could not build a row"; return; }
+  fg "$ROW_DIR" mv apps/web-platform/server/keep.ts docs/keep.md && commit_row
+  cls_expect "a rename out of a non-allowlisted path (the old path is a D row) is refused" "NOT eligible" "$script" "$ROW_DIR"; free_row
+  new_row || { fail "classifier: could not build a row"; return; }
+  commit_row
+  cls_expect "an empty diff is refused" "NOT eligible" "$script" "$ROW_DIR"; free_row
+  new_row || { fail "classifier: could not build a row"; return; }
+  put_in "$ROW_DIR" docs/classifier-ok.md; commit_row; fg "$ROW_DIR" remote remove origin
+  cls_expect "a failed fetch and diff is refused" "NOT eligible" "$script" "$ROW_DIR"; free_row
+  if [ "$CLS_ROWS" -ne 7 ]; then printf 'FATAL: classifier rows: ran %s, want 7\n' "$CLS_ROWS" >&2; exit 1; fi
+}
+
 section_steps() {
   echo "── steps"
   selftest_step_verdicts
   extract_steps
+  section_classifier
   # The DEFAULT_ENV subset check, once per step, against the arm it runs under: an undeclared key fails inside run_step.
   new_row || { fail "steps: could not build a row"; return; }
   commit_row
@@ -1508,6 +1559,7 @@ apps/web-platform/.github/workflows/constraint-gates.yml	changed_files=.*git dif
 .github/workflows/pr-quality-guards.yml	grep -zFxc -- "\$legal" "\$changed_nul"
 .github/workflows/secret-scan.yml	CHANGED=.*git diff -z --name-only
 plugins/soleur/skills/ship/references/settle-then-admin-merge.md	files="\$\(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only origin/main\.\.\.HEAD \| tr '"'"'\\n\\0'"'"' '"'"'\?\\n'"'"'\)"
+scripts/hooks/pre-push	git diff --name-only --no-renames --ignore-submodules=none "origin
 scripts/pre-push-ratchet-lane.sh	git -C "\$REPO_ROOT" diff -z --no-renames --ignore-submodules=none --name-only "\$BASE" HEAD \\$
 scripts/pre-push-ratchet-lane.sh	git -C "\$REPO_ROOT" diff -z --no-renames --ignore-submodules=none --name-only "\$BASE" origin/main \\$
 .github/workflows/web-platform-release.yml	--jq '"'"'\(\.files\|length\), \(\.files\[\] \| \.filename, \(\.previous_filename // empty\)\)'"'"'
@@ -1749,6 +1801,8 @@ selftest_pinned() {
   selftest_moved "pinned_z_check accepts a pinned line that exists" pass pinned_z_check synthetic.sh 'diff -z --no-renames'
   selftest_moved "pinned_z_check rejects a regex no line matches" fail pinned_z_check synthetic.sh 'selftest-no-such-line-zzz'
   selftest_moved "pinned_z_check rejects a pin only a comment line satisfies" fail pinned_z_check synthetic.sh '^# synthetic: git diff -z'
+  selftest_moved "exempt_rows_check rejects a reason shorter than 20 characters" fail exempt_rows_check synthetic $'a.sh\tanchor\tshort'
+  selftest_moved "exempt_rows_check accepts a row with a path, an anchor and a full reason" pass exempt_rows_check synthetic $'a.sh\tanchor\tthis reason is long enough to count'
   selftest_moved "pinned_z_check rejects a missing file" fail pinned_z_check no-such-file.sh 'diff'
   PIN_ROOT="$o_root"
 }
@@ -2238,14 +2292,14 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1
 fi
-# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 180 + sentinel 119.
-MIN_TOTAL=408
+# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 187 + sentinel 120.
+MIN_TOTAL=416
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
 fi
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-if [ "$SELFTESTS" -ne 68 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 68\n' "$SELFTESTS" >&2; exit 1; fi
+if [ "$SELFTESTS" -ne 70 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 70\n' "$SELFTESTS" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
 echo "Guard: $PASS passed, $FAIL failed"
