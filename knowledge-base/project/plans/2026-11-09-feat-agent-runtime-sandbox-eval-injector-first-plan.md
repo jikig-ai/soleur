@@ -150,7 +150,7 @@ Rulings that shape it (CTO, binding, 2026-11-09; full text in `decision-challeng
 Policy data (`policy.yaml`) is the per-host classifier and the only place a verb is declared. The base policy is closed for writes (CTO R13):
 
 - Inject hosts: `github.com`, `api.github.com`, `uploads.github.com`, `codeload.github.com`. Every other host is routed to the forwarder by the router and never reaches iron-proxy (R24).
-- Reads vend without a row, on the per-workspace repository allowlist: REST `GET`/`HEAD` on allowlisted paths; git `GET info/refs?service=git-upload-pack` and `POST git-upload-pack`; GraphQL documents whose selected operation (by `operationName`, parsed with the `graphql` package) is a `query`.
+- Reads vend without a row, on the per-workspace repository allowlist: REST `GET`/`HEAD` on allowlisted paths; git `GET info/refs?service=git-upload-pack` and `POST git-upload-pack`; GraphQL documents whose selected operation (by `operationName`, parsed with the `graphql` package) is a `query`. *(Corrected 2026-11-10, CTO R38: the GraphQL classifier does not resolve repositories, so GraphQL queries vend for any repository the token reaches and GraphQL mutations carry no repository; token scoping is a #11637 precondition.)*
 - The push ref advertisement (`GET info/refs?service=git-receive-pack`) vends without a row on the same allowlist: it mutates nothing and carries no ref updates to hash (CTO R1).
 - Listed writes need a row: `POST git-receive-pack`; the REST write verbs and GraphQL mutation fields named in `policy.yaml`. An unlisted write, and any unparseable, batched (array) or multi-operation body without a resolvable `operationName`, is refused as `not-allowlisted` with no row.
 - Each write rule names the canonical-action fields hashed into `action_sha256` (HMAC-SHA-256 with a spike-only key), always including host and repository path: REST = method, host, path, sha256 of body; GraphQL = host, operation name, operation type, sha256 of normalized document and variables; git push = host, repository path, and the ref-update commands from the receive-pack pkt-lines (old sha, new sha, ref). Host case, the repository path's `.git` suffix and percent-encoding are normalized first (CTO R6). `canonical_action` stores the same fields readably, so the results note records what an approval card could show.
@@ -262,7 +262,7 @@ Any "no" on 1–8 that configuration cannot fix stops the run and goes to the CT
   - #11637 (comment, made on merge): on GO, add as its acceptance criteria that the founder can read every approval card (CPO), that `git`, `gh` and `claude` each show a pending approval to the agent, that it owns re-running the spike job and refreshing the results JSON, and that the image mirror and bus-factor review precede adoption.
   - File "Demand-side session telemetry (session-hours, peak concurrency, session-length distribution) from our own runtime records", milestone Phase 4, so the managed break-even has inputs (COO).
 - Dispositions take effect on merge, never before. `soleur:ship` derives the PR body's issue lines from `jq -r .verdict` of the committed results JSON, so a NO-GO cannot close #12467 by hand error:
-  - GO: `Closes #12517`, `Closes #12467` (superseded, linking the results); on merge, the #11637 comment above.
+  - GO: `Closes #12517`, `Closes #12467` (superseded, linking the results; its closing comment names ADR-325's three reopen triggers, CTO R42); on merge, the #11637 comment above.
   - NO-GO: `Closes #12517`, `Ref #12467`; on merge, a comment on #12467 that it resumes, `gh issue edit 12467 --remove-blocked-by 12517`, and `gh issue edit 11637 --add-blocked-by 9859` so #11637 stays blocked on the trial.
   - INCONCLUSIVE: the PR is not marked ready; `Ref #12517` only; the CTO rules on the harness defect and the run repeats.
 - Handoff for the next `soleur:product-roadmap` workshop run (this plan never edits `roadmap.md`): row 4.6 should also cite #9842; #12517 and the demand-telemetry issue have no roadmap row; Current State (dated 2026-08-11) is stale.
@@ -535,7 +535,7 @@ None. Re-checked 2026-11-09 after the deepen pass moved the job out of `infra-va
 
 ## Operator Holds
 
-- Hold: Operator-authorizes: arm one issue-comment reminder on #12467 for 2026-11-30 through `POST /api/internal/schedule-reminder` (a production write), so the paused per-verb work resumes on that date if the spike has not reported.
+- ~~Hold: Operator-authorizes: arm one issue-comment reminder on #12467 for 2026-11-30 through `POST /api/internal/schedule-reminder` (a production write), so the paused per-verb work resumes on that date if the spike has not reported.~~ **Withdrawn 2026-11-10 (CTO R42):** the spike has reported, so the reminder's condition is met and the production write would have no effect. #12467's reopen triggers are named in ADR-325 instead.
 
 ## Acceptance Criteria
 

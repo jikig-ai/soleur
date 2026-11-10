@@ -7,7 +7,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - [x] 0.1 Move #12517 to milestone "Phase 4: Validate + Scale".
 - [x] 0.2 Add blocked-by edges: #12467 and #11637 blocked by #12517.
 - [x] 0.3 Comment on #12467: paused for the spike, review date 2026-11-30.
-- [ ] 0.4 Arm the 2026-11-30 issue-comment reminder on #12467 via the schedule-reminder endpoint, only after the operator's typed go naming the exact command (`## Operator Holds`).
+- [x] 0.4 ~~Arm the 2026-11-30 issue-comment reminder on #12467 via the schedule-reminder endpoint, only after the operator's typed go naming the exact command (`## Operator Holds`).~~ Withdrawn 2026-11-10 by CTO R42: the spike reported, so the reminder has no effect; nothing was armed.
 
 ## Phase 0.5: Tracer (local docker, before anything else is built)
 

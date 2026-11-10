@@ -60,7 +60,7 @@ The sandbox holds no credential: the real one never appears in its environment, 
 
 ### TR2: Approval attachment
 
-Every mutating request consumes exactly one unconsumed ADR-309 action-bound row before the credential is attached. With the `approval-queue` flag off, every vend is denied. A denied mutating request creates the pending row. Allowlisted reads vend without a row, classified by protocol on a per-workspace repository allowlist: REST `GET`/`HEAD`, git upload-pack (the `info/refs` advertisement and the `git-upload-pack` POST), GraphQL queries, and the push ref advertisement.
+Every mutating request consumes exactly one unconsumed ADR-309 action-bound row before the credential is attached. With the `approval-queue` flag off, every vend is denied. A denied mutating request creates the pending row. Allowlisted reads vend without a row, classified by protocol on a per-workspace repository allowlist: REST `GET`/`HEAD`, git upload-pack (the `info/refs` advertisement and the `git-upload-pack` POST), and the push ref advertisement. GraphQL queries also vend without a row but are not repository-scoped by the hook; GraphQL mutations are gated but their approval row names no repository. The repository boundary for GraphQL is the token's own `repositories` scope, a #11637 precondition (CTO R38, 2026-11-10).
 
 ### TR3: CA scope
 
