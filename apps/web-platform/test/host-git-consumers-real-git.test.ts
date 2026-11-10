@@ -762,7 +762,7 @@ describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDU
     // (the fixture's own env pins GIT_ALLOW_PROTOCOL without ext, so the control brings a bare env)
     spawnSync("git", ["ls-remote", "x"], {
       cwd: ws,
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: w.home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: w.home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as unknown as NodeJS.ProcessEnv,
       timeout: 20_000,
     });
     expect(existsSync(marker), "control: the ext:: carrier is not live").toBe(true);
@@ -876,7 +876,7 @@ describe("census: every host-side git exec site is classified (consistency with 
     const sites: string[] = [];
     for (const f of walk(SERVER)) {
       if (f.endsWith("host-git.ts")) continue;
-      for (const m of code(f).matchAll(/allowProtocol:\s*([A-Za-z_]+)/g)) sites.push(m[1]);
+      for (const m of code(f).matchAll(/allowProtocol:\s*([^,}\s)]+)/g)) sites.push(m[1]);
     }
     const allowed = new Set(["KEY_AUTH_ALLOW_PROTOCOL", "LEGACY_ALLOW_PROTOCOL", "ALLOW_PROTOCOL_NONE"]);
     expect(sites.filter((n) => !allowed.has(n)), "an allowProtocol that is not one of the three constants").toEqual([]);
