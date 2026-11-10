@@ -1,4 +1,4 @@
-# Egress injector spike (#12517, plan knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md).
+# Egress injector spike (#12517, plan knowledge-base/project/plans/archive/20261110-211546-2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md).
 #
 # An on-demand recorded measurement, never a required lane (CTO F-g): it runs the injector spike suite on the
 # production run tuple and uploads the raw results JSON. Its own workflow file (CTO D2) because

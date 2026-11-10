@@ -10,7 +10,7 @@ date: 2026-11-10
 
 Issue #12517 re-opened the agent runtime question: keep the bwrap sandbox and the egress gateway (ADR-278), or move agent sessions to a managed sandbox platform. The operator's deciding criterion is whether one mechanism covers every HTTPS-credentialed tool (`gh`, `git`, any HTTPS-API CLI) without per-tool code on our side. Today an agent in an entitled session cannot push: ADR-311 found that the SDK's credential `mask` mode does not substitute on our proxy carrier and ruled (Decision 4) that any network-layer credential path is rejected unless every vend is gated by an unconsumed ADR-309 approval row. The per-verb alternative (#12467) adds one gated tool at a time.
 
-The brainstorm (`knowledge-base/project/brainstorms/2026-11-09-agent-runtime-sandbox-eval-brainstorm.md`) found that the criterion does not depend on the isolation substrate: session-to-tenant identity already exists at the hop (ADR-278 Decision 3), so injection can be specified against the hop and measured on today's runtime, and the work carries into the gVisor path (#9842).
+The brainstorm (`knowledge-base/project/brainstorms/archive/20261110-211546-2026-11-09-agent-runtime-sandbox-eval-brainstorm.md`) found that the criterion does not depend on the isolation substrate: session-to-tenant identity already exists at the hop (ADR-278 Decision 3), so injection can be specified against the hop and measured on today's runtime, and the work carries into the gVisor path (#9842).
 
 ## Considered Options
 
@@ -98,6 +98,6 @@ The C4 model gains no element in this PR. An `egressInjector` container (the per
 
 ## Measured outcome — injector
 
-GO: on run [42883871262](https://github.com/jikig-ai/soleur/actions/runs/42883871262), the production run tuple's flags on a GitHub-hosted runner, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it. An earlier GO (run 42823659776) was withdrawn by the PR review (CTO R40): one criterion was reported pass with required items unmeasured, and several checks could not fail.
+GO: on run [42883871262](https://github.com/jikig-ai/soleur/actions/runs/42883871262), the production run tuple's flags on a GitHub-hosted runner, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/archive/20261110-211546-feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it. An earlier GO (run 42823659776) was withdrawn by the PR review (CTO R40): one criterion was reported pass with required items unmeasured, and several checks could not fail.
 
 The verdict carries two limits: GraphQL is not repository-scoped by the hook (R38), and request bodies of 3 MiB or more are refused (R40). Flip fact F1 does not hold. What was measured, what was not, and the defects the measurement and its review found and fixed are in the results note; the production changes #11637 needs are listed in Consequences above, and the `SandboxNetworkAccess` denial is filed as #12585.

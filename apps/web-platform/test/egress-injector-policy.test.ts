@@ -1,5 +1,5 @@
 // #12517 — hermetic tests for the egress injector spike's pure decision code (plan
-// knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md, Phase 1).
+// knowledge-base/project/plans/archive/20261110-211546-2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md, Phase 1).
 //
 // Three modules under test, all on the test path (no production code imports them):
 //   policy.mjs        the per-host classifier and the action-hash recipe (Guard 2's chokepoint)

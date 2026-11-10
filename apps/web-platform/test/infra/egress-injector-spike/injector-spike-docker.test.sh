@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Egress injector spike suite (#12517). Plan: knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md
+# Egress injector spike suite (#12517). Plan: knowledge-base/project/plans/archive/20261110-211546-2026-11-09-feat-agent-runtime-sandbox-eval-injector-first-plan.md
 #
 # Measures criteria 1-9 on the production run tuple against the real approval RPCs on a throwaway local Supabase
 # stack (CTO F-a), the real egress-forwarder.mjs and squid conf (unchanged), digest-pinned iron-proxy (F-b), hermetic

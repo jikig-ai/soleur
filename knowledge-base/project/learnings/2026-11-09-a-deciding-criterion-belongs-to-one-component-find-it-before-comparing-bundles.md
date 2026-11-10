@@ -51,7 +51,7 @@ A corollary for the criterion itself: "no per-tool code" survived only until app
 
 ## Related
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-11-09-agent-runtime-sandbox-eval-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261110-211546-2026-11-09-agent-runtime-sandbox-eval-brainstorm.md`
 - `knowledge-base/project/learnings/2026-07-26-prior-art-sweep-by-function-and-scoped-agent-negatives.md`
 - `knowledge-base/project/learnings/2026-09-04-an-agent-will-confidently-restate-the-position-your-corpus-already-corrected.md`
 - ADR-311 (the credential-broker mechanism is measured before it is built)

@@ -22,7 +22,7 @@ Planning #12517 (a measured TLS-terminating credential injector for GitHub on th
 
 ## Solution
 
-The plan was revised under 23 binding CTO rulings (`knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/decision-challenges.md`): measure arm A with the exact `buildAgentEnv` output and arm B with the inject hosts removed from `NO_PROXY` (labelled #11637's change); replace the whole `Authorization` header on inject hosts rather than substituting inside it; follow `service.ts`'s create-then-consume order with a fresh conversation per arm; place the suite under `test/infra/` with a dedicated job; mask every secret's path and probe it from the CLI tier with scripted tool calls and a same-uid positive control; compare criterion 7 against the measured 9 source files.
+The plan was revised under 23 binding CTO rulings (`knowledge-base/project/specs/archive/20261110-211546-feat-agent-runtime-sandbox-eval/decision-challenges.md`): measure arm A with the exact `buildAgentEnv` output and arm B with the inject hosts removed from `NO_PROXY` (labelled #11637's change); replace the whole `Authorization` header on inject hosts rather than substituting inside it; follow `service.ts`'s create-then-consume order with a fresh conversation per arm; place the suite under `test/infra/` with a dedicated job; mask every secret's path and probe it from the CLI tier with scripted tool calls and a same-uid positive control; compare criterion 7 against the measured 9 source files.
 
 ## Key Insight
 
