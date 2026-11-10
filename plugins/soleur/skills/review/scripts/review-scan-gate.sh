@@ -9,6 +9,8 @@ ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 ENSURE="$SCRIPT_DIR/ensure-semgrep.sh"
 TMP=""
 
+# The EXIT/INT/TERM trap below is the only caller. Shellcheck does not count a trap as a call.
+# shellcheck disable=SC2329
 cleanup() {
   if [ -n "$TMP" ]; then
     rm -rf "$TMP"
