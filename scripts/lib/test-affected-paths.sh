@@ -1004,9 +1004,11 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # #12348 (CTO ruling E5): the lint-cve-safe-status UNIT suite runs on synthesized fixtures in
 # temp repos plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's
 # phrase anchors in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict
-# changes only when one of these files changes. Its local 5-run median (14,705 ms) is over
-# LOCAL_FAST_CAP_MS=10000, so it is edge-selected; the always-on corpus property is carried by
-# the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member `cve-safe-status`.
+# changes only when one of these files changes: this array is exactly its read set, so edge
+# selection runs it whenever its result could change and loses no coverage (CTO ruling V4,
+# amending E5: it stays edge-selected whatever its CI median). The local timings taken so far
+# were not taken under E5's load rule and are not cited. The always-on corpus property is
+# carried by the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member `cve-safe-status`.
 AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
   "scripts/lint-cve-safe-status.py"
   "scripts/lint-cve-safe-status.test.sh"
