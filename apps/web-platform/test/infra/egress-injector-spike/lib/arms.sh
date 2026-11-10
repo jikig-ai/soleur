@@ -268,10 +268,10 @@ JSON
   local pw=/home/soleur/spike-c2push/ws rows0 id approve st seq1 seq2
   printf '{"workspace": "%s"}\n' "$pw" > "$d/push-extras.json"
   cat > "$d/push1.json" <<JSON
-[ {"id": "push1", "tool": "Bash", "input": {"command": "git clone -q https://github.com/spike/alpha.git $pw/p 2>&1 | tail -1; cd $pw/p && git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m 'c2 sandboxed push' && git push -q origin HEAD:main 2>&1 | tail -3; echo push_rc=\${PIPESTATUS[0]}"}} ]
+[ {"id": "push1", "tool": "Bash", "input": {"command": "git clone -q https://github.com/spike/alpha.git $pw/p 2>&1 | tail -1; cd $pw/p && git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m 'c2 sandboxed push' && git push -q origin HEAD:refs/heads/spike-c2-push 2>&1 | tail -3; echo push_rc=\${PIPESTATUS[0]}"}} ]
 JSON
   cat > "$d/push2.json" <<JSON
-[ {"id": "push2", "tool": "Bash", "input": {"command": "cd $pw/p && git push -q origin HEAD:main 2>&1 | tail -2; echo push_rc=\${PIPESTATUS[0]}"}} ]
+[ {"id": "push2", "tool": "Bash", "input": {"command": "cd $pw/p && git push -q origin HEAD:refs/heads/spike-c2-push 2>&1 | tail -2; echo push_rc=\${PIPESTATUS[0]}"}} ]
 JSON
   rows0="$(spike_rows "$CONV_A")"; seq1="$(spike_stub_seq)"
   spike_spec "$d/spec-push1.json" sessA B "$d/push1.json" "$d/push-extras.json"
@@ -347,7 +347,7 @@ spike_cx() {
   local cred port
   cred="$(docker exec "$SPIKE_APP_CTR" cat "/run/spike/$1/secrets/router-session.cred" 2>/dev/null)" || harness_fail DRIVER "router cred $1"
   port="$(cat "$SPIKE_WORK/run/$1/state/router.port")"
-  timeout -k 5 120 docker exec -i -u "$SPIKE_APP_UID" -e "P=http://$cred@127.0.0.1:$port" -e "CA=/run/spike-pub/$1/bundle.pem" \
+  timeout -k 5 "${SPIKE_CX_TIMEOUT:-120}" docker exec -i -u "$SPIKE_APP_UID" -e "P=http://$cred@127.0.0.1:$port" -e "CA=/run/spike-pub/$1/bundle.pem" \
     -e GIT_CONFIG_GLOBAL=/dev/null -e GIT_CONFIG_NOSYSTEM=1 -e HOME=/home/soleur "$SPIKE_APP_CTR" bash -s < "$2" > "$3" 2>&1
 }
 
@@ -376,7 +376,9 @@ w=/home/soleur/c3-$1-$2
 if [ ! -d "\$w/.git" ]; then HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git clone -q https://github.com/spike/alpha.git "\$w" 2>&1 | tail -1; fi
 cd "\$w" || { echo push_rc=clone-failed; exit 0; }
 if ! git log --format=%s | grep -qx "$3"; then git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "$3"; fi
-HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:main 2>&1 | tail -2
+# Its own branch: other arms push to the same repository, and a push to a moved main is refused by git locally
+# (non-fast-forward) before any request leaves, which measured nothing (run 42809989901, the expiry arm).
+HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:refs/heads/spike-$1-$2 2>&1 | tail -2
 echo push_rc=\${PIPESTATUS[0]}
 EOS
 }
@@ -763,11 +765,11 @@ _c8_clients() { # <label> <session> <out>: git push (write), curl POST (write), 
   cat > "$SPIKE_WORK/c8/clients-$1.sh" <<EOS
 L=$1
 up() { cut -d' ' -f1 /proc/uptime; }
-run() { local n=\$1; shift; local t0 t1 rc; t0=\$(up); timeout -k 2 30 "\$@" >/dev/null 2>&1; rc=\$?; t1=\$(up); echo "c8 \$L \$n rc=\$rc elapsed=\$(echo "\$t1 \$t0" | awk '{printf "%.2f", \$1-\$2}')"; }
+run() { local n=\$1; shift; local t0 t1 rc; t0=\$(up); timeout -k 2 ${C8_CLIENT_CAP:-30} "\$@" >/dev/null 2>&1; rc=\$?; t1=\$(up); echo "c8 \$L \$n rc=\$rc elapsed=\$(echo "\$t1 \$t0" | awk '{printf "%.2f", \$1-\$2}')"; }
 w=/home/soleur/c8-$2
 [ -d "\$w/.git" ] || HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" timeout 30 git clone -q https://github.com/spike/alpha.git "\$w" >/dev/null 2>&1
 [ -d "\$w/.git" ] && git -C "\$w" -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "c8 \$L"
-run gitPush env HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git -C "\$w" push -q origin HEAD:main
+run gitPush env HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git -C "\$w" push -q origin HEAD:refs/heads/spike-c8-\$L
 run curlPost curl -sS -f -o /dev/null --cacert "\$CA" -x "\$P" -H 'content-type: application/json' --data "{\"title\":\"c8 \$L\",\"head\":\"a\",\"base\":\"main\"}" https://api.github.com/repos/spike/alpha/pulls
 run ghPost env HTTPS_PROXY="\$P" SSL_CERT_FILE="\$CA" GH_TOKEN=spike-placeholder gh api -X POST repos/spike/alpha/pulls -f title="c8 gh \$L" -f head=a -f base=main
 run curlGet curl -sS -f -o /dev/null --cacert "\$CA" -x "\$P" https://api.github.com/repos/spike/alpha
@@ -794,7 +796,9 @@ arm_c8() {
   docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep -c 'reason=hook-timeout' > "$d/hook-timeouts.txt"
   # Frozen: the hook process is frozen (cgroup freezer, the SIGSTOP of R27); iron-proxy has no deadline of its own.
   docker pause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
-  window frozen "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients frozen sessA "$d/frozen.out"
+  # A frozen hook makes each inject-host client wait until its own timeout (R27: recorded, not scored), so the per-client
+  # cap is shorter here and the script's cap longer, or the read and the SSE never run (run 42809989901).
+  window frozen "$(spike_stub_seq)" "$(spike_hook_lines)"; C8_CLIENT_CAP=15 SPIKE_CX_TIMEOUT=200 _c8_clients frozen sessA "$d/frozen.out"
   docker unpause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
   # Killed hook.
   docker kill "$SPIKE_HOOK_CTR" >/dev/null 2>&1
