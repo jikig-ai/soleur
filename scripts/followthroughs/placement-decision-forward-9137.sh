@@ -23,16 +23,26 @@ EXEC_HOST_IP="10.0.1.10"
 qerr=$(mktemp)
 trap 'rm -f "$qerr"' EXIT
 
+# Field-isolate on SYSLOG_IDENTIFIER (load-bearing per the betterstack-emitter
+# rule): `placement_decision` is also an ordinary word in issue/PR bodies that
+# ride the doppler webhook rows to the same source — only the container's own
+# journald identifier proves the row is an app emission.
+APP_ID="soleur-web-platform"
+
 raw="$("$QUERY" --since "$WINDOW" --grep placement_decision --limit 5000 2>"$qerr")" || {
   rc=$?
   echo "TRANSIENT: betterstack-query.sh exited ${rc}: $(head -c 600 "$qerr")"
   exit 2
 }
 
-fwd="$(printf '%s\n' "$raw" | grep 'placement_decision' | grep '"forward"' \
-  | grep -cv "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"")"
-exe="$(printf '%s\n' "$raw" | grep 'placement_decision' | grep '"execute"' \
-  | grep -c "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"")"
+rows="$(printf '%s\n' "$raw" | jq -r --arg id "$APP_ID" '
+  .raw | fromjson | select(.SYSLOG_IDENTIFIER == $id) | .message' \
+  | grep 'placement_decision' || true)"
+
+fwd="$(printf '%s\n' "$rows" | grep '"forward"' \
+  | grep -cv "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"" || true)"
+exe="$(printf '%s\n' "$rows" | grep '"execute"' \
+  | grep -c "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"" || true)"
 
 if (( fwd > 0 && exe > 0 )); then
   echo "placement_decision split verified (window=${WINDOW}): forward rows off-exec=${fwd}; execute rows on ${EXEC_HOST_IP}=${exe}"
