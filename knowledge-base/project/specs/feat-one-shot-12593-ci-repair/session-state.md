@@ -29,3 +29,17 @@ soleur:plan (inline), soleur:deepen-plan (inline gates pass), pipeline-tally, wo
 - constraint: PR body Closes #12593 is intentional.
 
 no ci-is-the-gate token written (asked for local verification runs — brief requires executing the suites and verifying deltas)
+
+## Work Phase
+
+- Status: complete — 6 files, commits 213be7f8 + 6a18443a; PR #12594 marked ready
+- Local verification: fixture-relative-assert 63/63, merge-group-coverage 73/73, test-affected-kb-consumers 31/31, apt-bounded 37/37 (new A20), markdownlint clean
+- Deltas verified exact: fixture baseline 4 diff lines (12->13 row only); kb-consumers +5 ci-oracle-review rows only; literals 8 sites; ADR +1 blank line
+- Fix self-caught: apostrophe inside single-quoted bash -c broke lib syntax (bash -n + suite caught; corrected to "outer dt")
+- H2 row bound relaxed -lt -> -le 20: two new GD_APT_STAGE=repair lines take the 3-attempt fail block to exactly the cap boundary; no-reach-back still proven by NOISE assertions
+- Rung-2 evidence refresh: descoped (non-required gate; deliberately non-auto-committed artifact) — disclosed in PR body
+- Sibling PR #12560 overlap: disclosed in PR body (deterministic same-content baselines merge clean)
+
+## CI
+
+- Run 42826221516 on head 6a18443a — in progress, 0 failures at last check
