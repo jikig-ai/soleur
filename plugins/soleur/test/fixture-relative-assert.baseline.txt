@@ -173,7 +173,7 @@
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
 1	apps/web-platform/infra/cron-egress-enforce-probe.sh
-11	apps/web-platform/infra/cron-egress-firewall.test.sh
+12	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
 8	apps/web-platform/infra/cron-egress-resolve.sh
 2	apps/web-platform/infra/cutover-inngest-workflow.test.sh
