@@ -1190,3 +1190,4 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   inflated): 1 statement 218 ms, 10 statements 577 ms, 100 statements 4954 ms (about 47 ms per statement, one
   stubbed `gh pr view` per statement). The 100-statement run exceeds the 200 ms threshold ruled in T3, so the
   per-statement cost is tracked in #12449 rather than fixed here.
+- **Accepted residual, 2026-11-10 (#12449).** Ruled by CTO agent, 2026-11-10: stated residual 2 (the ruleset's admin bypass lets an admin-credentialed `gh pr merge --admin` pass a parked PR) is accepted with no ruleset change, because every CODEOWNERS entry names one code owner, so a code-owner review rule would block every PR that identity authors (GitHub does not let an author approve their own PR) while the bypass stayed, and both agent merge paths are already gated by `admin-merge-ready.sh` and the local hook.

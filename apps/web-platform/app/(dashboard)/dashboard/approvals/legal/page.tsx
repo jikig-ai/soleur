@@ -1,8 +1,8 @@
 // Index of the founder's legal texts (#12011 PR-C, wireframe 17 style): one plain line per registry key with its state in
 // plain words, each linking to its card. Server component with the same auth gate as the card page.
 //
-// The surface gate is read first: the `approval-queue` flag (effectively global: `workspaceId: null`) AND the founder
-// (`LEGAL_ACCEPTANCE_FOUNDER_ID`); anyone else behaves as if the flag were off. A text with no declared card kind is left out
+// The surface gate is read first: the configured founder id only (`LEGAL_ACCEPTANCE_FOUNDER_ID`; the `approval-queue` flag is
+// not read, CTO ruling 2026-11-10); anyone else behaves as if the surface were off. A text with no declared card kind is left out
 // (and reported on every render, after the gate). With the gate off the page lists only the
 // keys the founder already has a recorded row for, and is not-found when there is none: an unreleased key is never listed.
 
@@ -25,8 +25,8 @@ export default async function LegalAcceptanceIndexPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent("/dashboard/approvals/legal")}`);
 
-  // The surface gate first (flag AND founder): it decides what this page may show at all.
-  const flagOn = await isLegalSurfaceEnabled(user.id);
+  // The surface gate first (the founder id only): it decides what this page may show at all.
+  const surfaceOn = await isLegalSurfaceEnabled(user.id);
 
   let entries;
   try {
@@ -42,7 +42,7 @@ export default async function LegalAcceptanceIndexPage() {
     const kc = legalKindCopy(e.key);
     return kind !== null && kc !== null ? [{ ...e, kind, kc }] : [];
   });
-  if (flagOn) {
+  if (surfaceOn) {
     for (const e of entries) if (legalKindCopy(e.key) === null) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key: e.key } });
   }
 
@@ -53,9 +53,9 @@ export default async function LegalAcceptanceIndexPage() {
     throw new Error("legal acceptance read failed");
   }
 
-  // Flag off: only the founder's own recorded keys; nothing recorded means there is nothing to show.
-  const visible = flagOn ? declaredEntries : declaredEntries.filter((e) => rows.some((r) => r.key === e.key));
-  if (!flagOn && visible.length === 0) notFound();
+  // Surface off: only the founder's own recorded keys; nothing recorded means there is nothing to show.
+  const visible = surfaceOn ? declaredEntries : declaredEntries.filter((e) => rows.some((r) => r.key === e.key));
+  if (!surfaceOn && visible.length === 0) notFound();
 
   const now = new Date();
   const items = visible.map((e) => ({
@@ -89,7 +89,7 @@ export default async function LegalAcceptanceIndexPage() {
                   {i.label}, version {i.version}
                 </span>
                 <span className="text-sm text-soleur-text-secondary">
-                  {i.state === "pending" && !flagOn ? LEGAL_COPY.index.notAvailable : legalIndexState(i.kc, i.state)}
+                  {i.state === "pending" && !surfaceOn ? LEGAL_COPY.index.notAvailable : legalIndexState(i.kc, i.state)}
                 </span>
               </NavLink>
             </li>

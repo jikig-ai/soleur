@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { NavLink } from "@/components/ui/nav-link";
 import { EGRESS_AUDIT_PATH, formatAgo, type CollectionState } from "@/lib/egress-audit/summary";
 import { usePendingAction } from "@/hooks/use-pending-action";
-import { GH_DISCLOSURE } from "@/lib/web-egress-disclosure";
+import { GH_DISCLOSURE, PUSH_DISCLOSURE } from "@/lib/web-egress-disclosure";
 
 /**
  * feat-open-web-egress (#9534) — per-workspace "Agent web access" toggle.
@@ -117,13 +117,14 @@ export function WebEgressToggle({
             {!isOwner && " Owner-only — read-only for you."}
           </span>
           {webEgress && (
-            <span className="text-xs text-soleur-text-secondary">
-              On. Sandboxed commands run without stored credentials — agents
-              can't push to git remotes or use stored API keys while this is
-              on. Applies to sessions started after enabling; turning off
-              revokes live access on the session's next dispatch.{" "}
-              {GH_DISCLOSURE}
-            </span>
+            <div className="flex flex-col gap-1.5 text-xs text-soleur-text-secondary">
+              <p>
+                On. Applies to sessions started after enabling; turning off
+                revokes live access on the session's next dispatch.
+              </p>
+              <p>{PUSH_DISCLOSURE}</p>
+              <p>{GH_DISCLOSURE}</p>
+            </div>
           )}
           {/* The wireframe's "Widens the security boundary" risk callout is
               rendered by the SECTION (scope-grants/page.tsx), not this
@@ -189,10 +190,11 @@ export function WebEgressToggle({
           <p className="text-xs text-soleur-text-secondary">
             Agents will reach the public internet over HTTPS and could send
             data to external hosts if compromised or prompt-injected.
-            Sandboxed commands run without stored credentials while this is
-            on — agents can't push to git remotes or use stored API keys.{" "}
-            {GH_DISCLOSURE}
           </p>
+          <p className="text-xs text-soleur-text-secondary">
+            {PUSH_DISCLOSURE}
+          </p>
+          <p className="text-xs text-soleur-text-secondary">{GH_DISCLOSURE}</p>
           {collection === true && (
             <p className="text-xs text-soleur-text-secondary">
               {RECORDING_NOTICE}

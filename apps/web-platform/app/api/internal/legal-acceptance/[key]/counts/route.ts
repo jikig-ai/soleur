@@ -7,7 +7,7 @@ import { LegalServiceError, hashCounts, type LegalRpcClient } from "@/server/leg
 import { reportLegalOp } from "@/server/approval/ops";
 
 /**
- * GET /api/internal/legal-acceptance/[key]/counts — the credential-free pre-flag aggregate (#12429, ADR-319 amendment
+ * GET /api/internal/legal-acceptance/[key]/counts — the credential-free pre-publication aggregate (#12429, ADR-319 amendment
  * 2026-11-08). The sibling of the verify route, with its own contract: that route is "exactly four keys, one configured
  * founder" and stays so.
  *
