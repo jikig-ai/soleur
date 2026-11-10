@@ -7,7 +7,7 @@
 # `SOLEUR_GHCR_PUSH_FAILED` line (stdout, one `::error::` annotation, one step-summary line in a code span) carrying
 # the validated run attempt and one of four classes. `denial=` carries only text that matches the allowlist shape
 # `denied: <code>: <reason>`; nothing is ever transformed into it (CTO ruling D2). The step never runs on success,
-# never fails the job, cannot inject a workflow command, and no build-arg value reaches any output. Diagnostics only:
+# never fails the job, cannot inject a workflow command, and no record field beyond the error message reaches any output. Diagnostics only:
 # no retry (C1), no billing read (C3), no new permission.
 #
 # HOW. The workflow is parsed with PyYAML (never sliced by delimiter), the marker's `run:` body is executed under
@@ -22,8 +22,8 @@
 #   - its `ref` is `<builder>/<node>/<id>`, and `history inspect` resolves only the trailing `<id>` (the full ref
 #     answers `no record found`, rc 1);
 #   - the error text is `.Error.Message` of `history inspect <id> --format json`, with no `ERROR: ` prefix;
-#     the record also carries `.Error.Stack` and `.BuildArgs[].{Name,Value}`, which the step must never print.
-# Every value below is synthesized (cq-test-fixtures-synthesized-only). The build-arg token is assembled from
+#     the step reads only `.ref` and `.Error.Message` from the record and prints nothing else from it.
+# Every value below is synthesized (cq-test-fixtures-synthesized-only). The sentinel value is assembled from
 # fragments so no contiguous token shape exists in this file.
 #
 # MUTATION MATRIX (Guard 4) -- run 2026-11-10 on a pristine copy of the workflow (and of this suite for row H),
@@ -317,7 +317,7 @@ h_rc=$?
 check_eq "H the stub refuses an unknown argv with 64" "$h_rc" "64"
 check "H2 the refusal is logged" test -s "$H_REF"
 
-# Synthesized build-arg token, assembled from fragments (no contiguous token shape in this file).
+# Synthesized sentinel value, assembled from fragments (no contiguous token shape in this file).
 SYNTH_TOKEN="sntr""ys_""SYNTHFIXTURE""0notareal""value0""4d""9e"
 SYNTH_TOKEN_TAIL="SYNTHFIXTURE""0notareal"
 
