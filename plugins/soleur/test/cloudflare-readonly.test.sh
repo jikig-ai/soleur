@@ -1469,7 +1469,9 @@ grp_proj_an() {
   done
   # a non-ASCII digit must stay outside the hours grammar even when the caller runs a UTF-8 locale (the wrapper pins LC_ALL=C);
   # only where that locale is installed, because an absent locale would make the row meaningless rather than red
-  if locale -a 2> /dev/null | /usr/bin/grep -qix 'en_US.utf-\?8'; then
+  local locales
+  locales=$(locale -a 2> /dev/null || true)
+  if [[ "$locales" =~ (^|$'\n')en_US\.[Uu][Tt][Ff]-?8($|$'\n') ]]; then
     PROJ_ROWS=$((PROJ_ROWS + 1))
     PROJ_COND=$((PROJ_COND + 1))
     fixture 200 "$(ok_body analytics-health)"
