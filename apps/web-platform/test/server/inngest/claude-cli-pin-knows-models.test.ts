@@ -1479,7 +1479,7 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
           for (const r of rows) {
             for (const id of Object.keys(flipped)) {
               // MOVED only: a NO_ROW here means the real row went unread, which is not proof the comparison reads it.
-              expect(msg, `${r.label} ${id}`).toMatch(new RegExp(`EFFORT_MOVED ${r.label.replace(/\./g, "\\.")} ${id} `));
+              expect(msg, `${r.label} ${id}`).toContain(`EFFORT_MOVED ${r.label} ${id} `);
             }
           }
           expect(msg).not.toMatch(/EFFORT_NO_ROW|EFFORT_ROW_UNREADABLE/);
