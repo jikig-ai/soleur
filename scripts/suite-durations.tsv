@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1251
-# generated-at=2026-11-09T23:02:38Z
+# default-weight-ms=1261
+# generated-at=2026-11-10T11:20:39Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -310,6 +310,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	4113	measured
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	50	measured
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	178	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	2754	measured
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	1261	floor
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	974	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor

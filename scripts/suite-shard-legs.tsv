@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1251
-# generated-at=2026-11-09T23:02:38Z
+# default-weight-ms=1261
+# generated-at=2026-11-10T11:20:39Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -312,6 +312,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	6
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	2
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	8
 plugins/soleur/test/reusable-release-idempotency.test.sh	4
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	2
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/rtk-grammar-parity.test.sh	1
