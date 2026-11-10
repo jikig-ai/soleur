@@ -10,7 +10,8 @@
 // The decision logic is the exported pure-ish `createDecider(...).decide(request, session)`, tested hermetically in
 // apps/web-platform/test/egress-injector-policy.test.ts over a fake RPC client. Decision order (plan, binding):
 //   0. CONNECT: the router-only credential is required (407 without it); a CONNECT is not a vend (R26)
-//   0b. any other request must arrive on a tunnel whose target is its own host on 443 (R28), else guard-refused
+//   0b. any other request must arrive on a tunnel whose target is its own host on 443 (R28), over TLS whose SNI is
+//       that host (R37), with a body under the iron-proxy cap (R40); else guard-refused
 //   1. flag input off: REJECT every vend, reads included, no row (CTO R2)
 //   2. unparseable / unclassifiable / unlisted write: REJECT not-allowlisted, no row
 //   3. allowlisted read or push advertisement: CONTINUE
@@ -28,6 +29,13 @@ import * as policyLib from "./policy.mjs";
 /** The one spike tool name (CTO D4): a credential vend must not look like a server-run tool in the audit record. */
 export const SPIKE_TOOL_NAME = "egress_injector_spike__credential_vend";
 const DEFAULT_DEADLINE_MS = 5000;
+/**
+ * iron-proxy's `proxy.max_request_body_bytes` (iron-proxy.config.tmpl.yaml). Above it iron-proxy CUTS the body with no
+ * error and forwards the cut copy (internal/transform/body.go, v0.56.0), so a body of this size or more is refused:
+ * the hook cannot tell a whole body at the cap from a cut one (CTO R40). It stays below grpc-js's 4 MiB default receive
+ * limit, so the hook always receives what iron-proxy has.
+ */
+export const BODY_CAP_BYTES = 3 * 1024 * 1024;
 const REASONS = new Set([
   "flag-off", "not-allowlisted", "pending", "rejected", "expired", "cap", "retry", "closed",
   "consume-failed", "rpc-error", "guard-refused", "hook-timeout", "no-hook-decision",
@@ -131,8 +139,10 @@ function body(reason, extra = {}) {
 /**
  * deps: { policy (compiled), hmacKey, rpc: {create, consume, status}, toolName, ttlSeconds, deadlineMs, now }.
  * session: { sessionId, conversationId, workspaceId, requesterId, repositories, flagOn, routerCredential, ttlSeconds? }.
- * request: { method, host, path, query, headers, body, tunnelTarget, requestId? } (headers: name -> string | string[];
- *   tunnelTarget: the CONNECT target of the tunnel the request arrived on, or null; CTO R28).
+ * request: { method, host, path, query, headers, body, tunnelTarget, sni, requestId? } (headers: name -> string | string[];
+ *   tunnelTarget: the CONNECT target of the tunnel the request arrived on, or null (CTO R28); sni: the TLS server name
+ *   iron-proxy terminated, or null for plain HTTP (CTO R36, R37)).
+ * deps.bodyCapBytes: defaults to BODY_CAP_BYTES (CTO R40).
  */
 export function createDecider(deps) {
   const { policy, hmacKey, rpc } = deps;
@@ -142,6 +152,7 @@ export function createDecider(deps) {
   const toolName = deps.toolName ?? SPIKE_TOOL_NAME;
   const ttlSeconds = deps.ttlSeconds ?? 600;
   const deadlineMs = deps.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const bodyCap = deps.bodyCapBytes ?? BODY_CAP_BYTES;
   const now = deps.now ?? (() => Date.now());
   const lastId = new Map(); // `${conversation}:${hash}` -> last approval id seen
 
@@ -168,15 +179,25 @@ export function createDecider(deps) {
       marker: { name: "SOLEUR_EGRESS_VEND", fields: { ...base, class: cls, rule, approval_id: approvalId ?? "read-allowlist" } },
     });
 
-    // 0. CONNECT through iron-proxy's transform pipeline (R26): the router-only credential, never a vend.
+    // 0. CONNECT through iron-proxy's transform pipeline (R26): the router-only credential, never a vend. Only the
+    // synthetic CONNECT iron-proxy builds for a tunnel_listen tunnel passes: it carries SNI = the CONNECT host and no
+    // tunnel context (tunnel.go tunnelTransformCheck). A CONNECT sent to http_listen has no SNI, and one sent inside a
+    // tunnel has tunnel context; both are refused (CTO R36). The secrets rules' method list is the main control: no
+    // listener attaches the credential to a CONNECT at all.
     if (n.ok && n.method === "CONNECT") {
       const pw = proxyAuthPassword(n.headers["proxy-authorization"]);
-      const ok = pw !== null && sameSecret(pw, session.routerCredential);
+      const sni = request?.sni ? policyLib.normalizeHost(String(request.sni)) : null;
+      let sub = null;
+      if (!(pw !== null && sameSecret(pw, session.routerCredential))) sub = "credential";
+      else if (request?.tunnelTarget) sub = "in-tunnel";
+      else if (sni === null) sub = "no-sni";
+      else if (sni !== n.host) sub = "sni-mismatch";
+      const ok = sub === null;
       return {
         action: ok ? "CONTINUE" : "REJECT", status: ok ? undefined : 407, class: "connect", requestId: ctl.requestId,
-        body: ok ? undefined : "",
+        body: ok ? undefined : "", subreason: sub ?? undefined,
         headers: ok ? undefined : { "proxy-authenticate": ['Basic realm="soleur-injector"'] },
-        marker: { name: "SOLEUR_EGRESS_CONNECT", fields: { ...base, outcome: ok ? "continue" : "refused-407" } },
+        marker: { name: "SOLEUR_EGRESS_CONNECT", fields: { ...base, outcome: ok ? "continue" : "refused-407", subreason: sub ?? undefined } },
       };
     }
 
@@ -188,6 +209,11 @@ export function createDecider(deps) {
       const t = String(request?.tunnelTarget ?? "");
       const tunnelHost = /:443$/.test(t) ? policyLib.normalizeHost(t) : null; // one host normalizer (review)
       if (tunnelHost !== n.host) return refuse("guard-refused", { subreason: "no-tunnel" });
+      // iron-proxy sets SNI only on a TLS-terminated request and itself refuses SNI != Host, so an empty SNI means
+      // plain HTTP inside the tunnel: the credential would cross the forwarder in cleartext (CTO R37).
+      const sni = request?.sni ? policyLib.normalizeHost(String(request.sni)) : null;
+      if (sni !== n.host) return refuse("guard-refused", { subreason: "no-tls" });
+      if (n.body.length >= bodyCap) return refuse("guard-refused", { subreason: "body-over-cap" }); // CTO R40
     }
 
     // 1. Flag input off: every vend refused, reads included.

@@ -55,6 +55,13 @@ push_advertisement:
     methods: [GET]
     path: /{owner}/{repo}/info/refs
     query: { service: git-receive-pack }
+  # Before a pack larger than http.postBuffer, git sends a probe POST whose body is only a flush-pkt: no ref update, so
+  # it mutates nothing (CTO R39, the R1 reasoning). Any other body falls through to the git-push write rule below.
+  - id: git-receive-pack-probe
+    host: github.com
+    methods: [POST]
+    path: /{owner}/{repo}/git-receive-pack
+    body_exact: "0000"
 
 # Listed writes need one approved row whose action hash equals this request's (ADR-309 consume).
 # `recipe` names the canonical-action fields hashed into action_sha256; every recipe also hashes host and repository.

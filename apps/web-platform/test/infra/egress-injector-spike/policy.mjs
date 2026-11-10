@@ -152,7 +152,11 @@ function compileRule(rule, kind) {
     graphql: rule.graphql ?? null,
     recipe: rule.recipe ?? null,
     mutationFields: new Set(rule.mutation_fields ?? []),
+    bodyExact: rule.body_exact ?? null,
   };
+  if (out.bodyExact !== null && (kind !== "push_advertisement" || typeof out.bodyExact !== "string")) {
+    throw new Error(`policy: rule ${rule.id}: body_exact is only for push_advertisement rules`);
+  }
   if (!out.host) throw new Error(`policy: rule ${rule.id} has a bad host`);
   if (kind === "writes" && !RECIPES.has(out.recipe)) throw new Error(`policy: rule ${rule.id} has an unknown recipe`);
   if (kind !== "writes" && out.recipe) throw new Error(`policy: read rule ${rule.id} names a recipe`);
@@ -242,6 +246,10 @@ function findRule(rules, n) {
     if (r.graphql !== null || r.recipe === "graphql") continue;
     if (r.host !== n.host || !r.methods.has(n.method)) continue;
     if (!queryMatches(r.query, n.query)) continue;
+    if (r.bodyExact !== null) {
+      const body = decodedBody(n);
+      if (body === null || body.toString("latin1") !== r.bodyExact) continue;
+    }
     const b = matchPattern(r.pattern, n.segments);
     if (b) return { rule: r, bind: b };
   }

@@ -18,6 +18,10 @@ proxy:
   http_listen: "127.0.0.1:@@HTTP_PORT@@"
   https_listen: "127.0.0.1:@@HTTPS_PORT@@"
   upstream_response_header_timeout: "30s"
+  # Explicit (the default is 1 MiB): above it iron-proxy cuts the body with no error and forwards the cut copy, so
+  # the hook refuses any body of this size or more (CTO R40). Must equal approval-hook.mjs BODY_CAP_BYTES and stay
+  # below grpc-js's 4 MiB receive limit; egress-injector-policy.test.ts pins both.
+  max_request_body_bytes: 3145728
   # iron-proxy's default deny list includes 127.0.0.0/8 and ::1/128, and it applies the list to the address it DIALS,
   # which here is only the upstream proxy: the unchanged egress-forwarder.mjs listens on 127.0.0.1 (measured
   # 2026-11-10: "dial tcp 127.0.0.1:<port>: denied by upstream_deny_cidrs"). So the list is rendered from
@@ -74,8 +78,11 @@ transforms:
           inject:
             header: "Authorization"
             formatter: 'Basic {{ base64 "x-access-token:" .Value }}'
+          # The method list keeps the credential off every CONNECT on every listener (CTO R36). A verb an overlay
+          # adds that is not listed here gets no credential: fails closed.
           rules:
             - host: "github.com"
+              methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
         - source:
             type: file
             path: "@@DECOY_TOKEN_FILE@@"
@@ -84,8 +91,11 @@ transforms:
             formatter: "token {{ .Value }}"
           rules:
             - host: "api.github.com"
+              methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
             - host: "uploads.github.com"
+              methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
             - host: "codeload.github.com"
+              methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
 
 log:
   level: "info"

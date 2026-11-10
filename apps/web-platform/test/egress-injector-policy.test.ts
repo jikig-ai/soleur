@@ -45,10 +45,12 @@ type Req = {
   body?: Buffer;
 };
 
-// Every request iron-proxy forwards from a tunnel carries that tunnel's CONNECT target (measured 2026-11-10); the
-// default here is the one the router produces, `<host>:443`. Rows that test the R28 guard override it.
-function req(r: Req & { tunnelTarget?: string | null }) {
-  return { query: "", headers: {}, body: Buffer.alloc(0), tunnelTarget: `${String(r.host).toLowerCase()}:443`, ...r };
+// Every request iron-proxy forwards from a tunnel carries that tunnel's CONNECT target (measured 2026-11-10) and,
+// once TLS is terminated, the SNI it terminated (iron-proxy v0.56.0 proxy.go); the defaults here are the ones the
+// router path produces, `<host>:443` and `<host>`. Rows that test the R28, R36 and R37 guards override them.
+function req(r: Req & { tunnelTarget?: string | null; sni?: string | null }) {
+  const h = String(r.host).toLowerCase();
+  return { query: "", headers: {}, body: Buffer.alloc(0), tunnelTarget: `${h}:443`, sni: h, ...r };
 }
 
 function pkt(line: string): string {
@@ -137,7 +139,9 @@ describe("policy.mjs — git smart HTTP", () => {
   });
 
   it("a receive-pack body with no ref update, a bad pkt-line or an unknown encoding is unparseable", () => {
-    for (const body of [Buffer.from("0000"), Buffer.from("zzzz"), Buffer.from("0010short")]) {
+    // A body of exactly "0000" is git's large-push probe and vends (CTO R39, its own row below); a flush followed by
+    // anything is still a body with no ref update.
+    for (const body of [Buffer.from("00000000"), Buffer.from("0000PACK"), Buffer.from("zzzz"), Buffer.from("0010short")]) {
       expect(classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
     }
     expect(classify({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]), headers: { "content-encoding": "br" } })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
@@ -591,7 +595,8 @@ describe("approval-hook.mjs decide() — decision order", () => {
 
   it("CONNECT: the router-only credential is required (407 without it), and a CONNECT is not a vend (R26)", async () => {
     const { fake, decider } = setup();
-    const conn = (auth?: string) => req({ method: "CONNECT", host: "github.com", path: "", headers: auth ? { "proxy-authorization": auth } : {} });
+    // The synthetic CONNECT iron-proxy builds for a tunnel_listen tunnel: SNI = host, no tunnel context (CTO R36).
+    const conn = (auth?: string) => req({ method: "CONNECT", host: "github.com", path: "", tunnelTarget: null, headers: auth ? { "proxy-authorization": auth } : {} });
     const good = "Basic " + Buffer.from(`router:${SESSION.routerCredential}`).toString("base64");
     expect(await decider.decide(conn(), SESSION)).toMatchObject({ action: "REJECT", status: 407 });
     expect(await decider.decide(conn("Basic " + Buffer.from("router:wrong").toString("base64")), SESSION)).toMatchObject({ action: "REJECT", status: 407 });
@@ -852,5 +857,71 @@ describe("review 2026-11-10 — what the hook judges is what goes upstream", () 
     expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ action: "REJECT", reason: "hook-timeout" });
     await new Promise((r) => setTimeout(r, 150));
     expect(consumes).toBe(0);
+  });
+});
+
+describe("review 2026-11-10 — CTO R36, R37, R39, R40", () => {
+  const good = "Basic " + Buffer.from(`router:${SESSION.routerCredential}`).toString("base64");
+  const connect = (over: Record<string, unknown>) => req({ method: "CONNECT", host: "api.github.com", path: "", tunnelTarget: null, headers: { "proxy-authorization": good }, ...over });
+
+  it("R36: a CONNECT passes only as tunnel_listen's synthetic CONNECT (router credential, SNI = host, no tunnel)", async () => {
+    const { fake, decider } = setup();
+    expect(await decider.decide(connect({}), SESSION)).toMatchObject({ action: "CONTINUE", class: "connect" });
+    for (const [over, sub] of [
+      [{ sni: null }, "no-sni"], // a CONNECT sent to http_listen
+      [{ sni: "github.com" }, "sni-mismatch"],
+      [{ tunnelTarget: "api.github.com:443" }, "in-tunnel"], // a CONNECT sent inside a tunnel
+      [{ headers: {} }, "credential"],
+    ] as const) {
+      expect(await decider.decide(connect(over), SESSION), sub).toMatchObject({ action: "REJECT", status: 407, subreason: sub });
+    }
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("R36: every secrets rule in the iron-proxy template carries the method list, so no CONNECT gets the credential", () => {
+    const tmpl = parseYaml(readFileSync(join(SPIKE, "iron-proxy.config.tmpl.yaml"), "utf8").replace(/@@[A-Z_]+@@/g, "x"));
+    const secrets = tmpl.transforms.find((t: { name: string }) => t.name === "secrets").config.secrets;
+    const rules = secrets.flatMap((x: { rules: Array<{ host: string; methods?: string[] }> }) => x.rules);
+    expect(rules.length).toBe(4);
+    for (const r of rules) {
+      expect(r.methods, r.host).toEqual(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
+    }
+  });
+
+  it("R37: a request with no SNI (plain HTTP inside the tunnel) or another SNI is refused no-tls, before the flag", async () => {
+    const { fake, decider } = setup();
+    for (const sni of [null, "", "github.com"]) {
+      expect(await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", sni }), SESSION), String(sni)).toMatchObject({ action: "REJECT", reason: "guard-refused", subreason: "no-tls" });
+      expect(await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", sni }), { ...SESSION, flagOn: false })).toMatchObject({ subreason: "no-tls" });
+    }
+    expect(await decider.decide(req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", sni: "API.GITHUB.COM." }), SESSION)).toMatchObject({ action: "CONTINUE" });
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it("R40: a body at or over the cap is refused with no row; one byte under is classified", async () => {
+    const { fake, decider } = setup({ bodyCapBytes: 64 });
+    const at = (n: number) => req({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", body: Buffer.alloc(n, 0x20) });
+    expect(await decider.decide(at(64), SESSION)).toMatchObject({ action: "REJECT", reason: "guard-refused", subreason: "body-over-cap" });
+    expect(await decider.decide(at(65), SESSION)).toMatchObject({ subreason: "body-over-cap" });
+    expect(fake.rows).toHaveLength(0);
+    expect(await decider.decide(at(63), SESSION)).toMatchObject({ reason: "pending" });
+  });
+
+  it("R40: the hook's cap equals iron-proxy's max_request_body_bytes and stays under grpc-js's 4 MiB receive limit", () => {
+    const tmpl = parseYaml(readFileSync(join(SPIKE, "iron-proxy.config.tmpl.yaml"), "utf8").replace(/@@[A-Z_]+@@/g, "x"));
+    expect(tmpl.proxy.max_request_body_bytes).toBe(hookMod.BODY_CAP_BYTES);
+    expect(hookMod.BODY_CAP_BYTES).toBeLessThan(4 * 1024 * 1024);
+  });
+
+  it("R39: git's flush-only receive-pack probe vends with no row; any other body is the gated push", async () => {
+    const { fake, decider } = setup();
+    const post = (body: Buffer, path = "/acme-synth/widget/git-receive-pack") => req({ method: "POST", host: "github.com", path, body });
+    expect(await decider.decide(post(Buffer.from("0000")), SESSION)).toMatchObject({ action: "CONTINUE", class: "push-advert", rule: "git-receive-pack-probe" });
+    expect(fake.rows).toHaveLength(0);
+    for (const b of ["00000", "0000\n", "0000PACK", ""]) {
+      expect((await decider.decide(post(Buffer.from(b)), SESSION)).class, JSON.stringify(b)).not.toBe("push-advert");
+    }
+    expect(await decider.decide(post(Buffer.from("0000"), "/other-synth/thing/git-receive-pack"), SESSION)).toMatchObject({ action: "REJECT", subreason: "read-outside-allowlist" });
+    expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ reason: "pending" });
   });
 });
