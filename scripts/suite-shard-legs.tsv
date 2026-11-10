@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1251
-# generated-at=2026-11-09T23:02:38Z
+# default-weight-ms=1227
+# generated-at=2026-11-10T20:00:53Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -165,6 +165,7 @@ plugins/soleur/skills/registry-breakglass-mirror/test/mirror-ghcr-to-zot.test.sh
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	5
 plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
+plugins/soleur/skills/review/test/review-scan-gate.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	1
