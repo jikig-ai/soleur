@@ -1,5 +1,5 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #12289 — the signed relay hello. Pure module tests with an injected clock (no fake timers, no
 // sockets). The known-answer vector is assembled BY HAND from the spec string and node:crypto in the
@@ -19,6 +19,7 @@ import {
   SKEW_S,
   buildHelloMacInput,
   createReplayCache,
+  helloKeyFingerprint,
   signProxyHello,
   verifyProxyHello,
 } from "@/server/proxy-hello";
@@ -52,7 +53,7 @@ function hello(over: Record<string, unknown> = {}, key: Buffer = KEY): Buffer {
 }
 
 function verify(buf: Buffer, cache = createReplayCache(), isBinary = false) {
-  return verifyProxyHello(buf, isBinary, KEY, cache, now);
+  return verifyProxyHello(buf, isBinary, { current: KEY, acceptAlso: null }, cache, now);
 }
 
 beforeEach(() => {
@@ -98,7 +99,7 @@ describe("canonical string and MAC (known-answer vector)", () => {
     const w2 = randomUUID();
     const k2 = randomBytes(32);
     const text = signProxyHello(k2, u2, w2, { now });
-    expect(verifyProxyHello(Buffer.from(text), false, k2, createReplayCache(), now)).toEqual({ ok: true, userId: u2, workspaceId: w2 });
+    expect(verifyProxyHello(Buffer.from(text), false, { current: k2, acceptAlso: null }, createReplayCache(), now)).toEqual({ ok: true, userId: u2, workspaceId: w2 });
   });
 });
 
@@ -306,5 +307,118 @@ describe("replay cache", () => {
     verify(hello({ ts: String(T0_S + 99) }), cache); // skew
     verify(hello({ mac: "0".repeat(64) }), cache); // mac
     expect(cache.size()).toBe(0);
+  });
+});
+
+// #8211 (ADR-323 Decision 9, B3) — Guard 1: the accept-only slot is verify-only. A hello is admitted if its MAC matches
+// under CURRENT, or under the accept-also key while CURRENT is loaded, and either way it meets the same skew and replay
+// checks. All keys are synthesized per run.
+describe("key set: the accept-only slot (Guard 1)", () => {
+  const ACCEPT_KEY = randomBytes(32);
+  const THIRD_KEY = randomBytes(32);
+  const BOTH = { current: KEY, acceptAlso: ACCEPT_KEY };
+  // Own-dispatch counters: the suite must really exercise an accept-also accept and a `mac` refusal.
+  let acceptAlsoAccepts = 0;
+  let macRefusals = 0;
+  const verifyBoth = (buf: Buffer, cache = createReplayCache(), keys: { current: Buffer; acceptAlso: Buffer | null } = BOTH) => {
+    const r = verifyProxyHello(buf, false, keys, cache, now);
+    if (!r.ok && r.reason === "mac") macRefusals++;
+    return r;
+  };
+  afterAll(() => {
+    expect(acceptAlsoAccepts).toBeGreaterThanOrEqual(1);
+    expect(macRefusals).toBeGreaterThanOrEqual(1);
+  });
+
+  it("fixture distinctness: CURRENT, the accept-also key and the third key are three different keys", () => {
+    const hexes = [KEY, ACCEPT_KEY, THIRD_KEY].map((k) => k.toString("hex"));
+    expect(new Set(hexes).size).toBe(3);
+  });
+
+  it("a hello signed with the accept-also key is admitted, with the unchanged success shape", () => {
+    const r = verifyBoth(Buffer.from(signProxyHello(ACCEPT_KEY, U, W, { now })));
+    expect(r).toEqual({ ok: true, userId: U, workspaceId: W });
+    acceptAlsoAccepts++;
+  });
+
+  it("a hello signed with CURRENT is still admitted while the slot is set", () => {
+    expect(verifyBoth(Buffer.from(signProxyHello(KEY, U, W, { now })))).toEqual({ ok: true, userId: U, workspaceId: W });
+  });
+
+  it("the accept-also hello is admitted only through the slot: with the slot null it is refused with mac", () => {
+    const text = signProxyHello(ACCEPT_KEY, U, W, { now });
+    expect(verifyBoth(Buffer.from(text), createReplayCache(), { current: KEY, acceptAlso: null })).toEqual({ ok: false, reason: "mac" });
+  });
+
+  it("a hello signed by a THIRD unrelated key is refused with mac while both slots are set", () => {
+    expect(verifyBoth(hello({}, THIRD_KEY))).toEqual({ ok: false, reason: "mac" });
+  });
+
+  it("an accept-also hello replayed is refused with replay (the same cache)", () => {
+    const cache = createReplayCache();
+    const h = hello({}, ACCEPT_KEY);
+    expect(verifyBoth(h, cache).ok).toBe(true);
+    acceptAlsoAccepts++;
+    expect(verifyBoth(h, cache)).toEqual({ ok: false, reason: "replay" });
+  });
+
+  it.each([31, -31])("an accept-also hello %i s outside the owner clock is refused with skew", (offset) => {
+    expect(verifyBoth(hello({ ts: String(T0_S + offset) }, ACCEPT_KEY))).toEqual({ ok: false, reason: "skew" });
+  });
+
+  it("a rejected accept-also hello never inserts its nonce", () => {
+    const cache = createReplayCache();
+    verifyBoth(hello({ ts: String(T0_S + 99) }, ACCEPT_KEY), cache);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("both MACs are always compared when the slot is set (2 timingSafeEqual calls per hello, whichever key matches); 1 with the slot null", () => {
+    verifyBoth(hello({ nonce: "1".repeat(32) }));
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(2);
+    verifyBoth(hello({ nonce: "2".repeat(32) }, ACCEPT_KEY));
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(4);
+    verifyBoth(hello({ nonce: "3".repeat(32) }, THIRD_KEY));
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(6);
+    verify(hello({ nonce: "4".repeat(32) }));
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(7);
+    for (const call of timingSafeEqualSpy.mock.calls) {
+      expect(call[0]).toHaveLength(32);
+      expect(call[1]).toHaveLength(32);
+    }
+  });
+
+  it("must-pass: a different synthetic CURRENT with a different synthetic slot admits both its keys", () => {
+    const c = randomBytes(32);
+    const a = randomBytes(32);
+    const keys = { current: c, acceptAlso: a };
+    expect(verifyBoth(Buffer.from(signProxyHello(c, U, W, { now })), createReplayCache(), keys).ok).toBe(true);
+    expect(verifyBoth(Buffer.from(signProxyHello(a, U, W, { now })), createReplayCache(), keys).ok).toBe(true);
+    acceptAlsoAccepts++;
+  });
+});
+
+// Guard 5 — the fingerprint discloses no key byte: the first 8 hex of HMAC-SHA256(key, "soleur-relay-hello-key-fp-v1").
+describe("helloKeyFingerprint (Guard 5)", () => {
+  const FP_DOMAIN = "soleur-relay-hello-key-fp-v1";
+  const handFp = (k: Buffer) => createHmac("sha256", k).update(FP_DOMAIN).digest("hex").slice(0, 8);
+
+  it("known answer: equals the hand-computed domain-separated HMAC prefix, 8 lowercase hex", () => {
+    expect(helloKeyFingerprint(KEY)).toBe(handFp(KEY));
+    expect(helloKeyFingerprint(KEY)).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("is not a raw-key prefix, a base64 prefix, a plain SHA-256 prefix, or keyed under the hello domain", () => {
+    const fp = helloKeyFingerprint(KEY);
+    expect(fp).not.toBe(KEY.toString("hex").slice(0, 8));
+    expect(fp).not.toBe(KEY.toString("base64").slice(0, 8));
+    expect(fp).not.toBe(createHash("sha256").update(KEY).digest("hex").slice(0, 8));
+    expect(fp).not.toBe(createHmac("sha256", KEY).update("").digest("hex").slice(0, 8));
+    expect(fp).not.toBe(createHmac("sha256", KEY).update("soleur-proxy-hello-v1").digest("hex").slice(0, 8));
+  });
+
+  it("two distinct fixture keys give two distinct fingerprints (fixture distinctness asserted first)", () => {
+    expect(KEY.equals(OTHER_KEY)).toBe(false);
+    expect(helloKeyFingerprint(OTHER_KEY)).toBe(handFp(OTHER_KEY));
+    expect(helloKeyFingerprint(OTHER_KEY)).not.toBe(helloKeyFingerprint(KEY));
   });
 });

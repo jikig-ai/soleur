@@ -62,7 +62,9 @@ const blockers: NetServer[] = [];
 const onProxiedSession = vi.fn();
 
 function warnLines(): string[] {
-  return mockWarn.mock.calls.map((c) => String(c[1]));
+  // The once-per-start relay_hello_key_fp line (#8211) is createProxyServer's own key-state line, not the reporter's,
+  // and has its own pins in session-proxy-hello.test.ts; every OTHER warn line must still be a relay_probe line.
+  return mockWarn.mock.calls.map((c) => String(c[1])).filter((l) => !l.startsWith("relay_hello_key_fp "));
 }
 
 function whenListeningOrError(s: HttpsServer): Promise<"listening" | "error"> {

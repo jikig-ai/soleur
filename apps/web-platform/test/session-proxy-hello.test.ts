@@ -45,6 +45,10 @@ vi.mock("@/server/proxy-hello", async (importOriginal) => {
 });
 
 import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES, REFUSE_LINGER_MS, isSendableCloseCode } from "@/server/session-proxy";
+import { proxyClientToOwner } from "@/server/session-proxy";
+import { createReplayCache, helloKeyFingerprint, verifyProxyHello } from "@/server/proxy-hello";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { EventEmitter } from "node:events";
 import { signProxyHello } from "@/server/proxy-hello";
 import * as denyReporterModule from "@/server/proxy-deny-report";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
@@ -599,5 +603,192 @@ describe("startup guard: hello key", () => {
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "");
     expect(createProxyServer({ onProxiedSession, ...BASE, bindAddress: "127.0.0.1" })).toBeNull();
     expect(getProxyStatus().state).toBe("no_allowlist");
+  });
+});
+
+// #8211 (ADR-323 Decision 9, B3) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO at the call sites: the
+// sender signs with CURRENT only, the listener starts only with a CURRENT key, the verifier receives the key set, and
+// every loader state has its exact Sentry events (named spies) plus the relay_hello_key_fp boot line.
+describe("accept-only slot (#8211): call sites, degraded states and the fingerprint line", () => {
+  const SLOT = "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO";
+  const ACCEPT_HEX = randomBytes(32).toString("hex");
+  const ACCEPT_KEY = Buffer.from(ACCEPT_HEX, "hex");
+  const BASE = { privateBindPrefix: "", port: 0 } as const;
+  const namedReport = vi.mocked(reportSilentFallback);
+  const namedWarn = vi.mocked(warnSilentFallback);
+  const warnOps = () => namedWarn.mock.calls.map((c) => c[1]?.op as string);
+  const fpLines = () =>
+    mockWarn.mock.calls.filter((c) => typeof c[1] === "string" && String(c[1]).startsWith("relay_hello_key_fp")) as Array<
+      [Record<string, unknown>, string]
+    >;
+  const assertNoKeyMaterial = () => {
+    const blob = JSON.stringify([mockReport.mock.calls, namedWarn.mock.calls, mockWarn.mock.calls]);
+    for (const hex of [KEY_HEX, ACCEPT_HEX]) {
+      expect(blob).not.toContain(hex);
+      expect(blob).not.toContain(Buffer.from(hex, "hex").toString("base64"));
+    }
+  };
+  const listen = async (server: HttpsServer | null) => {
+    expect(server).not.toBeNull();
+    opened.push(server as HttpsServer);
+    if (!server?.listening) await new Promise<void>((r) => server?.once("listening", () => r()));
+    const a = (server as HttpsServer).address();
+    if (!a || typeof a === "string") throw new Error("no address");
+    return a.port;
+  };
+  const startWith = (current: string, slot: string | undefined) => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", current);
+    if (slot !== undefined) vi.stubEnv(SLOT, slot);
+    vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
+    return createProxyServer({ onProxiedSession, ...BASE, bindAddress: "127.0.0.1" });
+  };
+
+  it("the reporter spies are the named module exports (not anonymous vi.fn())", () => {
+    expect(namedReport).toBe(mockReport);
+    expect(vi.isMockFunction(namedWarn)).toBe(true);
+    expect(KEY_HEX).not.toBe(ACCEPT_HEX); // fixture distinctness
+  });
+
+  it("slot unset (default): listens, 0 events, one fingerprint line with accept_also=none", async () => {
+    const port = await listen(startWith(KEY_HEX, undefined));
+    expect(reports()).toEqual([]);
+    expect(warnOps()).toEqual([]);
+    const lines = fpLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0][1]).toBe(`relay_hello_key_fp current=${helloKeyFingerprint(KEY)} accept_also=none`);
+    expect(lines[0][0]).toEqual({ current_fp: helloKeyFingerprint(KEY), accept_also_fp: "none" });
+    expect((await run(port, [signProxyHello(KEY, U, W)])).ready).toBe(true);
+  });
+
+  it("slot malformed: listens, exactly 1 accept-also-ignored event (reason malformed), the slot is absent", async () => {
+    const port = await listen(startWith(KEY_HEX, ACCEPT_HEX.toUpperCase()));
+    expect(reports()).toEqual([{ op: "proxy-hello.accept-also-ignored", extra: { reason: "malformed" } }]);
+    expect(warnOps()).toEqual([]);
+    expect(fpLines().map((l) => l[1])).toEqual([`relay_hello_key_fp current=${helloKeyFingerprint(KEY)} accept_also=none`]);
+    expect((await run(port, [signProxyHello(ACCEPT_KEY, U, W)])).ready).toBe(false);
+    assertNoKeyMaterial();
+  });
+
+  it("slot equal to current: listens, exactly 1 warn-level accept-also-equals-current event, the line shows equal values", async () => {
+    await listen(startWith(KEY_HEX, KEY_HEX));
+    expect(reports()).toEqual([]);
+    expect(warnOps()).toEqual(["proxy-hello.accept-also-equals-current"]);
+    const fp = helloKeyFingerprint(KEY);
+    expect(fpLines().map((l) => l[1])).toEqual([`relay_hello_key_fp current=${fp} accept_also=${fp}`]);
+    assertNoKeyMaterial();
+  });
+
+  it("slot well-formed and distinct: exactly 1 warn-level accept-also-active event (no value, no fingerprint), and an accept-also hello is admitted", async () => {
+    const port = await listen(startWith(KEY_HEX, ACCEPT_HEX));
+    expect(reports()).toEqual([]);
+    expect(warnOps()).toEqual(["proxy-hello.accept-also-active"]);
+    const payload = JSON.stringify(namedWarn.mock.calls);
+    expect(payload).not.toContain(helloKeyFingerprint(KEY));
+    expect(payload).not.toContain(helloKeyFingerprint(ACCEPT_KEY));
+    expect(namedWarn.mock.calls[0][1]?.extra).toBeUndefined();
+    const lines = fpLines();
+    expect(lines.map((l) => l[1])).toEqual([
+      `relay_hello_key_fp current=${helloKeyFingerprint(KEY)} accept_also=${helloKeyFingerprint(ACCEPT_KEY)}`,
+    ]);
+    expect(lines[0][0]).toEqual({ current_fp: helloKeyFingerprint(KEY), accept_also_fp: helloKeyFingerprint(ACCEPT_KEY) });
+    expect(helloKeyFingerprint(KEY)).not.toBe(helloKeyFingerprint(ACCEPT_KEY));
+    const out = await run(port, [signProxyHello(ACCEPT_KEY, U, W)]);
+    expect(out.ready).toBe(true);
+    expect(onProxiedSession.mock.calls[0][1]).toEqual({ userId: U, workspaceId: W });
+    expect((await run(port, [signProxyHello(KEY, U, W)])).ready).toBe(true);
+    expect((await run(port, [raw({}, randomBytes(32))])).ready).toBe(false);
+    expect(reports().map((r) => r.extra?.reason)).toEqual(["mac"]);
+    assertNoKeyMaterial();
+  });
+
+  it("slot well-formed, current absent: no listener, exactly 1 no-hello-key event, 0 accept-also events, no fingerprint line", () => {
+    expect(startWith("", ACCEPT_HEX)).toBeNull();
+    expect(getProxyStatus().state).toBe("error");
+    expect(reports().map((r) => r.op)).toEqual(["createProxyServer.no-hello-key"]);
+    expect(warnOps()).toEqual([]);
+    expect(fpLines()).toEqual([]);
+    assertNoKeyMaterial();
+  });
+
+  it("slot malformed, current absent: no listener, 1 accept-also-ignored then 1 no-hello-key event", () => {
+    expect(startWith("", "zz")).toBeNull();
+    expect(reports().map((r) => r.op)).toEqual(["proxy-hello.accept-also-ignored", "createProxyServer.no-hello-key"]);
+    expect(warnOps()).toEqual([]);
+    expect(fpLines()).toEqual([]);
+  });
+
+  it("both unset: no listener, exactly 1 no-hello-key event", () => {
+    expect(startWith("", undefined)).toBeNull();
+    expect(reports().map((r) => r.op)).toEqual(["createProxyServer.no-hello-key"]);
+    expect(warnOps()).toEqual([]);
+  });
+
+  it("call twice: the loader's event fires once per process, while each listener start prints its own fingerprint line", async () => {
+    await listen(startWith(KEY_HEX, ACCEPT_HEX));
+    await listen(createProxyServer({ onProxiedSession, ...BASE, bindAddress: "127.0.0.1" }));
+    expect(warnOps()).toEqual(["proxy-hello.accept-also-active"]);
+    expect(fpLines()).toHaveLength(2);
+  });
+
+  it("the canary (empty bind) stops before the key check: no fingerprint line, no slot event", () => {
+    vi.stubEnv(SLOT, ACCEPT_HEX);
+    vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
+    expect(createProxyServer({ onProxiedSession, ...BASE, bindAddress: "" })).toBeNull();
+    expect(fpLines()).toEqual([]);
+    expect(warnOps()).toEqual([]);
+  });
+
+  it("a hello admitted through accept-also still gets the AP-2 membership deny when membership is false", async () => {
+    mockMembership.mockResolvedValue(false);
+    const port = await listen(startWith(KEY_HEX, ACCEPT_HEX));
+    const out = await run(port, [signProxyHello(ACCEPT_KEY, U, W)]);
+    expect(out.ready).toBe(false);
+    expect(out.closeReason).toBe("relay refused");
+    expect(onProxiedSession).not.toHaveBeenCalled();
+    expect(reports()).toEqual([
+      { op: "createProxyServer.ap2-deny", extra: { reason: "membership", peer: "127.0.0.1", userId: U, workspaceId: W } },
+    ]);
+  });
+
+  it("a replayed accept-also hello is refused with replay over the real listener", async () => {
+    const port = await listen(startWith(KEY_HEX, ACCEPT_HEX));
+    const text = signProxyHello(ACCEPT_KEY, U, W);
+    expect((await run(port, [text])).ready).toBe(true);
+    expect((await run(port, [text])).ready).toBe(false);
+    expect(reports().map((r) => r.extra?.reason)).toEqual(["replay"]);
+  });
+
+  it("the sender signs with CURRENT only: with both keys set, its hello verifies under CURRENT and fails on a verifier holding only the accept-also key", async () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
+    vi.stubEnv(SLOT, ACCEPT_HEX);
+    class FakeWs extends EventEmitter {
+      readyState = 1;
+      sent: unknown[] = [];
+      send(d: unknown) {
+        this.sent.push(d);
+      }
+      close() {
+        this.readyState = 3;
+      }
+    }
+    const client = new FakeWs();
+    const owner = new FakeWs();
+    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: (() => owner) as never });
+    owner.emit("open");
+    expect(owner.sent).toHaveLength(1);
+    const frame = Buffer.from(owner.sent[0] as string);
+    expect(verifyProxyHello(frame, false, { current: KEY, acceptAlso: null }, createReplayCache())).toEqual({ ok: true, userId: U, workspaceId: W });
+    expect(verifyProxyHello(frame, false, { current: ACCEPT_KEY, acceptAlso: null }, createReplayCache())).toEqual({ ok: false, reason: "mac" });
+  });
+
+  it("the sender with only the accept-also key (current absent) never dials: no_key", async () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    vi.stubEnv(SLOT, ACCEPT_HEX);
+    const dial = vi.fn();
+    const client = new EventEmitter() as EventEmitter & { readyState: number; close: () => void };
+    client.readyState = 1;
+    client.close = () => undefined;
+    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: dial as never });
+    expect(dial).not.toHaveBeenCalled();
   });
 });
