@@ -398,7 +398,7 @@ Two readings that follow from the flag being on (CLO fix-round ruling, 2026-11-0
 
 ## Amendment 2026-11-10 (#12197): the founder surface no longer reads the approval-queue flag
 
-Appended; no earlier text is edited. Ruled by CTO agent, 2026-11-10 (follow-up 2, F1, K1 to K3). The rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12197-leader-rulings-surface-decouple/decision-challenges.md`.
+Appended; no earlier text is edited. Ruled by CTO agent, 2026-11-10 (follow-up 2, F1, K1 to K3). The rulings are recorded in `knowledge-base/project/specs/archive/20261110-155152-feat-one-shot-12197-leader-rulings-surface-decouple/decision-challenges.md`.
 
 ### Decisions
 
