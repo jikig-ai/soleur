@@ -259,6 +259,7 @@ ALWAYS_ON_SUITES=(
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
+  "scripts/allowlist-diff"
   "scripts/assert-dependabot-drain-unit"
   "scripts/expenses-verify-by-check"
   "scripts/ship-incident-pir-gate-mutations"

@@ -5908,6 +5908,8 @@ if want_scripts; then
   # rename-guard: allowlist->allowlist renames (the archive-kb shape) are exempt;
   # outside->allowlist still fails. TS-1..TS-6 + MB-1..MB-2.
   run_suite "scripts/rename-guard" bash scripts/rename-guard.test.sh
+  # allowlist-diff: the .gitleaks.toml pathspec read must fail closed (exit 2) on a git failure (D7 remainder, #12494).
+  run_suite "scripts/allowlist-diff" bash scripts/allowlist-diff.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
