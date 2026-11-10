@@ -56,9 +56,12 @@ Epic #11556 Lever A).
 - [x] 4.1 `time bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh`; target ≤ ~120s
       CI-class. Final local: 3m05.4s on a contended host (baseline 6m19.4s, −51%); CI-equivalent
       ≈ 124s (254.6 × 185.4/379.4), at the ~120s target.
-- [ ] 4.2 Re-price `scripts/suite-durations.tsv` row via
+- [x] 4.2 Re-price `scripts/suite-durations.tsv` row via
       `python3 scripts/regenerate-shard-manifest.py` (or targeted edit per PR #12419 convention);
-      commit message names the green `merge_group` run IDs measured. — awaiting CI timings on
-      this branch's run (suite-timings-scripts-* artifacts, pull_request event).
+      commit message names the green `merge_group` run IDs measured. — targeted edit at
+      `scripts/suite-durations.tsv:427`: 87919 → 185400 measured (local wall on a contended host;
+      this PR's test-scripts legs are oracle-selection-skipped so no CI artifact carries the new
+      code; commit ae1e1ce196 names the merge_group runs used as the CI-scale basis:
+      42891735582 / 42887535182 / 42864026488).
 - [x] 4.3 Confirm `MAX_RUNS`, `IDLE_RUNS`, `MIN_ELIDED`, `MIN_DAYS`, `DEADLINE_DAYS`, and the
       mean limit are byte-unchanged (ADR-276 S2 contract). Verified: lines 69–77 unchanged.
