@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Suite for first-boot kernel currency on web hosts (#12008, ADR-324).
+# Suite for first-boot kernel currency on web hosts (#12008, ADR-326).
 #
 # PROPERTY. A web host born by create or replace installs the archive's generic kernel inside the
 # bounded apt block, and the runcmd item RIGHT AFTER that block reboots it ONCE onto that kernel,

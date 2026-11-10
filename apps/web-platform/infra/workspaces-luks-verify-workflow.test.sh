@@ -2013,9 +2013,9 @@ PY
   g3_dbin_pipeline='doppler run --preserve-env -p soleur -c prd -- '"$g3_dbin_cmd"
   g3_dbin_ok() { # <cf-lb-overlay.yml copy> -> 0 when the §(c) step hands the wrapper the exact DOPPLER_BIN
     local code
-    # The serve arm (#12167) injects exactly two more gate inputs through the same inner env; strip those two
+    # The serve arm (#12167) injects exactly two more gate inputs, plus SOLEUR_GATED_HOST (#9421), through the same inner env; strip those three
     # exact assignments (and nothing else) so the pin below still sees the wrapper hand-off in its exact form.
-    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ' | sed -e 's/ SOLEUR_WEB2_SERVING_WEIGHT="[^"]*"//' -e 's/ SOLEUR_SERVING_ROTATION="web-1,web-2"//')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
+    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ' | sed -e 's/ SOLEUR_WEB2_SERVING_WEIGHT="[^"]*"//' -e 's/ SOLEUR_GATED_HOST="web-2"//' -e 's/ SOLEUR_SERVING_ROTATION="web-1,web-2"//')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
     [[ "$(grep -cF -- "$g3_dbin_pipeline" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \

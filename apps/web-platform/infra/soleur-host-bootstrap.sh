@@ -1042,7 +1042,7 @@ case "$HOST" in @@*) HOST="" ;; esac
 [ -n "$HOST" ] || HOST=$(hostname 2>/dev/null)
 HOST=$(printf '%s' "$HOST" | tr -cd 'A-Za-z0-9.-' | head -c 63); [ -n "$HOST" ] || HOST=unknown
 # kernel (#12008): the running kernel IS the one the installed linux-image-generic points to — what
-# cloud-init's kernel-settle reboot makes true at birth (ADR-324). GATED; an empty or unreadable
+# cloud-init's kernel-settle reboot makes true at birth (ADR-326). GATED; an empty or unreadable
 # target is never a match.
 KT=$(dpkg-query -W -f='${Depends}' linux-image-generic 2>/dev/null | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | cut -c13-)
 if [ -n "$KT" ] && [ "$KT" = "$(uname -r 2>/dev/null)" ]; then K=1; else K=0; fi

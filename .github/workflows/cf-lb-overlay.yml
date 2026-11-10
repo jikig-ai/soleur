@@ -954,6 +954,7 @@ jobs:
           # TWO gate inputs are not in Doppler prd and are injected by the inner `env`
           # (after `doppler run`, so they override any ambient value):
           #   SOLEUR_WEB2_SERVING_WEIGHT  the weight this dispatch will plan (1 in serve).
+          #   SOLEUR_GATED_HOST           the var.web_hosts key that weight applies to.
           #   SOLEUR_SERVING_ROTATION     the target rotation {web-1,web-2}.
           # The gate no longer reads or allowlists any relay-bind input (Condition A.1 was
           # deleted); the real relay evidence is the `relay bind probe (serve only)` step.
@@ -969,7 +970,7 @@ jobs:
           GATE_OUT=""
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
-              SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" \
+              SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
               SOLEUR_SERVING_ROTATION="web-1,web-2" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."

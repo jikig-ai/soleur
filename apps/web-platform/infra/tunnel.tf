@@ -68,7 +68,8 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # public SERVER_IP).
     ingress_rule {
       hostname = "ssh.${var.app_domain_base}"
-      service  = "ssh://${var.web_hosts["web-1"].private_ip}:22"
+      # The jump host is the keyed `jump` field (exactly one, variables.tf; web-1 today).
+      service = "ssh://${one([for h in values(var.web_hosts) : h.private_ip if h.jump])}:22"
     }
     # #6122 (ADR-096) — registry PUSH ingress. A web-host cloudflared connector proxies to
     # the private-net zot host, so the registry host needs NO cloudflared of its own. CI runs

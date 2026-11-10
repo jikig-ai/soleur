@@ -428,7 +428,7 @@ runcmd:
     n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
     STAGE=apt_install
     n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq linux-image-generic nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; timeout 120 dpkg --configure -a || :; sleep 10; done
-  # ADR-324: one reboot onto the new kernel; runcmd re-runs.
+  # ADR-326: one reboot onto the new kernel; runcmd re-runs.
   - |
     STAGE=kernel_settle
     K=$(dpkg-query -W -f='$${Depends}' linux-image-generic | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | cut -c13-)

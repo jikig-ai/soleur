@@ -429,8 +429,9 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
-    # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
+    # The predicate is the keyed `tunnel_connector` field (#9421 Part 2a, ADR-327), validated
+    # exactly-one in variables.tf so a second connector cannot be declared; web-2 holds it. It
+    # replaced an `each.key == "web-2"` literal, and the reasoning below still holds. At the time:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
     # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
@@ -462,7 +463,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-2"
+    web_tunnel_connector = each.value.tunnel_connector
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret

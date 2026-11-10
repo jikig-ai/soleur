@@ -211,7 +211,7 @@ run_wb() {
   local -a e=(
     PATH="$BASEPATH" HOME="$TMP/home"
     DOPPLER_TOKEN="dp.st.fixture0token"
-    SOLEUR_WEB2_SERVING_WEIGHT=1 SOLEUR_SERVING_ROTATION="web-1,web-2"
+    SOLEUR_WEB2_SERVING_WEIGHT=1 SOLEUR_GATED_HOST=web-2 SOLEUR_SERVING_ROTATION="web-1,web-2"
     SOLEUR_PROXY_PEER_ALLOWLIST=10.0.1.11
     SOLEUR_HOST_ROSTER='{"web-1":"10.0.1.10","web-2":"10.0.1.11"}'
     GIT_DATA_STORE_ENABLED=true GIT_DATA_LUKS_CUTOVER_AT="$OLD4D"
@@ -467,14 +467,14 @@ wrapper_allow_vars() { # the NAMEs inside the wrapper's GATE_ENV_ALLOW=( ... ) a
 BASH_ADDED='^(PWD|SHLVL|_|OLDPWD)$'
 scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a drift either way is RED)
   local d w; d="$(gate_read_vars)"; w="$(wrapper_allow_vars "$1")"
-  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 9 ] && [ "$d" = "$w" ]
+  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 10 ] && [ "$d" = "$w" ]  # +1 SOLEUR_GATED_HOST (#9421)
 }
 scn_derive_sees_every_form() { # PLANTED reads in every expansion form are derived as inputs; the gate's own variables are not
   local real="$GATE" planted="$TMP/gate.planted.sh" got
   { cat "$real"; printf '%s\n' 'x_plain=$PLANT_PLAIN' 'x_brace="${PLANT_BRACE}"' 'x_req="${PLANT_REQ:?missing}"' 'x_dflt="${PLANT_DFLT:-d}"' 'PLANT_OWN=1' 'x_own="$PLANT_OWN"' '# $PLANT_COMMENT'; } > "$planted"
   GATE="$planted"; got="$(gate_read_vars)"; GATE="$real"
   grep -qxF PLANT_PLAIN <<<"$got" && grep -qxF PLANT_BRACE <<<"$got" && grep -qxF PLANT_REQ <<<"$got" && grep -qxF PLANT_DFLT <<<"$got" \
-    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 13 ]
+    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 14 ]
 }
 scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
   # DOPPLER_BIN (and RUNNER_TEMP) are SET and VALID here, with the only working doppler under RUNNER_TEMP: the chain
@@ -562,7 +562,7 @@ assert "a prefix-colliding name does not satisfy the membership test and no get 
 assert "the gate's own exit code propagates through exec (failure and success)" scn_exec_rc "$WRAPPER"
 assert "no DOPPLER_*, BASH_ENV or ENV reaches the gate; the marker and the orchestrator's env do" scn_doppler_scrub "$WRAPPER"
 assert "the gate's environment is an allowlist: DOPPLER-API-HOST, doppler_token, BASH_FUNC_* and every unrelated variable are dropped" scn_survivors "$WRAPPER"
-assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 9 names)" scn_allow_parity "$WRAPPER"
+assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 10 names)" scn_allow_parity "$WRAPPER"
 assert "the derivation of the gate's reads sees every expansion form (\$NAME, \${NAME}, \${NAME:?, \${NAME:-) and ignores the gate's own variables and comments" scn_derive_sees_every_form
 assert "every allowlisted gate input the caller set reaches the gate verbatim; set-but-empty stays set, unset stays unset" scn_allow_passthrough "$WRAPPER"
 assert "SOLEUR_PROXY_BIND is not a gate input: a caller-set value never reaches the gate and an empty one does not refuse the real gate" scn_proxy_bind_not_forwarded "$WRAPPER"
@@ -741,8 +741,8 @@ mutate "row 5d3: SOLEUR_PROXY_BIND is re-added to GATE_ENV_ALLOW (a stale A.1 in
 mutate "row 5d4: SOLEUR_PROXY_BIND is re-added to GATE_ENV_ALLOW (parity with the gate)" 's/^  SOLEUR_PROXY_PEER_ALLOWLIST SOLEUR_HOST_ROSTER$/  SOLEUR_PROXY_BIND SOLEUR_PROXY_PEER_ALLOWLIST SOLEUR_HOST_ROSTER/' scn_allow_parity
 mutate "row 5e: a set-but-empty input is collapsed to unset" 's/if \[\[ -n "\${!v+x}" \]\]; then gate_env/if [[ -n "${!v-}" ]]; then gate_env/' scn_allow_passthrough
 mutate "row 5e2: a set-but-empty input is collapsed to unset (the real gate then fails closed on standby)" 's/if \[\[ -n "\${!v+x}" \]\]; then gate_env/if [[ -n "${!v-}" ]]; then gate_env/' scn_rotation_empty_standby
-mutate "row 5f: the allowlist grows past what the gate reads (HOME)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION/' scn_allow_parity
-mutate "row 5f2: the allowlist grows past what the gate reads (HOME reaches the gate)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION/' scn_survivors
+mutate "row 5f: the allowlist grows past what the gate reads (HOME)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION/' scn_allow_parity
+mutate "row 5f2: the allowlist grows past what the gate reads (HOME reaches the gate)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION/' scn_survivors
 mutate "row 10: DOPPLER_CONFIG_DIR no longer points the Doppler calls at the private dir" 's/ DOPPLER_CONFIG_DIR="\$DOPPLER_CFG_DIR"//' scn_confdir
 mutate "row 11: exported functions are no longer purged" '/# seam:purge-functions$/d' scn_function_purge
 mutate "row 12: the private dir leaks past the exec" 's/^rm -rf "\$DOPPLER_CFG_DIR"$/:/' scn_confdir
@@ -785,7 +785,7 @@ mutate "row 14e: the directory group/world-writable check is dropped" '/# seam:d
 mutate "row 14f: the regular-file check on the binary is dropped" 's|\[\[ -f "\$p" \&\& |[[ |' scn_dbin_notfile
 mutate "row 15: an invalid DOPPLER_BIN falls back silently to the pinned PATH" 's|then src_fail "bad_doppler_bin"; fi # seam:dbin-reject|then _dbin=""; fi # seam:dbin-reject|' scn_dbin_wrongpath
 mutate "row 16: doppler_ro ignores the validated absolute path" 's|"\${DOPPLER_RESOLVED:-doppler}" "\$@"|doppler "$@"|' scn_dbin_pass
-mutate "row 5g: DOPPLER_BIN is allowlisted and no longer unset (it reaches the gate)" 's|^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$|  DOPPLER_BIN SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION|; /# seam:unset-dbin$/d' scn_survivors
+mutate "row 5g: DOPPLER_BIN is allowlisted and no longer unset (it reaches the gate)" 's|^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION$|  DOPPLER_BIN SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_GATED_HOST SOLEUR_SERVING_ROTATION|; /# seam:unset-dbin$/d' scn_survivors
 
 # row 3 as a mutation of the census input: a second invoker planted next to the real files turns it RED
 cases=$((cases + 1))

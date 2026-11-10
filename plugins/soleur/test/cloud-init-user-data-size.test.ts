@@ -197,11 +197,11 @@ const HETZNER_CAP = 32_768;
 // one-line in-file comment (the baseline was under the 24,500 budget; the comment adds a few tens of bytes), so
 // ~24,790 with it; CI ~= local + 32 -> ~24,820; 25,000 leaves ~180 B of headroom (the same margin the earlier
 // raises used) and stays ~7.7 KB below HETZNER_CAP, so a ~1.5 KB re-inlined blob still trips it.
-// #12008 (ADR-324): +400 B modest re-baseline (25,000 -> 25,400). The kernel-settle runcmd item (one reboot
+// #12008 (ADR-326): +400 B modest re-baseline (25,000 -> 25,400). The kernel-settle runcmd item (one reboot
 // onto the kernel the bounded apt line just installed, before any item unsafe to re-run) plus the one package
 // token and the dpkg repair on that line. IRREDUCIBLY inline: it runs right after STAGE=apt_install, before the
 // baked bootstrap is seeded, so it cannot ride that script. Comments trimmed first (the in-file comment is one
-// short line; the explanation lives in ADR-324). Measured 25,192 B local; CI ~= local + 32 -> ~25,224; 25,400
+// short line; the explanation lives in ADR-326). Measured 25,192 B local; CI ~= local + 32 -> ~25,224; 25,400
 // leaves ~176 B of headroom (the same margin the earlier raises used) and stays ~7.3 KB below HETZNER_CAP.
 const WEB_GZIP_BUDGET = 25_400;
 const WEB_GZIP_FLOOR = 10_000;

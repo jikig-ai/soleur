@@ -59,9 +59,9 @@ locals {
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
   #
   # TWO-HOST (#6608/#6459): web-2 (10.0.1.11) RE-ADDED 2026-07-24 as a fresh cattle out-of-band
-  # standby (ADR-143) — a different host from the retired fsn1 .11 (#6538). This literal is
-  # DRIFT-GUARDED against var.web_hosts by inngest-host.test.sh §6b (the allowlist IP set must
-  # byte-equal the var.web_hosts private_ip set), so a roster change red-lines CI until this follows.
+  # standby (ADR-143) — a different host from the retired fsn1 .11 (#6538). DERIVED from var.web_hosts
+  # (#9421 Part 2a), map-key order, so it renders the same string as the literal it replaced and a roster
+  # change follows automatically; web-host-private-ips-parity.test.sh pins every workflow copy to it.
   #
   # AC6 / SEQUENCING (ADR-143 3.3 / #6608): this config change is SAFE on the merge-apply — the
   # default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list that does
@@ -69,7 +69,7 @@ locals {
   # ForceNew) does NOT replace the prod Inngest host at merge. The nftables allowlist reaches the
   # RUNNING inngest host only via the separate `inngest-host-replace` dispatch (#6608 maintenance
   # window), which must land BEFORE the Phase-4 web-2 soak so the soak validates a fully-integrated host.
-  web_host_private_ips = "10.0.1.10,10.0.1.11"
+  web_host_private_ips = join(",", [for k in sort(keys(var.web_hosts)) : var.web_hosts[k].private_ip])
 
   # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
   # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest
