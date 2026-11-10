@@ -340,16 +340,18 @@ describe("gitWithInstallationAuth child env and argv", () => {
     expect(args.slice(-3)).toEqual(["push", "u", `${"c".repeat(40)}:refs/heads/x`]);
   });
 
-  test("legacy form (field unset): the shared host-git block precedes the credential reset, the env is scrubbed, no GIT_DIR", async () => {
+  test("legacy form (field unset): the shared host-git block precedes the credential reset, the env is scrubbed, GIT_DIR is the workspace's own", async () => {
     await gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { cwd: "/ws/parent/work" });
     const { args, opts } = calls[0] as Call;
-    const block = hostGitInvocation([]).args;
+    const block = hostGitInvocation([], { allowProtocol: "none" }).args;
     expect(args).toEqual([...block, "-c", "credential.helper=", "push", "u", "HEAD:refs/heads/x"]);
     expect(args).toContain("--no-replace-objects");
     expect(args).toContain("core.hooksPath=/dev/null");
     // the server's process.env is no longer inherited by the legacy form
     expect(opts.env?.SOLEUR_TEST_SECRET_CANARY).toBeUndefined();
-    expect(opts.env?.GIT_DIR).toBeUndefined();
+    // pinned to the workspace itself (never the isolated directory)
+    expect(opts.env?.GIT_DIR).toBe("/ws/parent/work/.git");
+    expect(opts.env?.GIT_COMMON_DIR).toBe("/ws/parent/work/.git");
     expect(opts.env?.GIT_ALLOW_PROTOCOL).toBe("https");
     expect(opts.env?.GIT_WORK_TREE).toBe("/ws/parent/work");
   });

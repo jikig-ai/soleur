@@ -19,6 +19,7 @@ import {
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { hashUserId, reportSilentFallback } from "./observability";
+import { ALLOW_PROTOCOL_NONE, assertWorkspaceGitShape, hostGitInvocation } from "./host-git";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
 import {
@@ -143,12 +144,17 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
 
   // 5. Initialize git repo (execFileSync avoids shell injection)
   try {
-    execFileSync("git", ["init"], { cwd: workspacePath, stdio: "pipe" });
-    execFileSync("git", ["add", "."], { cwd: workspacePath, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "Initial workspace"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    // Reachable on an EXISTING workspace (any login whose workspace_status is not ready), so a `.git` an agent session
+    // authored can be present: the shared host-git invocation (hardening arguments, scrubbed environment, `.git`
+    // shape check). `init` takes no cwd/GIT_DIR (there is nothing to pin yet); `add`/`commit` pin the workspace's own.
+    const runGit = (args: string[], pin: boolean): void => {
+      const h = hostGitInvocation(args, { ...(pin ? { cwd: workspacePath } : {}), allowProtocol: ALLOW_PROTOCOL_NONE });
+      execFileSync("git", h.args, { cwd: workspacePath, stdio: "pipe", env: h.env });
+    };
+    assertWorkspaceGitShape(workspacePath); // `init` re-initialises whatever a gitfile or symlink names: refuse first
+    runGit(["init"], false);
+    runGit(["add", "."], true);
+    runGit(["commit", "-m", "Initial workspace"], true);
   } catch (err) {
     log.warn({ err, workspaceId }, "Git init failed");
   }

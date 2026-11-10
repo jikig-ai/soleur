@@ -16,7 +16,7 @@ const TEST_PIN = makeEd25519Pin();
 
 // Local git now rides the shared host-git invocation: the hardening block precedes the caller's args. The block is taken from
 // the helper itself (not a copied literal list), so a change to it moves the fake and production together.
-const HOST_GIT_BLOCK = hostGitInvocation([]).args;
+const HOST_GIT_BLOCK = hostGitInvocation([], { allowProtocol: "none" }).args;
 const stripBlock = (argv: string[]): string[] => argv.slice(HOST_GIT_BLOCK.length);
 
 const gitPush = vi.fn().mockResolvedValue(Buffer.from(""));
@@ -144,13 +144,15 @@ describe("replicateToGitData — gated on", () => {
     expect(gitPush).toHaveBeenCalledTimes(1);
     const pushArgs = gitPush.mock.calls[0][0] as string[];
     expect(pushArgs).toContain("push");
-    expect(pushArgs).toContain("git-data");
+    // the EXPLICIT server-derived URL, never the remote NAME (which resolves through the agent-writable .git/config)
+    expect(pushArgs).toContain(gitDataRemoteUrl(WS));
+    expect(pushArgs).not.toContain("git-data");
     // CTO F20: the main push is PER-REF, not atomic. Under --atomic one stale store head plus a later
     // local ref that refname-conflicts with it (store `heads/fix/x`, local `fix`) rejected every ref of
     // every later push forever; rescue-first already protects the old tip, so atomicity here is
     // redundant. (--atomic lives on the rescue step only: see the two-step rows below.)
     expect(pushArgs).not.toContain("--atomic");
-    expect(pushArgs.indexOf("--force")).toBeLessThan(pushArgs.indexOf("git-data"));
+    expect(pushArgs.indexOf("--force")).toBeLessThan(pushArgs.indexOf(gitDataRemoteUrl(WS)));
     // Fence push-options ride this push — worktree-id is now PER-USER, not "primary".
     expect(pushArgs).toContain("--push-option=lease-gen=7");
     expect(pushArgs).toContain(`--push-option=worktree-id=${WT}`);
@@ -198,7 +200,7 @@ describe("replicateToGitData — gated on", () => {
       expect(gitPush).toHaveBeenCalledTimes(2);
       // step 1 keeps --atomic (F12/F20)
       expect(argsOf(0)).toEqual([
-        "push", "--force", "--atomic", "git-data", RESCUE_SPEC,
+        "push", "--force", "--atomic", gitDataRemoteUrl(WS), RESCUE_SPEC,
         "--push-option=lease-gen=7", `--push-option=worktree-id=${WT}`,
       ]);
       // step 2 is per-ref: NO --atomic (F20)

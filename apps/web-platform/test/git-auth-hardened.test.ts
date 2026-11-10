@@ -24,8 +24,8 @@ vi.mock("../server/host-git", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/host-git")>();
   return {
     ...actual,
-    hostGitInvocation: (args: readonly string[], opts: import("../server/host-git").HostGitOpts = {}) =>
-      actual.hostGitInvocation(args, { ...opts, ...(opts.allowProtocol !== undefined ? { allowProtocol: `${opts.allowProtocol}:file` } : {}) }),
+    hostGitInvocation: (args: readonly string[], opts: import("../server/host-git").HostGitOpts) =>
+      actual.hostGitInvocation(args, { ...opts, allowProtocol: `${opts.allowProtocol}:file` }),
   };
 });
 vi.mock("../server/git-hardened-env", async (importOriginal) => {

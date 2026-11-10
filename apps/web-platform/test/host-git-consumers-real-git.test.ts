@@ -11,7 +11,8 @@
 //
 // No `child_process` mock anywhere in this file. Fixtures are synthesized (cq-test-fixtures-synthesized-only).
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   PLANTERS,
@@ -79,18 +80,19 @@ vi.mock("@/server/host-git", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/host-git")>();
   return {
     ...actual,
-    hostGitInvocation: (args: readonly string[], opts: import("@/server/host-git").HostGitOpts = {}) =>
+    hostGitInvocation: (args: readonly string[], opts: import("@/server/host-git").HostGitOpts) =>
       actual.hostGitInvocation(args, {
         ...opts,
-        allowProtocol:
-          opts.allowProtocol !== undefined && !H.keepProductionProtocol ? `${opts.allowProtocol}:file` : opts.allowProtocol,
+        allowProtocol: H.keepProductionProtocol ? opts.allowProtocol : `${opts.allowProtocol}:file`,
       }),
   };
 });
 
 import { syncPush } from "@/server/session-sync";
 import { ensureWorkspaceRepoCloned, __setGraftForTests } from "@/server/ensure-workspace-repo";
-import { gitWithInstallationAuth, gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { gitWithInstallationAuth, gitWithPrivateKeyAuth, KEY_AUTH_ALLOW_PROTOCOL, LEGACY_ALLOW_PROTOCOL } from "@/server/git-auth";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "@/server/host-git";
+import { assertNoUrlRewrite, GitDataUrlRewriteError } from "@/server/git-data-url-guard";
 import { ensureGitDataRemote } from "@/server/git-data-replication";
 import { checkpointInflightWork, checkpointRefName } from "@/server/inflight-checkpoint";
 import { gitDataFetchRefspecs } from "@/server/git-data-client";
@@ -141,6 +143,10 @@ interface Driver {
   closable: string[];
   /** Planters whose helper is expected to RUN on this driver's verbs (measured open items). */
   residual: string[];
+  /** Planters that redirect the git directory (`commondir`): the call is REFUSED before git runs. */
+  refused: string[];
+  /** After a refused call: the consumer's operation must have had no effect. */
+  refusedCheck?(c: Ctx): void;
   /** Planters measured as already inert on today's code: control / regression pin, excluded from RED. */
   preexistingControl?: string[];
   prepare(): Promise<Ctx>;
@@ -156,14 +162,17 @@ const syncPushDriver: Driver = {
   id: "session-sync syncPush",
   closable: [
     "fsmonitor-in-git-config",
-    "fsmonitor-via-commondir",
     "fsmonitor-in-config-worktree",
     "hook-pre-commit",
     "hook-reference-transaction",
     "signing-program",
     "core-worktree-foreign",
   ],
-  residual: ["filter-via-git-config", "filter-via-info-attributes", "filter-via-commondir"],
+  residual: ["filter-via-git-config", "filter-via-info-attributes"],
+  refused: ["fsmonitor-via-commondir", "filter-via-commondir"],
+  refusedCheck(c) {
+    expect(w.git(c.ws, "-c", "core.fsmonitor=false", "log", "-1", "--format=%s")).not.toBe("Auto-commit after session");
+  },
   async prepare() {
     const { ws, upstream } = newWorkspace(w);
     dirty(ws);
@@ -180,14 +189,12 @@ const syncPushDriver: Driver = {
 
 const overlayDriver: Driver = {
   id: "ensure-workspace-repo overlay",
-  closable: [
-    "fsmonitor-in-git-config",
-    "fsmonitor-via-commondir",
-    "fsmonitor-in-config-worktree",
-    "hook-reference-transaction",
-    "core-worktree-foreign",
-  ],
+  closable: ["fsmonitor-in-git-config", "fsmonitor-in-config-worktree", "hook-reference-transaction", "core-worktree-foreign"],
   residual: [],
+  refused: ["fsmonitor-via-commondir"],
+  refusedCheck(c) {
+    expect(w.git(c.ws, "-c", "core.fsmonitor=false", "rev-parse", "HEAD")).not.toBe(c.storeTip);
+  },
   async prepare() {
     const origin = join(w.root, "origin");
     const store = join(w.root, "store.git");
@@ -238,8 +245,13 @@ const overlayDriver: Driver = {
 
 const keyAuthPushDriver: Driver = {
   id: "git-data gitWithPrivateKeyAuth push",
-  closable: ["hook-pre-push", "uploadpack-local-remote"],
+  closable: ["hook-pre-push", "uploadpack-local-remote", "core-worktree-foreign"],
   residual: [],
+  refused: ["fsmonitor-via-commondir"],
+  refusedCheck(c) {
+    // the push did not happen: the upstream is still behind the local commit
+    expect(w.git(c.upstream, "rev-parse", "main")).not.toBe(w.git(c.ws, "-c", "core.fsmonitor=false", "rev-parse", "HEAD"));
+  },
   async prepare() {
     const { ws, upstream } = newWorkspace(w);
     writeFileSync(join(ws, "knowledge-base", "more.md"), "more\n");
@@ -264,12 +276,16 @@ const legacyPullDriver: Driver = {
   id: "git-auth legacy gitWithInstallationAuth pull",
   closable: [
     "fsmonitor-in-git-config",
-    "fsmonitor-via-commondir",
     "fsmonitor-in-config-worktree",
     "hook-reference-transaction",
     "uploadpack-local-remote",
+    "core-worktree-foreign",
   ],
   residual: [],
+  refused: ["fsmonitor-via-commondir"],
+  refusedCheck(c) {
+    expect(w.git(c.ws, "-c", "core.fsmonitor=false", "rev-parse", "HEAD")).not.toBe(c.storeTip);
+  },
   async prepare() {
     const { ws, upstream } = newWorkspace(w);
     const other = join(w.root, "other");
@@ -293,16 +309,14 @@ const legacyPullDriver: Driver = {
 
 const checkpointDriver: Driver = {
   id: "inflight-checkpoint checkpointInflightWork",
-  closable: [
-    "fsmonitor-in-git-config",
-    "fsmonitor-via-commondir",
-    "fsmonitor-in-config-worktree",
-    "hook-reference-transaction",
-    "core-worktree-foreign",
-  ],
-  residual: ["filter-via-git-config", "filter-via-info-attributes", "filter-via-commondir"],
+  closable: ["fsmonitor-in-git-config", "fsmonitor-in-config-worktree", "hook-reference-transaction", "core-worktree-foreign"],
+  residual: ["filter-via-git-config", "filter-via-info-attributes"],
+  refused: ["fsmonitor-via-commondir", "filter-via-commondir"],
+  refusedCheck(c) {
+    expect(() => w.git(c.ws, "-c", "core.fsmonitor=false", "rev-parse", "--verify", checkpointRefName(CONV))).toThrow();
+  },
   // the shared hardening set already closes these on today's code: control / regression pin
-  preexistingControl: ["fsmonitor-in-git-config", "fsmonitor-via-commondir", "fsmonitor-in-config-worktree"],
+  preexistingControl: ["fsmonitor-in-git-config", "fsmonitor-in-config-worktree"],
   async prepare() {
     const { ws, upstream } = newWorkspace(w);
     dirty(ws);
@@ -320,12 +334,14 @@ const DRIVERS: Driver[] = [syncPushDriver, overlayDriver, keyAuthPushDriver, leg
 
 let currentPlanters: Planter[] = [];
 
-async function runCell(d: Driver, p: Planter): Promise<{ tags: string[]; ctx: Ctx }> {
+async function runCell(d: Driver, p: Planter, tolerate = false): Promise<{ tags: string[]; ctx: Ctx }> {
   H.keepProductionProtocol = p.id === "uploadpack-local-remote";
   const ctx = await d.prepare();
   currentPlanters = [p];
   if (d !== overlayDriver) plant(p, ctx.ws, w);
-  await d.run(ctx);
+  // a refused call may surface as a rejection (the consumer's own handling differs); the evidence is the effect
+  if (tolerate) await d.run(ctx).catch(() => {});
+  else await d.run(ctx);
   return { tags: w.tags(), ctx };
 }
 
@@ -402,7 +418,8 @@ function headTreeIntact(ws: string): void {
 }
 
 function victimUntouched(): void {
-  expect(readdirSync(w.victim).sort()).toEqual(["knowledge-base", "victim.txt"]);
+  // recursive: a new file written UNDER the foreign tenant's tree must fail the row too
+  expect((readdirSync(w.victim, { recursive: true }) as string[]).sort()).toEqual(["knowledge-base", "knowledge-base/n.md", "victim.txt"]);
   expect(readFileSync(join(w.victim, "victim.txt"), "utf8")).toBe("foreign tenant content\n");
   expect(readFileSync(join(w.victim, "knowledge-base", "n.md"), "utf8")).toBe("foreign tenant note\n");
 }
@@ -431,6 +448,13 @@ describe("closable carriers stay silent on every consumer (A1, A2, A3)", () => {
         if (id === "core-worktree-foreign") {
           victimUntouched();
           if (d === syncPushDriver) headTreeIntact(ctx.ws);
+          if (d === checkpointDriver) {
+            // the checkpoint commits the WORKSPACE's tree, not the foreign tenant's
+            const tree = w.git(ctx.ws, "-c", "core.fsmonitor=false", "ls-tree", "-r", "--name-only", checkpointRefName(CONV)).split("\n");
+            expect(tree).toContain("knowledge-base/base.md");
+            expect(tree).not.toContain("knowledge-base/n.md");
+            expect(tree).not.toContain("victim.txt");
+          }
         }
         // A2
         for (const dump of w.envDumps()) expect(dump).not.toContain(SENTINEL);
@@ -441,29 +465,115 @@ describe("closable carriers stay silent on every consumer (A1, A2, A3)", () => {
   }
 });
 
-describe("git-data ensureGitDataRemote (local config of the git-data remote) under planted carriers", () => {
-  for (const id of ["fsmonitor-in-git-config", "fsmonitor-via-commondir", "hook-reference-transaction", "core-worktree-foreign"]) {
-    it(`${id}: the remote is added then re-pointed, no canary runs, the real workspace config is what changed`, async () => {
-      const p = planterById(id);
-      expect(rawTwin(p), `carrier ${id} is not live on ${gitVersion}`).toBe(true);
-      const { ws } = newWorkspace(w);
-      plant(p, ws, w);
-      const savedHost = process.env.GIT_DATA_SSH_HOST;
-      process.env.GIT_DATA_SSH_HOST = "git-data.invalid";
-      try {
-        ensureGitDataRemote(ws, WS_ID);
-        process.env.GIT_DATA_SSH_HOST = "git-data-2.invalid";
-        ensureGitDataRemote(ws, WS_ID); // second call takes the set-url path
-      } finally {
-        if (savedHost === undefined) delete process.env.GIT_DATA_SSH_HOST;
-        else process.env.GIT_DATA_SSH_HOST = savedHost;
-      }
-      expect(w.tags().filter((t) => t === p.tag)).toEqual([]);
-      if (id === "core-worktree-foreign") victimUntouched();
-      const url = w.git(ws, "-c", "core.fsmonitor=false", "config", "--local", "remote.git-data.url");
-      expect(url).toContain("git-data-2.invalid");
-    });
+describe("a .git that redirects the git directory is REFUSED before git runs (commondir): no helper, no effect", () => {
+  for (const d of DRIVERS) {
+    for (const id of d.refused) {
+      it(`${d.id}: ${id} (refused)`, async () => {
+        const p = planterById(id);
+        expect(rawTwin(p), `carrier ${id} is not live on ${gitVersion}`).toBe(true);
+        const { tags, ctx } = await runCell(d, p, true);
+        canaryCheckedRuns++;
+        expect(tags.filter((t) => t === p.tag)).toEqual([]);
+        for (const dump of w.envDumps()) expect(dump).not.toContain(SENTINEL);
+        d.refusedCheck?.(ctx);
+      });
+    }
   }
+});
+
+describe("git-data remote: the push target is the explicit URL, and a url.* rewrite is refused (C4)", () => {
+  // Two bare "tenant" repositories on one "host": A is the workspace's own, B is another tenant's.
+  function twoTenants(): { ws: string; a: string; b: string } {
+    const { ws } = newWorkspace(w);
+    const a = join(w.root, "tenant-a.git");
+    const b = join(w.root, "tenant-b.git");
+    w.git(w.root, "init", "-q", "--bare", a);
+    w.git(w.root, "init", "-q", "--bare", b);
+    return { ws, a, b };
+  }
+  const tipOf = (bare: string): string => {
+    try {
+      return w.git(bare, "rev-parse", "--verify", "refs/heads/main");
+    } catch {
+      return "none";
+    }
+  };
+  /** The push exactly as the replication builds it: hardening block + explicit URL, widened to file:// for the fixture. */
+  function hostPush(ws: string, target: string): void {
+    const h = hostGitInvocation(["push", "--force", target, "main"], { cwd: ws, allowProtocol: "none:file" });
+    try {
+      execFileSync("git", h.args, { cwd: ws, env: h.env, stdio: "pipe" });
+    } catch {
+      /* the evidence is where the ref landed */
+    }
+  }
+
+  it("remote.git-data.pushurl aimed at tenant B: raw git pushing by remote NAME lands in B (control); the explicit URL lands in A", () => {
+    const { ws, a, b } = twoTenants();
+    w.git(ws, "remote", "add", "git-data", `file://${a}`);
+    w.git(ws, "config", "remote.git-data.pushurl", `file://${b}`);
+    // control: the remote name resolves through the planted config
+    w.git(ws, "push", "-q", "--force", "git-data", "main");
+    expect(tipOf(b), "control: the pushurl carrier is not live").not.toBe("none");
+    expect(tipOf(a)).toBe("none");
+    w.git(b, "update-ref", "-d", "refs/heads/main");
+    hostPush(ws, `file://${a}`);
+    expect(tipOf(a)).not.toBe("none");
+    expect(tipOf(b)).toBe("none");
+  });
+
+  it("url.<B>.insteadOf <A>: raw git follows it even for an explicit URL (control); assertNoUrlRewrite refuses before the push", () => {
+    const { ws, a, b } = twoTenants();
+    w.git(ws, "config", `url.file://${b}.insteadOf`, `file://${a}`);
+    w.git(ws, "push", "-q", "--force", `file://${a}`, "main");
+    expect(tipOf(b), "control: the insteadOf carrier is not live").not.toBe("none");
+    w.git(b, "update-ref", "-d", "refs/heads/main");
+    expect(() => assertNoUrlRewrite(ws)).toThrow(GitDataUrlRewriteError);
+    // the error carries a count, never the key or the value
+    try {
+      assertNoUrlRewrite(ws);
+    } catch (err) {
+      expect((err as Error).message).not.toContain(b);
+    }
+  });
+
+  it("an include.path carrier is covered (the guard reads the EFFECTIVE config); a clean workspace passes", () => {
+    const { ws, a, b } = twoTenants();
+    expect(() => assertNoUrlRewrite(ws)).not.toThrow();
+    const inc = join(w.root, "inc.gitconfig");
+    writeFileSync(inc, `[url "file://${b}"]\n\tinsteadOf = file://${a}\n`);
+    w.git(ws, "config", "include.path", inc);
+    expect(() => assertNoUrlRewrite(ws)).toThrow(GitDataUrlRewriteError);
+  });
+
+  it("ensureGitDataRemote adds then re-points the git-data remote in the workspace's own config", () => {
+    const { ws } = newWorkspace(w);
+    const savedHost = process.env.GIT_DATA_SSH_HOST;
+    process.env.GIT_DATA_SSH_HOST = "git-data.invalid";
+    try {
+      ensureGitDataRemote(ws, WS_ID);
+      process.env.GIT_DATA_SSH_HOST = "git-data-2.invalid";
+      ensureGitDataRemote(ws, WS_ID); // second call takes the set-url path
+    } finally {
+      if (savedHost === undefined) delete process.env.GIT_DATA_SSH_HOST;
+      else process.env.GIT_DATA_SSH_HOST = savedHost;
+    }
+    expect(w.git(ws, "config", "--local", "remote.git-data.url")).toContain("git-data-2.invalid");
+  });
+
+  it("ensureGitDataRemote on a workspace whose .git carries commondir is refused (fail-loud), and the foreign config is not edited", () => {
+    const { ws } = newWorkspace(w);
+    const foreign = newWorkspace(w, "foreign-tenant");
+    writeFileSync(join(ws, ".git", "commondir"), `${join(foreign.ws, ".git")}\n`);
+    const before = readFileSync(join(foreign.ws, ".git", "config"), "utf8");
+    process.env.GIT_DATA_SSH_HOST = "git-data.invalid";
+    try {
+      expect(() => ensureGitDataRemote(ws, WS_ID)).toThrow(/failed to configure the git-data remote/);
+    } finally {
+      delete process.env.GIT_DATA_SSH_HOST;
+    }
+    expect(readFileSync(join(foreign.ws, ".git", "config"), "utf8")).toBe(before);
+  });
 });
 
 describe("clean repository: every consumer's operation succeeds with no carrier (must-PASS input)", () => {
@@ -543,38 +653,84 @@ describe("RESIDUAL rows: measured open items, not controls", () => {
   });
 });
 
-describe("RESIDUAL: a gitfile .git pointing at a foreign gitdir (not closed by GIT_WORK_TREE)", () => {
-  // Measured open item, not a control. `GIT_WORK_TREE=<workspace>` pins the working tree, not the git directory: a workspace
-  // `.git` FILE ("gitdir: <path>") the agent wrote redirects the object store, refs and config to another repository, and the
-  // consumer then commits the workspace's files INTO that repository. The shape check in git-worktree-validity.ts is the
-  // candidate structural answer (follow-up); until then this row pins today's behaviour.
-  it("RESIDUAL session-sync syncPush: the auto-commit lands in the foreign repository the gitfile names", async () => {
+describe("a .git naming another tenant's repository (gitfile, symlink, commondir) is refused: the foreign history does not move", () => {
+  // `GIT_WORK_TREE` pins the working tree, not the git directory; the shape check (host-git.ts) refuses these shapes and
+  // `GIT_DIR` / `GIT_COMMON_DIR` pin the workspace's own store. Measured for session-sync only: the other consumers share
+  // the helper but have no row naming a foreign store here. A preflight, not a structural control.
+  const shapes: Array<[string, (ws: string, foreignGit: string) => void]> = [
+    ["gitfile", (ws, f) => {
+      rmSync(join(ws, ".git"), { recursive: true, force: true });
+      writeFileSync(join(ws, ".git"), `gitdir: ${f}\n`);
+    }],
+    ["symlink", (ws, f) => {
+      rmSync(join(ws, ".git"), { recursive: true, force: true });
+      symlinkSync(f, join(ws, ".git"));
+    }],
+    ["commondir", (ws, f) => writeFileSync(join(ws, ".git", "commondir"), `${f}\n`)],
+  ];
+  for (const [name, plantShape] of shapes) {
+    it(`session-sync syncPush with a ${name} .git: refused; raw git (control) moves the foreign repository`, async () => {
+      // control: the same carrier under raw git writes into the foreign repository
+      const ctl = newWorkspace(w, `ctl-ws-${name}`);
+      const ctlForeign = newWorkspace(w, `ctl-foreign-${name}`);
+      const ctlBefore = w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count");
+      const ctlObjectsBefore = w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v");
+      plantShape(ctl.ws, join(ctlForeign.ws, ".git"));
+      writeFileSync(join(ctl.ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
+      try {
+        w.git(ctl.ws, "add", "--", "knowledge-base/tenant-a-note.md");
+        w.git(ctl.ws, "commit", "-q", "-m", "ctl");
+      } catch {
+        /* a redirect may also make the verb fail; the foreign object store is the evidence */
+      }
+      const moved =
+        Number(w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count")) > Number(ctlBefore) ||
+        w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v") !== ctlObjectsBefore;
+      expect(moved, `control: carrier ${name} is not live on ${gitVersion}`).toBe(true);
+
+      const { ws } = newWorkspace(w);
+      const foreign = newWorkspace(w, "foreign-tenant");
+      const before = w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count");
+      const objectsBefore = w.git(foreign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v");
+      plantShape(ws, join(foreign.ws, ".git"));
+      writeFileSync(join(ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
+      await syncPush(USER, ws, {} as never, WS_ID).catch(() => {});
+      canaryCheckedRuns++;
+      expect(w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count")).toBe(before);
+      expect(w.git(foreign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v")).toBe(objectsBefore);
+    });
+  }
+});
+
+describe("the auto-commit Sentry mirror carries a classified failure, never the argv or a tenant path", () => {
+  it("a stale index.lock makes `git add` fail: op auto-commit-push is reported with a closed bucket and no file name or workspace path", async () => {
     const { ws } = newWorkspace(w);
-    const foreign = newWorkspace(w, "foreign-tenant");
-    const before = w.git(foreign.ws, "rev-list", "--count", "HEAD");
-    rmSync(join(ws, ".git"), { recursive: true, force: true });
-    writeFileSync(join(ws, ".git"), `gitdir: ${join(foreign.ws, ".git")}\n`);
-    writeFileSync(join(ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
+    dirty(ws);
+    writeFileSync(join(ws, ".git", "index.lock"), "");
     await syncPush(USER, ws, {} as never, WS_ID).catch(() => {});
-    residualRows++;
-    const after = w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--count", "HEAD");
-    // pin: the foreign repository's history moved
-    expect(Number(after)).toBeGreaterThan(Number(before));
+    const calls = H.reportSilentFallback.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === "auto-commit-push");
+    expect(calls).toHaveLength(1);
+    const reported = calls[0][0] as Error;
+    expect(reported.message).toMatch(/^auto-commit-push failed \(exit \d+, index-lock\)$/);
+    expect(reported.message).not.toContain("note.md");
+    expect(reported.message).not.toContain(ws);
+    expect(JSON.stringify(calls[0][1])).not.toContain(ws);
   });
 });
 
 describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDUAL: the dial still goes to the rewritten host)", () => {
   // A fake `ssh` first on PATH records its argv and fails like a refused handshake. The helper's scrubbed env keeps PATH.
-  function fakeSsh(): { bin: string; argvFile: string } {
+  function fakeSsh(): { bin: string; argvFile: string; envFile: string } {
     const bin = join(w.root, "bin");
     mkdirSync(bin);
     const argvFile = join(w.root, "ssh-argv");
-    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${argvFile}'\nexit 255\n`, { mode: 0o755 });
-    return { bin, argvFile };
+    const envFile = join(w.root, "ssh-env");
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${argvFile}'\nenv >> '${envFile}'\nexit 255\n`, { mode: 0o755 });
+    return { bin, argvFile, envFile };
   }
 
   it("a repo-config core.sshCommand does not run for the key-auth arm (GIT_SSH_COMMAND wins) [pre-existing control / regression pin]", async () => {
-    const { bin } = fakeSsh();
+    const { bin, argvFile, envFile } = fakeSsh();
     const { ws } = newWorkspace(w);
     w.git(ws, "remote", "add", "git-data", "ssh://git@git-data.invalid/repo.git");
     w.git(ws, "config", "core.sshCommand", w.helper("ssh-command", "exit 255"));
@@ -586,6 +742,34 @@ describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDU
       process.env.PATH = savedPath;
     }
     expect(w.tags()).not.toContain("ssh-command");
+    // the dial DID happen through the pinned command (so the absence above is not "never reached ssh"), and the ssh
+    // child's environment carries no server-only variable (positive control: it does carry the git-set variables)
+    expect(existsSync(argvFile), "the key-auth arm never reached ssh").toBe(true);
+    const sshEnv = readFileSync(envFile, "utf8");
+    expect(sshEnv).toContain("GIT_ALLOW_PROTOCOL=ssh");
+    expect(sshEnv).not.toContain(SENTINEL);
+  });
+
+  it("a repo-config protocol.ext.allow=always and an ext:: URL do not run a command on the key-auth arm or the legacy arm (control: raw git does)", async () => {
+    H.keepProductionProtocol = true; // the production allowProtocol values, not the fixture's file:// widening
+    const marker = join(w.root, "ext-marker");
+    const url = `ext::touch ${marker}`;
+    const { ws } = newWorkspace(w);
+    w.git(ws, "config", "protocol.ext.allow", "always");
+    w.git(ws, "remote", "add", "x", url);
+    // control: raw git honours the repo config and runs the command
+    // (the fixture's own env pins GIT_ALLOW_PROTOCOL without ext, so the control brings a bare env)
+    spawnSync("git", ["ls-remote", "x"], {
+      cwd: ws,
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: w.home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      timeout: 20_000,
+    });
+    expect(existsSync(marker), "control: the ext:: carrier is not live").toBe(true);
+    rmSync(marker);
+    await gitWithPrivateKeyAuth(["ls-remote", "x"], "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----", makeEd25519Pin(), { cwd: ws, timeout: 20_000 }).catch(() => {});
+    expect(existsSync(marker), "key-auth arm ran the ext:: command").toBe(false);
+    await gitWithInstallationAuth(["ls-remote", "x"], 1, { cwd: ws, timeout: 20_000 }).catch(() => {});
+    expect(existsSync(marker), "legacy arm ran the ext:: command").toBe(false);
   });
 
   it("RESIDUAL: a repo-config url.<x>.insteadOf makes the key-auth arm dial the rewritten host, with the host-key pin options still on the command", async () => {
@@ -617,17 +801,24 @@ describe("census: every host-side git exec site is classified (consistency with 
   // The census proves the classification table agrees with the source IN THE SAME COMMIT; a diff can edit both. The
   // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
   const SERVER = join(__dirname, "..", "server");
-  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts"];
+  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts"];
   const CENSUS_ONLY: Record<string, string> = {
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
-    "context-queries-hook.ts": "read-only context queries",
-    "git-config-atomic.ts": "census item: atomic config writes into the workspace (follow-up)",
-    "git-worktree-validity.ts": "own minimal env, rev-parse probe only",
-    "push-branch.ts": "legacy branch census-only; the isolated-GIT_DIR path is operator-held and untouched",
-    "workspace.ts": "fresh `git init` / clone into a new directory",
-    "worktree-config-seed.ts": "census item: seeds worktree config",
+    "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",
+    "git-worktree-validity.ts": "census-only: own minimal env, rev-parse probe; a redirect only changes its verdict",
+    "push-branch.ts": "census-only: the file holds the operator-held isolated-GIT_DIR push; its direct `cat-file` / `config user.*` calls run unhardened (writes follow a redirect, read from source, not measured)",
+    "worktree-config-seed.ts": "census-only: seeds worktree config; executes host git on an agent-authored `.git` without the shared hardening",
   };
-  const CRON_DIR = join("inngest", "functions");
+  // Cron handlers: classified PER FILE (a new file here is an unclassified hit, not covered by a directory exemption).
+  const CRON_CENSUS: Record<string, string> = {
+    "inngest/functions/_cron-safe-commit.ts": "own hardening + env; refuses symlink/gitfile .git shapes",
+    "inngest/functions/cron-compound-promote.ts": "cron checkout of the product repo, not an agent workspace",
+    "inngest/functions/cron-content-publisher.ts": "cron checkout of the product repo, not an agent workspace",
+    "inngest/functions/cron-content-vendor-drift.ts": "cron checkout of the product repo, not an agent workspace",
+    "inngest/functions/cron-rule-prune.ts": "cron checkout of the product repo, not an agent workspace",
+    "inngest/functions/cron-strategy-review.ts": "cron checkout of the product repo, not an agent workspace",
+    "inngest/functions/cron-weekly-analytics.ts": "cron checkout of the product repo, not an agent workspace",
+  };
 
   /** Code only: a doc comment that quotes an exec call is not an exec site. */
   const code = (path: string): string =>
@@ -642,7 +833,7 @@ describe("census: every host-side git exec site is classified (consistency with 
     return out;
   }
 
-  const GIT_EXEC = /(?:execFile|execFileSync|spawn|spawnSync|execFileAsync|execFileP)\(\s*"git"/g;
+  const GIT_EXEC = /\b(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|execFileAsync|execFileP)\s*(?:<[^>]*>)?\(\s*["'`]git\b/g;
 
   it("no unclassified file execs git, and every in-scope file reaches git through the helper", () => {
     const hits: Record<string, number> = {};
@@ -652,14 +843,18 @@ describe("census: every host-side git exec site is classified (consistency with 
       if (n > 0) hits[rel] = n;
     }
     const unclassified = Object.keys(hits).filter(
-      (rel) => !IN_SCOPE.includes(rel) && !(rel in CENSUS_ONLY) && !rel.startsWith(CRON_DIR),
+      (rel) => !IN_SCOPE.includes(rel) && !(rel in CENSUS_ONLY) && !(rel in CRON_CENSUS),
     );
+    // totality: a classified entry that no longer matches any exec site is stale
+    for (const rel of [...IN_SCOPE, ...Object.keys(CENSUS_ONLY), ...Object.keys(CRON_CENSUS)]) {
+      expect(hits[rel], `${rel} is classified but has no git exec site (stale entry)`).toBeGreaterThan(0);
+    }
     expect(unclassified, "a host-side git exec site is not classified: add it to IN_SCOPE (and route it through hostGitInvocation) or to CENSUS_ONLY with a reason").toEqual([]);
     for (const rel of IN_SCOPE) {
       const src = code(join(SERVER, rel));
       expect(src, `${rel} does not use hostGitInvocation`).toContain("hostGitInvocation(");
       // every exec of git in an in-scope file passes an env: no bare `execFile*("git", args)` with the server environment
-      for (const m of src.matchAll(/(?:execFile|execFileSync|execFileAsync|execFileP)\(\s*"git"/g)) {
+      for (const m of src.matchAll(GIT_EXEC)) {
         // the call's own argument list: paren-balanced, so a neighbouring `env` cannot satisfy it
         const open = src.indexOf("(", m.index);
         let depth = 0;
@@ -670,25 +865,36 @@ describe("census: every host-side git exec site is classified (consistency with 
         }
         const call = src.slice(open, end + 1);
         expect(call, `${rel}: a git exec without an explicit env: ${call.slice(0, 80)}`).toMatch(/\benv\b/);
+        // ... and never the server's: `process.env` in the exec's own options is the regression this census exists for
+        expect(call, `${rel}: a git exec passes the server environment: ${call.slice(0, 80)}`).not.toMatch(/process\.env/);
       }
     }
   });
 
-  it("production call sites pass only the two arm constants as allowProtocol", () => {
+  it("production call sites pass only the three allowProtocol constants, each with its pinned value", () => {
     const sites: string[] = [];
     for (const f of walk(SERVER)) {
       if (f.endsWith("host-git.ts")) continue;
       for (const m of code(f).matchAll(/allowProtocol:\s*([A-Za-z_]+)/g)) sites.push(m[1]);
     }
-    expect(sites.sort()).toEqual(["KEY_AUTH_ALLOW_PROTOCOL", "LEGACY_ALLOW_PROTOCOL"]);
+    const allowed = new Set(["KEY_AUTH_ALLOW_PROTOCOL", "LEGACY_ALLOW_PROTOCOL", "ALLOW_PROTOCOL_NONE"]);
+    expect(sites.filter((n) => !allowed.has(n)), "an allowProtocol that is not one of the three constants").toEqual([]);
+    expect(sites.filter((n) => n === "KEY_AUTH_ALLOW_PROTOCOL")).toHaveLength(1);
+    expect(sites.filter((n) => n === "LEGACY_ALLOW_PROTOCOL")).toHaveLength(1);
+    expect(sites.filter((n) => n === "ALLOW_PROTOCOL_NONE").length).toBeGreaterThan(0);
+    // the values: `ssh:ext` would re-enable ext:: past protocol.ext.allow=never; `none` is what blocks a promisor or file remote
+    expect(KEY_AUTH_ALLOW_PROTOCOL).toBe("ssh");
+    expect(LEGACY_ALLOW_PROTOCOL).toBe("https");
+    expect(ALLOW_PROTOCOL_NONE).toBe("none");
   });
 });
 
 describe("floor", () => {
   it("the battery executed one canary-checked run per closable cell (derived, not a literal)", () => {
-    const expected = DRIVERS.reduce((n, d) => n + d.closable.length, 0);
+    const shapeRows = 3; // gitfile, symlink, commondir naming a foreign tenant
+    const expected = DRIVERS.reduce((n, d) => n + d.closable.length + d.refused.length, 0) + shapeRows;
     expect(canaryCheckedRuns).toBe(expected);
-    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 4; // + merge-driver/token, insteadOf, rewritten-host, gitfile
+    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 3; // + merge-driver/token, insteadOf, rewritten-host
     expect(residualRows).toBe(residualExpected);
     expect(PLANTERS.length).toBeGreaterThan(0);
   });

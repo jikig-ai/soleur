@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { hostGitInvocation } from "./host-git";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "./host-git";
 import { rm } from "node:fs/promises";
 
 import { reportSilentFallback } from "./observability";
@@ -88,6 +88,7 @@ async function runPlumbingGit(
     // `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
     const h = hostGitInvocation(args, {
       cwd,
+      allowProtocol: ALLOW_PROTOCOL_NONE,
       extraEnv: {
         GIT_AUTHOR_NAME: "Soleur Checkpoint",
         GIT_AUTHOR_EMAIL: "checkpoint@soleur.local",

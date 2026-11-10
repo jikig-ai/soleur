@@ -21,7 +21,7 @@ import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
 import { fetchFromGitData } from "@/server/git-data-client";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
 import { seedWorktreeConfig } from "@/server/worktree-config-seed";
-import { hostGitInvocation } from "@/server/host-git";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "@/server/host-git";
 
 const log = createChildLogger("ensure-workspace-repo");
 const execFileAsync = promisify(execFile);
@@ -42,7 +42,7 @@ type LocalGitFn = (args: string[], cwd: string) => Promise<{ stdout: string }>;
 
 const realLocalGit: LocalGitFn = async (args, cwd) => {
   // Host-side git in a workspace an agent session may have authored: shared hardening + scrubbed env (host-git.ts).
-  const h = hostGitInvocation(args, { cwd });
+  const h = hostGitInvocation(args, { cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
   const { stdout } = await execFileAsync("git", h.args, {
     cwd,
     env: h.env,

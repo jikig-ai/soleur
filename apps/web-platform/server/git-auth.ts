@@ -519,8 +519,9 @@ export async function gitWithPrivateKeyAuth(
       "BatchMode=yes",
     ].join(" ");
 
-    // The shared host-git invocation: hardening arguments, a scrubbed environment (the server's secrets never reach a
-    // helper a planted carrier runs), the image identity file as the global config, and ssh as the only transport.
+    // The shared host-git invocation: hardening arguments, a scrubbed environment (a helper that reads only its own
+    // environment sees none of the server's variables; a same-uid helper can still read the server's /proc environ), the
+    // image identity file as the global config, and ssh as the only transport.
     // Only this arm's own variables ride `extraEnv`; it sets no `GIT_CONFIG_*` of its own.
     const h = hostGitInvocation([...HELPER_RESET, ...args], {
       cwd: opts.cwd,

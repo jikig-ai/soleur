@@ -23,7 +23,8 @@ import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
-import { hostGitInvocation } from "./host-git";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "./host-git";
+import { assertNoUrlRewrite } from "./git-data-url-guard";
 import { readGitDataKeyEnv, type GitDataKeyEnvName } from "./git-data-key";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
@@ -632,7 +633,7 @@ export function ensureGitDataRemote(
     // Phase-2 fence iteration).
     // Host-side git in a workspace an agent session may have authored: shared hardening + scrubbed env (host-git.ts).
     const run = (args: string[]): Buffer => {
-      const h = hostGitInvocation(args, { cwd: workspacePath });
+      const h = hostGitInvocation(args, { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE });
       return execFileSync("git", h.args, { ...opts, env: h.env });
     };
     const existing = run(["-C", workspacePath, "remote"])
@@ -855,8 +856,14 @@ export async function replicateToGitData(params: {
       `--push-option=lease-gen=${leaseGeneration}`,
       `--push-option=worktree-id=${worktreeId}`,
     ];
-    const pushArgs = ["push", "--force", "git-data", refspecs.heads, refspecs.tags, ...pushOptions];
-    const rescuePushArgs = ["push", "--force", "--atomic", "git-data", refspecs.rescue, ...pushOptions];
+    // Push to the EXPLICIT server-derived URL, never the remote NAME `git-data`: the name resolves through the agent-writable
+    // `.git/config` (`remote.git-data.pushurl`, `url.<base>.insteadOf`), which could aim the key-auth push at another tenant's
+    // repository on the same host (the host-key pin does not bind the repository path). `assertNoUrlRewrite` is a
+    // preflight for the `url.*` keys (git-data-url-guard.ts); it is not a structural control.
+    assertNoUrlRewrite(workspacePath);
+    const pushTarget = gitDataRemoteUrl(workspaceId);
+    const pushArgs = ["push", "--force", pushTarget, refspecs.heads, refspecs.tags, ...pushOptions];
+    const rescuePushArgs = ["push", "--force", "--atomic", pushTarget, refspecs.rescue, ...pushOptions];
     // True if EITHER step took its single transient retry; reported as a bit on the success marker.
     let retried = false;
     const pushWithRetry = async (args: string[]): Promise<void> => {
@@ -908,7 +915,7 @@ export async function replicateToGitData(params: {
     // The listing is local and bounded (5 s). Its lines are `<full sha> <refname>`.
     const listing = hostGitInvocation(
       ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
-      { cwd: workspacePath },
+      { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE },
     );
     const rescueListing = String(
       execFileSync("git", listing.args, { cwd: workspacePath, stdio: "pipe", timeout: 5000, env: listing.env }) ?? "",
@@ -923,7 +930,7 @@ export async function replicateToGitData(params: {
         const m = /^([0-9a-f]{40,64}) (refs\/heads\/soleur-store-tip-\S+)$/.exec(line.trim());
         if (!m) continue;
         try {
-          const del = hostGitInvocation(["-C", workspacePath, "update-ref", "-d", m[2], m[1]], { cwd: workspacePath });
+          const del = hostGitInvocation(["-C", workspacePath, "update-ref", "-d", m[2], m[1]], { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE });
           execFileSync("git", del.args, {
             cwd: workspacePath,
             stdio: "pipe",

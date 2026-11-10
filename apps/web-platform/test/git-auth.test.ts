@@ -292,7 +292,7 @@ describe("gitWithInstallationAuth", () => {
     const args = capturedCalls[0].args;
     // The shared host-git hardening block comes first (computed from the helper, not a copied literal), then the
     // credential.helper reset, then the caller's args.
-    const block = hostGitInvocation([]).args;
+    const block = hostGitInvocation([], { allowProtocol: "none" }).args;
     expect(args.slice(0, block.length)).toEqual(block);
     expect(args.slice(block.length, block.length + 2)).toEqual(["-c", "credential.helper="]);
     expect(args.slice(block.length + 2)).toEqual(["push", "origin", "main"]);
@@ -502,7 +502,7 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
     expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
     expect(env.GIT_CONFIG_GLOBAL).toBe(AGENT_GIT_GLOBAL_CONFIG);
     // HELPER_RESET is prepended.
-    const keyBlock = hostGitInvocation([]).args;
+    const keyBlock = hostGitInvocation([], { allowProtocol: "none" }).args;
     expect(capturedCalls[0].args.slice(keyBlock.length, keyBlock.length + 2)).toEqual(["-c", "credential.helper="]);
 
     // The key material is on disk 0600 during the call, with the real key bytes,

@@ -56,7 +56,12 @@ vi.mock("child_process", () => ({
   }),
 }));
 
-vi.mock("fs", () => ({ readdirSync: vi.fn(() => []) }));
+vi.mock("fs", () => ({
+  readdirSync: vi.fn(() => []),
+  lstatSync: vi.fn(() => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // host-git shape guard: the fake workspace has no .git
+  }),
+}));
 
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn() }));
 
