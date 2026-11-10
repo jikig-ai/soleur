@@ -261,7 +261,7 @@ assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Sourc
   "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-heartbeat$' >/dev/null"
 # Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
 # the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
-FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
+FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=') || true
 assert "failure-log ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 assert "failure-log ExecStart command is /usr/bin/logger (bare)" \

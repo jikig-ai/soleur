@@ -486,6 +486,108 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 > entry, every merge's per-merge apply halts until the owner repairs state (see ADR-282 and the runbook
 > `inngest-luks-cutover-6894.md` section 5c). The text above is kept as the dated record.
 
+**The relay hello-key HALT in `apply` (PR A of #8211 / #12167, CTO ruling F1).** A second, separate non-ackable counter,
+`relay_hello_key_changes` (same jq file), covers `random_bytes.proxy_hello_hmac` and
+`doppler_secret.proxy_hello_hmac_key`, the pair in `apps/web-platform/infra/proxy-hello-hmac.tf` that mints
+`PROXY_HELLO_HMAC_KEY`.
+
+- **What it stops.** A planned `update`, `delete`, `forget`, a state move off either address (`previous_address`, any verb) or an unreadable action list at either address, and a `create` of
+  `random_bytes.proxy_hello_hmac`. A lone `create` of the Doppler copy reads 0 (it restores the state-held value and a
+  missing copy must stay repairable), and the routine merge shape (both `no-op`) reads 0. Both addresses are
+  `[0]`-indexed in a real plan, so the match goes through `luks_passphrase_base`, like the LUKS lists.
+- **Why a dedicated counter and not two more LUKS rows.** The LUKS set protects data already encrypted under the old
+  value, and its HALT wording, the parity test's six-address grep form and the destroy-guard suite's exact floor are all
+  LUKS-worded. A change to this pair is a different failure: since the signed relay hello the key is read, and both web
+  hosts take it from Doppler at container start, so a replaced or edited value leaves the hosts disagreeing on the key
+  and every relayed session whose lease sits on the other host is refused. That is a **relay outage**, not data loss, and
+  the HALT text says so (no LUKS wording).
+- **Why non-ackable.** The counter is read before and outside the `destroy_count` sum, exactly like the LUKS HALT:
+  a replace also trips `resource_deletes`, and `[ack-destroy]` cannot tell it from an unrelated delete in the same merge.
+- **UNWEDGE.** `[skip-web-platform-apply]` on the merge commit is the only bypass. It skips the apply and performs
+  nothing. The HALT's remediation names the `_PREVIOUS` pattern (a `PROXY_HELLO_HMAC_KEY_PREVIOUS` the verifier also
+  accepts during a roll): rotation has no route today, so an intended rotation means stop and escalate.
+- **Retiring the relay.** Turning `host_proxy_tls_enabled` off plans a destroy of this pair, so that route is **closed on
+  the per-merge path** by this HALT (ADR-118 states it). Retiring the relay needs a separately reviewed route, and
+  `PROXY_HELLO_HMAC_KEY` must leave `apps/web-platform/scripts/verify-required-secrets.sh` (the release-time presence
+  gate) in the same change, or every deploy is blocked on a key that no longer exists.
+- **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
+  (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
+
+## Comment prose relocated from the apply step
+
+The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
+comments lives here. Verbatim, as it stood above the `host_creates` read (#6416):
+
+```text
+host_creates (#6416): a pure `+ create` of an hcloud_server
+(hcloud_volume dropped #6919/T55 — a for_each volume fan-out for a
+legitimate new web host is not a host birth). INVISIBLE to all three
+counters above (no delete, no
+nested-block shrinkage, not an ["update"]). This apply path must
+NEVER birth a host: `-target` is transitive at the RESOURCE level, so
+cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
+(firewall.tf) each pull the whole hcloud_server.web for_each map —
+but the map's hcloud_server_network attachments are NOT
+target-reachable. That asymmetry is exactly how soleur-web-2 came up
+with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
+still serving as a CF tunnel connector replica (ADR-114 I1). Such a host
+also boots with NO firewall (hcloud provider 1.63.0:
+hcloud_firewall_attachment does not attach before first boot, unlike
+hcloud_server.firewall_ids). Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above the numeric validation line (counters must all be listed there):
+
+```text
+Validate counters parsed correctly — empty values from a jq
+failure would silently evaluate false in the `-gt 0` test and
+let destructive plans slip past the guard.
+
+BOTH new counters are listed. This `if` is the one place two concurrent branches each
+added a counter, and a merge that keeps only one side's list leaves the other counter
+unvalidated — it would then read empty on a jq failure and evaluate false in its own
+`-gt 0` HALT, which is precisely the fail-open this validation exists to prevent.
+```
+
+Verbatim, the comment above the `plan_ok` read:
+
+```text
+plan_ok: false means the plan JSON carried no resource_changes ARRAY,
+so every counter above is 0 because nothing was read — not because
+there is nothing to do. Without this, an empty or error plan document
+passes every gate in this step.
+```
+
+Verbatim, the comment above the `undecidable_entries` read (#7695 review F1):
+
+```text
+undecidable_entries (#7695 review F1): any entry, at ANY address, whose actions array is
+empty or not an array. `[] | any(...)` is false and `[] | index("delete")` is null, so
+such an entry is invisible to every other counter in the filter — a destroy of the
+inngest AOF volume or of hcloud_volume.workspaces (every user's repo tree) reads as a
+clean plan with destroy_count 0, which never even demands [ack-destroy].
+```
+
+Verbatim, the comment above the `apex_move_orphans` read (#7640 PR4b, plan AC72):
+
+```text
+apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
+against absent state. The ONLY counter here that is about STATE rather
+than about the text of dns.tf. Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above the `reboot_updates` read (#5911):
+
+```text
+reboot_updates (#5911): reboot-forcing in-place update on
+hcloud_server.* (placement_group_id / server_type change →
+power-off reboot of the running host, 0 destroys — invisible to
+the two counters above). Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
@@ -1031,10 +1133,25 @@ LUKS alert drift guard — is NOT a required context, so a PR that reverts
 that guard's subject with the guard red is mergeable (#6480, open).
 
 Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
-commit message to skip auto-apply for that merge.
+commit message to skip auto-apply for that merge. Any-commit reach (CTO-ruled
+2026-11-09): the token counts on its own line in ANY of the push's commit
+messages, not only the tip — a merge-queue coalesce cannot bury it. A
+wrongly-suppressed apply is recoverable via the `manual-rerun` dispatch (on
+dispatch `head_commit` is absent so the token cannot arm). Note the carrier is
+the whole message: a bare token line inside a code fence DOES fire (only
+`>`-quoted lines and mid-line text are protected by the own-line anchor).
 
 Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
-commit message to acknowledge planned destroys (otherwise apply halts).
+commit message to acknowledge planned destroys (otherwise apply halts). Same
+any-commit reach — parity with `deploy_policy_gate` (#12404). Bounded residual:
+an ack authored for one commit's destroys arms every destroy in the same
+coalesced push — merge-queue reviewers are the control for that, and the ack's
+own warning already scopes it to "the WHOLE intended change".
+
+Residual (both tokens): `event.commits` is capped at 20 entries, so a token
+older than the window in a giant coalesced push still misses — fail-OPEN for
+the skip (the apply runs), fail-CLOSED for the ack (the apply refuses; re-merge
+carrying the token inside the window, or run the supervised apply).
 
 Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
 failure or for ad-hoc applies (still target-scoped to the allow-list below).

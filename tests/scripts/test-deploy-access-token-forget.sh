@@ -130,7 +130,7 @@ check     "G10: the workflow sources the gate and calls it before the destroy_co
   [[ -n "$a" && -n "$d" && "$a" -lt "$d" ]] && grep -qF "tests/scripts/lib/deploy-policy-gate.sh" <<<"$w"' _ "$WF"
 check     "G11: the gate input is fed from event.commits messages, not the tip alone (coalesced-merge ack)" bash -c '
   w="$(grep -vE "^[[:space:]]*#" "$1")"
-  grep -qF "EVENT_MSGS_JSON: \${{ toJSON(github.event.commits.*.message) }}" <<<"$w" && grep -qF "deploy_policy_gate \"\$counts\" \"\$POLICY_MSGS\" || exit 1" <<<"$w"' _ "$WF"
+  grep -qF "EVENT_MSGS_JSON: \${{ toJSON(github.event.commits.*.message) }}" <<<"$w" && grep -qF "deploy_policy_gate \"\$counts\" \"\$ALL_MSGS\" || exit 1" <<<"$w"' _ "$WF"
 
 # ── source mutants: every predicate above must be able to fail ─────────────────────────────────────────────────────────────
 cp "$TF" "$SBX/orig.tf"

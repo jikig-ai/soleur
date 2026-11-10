@@ -266,7 +266,7 @@ LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
 
 # Glob members the loop special-cases AND diverts to literal `run_suite … bash <file>` argv
 # land in BOTH surfaces — subtract only those, or the double-coverage check reds on a
-# legitimate diversion (#11562's ci-pr-affected-replay split). A special case that emits
+# legitimate diversion (#11562's retired replay-split shape). A special case that emits
 # skip_suite only (c4-from-components) stays glob-covered; surface 1 never saw it anyway.
 grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | LC_ALL=C sort -u > "$WORK/glob_special"
 comm -12 "$WORK/glob_special" "$WORK/raw1" > "$WORK/glob_diverted"
@@ -339,7 +339,7 @@ fi
 # workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
-# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds seven as of #9927 (the count had already drifted to six) -- registered both
+# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds eight as of #12396 (seven as of #9927, six before that) -- registered both
 # locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
 # listed in DOUBLE_COVERED_ACK below and the check fails on any suite not in that array.
 #
@@ -440,6 +440,7 @@ DOUBLE_COVERED_ACK=(
   "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh|test-all glob AND its own gdpr-gate-self-test.yml job -- the two surfaces do DIFFERENT things and both are load-bearing: under the glob lefthook is absent so the suite loud-skips, while the workflow installs lefthook and sets SOLEUR_REQUIRE_LEFTHOOK=1 so the skip becomes a hard failure. De-registering either is NOT a no-op. #7710"
   "apps/web-platform/infra/inngest-luks-sole-copy.test.sh|infra runner glob (deploy-script-tests) AND an explicit test-all.sh run_suite in the required test-scripts leg; the second is what makes a red Guard 1 block merge and the G2f pin in terraform-target-parity.test.ts guards it, #9927"
+  "scripts/ci-parked-hold.test.sh|explicit test-all.sh run_suite AND the parked-hold-selftest member step of the secret-guards umbrella in secret-scan.yml -- the workflow step is what puts the guard's own selftest into the REQUIRED check set (a red selftest blocks merge) while the run_suite keeps it in the local gate; de-registering either is not a no-op, #12396"
 )
 : > "$WORK/dupes"
 cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \

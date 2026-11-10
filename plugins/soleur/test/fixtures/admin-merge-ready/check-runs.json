@@ -927,20 +927,6 @@
         }
       },
       {
-        "id": 999000000000,
-        "name": "affected-index-ratchet",
-        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
-        "status": "completed",
-        "conclusion": "success",
-        "started_at": "2026-11-07T00:00:00Z",
-        "app": {
-          "id": 15368
-        },
-        "check_suite": {
-          "id": 96660252408
-        }
-      },
-      {
         "id": 999000000001,
         "name": "oracle-review-required",
         "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",

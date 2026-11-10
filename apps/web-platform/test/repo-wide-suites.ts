@@ -78,6 +78,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/legal-acceptance/cross-layer-limits.test.ts",
   "test/legal-acceptance/internal-auth-secret-name.test.ts",
   "test/legal-acceptance/legal-copy.test.ts",
+  "test/legal-acceptance/published-retention.test.ts",
   "test/legal-acceptance/registry-pins.test.ts",
   "test/legal-doc-consistency.test.ts",
   "test/legal-doc-shas-guard.test.ts",

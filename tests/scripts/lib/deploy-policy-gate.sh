@@ -3,9 +3,11 @@
 # Deploy-webhook Access policy gate (#9294 G1 PR-2, ADR-241 D10; Ruled by CTO agent, 2026-10-23).
 #
 # SOURCED by .github/workflows/apply-web-platform-infra.yml's "Terraform plan (allow-list ...)" step, which calls
-#   deploy_policy_gate "$counts" "$POLICY_MSGS" || exit 1
-# where POLICY_MSGS is the tip message plus every push commit's message (a merge-queue coalesce can bury the
-# ack one squash below the tip; event.commits is capped at 20 entries — an older ack still misses, fail-closed).
+#   deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1
+# where ALL_MSGS is the tip message plus every push commit's message (a merge-queue coalesce can bury the
+# ack one squash below the tip; event.commits is capped at 20 entries — an older ack still misses, fail-closed
+# for the acks, fail-open for the [skip-web-platform-apply] kill-switch, which recomputes the same combined feed
+# at preflight; both ack gates and the skip gate consume it).
 # right after the apex_move_orphans HALT and BEFORE the destroy_count sum, so `[ack-destroy]` cannot reach it. It lives
 # here, not inline, so a test can EXECUTE it (tests/scripts/test-deploy-access-token-forget.sh) and so the 490,000-byte
 # ADR-231 workflow cap is not spent on it.
@@ -22,7 +24,7 @@
 #                                                                  include on purpose and carries the ack)
 #   a counter that is not a non-negative integer                -> refuse (a jq failure must not read as 0)
 # `[ack-destroy]` is deliberately NOT consulted. Prints ::error:: lines; returns 1 to refuse, 0 to pass.
-deploy_policy_gate() { # <counts-json> <head-commit-message>
+deploy_policy_gate() { # <counts-json> <combined tip+push-commit messages>
   local counts="$1" msg="${2-}" k v
   local -A n=()
   for k in deploy_policy_changes deploy_policy_unsafe access_token_stray_forgets; do

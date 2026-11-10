@@ -590,7 +590,16 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockPushBranch.mockReset().mockResolvedValue({ branch: "feat-x", pushed: true });
     mockGetUserApiKey.mockResolvedValue("sk-test");
     mockGetUserServiceTokens.mockResolvedValue({});
-    mockBuildAgentEnv.mockReturnValue({ ANTHROPIC_API_KEY: "sk-test" });
+    // #11764: mirror the real contract — a threaded claudeTmpDir exports
+    // CLAUDE_CODE_TMPDIR and routes TMPDIR at the same per-tenant `.cs` base,
+    // so the T9/T18 env-shape arm can assert TMPDIR reaches the wire (the
+    // factory hands the CLI exactly what buildAgentEnv built).
+    mockBuildAgentEnv.mockImplementation((credential, _tokens, opts) => ({
+      ANTHROPIC_API_KEY: "sk-test",
+      ...(opts?.claudeTmpDir
+        ? { CLAUDE_CODE_TMPDIR: opts.claudeTmpDir, TMPDIR: opts.claudeTmpDir }
+        : {}),
+    }));
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
@@ -1476,6 +1485,17 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // CWE-526: no service-role key in env.
     expect(opts.env.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
     expect(opts.env.BYOK_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  it("T18b (#11764): the per-tenant .cs TMPDIR reaches the spawned CLI env", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const opts = mockQuery.mock.calls[0][0].options;
+    const csDir = /^\/tmp\/\.cs\/[0-9a-f]{16}$/;
+    // The threaded claudeTmpDir exports BOTH names — descendant mktemp reads
+    // TMPDIR; the CLI's own session scratch reads CLAUDE_CODE_TMPDIR.
+    expect(opts.env.TMPDIR).toMatch(csDir);
+    expect(opts.env.CLAUDE_CODE_TMPDIR).toMatch(csDir);
+    expect(opts.env.TMPDIR).toBe(opts.env.CLAUDE_CODE_TMPDIR);
   });
 
   // -------------------------------------------------------------------------

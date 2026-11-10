@@ -202,7 +202,8 @@ acked() {
 
   # Guarded so an unreadable path cannot trip `set -e` and change the
   # "exit 0 always" contract.
-  [ -f "$resolved" ] && grep -qF "$ACK_LITERAL" "$resolved" 2>/dev/null
+  [ -f "$resolved" ] || return 1
+  grep -qF "$ACK_LITERAL" "$resolved" 2>/dev/null
 }
 
 if acked; then

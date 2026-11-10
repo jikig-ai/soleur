@@ -195,17 +195,13 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # --- PR3b (#10859, ADR-276 ruling (a) of 2026-11-06): the affected-index ratchet flips advisory->required and ---
-      # --- the oracle-review sentinel lands REQUIRED, in the same commit as their ci.yml producers (ADR-032).      ---
-      # affected-index-ratchet: a bot PR's diff (ALLOWED_PATHS = {weakness-digest.md}) touches no suite file, so the
-      #   live pair set is unchanged and the synthetic green equals the real verdict — unreachability, per ADR-139.
-      # oracle-review-required: the sentinel's own pull_request arm classifies on the BASE commit's RATCHET_ORACLE;
-      #   ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (pinned by plugins/soleur/test/bot-synthetic-unreachability.test.sh), so
-      #   every bot PR is verdict not-oracle and the synthetic green asserts exactly that.
-      required_check {
-        context        = "affected-index-ratchet"
-        integration_id = var.actions_integration_id
-      }
+      # --- PR3b (#10859, ADR-276 ruling (a) of 2026-11-06): the oracle-review sentinel lands REQUIRED, in the same  ---
+      # --- commit as its ci.yml producer (ADR-032). The S4 ratchet member retired 2026-11-09 (#9729 ruling: the      ---
+      # --- stage never activated; the full battery already runs on every PR and merge_group entry).                ---
+      # oracle-review-required: the sentinel's own pull_request arm classifies on the BASE commit's resolved oracle
+      #   list (scripts/ci-oracle-surface.txt); ALLOWED_PATHS ∩ oracle surface = ∅ (pinned by
+      #   plugins/soleur/test/bot-synthetic-unreachability.test.sh), so every bot PR is verdict not-oracle and the
+      #   synthetic green asserts exactly that.
       required_check {
         context        = "oracle-review-required"
         integration_id = var.actions_integration_id
@@ -248,8 +244,14 @@ resource "github_repository_ruleset" "ci_required" {
     # because the 5-minute default would add that wait to every merge. A parity gate
     # (tests/scripts/test-audit-ruleset-bypass.sh, T-mq-1) holds this block equal to
     # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
-    # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
-    # runs all 12 contexts); raise only after the canary measures it.
+    # `max_entries_to_build = 1` (lowered from 2 on #12269, lever E of epic
+    # #11556 — the measured experiment): the 28-day decision window counted 27
+    # cancelled `merge_group` ci.yml runs (threshold >= 2; clustered on the
+    # 2026-11-06/07 congestion burst), so queue-side speculative demand was
+    # real and the flip signal fired. Soak verdict lives on #12269 via
+    # scripts/followthroughs/mq-lever-e-verdict-12269.sh; revert is a
+    # value-only diff back to 2 on all four surfaces (this file, the DR
+    # skeleton, the README table, merge-queue-stall-check.yml).
     # `check_response_timeout_minutes` (120) must exceed the slowest required check on
     # `merge_group` INCLUDING runner start spread, else a green PR is dequeued. Raised
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured
@@ -271,7 +273,7 @@ resource "github_repository_ruleset" "ci_required" {
       max_entries_to_merge              = 3
       min_entries_to_merge              = 1
       min_entries_to_merge_wait_minutes = 0
-      max_entries_to_build              = 2
+      max_entries_to_build              = 1
       check_response_timeout_minutes    = 120
     }
   }

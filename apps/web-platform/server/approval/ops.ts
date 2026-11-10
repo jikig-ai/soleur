@@ -285,7 +285,11 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: a legal acceptance row has no recorded acknowledgement",
     level: "error",
   },
-  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  /**
+   * A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged.
+   * `extra.read` names the read. The Inbox legal row (`read: legal_acceptance_inbox`, server/legal-acceptance/inbox-rows.ts) adds a static
+   * `extra.step` saying where it stopped: gate | registry | read | shape | state. The registry step also carries `extra.key`.
+   */
   pageReadFailed: {
     op: "page_read_failed",
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
@@ -306,8 +310,12 @@ export const LEGAL_OPS = {
   /**
    * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
    * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
-   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; verify endpoint step 4) or `config` (a token or founder id
-   * that is SET but malformed; once per process, names only the variable). No paging rule yet (#12195).
+   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; the verify route's step 4 and the counts route's step 4, so both
+   * routes emit it) or `config` (a token or founder id that is SET but malformed; once per route module, so a malformed
+   * token yields one event from each of the verify and counts routes; names only the variable) or `counts` (the aggregate
+   * read behind GET /api/internal/legal-acceptance/[key]/counts failed, threw, or answered an undocumented shape, including
+   * migration 186 not applied; extra.code is the SQLSTATE and extra.reason is "too_many_hashes" when the RPC refused with
+   * 54000; #12429). No paging rule yet (#12195).
    */
   storeFailed: {
     op: "store_failed",
@@ -319,7 +327,7 @@ export const LEGAL_OPS = {
 export type LegalOpKey = keyof typeof LEGAL_OPS;
 
 /** The closed set of `store_failed` `tags.stage` values; every storeFailed report carries exactly one (the contract test pins it). */
-export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config"] as const;
+export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config", "counts"] as const;
 export type StoreFailedStage = (typeof STORE_FAILED_STAGES)[number];
 
 export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {

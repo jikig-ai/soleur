@@ -295,7 +295,7 @@ TOTAL=$((TOTAL + 1))
 if [[ ! -f "$SCRIPT_DIR/dns.tf" ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.1b — dns.tf not found (fail-closed)"
 else
-  app_records=$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"app"[[:space:]]*$' "$SCRIPT_DIR/dns.tf")
+  app_records=$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"app"[[:space:]]*$' "$SCRIPT_DIR/dns.tf") || true
   if [[ "$app_records" -eq 1 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: C.1b: exactly one 'name = \"app\"' record in dns.tf (no second pooling record)"
   else

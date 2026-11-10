@@ -73,7 +73,7 @@ while IFS=':' read -r line rest; do
     host="${host,,}"  # lowercase
     # Detect utm tag
     if grep -qE 'utm_(source|medium|campaign|term|content)=' <<<"$url"; then
-      camp="$(echo "$url" | grep -oE 'utm_campaign=[^&[:space:]]+' | head -1 | cut -d'=' -f2)"
+      camp="$(echo "$url" | grep -oE 'utm_campaign=[^&[:space:]]+' | head -1 | cut -d'=' -f2)" || true
       if is_allowlisted_host "$host"; then
         # First-party + allowlisted campaign → LOW-RISK; non-allowlisted campaign on first-party host still REVIEW
         if [ -n "$camp" ] && ! is_allowed_campaign "$camp"; then
@@ -112,7 +112,7 @@ done < <(grep -niE -- "$brand_re" "$tmp" 2>/dev/null || true)
 # Simplified: any `fetch(...)` or `axios.post(...)` whose URL host is not allowlisted → HIGH-RISK.
 fetch_re='\b(fetch|axios\.post|axios\.put|http\.post)[[:space:]]*\([[:space:]]*["'"'"'`](https?://[^"'"'"'`)[:space:]]+)'
 while IFS= read -r match; do
-  url="$(echo "$match" | grep -oE "$url_re" | head -1)"
+  url="$(echo "$match" | grep -oE "$url_re" | head -1)" || true
   [ -z "$url" ] && continue
   nh="${url#http://}"; nh="${nh#https://}"; host="${nh%%[/?#]*}"; host="${host,,}"
   if ! is_allowlisted_host "$host"; then

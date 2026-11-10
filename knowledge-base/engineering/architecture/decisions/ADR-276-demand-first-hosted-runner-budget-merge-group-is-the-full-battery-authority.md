@@ -691,3 +691,49 @@ Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-re
 | (d) reader audit | kb-consumers 31/31; edge:consumed sel=0 | **pass** |
 
 Notes: commits and ejections halves of n=444 were enumerated on bases differing by ~3 edge commits (relaunch/ejections resolved a drifted `origin/main`; corrected-and-disclosed, bound unaffected — receipts provenance note). First window exercising the 2026-11-09 corroboration + classifier changes — corroboration found zero drops (merge_group_on_landed=293/300, missing=0, refused=0), the `unclassified-job` bucket stays at 0 (R3 also 0), flake-cleared=32. Remaining bound driver: `failed-job-without-fail-line` (22) + `queue-oracle-shortfall` synthetic units (40) + unsettled legs (4) — measurement coverage, not escapes. Retire-vs-schedule stays operator-owned.
+
+- 2026-11-09 S4 retired, verdict NO-GO (#9729; see `## Amendment 2026-11-09 (S4 retirement, #9729)` below): the stage and its evidence layer are torn out after the fourth ruling window — `S4 live` is NEVER recorded, the `pr-selection` lever, the `affected-index-ratchet` required context and the whole replay/preactivation/accept-table evidence layer are removed; the full battery is restored on every event and `oracle-review-required` is re-scoped onto the committed `scripts/ci-oracle-surface.txt`
+
+## Amendment 2026-11-09 (S4 retirement, #9729)
+
+Status stays `adopting`. This amendment records the retirement of stage 4 — a partial reversal of the stage,
+not a new decision — executed per the operator's instruction on the fourth ruling day (ruling comment 6751457876
+on #9729). S4 never activated: the lever shipped dark and locked in PR B (2026-10-14) and the lock was never
+removed; `S4 live` is never recorded.
+
+**The four-window evidence outcome.** Four go/no-go rulings ran against fresh windows: 2026-10-16 NO-GO on
+criterion (b) (index 37%-incomplete), 2026-11-07 NO-GO on criterion (a)'s worst-case bound (19.38% ≥ 12%), the
+2026-11-08 third window NO-GO on the same bound (16.99% ≥ 12%), and 2026-11-09's fourth window NO-GO (`verdict
+--a fail --b pass --c within-10% --d pass`, bound 18.41% ≥ 12%). Across all four windows `attributable=0` — no
+measured escape — but criterion (a) failed on COVERAGE, not on a caught escape: the numerator is swollen by
+unreadable-by-construction units (silent job logs, unsettled suite legs, synthetic oracle-shortfall units), so
+the bound cannot be certified. Criterion (c) fell off its pass for the first time in window 3 and stayed inside
+the band in window 4 (~92-96.7% of the bar on the bar's own denominator), which caps further re-rulings at
+UNDECIDED: another window could not rule GO on (a) and (c) simultaneously with confidence.
+
+**Machinery removed.** The `pr-selection` job, its `needs:` edges, its three `if:` PR-skip terms, its driver
+`scripts/ci-pr-selection.sh` and its test, and the `PR-AFFECTED-SKIP` aggregator tolerance arm with its
+SKIP_LEGS/ACTIVE/HEAD_SHA_OK env; the `affected-index-ratchet` job and its required-context entries (workflow,
+`scripts/required-checks.txt`, the canonical required-status-checks JSON, the Terraform ruleset, the
+admin-merge-ready fixtures); and the whole evidence layer: `scripts/ci-pr-affected-replay.py`,
+`scripts/ci-pr-affected-preactivation.sh`, `scripts/ci-pr-affected-audit.accept.tsv`, the replay/preactivation
+test batteries, their `--rows` arms, lane declarations, TSV rows, affected-paths edge arrays, kb-consumer
+baseline rows and the activation runbook.
+
+**Machinery kept.** The full battery on every event is restored (workflow job count 20, required contexts 11).
+`test-all.sh --affected` and `scripts/lib/test-affected-paths.sh` keep the local affected-run machinery (dead
+suite edges removed). `plugins/soleur/scripts/lint-ratchet.py` stays. The oracle lane (`oracle-selection`,
+`oracle-index-check`, `ORACLE-ONLY-SKIP`, the dark `CI_ORACLE_LANE` switch) is untouched. The
+`oracle-review-required` sentinel keeps its merge-gate role with its oracle list re-scoped from the replay
+module's `RATCHET_ORACLE` onto the committed 11-member `scripts/ci-oracle-surface.txt`, resolved base-first
+(base surface → legacy base replay → HEAD surface); a PR cannot shrink the list that judges it, and an empty or
+unreadable list fails closed as `api`/`shape`, never `not-oracle`.
+
+**Standing dissent pair (re-attempt conditions, recorded not adjudicated).** Re-attempting per-suite selection
+requires BOTH (i) an enumerable queue-entry→run linkage that settles every unreadable unit (cancelled runs,
+silent job logs — the coverage debt criterion (a) could not certify around) AND (ii) a fresh criterion-(c)
+`pass` window — either alone is insufficient, since (i) without (ii) certifies a saving the bar no longer
+measures and (ii) without (i) re-risks the unbound. A second recorded dissent: whether
+`scripts/lib/affected-glob.sh` and `scripts/lib/test-suite-lanes.sh` (sourced at runtime by
+`scripts/test-all.sh`, satisfying the old list's own membership criterion) should join the oracle surface is
+deliberately NOT folded into the teardown — a follow-up issue, not this PR.

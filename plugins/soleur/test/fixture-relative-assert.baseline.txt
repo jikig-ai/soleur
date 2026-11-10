@@ -332,6 +332,7 @@
 5	plugins/soleur/scripts/pipeline-tally.test.sh
 2	plugins/soleur/scripts/plugin-version.sh
 2	plugins/soleur/scripts/render-c4-model.sh
+1	plugins/soleur/scripts/required-set-report.test.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/scripts/write-budget-marker.sh
@@ -393,7 +394,6 @@
 1	plugins/soleur/test/c4-model-freshness.test.sh
 2	plugins/soleur/test/check-deps-adapter-drift.test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
-1	plugins/soleur/test/ci-pr-affected-replay.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 1	plugins/soleur/test/collision-precheck.test.sh
 1	plugins/soleur/test/compaction-state-hook.test.sh
@@ -432,6 +432,7 @@
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
 11	plugins/soleur/test/ship-battery-owed.test.sh
+1	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh
 1	plugins/soleur/test/ship-pir-action-items-gate.test.sh
 1	plugins/soleur/test/technical-ruling-gate.test.sh
 3	plugins/soleur/test/test-helpers.sh
@@ -458,8 +459,8 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-oracle-lane.sh
 2	scripts/ci-oracle-lane.test.sh
-8	scripts/ci-oracle-review.sh
-8	scripts/ci-pr-selection.sh
+13	scripts/ci-oracle-review.sh
+1	scripts/ci-parked-hold.test.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
@@ -479,6 +480,7 @@
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh
 2	scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
+3	scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
 21	scripts/followthroughs/pr-battery-gate-saving-9323.sh
 3	scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh

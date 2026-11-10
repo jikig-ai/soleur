@@ -81,7 +81,7 @@ FAIL=0
 # are fail-only, ZERO counted (the newshape self-check precedent below), so a
 # skipped row charges exactly its declared cost.
 SKIPPED_ASSERTIONS=0
-MIN_ASSERTIONS=696   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=712   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows; 712 on 2026-11-09 with #12508: +16 explicit-enqueue rows — enqueue/enqueuefail fixtures plus no-enqueue pins on the held/degraded/mergefail arms); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -340,6 +340,24 @@ case "$sub" in
     sed -i -E "s|^(${n}[|][^|]*[|][^|]*[|][^|]*[|])open|\1closed|" "$MOCK_GH_PRS"
     exit 0
     ;;
+  "pr view")
+    # The #12508 node-id lookup (`gh pr view <n> --json id`). The node id is a
+    # deterministic stand-in keyed to the PR number so rows can assert the
+    # enqueue mutation carries exactly this id.
+    printf '{"id":"PR_node_%s"}\n' "${args[2]:-0}"
+    ;;
+  "api graphql")
+    # The #12508 explicit merge-queue enqueue. The recorded call log flattens
+    # the -f query= text into the same line, so rows assert the mutation shape
+    # (enqueuePullRequest present, `jump` absent) from MOCK_GH_LOG directly.
+    # MOCK_GH_ENQUEUE_FAIL=1 rejects the mutation, exercising warn-and-continue.
+    if [[ " $* " == *enqueuePullRequest* ]]; then
+      [[ "${MOCK_GH_ENQUEUE_FAIL:-0}" == "1" ]] && { echo "gh-stub: enqueuePullRequest rejected" >&2; exit 1; }
+      printf '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1,"state":"QUEUED"}}}}\n'
+      exit 0
+    fi
+    echo "gh-stub: unhandled api graphql: $*" >&2; exit 1
+    ;;
   "api "*)
     ep="${args[1]:-}"
     if [[ "$ep" =~ commits/([0-9a-f]{40})$ ]]; then
@@ -534,6 +552,7 @@ assert_gh_called 'g1.happy:body-digest'  "$DIG_NEW"
 assert_gh_called 'g1.happy:body-run'     'github.test/runs/1'
 assert_gh_called 'g1.happy:body-adr'     'ADR-232'
 assert_gh_called 'g1.happy:auto-merge'   'gh pr merge .* --auto --squash'
+assert_gh_called 'g1.happy:enqueue'      'gh api graphql .*enqueuePullRequest'
 assert_gh_not_called 'g1.happy:no-close' 'gh pr close '
 [[ -s "$TMP/happy.summary" ]] && pass 'g1.happy:summary' \
   || fail 'g1.happy:summary' "GITHUB_STEP_SUMMARY file empty — summary() never wrote"
@@ -852,6 +871,7 @@ for mo in 'true:held' 'false:armed' ':armed'; do
   assert_result "g1.$lbl:result" opened
   if [[ "$want" == held ]]; then
     assert_gh_not_called "g1.$lbl:no-merge" 'gh pr merge '
+    assert_gh_not_called "g1.$lbl:no-enqueue" 'gh api graphql'
     assert_gh_called     "g1.$lbl:body-says-why" 'gh pr create .*mirror_only backfill cannot attest provenance'
     assert_gh_called     "g1.$lbl:hold-comment" 'gh pr comment .*mirror_only'
   else
@@ -933,6 +953,7 @@ assert_rc     'g1.degraded:exit' 0
 assert_result 'g1.degraded:result' opened
 assert_gh_called     'g1.degraded:pr-create' 'gh pr create '
 assert_gh_not_called 'g1.degraded:no-merge'  'gh pr merge '
+assert_gh_not_called 'g1.degraded:no-enqueue' 'gh api graphql'
 assert_gh_called     'g1.degraded:hold-comment' 'gh pr comment '
 
 # ---------------------------------------------------------------------------
@@ -950,6 +971,56 @@ MOCK_GH_MERGE_FAIL=1 run_bump mergefail --signed-tag v1.1.38 \
 assert_rc     'g1.mergefail:exit' 0
 assert_result 'g1.mergefail:result' opened
 assert_out_has 'g1.mergefail:warning' '::warning::'
+assert_gh_not_called 'g1.mergefail:no-enqueue' 'gh api graphql'
+
+# ---------------------------------------------------------------------------
+# #12508 — explicit merge-queue enqueue after a SUCCESSFUL arm. The 2026-10-07
+# ADR-270 measurement ("GitHub enqueues an armed PR whose head is behind main
+# on its own under the strict policy") has a counter-instance: authored bump
+# PR #12489 sat armed 5h20m+ with isInMergeQueue:false / BLOCKED. The arm
+# branch therefore resolves the PR's GraphQL node id and calls
+# enqueuePullRequest itself — a NORMAL enqueue (`jump` is never set; the jump
+# variant is operator-urgency tooling, runbooks/merge-queue-jump.md).
+# ---------------------------------------------------------------------------
+new_fixture_repo enqueue
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+run_bump enqueue --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueue:exit' 0
+assert_result    'g1.enqueue:result' opened
+assert_gh_called 'g1.enqueue:node-id'  'gh pr view 1 --repo [^ ]+ --json id'
+assert_gh_called 'g1.enqueue:mutation' 'gh api graphql .*enqueuePullRequest'
+assert_gh_called 'g1.enqueue:pr-id'    'gh api graphql -F pr=PR_node_1 '
+# The enqueue lands AFTER the arm, and the mutation never carries `jump`.
+_merge_ln=$(grep -n 'gh pr merge .* --auto --squash' "$MOCK_GH_LOG" | tail -1 | cut -d: -f1)
+_enq_ln=$(grep -n 'enqueuePullRequest' "$MOCK_GH_LOG" | head -1 | cut -d: -f1)
+[[ -n "$_merge_ln" && -n "$_enq_ln" && "$_enq_ln" -gt "$_merge_ln" ]] \
+  && pass 'g1.enqueue:after-arm' \
+  || fail 'g1.enqueue:after-arm' "enqueue line ${_enq_ln:-none} does not follow arm line ${_merge_ln:-none}"
+_enq_line=$(grep 'gh api graphql' "$MOCK_GH_LOG" || true)
+[[ -n "$_enq_line" && "$_enq_line" != *jump* ]] && pass 'g1.enqueue:no-jump' \
+  || fail 'g1.enqueue:no-jump' "enqueue call missing or carries jump: ${_enq_line:-<none>}"
+
+# An enqueue rejection warns and continues — armed auto-merge remains the
+# fallback, strictly better than the pre-#12508 no-enqueue path; exit stays 0.
+new_fixture_repo enqueuefail
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+MOCK_GH_ENQUEUE_FAIL=1 run_bump enqueuefail --signed-tag v1.1.38 \
+  --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueuefail:exit' 0
+assert_result    'g1.enqueuefail:result' opened
+assert_out_has   'g1.enqueuefail:warning' '::warning::'
+assert_out_has   'g1.enqueuefail:names'   'enqueuePullRequest'
+assert_gh_called 'g1.enqueuefail:armed'   'gh pr merge .* --auto --squash'
 
 # ---------------------------------------------------------------------------
 # AC8 — supersede: open bot-authored pin PR for an OLDER target is closed with

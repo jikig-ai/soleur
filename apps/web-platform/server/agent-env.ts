@@ -375,7 +375,25 @@ export function buildAgentEnv(
     );
   }
 
-  if (opts?.claudeTmpDir) env.CLAUDE_CODE_TMPDIR = opts.claudeTmpDir;
+  if (opts?.claudeTmpDir) {
+    env.CLAUDE_CODE_TMPDIR = opts.claudeTmpDir;
+    // #11764 — TMPDIR is the lever every descendant mktemp reads (hooks, skill
+    // scripts, `srt` fixtures, `claude-http-*`, subagent scratch). Routing it
+    // at the same per-tenant base lands that scratch under `/tmp/.cs/<tenant>`
+    // — repo-owned and age-reaped by tmpfs-guard's owned-base arm — instead of
+    // scattered across shared `/tmp` top level (the 6.3k-entry count-shaped
+    // leak). Set AFTER the allowlist loop above so it beats an ambient
+    // `process.env.TMPDIR` copy; TMPDIR was already allowlisted, and the
+    // sandbox binds `/tmp/.cs` writable for exactly this path.
+    // Scope caveat: the injected path is authoritative ONLY on the direct
+    // spawn path. On the flag-gated outer-wrap arm, `agent-outer-wrap.ts:458`
+    // re-pins `TMPDIR=/tmp` over this built env (the session tmpfs the wrap
+    // itself provisions), and inside the inner sandbox `/tmp/.cs` is an
+    // ephemeral tmpfs mask — so this value never reaches the sandboxed
+    // child's /tmp tree on that arm.
+    // Callsite contract: the tenant dir exists because the Claude Code CLI creates CLAUDE_CODE_TMPDIR before spawning — an unsandboxed consumer in the window before creation gets ENOENT (loud, safe direction).
+    env.TMPDIR = opts.claudeTmpDir;
+  }
 
   // #10455 (a): per-session seccomp artifact. Egress is read from the SAME handles that set the egress
   // env above (`ghToken` -> GH_TOKEN, `egressProxy` -> HTTPS_PROXY). Only a no-egress session with the

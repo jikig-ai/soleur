@@ -698,9 +698,14 @@ t_rsc_order_insensitive() {
 # into the three umbrella contexts guards-ruleset / quality-guards /
 # secret-guards in the same PR that produced them — ADR-032 amendment
 # 2026-11-06; per-member history above records each member's lineage).
-# bumped 10->12 by #10859 (PR3b: affected-index-ratchet flipped advisory->required
+# bumped 10->12 by #10859 (PR3b: the S4 ratchet context flipped advisory->required
 # and the new oracle-review-required context — ADR-276 rulings (a)/(b)
-# 2026-11-06, budget-owner go-ahead 2026-11-07).
+# 2026-11-06, budget-owner go-ahead 2026-11-07);
+# bumped 12->11 by the S4 retirement of 2026-11-09 (#9729 ruling: the stage never
+# activated — the repo variable stayed unset and the activation lock intact — so
+# the full battery already runs on every PR and merge_group entry;
+# oracle-review-required stays required and re-scoped onto
+# scripts/ci-oracle-surface.txt).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -718,10 +723,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "12" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "11" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
@@ -747,7 +752,7 @@ t_rsc_canonical_matches_terraform() {
   # Extract `context = "..."` (required_check blocks are the only `context =`
   # assignments in this root); strip quotes; sort for set comparison.
   tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" \
-    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort || true)
   if [[ "$json_ctx" == "$tf_ctx" ]]; then
     _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" ok
   else
@@ -880,6 +885,11 @@ _mq_guard2() {
     fi
     MQ_REASON="0 params compared (no merge_queue params parsed from any source)"; return 1
   fi
+  local nblk_tf
+  # Counted on the comment-STRIPPED tf: a /* */-wrapped stale copy (the m8 masquerade
+  # fixture) is not a second block — only real block tokens can escape the parser.
+  nblk_tf=$(_mq_strip_hcl "$tf" | grep -cE '^[[:space:]]*merge_queue[[:space:]]*\{' || true)
+  if (( nblk_tf > 1 )); then MQ_REASON="tf carries $nblk_tf merge_queue blocks (the first-block parser reads block 1; a second block escapes parity AND the safety values)"; return 1; fi
   if (( n_tf != 7 )); then MQ_REASON="tf carries $n_tf of 7 merge_queue params"; return 1; fi
   if (( n_dr != 7 )); then MQ_REASON="DR skeleton carries $n_dr of 7 merge_queue params"; return 1; fi
   if (( n_rd != 7 )); then MQ_REASON="README table carries $n_rd of 7 merge_queue params"; return 1; fi
@@ -894,6 +904,9 @@ _mq_guard2() {
   #    (head_ref names only the deepest), so multi-PR groups are supported — but the set is
   #    deliberately {1,3} so an unsanctioned raise still fails while a value-only 1<->3
   #    rollback/re-raise needs no guard edit (#11678 adoption window).
+  #  - max_entries_to_build in {1,2}: sanctions the current value AND the deferred #12269
+  #    measured-experiment value so a value-only 1<->2 PR needs no guard edit; any other
+  #    value (0, 3, ...) fails here even with parity.
   #  - merge_method == SQUASH: matches `gh pr merge --squash` and the repo's linear-history contract.
   #  - check_response_timeout_minutes > the stall probe's threshold: else the probe cannot report before the queue
   #    ejects the entry silently.
@@ -901,6 +914,11 @@ _mq_guard2() {
   me=$(_mq_val "$tf_p" max_entries_to_merge); mm=$(_mq_val "$tf_p" merge_method); to=$(_mq_val "$tf_p" check_response_timeout_minutes)
   if [[ "$me" != "1" && "$me" != "3" ]]; then
     MQ_REASON="max_entries_to_merge=$me, must be in {1,3} (sanctioned set; the CLA verify enumerates group members — an unsanctioned raise is a deliberate act needing this guard's own edit)"; return 1
+  fi
+  local mb
+  mb=$(_mq_val "$tf_p" max_entries_to_build)
+  if [[ "$mb" != "1" && "$mb" != "2" ]]; then
+    MQ_REASON="max_entries_to_build=$mb, must be in {1,2} (sanctioned set; current value 1 plus the #12269 revert target 2 — an unsanctioned raise/lower is a deliberate act needing this guard's own edit)"; return 1
   fi
   if [[ "$mm" != "SQUASH" ]]; then MQ_REASON="merge_method=$mm, must be SQUASH"; return 1; fi
   thr=$(_mq_stall_threshold "$wf")
@@ -1061,6 +1079,85 @@ t_mq_mutations() {
   _mq_mutation "T-mq-1.m13 stall workflow threshold made non-numeric (underivable) -> RED" \
     'stall threshold not derivable' wf \
     "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1soon'/"
+  # 14 — max_entries_to_build outside the sanctioned {1,2} set, parity preserved -> RED
+  _mq_mutation "T-mq-1.m14 max_entries_to_build -> 4 in tf+DR+README (parity holds, unsanctioned value) -> RED on the safety value" \
+    'must be in \{1,2\}' tf,dr,readme \
+    's/(max_entries_to_build[[:space:]]*=[[:space:]]*)[0-9]+/\14/; s/("max_entries_to_build":[[:space:]]*)[0-9]+/\14/; s/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\14/'
+  # 14b — the ADJACENT unsanctioned value (the natural raise direction for this knob)
+  _mq_mutation "T-mq-1.m14b max_entries_to_build -> 3 in tf+DR+README (parity holds, adjacent unsanctioned) -> RED on the safety value" \
+    'must be in \{1,2\}' tf,dr,readme \
+    's/(max_entries_to_build[[:space:]]*=[[:space:]]*)[0-9]+/\13/; s/("max_entries_to_build":[[:space:]]*)[0-9]+/\13/; s/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\13/'
+
+}
+
+# ---- merge_queue surface uniqueness (#12269 review): the {1,2} pin guards the
+# value carried by the three parity surfaces. A merge_queue block on ANY OTHER tf
+# ruleset resource (or a second block appended to the same file — the parser reads
+# block 1 only) reaches apply-github-infra.yml with Guard 2 fully green, and
+# GitHub accepts a second merge queue on one branch (deadlock, not a 422). Same
+# for a merge_queue rule in a different create-*-required-ruleset.sh skeleton.
+_mq_surface_uniqueness() { # <repo-root>; 0 = queue surface lives only in the pinned files
+  local root="$1" f hits="" dr_hits="" stripped
+  # HCL forms that produce a merge_queue rule: a literal block OR a dynamic block.
+  # Comment-stripped so a /* */-wrapped or commented copy cannot count (m8 class);
+  # `dynamic "merge_queue"` carries '"' before '{', so a single anchored pattern
+  # cannot cover both — scan each form separately.
+  while IFS= read -r f; do
+    stripped=$(awk 'BEGIN{c=0}{line=$0;out="";for(i=1;i<=length(line);i++){two=substr(line,i,2);if(c==0&&two=="/*"){c=1;i++;continue}if(c==1&&two=="*/"){c=0;i++;continue}if(c==1)continue;if(two=="//"||substr(line,i,1)=="#")break;out=out substr(line,i,1)}print out}' "$f")
+    if grep -qE 'merge_queue[[:space:]]*\{|dynamic[[:space:]]+"merge_queue"' <<<"$stripped"; then hits="${hits}${f}"$'\n'; fi
+  done < <(find "$root" \( -name .git -o -name .worktrees -o -name .claude -o -name node_modules \) -prune -o -name '*.tf' -type f -print 2>/dev/null | sort)
+  # Terraform JSON files: "merge_queue" : { is a rule object — scan separately.
+  while IFS= read -r f; do
+    grep -q '"merge_queue"' "$f" && hits="${hits}${f}"$'\n'
+  done < <(find "$root" \( -name .git -o -name .worktrees -o -name .claude -o -name node_modules \) -prune -o -name '*.tf.json' -type f -print 2>/dev/null | sort)
+  # DR skeletons: any *ruleset*.sh carrying a merge_queue rule type outside the pinned one.
+  while IFS= read -r f; do
+    grep -qE '"type"[^a-zA-Z0-9_]{1,4}"merge_queue"' "$f" && dr_hits="${dr_hits}${f}"$'\n'
+  done < <(find "$root/scripts" -maxdepth 1 -name '*ruleset*.sh' -type f 2>/dev/null | sort)
+  hits=$(printf '%s' "$hits" | sort | sed '/^$/d'); dr_hits=$(printf '%s' "$dr_hits" | sort | sed '/^$/d')
+  MQ_REASON=""
+  # Queue-off is a sanctioned rollback state: an EMPTY surface is not a violation.
+  if [ -n "$hits" ] && [[ "$hits" != "$root/infra/github/ruleset-ci-required.tf" ]]; then
+    MQ_REASON="merge_queue in tf outside infra/github/ruleset-ci-required.tf: $hits"; return 1
+  fi
+  if [ -n "$dr_hits" ] && [[ "$dr_hits" != "$root/scripts/create-ci-required-ruleset.sh" ]]; then
+    MQ_REASON="merge_queue rule in a DR skeleton outside create-ci-required-ruleset.sh: $dr_hits"; return 1
+  fi
+  return 0
+}
+
+t_mq_surface_uniqueness() {
+  local label="T-mq-1.u1 repo-wide merge_queue surface == the pinned files -> GREEN"
+  if _mq_surface_uniqueness "$REPO_ROOT"; then _report "$label" ok; else _report "$label" fail "$MQ_REASON"; fi
+  # staged: a second merge_queue-bearing tf elsewhere in infra/github -> RED
+  local d; d=$(mktemp -d); assert_fixture_dir "$d"; MQ_STAGE_DIRS+=("$d")
+  mkdir -p "$d/infra/github" "$d/scripts"
+  cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$d/infra/github/"
+  cp "$REPO_ROOT/infra/github/ruleset-cla-required.tf" "$d/infra/github/" 2>/dev/null || true
+  printf 'resource "github_repository_ruleset" "cla" {\n  rules {\n    merge_queue {\n      max_entries_to_build = 9\n    }\n  }\n}\n' >> "$d/infra/github/ruleset-cla-required.tf"
+  cp "$REPO_ROOT/scripts/create-ci-required-ruleset.sh" "$d/scripts/"
+  if _mq_surface_uniqueness "$d"; then
+    _report "T-mq-1.u2 merge_queue block added to a second tf ruleset -> RED" fail "guard stayed GREEN"
+  else
+    _report "T-mq-1.u2 merge_queue block added to a second tf ruleset -> RED" ok
+  fi
+  rm -rf "$d"
+  # staged: merge_queue rule injected into the CLA DR skeleton -> RED
+  d=$(mktemp -d); assert_fixture_dir "$d"; MQ_STAGE_DIRS+=("$d")
+  mkdir -p "$d/infra/github" "$d/scripts"
+  cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$d/infra/github/"
+  cat > "$d/scripts/create-cla-required-ruleset.sh" <<'FIX'
+cat > "$skeleton" << 'EOF'
+{"rules": [{"type": "merge_queue", "parameters": {"max_entries_to_build": 9}}]}
+EOF
+FIX
+  cp "$REPO_ROOT/scripts/create-ci-required-ruleset.sh" "$d/scripts/"
+  if _mq_surface_uniqueness "$d"; then
+    _report "T-mq-1.u3 merge_queue rule in a second DR skeleton -> RED" fail "guard stayed GREEN"
+  else
+    _report "T-mq-1.u3 merge_queue rule in a second DR skeleton -> RED" ok
+  fi
+  rm -rf "$d"
 }
 
 # ---- queue-OFF (rollback) state, #9454 L5 ----
@@ -1216,6 +1313,36 @@ FIX
   rm -rf "$d"
 }
 
+# T-mq-1.m15 (must-PASS): each member of the sanctioned {1,2} set staged consistently across
+# tf+DR+README must go GREEN — covers the reject-everything guard class (a pin that fails its own
+# sanctioned values is worse than no pin). Driven on staged copies so the row is live-value agnostic.
+# shellcheck disable=SC2016  # sed scripts are single-quoted on purpose; $v interpolates via '...'"$v"'...' concatenation
+t_mq_sanctioned_values_pass() {
+  local d v
+  for v in 1 2; do
+    _mq_stage; d="$MQ_STAGE_DIR"
+    sed -E \
+      's/(max_entries_to_build[[:space:]]*=[[:space:]]*)[0-9]+/\1'"$v"'/; s/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/; s/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' \
+      "$d/pristine/tf" > "$d/work/tf"
+    sed -E 's/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/' "$d/pristine/dr" > "$d/work/dr"
+    sed -E 's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' "$d/pristine/readme" > "$d/work/readme"
+    local live_v
+    live_v=$(_mq_strip_hcl "$d/pristine/tf" | sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' | grep -oE 'max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)
+    # Landed-proof: staging the NON-live value must change all three surfaces; staging
+    # the live value is intentionally a no-op (the row still proves the pin accepts it).
+    if [[ "$v" != "$live_v" ]] && { cmp -s "$d/pristine/tf" "$d/work/tf" || cmp -s "$d/pristine/dr" "$d/work/dr" || cmp -s "$d/pristine/readme" "$d/work/readme"; }; then
+      _report "T-mq-1.m15 sanctioned max_entries_to_build=$v (parity holds) -> GREEN" fail "value-$v staging did not land on all three surfaces (seds missed — the row tested nothing)"
+      rm -rf "$d"; continue
+    fi
+    if _mq_guard2 "$d/work/tf" "$d/work/dr" "$d/work/readme" "$d/work/canon" "$d/work/wf"; then
+      _report "T-mq-1.m15 sanctioned max_entries_to_build=$v (parity holds) -> GREEN" ok
+    else
+      _report "T-mq-1.m15 sanctioned max_entries_to_build=$v (parity holds) -> GREEN" fail "$MQ_REASON"
+    fi
+    rm -rf "$d"
+  done
+}
+
 # ---- Guard 2 controls: the guard and its row batteries must be provably FALSIFIABLE (#9454 L17/L18) ----
 # Every Guard 2 invocation is driven once with an input that MUST fail, and its verdict recorded through printf
 # (never through the helper under test). `_mq_drive_must_fail` runs a battery, requires >= 1 recorded failure
@@ -1276,6 +1403,8 @@ t_mq_controls() {
     _mq_with_guard_stub green t_mq_mutations
   _mq_drive_must_fail "T-mq-ctl4 non-canonical must-PASS invocation reds when the guard always rejects" strict \
     _mq_with_guard_stub red t_mq_param_parity_noncanonical_pass
+  _mq_drive_must_fail "T-mq-ctl8 sanctioned-values battery reds when the guard always rejects" strict \
+    _mq_with_guard_stub red t_mq_sanctioned_values_pass
   _mq_drive_must_fail "T-mq-ctl5 queue-off battery reds when the guard is neutered to always-green (half-removed rows must red)" "" \
     _mq_with_guard_stub green t_mq_queue_off
   # 6-7. The two queue-off evidence arms are PINNED: removing either from _mq_queue_absent must red the queue-off battery.
@@ -1586,6 +1715,8 @@ t_rsc_canonical_matches_terraform
 t_mq_param_parity_real
 t_mq_mutations
 t_mq_param_parity_noncanonical_pass
+t_mq_sanctioned_values_pass
+t_mq_surface_uniqueness
 t_mq_queue_off
 t_mq_controls
 
@@ -1601,7 +1732,9 @@ echo "=== $pass passed, $fail failed ==="
 # EXACT floor on the Guard 2 rows (printf + exit, independent of the verdict helpers it audits). Deleting a Guard
 # 2 invocation, dropping a row, or neutering _report (which stops counting T-mq-* oks) moves MQ_OK off the
 # constant. Update MQ_EXPECTED_OK deliberately when a Guard 2 row is added or removed.
-MQ_EXPECTED_OK=28
+# 28 -> 31 on #12269: +m14 (unsanctioned 4 -> RED) +m15 x2 (sanctioned 1 and 2 -> GREEN).
+# 31 -> 36 on the #12269 fix round: +m14b (adjacent 3) +ctl8 (m15 falsifiability) +u1..u3 (surface uniqueness).
+MQ_EXPECTED_OK=36
 if [[ "$MQ_OK" -ne "$MQ_EXPECTED_OK" ]]; then
   printf 'FAIL: Guard 2 reported %s ok T-mq rows, expected exactly %s (an invocation or row was deleted/added, or _report was neutered)\n' "$MQ_OK" "$MQ_EXPECTED_OK" >&2
   exit 1

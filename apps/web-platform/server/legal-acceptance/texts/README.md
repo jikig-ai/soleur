@@ -27,7 +27,7 @@ Adding a second text, step by step:
 5. The records (Art. 30 register, LIA, attestation, ADR-319) are per text; see the CLO ruling file for the shape.
 
 The `kind` of a key is immutable once a hash is published: flipping `acknowledgement` to `terms` would re-word the founder's recorded Yes as
-"You accepted the updated ...". Changing it is a review-blocking change that needs a CLO ruling.
+"You accepted the ...". Changing it is a review-blocking change that needs a CLO ruling.
 
 ## The pin rule
 
@@ -36,7 +36,7 @@ a new `version` and a new appended pin row; an existing row's sha is never edite
 requires the keys the loader serves, the keys in `PUBLISHED` and the keys in `LEGAL_TEXT_KIND` to be the same set, and checks each hash twice
 (through the loader and by an independent read of the file bytes). It proves consistency, not integrity: the text and its pin can be
 edited in one diff. The hash, not the version label, is the authority, because the database keeps `UNIQUE (founder_id, key, text_hash)`.
-If that is judged insufficient, add a base-SHA CI guard modelled on `tc-document-sha-guard` (tracked in #12366). A change to a published
+If that is judged insufficient, add a base-SHA CI guard modelled on `tc-document-sha-guard` (tracked in #12366); the `needsBaseGuard` tripwire in `registry-pins.test.ts` fails as soon as a second text is served without `scripts/check-registry-pin-base.sh`, and its failure message carries the guard shape. A change to a published
 file is a new version: the old hash stays valid for the decisions already recorded against it.
 
 ## What `accept` means for an acknowledgement text

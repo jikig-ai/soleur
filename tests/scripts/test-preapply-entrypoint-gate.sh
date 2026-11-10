@@ -107,7 +107,7 @@ _gate() {
     bash "$GATE" --gate "$fixture" 2>&1
   )" && RC=0 || RC=$?
 }
-_calls() { local n=0; [[ -s "$CALLLOG" ]] && n=$(grep -c '' <"$CALLLOG"); echo "$n"; }
+_calls() { local n=0; [[ -s "$CALLLOG" ]] && n=$(grep -c '' <"$CALLLOG") || true; echo "$n"; }
 
 # --- 1. GATE control flow ----------------------------------------------------
 
@@ -193,7 +193,7 @@ t_malformed_json_fails_closed() {
       _report "G10.$f malformed plan fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
     fi
   done
-  [[ "$allok" -eq 1 ]] && _report "G10 malformed/non-array/empty plan JSON all fail closed (never 'no matches → PASS')" ok
+  [[ "$allok" -eq 1 ]] && _report "G10 malformed/non-array/empty plan JSON all fail closed (never 'no matches → PASS')" ok || true
 }
 
 # G11: account-level (kind=root) create over non-empty → BLOCK via accounts/ URL.
@@ -599,9 +599,9 @@ _in_list() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n
 t_parity_all_types_adjudicated() {
   local types t missing=() n=0
   types=$(grep -rhoE 'resource "cloudflare_[a-z_]+"' "$REPO_ROOT"/apps/web-platform/infra/*.tf \
-          | sed -E 's/resource "([a-z_]+)"/\1/' | sort -u)
+          | sed -E 's/resource "([a-z_]+)"/\1/' | sort -u) || true
   # Minimum-cardinality guard: the infra is known to declare ≥10 cloudflare types.
-  n=$(grep -c '' <<<"$types")
+  n=$(grep -c '' <<<"$types") || true
   if [[ "$n" -lt 10 ]]; then
     _report "P1 all cloudflare_* types adjudicated" fail "only $n types enumerated — grep/glob likely broke (expected ≥10)"
     return
@@ -730,7 +730,7 @@ t_audit_job_shape() {
     _report "D2 entrypoint_audit job shape" fail "job block empty — job missing or extractor broken"
     return
   fi
-  local code; code="$(grep -vE '^[[:space:]]*#' <<<"$block")"
+  local code; code="$(grep -vE '^[[:space:]]*#' <<<"$block")" || true
   local ok=1 why=""
   grep -Eq "inputs\.apply_target == 'entrypoint-audit'" <<<"$code" || { ok=0; why+="[no mutually-exclusive if] "; }
   grep -Eq 'issues: write' <<<"$code" || { ok=0; why+="[no issues:write] "; }
@@ -763,8 +763,8 @@ t_parity_destroy_guard_classes_adjudicated() {
   # Numbered class list only: lines like `#   1. cloudflare_ruleset.*  .rules`.
   local types t missing=() n=0
   types=$(grep -E '^#[[:space:]]+[0-9]+\.[[:space:]]+cloudflare_' "$jq_file" \
-          | grep -oE 'cloudflare_[a-z_]+' | sort -u)
-  n=$(grep -c '' <<<"$types")
+          | grep -oE 'cloudflare_[a-z_]+' | sort -u) || true
+  n=$(grep -c '' <<<"$types") || true
   # Minimum-cardinality guard: the numbered table lists ≥4 cloudflare classes.
   if [[ "$n" -lt 4 ]]; then
     _report "P3x destroy-guard class table cross-ref" fail "only $n cloudflare_ class(es) parsed from the jq numbered list — extractor broke (expected ≥4)"
@@ -799,7 +799,7 @@ t_parity_tunnel_import_forcing_function() {
     inb && /to[[:space:]]*=[[:space:]]*cloudflare_zero_trust_tunnel_cloudflared/ { print FILENAME ": " $0 }
     inb && /^[[:space:]]*\}/ { inb=0 }
   ' "$REPO_ROOT"/apps/web-platform/infra/*.tf 2>/dev/null || true)
-  [[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits")
+  [[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits") || true
   if [[ "$tunnel_out" -eq 1 && "$n" -gt 0 ]]; then
     _report "P3x tunnel import forcing function" fail "import targets cloudflare_zero_trust_tunnel_cloudflared* while adjudicated OUT — config[].ingress_rule is now a whole-list clobber surface. Re-adjudicate IN (ADR-136) + gate it: ${hits}"
   else

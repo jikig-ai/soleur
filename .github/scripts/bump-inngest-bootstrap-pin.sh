@@ -630,8 +630,32 @@ fi
 # arm only when the signed tag IS the target AND its mirror is healthy.
 if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS" == "ok" && "$PROVENANCE" == "bound" ]]; then
   if [[ -n "$PR_NUM" ]]; then
-    gh pr merge "$PR_NUM" --repo "$REPO" --auto --squash \
-      || echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"
+    if gh pr merge "$PR_NUM" --repo "$REPO" --auto --squash; then
+      # #12508 / ADR-270 addendum 2026-11-09: armed auto-merge does NOT reliably
+      # self-enqueue a PR whose head goes BEHIND under
+      # strict_required_status_checks_policy — the authored bump PR #12489 sat
+      # armed 5h20m+ with isInMergeQueue:false / mergeStateStatus:BLOCKED while
+      # the pin-drift guard ran red on every head carrying the tag. So the arm
+      # branch enqueues the PR EXPLICITLY through the same minted App token
+      # (ADR-285: only App-authored enqueues get merge_group runs —
+      # github-actions[bot]'s get zero). A NORMAL enqueue: `jump` is never set —
+      # it is operator-urgency tooling (runbooks/merge-queue-jump.md) that
+      # rebuilds every in-flight entry. Every failure here warns and continues:
+      # armed auto-merge remains the fallback, strictly better than the
+      # pre-#12508 no-enqueue path.
+      pr_node=$(timeout 60 gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
+        | jq -r '.id // ""' 2>/dev/null || true)
+      if [[ -z "$pr_node" ]]; then
+        echo "::warning::could not resolve PR ${PR_NUM}'s GraphQL node id — explicit merge-queue enqueue skipped; armed auto-merge remains"
+      elif enq_out=$(timeout 60 gh api graphql -F pr="$pr_node" \
+          -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>/dev/null); then
+        echo "enqueued ${PR_URL} on the merge queue (position $(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$enq_out" 2>/dev/null || echo '?'))"
+      else
+        echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
+      fi
+    else
+      echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"
+    fi
   else
     echo "::warning::could not resolve PR number for ${PR_URL} — auto-merge not armed"
   fi
