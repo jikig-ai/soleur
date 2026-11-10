@@ -129,7 +129,15 @@ describe("workspace provisioning", () => {
     const path = await provisionWorkspace(userId);
     rmSync(join(path, ".git"), { recursive: true, force: true });
     writeFileSync(join(path, ".git"), `gitdir: ${join(victim, ".git")}\n`);
+    // `git init` on a gitfile RE-INITIALISES the repository it names (it re-creates template files that are missing):
+    // delete one, and prove with raw git (control) that init would bring it back
+    const description = join(victim, ".git", "description");
+    rmSync(description, { force: true });
+    execFileSync("git", ["init", "-q"], { cwd: path, stdio: "pipe" });
+    expect(existsSync(description), "control: raw git init did not re-initialise the named repository").toBe(true);
+    rmSync(description, { force: true });
     await provisionWorkspace(userId);
+    expect(existsSync(description), "provisionWorkspace re-initialised another repository through the gitfile").toBe(false);
     const marker = execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], { cwd: victim, stdio: "pipe" }).toString().trim();
     expect(marker).toBe("true");
     // and no commit landed in the victim's history from the attacker's workspace
