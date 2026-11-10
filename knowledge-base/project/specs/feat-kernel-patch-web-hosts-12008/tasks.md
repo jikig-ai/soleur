@@ -11,7 +11,7 @@ ADR-322 applies to every file, commit and the PR body.
 - [x] 1.4 Instrument self-test + exact-count anti-vacuity floor
 - [x] 1.5 `fresh-boot-ready.test.sh`: kernel predicate rows (match, mismatch, empty target)
 - [ ] 1.6 Part 2a tests: var validations (one primary profile, one jump, unique in-subnet IP); dynamic LB origins reproduce today's weights and order; `WEB_HOST_PRIVATE_IPS` parity across workflows; `lb-weight-gate.sh` third-key cases; ratchet (web-1 IP literal + `"web-1"`, ceiling = today); host-bound-state census rows
-- [ ] 1.7 Register new suites: `suite-shard-legs.tsv` (+ `suite-durations.tsv` if required), `scripts/guard-vacuity-floor.test.sh` promotion
+- [x] 1.7 Register new suites: `suite-shard-legs.tsv` (+ `suite-durations.tsv` if required), `scripts/guard-vacuity-floor.test.sh` promotion
 
 ## Phase 2: GREEN — Part 1 (kernel currency)
 
