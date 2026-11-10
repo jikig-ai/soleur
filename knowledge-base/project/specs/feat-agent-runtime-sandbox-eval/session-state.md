@@ -9,6 +9,11 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - Filed #12585 (`type/security`, Phase 4): production `createCanUseTool` denies the SDK's `SandboxNetworkAccess` request as an unknown tool. #11637 is blocked by #12585 (verified).
 - Branch-owned CI reds fixed (brainstorm SKILL.md byte ceiling, `gh pr list -L`, CTO link text). Remaining reds are main-side with open fixes: ADR-276 MD032 (#12559), inngest pin v1.1.72 (#12562); re-merge main after they land.
 
+## Superseded result (2026-11-10, later the same day)
+
+- A defect found after the GO run: the REST canonical action dropped literal path segments, so `POST /repos/o/r/pulls` and `POST /repos/o/r/issues` with the same body shared a hash. Fixed in `policy.mjs` (hermetic row, RED before the fix) and probed in criterion 7. The GO of run 42816918299 predates the fix; the re-measure on the fixed head replaces `injector-spike-results.json`.
+- Task 2.2 in flight: eight Guard mutation runs dispatched on `spike-mut/*` branches (base 6b9a0cb43b, scratch worktree `/var/tmp/spike-mut-wt`; remove both when recorded). Guard 3 row 4 measured locally: caught (FAIL DOCKER_UNAVAILABLE, exit 1, INCONCLUSIVE).
+
 ## Next
 
 1. Task 2.2: run each by-hand Guard row once (Guard 1 rows 1 to 5, Guard 2 rows 2, 6, 8, Guard 3 row 4) as a mutated copy dispatched through `egress-injector-spike.yml` (`workflow_dispatch` on a throwaway branch, one mutation per branch; Guard 3 row 4 can run locally with `docker` shadowed on PATH). Record which reddened, the run URL and the message. Expected survivors to label: Guard 1 row 1 (the Read tool refuses `/proc` files and bwrap hides `/proc`), Guard 2 row 8 (the hook still rejects; check what it observes).
