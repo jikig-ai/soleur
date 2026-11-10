@@ -1,9 +1,9 @@
 {
   "verdict": "GO",
   "meta": {
-    "run_url": "https://github.com/jikig-ai/soleur/actions/runs/42880042135",
-    "commit": "fd765ec1c5c395ea4ff91a880fab886a328eaedd",
-    "date": "2026-11-10T19:00:28Z",
+    "run_url": "https://github.com/jikig-ai/soleur/actions/runs/42883871262",
+    "commit": "1cd31393584347896f774e8ff01d409a6acf4ab7",
+    "date": "2026-11-10T19:25:40Z",
     "machine": "Linux 7.0.0-1017-azure x86_64 cpus=4",
     "sdk_pin": "0.3.311",
     "iron_proxy_digest": "sha256:727da0cc35a6d73ed2913a38d56c4b9b4476c075149492e4fbf75552e83361ff",
@@ -105,29 +105,29 @@
         "readInjectorEnviron": {
           "isError": true,
           "hits": [],
-          "content": "<tool_use_error>Cannot read '/proc/57/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+          "content": "<tool_use_error>Cannot read '/proc/51/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
         },
         "readInjectorCmdline": {
           "isError": true,
           "hits": [],
-          "content": "<tool_use_error>Cannot read '/proc/57/cmdline': this path names a device or process file that this tool does not read.</tool_use_error>"
+          "content": "<tool_use_error>Cannot read '/proc/51/cmdline': this path names a device or process file that this tool does not read.</tool_use_error>"
         },
         "readForwarderEnviron": {
           "isError": true,
           "hits": [],
-          "content": "<tool_use_error>Cannot read '/proc/28/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+          "content": "<tool_use_error>Cannot read '/proc/22/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
         },
         "webfetchDecoy": {
           "isError": true,
           "hits": [],
           "content": "Invalid URL"
         },
-        "scan:/home/soleur/spike-sessA-B-b7ce4dec0461/ws/.spike-scan.txt": {
+        "scan:/home/soleur/spike-sessA-B-206e61add3cf/ws/.spike-scan.txt": {
           "isError": false,
           "hits": [
             "planted-control"
           ],
-          "content": "bytes=551522 readable=true"
+          "content": "bytes=552284 readable=true"
         }
       },
       "leaks": {},
@@ -175,7 +175,7 @@
         },
         "steps": {
           "clone": "fatal: could not read Username for 'https://github.com': No such device or address\ncloned=no",
-          "fetch": "fatal: cannot change to '/home/soleur/spike-sessA-A-828619158ba3/ws/c': No such file or directory\nfetch_rc=128",
+          "fetch": "fatal: cannot change to '/home/soleur/spike-sessA-A-bdb72fe1577a/ws/c': No such file or directory\nfetch_rc=128",
           "ghRest": "unexpected end of JSON input",
           "ghGraphql": "gh: HTTP 401",
           "nodeFetch": "err=EAI_AGAIN",
@@ -310,7 +310,7 @@
         "rest_x2": "x2=201",
         "rest_x2_reason": "",
         "x_status": "consumed",
-        "stub_x2": "{\"seq\":40,\"ts\":\"2026-11-10T19:04:29.962Z\",\"host\":\"api.github.com\",\"method\":\"POST\",\"path\":\"/repos/spike/alpha/pulls\",\"query_keys\":[],\"auth_class\":\"real-decoy\",\"auth_count\":1,\"decoy_id\":\"sessD\",\"auth_scheme\":\"token\",\"idempotency_key\":false,\"sni\":\"api.github.com\"}",
+        "stub_x2": "{\"seq\":40,\"ts\":\"2026-11-10T19:29:06.398Z\",\"host\":\"api.github.com\",\"method\":\"POST\",\"path\":\"/repos/spike/alpha/pulls\",\"query_keys\":[],\"auth_class\":\"real-decoy\",\"auth_count\":1,\"decoy_id\":\"sessD\",\"auth_scheme\":\"token\",\"idempotency_key\":false,\"sni\":\"api.github.com\"}",
         "rest_x3": "x3=403",
         "rest_x3_reason": "pending",
         "pend_after_rest": "consumed:2 pending:3 rejected:2 ",
@@ -411,7 +411,7 @@
         ],
         "push2_receive_pack_bodies": [
           4,
-          2098225
+          2098227
         ],
         "probe_seen": true
       },
@@ -757,7 +757,7 @@
       ],
       "recorded_only_unentitled_with_network_allowed": "https://sse.open-web.spike.test/ 200\nhttps://api.github.com/repos/spike/alpha 401\nhttps://127.0.0.1:18082/ 000",
       "log_sizes": {
-        "app.log": 143870,
+        "app.log": 143881,
         "hook.log": 29181,
         "squid.log": 3782,
         "stub-stdout.log": 26,
@@ -803,8 +803,8 @@
     },
     {
       "arm": "c7",
-      "hashes_pass1": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f 21e5db71f43e0133cf9fd1a338e8c83fd0fb6c1673c28229d26b1c1153bc34a4 ",
-      "hashes_pass2": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f 21e5db71f43e0133cf9fd1a338e8c83fd0fb6c1673c28229d26b1c1153bc34a4 ",
+      "hashes_pass1": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f d0d849443e9ecc36e350c52d8c869f6191bf9c92018f93cf90e9de90b188a8c6 ",
+      "hashes_pass2": "35391582b7e3261cbb22c3cddaf29f400d02e96bdcc024e4564c34066ff3581f d0d849443e9ecc36e350c52d8c869f6191bf9c92018f93cf90e9de90b188a8c6 ",
       "pass1_marker": "reason=not-allowlisted subreason=unlisted-write ",
       "checks": {
         "control: pass 1 refuses the request not-allowlisted, with no row": true,
@@ -875,7 +875,7 @@
       "results": {
         "control.gitPush": {
           "rc": 1,
-          "elapsed": 0.19
+          "elapsed": 0.21
         },
         "control.curlPost": {
           "rc": 22,
@@ -883,35 +883,35 @@
         },
         "control.ghPost": {
           "rc": 1,
-          "elapsed": 0.1
+          "elapsed": 0.09
         },
         "control.curlGet": {
           "rc": 0,
-          "elapsed": 0.08
+          "elapsed": 0.07
         },
         "control.sse": {
           "rc": 0,
-          "elapsed": 1.05
+          "elapsed": 1.04
         },
         "stalled.gitPush": {
           "rc": 1,
-          "elapsed": 5.18
+          "elapsed": 5.19
         },
         "stalled.curlPost": {
           "rc": 22,
-          "elapsed": 5.05
+          "elapsed": 5.04
         },
         "stalled.ghPost": {
           "rc": 1,
-          "elapsed": 5.1
+          "elapsed": 5.05
         },
         "stalled.curlGet": {
           "rc": 0,
-          "elapsed": 0.09
+          "elapsed": 0.07
         },
         "stalled.sse": {
           "rc": 0,
-          "elapsed": 1.05
+          "elapsed": 1.04
         },
         "frozen.gitPush": {
           "rc": 124,
@@ -919,19 +919,19 @@
         },
         "frozen.curlPost": {
           "rc": 124,
-          "elapsed": 15.01
+          "elapsed": 15.0
         },
         "frozen.ghPost": {
           "rc": 124,
-          "elapsed": 15.01
+          "elapsed": 15.0
         },
         "frozen.curlGet": {
           "rc": 124,
-          "elapsed": 15.0
+          "elapsed": 15.01
         },
         "frozen.sse": {
           "rc": 0,
-          "elapsed": 1.06
+          "elapsed": 1.05
         },
         "hookKilled.gitPush": {
           "rc": 128,
@@ -947,7 +947,7 @@
         },
         "hookKilled.curlGet": {
           "rc": 22,
-          "elapsed": 0.01
+          "elapsed": 0.0
         },
         "hookKilled.sse": {
           "rc": 0,
@@ -959,11 +959,11 @@
         },
         "routerKilled.curlPost": {
           "rc": 7,
-          "elapsed": 0.01
+          "elapsed": 0.0
         },
         "routerKilled.ghPost": {
           "rc": 1,
-          "elapsed": 0.05
+          "elapsed": 0.03
         },
         "routerKilled.curlGet": {
           "rc": 7,
@@ -975,7 +975,7 @@
         },
         "ironKilled.gitPush": {
           "rc": 128,
-          "elapsed": 0.01
+          "elapsed": 0.02
         },
         "ironKilled.curlPost": {
           "rc": 56,
@@ -983,7 +983,7 @@
         },
         "ironKilled.ghPost": {
           "rc": 1,
-          "elapsed": 0.05
+          "elapsed": 0.03
         },
         "ironKilled.curlGet": {
           "rc": 56,
@@ -991,7 +991,7 @@
         },
         "ironKilled.sse": {
           "rc": 0,
-          "elapsed": 1.06
+          "elapsed": 1.04
         }
       },
       "hook_timeouts": 3,
@@ -1003,15 +1003,15 @@
         },
         "curlPost": {
           "rc": 124,
-          "elapsed": 15.01
+          "elapsed": 15.0
         },
         "ghPost": {
           "rc": 124,
-          "elapsed": 15.01
+          "elapsed": 15.0
         },
         "curlGet": {
           "rc": 124,
-          "elapsed": 15.0
+          "elapsed": 15.01
         }
       },
       "claude_streaming_after_iron_killed": {

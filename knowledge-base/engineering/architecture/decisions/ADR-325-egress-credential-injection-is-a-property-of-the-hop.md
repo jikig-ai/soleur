@@ -98,6 +98,6 @@ The C4 model gains no element in this PR. An `egressInjector` container (the per
 
 ## Measured outcome — injector
 
-GO: on run [42880042135](https://github.com/jikig-ai/soleur/actions/runs/42880042135), the production run tuple's flags on a GitHub-hosted runner, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it. An earlier GO (run 42823659776) was withdrawn by the PR review (CTO R40): one criterion was reported pass with required items unmeasured, and several checks could not fail.
+GO: on run [42883871262](https://github.com/jikig-ai/soleur/actions/runs/42883871262), the production run tuple's flags on a GitHub-hosted runner, all nine criteria passed. Record: [injector-spike-results.md](../../../project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md), raw JSON beside it. An earlier GO (run 42823659776) was withdrawn by the PR review (CTO R40): one criterion was reported pass with required items unmeasured, and several checks could not fail.
 
 The verdict carries two limits: GraphQL is not repository-scoped by the hook (R38), and request bodies of 3 MiB or more are refused (R40). Flip fact F1 does not hold. What was measured, what was not, and the defects the measurement and its review found and fixed are in the results note; the production changes #11637 needs are listed in Consequences above, and the `SandboxNetworkAccess` denial is filed as #12585.

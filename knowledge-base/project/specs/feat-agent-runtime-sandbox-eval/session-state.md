@@ -4,8 +4,8 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Where it stands
 
-- Verdict **GO** on run 42880042135 (head f33a8c7b58), measured after the PR review and its fix round (run 42871893115, an earlier GO, predates the fix round). The earlier GO (run 42823659776) was withdrawn by CTO R40; runs 42864371897 and 42868332624 read NO-GO on harness judges the review's changes broke (fixed, the mechanism unchanged).
-- Review (13 seats, rulings R36 to R42) fixed inline; every new hook/policy guard mutation-proven (17/17). Results note, results JSON, ADR-325 measured outcome and the ADR-311 addendum rewritten from run 42880042135.
+- Verdict **GO** on run 42883871262 (head 7d76d469ae), measured after the PR review, its fix round and the verification pass (earlier GOs 42871893115 and 42880042135 predate those fixes). The earlier GO (run 42823659776) was withdrawn by CTO R40; runs 42864371897 and 42868332624 read NO-GO on harness judges the review's changes broke (fixed, the mechanism unchanged).
+- Review (13 seats, rulings R36 to R42) fixed inline; every new hook/policy guard mutation-proven (17/17). Results note, results JSON, ADR-325 measured outcome and the ADR-311 addendum rewritten from run 42883871262.
 
 ## Next
 
