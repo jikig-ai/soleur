@@ -477,6 +477,10 @@ None. No NFR register row changes tier.
 - AP-020 (Untrusted input at the agent boundary): Aligned. The tool call is model-controlled; the approval binds to a hash of the full canonical input and is consumed once. The in-process decide path is the stated residual risk, mitigated by a sentinel, not eliminated.
 - AP-021 (Diagnostic honesty): Aligned. The card says "released to your agent", not "sent"; no outcome is claimed, and nothing here asserts a measured control.
 
+## Addendum — 2026-11-09 (Ref #9601): the legacy push is no longer byte-identical
+
+Items 7 and 9a above say the legacy (non-`hardened`) push keeps a byte-identical argv and environment. That held when written and is superseded: the legacy arm of `gitWithInstallationAuth` now goes through the shared host-side git invocation (`server/host-git.ts`: hardening arguments before the credential-helper reset, a scrubbed environment, `GIT_ALLOW_PROTOCOL=https`, `GIT_WORK_TREE=<cwd>`). The `hardened` arm's argv and environment are unchanged. The legacy arm still reads the workspace `.git`; what that closes and does not close is recorded in the ADR-050 2026-11-09 follow-on addendum. Nothing in the flip items changes.
+
 ## Diagram
 
 C4: `platform.infra.approvalStore` ("Approval Requests") with `webapp -> approvalStore` and `engine -> approvalStore`, included in the `containers` view.
