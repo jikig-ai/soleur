@@ -12,11 +12,11 @@
 #   IMAGE_DRIFT IRON_PROXY NETWORK OWNERSHIP STUB_START SQUID_START CONTAINER_START_FAILED SESSION_PREP HOOK_START
 #   SESSION_UP SEED DRIVER
 #
-# Slice status (2026-11-10). Built: preflight, the harness self-test, the local stack, the R21 guard, the inline
-# CHECK widening (CTO R5, D4), and the topology (lib/bringup.sh: image, prod posture, networks, real squid, stub,
-# app container, hook, three sessions) with synthetic seeding (lib/arms.sh). Criterion arms not built yet are each
-# recorded `unmeasurable` with reason `arm-not-implemented:<what>`, so such a run reads INCONCLUSIVE by construction.
-# The arms are task 1.8 in knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/tasks.md.
+# Arms (lib/arms.sh), all nine built: 1 sandbox scan and CLI-tier probes; 2 transport in arms A and B, the gated
+# sandboxed push and the CLI's own streaming (CTO R29, R32, R30/R33); 3 approval lifecycle, binding and expiry; 4
+# allowlisted reads; 5 cross-session; 6 ADR-278 controls, listeners and log grep (R28); 7 the add-verb overlay; 9 CA
+# scope (R31); 8 failure modes, last, because it stops the hook, a router and an injector. A criterion whose arm
+# cannot run records `unmeasurable` with a named harness reason, so such a run reads INCONCLUSIVE, never a pass.
 #
 # Secrets: every value is a synthesized decoy generated per run, masked in the CI log, kept out of env and argv of
 # the processes under test, and never printed. xtrace is refused (a trace would print them).
@@ -226,7 +226,7 @@ check_deadline "topology"
 # The expiry arm's 60 s wait overlaps the other arms (deepen pass, criterion 3).
 arm_c3_expiry_start
 
-# --- Arms (lib/arms.sh). Those not built yet are recorded honestly, so the floor reads INCONCLUSIVE, never a pass. --
+# --- Arms (lib/arms.sh) ------------------------------------------------------------------------------------------
 arm_c1
 arm_c2
 arm_c3
