@@ -1117,6 +1117,7 @@ jqe() { # jqe [jq options...] <jq filter> : exit status of jq -e on the projecti
   json2 | jq -e "$@" > /dev/null
 }
 PROJ_ROWS=0
+PROJ_COND=0 # projection runs that only execute when their precondition holds (the UTF-8 locale row); added to the floor when they ran
 # pr <subcommand> <body>: one projection run. The proj group floor counts THESE runs (not t/ok, which the floor backstops).
 pr() {
   PROJ_ROWS=$((PROJ_ROWS + 1))
@@ -1470,6 +1471,7 @@ grp_proj_an() {
   # only where that locale is installed, because an absent locale would make the row meaningless rather than red
   if locale -a 2> /dev/null | /usr/bin/grep -qix 'en_US.utf-\?8'; then
     PROJ_ROWS=$((PROJ_ROWS + 1))
+    PROJ_COND=$((PROJ_COND + 1))
     fixture 200 "$(ok_body analytics-health)"
     run "${BASE_ENV[@]}" "LC_ALL=en_US.utf8" -- analytics-health "$(printf '\xd9\xa3')"
     t "proj[analytics-health]: an Arabic-Indic digit hours argument is refused (64) under a UTF-8 caller locale" eq "$RC|$(ncalls)" "64|0"
@@ -1739,7 +1741,7 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=173
+PROJ_FLOOR=172
 for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
@@ -1751,12 +1753,12 @@ for g in source wire refuse token env status xtrace proj shape tools gql selftes
 done
 # The proj floor sits OUTSIDE the group loop and reports with printf+exit: a loop that no longer runs proj cannot
 # also skip the check that proves it ran, and the counter is bumped by pr(), not by the t/ok path the floor backstops.
-if want proj && [[ "$SANDBOX_OK" == 1 ]] && [[ "$PROJ_ROWS" -lt "$PROJ_FLOOR" ]]; then
-  printf 'FAIL - proj floor: %s projection runs executed, need at least %s (the proj group did not run)\n' "$PROJ_ROWS" "$PROJ_FLOOR"
+if want proj && [[ "$SANDBOX_OK" == 1 ]] && [[ "$PROJ_ROWS" -lt "$((PROJ_FLOOR + PROJ_COND))" ]]; then
+  printf 'FAIL - proj floor: %s projection runs executed, need at least %s (the proj group did not run)\n' "$PROJ_ROWS" "$((PROJ_FLOOR + PROJ_COND))"
   printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$((fail + 1))" "$asserted"
   exit 1
 fi
-if want proj && [[ "$SANDBOX_OK" == 1 ]]; then printf 'info - proj floor: %s projection runs observed, floor %s\n' "$PROJ_ROWS" "$PROJ_FLOOR"; fi
+if want proj && [[ "$SANDBOX_OK" == 1 ]]; then printf 'info - proj floor: %s projection runs observed, floor %s\n' "$PROJ_ROWS" "$((PROJ_FLOOR + PROJ_COND))"; fi
 
 # =============================================================================================
 # Group: wirefloor harness row + mutation battery (never in the inner child)

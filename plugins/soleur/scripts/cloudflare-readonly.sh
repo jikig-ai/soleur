@@ -139,7 +139,7 @@
 #     `not-found` (404) or plain `bad-response`       -> re-run once; if it repeats record `other: not-found` / `other: bad-response`; not a fix PR
 #     `token-invalid`                                 -> the token (expires 2027-02-07) was rotated or expired: the owner's credential change
 #     `no-credential (<name>)`                        -> the Doppler config lacks that variable
-#     `no-tool (jq|date)`                             -> record `no-tool`; the host lacks the tool
+#     `no-tool (jq or date)`                          -> record `no-tool`; the host lacks the tool
 # Reasons to Records vocabulary: exit 10 -> no-credential; `no-tool (...)` -> `no-tool`; every other exit 11 and 14 reason -> `other: <the
 # leading reason token only>` (for example `other: no-zone-access`, `other: api-error`); anything in parentheses is DATA and is never copied
 # into a Records line, an issue, a pull request or a commit message, and for `api-error (graphql: ...)` that means the vendor text above all
