@@ -641,7 +641,7 @@ describe("transcripts placeholder (#10445)", () => {
   });
 });
 
-// #12026 — claude-code 2.1.311 / SDK 0.3.311 covers the config-dir `seed-admin` (default `$HOME/.claude/seed-admin`) with a --tmpfs in every per-command argv.
+// #12026 — claude-code 2.1.311 / SDK 0.3.311 (still 2.1.321 / 0.3.321, 2026-11-10 capture) covers the config-dir `seed-admin` (default `$HOME/.claude/seed-admin`) with a --tmpfs in every per-command argv.
 describe("seed-admin placeholder (#12026)", () => {
   const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
   const SA = "/root/.claude/seed-admin";
