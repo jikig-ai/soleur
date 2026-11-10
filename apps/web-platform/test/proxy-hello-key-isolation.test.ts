@@ -122,9 +122,15 @@ describe("both hello-key names (Guard 3)", () => {
       }
     });
 
-    it.each(["agent-env.ts", "providers.ts"])("%s names the key on no source line", (file) => {
+    it.each(["agent-env.ts", "providers.ts"])("%s names the key on no source line (exact name, not a substring of a longer one)", (file) => {
       const src = readFileSync(join(SERVER_DIR, file), "utf8");
-      expect(src.split("\n").filter((l) => l.includes(name))).toEqual([]);
+      // Bounded on both sides, so the ACCEPT_ALSO row cannot pass by the base name's row and vice versa.
+      const exact = new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`);
+      expect(src.split("\n").filter((l) => exact.test(l))).toEqual([]);
+      // Self-test of the matcher: it hits the exact name and misses the other name.
+      expect(exact.test(`x ${name} y`)).toBe(true);
+      const other = NAMES.find((n) => n !== name) as string;
+      expect(exact.test(`x ${other} y`)).toBe(false);
     });
 
     it("is absent from process.env after the boot loader runs", () => {

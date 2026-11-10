@@ -730,7 +730,7 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
     expect(fpLines()).toHaveLength(2);
   });
 
-  it("the canary (empty bind) stops before the key check: no fingerprint line, no slot event", () => {
+  it("createProxyServer with an empty bind (the canary's setting) stops before the key check: it prints no fingerprint line and its own call raises no slot event (in production index.ts has already run the loader at boot, so a canary carrying the slot does emit the loader's event)", () => {
     vi.stubEnv(SLOT, ACCEPT_HEX);
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
     expect(createProxyServer({ onProxiedSession, ...BASE, bindAddress: "" })).toBeNull();
@@ -781,14 +781,22 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
     expect(verifyProxyHello(frame, false, { current: ACCEPT_KEY, acceptAlso: null }, createReplayCache())).toEqual({ ok: false, reason: "mac" });
   });
 
-  it("the sender with only the accept-also key (current absent) never dials: no_key", async () => {
+  it("the sender with only the accept-also key (current absent) never dials: exactly one no_key deny, and the client is closed owner-unreachable", async () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
     vi.stubEnv(SLOT, ACCEPT_HEX);
     const dial = vi.fn();
-    const client = new EventEmitter() as EventEmitter & { readyState: number; close: () => void };
+    const record = vi.spyOn(denyReporterModule.denyReporter, "record");
+    const close = vi.fn();
+    const client = new EventEmitter() as EventEmitter & { readyState: number; close: (code: number, reason: string) => void };
     client.readyState = 1;
-    client.close = () => undefined;
-    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: dial as never });
-    expect(dial).not.toHaveBeenCalled();
+    client.close = close;
+    try {
+      await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: dial as never });
+      expect(dial).not.toHaveBeenCalled();
+      expect(record.mock.calls).toEqual([["no_key"]]);
+      expect(close.mock.calls).toEqual([[WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable"]]);
+    } finally {
+      record.mockRestore();
+    }
   });
 });
