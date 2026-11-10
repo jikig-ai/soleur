@@ -9,11 +9,25 @@ ruled_by: "soleur:legal:clo agent (2026-11-10)"
 measured_at_commit: "b258336eb5"
 measured_against: "origin/main, not production"
 source_sha256: "6217aeba088c1016e86be9054fcbf6ababcde80ac4a432ef9f0e4d219a84cb1e"
+required_change_4_sha256: "8a2f6e6c0f00b9e9bf8d3c6c7ecd2be490ca95a21e16f301fa4af761fd515856"
 ---
 
 # CLO agent ruling: approval-queue enabling gates and the published status statement (#12365)
 
 > **What this is and is not.** The company has no external counsel. On the operator's instruction, the CLO agent's ruling (`soleur:legal:clo`) stands in for counsel on this matter. It is a v1 internal position, not a lawyer's opinion; no human lawyer has read it, and human-lawyer review is owed. Rulings 3 and 4 below are the CLO agent's reply of 2026-11-10, copied word for word by script, not retyped; `source_sha256` above is the sha256 of that block, from its first heading to the end of this file. They were measured against `origin/main` at `b258336eb5`, not against production. No version bump and no SHA move follow from this record.
+
+## Required change 4, referenced by Ruling 4
+
+> Placed here on 2026-11-10 (#12197, PR #12567). Ruling 4 says "(required change 4 below)", but the change was not copied when this record was made, and `source_sha256` covers everything from the heading "## Ruling 3" to the end of this file, so nothing can be added after Ruling 4 without breaking that hash. Read "below" in Ruling 4 as pointing here. The item is item 4 of "Required repo changes (specified, not made)" in the same CLO agent reply of 2026-11-10, copied word for word by script; `required_change_4_sha256` above is the sha256 of the copied item, from its line beginning "4. **Only if" to its last line. It is a conditional instruction: it applies only if the flag is narrowed or turned off, and nothing in PR #12567 narrows or turns off the flag.
+
+4. **Only if the flag is narrowed or turned off.** Edit all three documents and their mirrors together, re-pin `legal-doc-shas.ts`, add a dated `**Amended:**` entry to each document. No `TC_VERSION` bump. Try to date the start from the Flagsmith audit log, read-only; if it cannot be found, use the wording below.
+   - Head notices (PP 4.15, GDPR 3.17, DPD 2.3(ah)):
+     - OLD: `Status as of November 9, 2026: the approval queue is switched on in production for every workspace, including workspaces that Jikigai does not own.`
+     - NEW: `Status as of <DATE>: the approval queue was switched on in production for every workspace, including workspaces that Jikigai does not own, from a date we have not established (no later than November 8, 2026) until <DATE>; since then it is switched on only for workspaces that Jikigai owns [or: switched off]. Approval requests recorded in that period are kept as described below.`
+   - Also in those notices:
+     - OLD: `…now applies to every workspace.`
+     - NEW: `…applied to every workspace during that period and still applies to the requests recorded in it.`
+   - Every sibling sentence beginning "As of November 9, 2026 the approval queue is switched on…" (PP §6 and §7, GDPR 5.3, 8.4, 9 and 10, DPD 5.3(a) and 10.3(j)) gets the same past-interval wording.
 
 ## Ruling 3: enabling gates for a non-canary ON
 
