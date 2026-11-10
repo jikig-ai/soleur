@@ -65,7 +65,7 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
   `workspaces-luks.test.sh`; runbook 6604 verify block (`jq` inside the guarded wrapper, `--max-time 30`), read-back
   `--max-time 30`, `volume-gone` rows (6604, 6894) point at the 8209 project listing; 6894 pin list regenerated as a
   dated note; 6604 stale-example note; 8209 row date and attempt count; plan rulings 20-23 and 26
-- [ ] R.2 Code: workflow, suite, `gha-expr.py` revert, `mutation-proofs.md` (rulings 20 item 2, 21-23, 26, 27; R1, R3,
+- [x] R.2 Code: workflow, suite, `gha-expr.py` revert, `mutation-proofs.md` (rulings 20 item 2, 21-23, 26, 27; R1, R3,
   R4 code half, R6 workflow copies, R7-R10)
 
 ## Phase 5 — After merge

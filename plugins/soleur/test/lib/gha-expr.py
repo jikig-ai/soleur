@@ -10,10 +10,7 @@ heartbeat suite. Semantics:
   * `==` across different types coerces both sides to numbers (null -> 0, '' -> 0, a non-numeric
     string -> NaN); same-type strings compare case-insensitively.
   * `&&` / `||` return an operand, not a boolean.
-  * A context ref that is not in the (flat, dotted-key) context is null -- EXCEPT a `matrix` ref: `matrix` or a
-    `matrix.<key>` absent from the context raises ExprError (exit 3). This DIVERGES from the runner on purpose: the
-    runner renders an unknown matrix key as an empty string, which in a test would silently hand a step the wrong
-    row's data (or none) and still pass. Every other context (steps, github, secrets) keeps "absent is null".
+  * A context ref that is not in the (flat, dotted-key) context is null.
   * The job status the status functions read is ctx `__job_status` (default success).
   * Mode `if` models the runner: an expression with no status function is wrapped in an implicit
     `success() && (...)`, and the result is TRUTHY unless it is false/0/''/null -- the STRING 'false'
@@ -137,9 +134,6 @@ def evaluate(mode, src, ctx):
                 return False
             if t[1] == "null":
                 return None
-            if t[1] == "matrix" or t[1].startswith("matrix."):  # strict-matrix
-                if t[1] not in ctx:  # strict-matrix
-                    raise ExprError("unknown matrix key %s (the selected include row has no such key)" % t[1])  # strict-matrix
             return ctx.get(t[1])
         raise ExprError("unexpected token %r" % (t,))
 

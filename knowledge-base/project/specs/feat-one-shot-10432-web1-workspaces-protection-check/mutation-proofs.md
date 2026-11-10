@@ -147,3 +147,61 @@ after, none in the job. Byte identity (Phase 4.8): the first half lists only the
 second half compares 15 lines, 0 diff lines; the `TITLE_*` block against `use_entry inngest` diff is empty.
 `lint-guard-contract.py` on the plan: 3 guard entries, rc 0. `git diff --name-only origin/main...HEAD`: no `.tf`,
 cloud-init or user_data file.
+
+## Review round 1 (2026-11-10, PR #12563, CTO rulings 20-27): code fix round
+
+The rows above are the record of the first battery and stay as written. This section supersedes them where it says so.
+
+Final suite: `=== Results: 257/257 passed, 0 failed ===`, rc 0, `FLOOR=257`, `TABLE_ROWS=149` (H3: 149 executed rows;
+157 - 9 rows deleted by ruling 23 (WV3b, WT1, WF3, WX7, C1, C2, C8, C5 merged into C4) + M17). Wall 1m28.2s, user 36.7 s,
+sys 34.7 s.
+
+**Guard 2, renumbered to the plan's mutation matrix.** Row G2 r1 above (the evaluator's strict branch removed) is RETIRED:
+ruling 21 deleted that branch, `gha-expr.py` equals `origin/main` byte for byte, and H11a and the S0b matrix clauses are
+deleted with it. The old G2 r2 and G2 r3 are the plan's rows 1 and 2; row 3 is new.
+
+Every mutant below is a COPY in an allocated sandbox (`scripts/soleur-sandbox.sh new`, with `knowledge-base/engineering`
+copied in, because the sandbox excludes `knowledge-base/`): workflow mutants run the suite with
+`SOLE_COPY_DRIFT_WF=<copy>`; harness mutants run a mutated copy of the suite. One script per kind asserts each edit lands
+exactly once. Control: the unmutated sandbox run is 257/257, rc 0. Every row is KILLED (rc 1).
+
+| Guard / row | Edit | Named rows that must turn RED | Observed RED |
+| --- | --- | --- | --- |
+| G2 r1 (plan) | `check()` drops the `matrix` clause | H11b | 255/257: H11b, H11c |
+| G2 r2 (plan) | `refs()` checks only the first `matrix.*` ref of an expression | H11c | 256/257: H11c |
+| G2 r3 (plan) | row selection loosened: zero or two matching rows take the first row | H11d | 256/257: H11d |
+| R1 m1 | job `needs:` | S1 (`job-key:needs`) | 255/257: S1, S2/control |
+| R1 m2 | job `defaults.run.shell` | S1 (`job-key:defaults`) | 254/257: S1, S2/control, S2/m2 (the in-process mutant is already present) |
+| R1 m3 | workflow `defaults.run.shell` | S1 (`wf-key:defaults`) | 254/257: S1, S2/control, S2/m3 |
+| R1 m4 | job `concurrency` that cancels | S1 (`job-key:concurrency`) | 254/257: S1, S2/control, S2/m4 |
+| R1 m5 | `shell:` on the finding filer | S1 (`step-key:file_finding:shell`) | 254/257: S1, S2/control, S2/m5 |
+| R1 m12 | `runs-on: [self-hosted]` | S1 (`job-runs-on`) | 255/257: S1, S2/control |
+| R1 m13 | checkout `ref:` | S1 (`checkout-with`) | 255/257: S1, S2/control |
+| R3 a | the inngest `volume-not-found` DECISION set to the web-1 one | X5 (decision line), F12 | 253/257: X5 ("the decision line, exactly", "names nothing of the other entry"), F12 x3 |
+| R3 b | the web1 `volume-not-found` DECISION set to the ADR-282 one | WX5, WF12 | 255/257: WX5 (both checks), WF12/volume-not-found |
+| R3 c | web-1 words in the inngest `volume-not-found` LEAD | X5 (lead line), F12 | 253/257: X5 ("the lead line, exactly", "names nothing of the other entry"), F12 x3 |
+| R9 (M17) | the probe's `jq -s` and one-document check reverted to `origin/main` | M17 | 256/257: M17 (two concatenated documents read as matches-declared) |
+| ruling 26 a | `entry=` dropped from the probe's finish echo | the per-case entry invariant | 124/257, 166 "lacks ' entry='" lines |
+| ruling 26 b | `entry=` dropped from the gate's clean line | the per-case entry invariant | 220/257, 45 such lines |
+| ruling 26 c | `entry=` dropped from the gate's `::error::` line | the per-case entry invariant | 136/257, 153 such lines |
+| ruling 26 harness | the per-case entry invariant removed | H5 | 256/257: H5 (`_iv_noentry`, `_iv_otherentry`, `_iv_entrylate`) |
+| ruling 20 / N4 | "dated re-protect follow-through issue" removed from the job comment | N4 | 255/257: N4; H17 (its `job-phrase-removed` copy cannot land on a file that already lacks the phrase) |
+| N4 harness | the "forcing function is Guard B4" ban removed | H17 | 256/257: H17 (`job-says-guard-b4`, `adr-says-guard-b4`) |
+| R4 / N1c | the file-wide read-only id check removed | H14 | 256/257: H14 (`verify-block-get-names-the-inngest-id`, `verify-block-expect-names-the-inngest-id`) |
+| R7 / N3 | the argv-header spelling ban removed from `rb_line_ok` | H15 | 256/257: H15 (moved-H, --header, --header=, -HAuthorization, -H"Authorization, -sSH, -H "$HDR", --oauth2-bearer, vb-moved-H) |
+| R7 / N3 | the Authorization count removed from `rb_line_ok` | H15 | 256/257: H15 (`second-authorization`, a `--proxy-header` outside the spelling ban; the first run of this mutant survived, so that row was added) |
+| R7 / N3 | the verify block's line count no longer pinned to 4 | H15 | 256/257: H15 (`vb-line-deleted`) |
+
+The H15 header mutants MOVE the header from curl's stdin config to its argument list, so the Authorization count stays 1
+and only the spelling ban can catch them; the spelling-ban mutant above shows each of them surviving without it.
+
+Ruling 27: the cross-entry ban (`web-1|ADR-119|6604|workspaces` on the Inngest texts, `inngest|ADR-282|6894` on the web-1
+texts, case-insensitive) was checked against today's Inngest strings first: the final suite is green, so no Inngest
+string matches it and nothing was narrowed or edited.
+
+Lints (final tree): `check-workflow-duplicate-keys` OK (114 files); actionlint 17 findings, equal to `origin/main`'s 17;
+shellcheck on the suite: 0 warning or error findings (as on `origin/main`); the note-level count (`-f gcc`) rises from 25 to 53
+(SC2016 on the deliberate `$` literals of the mutant strings, SC2030/SC2031 on the subshell-isolated negative controls).
+`guard-vacuity-floor` 32/32 rc 0; `fixture-dir-operand-assert` 71/71 rc 0; `fixture-relative-assert` 61/63 rc 1, the same
+pre-existing `scripts/ci-oracle-review.sh` row (13 sites against a baseline of 12) and no row of this suite;
+`token-drift-workflow-causes` 402/402 rc 0; `workspaces-luks.test.sh` 63/63 rc 0.

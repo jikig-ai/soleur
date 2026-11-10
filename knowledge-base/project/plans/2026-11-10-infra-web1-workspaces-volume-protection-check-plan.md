@@ -220,7 +220,7 @@ only `merge_group` or `workflow_dispatch` runs count as Guard 1 evidence.
   sole-copy-protection-check:
     name: sole-copy-protection-check (${{ matrix.entry }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
@@ -243,7 +243,8 @@ only `merge_group` or `workflow_dispatch` runs count as Guard 1 evidence.
 `fail-fast: false` is load-bearing (P6): with the default `true`, a red leg cancels the other, still-running leg. That
 leg's filers are `always()`, so they still run, but its probe is skipped or killed: it never reaches its own verdict,
 and with an empty verdict its could-not-perform filer files a false `(name-unreadable)` p2 issue and its gate goes red.
-Each leg keeps the 10-minute ceiling and every step timeout.
+Each leg keeps every step timeout; the job ceiling is 20 minutes, above the 16-minute sum of step bounds (review
+round 1, R10: main's 10 was below that sum, so a slow leg could be cancelled mid-filer).
 
 ### Step-by-step changes (every per-entry value reaches a `run:` body only through `env:`)
 
@@ -357,8 +358,10 @@ empty string; the harness refuses it. `gha-expr.py` keeps today's "absent is nul
     name, `workspaces-luks-cutover-6604.md`, `soleur:incident`) is asserted by WF1 and WX5, so N3 checks only the
     document side for web-1. Over the new subsection's command line only (so the outcome table's prose "does not fall
     back to `HCLOUD_TOKEN`" stays legal), N3 requires exactly one `--only-secrets`, naming `HCLOUD_TOKEN_READONLY`,
-    and `curl -sS --config -`, and bans `HCLOUD_TOKEN([^_]|$)`, `-H "Authorization` and a `:-` fallback expansion; one
-    mutant row per pattern (a second `--only-secrets HCLOUD_TOKEN`, an argv header, `${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}`).
+    and `curl -sS --config -`, and bans `HCLOUD_TOKEN([^_]|$)`, an Authorization header on argv in any spelling (`-H`,
+    `--header`, `--header=`, `-HAuthorization`, bundled `-sSH`, `--proxy-header`, `--oauth2-bearer`; review round 1, H15)
+    and a `:-` fallback expansion; one mutant row per pattern (a second `--only-secrets HCLOUD_TOKEN`, each argv-header
+    spelling, `${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}`).
 - **Counting**: `FLOOR` and `TABLE_ROWS` move to the realized numbers in the same commit as the rows (expected about
   +30 table rows and +50 assertions after the plan-review cuts). The header comment's PROPERTY and COUNTING paragraphs are rewritten for two
   entries.
@@ -937,7 +940,7 @@ None: the addendum is true on merge (the check runs from the first scheduled run
 - AC11: in runbook 6604's "Verify the retired end state" block
   (`sed -n '/Verify the retired end state/,/^   > /p' knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`),
   every `doppler run` line carries `--only-secrets HCLOUD_TOKEN_READONLY` (four lines) and `curl -sS --config -`, and
-  the block carries no `-H "Authorization` and no `HCLOUD_TOKEN` not followed by `_READONLY`
+  the block carries no Authorization header on argv in any spelling (H15) and no `HCLOUD_TOKEN` not followed by `_READONLY`
   (`grep -cE 'HCLOUD_TOKEN([^_]|$)'` over the command lines prints `0`). The new "Read back the delete-protection flag
   (read-only token)" subsection's command line passes the same checks and names `v1/volumes/106443278`; N1c and N3
   are green.

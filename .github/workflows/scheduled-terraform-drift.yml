@@ -1880,9 +1880,12 @@ jobs:
   #
   # WHY A MATRIX. Two include rows, one set of steps: `inngest` (the Inngest store volume, `hcloud_volume.inngest_redis_luks`,
   # ADR-282) and `web1` (the web-1 workspaces volume, `hcloud_volume.workspaces_luks`, ADR-119). Every per-row value reaches a
-  # step through `env:` only (a suite forbids an expression inside `run:`); the per-row PROSE of the finding filer lives in
-  # its `case "${ENTRY}:${VERDICT}"` arms, so the Inngest strings stay byte-identical in place. `fail-fast: false` is
-  # load-bearing: with the default, a red leg cancels the other leg before its filers run. Each leg keeps every bound below.
+  # `run:` body through `env:` (a suite forbids an expression inside `run:`); the notify step reads `matrix.subject` and
+  # `matrix.adr` in its `with:` inputs, which its action hands to its own run through `env:`. The per-row PROSE of the finding
+  # filer lives in its `case "${ENTRY}:${VERDICT}"` arms, so the Inngest strings stay byte-identical in place.
+  # `fail-fast: false` is load-bearing: with the default, a red leg cancels the other leg, whose probe is then skipped
+  # (`!cancelled()`) while its always() filers still run, so the healthy leg files a false `(name-unreadable)` p2 and goes
+  # red. Each leg keeps every bound below.
   # The subject is the per-row title prefix: dedupe and the clear step match exact titles, so one leg never comments on,
   # or closes, the other leg's issues (the suite proves the two title sets are disjoint on one shared issue store).
   #
@@ -1891,7 +1894,8 @@ jobs:
   # shape as this job. This job binds no `environment:` and runs no loader. It reads the Hetzner Read-permission token
   # (HCLOUD_TOKEN_READONLY, operator step O5 of the infra-credential-tiers runbook) from soleur/prd_terraform with the
   # repository secret DOPPLER_TOKEN, bound in the probe step only, and has NO fallback to the read/write name: an
-  # absent, malformed or rejected token is its own verdict (`no-token`). The read/write token is never in this job.
+  # absent, malformed or rejected token is its own verdict (`no-token`). The read/write token is never read by this job (the
+  # DOPPLER_TOKEN scope could read it; the probe body and a suite keep it out).
   # Both legs read the same token the same way.
   #
   # WHAT IT CHECKS, PER ROW. The volume is found by NAME (derived from the row's checked-out declaration, `tf_file` and
@@ -1902,9 +1906,11 @@ jobs:
   # too. What this catches is a live flip with no merged change. A re-protect merge is applied minutes later, so
   # declared-true / live-false inside 90 minutes of the row's OWN declaration file's last commit is `lift-pending-apply`
   # (green, warned), not a finding. After a lift applied through the reviewed route the leg reads `unprotected-as-declared`
-  # (green) by design, and the forcing function is outside this job: for `inngest`, the dated re-protect issue; for `web1`,
-  # Guard B4 in apps/web-platform/infra/workspaces-luks.test.sh, which pins `delete_protection = true`, so a lift PR must
-  # edit that guard in review.
+  # (green) by design, and the forcing function is outside this job. For both rows it is the same: the lift PR must open a
+  # dated re-protect follow-through issue before it merges (ADR-282 step 1), and that issue is the only forcing function; no
+  # check stops a lift PR that merges without it. For `web1`, Guard B4 in apps/web-platform/infra/workspaces-luks.test.sh
+  # pins `delete_protection = true`, so it makes the lift reviewed (the lift PR must edit that guard); nothing in B4 forces
+  # the volume back to protected.
   #
   # NOTHING CONSUMES THIS JOB'S CONCLUSION. cron-terraform-drift.ts only dispatches the workflow and never reads the
   # run, and no Sentry check-in covers this job (tracked: #10430), so a red run alone reaches nobody: the issue
@@ -1914,8 +1920,9 @@ jobs:
   # declares none, and with a matrix they would come from whichever leg wrote last). The gate runs last and is red on any
   # verdict that is not clean, an empty one included. The job is read-only and prints no command that changes anything.
   #
-  # BOUNDED WAITS, PER LEG. The job has a 10-minute ceiling. The steps this job runs itself carry a timeout-minutes (checkout 2,
-  # Doppler install 3, commit-time read 2, probe 3, each filer 2, clear 2). Inside them, the commit-time read has its own
+  # BOUNDED WAITS, PER LEG. The job has a 20-minute ceiling, above the sum of the step bounds (2 + 3 + 2 + 3 + 2 + 2 + 2 =
+  # 16, a suite pins it above that sum), so a step's own bound fires before the job's. The steps this job runs itself carry
+  # a timeout-minutes (checkout 2, Doppler install 3, commit-time read 2, probe 3, each filer 2, clear 2). Inside them, the commit-time read has its own
   # `timeout 30` (so it always exits 0 and the probe still runs with an unknown age), the credential read has
   # `timeout -k 5 60`, each Hetzner request has `--max-time 30`, and the Doppler download has `--max-time 120`. The probe's
   # worst case (65 + 3 x 30 + 2 x 5 = 165 s) is pinned below its 180 s step timeout by a suite. The notify step is bounded
@@ -1935,7 +1942,8 @@ jobs:
   sole-copy-protection-check:
     name: sole-copy-protection-check (${{ matrix.entry }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Above the sum of the step bounds (2 + 3 + 2 + 3 + 2 + 2 + 2 = 16): the job cap must never fire before a step's own.
+    timeout-minutes: 20
     # Hygiene only, NOT a security boundary: it stops an unmerged declaration from filing issues on an accidental
     # branch run (a branch dispatch runs the branch's own copy of this file).
     if: github.ref == 'refs/heads/main'
@@ -2022,6 +2030,7 @@ jobs:
           TF_RESOURCE: ${{ matrix.tf_resource }}
           PIN: ${{ matrix.volume_id }}
           SUBJECT: ${{ matrix.subject }}
+          ENTRY: ${{ matrix.entry }}
         run: |
           # A run: with no shell: key is `bash -e {0}`, and `set -uo pipefail` does not clear -e, so errexit is
           # cleared on purpose and every status is checked. The EXIT trap publishes a verdict if the body dies
@@ -2065,7 +2074,7 @@ jobs:
               done
             } >> "$GITHUB_OUTPUT"
             published=1
-            echo "sole-copy-check verdict=${v} expected=${expected:-n/a} live=${live:-n/a} http=${http:-n/a} volume_id=${volume_id:-n/a} name=${name:-n/a}${reason:+ reason=${reason}}"
+            echo "sole-copy-check verdict=${v} entry=${ENTRY:-none} expected=${expected:-n/a} live=${live:-n/a} http=${http:-n/a} volume_id=${volume_id:-n/a} name=${name:-n/a}${reason:+ reason=${reason}}"
             local note="" warn=1
             case "$v" in
               lift-pending-apply) note="the ${SUBJECT} is unprotected at Hetzner until the re-protect change applies" ;;
@@ -2186,20 +2195,24 @@ jobs:
             *) echo "::error::Hetzner answered HTTP ${http}."; finish could-not-read ;;
           esac
 
-          # One reading of the answer: a container check first (a truncated or malformed listing is never clean), then
-          # count, identity, name and the flag's JSON type. jq output is a closed set of words.
-          facts="$(jq -r --argjson pin "$VOLUME_ID_PIN" --arg name "$name" '
-            if type != "object" then "bad-body"
-            elif ((.volumes | type) != "array") or ((.meta.pagination | type) != "object")
-              or ((.meta.pagination | has("next_page")) | not) or (.meta.pagination.next_page != null) then "bad-container"
-            elif (.volumes | length) == 0 then "zero"
-            elif (.volumes | length) > 1 then "many"
-            else .volumes[0] as $v
-              | if ($v | type) != "object" or ($v.id | type) != "number" then "bad-volume"
-                elif $v.id != $pin then "other-id"
-                elif $v.name != $name then "bad-volume"
-                elif ($v.protection | type) != "object" or ($v.protection.delete | type) != "boolean" then "bad-volume"
-                else "ok \($v.id) \($v.protection.delete)" end
+          # One reading of the answer: exactly ONE JSON document (slurped, so a second concatenated document is never read
+          # past), a container check (a truncated or malformed listing is never clean), then count, identity, name and the
+          # flag's JSON type. jq output is a closed set of words.
+          facts="$(jq -r -s --argjson pin "$VOLUME_ID_PIN" --arg name "$name" '
+            if length != 1 then "bad-body"
+            else .[0]
+            | if type != "object" then "bad-body"
+              elif ((.volumes | type) != "array") or ((.meta.pagination | type) != "object")
+                or ((.meta.pagination | has("next_page")) | not) or (.meta.pagination.next_page != null) then "bad-container"
+              elif (.volumes | length) == 0 then "zero"
+              elif (.volumes | length) > 1 then "many"
+              else .volumes[0] as $v
+                | if ($v | type) != "object" or ($v.id | type) != "number" then "bad-volume"
+                  elif $v.id != $pin then "other-id"
+                  elif $v.name != $name then "bad-volume"
+                  elif ($v.protection | type) != "object" or ($v.protection.delete | type) != "boolean" then "bad-volume"
+                  else "ok \($v.id) \($v.protection.delete)" end
+              end
             end' "$body_file" 2>/dev/null)" || facts=""
           case "$facts" in
             zero|many|other-id)
@@ -2516,13 +2529,14 @@ jobs:
         env:
           VERDICT: ${{ steps.probe.outputs.verdict }}
           HTTP: ${{ steps.probe.outputs.http }}
+          ENTRY: ${{ matrix.entry }}
         run: |
           set -uo pipefail
           case "${VERDICT:-}" in
             matches-declared|unprotected-as-declared|lift-pending-apply|lift-not-applied)
-              echo "sole-copy-check verdict=${VERDICT} (clean)" ;;
+              echo "sole-copy-check verdict=${VERDICT} entry=${ENTRY} (clean)" ;;
             *)
-              echo "::error::sole-copy-check verdict=${VERDICT:-none} http=${HTTP:-none}"
+              echo "::error::sole-copy-check verdict=${VERDICT:-none} entry=${ENTRY:-none} http=${HTTP:-none}"
               exit 1 ;;
           esac
 
@@ -2547,8 +2561,9 @@ jobs:
   # THE TOKEN. This job lists with GET calls only, so it holds the Hetzner Read-permission token and no Hetzner write
   # credential: no `environment:`, no credential loader, and no fallback to the read/write name. It reads
   # HCLOUD_TOKEN_READONLY from soleur/prd_terraform with the repository secret DOPPLER_TOKEN, the same way the
-  # sole-copy-protection-check job above does. The token's project is NOT checked here: the sole-copy job pins the
-  # Inngest store volume by name and id and pages on `volume-not-found`, so a token for another project reaches a
+  # sole-copy-protection-check job above does. The token's project is NOT checked here: the sole-copy job pins each
+  # sole-copy volume (the Inngest store volume and web-1's workspaces volume) by name and id and pages on
+  # `volume-not-found`, so a token for another project reaches a
   # person through that job, while this sweep would only list nothing. An absent, malformed, timed-out or rejected
   # TOKEN read ends this job red (never a clean sweep), and the failure email below is what turns that red into a message.
   rung2-rehearsal-orphan-sweep:
