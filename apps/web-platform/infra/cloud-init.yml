@@ -427,7 +427,19 @@ runcmd:
     STAGE=apt_update
     n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
     STAGE=apt_install
-    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
+    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq linux-image-generic nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; timeout 120 dpkg --configure -a || :; sleep 10; done
+  # ADR-324: one reboot onto the new kernel; runcmd re-runs.
+  - |
+    STAGE=kernel_settle
+    K=$(dpkg-query -W -f='$${Depends}' linux-image-generic | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | cut -c13-)
+    [ -n "$K" ] || exit 1
+    if [ "$K" != "$(uname -r)" ]; then
+      M=/var/lib/soleur/kernel-settle; S=/var/lib/cloud/instance/sem/config_scripts_user
+      [ ! -e $M ] && [ -f $S ] || exit 1
+      mkdir -p /var/lib/soleur; : > $M
+      _emit "soleur-cloud-init boot stage" kernel_reboot info
+      trap - EXIT; rm -f $S; reboot || :; sleep 600; on_err
+    fi
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
   # fail2ban is installed via the apt_install block above; the service auto-starts on

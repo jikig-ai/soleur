@@ -5,22 +5,22 @@ ADR-322 applies to every file, commit and the PR body.
 
 ## Phase 1: RED tests
 
-- [ ] 1.1 `apps/web-platform/infra/kernel-currency.test.sh`: settle behaviour cases (match; mismatch+no marker; mismatch+marker; unreadable; semaphore absent) with stubs
-- [ ] 1.2 Same suite: structural rows (apt token in `STAGE=apt_install`, `dpkg --configure -a` retry, settle item right after apt, idempotent allowlist, no Doppler/docker/`/mnt/data`/LUKS before it, semaphore path once, no `power_state:`/`packages:`, marker under `/var/lib/soleur`)
-- [ ] 1.3 Same suite: budget rows (`DEADLINE` + `SOLEUR_FRESH_BOOT_WINDOW_SECONDS` moved together; create < 30 min, replace < 40 min)
-- [ ] 1.4 Instrument self-test + exact-count anti-vacuity floor
-- [ ] 1.5 `fresh-boot-ready.test.sh`: kernel predicate rows (match, mismatch, empty target)
+- [x] 1.1 `apps/web-platform/infra/kernel-currency.test.sh`: settle behaviour cases (match; mismatch+no marker; mismatch+marker; unreadable; semaphore absent) with stubs
+- [x] 1.2 Same suite: structural rows (apt token in `STAGE=apt_install`, `dpkg --configure -a` retry, settle item right after apt, idempotent allowlist, no Doppler/docker/`/mnt/data`/LUKS before it, semaphore path once, no `power_state:`/`packages:`, marker under `/var/lib/soleur`)
+- [x] 1.3 Same suite: budget rows (`DEADLINE` + `SOLEUR_FRESH_BOOT_WINDOW_SECONDS` moved together; create and replace worst cases under their 40 min job limits (create raised 30 -> 40))
+- [x] 1.4 Instrument self-test + exact-count anti-vacuity floor
+- [x] 1.5 `fresh-boot-ready.test.sh`: kernel predicate rows (match, mismatch, empty target)
 - [ ] 1.6 Part 2a tests: var validations (one primary profile, one jump, unique in-subnet IP); dynamic LB origins reproduce today's weights and order; `WEB_HOST_PRIVATE_IPS` parity across workflows; `lb-weight-gate.sh` third-key cases; ratchet (web-1 IP literal + `"web-1"`, ceiling = today); host-bound-state census rows
 - [ ] 1.7 Register new suites: `suite-shard-legs.tsv` (+ `suite-durations.tsv` if required), `scripts/guard-vacuity-floor.test.sh` promotion
 
 ## Phase 2: GREEN — Part 1 (kernel currency)
 
-- [ ] 2.1 `cloud-init.yml`: `linux-image-generic` on the bounded install line; `dpkg --configure -a` before attempt 2
-- [ ] 2.2 `cloud-init.yml`: inline settle item (`STAGE=kernel_settle`) right after the apt block
-- [ ] 2.3 `soleur-host-bootstrap.sh`: verdict `kernel=` field + not-ready `kernel`; window constant + derivation
-- [ ] 2.4 `scripts/fresh-host-boot-trail.sh`: `DEADLINE` + cost comment
-- [ ] 2.5 Measure rendered user_data (`bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`); trim comments or re-baseline with the number
-- [ ] 2.6 Drive every Guard 1–2 mutation row RED once; record results
+- [x] 2.1 `cloud-init.yml`: `linux-image-generic` on the bounded install line; `dpkg --configure -a` before attempt 2
+- [x] 2.2 `cloud-init.yml`: inline settle item (`STAGE=kernel_settle`) right after the apt block
+- [x] 2.3 `soleur-host-bootstrap.sh`: verdict `kernel=` field + not-ready `kernel`; window constant + derivation
+- [x] 2.4 `scripts/fresh-host-boot-trail.sh`: `DEADLINE` + cost comment
+- [x] 2.5 Measure rendered user_data (`bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`); trim comments or re-baseline with the number
+- [x] 2.6 Drive every Guard 1–2 mutation row RED once; record results
 
 ## Phase 3: GREEN — Part 2a (generic web hosts, no running host changed)
 

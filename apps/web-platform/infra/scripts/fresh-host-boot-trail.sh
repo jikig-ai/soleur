@@ -211,11 +211,12 @@ fi
 # it could not discriminate the two states it exists to tell apart.
 #
 # COST OF THIS POLL, stated on its own terms — a shared script must not name one caller's
-# timeout-minutes. The loop checks the deadline BEFORE sleeping, so the worst case is 960s plus
-# one more iteration (~30s sleep + <=20s curl) ~= 17m. Every caller's timeout-minutes must cover
-# its own pre-poll work plus that; measured pre-poll cost on the birth path is ~2.6m, so both
-# the 30m (create) and 40m (replace) budgets have ample margin. Terminal states end the poll early, so a
-# healthy boot usually returns in well under the budget.
+# timeout-minutes. BOOT_TRAIL_DEADLINE_S is the host's SOLEUR_FRESH_BOOT_WINDOW_SECONDS plus 60 s
+# (both grew 240 s for the one kernel-settle reboot, #12008); kernel-currency.test.sh pins the two
+# together and computes every caller's worst case from these literals: the deadline, then CC_GRACE
+# once cloud_init_complete is seen, then one more iteration (30 s sleep + the 20 s curl bound).
+# Terminal states end the poll early, so a healthy boot usually returns well under the budget.
+BOOT_TRAIL_DEADLINE_S=1200
 # The step is `if: always()`, so it also runs when the APPLY failed — and then
 # there may be no host at all. Polling 16 minutes for a host that was never
 # created would turn every failed apply into a 16-minute red run for no signal.
@@ -224,7 +225,7 @@ fi
 # the real cause). Only a job that got as far as a successful apply is entitled to
 # a dark-boot verdict.
 if [[ "${JOB_STATUS}" == "success" ]]; then
-  DEADLINE=$(( SECONDS + 960 ))
+  DEADLINE=$(( SECONDS + BOOT_TRAIL_DEADLINE_S ))
 else
   DEADLINE=$SECONDS
 fi
@@ -443,7 +444,7 @@ case "$TERMINAL" in
       echo "_No terminal boot event; this job did not complete its apply, so no dark-boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
       exit 0
     fi
-    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
+    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within ${BOOT_TRAIL_DEADLINE_S}s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 1140). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
     echo "_**No terminal boot event inside the host's own boot window.** Host \`${LAST_HOST:-unknown}\`, last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
     # (#8651) A slow seed pull can fail AFTER this poll ends; the fatal still reaches Sentry.
     # Read it once more (server-side, 14 d) so the cause is not lost, and name the re-read.
