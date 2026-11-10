@@ -46,7 +46,6 @@ fi
 new_arm() {
   local dir
   dir="$(mktemp -d)"
-  DIRS+=("$dir")
   mkdir -p "$dir/bin" "$dir/work"
   local name src
   for name in python3 grep mktemp cp mkdir rm cat chmod basename bash head dirname; do
@@ -60,6 +59,7 @@ new_arm() {
 
 write_semgrep() {
   local arm="$1" mode="$2"
+  assert_fixture_dir "$arm"
   cat >"$arm/bin/semgrep" <<EOF
 #!/bin/sh
 printf '%s\\n' "\$*" >>"$arm/semgrep.args"
@@ -155,6 +155,7 @@ EOF
 
 write_shellcheck() {
   local arm="$1"
+  assert_fixture_dir "$arm"
   cat >"$arm/bin/shellcheck" <<EOF
 #!/bin/sh
 printf '%s\\n' "\$*" >>"$arm/shellcheck.args"
@@ -184,6 +185,7 @@ fi
 
 # --- probe ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 out="$(run_gate "$arm" --probe)"
 rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "SOLEUR_REVIEW_SCAN_GATE probe" ]; then
@@ -199,6 +201,7 @@ fi
 
 # --- docs only skip ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 printf '# doc\n' >"$arm/work/readme.md"
 out="$(run_gate "$arm" "$arm/work/readme.md")"
 rc=$?
@@ -210,6 +213,7 @@ fi
 
 # --- lockfile beside one source file: files=1 ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" plural
 printf 'export const n = 1;\n' >"$arm/work/a.ts"
 printf '{}\n' >"$arm/work/package-lock.json"
@@ -224,6 +228,7 @@ fi
 
 # --- singular summary ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" singular
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 printf 'export const b = 2;\n' >"$arm/work/b.ts"
@@ -238,6 +243,7 @@ fi
 
 # --- empty scan refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" empty
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/b.ts" 2>/dev/null || true)"
@@ -254,6 +260,7 @@ fi
 
 # --- forged Ran line in a target body refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" forged
 printf 'Ran 99 rules on 99 files\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
@@ -267,6 +274,7 @@ fi
 
 # --- short paths.scanned refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" short
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 printf 'export const b = 2;\n' >"$arm/work/b.ts"
@@ -289,6 +297,7 @@ fi
 
 # --- a non-ts source suffix is still a target ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" plural
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 printf 'export const b = 1;\n' >"$arm/work/b.js"
@@ -303,6 +312,7 @@ fi
 
 # --- test/ copy maps back to ok ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" plural
 mkdir -p "$arm/work/test"
 printf 'export const t = 1;\n' >"$arm/work/test/t.ts"
@@ -327,6 +337,7 @@ fi
 
 # --- two test files must both be scanned ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" plural
 mkdir -p "$arm/work/test"
 printf 'export const t = 1;\n' >"$arm/work/test/t.ts"
@@ -340,6 +351,7 @@ else
   no "both test files map back (rc=$rc line=$first)"
 fi
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" short
 mkdir -p "$arm/work/test"
 printf 'export const t = 1;\n' >"$arm/work/test/t.ts"
@@ -355,6 +367,7 @@ fi
 
 # --- exit 7 refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" exit7
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
@@ -368,6 +381,7 @@ fi
 
 # --- io_uring retry still empty refuses, and the retry happened ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" iouring
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
@@ -382,6 +396,7 @@ fi
 
 # --- finding line has no matched source ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" finding
 printf 'export const secret = "SECRETVALUE";\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
@@ -396,6 +411,7 @@ fi
 
 # --- shellcheck not executed refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
 rc=$?
@@ -408,6 +424,7 @@ fi
 
 # --- shellcheck executed receipts ok rules=0 ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_shellcheck "$arm"
 printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
@@ -421,6 +438,7 @@ fi
 
 # --- mixed without shellcheck refuses ---
 arm="$(new_arm)"
+DIRS+=("$arm")
 write_semgrep "$arm" plural
 printf 'export const a = 1;\n' >"$arm/work/a.ts"
 printf 'echo hi\n' >"$arm/work/a.sh"

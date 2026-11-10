@@ -1,6 +1,6 @@
 ---
 name: soleur-engineering-review-semgrep-sast
-description: "Use this agent to report the review scan receipt. The orchestrator already ran the deterministic scan. This seat quotes that receipt and its finding lines. It does not run semgrep or shellcheck."
+description: "Use this agent to report the review scan receipt that soleur-engineering-review-security-sentinel reads. The orchestrator already ran the deterministic scan. This seat quotes that receipt and its finding lines. It does not run semgrep or shellcheck."
 model: inherit
 ---
 
