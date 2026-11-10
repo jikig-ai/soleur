@@ -157,7 +157,16 @@ export interface HostGitInvocation {
   env: NodeJS.ProcessEnv;
 }
 
-/** The subcommand and the index it sits at; only the tokens BEFORE it are git's own (global) options. */
+/** Global (pre-subcommand) options a call may carry: git's own `-C <path>` / `-c <k=v>` and the two argument-less ones the shared block uses. */
+const ALLOWED_GLOBAL_FLAGS: ReadonlySet<string> = new Set(["--no-replace-objects", "--no-optional-locks", "--no-pager"]);
+
+/**
+ * The subcommand and the index it sits at. Everything BEFORE it must be `-C <v>`, `-c <v>` or an allowed argument-less flag;
+ * any other dash token (`--git-dir`, `--work-tree`, `--namespace`, `--attr-source <v>`, `--config-env <v>` ...) is refused, because
+ * a global `--git-dir` / `--work-tree` outranks the pinned GIT_DIR / GIT_WORK_TREE (measured) and an unknown global that takes a
+ * separate value would hide one from a scan (`--attr-source HEAD --git-dir=X rev-parse` reads HEAD as the subcommand).
+ * (`rev-parse --git-dir` is a subcommand option, after the subcommand, and is fine.)
+ */
 function subcommandOf(args: readonly string[]): { sub: string | undefined; at: number } {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -165,7 +174,10 @@ function subcommandOf(args: readonly string[]): { sub: string | undefined; at: n
       i++;
       continue;
     }
-    if (a.startsWith("-")) continue;
+    if (a.startsWith("-")) {
+      if (ALLOWED_GLOBAL_FLAGS.has(a)) continue;
+      throw new HostGitRefusedError("args");
+    }
     return { sub: a, at: i };
   }
   return { sub: undefined, at: args.length };
@@ -269,11 +281,8 @@ export function hostGitInvocation(args: readonly string[], opts: HostGitOpts): H
   };
   if (opts.cwd !== undefined) {
     if (opts.cwd === "" || !isAbsolute(opts.cwd)) throw new HostGitRefusedError("cwd");
-    const { sub, at } = subcommandOf(args);
+    const { sub } = subcommandOf(args); // throws HostGitRefusedError("args") on an unexpected global option
     if (sub === "clone" || sub === "init") throw new HostGitRefusedError("cwd");
-    // a GLOBAL `--git-dir` / `--work-tree` outranks the pinned GIT_DIR / GIT_WORK_TREE (measured); no call site passes one.
-    // (`rev-parse --git-dir` is a subcommand option, after the subcommand, and is fine.)
-    if (args.slice(0, at).some((a) => /^--(git-dir|work-tree|namespace)(=|$)/.test(a))) throw new HostGitRefusedError("args");
     const cwd = resolve(opts.cwd);
     assertWorkspaceGitShape(cwd);
     env.GIT_WORK_TREE = cwd;

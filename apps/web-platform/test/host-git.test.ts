@@ -144,8 +144,12 @@ describe("hostGitInvocation: environment", () => {
     expect(() => hostGitInvocation(["init"], { allowProtocol: "none" })).not.toThrow();
   });
 
+  it("a global option other than -C/-c and the allowed flags is refused, so a --git-dir behind a value-taking global cannot hide (a subcommand's own --git-dir is fine)", () => {
+    expect(() => hostGitInvocation(["-C", "/ws/a", "-c", "credential.helper=", "--no-replace-objects", "rev-parse", "--git-dir"], { cwd: "/ws/a", allowProtocol: "none" })).not.toThrow();
+  });
+
   it("an argv --git-dir / --work-tree / --namespace outranks the pinned env and is refused", () => {
-    for (const bad of [["--git-dir=/x", "status"], ["--git-dir", "/x", "status"], ["--work-tree=/x", "status"], ["--namespace=n", "status"]]) {
+    for (const bad of [["--git-dir=/x", "status"], ["--git-dir", "/x", "status"], ["--work-tree=/x", "status"], ["--namespace=n", "status"], ["--attr-source", "HEAD", "--git-dir=/x", "rev-parse", "--git-dir"], ["--config-env", "a=B", "--git-dir=/x", "status"]]) {
       expect(() => hostGitInvocation(bad, { cwd: "/ws/a", allowProtocol: "none" }), bad.join(" ")).toThrow(HostGitRefusedError);
     }
   });
