@@ -1,6 +1,9 @@
 // #8603 — the pinned `@anthropic-ai/claude-code` CLI knows every tier model id
 // (Guard 2), accepts the audit effort value (Guard 3), and still carries the
-// per-model default effort we last reviewed.
+// per-model default effort we last reviewed. #8643 — BOTH pinned platform
+// binaries (claude-code and claude-agent-sdk) know every current model id
+// (Guard 4) and carry the reviewed default effort for each CLI-reaching tier and
+// for the `fable` alias target (Guard 5).
 //
 // Why: an Anthropic model id missing from the pinned CLI's bundled model table
 // is treated as unknown — the CLI silently halves max_tokens (64000 → 32000,
@@ -25,18 +28,22 @@
 //      update CLI_EFFORT_FALLBACK_NEEDLE in model-tiers.ts. The substrate's
 //      Sentry mirror reads the same constant, so the two cannot diverge.
 //
-// The boundary + harvest regexes follow
+// The boundary + harvest rules follow
 // plugins/soleur/skills/model-launch-review/scripts/audit-models.sh `[2b]`,
-// which stays the hand-run check for CANDIDATE versions. This file is its CI
-// twin against the INSTALLED pinned version.
+// which stays the hand-run check of the claude-code CANDIDATE version. This
+// file is now WIDER than `[2b]` against the INSTALLED pinned versions: both
+// platform binaries, every AUTOFIX_PAIRS target, and the hosted SDK default.
 //
 // Completeness: ids are harvested from model-tiers.ts and
 // leader-prompts/constants.ts. That covers the cron CLI because
 // model-tiers.test.ts G1-c and G1-f forbid every other way a model id can
 // reach it from server/inngest/functions/. HAIKU_MODEL only reaches HTTP
 // callers today; it is checked anyway (conservative — an id the bundle does
-// not know is never a safe thing to hand the CLI later). The Agent SDK's own
-// bundled CLI (claude-agent-sdk-*) is out of scope — tracked in #8643.
+// not know is never a safe thing to hand the CLI later). The hosted Agent SDK
+// session runs the claude-agent-sdk platform binary, so Guards 4/5 read it too,
+// with the SDK default model from server/agent-model-defaults.ts in the harvest
+// and the RHS of AUTOFIX_PAIRS (parsed by the one shared
+// plugins/soleur/test/lib/autofix-pairs.ts) in the id set.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -51,6 +58,7 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { AGENT_DEFAULT_MODEL } from "@/server/agent-model-defaults";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
 import {
   AUDIT_CLI_ARGS,
@@ -58,6 +66,14 @@ import {
   CLI_EFFORT_FALLBACK_NEEDLE,
   EXECUTION_MODEL,
 } from "@/server/inngest/model-tiers";
+import {
+  MIN_AUTOFIX_PAIRS,
+  MIN_DISTINCT_TARGETS,
+  assertPairFloors,
+  distinctTargets,
+  parseAutofixPairs,
+  type AutofixPair,
+} from "../../../../../plugins/soleur/test/lib/autofix-pairs";
 import { stripComments } from "../../helpers/strip-comments";
 import {
   BUN_FLOOR,
@@ -65,14 +81,19 @@ import {
   assertEmbeddedBunFloor,
   bufferSource,
   compareSemver,
+  fileSource,
+  resolveVendoredBinary,
   scanEmbeddedBunVersions,
   scanInstalledEmbeddedBun,
+  scanNeedles,
   shouldSkipRealBinaryRows,
+  type ByteSource,
   type EmbeddedBunRow,
 } from "../../helpers/vendored-bwrap-tail";
 
 const APP_ROOT = join(__dirname, "../../..");
 const PKG = "@anthropic-ai/claude-code";
+const AUDIT_SH = join(APP_ROOT, "../../plugins/soleur/skills/model-launch-review/scripts/audit-models.sh");
 
 // The PLATFORM binary for this host only. Never resolve through the
 // @anthropic-ai scope dir: the sibling claude-agent-sdk* packages carry sonnet
@@ -112,6 +133,17 @@ const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   [EXECUTION_MODEL]: "medium",
 };
 
+// Guard 5: the `fable` alias target's bundled `default_effort`, as last reviewed (ADR-083 consult, ADR-053 tiering).
+// A LITERAL, never keyed at runtime from the derived AUTOFIX_PAIRS target: a derived key would carry "medium" to an
+// unreviewed claude-fable-5-3. A sibling of REVIEWED_DEFAULT_EFFORT so tierRows' audit-capability logic is never fed a
+// non-tier key. Its key set must EQUAL the distinct `claude-fable-` targets of AUTOFIX_PAIRS (advisorKeyProblems).
+// Measured 2026-11-10: "medium" in the 2.1.321 bundle (MEASURED_FABLE_5_2_ROW below); absent from 2.1.311.
+const REVIEWED_ADVISOR_EFFORT: Readonly<Record<string, string>> = { "claude-fable-5-2": "medium" };
+const REVIEWED_ADVISOR_KEYS = Object.keys(REVIEWED_ADVISOR_EFFORT);
+const REVIEWED_EFFORT_ALL: Readonly<Record<string, string>> = { ...REVIEWED_DEFAULT_EFFORT, ...REVIEWED_ADVISOR_EFFORT };
+/** Guard 4 checked-ids floor: opus, sonnet, haiku, fable (a loop over fewer ids is a collapsed id set, not a pass). */
+const MIN_CHECKED_IDS = 4;
+
 function readPin(): string {
   const pkg = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8"));
   return pkg.dependencies?.[PKG];
@@ -131,88 +163,130 @@ function readDockerfilePins(): string[] {
   );
 }
 
-// Every quoted Claude model id on a NON-comment line of the two tier files.
-// A historical id quoted in a comment is not a required bundle id.
+// Every quoted Claude model id outside comments. A historical id quoted in a
+// comment is not a required bundle id.
+function rawTierLiterals(src: string): string[] {
+  const ids = new Set<string>();
+  for (const m of stripComments(src).matchAll(
+    /["'`](claude-(?:opus|sonnet|haiku|fable)-[0-9a-z-]+)["'`]/g,
+  )) {
+    ids.add(m[1]);
+  }
+  return [...ids].sort();
+}
+
+// Every quoted Claude model id on a NON-comment line of the tier files and the
+// hosted SDK default (Guard 4 authority (c)).
 function harvestIds(): string[] {
   const ids = new Set<string>();
   for (const rel of [
     "server/inngest/model-tiers.ts",
     "server/inngest/leader-prompts/constants.ts",
+    "server/agent-model-defaults.ts",
   ]) {
-    const src = stripComments(readFileSync(join(APP_ROOT, rel), "utf8"));
-    for (const m of src.matchAll(
-      /["'`](claude-(?:opus|sonnet|haiku|fable)-[0-9a-z-]+)["'`]/g,
-    )) {
-      ids.add(m[1]);
-    }
+    for (const id of rawTierLiterals(readFileSync(join(APP_ROOT, rel), "utf8"))) ids.add(id);
   }
   return [...ids].sort();
+}
+
+/** Guard 4's id set: AUTOFIX_PAIRS targets ∪ the tier harvest (which carries the SDK default), sorted. */
+function currentModelIds(): string[] {
+  const pairs = parseAutofixPairs(readFileSync(AUDIT_SH, "utf8"));
+  assertPairFloors(pairs);
+  return [...new Set([...distinctTargets(pairs), ...harvestIds()])].sort();
 }
 
 function assertIdShape(id: string): void {
   if (!/^claude-[a-z0-9-]+$/.test(id)) throw new Error(`refusing unvalidated id: ${id}`);
 }
 
-/** Run grep over a (possibly binary) file. rc 0 → matches, 1 → none, else throw. */
-function grepFile(args: string[], file: string): string | null {
-  const r = spawnSync("grep", [...args, "--", file], {
-    // NODE_ENV: Next augments ProcessEnv to require it (tsc); inert to grep.
-    env: { LC_ALL: "C", PATH: "/usr/bin:/bin", NODE_ENV: "test" },
-    encoding: "latin1",
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (r.error) throw r.error;
-  if (r.status === 0) return r.stdout;
-  if (r.status === 1) return null;
-  throw new Error(`grep could not read ${file} (rc=${r.status}): ${r.stderr}`);
+// Bundle readers. One implementation over a ByteSource (bounded chunked scans, never a whole-file read or an
+// unbounded regex), shared by the claude-code Guards 2/3 rows (through the file wrappers below) and Guards 4/5
+// (fed `bufferSource` blobs in the synthetic rows and `fileSource` binaries in the real ones).
+//
+// Whole-token boundary: the right side is audit-models.sh [2b]'s ID_BOUNDARY (rejects `<id>-20260101` shadowing); the
+// left side rejects an id embedded in a longer token such as the Bedrock form `us.anthropic.<id>`.
+const ID_LEFT_REJECT = /[0-9A-Za-z.-]/;
+const ID_RIGHT_REJECT = /[0-9A-Za-z-]/;
+// Rows measured at ~1 KB (2.1.280 opus-5-5: 996 B, sonnet-5: 922 B; 2.1.321 fable-5-2: 1015 B); the 3000-byte window
+// leaves ~3x headroom, and a row that outgrows it throws rather than reading as a missing default.
+const ROW_WINDOW_BYTES = 3000;
+
+type ModelRow = { defaultEffort: string | null; capabilities: string[] };
+
+/** Every id `src` does not contain as a whole token — all of them, not just the first. One scan for every id. */
+function sourceAbsentIds(src: ByteSource, ids: readonly string[]): string[] {
+  ids.forEach(assertIdShape);
+  if (ids.length === 0) return [];
+  const hits = scanNeedles(src, Object.fromEntries(ids.map((id) => [id, Buffer.from(id, "latin1")])));
+  const byteAt = (at: number): string | null => {
+    if (at < 0) return null;
+    const b = src.read(at, 1);
+    return b.length === 0 ? null : String.fromCharCode(b[0]);
+  };
+  const whole = (id: string, at: number): boolean => {
+    const before = byteAt(at - 1);
+    const after = byteAt(at + id.length);
+    return (before === null || !ID_LEFT_REJECT.test(before)) && (after === null || !ID_RIGHT_REJECT.test(after));
+  };
+  return ids.filter((id) => !hits[id].some((at) => whole(id, at)));
 }
 
 /**
- * Does `file` contain `id` as a whole token? Two-sided boundary: the right side
- * is audit-models.sh [2b]'s ID_BOUNDARY (rejects `<id>-20260101` shadowing);
- * the left side rejects an id embedded in a longer token such as the Bedrock
- * form `us.anthropic.<id>`. LC_ALL=C so a non-UTF-8 byte after the id cannot
- * fail the bracket class and report a present id as absent. Could-not-look
- * throws — it is never read as absent.
+ * The model-table row of each id: `{id:"<id>",family:…` up to the next row (or the window, cut at a newline). Its
+ * `default_effort` and `capabilities`, or null when no such row exists. Throws on two rows or an over-long row.
  */
+function sourceModelRows(src: ByteSource, ids: readonly string[]): Record<string, ModelRow | null> {
+  ids.forEach(assertIdShape);
+  const anchors = Object.fromEntries(ids.map((id) => [id, Buffer.from(`{id:"${id}",family:`, "latin1")]));
+  const hits = ids.length === 0 ? {} : scanNeedles(src, anchors);
+  const out: Record<string, ModelRow | null> = {};
+  for (const id of ids) {
+    const at = hits[id];
+    if (at.length === 0) {
+      out[id] = null;
+      continue;
+    }
+    if (at.length !== 1) throw new Error(`expected exactly one model-table row for ${id}, found ${at.length}`);
+    let window = src.read(at[0], anchors[id].length + ROW_WINDOW_BYTES).toString("latin1");
+    const nl = window.indexOf("\n");
+    if (nl !== -1) window = window.slice(0, nl);
+    const end = window.indexOf('},{id:"');
+    if (end === -1 && window.length >= ROW_WINDOW_BYTES + anchors[id].length) {
+      throw new Error(`model-table row for ${id} is longer than the ${ROW_WINDOW_BYTES}-byte window — widen it`);
+    }
+    const row = end === -1 ? window : window.slice(0, end);
+    const caps = row.match(/capabilities:\[([^\]]*)\]/);
+    out[id] = {
+      defaultEffort: row.match(/default_effort:"([a-z]+)"/)?.[1] ?? null,
+      capabilities: caps ? [...caps[1].matchAll(/"([a-z_0-9]+)"/g)].map((m) => m[1]) : [],
+    };
+  }
+  return out;
+}
+
+function withFile<T>(file: string, fn: (src: ByteSource) => T): T {
+  const fs = fileSource(file); // a missing file throws: could-not-look is never "absent"
+  try {
+    return fn(fs.source);
+  } finally {
+    fs.close();
+  }
+}
+
+/** Does `file` contain `id` as a whole token? */
 function bundleHasId(file: string, id: string): boolean {
-  assertIdShape(id);
-  return grepFile(["-aqE", "-e", `(^|[^0-9A-Za-z.-])${id}([^0-9A-Za-z-]|$)`], file) !== null;
+  return absentIds(file, [id]).length === 0;
 }
 
 /** Every id the bundle does not know — all of them, not just the first. */
 function absentIds(file: string, ids: string[]): string[] {
-  return ids.filter((id) => !bundleHasId(file, id));
+  return withFile(file, (src) => sourceAbsentIds(src, ids));
 }
 
-/**
- * The model-table row for `id`: `{id:"<id>",family:…` up to the next row. Returns
- * its `default_effort` and `capabilities`, or null when no such row exists.
- */
-function modelRow(
-  file: string,
-  id: string,
-): { defaultEffort: string | null; capabilities: string[] } | null {
-  assertIdShape(id);
-  // Rows measured at ~1 KB on 2.1.280 (opus-5-5: 996 B, sonnet-5: 922 B); the
-  // 3000-byte window leaves ~3x headroom, and a row that outgrows it throws
-  // below rather than reading as a missing default.
-  const out = grepFile(["-aoE", "-e", `\\{id:"${id}",family:.{0,3000}`], file);
-  if (out === null) return null;
-  const windows = out.split("\n").filter(Boolean);
-  if (windows.length !== 1) {
-    throw new Error(`expected exactly one model-table row for ${id}, found ${windows.length}`);
-  }
-  const end = windows[0].indexOf('},{id:"');
-  if (end === -1 && windows[0].length >= 3000 + `{id:"${id}",family:`.length) {
-    throw new Error(`model-table row for ${id} is longer than the 3000-byte window — widen it`);
-  }
-  const row = end === -1 ? windows[0] : windows[0].slice(0, end);
-  const caps = row.match(/capabilities:\[([^\]]*)\]/);
-  return {
-    defaultEffort: row.match(/default_effort:"([a-z]+)"/)?.[1] ?? null,
-    capabilities: caps ? [...caps[1].matchAll(/"([a-z_0-9]+)"/g)].map((m) => m[1]) : [],
-  };
+/** The model-table row for `id` in `file`, or null when no such row exists. */
+function modelRow(file: string, id: string): ModelRow | null {
+  return withFile(file, (src) => sourceModelRows(src, [id])[id]);
 }
 
 /**
@@ -280,6 +354,129 @@ function runCli(binPath: string, args: string[]) {
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Guards 4/5 (#8643) — pure functions over (package, ByteSource) rows, so every mutation row is a standing synthetic test.
+
+/** One platform binary under test: the package it came from, a label for messages, and its bytes. */
+interface BinaryUnderTest {
+  pkg: string;
+  label: string;
+  src: ByteSource;
+}
+
+function failureOf(fn: () => void): string {
+  try {
+    fn();
+    return "";
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+function synthSrc(text: string): ByteSource {
+  return bufferSource(Buffer.from(text, "latin1"));
+}
+
+function synthBin(pkg: string, text: string): BinaryUnderTest {
+  return { pkg, label: `${pkg}@synthetic`, src: synthSrc(text) };
+}
+
+/** Shared by Guards 4 and 5: every required package was examined, so a loop over zero or one binary cannot pass. */
+function coverageProblems(tag: string, rows: readonly BinaryUnderTest[], required: readonly string[]): string[] {
+  const examined = rows.map((r) => r.pkg);
+  return required
+    .filter((pkg) => !examined.includes(pkg))
+    .map((pkg) => `${tag} ${pkg} was not examined (examined: [${examined.join(", ")}], want: [${required.join(", ")}])`);
+}
+
+/** Guard 4: throws unless every required binary was examined, at least `minIds` ids were checked, and each knows each id. */
+function assertIdsKnown(
+  rows: readonly BinaryUnderTest[],
+  ids: readonly string[],
+  required: readonly string[] = BUN_FLOOR_PACKAGES,
+  minIds: number = MIN_CHECKED_IDS,
+): void {
+  const problems = coverageProblems("MODEL_ID_COVERAGE", rows, required);
+  if (ids.length < minIds) problems.push(`MODEL_ID_FLOOR checked ${ids.length} ids, floor ${minIds} (the id set collapsed)`);
+  for (const r of rows) {
+    for (const id of sourceAbsentIds(r.src, ids)) problems.push(`MODEL_ID_ABSENT ${r.label} does not know ${id}`);
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `${problems.join("; ")}. An id the bundled model table does not know is treated as unknown — max_tokens is silently ` +
+      "halved (#6934) with tsc and CI green. Move the @anthropic-ai/claude-code and @anthropic-ai/claude-agent-sdk pins " +
+      "together to a pair whose bundles carry every AUTOFIX_PAIRS target, tier id and AGENT_DEFAULT_MODEL (honour the " +
+      "model-launch-review release-age note), or keep the retarget out of this PR.",
+  );
+}
+
+/**
+ * Guard 5: throws unless every required binary was examined and, in each, every reviewed id has exactly one model-table
+ * row whose default_effort equals the reviewed value, and the audit model's row advertises the `effort` capability.
+ */
+function assertReviewedEfforts(
+  rows: readonly BinaryUnderTest[],
+  reviewed: Readonly<Record<string, string>>,
+  required: readonly string[] = BUN_FLOOR_PACKAGES,
+  auditModel: string = AUDIT_MODEL,
+): void {
+  const problems = coverageProblems("EFFORT_COVERAGE", rows, required);
+  const ids = Object.keys(reviewed);
+  if (ids.length === 0) problems.push("EFFORT_FLOOR no reviewed ids to check");
+  for (const r of rows) {
+    let found: Record<string, ModelRow | null>;
+    try {
+      found = sourceModelRows(r.src, ids);
+    } catch (e) {
+      problems.push(`EFFORT_ROW_UNREADABLE ${r.label}: ${(e as Error).message}`);
+      continue;
+    }
+    for (const id of ids) {
+      const row = found[id];
+      if (row === null) {
+        problems.push(`EFFORT_NO_ROW ${r.label} ${id}: no model-table row ({id:"${id}",family: anchor)`);
+        continue;
+      }
+      if (row.defaultEffort !== reviewed[id]) {
+        problems.push(`EFFORT_MOVED ${r.label} ${id} default_effort is ${JSON.stringify(row.defaultEffort)}, reviewed ${JSON.stringify(reviewed[id])}`);
+      }
+      if (id === auditModel && !row.capabilities.includes("effort")) {
+        problems.push(`EFFORT_CAPABILITY ${r.label} ${id}: the row lacks the "effort" capability — --effort would be accepted and do nothing`);
+      }
+    }
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `${problems.join("; ")}. A bundle moved (or lacks) a reviewed default effort. For a tier id re-decide AUDIT_EFFORT / ` +
+      "accept the execution default and update REVIEWED_DEFAULT_EFFORT (ADR-053 amendment #8603); for the fable alias " +
+      "target re-review the ADR-083 consult effort and update REVIEWED_ADVISOR_EFFORT.",
+  );
+}
+
+/** "" when REVIEWED_ADVISOR_EFFORT's keys EQUAL the distinct `claude-fable-` targets of the pairs, else the problem. */
+function advisorKeyProblems(pairs: readonly AutofixPair[], reviewedAdvisor: Readonly<Record<string, string>>): string {
+  const fable = distinctTargets(pairs).filter((t) => t.startsWith("claude-fable-"));
+  const keys = Object.keys(reviewedAdvisor).sort();
+  if (fable.length > 0 && fable.join(",") === keys.join(",")) return "";
+  return (
+    `ADVISOR_EFFORT_KEYS AUTOFIX_PAIRS claude-fable- targets [${fable.join(", ")}] != REVIEWED_ADVISOR_EFFORT keys ` +
+    `[${keys.join(", ")}] — review the new fable target's bundled default_effort and edit the literal map`
+  );
+}
+
+/** Opens both installed linux-x64 binaries (BINARY_MISSING, never a skip, on linux-x64 and under CI) for one callback. */
+function withInstalledBinaries(fn: (rows: BinaryUnderTest[]) => void): void {
+  const opened = BUN_FLOOR_PACKAGES.map((pkg) => {
+    const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
+    return { pkg, label: `${pkg}@${bin.version}`, fs: fileSource(bin.path) };
+  });
+  try {
+    fn(opened.map(({ pkg, label, fs }) => ({ pkg, label, src: fs.source })));
+  } finally {
+    for (const o of opened) o.fs.close();
+  }
+}
+
 describe("pinned claude-code CLI — pin agreement + id set (every host)", () => {
   it("package.json pins an exact version and the Dockerfile agrees", () => {
     const pin = readPin();
@@ -297,7 +494,7 @@ describe("pinned claude-code CLI — pin agreement + id set (every host)", () =>
 
   it("harvests every tier model id (⊇ the imported constants)", () => {
     expect(harvestIds()).toEqual(
-      expect.arrayContaining([AUDIT_MODEL, EXECUTION_MODEL, HAIKU_MODEL]),
+      expect.arrayContaining([AUDIT_MODEL, EXECUTION_MODEL, HAIKU_MODEL, AGENT_DEFAULT_MODEL]),
     );
   });
 
@@ -613,14 +810,6 @@ describe("embedded Bun floor — synthetic mutation rows (#12026 Guard 1)", () =
     versions: scanEmbeddedBunVersions(bufferSource(Buffer.from(text, "latin1"))),
   });
   const ok = (pkg: string) => rowOf(pkg, `xx ${banner("1.4.4")} \0 yy ${banner("1.4.4", "(0ae49f8b6)")}`);
-  const failureOf = (fn: () => void): string => {
-    try {
-      fn();
-      return "";
-    } catch (e) {
-      return (e as Error).message;
-    }
-  };
 
   it("the floor is 1.4.4 and both packages are required", () => {
     expect([...BUN_FLOOR]).toEqual([1, 4, 4]);
@@ -720,3 +909,293 @@ describe("CI toolchain Bun floor (#12026)", () => {
     expect(compareSemver(v, BUN_FLOOR.join(".")), `.bun-version ${v} is below ${BUN_FLOOR.join(".")}`).toBeGreaterThanOrEqual(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Guard 4 (#8643): every CURRENT model id is known by BOTH installed platform binaries. Guard 5: both binaries' bundled
+// model-table rows carry the reviewed default_effort for every CLI-reaching tier id and for the `fable` alias target.
+//
+// The id set is the union of three authorities, each read from its source file and never retyped: the RHS of AUTOFIX_PAIRS
+// in model-launch-review's audit-models.sh (parsed by the ONE shared plugins/soleur/test/lib/autofix-pairs.ts), the tier
+// harvest above (model-tiers.ts, leader-prompts/constants.ts), and server/agent-model-defaults.ts (the hosted SDK default).
+// The chokepoint is the same two-package list the Bun floor uses (BUN_FLOOR_PACKAGES), read through bounded chunked scans.
+// The id set comes from files a model-launch PR edits, so one diff can drop an id from AUTOFIX_PAIRS and move the pins
+// together: these guards prove consistency, not that the table is right. Not reached: the musl / arm64 / darwin / win32
+// variants (lock version equality only) and the Dockerfile global install (the pin agreement row above).
+
+// The `claude-fable-5-2` model-table row as MEASURED in @anthropic-ai/claude-code-linux-x64@2.1.321 (2026-11-10, read
+// statically from the npm-packed binary, never executed): 1015 bytes from its `{id:"claude-fable-5-2",family:` anchor to
+// the next row. The synthetic Guard 4/5 rows are built from it so they exercise the real row's shape, not a model of it.
+const MEASURED_FABLE_5_2_ROW =
+  '{id:"claude-fable-5-2",family:"fable",display_name:"Fable 5.2",knowledge_cutoff:"June 2026",provider_ids:{first_party:"claude-fable-5-2",bedrock:"us.anthropic.claude-fable-5-2",vertex:"claude-fable-5-2",foundry:"claude-fable-5-2",anthropic_aws:"claude-fable-5-2",anthropic_google_cloud:"claude-fable-5-2",mantle:"anthropic.claude-fable-5-2",gateway:"claude-fable-5-2"},eager_input_streaming:{bedrock:!0,vertex:!0},vertex_region_env_var:"VERTEX_REGION_CLAUDE_FABLE_5_2",fallback_3p:"claude-fable-5-1",context:{window:1e6,native_1m:!0,supports_1m_beta:!0},max_output_tokens:{default:128000,upper:128000},pricing:"tier_8_40_cache_read_0_20",capabilities:["effort","max_effort","xhigh_effort","adaptive_thinking","rejects_disabled_thinking","mid_conv_tool_change","per_turn_effort","per_turn_timing","context_management","fast_mode","lean_prompt","refusal_fallback","org_locked_thinking","fable_5_2_prompt_bundle"],default_effort:"medium",image_limits:{maxWidth:2576,maxHeight:2576,maxImageTokens:4784},advisor_rank:10}';
+
+describe("AUTOFIX_PAIRS shared parser — synthetic rows (Guard 4 assembly)", () => {
+  const table = (...lines: string[]) =>
+    ["#!/usr/bin/env bash", "set -euo pipefail", "AUTOFIX_PAIRS=(", ...lines.map((l) => `  ${l}`), ")", "", 'echo "${AUTOFIX_PAIRS[@]}"', ""].join("\n");
+
+  it("the real table parses above both floors, and its fable targets equal REVIEWED_ADVISOR_EFFORT's keys", () => {
+    const pairs = parseAutofixPairs(readFileSync(AUDIT_SH, "utf8"));
+    expect(failureOf(() => assertPairFloors(pairs))).toBe("");
+    expect(pairs.length).toBeGreaterThanOrEqual(MIN_AUTOFIX_PAIRS);
+    expect(distinctTargets(pairs).length).toBeGreaterThanOrEqual(MIN_DISTINCT_TARGETS);
+    expect(advisorKeyProblems(pairs, REVIEWED_ADVISOR_EFFORT)).toBe("");
+  });
+
+  it("must-PASS non-canonical: a commented-out pair is not counted, a live pair with an inline trailing comment is", () => {
+    const pairs = parseAutofixPairs(
+      table('"claude-a-1=claude-a-2"', '# "claude-b-1=claude-b-2"', '"claude-c-1=claude-c-2"   # a trailing note', "claude-d-1=claude-d-2"),
+    );
+    expect(pairs).toEqual([["claude-a-1", "claude-a-2"], ["claude-c-1", "claude-c-2"], ["claude-d-1", "claude-d-2"]]);
+  });
+
+  it('a trailing `# was "a=b"` comment after a live pair is NOT a pair', () => {
+    expect(parseAutofixPairs(table('"claude-a-1=claude-a-2"  # was "claude-old-1=claude-old-2"'))).toEqual([["claude-a-1", "claude-a-2"]]);
+  });
+
+  it("a `)` inside a comment line does not end the block (the old non-greedy regex stopped there)", () => {
+    const pairs = parseAutofixPairs(table('"claude-a-1=claude-a-2"', "# (a parenthetical note)", '"claude-c-1=claude-c-2"'));
+    expect(pairs.map(([from]) => from)).toEqual(["claude-a-1", "claude-c-1"]);
+  });
+
+  it("no block, two blocks, no closing `)` line, or a malformed live token throws — never reads as zero pairs", () => {
+    expect(failureOf(() => parseAutofixPairs("echo nothing here\n"))).toMatch(/AUTOFIX_PAIRS_PARSE: expected exactly one .* found 0/);
+    expect(failureOf(() => parseAutofixPairs(`${table('"claude-a-1=claude-a-2"')}\n${table('"claude-b-1=claude-b-2"')}`))).toMatch(/found 2/);
+    expect(failureOf(() => parseAutofixPairs('AUTOFIX_PAIRS=(\n  "claude-a-1=claude-a-2"\n  "claude-b-1=claude-b-2")\n'))).toMatch(/no closing line/);
+    expect(failureOf(() => parseAutofixPairs(table('"claude-a-1"')))).toMatch(/is not from=to/);
+    expect(failureOf(() => parseAutofixPairs(table('"claude-a-1=claude-a-2')))).toMatch(/unterminated quote/);
+  });
+
+  it("Guard 4 row 4: an emptied block, or every pair commented out, reds BOTH floors (and assertIdsKnown on its targets reds the id floor)", () => {
+    for (const src of [table(), table('# "claude-a-1=claude-a-2"', '# "claude-b-1=claude-b-2"')]) {
+      const pairs = parseAutofixPairs(src);
+      expect(pairs).toEqual([]);
+      const msg = failureOf(() => assertPairFloors(pairs));
+      expect(msg).toMatch(/AUTOFIX_PAIRS_FLOOR 0 pairs parsed, floor 11/);
+      expect(msg).toMatch(/AUTOFIX_PAIRS_TARGET_FLOOR 0 distinct claude- targets/);
+      expect(failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", ""), synthBin("claude-code", "")], distinctTargets(pairs)))).toMatch(
+        /MODEL_ID_FLOOR checked 0 ids/,
+      );
+    }
+  });
+
+  it("the distinct-target floor is separate from the pair floor: 11 pairs onto 3 targets reds only the target floor", () => {
+    const pairs = Array.from({ length: 11 }, (_, i) => [`claude-old-${i}`, `claude-new-${i % 3}`] as const);
+    const msg = failureOf(() => assertPairFloors(pairs));
+    expect(msg).toMatch(/AUTOFIX_PAIRS_TARGET_FLOOR 3 distinct/);
+    expect(msg).not.toMatch(/AUTOFIX_PAIRS_FLOOR /);
+  });
+});
+
+describe("Guard 4 — current model ids known by both binaries: synthetic mutation rows", () => {
+  const SYNTH_TABLE = [
+    "AUTOFIX_PAIRS=(",
+    '  "claude-opus-5=claude-opus-5-5"',
+    '  "claude-sonnet-5=claude-sonnet-5-5"',
+    '  "claude-haiku-4-5=claude-haiku-5-5"',
+    '  "claude-fable-5-1=claude-fable-5-2"',
+    ")",
+  ].join("\n");
+  const KNOWS_ALL = `\0claude-opus-5-5\0"claude-sonnet-5-5"\0claude-haiku-5-5\0[${MEASURED_FABLE_5_2_ROW}]\0`;
+  const ids = (src = SYNTH_TABLE) => distinctTargets(parseAutofixPairs(src));
+
+  it("must-PASS control: both binaries carry every target (the fable id only through the measured 2.1.321 row)", () => {
+    expect(ids()).toEqual(["claude-fable-5-2", "claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5"]);
+    expect(failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", KNOWS_ALL), synthBin("claude-code", KNOWS_ALL)], ids()))).toBe("");
+  });
+
+  it("row 1: one pair retargeted to an id absent from the binaries reds naming BOTH packages and the id", () => {
+    const retargeted = SYNTH_TABLE.replace('"claude-fable-5-1=claude-fable-5-2"', '"claude-fable-5-1=claude-fable-9-9"');
+    expect(retargeted).not.toBe(SYNTH_TABLE);
+    const msg = failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", KNOWS_ALL), synthBin("claude-code", KNOWS_ALL)], ids(retargeted)));
+    expect(msg).toMatch(/MODEL_ID_ABSENT claude-agent-sdk@synthetic does not know claude-fable-9-9/);
+    expect(msg).toMatch(/MODEL_ID_ABSENT claude-code@synthetic does not know claude-fable-9-9/);
+    expect(msg).not.toMatch(/claude-opus-5-5|claude-sonnet-5-5/);
+  });
+
+  it('row 2 (dispatch, shared with Guard 5): zero binaries, or only the claude-code one, reds MODEL_ID_COVERAGE ("0 checked" cannot pass)', () => {
+    const none = failureOf(() => assertIdsKnown([], ids()));
+    expect(none).toMatch(/MODEL_ID_COVERAGE claude-agent-sdk was not examined/);
+    expect(none).toMatch(/MODEL_ID_COVERAGE claude-code was not examined/);
+    const one = failureOf(() => assertIdsKnown([synthBin("claude-code", KNOWS_ALL)], ids()));
+    expect(one).toMatch(/MODEL_ID_COVERAGE claude-agent-sdk was not examined/);
+    expect(one).not.toMatch(/MODEL_ID_COVERAGE claude-code/);
+  });
+
+  it("row 3: the CLI binary compliant and the SDK binary lacking claude-sonnet-5-5 reds naming ONLY claude-agent-sdk", () => {
+    const sdkText = KNOWS_ALL.replace('"claude-sonnet-5-5"', '"claude-sonnet-5"');
+    expect(sdkText).not.toBe(KNOWS_ALL);
+    const msg = failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", sdkText), synthBin("claude-code", KNOWS_ALL)], ids()));
+    expect(msg).toMatch(/MODEL_ID_ABSENT claude-agent-sdk@synthetic does not know claude-sonnet-5-5/);
+    expect(msg).not.toMatch(/claude-code@synthetic/);
+  });
+
+  it("row 5: a raw model-id literal in the runner reds even beside an AGENT_DEFAULT_MODEL import; a comment mention does not", () => {
+    const reverted = [
+      'import { AGENT_DEFAULT_MODEL } from "./agent-model-defaults";',
+      "const opts = {",
+      '  model: args.model ?? "claude-sonnet-5-5",',
+      "};",
+    ].join("\n");
+    expect(rawTierLiterals(reverted)).toEqual(["claude-sonnet-5-5"]);
+    expect(rawTierLiterals('/** Defaults to "claude-sonnet-5-5". */\nconst m = args.model ?? AGENT_DEFAULT_MODEL;\n')).toEqual([]);
+  });
+
+  it("row 5 (real source): agent-runner-query-options.ts carries no raw model-id literal outside comments", () => {
+    expect(rawTierLiterals(readFileSync(join(APP_ROOT, "server/agent-runner-query-options.ts"), "utf8"))).toEqual([]);
+  });
+
+  it("harness (a): an empty id list reds the checked-ids floor instead of passing over nothing", () => {
+    expect(failureOf(() => assertIdsKnown([synthBin("claude-agent-sdk", KNOWS_ALL), synthBin("claude-code", KNOWS_ALL)], []))).toMatch(
+      /MODEL_ID_FLOOR checked 0 ids, floor 4/,
+    );
+  });
+
+  it("harness (b): a dated id does NOT vouch for its undated prefix, a dotted Bedrock form does not either, an id at EOF does", () => {
+    expect(sourceAbsentIds(synthSrc("\0claude-x-1-20260101\0"), ["claude-x-1"])).toEqual(["claude-x-1"]);
+    expect(sourceAbsentIds(synthSrc('"us.anthropic.claude-x-1"'), ["claude-x-1"])).toEqual(["claude-x-1"]);
+    expect(sourceAbsentIds(synthSrc("\0\0claude-x-1"), ["claude-x-1"])).toEqual([]);
+    expect(sourceAbsentIds(synthSrc("claude-x-1\0"), ["claude-x-1"])).toEqual([]);
+  });
+
+  it("the id union carries the AUTOFIX_PAIRS targets, the tier harvest and the SDK default", () => {
+    const union = currentModelIds();
+    expect(union).toEqual(expect.arrayContaining([AGENT_DEFAULT_MODEL, AUDIT_MODEL, EXECUTION_MODEL, HAIKU_MODEL, ...REVIEWED_ADVISOR_KEYS]));
+    expect(union.length).toBeGreaterThanOrEqual(MIN_CHECKED_IDS);
+    expect(harvestIds()).toContain(AGENT_DEFAULT_MODEL);
+  });
+});
+
+describe("Guard 5 — reviewed default_effort in both binaries: synthetic mutation rows", () => {
+  const NEXT_ROW = '{id:"claude-zz-next-1",family:"zz",capabilities:["effort"],default_effort:"high"}';
+  const tableOf = (row: string) => `[${row},${NEXT_ROW}]`;
+  const FABLE = { "claude-fable-5-2": "medium" };
+  const withEffort = (v: string) => MEASURED_FABLE_5_2_ROW.replace('default_effort:"medium"', `default_effort:"${v}"`);
+
+  it("REVIEWED_ADVISOR_EFFORT is the literal reviewed map, and the measured row reads as medium with the effort capability", () => {
+    expect(REVIEWED_ADVISOR_EFFORT).toEqual({ "claude-fable-5-2": "medium" });
+    expect(MEASURED_FABLE_5_2_ROW.length).toBe(1015);
+    const row = sourceModelRows(synthSrc(tableOf(MEASURED_FABLE_5_2_ROW)), ["claude-fable-5-2"])["claude-fable-5-2"];
+    expect(row?.defaultEffort).toBe("medium");
+    expect(row?.capabilities).toContain("effort");
+  });
+
+  it("must-PASS control: both binaries carry the measured row", () => {
+    const t = tableOf(MEASURED_FABLE_5_2_ROW);
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", t), synthBin("claude-code", t)], FABLE))).toBe("");
+  });
+
+  it('row 1: the fable row reading default_effort:"high" reds naming the id, the package and both values', () => {
+    expect(withEffort("high")).not.toBe(MEASURED_FABLE_5_2_ROW);
+    const ok = tableOf(MEASURED_FABLE_5_2_ROW);
+    const msg = failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", ok), synthBin("claude-code", tableOf(withEffort("high")))], FABLE));
+    expect(msg).toMatch(/EFFORT_MOVED claude-code@synthetic claude-fable-5-2 default_effort is "high", reviewed "medium"/);
+    expect(msg).not.toMatch(/claude-agent-sdk@synthetic/);
+  });
+
+  it("row 2 (dispatch): a Guard 5 loop over zero binaries, or one, reds EFFORT_COVERAGE on its own", () => {
+    const none = failureOf(() => assertReviewedEfforts([], FABLE));
+    expect(none).toMatch(/EFFORT_COVERAGE claude-agent-sdk was not examined/);
+    expect(none).toMatch(/EFFORT_COVERAGE claude-code was not examined/);
+    const one = failureOf(() => assertReviewedEfforts([synthBin("claude-code", tableOf(MEASURED_FABLE_5_2_ROW))], FABLE));
+    expect(one).toMatch(/EFFORT_COVERAGE claude-agent-sdk was not examined/);
+    expect(one).not.toMatch(/EFFORT_COVERAGE claude-code/);
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", ""), synthBin("claude-code", "")], {}))).toMatch(/EFFORT_FLOOR/);
+  });
+
+  it('row 3: the CLI row compliant and the SDK row moved to "low" reds naming ONLY claude-agent-sdk', () => {
+    const msg = failureOf(() =>
+      assertReviewedEfforts([synthBin("claude-agent-sdk", tableOf(withEffort("low"))), synthBin("claude-code", tableOf(MEASURED_FABLE_5_2_ROW))], FABLE),
+    );
+    expect(msg).toMatch(/EFFORT_MOVED claude-agent-sdk@synthetic claude-fable-5-2 default_effort is "low", reviewed "medium"/);
+    expect(msg).not.toMatch(/claude-code@synthetic/);
+  });
+
+  it('row 4: the id present elsewhere but no `{id:"…",family:` row reds "no model-table row", never a missing default', () => {
+    const noRow = `[${NEXT_ROW}] fallback_3p:"claude-fable-5-2" "claude-fable-5-2"`;
+    const msg = failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", noRow), synthBin("claude-code", noRow)], FABLE));
+    expect(msg).toMatch(/EFFORT_NO_ROW claude-agent-sdk@synthetic claude-fable-5-2: no model-table row/);
+    expect(msg).toMatch(/EFFORT_NO_ROW claude-code@synthetic claude-fable-5-2: no model-table row/);
+    expect(msg).not.toMatch(/EFFORT_MOVED/);
+  });
+
+  it("must-PASS non-canonical: fields after `family:` reordered, with an extra capability, still read medium", () => {
+    const reordered = MEASURED_FABLE_5_2_ROW.replace(',default_effort:"medium"', "").replace(
+      'pricing:"tier_8_40_cache_read_0_20",capabilities:["effort",',
+      'pricing:"tier_8_40_cache_read_0_20",default_effort:"medium",capabilities:["some_new_cap","effort",',
+    );
+    expect(reordered.indexOf("default_effort")).toBeLessThan(reordered.indexOf("capabilities"));
+    const t = tableOf(reordered);
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", t), synthBin("claude-code", t)], FABLE))).toBe("");
+  });
+
+  it("must-RED: `family` before `id` is not a row (modelRow anchors on `{id:\"<id>\",family:` — stated behaviour)", () => {
+    const flipped = MEASURED_FABLE_5_2_ROW.replace('{id:"claude-fable-5-2",family:"fable",', '{family:"fable",id:"claude-fable-5-2",');
+    expect(flipped).not.toBe(MEASURED_FABLE_5_2_ROW);
+    const t = tableOf(flipped);
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", t), synthBin("claude-code", t)], FABLE))).toMatch(/EFFORT_NO_ROW/);
+  });
+
+  it("the audit model's row must still advertise the effort capability", () => {
+    const row = (caps: string) => `{id:"${AUDIT_MODEL}",family:"opus",capabilities:[${caps}],default_effort:"medium"}`;
+    const reviewed = { [AUDIT_MODEL]: "medium" };
+    const ok = tableOf(row('"effort","adaptive_thinking"'));
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", ok), synthBin("claude-code", ok)], reviewed))).toBe("");
+    const bad = tableOf(row('"adaptive_thinking"'));
+    expect(failureOf(() => assertReviewedEfforts([synthBin("claude-agent-sdk", ok), synthBin("claude-code", bad)], reviewed))).toMatch(
+      new RegExp(`EFFORT_CAPABILITY claude-code@synthetic ${AUDIT_MODEL}`),
+    );
+  });
+
+  it("REVIEWED_ADVISOR_EFFORT keys must EQUAL the distinct claude-fable- targets: zero, two, or a moved target reds", () => {
+    const pairs = (...to: string[]) => to.map((t, i) => [`claude-old-${i}`, t] as const);
+    expect(advisorKeyProblems(pairs("claude-opus-5-5", "claude-fable-5-2"), REVIEWED_ADVISOR_EFFORT)).toBe("");
+    expect(advisorKeyProblems(pairs("claude-opus-5-5"), REVIEWED_ADVISOR_EFFORT)).toMatch(/ADVISOR_EFFORT_KEYS .*\[\] /);
+    expect(advisorKeyProblems(pairs("claude-fable-5-2", "claude-fable-5-3"), REVIEWED_ADVISOR_EFFORT)).toMatch(/ADVISOR_EFFORT_KEYS/);
+    expect(advisorKeyProblems(pairs("claude-fable-5-3"), REVIEWED_ADVISOR_EFFORT)).toMatch(/ADVISOR_EFFORT_KEYS .*claude-fable-5-3/);
+  });
+});
+
+describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process.env.CI))(
+  "Guards 4/5 — the installed claude-agent-sdk and claude-code linux-x64 binaries (#8643)",
+  () => {
+    it(
+      "Guard 4: every current model id (AUTOFIX_PAIRS targets ∪ tier harvest ∪ SDK default) is known by both binaries",
+      () => {
+        withInstalledBinaries((rows) => {
+          expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
+          const ids = currentModelIds();
+          expect(ids.length).toBeGreaterThanOrEqual(MIN_CHECKED_IDS);
+          process.stdout.write(`Guard 4: checked ${ids.length} ids [${ids.join(", ")}] in ${rows.map((r) => r.label).join(", ")}\n`);
+          assertIdsKnown(rows, ids);
+        });
+      },
+      180_000,
+    );
+
+    it(
+      "Guard 5: each CLI-reaching tier and the fable alias target carry the reviewed default_effort in both binaries",
+      () => {
+        withInstalledBinaries((rows) => {
+          expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
+          assertReviewedEfforts(rows, REVIEWED_EFFORT_ALL);
+        });
+      },
+      180_000,
+    );
+
+    it(
+      "Guard 5 harness (a): every reviewed value flipped to \"high\" reds once per (package, id) — the comparison reads the real rows",
+      () => {
+        withInstalledBinaries((rows) => {
+          const flipped = Object.fromEntries(Object.keys(REVIEWED_EFFORT_ALL).map((id) => [id, "high"]));
+          const msg = failureOf(() => assertReviewedEfforts(rows, flipped));
+          for (const r of rows) {
+            for (const id of Object.keys(flipped)) {
+              expect(msg, `${r.label} ${id}`).toMatch(new RegExp(`EFFORT_(MOVED|NO_ROW) ${r.label.replace(/\./g, "\\.")} ${id}[ :]`));
+            }
+          }
+        });
+      },
+      180_000,
+    );
+  },
+);

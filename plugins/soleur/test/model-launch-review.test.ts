@@ -11,6 +11,11 @@ import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
+import {
+  assertPairFloors,
+  parseAutofixPairs as parseAutofixPairsFrom,
+} from "./lib/autofix-pairs";
+
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/model-launch-review");
 const SKILL_MD = resolve(SKILL_DIR, "SKILL.md");
@@ -32,16 +37,13 @@ const CURRENT_IDS = [
   "claude-fable-5-2",
 ];
 
-/** Parse AUTOFIX_PAIRS out of the script so tests are driven BY the table
- * rather than restating a hand-picked member of it. */
+/** AUTOFIX_PAIRS read out of the script so tests are driven BY the table
+ * rather than restating a hand-picked member of it. The parse rules live in
+ * the shared ./lib/autofix-pairs.ts, which the web-platform bundle-id guard
+ * (claude-cli-pin-knows-models.test.ts) imports too: one reading of the table. */
 function parseAutofixPairs(): Array<[string, string]> {
-  const src = readFileSync(AUDIT_SH, "utf8");
-  const block = src.match(/AUTOFIX_PAIRS=\(([\s\S]*?)\)/);
-  if (!block) throw new Error("AUTOFIX_PAIRS block not found in audit-models.sh");
-  // Comment lines are not pairs: a commented-out pair must not parse as live.
-  const body = block[1].replace(/^[ \t]*#.*$/gm, "");
-  return [...body.matchAll(/"([^"=]+)=([^"]+)"/g)].map(
-    (m) => [m[1], m[2]] as [string, string],
+  return parseAutofixPairsFrom(readFileSync(AUDIT_SH, "utf8")).map(
+    ([from, to]) => [from, to] as [string, string],
   );
 }
 
@@ -722,6 +724,8 @@ describe("model-launch-review Haiku 5.5 launch", () => {
     // 8 pairs before Haiku 5.5, +2 (dated and undated Haiku 4.5) = 10,
     // +1 at the Fable 5.2 launch (claude-fable-5-1 became a source id) = 11.
     expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(11);
+    // The same floor plus the distinct-target floor, as the shared parser states them.
+    assertPairFloors(parseAutofixPairs());
   });
 
   test("the DATED Haiku 4.5 id is detected and rewritten to claude-haiku-5-5", () => {

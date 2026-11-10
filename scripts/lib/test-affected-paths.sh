@@ -390,8 +390,10 @@ AFFECTED_CONSUMED_EDGES=(
   # Same consumed edge as [unit]: the bundle's app-local half (component) is
   # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
   # argv no longer mentions apps/web-platform directly (it execs the wrapper),
-  # so the derivation channel reads only the wrapper's own file.
-  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
+  # so the derivation channel reads only the wrapper's own file. It maps to
+  # AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS (declared below): WEBPLAT_APP_PATHS'
+  # three entries plus the out-of-app files a repo-wide suite reads.
+  "apps/web-platform [repo-wide+component]|AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -460,6 +462,21 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   "apps/web-platform/infra/"
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
+)
+# The web-platform [repo-wide+component] bundle's edges. The first three entries are
+# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim, so the app diff and the
+# relevance-lib diff still select it; keep them equal to that array. The rest are files OUTSIDE
+# apps/web-platform/ that a repo-wide suite reads, which neither the wrapper argv nor
+# `vitest related` (app-relative inputs only) can reach (#8643):
+# test/server/inngest/claude-cli-pin-knows-models.test.ts › currentModelIds() reads audit-models.sh
+# with readFileSync and imports the shared AUTOFIX_PAIRS parser.
+AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS=(
+  "apps/web-platform/"
+  "apps/web-platform/test/repo-wide-containment.test.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "plugins/soleur/skills/model-launch-review/scripts/audit-models.sh"  # claude-cli-pin-knows-models.test.ts › AUDIT_SH
+  "plugins/soleur/test/lib/autofix-pairs.ts"  # claude-cli-pin-knows-models.test.ts › parseAutofixPairs import
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # DECLARED EDGES for suites whose real dependencies derivation cannot reach:
