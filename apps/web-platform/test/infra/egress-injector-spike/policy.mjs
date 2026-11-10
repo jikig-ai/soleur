@@ -2,7 +2,9 @@
 //
 // Pure functions over a normalized request struct `{method, host, path, query, headers, body}`. No server import, no
 // network, no file read (the caller parses policy.yaml and passes the object in), and the HMAC key is a required
-// parameter with no default, so #11637 can port this file into server/ unchanged. Guard 2's classifier chokepoint.
+// parameter with no default. Guard 2's classifier chokepoint. The hash recipe here is spike-only: server/approval/
+// canonical.ts already owns `action_sha256` (it hashes tool, workspace and conversation with an HKDF-derived key), so
+// #11637 ports the classifier and binds its canonical action through canonical.ts, not through actionHash below.
 //
 // Decision vocabulary (the hook maps it to reason codes):
 //   read          allowlisted read; vends without a row
@@ -25,9 +27,14 @@ const RECIPES = new Set(["git-push", "rest", "graphql"]);
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
-/** JSON with object keys sorted at every depth, so equal values serialize equally. */
+/** JSON with object keys sorted at every depth, so equal values serialize equally. Throws on anything JSON cannot
+ * represent exactly (undefined, functions, symbols, bigints, non-finite numbers), so a hashed value and a stored value
+ * can never disagree about a field (review 2026-11-10; canonical.ts throws `not_canonical` the same way). */
 export function stableJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (value === undefined || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint" || (typeof value === "number" && !Number.isFinite(value))) {
+    throw new Error("stableJson: value is not canonical JSON");
+  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
   return "{" + Object.keys(value).sort().map((k) => JSON.stringify(k) + ":" + stableJson(value[k])).join(",") + "}";
 }
@@ -82,12 +89,17 @@ function lowerHeaders(headers) {
   return out;
 }
 
+/** Headers some servers honour to run a different method than the request line names; never accepted (review). */
+const METHOD_OVERRIDE_HEADERS = ["x-http-method-override", "x-http-method", "x-method-override"];
+
 /** Normalize a request into the struct classify() reads. Never throws. */
 export function normalizeRequest(input) {
-  const method = String(input?.method ?? "").toUpperCase();
+  // The method is taken as sent, never case-folded: HTTP methods are case-sensitive, so `get` is not GET (review).
+  const method = String(input?.method ?? "");
   const host = normalizeHost(input?.host);
   if (!/^[A-Z]{3,10}$/.test(method) || host === null) return { ok: false, detail: "bad-method-or-host" };
   const headers = lowerHeaders(input.headers);
+  if (METHOD_OVERRIDE_HEADERS.some((h) => headers[h] !== undefined)) return { ok: false, detail: "method-override" };
   if (headers.host) {
     if (headers.host.length !== 1 || normalizeHost(headers.host[0]) !== host) return { ok: false, detail: "host-header-mismatch" };
   }
@@ -95,7 +107,9 @@ export function normalizeRequest(input) {
   const segments = canonicalSegments(input.path);
   if (segments === null) return { ok: false, detail: "bad-path" };
   const body = Buffer.isBuffer(input.body) ? input.body : Buffer.from(input.body ?? "");
-  return { ok: true, method, host, segments, query: String(input.query ?? "").replace(/^\?/, ""), headers, body };
+  const query = String(input.query ?? "").replace(/^\?/, "");
+  if (new URLSearchParams(query).has("_method")) return { ok: false, detail: "method-override" };
+  return { ok: true, method, host, segments, query, headers, body };
 }
 
 function decodedBody(n) {
@@ -223,10 +237,6 @@ function queryMatches(ruleQuery, rawQuery) {
   return want.every((k) => params.getAll(k).length === 1 && params.get(k) === String(ruleQuery[k]));
 }
 
-function sortedQuery(rawQuery) {
-  return [...new URLSearchParams(rawQuery).entries()].sort((a, b) => (a[0] + "\0" + a[1] < b[0] + "\0" + b[1] ? -1 : 1));
-}
-
 function findRule(rules, n) {
   for (const r of rules) {
     if (r.graphql !== null || r.recipe === "graphql") continue;
@@ -253,39 +263,118 @@ function inAllowlist(repo, repositories) {
 // Protocol parsers
 // ---------------------------------------------------------------------------------------------------------------
 
-/** The ref-update commands of a git-receive-pack request body (before the pack). Throws on any malformed pkt-line. */
-export function parseReceivePackCommands(buf) {
+/**
+ * The command section of a git-receive-pack body: ref updates, the capability list sent after the first command's NUL,
+ * and, when `push-options` was negotiated, the option lines that follow the first flush. All three are hashed, so an
+ * approval for one push cannot be spent on the same updates sent with different options (review 2026-11-10).
+ */
+export function parseReceivePack(buf) {
   const updates = [];
+  let capabilities = "";
   let off = 0;
-  for (;;) {
+  const readPkt = () => {
     if (off + 4 > buf.length) throw new Error("receive-pack: truncated");
     const lenHex = buf.toString("latin1", off, off + 4);
     if (!/^[0-9a-f]{4}$/.test(lenHex)) throw new Error("receive-pack: bad pkt-line length");
     const len = parseInt(lenHex, 16);
-    if (len === 0) break;
+    if (len === 0) {
+      off += 4;
+      return null;
+    }
     if (len < 5 || off + len > buf.length) throw new Error("receive-pack: bad pkt-line");
     let line = buf.toString("latin1", off + 4, off + len);
     off += len;
     if (line.endsWith("\n")) line = line.slice(0, -1);
+    return line;
+  };
+  for (;;) {
+    let line = readPkt();
+    if (line === null) break;
     const nul = line.indexOf("\0");
-    if (nul !== -1) line = line.slice(0, nul);
+    if (nul !== -1) {
+      if (updates.length === 0) capabilities = line.slice(nul + 1).trim().split(/\s+/).filter(Boolean).sort().join(" ");
+      line = line.slice(0, nul);
+    }
     if (updates.length === 0 && /^shallow [0-9a-f]{40,64}$/.test(line)) continue;
     const m = line.match(/^(\S+) (\S+) (refs\/[^\s]+)$/);
     if (!m || !OID_RE.test(m[1]) || !OID_RE.test(m[2])) throw new Error("receive-pack: bad command");
     updates.push({ old: m[1], new: m[2], ref: m[3] });
   }
   if (updates.length === 0) throw new Error("receive-pack: no ref update");
-  return updates;
+  const pushOptions = [];
+  if (capabilities.split(" ").includes("push-options")) {
+    for (;;) {
+      const line = readPkt();
+      if (line === null) break;
+      pushOptions.push(line);
+    }
+  }
+  return { updates, capabilities, pushOptions };
+}
+
+/**
+ * JSON text the hook and a server could read differently: a duplicate key in any object (parsers disagree on which
+ * copy wins, so a document could select a query here and a mutation there) or an integer outside the exactly
+ * representable range (two different variables would parse, and hash, equal). Review 2026-11-10.
+ */
+const NUMBER_TOKEN = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+
+export function ambiguousJson(text) {
+  const stack = []; // one Set of keys per open object, null per open array
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      if (j >= n) return "unterminated-string";
+      const top = stack[stack.length - 1];
+      let k = j + 1;
+      while (k < n && /\s/.test(text[k])) k++;
+      if (top instanceof Set && text[k] === ":") {
+        let key;
+        try {
+          key = JSON.parse(text.slice(i, j + 1));
+        } catch {
+          return "bad-key";
+        }
+        if (top.has(key)) return "duplicate-key";
+        top.add(key);
+      }
+      i = j + 1;
+    } else if (ch === "{") {
+      stack.push(new Set());
+      i++;
+    } else if (ch === "[") {
+      stack.push(null);
+      i++;
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      i++;
+    } else if (ch === "-" || (ch >= "0" && ch <= "9")) {
+      NUMBER_TOKEN.lastIndex = i; // sticky: no per-token copy of the rest of the body
+      const m = NUMBER_TOKEN.exec(text);
+      if (!m) return "bad-number";
+      if (/^-?\d+$/.test(m[0]) && !Number.isSafeInteger(Number(m[0]))) return "unsafe-integer";
+      i += m[0].length;
+    } else {
+      i++;
+    }
+  }
+  return null;
 }
 
 /** The operation a GraphQL POST body selects, or a refusal subreason. */
 export function selectGraphqlOperation(bodyBuf) {
   let body;
+  const text = bodyBuf.toString("utf8");
   try {
-    body = JSON.parse(bodyBuf.toString("utf8"));
+    body = JSON.parse(text);
   } catch {
     return { error: "unparseable" };
   }
+  if (ambiguousJson(text) !== null) return { error: "unparseable" };
   if (Array.isArray(body)) return { error: "batched" };
   if (!body || typeof body !== "object" || typeof body.query !== "string") return { error: "unparseable" };
   if (body.variables !== undefined && body.variables !== null && (typeof body.variables !== "object" || Array.isArray(body.variables))) {
@@ -330,6 +419,9 @@ function classifyGraphql(n, policy) {
   const readRule = policy.reads.find((r) => r.graphql === "query" && r.host === n.host && r.methods.has(n.method) && matchPattern(r.pattern, n.segments));
   const writeRule = policy.writes.find((r) => r.recipe === "graphql" && r.host === n.host && r.methods.has(n.method) && matchPattern(r.pattern, n.segments));
   if (!readRule && !writeRule) return null;
+  // The selected operation must come from the body alone: a server that lets `?query=` or `?operationName=` override
+  // the body would run a different operation than the one classified here (review 2026-11-10, security P1).
+  if (n.query !== "") return refused("unparseable", { detail: "graphql-query-string" });
   const body = decodedBody(n);
   if (body === null) return refused("unparseable");
   const op = selectGraphqlOperation(body);
@@ -358,13 +450,13 @@ function canonicalFor(rule, n, bind, repo) {
   if (rule.recipe === "git-push") {
     const body = decodedBody(n);
     if (body === null) return null;
-    let updates;
+    let parsed;
     try {
-      updates = parseReceivePackCommands(body);
+      parsed = parseReceivePack(body);
     } catch {
       return null;
     }
-    return { kind: "git-push", host: n.host, repository: repo, updates };
+    return { kind: "git-push", host: n.host, repository: repo, updates: parsed.updates, capabilities: parsed.capabilities, push_options: parsed.pushOptions };
   }
   // rest
   const body = decodedBody(n);
@@ -375,7 +467,7 @@ function canonicalFor(rule, n, bind, repo) {
     host: n.host,
     repository: repo,
     path: "/" + bind.canonical.join("/"),
-    query: sortedQuery(n.query),
+    query: n.query, // the raw string: sorting would make `a=1&a=2` and `a=2&a=1` one approval (review 2026-11-10)
     body_sha256: sha256(body),
   };
 }

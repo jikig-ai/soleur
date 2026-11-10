@@ -747,3 +747,110 @@ describe("verdict.mjs — outcome floor", () => {
     expect(verdictMod.computeVerdict({ verdict: "GO", records: recs })).toMatchObject({ verdict: "INCONCLUSIVE" });
   });
 });
+
+// Review 2026-11-10 (PR #12518): the hook judged a URL-parser-cleaned path, GraphQL ignored the query string, and a
+// consume could commit after the hook had already answered hook-timeout. Each row below drives the live entry point
+// (fromTransformRequest -> normalizeRequest -> classify / decide), not classify on a hand-built struct.
+describe("review 2026-11-10 — what the hook judges is what goes upstream", () => {
+  const map = (url: string, host = "api.github.com", method = "GET") =>
+    hookMod.fromTransformRequest({ method, url, host, headers: {}, body: Buffer.alloc(0) }, { tunnel: { target: `${host}:443` }, sni: host });
+  const verdictOf = (m: ReturnType<typeof map>) => policyMod.classify(policyMod.normalizeRequest(m), BASE_POLICY, { repositories: REPOS });
+
+  it("refuses every traversal spelling on the live path instead of resolving it", () => {
+    for (const url of [
+      "//evil/repos/acme-synth/widget/contents",
+      "/\\evil/repos/acme-synth/widget/contents",
+      "/repos/other-synth/thing/../../acme-synth/widget/x",
+      "/repos/other-synth/thing/%2e%2e/%2e%2e/acme-synth/widget/x",
+      "/repos/acme-synth/widget/.%2E/x",
+      "/repos/acme-synth/widget/x#frag/../../../other-synth/r",
+      "https://api.github.com//evil/repos/acme-synth/widget",
+    ]) {
+      expect(verdictOf(map(url)), url).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    }
+  });
+
+  it("must-PASS: the plain allowlisted read still maps and vends", () => {
+    expect(verdictOf(map("/repos/acme-synth/widget/contents/README.md?ref=main"))).toMatchObject({ verdict: "read" });
+    expect(map("/repos/acme-synth/widget/x").sni).toBe("api.github.com");
+  });
+
+  it("refuses a GraphQL request that carries a query string (operationName or query override)", () => {
+    const doc = "query Q { viewer { login } } mutation M { addComment(input: {}) { clientMutationId } }";
+    const body = gql({ query: doc, operationName: "Q" });
+    for (const query of ["operationName=M", "query=mutation%7BaddComment%7D", "x=1"]) {
+      expect(classify({ method: "POST", host: "api.github.com", path: "/graphql", query, body }), query).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    }
+    expect(classify({ method: "POST", host: "api.github.com", path: "/graphql", body }).verdict).toBe("read");
+  });
+
+  it("refuses GraphQL JSON two parsers could read differently: duplicate keys, unsafe integers", () => {
+    const raw = (s: string) => classify({ method: "POST", host: "api.github.com", path: "/graphql", body: Buffer.from(s) });
+    expect(raw('{"query":"mutation { addComment(input: {}) { clientMutationId } }","query":"{ viewer { login } }"}')).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(raw('{"query":"mutation M($b: String) { addComment(input: {body: $b}) { clientMutationId } }","variables":{"b":"a","b":"z"}}')).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(raw('{"query":"mutation M($n: Int) { addComment(input: {n: $n}) { clientMutationId } }","variables":{"n":9007199254740993}}')).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(raw('{"query":"mutation M($n: Int) { addComment(input: {n: $n}) { clientMutationId } }","variables":{"n":42,"s":"a \\"b\\" c"}}').verdict).toBe("write");
+  });
+
+  it("refuses a lowercase method and every method-override spelling", () => {
+    expect(classify({ method: "get", host: "api.github.com", path: "/repos/acme-synth/widget" })).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    for (const h of ["X-HTTP-Method-Override", "x-http-method", "X-Method-Override"]) {
+      expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", headers: { [h]: "DELETE" } }), h).toMatchObject({ verdict: "refused" });
+    }
+    expect(classify({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", query: "_method=DELETE" })).toMatchObject({ verdict: "refused" });
+  });
+
+  it("hashes the REST query string as sent, so a reordered query is a different approval", () => {
+    const at = (query: string) => hashOf({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", query, body: Buffer.from("{}") });
+    expect(at("a=1&a=2")).not.toBe(at("a=2&a=1"));
+    expect(at("a=1&a=2")).toBe(at("a=1&a=2"));
+  });
+
+  it("hashes git push capabilities and push options, so options cannot ride on another push's approval", () => {
+    const body = (caps: string, opts: string[] = []) => {
+      const lines = [pkt(`${OID_A} ${OID_B} refs/heads/main\0${caps}\n`), "0000", ...opts.map((o) => pkt(`${o}\n`)), opts.length ? "0000" : ""];
+      return Buffer.concat([Buffer.from(lines.join(""), "latin1"), Buffer.from("PACK-synthetic-bytes")]);
+    };
+    const at = (b: Buffer) => hashOf({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: b });
+    const base = at(body("report-status push-options", ["ci.skip"]));
+    expect(at(body("report-status push-options", ["merge_request.create"]))).not.toBe(base);
+    expect(at(body("report-status atomic push-options", ["ci.skip"]))).not.toBe(base);
+    expect(at(body("push-options report-status", ["ci.skip"]))).toBe(base); // capability order is not meaning
+  });
+
+  it("stableJson refuses values JSON cannot represent exactly", () => {
+    for (const v of [{ a: undefined }, { a: Number.NaN }, { a: () => 1 }, { a: Infinity }]) expect(() => policyMod.stableJson(v)).toThrow();
+    expect(policyMod.stableJson({ b: 1, a: [null, "x"] })).toBe('{"a":[null,"x"],"b":1}');
+  });
+
+  it("a consume already in flight is not cut off by the deadline: the paid-for vend proceeds", async () => {
+    let consumes = 0;
+    const row = { id: "row-late", status: "approved", expires_at: "2099-01-01T00:00:00Z" };
+    const { decider } = setup({
+      deadlineMs: 50,
+      rpc: {
+        create: async () => ({ approval: row, created: false }),
+        consume: () => new Promise((r) => setTimeout(() => { consumes++; r({ consumed: true }); }, 120)),
+        status: async () => null,
+      },
+    });
+    expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ action: "CONTINUE", class: "write", approvalId: "row-late" });
+    expect(consumes).toBe(1);
+  });
+
+  it("a deadline that fires before consume starts refuses hook-timeout and never consumes", async () => {
+    let consumes = 0;
+    const row = { id: "row-slow", status: "approved", expires_at: "2099-01-01T00:00:00Z" };
+    const { decider } = setup({
+      deadlineMs: 50,
+      rpc: {
+        create: () => new Promise((r) => setTimeout(() => r({ approval: row, created: false }), 90)),
+        consume: async () => { consumes++; return { consumed: true }; },
+        status: async () => null,
+      },
+    });
+    expect(await decider.decide(PUSH(), SESSION)).toMatchObject({ action: "REJECT", reason: "hook-timeout" });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(consumes).toBe(0);
+  });
+});

@@ -185,9 +185,8 @@ export function createDecider(deps) {
     // 2026-11-10) and leaves it empty for http_listen and https_listen, which share the app container's loopback;
     // without this check a request sent straight to http_listen was vended.
     if (n.ok) {
-      const t = String(request?.tunnelTarget ?? "").toLowerCase();
-      const m = t.match(/^(.*):443$/);
-      const tunnelHost = m ? m[1].replace(/\.$/, "") : null;
+      const t = String(request?.tunnelTarget ?? "");
+      const tunnelHost = /:443$/.test(t) ? policyLib.normalizeHost(t) : null; // one host normalizer (review)
       if (tunnelHost !== n.host) return refuse("guard-refused", { subreason: "no-tunnel" });
     }
 
@@ -228,7 +227,12 @@ export function createDecider(deps) {
     }
     if (row.status === "approved") {
       if (!(Date.parse(row.expires_at) > now())) return refuse("expired", { ...w, approvalId: row.id });
-      if (ctl.timedOut) return refuse("hook-timeout", { ...w, approvalId: row.id }); // never spend an approval late
+      // Once consume starts, the deadline no longer races it (decide() below): a consume that commits must be followed
+      // by the vend it paid for, never by a hook-timeout refusal (review 2026-11-10, four seats reproduced the race).
+      // The RPC's own timeout still bounds it; an abort after the server committed is the residual ADR-311 Decision 5
+      // records: `consumed` means the approval was spent, not that the write was delivered.
+      if (ctl.timedOut) return refuse("hook-timeout", { ...w, approvalId: row.id });
+      ctl.consuming = true;
       let cr;
       try {
         cr = await rpc.consume({ id: row.id, hash, conversationId: session.conversationId });
@@ -244,11 +248,12 @@ export function createDecider(deps) {
 
   async function decide(request, session) {
     const requestId = /^[A-Za-z0-9._:-]{1,80}$/.test(String(request?.requestId ?? "")) ? request.requestId : randomUUID();
-    const ctl = { requestId, timedOut: false };
+    const ctl = { requestId, timedOut: false, consuming: false };
     let timer;
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => {
         ctl.timedOut = true;
+        if (ctl.consuming) return; // the in-flight consume decides; see step 5
         resolve({
           action: "REJECT", status: 403, reason: "hook-timeout", class: "unknown", requestId, body: body("hook-timeout"),
           marker: { name: "SOLEUR_EGRESS_VEND_REFUSED", fields: { session: session?.sessionId, request_id: requestId, source: "hook", reason: "hook-timeout" } },
@@ -274,13 +279,13 @@ export function createDecider(deps) {
 // Supabase RPC adapter (service role; PostgREST /rest/v1/rpc)
 // ---------------------------------------------------------------------------------------------------------------
 
-export function supabaseRpc({ url, key, fetchImpl = fetch }) {
+export function supabaseRpc({ url, key, fetchImpl = fetch, timeoutMs = DEFAULT_DEADLINE_MS }) {
   const call = async (fn, args) => {
     const res = await fetchImpl(`${url.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`, {
       method: "POST",
       headers: { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" },
       body: JSON.stringify(args),
-      signal: AbortSignal.timeout(DEFAULT_DEADLINE_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     let json = null;
@@ -307,30 +312,35 @@ export function supabaseRpc({ url, key, fetchImpl = fetch }) {
 // ---------------------------------------------------------------------------------------------------------------
 
 /**
- * iron-proxy's HttpRequest -> the decider's request struct. iron-proxy v0.56.0 sends `url` in origin form
- * (`/path?query`, measured 2026-11-10) with the authority in `host`; an absolute `url` is accepted only when its
- * authority names the same host, otherwise the path is left empty so normalization refuses it (Guard 2 row 14).
+ * iron-proxy's HttpRequest -> the decider's request struct. iron-proxy v0.56.0 sends `url` as Go's req.URL.String(),
+ * in origin form (`/path?query`, measured 2026-11-10) with the authority in `host`; an absolute `https://` url is
+ * accepted only when its authority names the same host, otherwise the path is left empty so normalization refuses it
+ * (Guard 2 row 14). The target is split by hand, never by a URL parser: WHATWG URL resolves `..` and `%2e%2e`, turns
+ * `\` into `/` and reads `//x` as an authority, so canonicalSegments would see a cleaned path while the raw target
+ * goes upstream (review 2026-11-10, security P1). A `#` is refused: it has no meaning in a request target.
  */
 export function fromTransformRequest(httpReq, context) {
   let path = "";
   let query = "";
   const host = String(httpReq.host ?? "");
-  try {
-    const raw = String(httpReq.url ?? "");
-    const absolute = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw);
-    const u = new URL(raw, `https://${host || "invalid.invalid"}`);
-    const sameHost = !absolute || u.host.toLowerCase().replace(/\.$/, "") === host.toLowerCase().replace(/\.$/, "").replace(/:443$/, "");
-    if ((raw.startsWith("/") || absolute) && sameHost) {
-      path = u.pathname;
-      query = u.search.replace(/^\?/, "");
-    }
-  } catch {
-    path = "";
+  let raw = String(httpReq.url ?? "");
+  const abs = raw.match(/^https:\/\/([^/?#]*)(.*)$/i);
+  if (abs) {
+    const authority = policyLib.normalizeHost(abs[1]);
+    raw = authority !== null && authority === policyLib.normalizeHost(host) ? abs[2] : "";
+  } else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw)) {
+    raw = "";
+  }
+  if (raw.startsWith("/") && !raw.includes("#")) {
+    const q = raw.indexOf("?");
+    path = q === -1 ? raw : raw.slice(0, q);
+    query = q === -1 ? "" : raw.slice(q + 1);
   }
   const headers = {};
   for (const [k, v] of Object.entries(httpReq.headers ?? {})) headers[k] = v?.values ?? [];
   const tunnelTarget = context?.tunnel?.target ? String(context.tunnel.target) : null;
-  return { method: httpReq.method, host: httpReq.host, path, query, headers, body: Buffer.from(httpReq.body ?? []), tunnelTarget };
+  const sni = context?.sni ? String(context.sni) : null; // iron-proxy sets it only on TLS-terminated requests
+  return { method: httpReq.method, host: httpReq.host, path, query, headers, body: Buffer.from(httpReq.body ?? []), tunnelTarget, sni };
 }
 
 /** Headers the hook removes on every request it lets through (criterion 2: a retried POST cannot reuse one approval). */
@@ -378,7 +388,7 @@ async function main(configPath) {
   const decider = createDecider({
     policy: policyLib.compilePolicy(policyObj),
     hmacKey: Buffer.from(read(cfg.hmacKeyFile), "hex"),
-    rpc: supabaseRpc({ url: cfg.supabaseUrl, key: serviceKey }),
+    rpc: supabaseRpc({ url: cfg.supabaseUrl, key: serviceKey, timeoutMs: cfg.deadlineMs ?? DEFAULT_DEADLINE_MS }),
     toolName: cfg.toolName ?? SPIKE_TOOL_NAME,
     ttlSeconds: cfg.ttlSeconds ?? 600,
     deadlineMs: cfg.deadlineMs ?? DEFAULT_DEADLINE_MS,
@@ -423,6 +433,10 @@ async function main(configPath) {
               annotations: { soleur_request_id: d.requestId, soleur_reason: d.reason ?? "" },
             });
           }
+        }).catch(() => {
+          // A throw while building the reply must still answer, closed, with a marker (review 2026-11-10).
+          print("SOLEUR_EGRESS_VEND_REFUSED", { session: session.sessionId, source: "hook", reason: "rpc-error", subreason: "reply" });
+          cb(null, { action: REJECT, response: { status_code: 403, headers: {}, body: Buffer.from(body("rpc-error")) } });
         });
       },
       TransformResponse(_call, cb) {

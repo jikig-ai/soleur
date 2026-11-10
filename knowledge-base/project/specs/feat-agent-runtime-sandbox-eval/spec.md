@@ -84,7 +84,7 @@ The Cloudflare trial uses synthetic workspaces and decoy credentials only, a har
 
 ### TR8: Observability
 
-Every vend, refusal and approval consumption in the spike emits a monitored marker, and every refusal is mirrored to Sentry (ADR-311 Decision 5).
+Every vend, refusal and approval consumption in the spike emits a `SOLEUR_EGRESS_VEND*` marker that the suite asserts per arm. Monitoring and the Sentry mirror of refusals (ADR-311 Decision 5) are #11637's; nothing in the spike ships to a host (plan, spec-deviation table).
 
 ### TR9: Measurement record
 
