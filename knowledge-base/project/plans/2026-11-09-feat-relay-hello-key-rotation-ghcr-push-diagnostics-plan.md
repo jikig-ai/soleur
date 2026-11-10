@@ -1159,8 +1159,8 @@ only consumer.
       web host's newest row must be **newer than that host's deploy time**, and each host's newest row must show the
       same `current=` value and `accept_also=none`. The deploy time is that host's newest
       `CRON_DRAIN: waited ... before prod stop` row (the runbook's deploy-time query), not the deploy-arm run's job
-      logs, which say when ci-deploy finished, after the new container started, and not the time of the read.
-      Failure branches:
+      logs, which say when ci-deploy finished, after the new container started, and not the time of the read. A row
+      whose `dt` ties the deploy time counts as newer (the runbook says why). Failure branches:
   - **Two `current=` values differ:** stop. File an issue referencing #8211. Do not roll back, because the key value did
     not change in this PR; it is pre-existing drift.
   - **A host has no row newer than its deploy time (or no row):** a newest row older than the deploy is from an earlier

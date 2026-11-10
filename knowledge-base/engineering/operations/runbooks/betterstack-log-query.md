@@ -562,8 +562,14 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
 
   For each roster host, the newest row must be newer than that host's deploy time, and the newest rows must all show the same
   `current=` and `accept_also=none`. **The deploy time** is the host's newest `CRON_DRAIN: waited ... before prod stop` row.
-  `ci-deploy.sh` journals it on every web-platform swap, right before it stops the old container and starts the new one, so a
-  row from the new boot is always newer than it:
+  `ci-deploy.sh` journals it on every web-platform swap, right before it stops the old container and starts the new one. A row
+  from the new boot is newer than it by a margin of seconds, not by construction: ci-deploy rows are timestamped per shipped
+  batch, so separate lines logged up to about 1.2 s apart can carry one identical `dt`, set a few tenths of a second after
+  the batch's last line (measured 2026-11-10 over three days of rows, read against each row's `_SOURCE_REALTIME_TIMESTAMP`:
+  the `SDK_BASH_SMOKE` and both `CRON_DRAIN` rows of one swap share a microsecond `dt`, and the first `relay_probe` row
+  after it came 4 to 5 s later). If the host's newest fingerprint row ties the deploy time, count it as newer: the old
+  container logged its fingerprint row once, when it booted at an earlier deploy, so only a restart of the old container in
+  the seconds before the swap could put a stale row at the deploy time:
 
   ```bash
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
