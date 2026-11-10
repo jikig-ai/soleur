@@ -1,44 +1,50 @@
 ---
-title: A leader's failover premise must be checked against the serving topology before it bounds an operator act
+title: A serving-topology claim must be read from the live load balancer, not inferred from a DNS record or a code comment
 date: 2026-11-10
 category: workflow-patterns
-tags: [brainstorm, domain-leaders, web-hosts, anti-pooling, adr-322]
+tags: [brainstorm, domain-leaders, web-hosts, load-balancer, live-state, adr-322]
 issue: 12008
 ---
 
-# Learning: a failover premise must be checked against the serving topology
+# Learning: read serving topology from the live load balancer
 
 ## Problem
 
-During the #12008 brainstorm the CTO ruling proposed a one-off owner act on the web host the replace path refuses and
-framed it as low-impact: "reboot once while the other web host carries traffic". Committed config is anti-pooling: the
-app record points at the refused host only and no load-balancer pool carries app weight on the other web host
-(`apps/web-platform/infra/server.tf` lifecycle comment, ADR-068 §(c), ADR-143). The other host's tunnel connector is
-management-plane only. So the act is a full app outage for its duration, which changes the user-notice posture.
+During the #12008 brainstorm the CTO ruling framed a one-off owner act on the web host the replace path refuses as
+lower-impact because "the other web host carries traffic". The orchestrator "corrected" that ruling from committed
+text: the `server.tf` lifecycle comment described anti-pooling and `dns.tf` points `cloudflare_record.app` at the
+refused host only. The correction was committed into the brainstorm, a runbook bullet and the first version of this
+learning. It was wrong. `cloudflare-lb.tf` defines an enabled Cloudflare load balancer for the app hostname whose
+pool carries both web origins (the second at `var.web2_lb_weight`, default 1), and a load balancer takes precedence
+over a same-name DNS record. The owner pointed it out at plan time; a read-only pool read confirmed both origins
+enabled at equal weight.
 
 ## Solution
 
-The orchestrator grepped `server.tf` while verifying the CTO's cited `ignore_changes` line and read the adjacent
-anti-pooling comment. The brainstorm records the correction next to the ruling, and the cadence runbook's web section
-now states the topology so the next reader does not inherit the premise.
+Read the live pool (`GET /accounts/<id>/load_balancers/pools`, origins `enabled` + `weight`, and the zone's
+`load_balancers` entry `enabled`/`proxied`) before any claim about which host serves users. The brainstorm, the
+cadence runbook bullet and this learning were corrected in the same branch.
 
 ## Key Insight
 
-"X carries traffic while Y is down" is a capability claim about the serving topology, not a property of having two
-hosts. Before a leader's failover framing bounds an operator act or its communication plan, grep the record that routes
-user traffic (DNS record target, LB pool membership) for the standby. Host count is not pool membership.
+Serving weight is runtime state with more than one committed source (DNS record, LB pool, workflow `-var`
+overrides). A single file, and especially a comment, is a claim about one layer. The verifier's own "correction" is a
+claim too: re-deriving a subagent's statement from a nearby file is not verification when a live read is one API
+call away (`hr-no-dashboard-eyeball-pull-data-yourself`).
 
 ## Session Errors
 
-1. **CTO failover premise contradicted committed anti-pooling config.** Recovery: verified against `server.tf` and
-   corrected in the brainstorm. **Prevention:** runbook web section now states the topology (fixed inline); keep using
-   the brainstorm's "cross-check leader infra/substrate claims" rule for failover claims too.
-2. **CPO stated proxied traffic reaches the vulnerable path.** The CTO's read showed the path is a blind spoofed
-   handshake packet past a source-address-only firewall. Recovery: CTO ruling governs. **Prevention:** existing rule,
-   a subagent's mechanism story is a claim to re-derive.
-3. **CPO asserted an exposure check had come back negative; none was run.** Recovery: not carried into any artifact
-   (ADR-322 makes exposure `unknown` by default). **Prevention:** existing rule, re-derive subagent claims; ADR-322
-   decision 1.
+1. **Orchestrator overrode a correct CTO premise from a code comment and the DNS record, without a live read.**
+   Recovery: owner flagged it; live pool read; brainstorm, runbook and learning corrected. **Prevention:** the cadence
+   runbook's web section now says to read the live pool before planning any web host outage, replace or reboot.
+2. **"Sole copy of users' repositories on the refused host" carried from #9421's body and the CTO into session
+   answers.** Production runs with `GIT_DATA_STORE_ENABLED=true`: objects/refs live on the git-data host and each
+   agent turn is replicated there; the refused host keeps working trees. Recovery: corrected in session.
+   **Prevention:** before restating a "sole copy" claim, read the flag that decides where the data lives.
+3. **CPO stated proxied traffic reaches the vulnerable path.** The CTO's read showed a different path. Recovery: CTO
+   ruling governs. **Prevention:** existing rule, a subagent's mechanism story is a claim to re-derive.
+4. **CPO asserted an exposure check had come back negative; none was run.** Recovery: not carried into any artifact
+   (ADR-322). **Prevention:** existing rule; ADR-322 decision 1.
 
 ## Tags
 

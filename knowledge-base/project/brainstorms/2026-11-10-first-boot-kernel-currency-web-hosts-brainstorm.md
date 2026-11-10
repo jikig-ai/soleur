@@ -68,11 +68,11 @@ Ruled by CTO agent, 2026-11-10 (binding technical ruling):
    rule (in-place kernel install + one reboot, performed by the owner) or raise #9421's priority instead.
 5. Later PRs + replaces for inngest, then registry; git-data via its own interlocked route.
 
-**Correction to the CTO ruling's item 2 (verified, `server.tf` lifecycle comment):** committed config keeps the app
-record on the refused host only and pools no LB weight on the replaceable one ("anti-pooling", ADR-068/ADR-143). So
-"reboot while the other web host carries traffic" does not hold: a reboot of the refused host is a full app outage for
-its duration. The CPO's 24h notice and a
-maintenance page apply to act 4 if the owner chooses the exception.
+**Correction to the CTO ruling's item 2 — itself corrected 2026-11-10 (plan phase):** the brainstorm first recorded
+"anti-pooling" from the `server.tf` lifecycle comment and the `dns.tf` app record. That was wrong: the enabled
+Cloudflare load balancer for the app hostname (`cloudflare-lb.tf`) pools both web origins, and the live pool read
+showed both enabled at equal weight. Both web hosts serve users; a replace of either one removes a serving origin, so
+the LB health monitor's drain behaviour, not an "outage-free standby" assumption, bounds its user impact.
 
 ## Open Questions
 

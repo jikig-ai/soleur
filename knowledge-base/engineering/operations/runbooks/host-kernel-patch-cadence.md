@@ -75,8 +75,11 @@ When the owner types a go that names an exact command from the table:
   The reboot workflow that once existed is retired (see [web-host-reboot.md](./web-host-reboot.md), and the ADR-263 addendum
   2026-10-08, "immutability, not reboot": a host is replaced, not rebooted).
   A row with no sanctioned act is an owner decision, not a gap an agent closes: escalate it (see Escalation).
-- Committed config pools no app serving weight on the other web host (anti-pooling; the `server.tf` lifecycle comment,
-  ADR-068, ADR-143), so any outage or reboot of the refused host is a full app outage. Never plan one as "the other web host carries traffic".
+- App traffic reaches the web hosts through the Cloudflare load balancer for the app hostname
+  (`apps/web-platform/infra/cloudflare-lb.tf`: pool `web_1` carries both web origins, the second at
+  `var.web2_lb_weight`), which takes precedence over the `cloudflare_record.app` DNS record in `dns.tf`. Before planning
+  any web host outage, replace or reboot, read the live pool (origins `enabled` and `weight`) instead of inferring
+  serving weight from either file: both web hosts may be serving users.
 
 ## inngest
 
