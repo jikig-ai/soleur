@@ -368,7 +368,7 @@ de-planned crons) that leave the substrate able to run them.
 The 2026-09-28 amendment designated "placement-aware execution at the ADR-143 Phase-3 flip" as the
 target and left it to this issue to pick one of the two sanctioned shapes. This amendment records
 the mechanism as merged (CTO rulings T1–T4, 2026-11-10,
-`knowledge-base/project/specs/feat-one-shot-9137-placement-aware-execution/decision-challenges.md`).
+`knowledge-base/project/specs/archive/20261110-134652-feat-one-shot-9137-placement-aware-execution/decision-challenges.md`).
 
 **Exposure that forced it.** web-2 has served LB weight 1 since the 2026-11-08 serve flip (#12167):
 `cloudflare_load_balancer.app` steers `app.soleur.ai` randomly between web-1 and web-2, so step calls
