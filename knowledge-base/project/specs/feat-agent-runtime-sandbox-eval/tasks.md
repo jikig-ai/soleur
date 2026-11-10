@@ -28,7 +28,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - [x] 1.8 Suite bring-up and all nine arms (`lib/bringup.sh`, `lib/arms.sh`, `probes/session-up.sh`, `probes/sdk-egress-driver.mts`, `probes/hook-client.mjs`; CTO R28 to R35 applied). Measured GO on CI run 42823659776 (head 3396c15847, merge ref 25893fbe7f): criteria 1 to 9 pass. The first GO (run 42816918299) predates the canonical-path fix and is superseded. Deviation: the sandbox probes run through `probes/sdk-egress-driver.mts` (the real `buildAgentSandboxConfig` and `buildAgentEnv` under tsx), so `probes/sandbox-probe.sh` was not needed.
 - [x] 1.9 Implement `verdict.mjs` and `print-verdict.sh` (exit 0 on GO or NO-GO, 1 otherwise).
 - [x] 1.10 Create `.github/workflows/egress-injector-spike.yml` (pull_request paths plus workflow_dispatch, 30-minute timeout, per-PR concurrency with cancel-in-progress false, `permissions: contents: read`, `persist-credentials: false`, no secrets, `::error::` per failing criterion, artifact upload) and its `scripts/pr-fanout-ledger.txt` row.
-- [ ] 1.11 Run `.github/scripts/test/test-infra-suite-registration.sh`, `plugins/soleur/test/pr-fanout-ledger.test.sh` and any `SOLEUR_*` marker census; fix them before the first push.
+- [x] 1.11 Run `.github/scripts/test/test-infra-suite-registration.sh`, `plugins/soleur/test/pr-fanout-ledger.test.sh` and any `SOLEUR_*` marker census; fix them before the first push. (2026-11-10: both green; the `SOLEUR_EGRESS_*` and `SOLEUR_SPIKE_*` markers live in test paths only)
 
 ### Phase 1 notes for the suite (2026-11-10, measured or read; carry into 1.7, 1.8 and 1.10)
 
@@ -72,7 +72,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Phase 4: Verification and ship
 
-- [ ] 4.1 Confirm the diff touches none of `egress-forwarder.mjs`, `egress-gateway-squid.conf`, `agent-env.ts`, `supabase/migrations/`, `server/` or any `.tf` file.
-- [ ] 4.2 Confirm no GitHub-token-format string in the committed results.
-- [ ] 4.3 Run the C4 tests, `lint-guard-contract.py`, `technical-ruling-gate.sh --branch` and markdownlint.
+- [x] 4.1 Confirm the diff touches none of `egress-forwarder.mjs`, `egress-gateway-squid.conf`, `agent-env.ts`, `supabase/migrations/`, `server/` or any `.tf` file. (0 matches)
+- [x] 4.2 Confirm no GitHub-token-format string in the committed results. (0 matches in the spec directory)
+- [x] 4.3 Run the C4 tests, `lint-guard-contract.py`, `technical-ruling-gate.sh --branch` and markdownlint. (`lint-guard-contract.py`, `technical-ruling-gate.sh --branch` and markdownlint green; the C4 tests do not apply, since no `.c4` file changed and `egressInjector` is pending under #11637)
 - [ ] 4.4 Ship: the PR body's first line states that merging redeploys unchanged runtime code via `web-platform-release.yml` and changes no infrastructure; issue lines are derived from the committed verdict; on-merge dispositions per the plan's Post-merge criteria.
