@@ -1,6 +1,6 @@
 # Egress injector spike: results
 
-The injector works, within the limits below. On the production run tuple's flags on a GitHub-hosted runner, an agent's git, gh, curl and Node clients reached hermetic stubs of the GitHub hosts with the real credential while the sandbox and the agent's Read and WebFetch tools never saw it. Every write was refused until an owner approved it and then spent the approval once. All nine criteria passed, so the verdict is **GO**. Two limits are part of that verdict: GraphQL is not repository-scoped by the hook (CTO R38), and request bodies of 3 MiB or more are refused (R40). The mechanism needs production changes before it can carry real traffic, each owned by #11637 or by #12585, and they are listed below.
+The injector works: on the production run tuple's flags on a GitHub-hosted runner, an agent's git, gh, curl and Node clients reached hermetic stubs of the GitHub hosts with the real credential while the sandbox and the agent's Read and WebFetch tools never saw it, and every write was refused until an owner approved it and then spent the approval once. All nine criteria passed, so the verdict is **GO**, with two limits that belong to it: GraphQL is not repository-scoped by the hook (CTO R38), and request bodies of 3 MiB or more are refused (R40). The mechanism needs production changes before it can carry real traffic, each owned by #11637 or by #12585, and they are listed below.
 
 ## Run
 
