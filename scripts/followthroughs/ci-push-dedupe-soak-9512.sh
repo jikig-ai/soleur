@@ -177,7 +177,7 @@ if [ -n "$oldest" ]; then
   for ((mg_p = 1; mg_p <= MG_MAX_PAGES; mg_p++)); do
     mg_page="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&per_page=100&created=%3E$mg_since_iso&page=$mg_p")" \
       || fail_api "ci.yml merge_group runs (page $mg_p)"
-    mg_n="$(jq -r '.workflow_runs | length' <<<"$mg_page" 2>/dev/null)"
+    mg_n="$(jq -r 'if has("workflow_runs") then (.workflow_runs | length) else "MISSING" end' <<<"$mg_page" 2>/dev/null)"
     [[ "$mg_n" =~ ^[0-9]+$ ]] || fail_api "ci.yml merge_group runs (page $mg_p, malformed body)"
     mg_raw="$mg_raw$mg_page"$'\n'
     (( mg_n < 100 )) && break
@@ -192,7 +192,7 @@ fi
 # --- per run: elided? counted seconds (ONE jq emits all four verdict inputs as a TSV row) ------------------------------
 n=0; elided=0; total_s=0; wrong=0; wrong_list=""; early=0; early_list=""; seen=0; would=0; elided_any=0; pd_bad=0
 elided_pairs=()
-while IFS=$'\t' read -r id sha created created_epoch; do
+while IFS=$'\t' read -r id sha created_epoch; do
   [ -n "$id" ] || continue
   seen=$((seen + 1))
   jobs_json="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100&filter=latest")" || fail_api "run $id jobs"
@@ -221,7 +221,7 @@ while IFS=$'\t' read -r id sha created created_epoch; do
     elided=$((elided + 1))
     elided_pairs+=("$id"$'\t'"$sha")
   fi
-done < <(jq -r '.[] | [.id, .head_sha, .created_at, .created_epoch] | @tsv' <<<"$runs_json")
+done < <(jq -r '.[] | [.id, .head_sha, .created_epoch] | @tsv' <<<"$runs_json")
 
 # --- the voucher diff: ONE post-loop pass over the collected elided {id, sha} pairs -----------------------------------
 if (( ${#elided_pairs[@]} > 0 )); then

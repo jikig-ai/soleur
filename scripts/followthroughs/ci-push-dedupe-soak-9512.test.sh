@@ -62,10 +62,9 @@ if [ "$1" = "issue" ]; then   # issue view <N> --repo <r> --json comments [--jq 
 fi
 [ "$1" = "api" ] || refuse "$@"
 shift
-paginate=0; jqx=""; ep=""
+jqx=""; ep=""
 while (( $# )); do
   case "$1" in
-    --paginate) paginate=1 ;;
     --jq) jqx="$2"; shift ;;
     -*) refuse "api $*" ;;
     *) ep="$1" ;;
