@@ -1006,9 +1006,11 @@ export HOME
 # Absence-detection deadline (seconds). Derivation — worst-case bounded first-boot span:
 # soleur-wait-ready x2 (webhook :9000 + cloudflared) 120s + soleur-wait-nic <=120s + `timeout 180`
 # vector install 180s + image-pull budget (web+app+plugin-seed) ~300s + apt/docker install ~120s +
-# Hetzner create->runcmd overhead ~60s ~= 900s. The Phase-3 Better Stack absence alert
-# (web-probe.tf) uses this as its grace window — keep the emit and any alert period in lockstep.
-SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900
+# Hetzner create->runcmd overhead ~60s ~= 900s, plus 240s for the one kernel-settle reboot
+# (#12008: kernel + initramfs install ~90s, reboot ~60s, the re-run apt update and runcmd head
+# ~90s) = 1140s. fresh-host-boot-trail.sh's DEADLINE is this plus 60s; kernel-currency.test.sh
+# pins the two together. Keep any absence-alert period in lockstep.
+SOLEUR_FRESH_BOOT_WINDOW_SECONDS=1140
 # Path seams (defaults = the real host paths; overridable so the unit test can drive each branch).
 WEBHOOK_ENV_FILE="${WEBHOOK_ENV_FILE:-/etc/default/webhook-deploy}"
 WORKSPACES_MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
@@ -1039,15 +1041,21 @@ HOST='@@SOLEUR_HOST_NAME@@'
 case "$HOST" in @@*) HOST="" ;; esac
 [ -n "$HOST" ] || HOST=$(hostname 2>/dev/null)
 HOST=$(printf '%s' "$HOST" | tr -cd 'A-Za-z0-9.-' | head -c 63); [ -n "$HOST" ] || HOST=unknown
+# kernel (#12008): the running kernel IS the one the installed linux-image-generic points to — what
+# cloud-init's kernel-settle reboot makes true at birth (ADR-324). GATED; an empty or unreadable
+# target is never a match.
+KT=$(dpkg-query -W -f='${Depends}' linux-image-generic 2>/dev/null | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | cut -c13-)
+if [ -n "$KT" ] && [ "$KT" = "$(uname -r 2>/dev/null)" ]; then K=1; else K=0; fi
 READY=0; REASON=none
-if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ] && [ "$LUKS" = 1 ]; then
+if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ] && [ "$LUKS" = 1 ] && [ "$K" = 1 ]; then
   READY=1
 elif [ "$T" != 1 ]; then REASON=token
 elif [ "$V" != 1 ]; then REASON=vector
 elif [ "$VOL" != 1 ]; then REASON=volume
-else REASON=luks
+elif [ "$LUKS" != 1 ]; then REASON=luks
+else REASON=kernel
 fi
-LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID host=$HOST reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
+LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID host=$HOST reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS kernel=$K"
 # (3) local journald breadcrumb — free, no Better Stack quota (deliberately NOT in the Vector
 # SYSLOG_IDENTIFIER allowlist; Better Stack delivery is the direct curl below, not via Vector).
 logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
@@ -1098,10 +1106,10 @@ fi
 # (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field, the
 # detail carries the whole field set so the page needs no second lookup).
 if [ "$READY" = 1 ]; then
-  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
+  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID kernel=$K"
   soleur-boot-emit fresh_boot_ready info
 else
-  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
+  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID kernel=$K"
   soleur-boot-emit "fresh_boot_not_ready_$REASON" fatal
 fi
 exit 0

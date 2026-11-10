@@ -45,7 +45,7 @@ const codeLines = (text: string): string =>
 const PROV = "workspaces_luks_provision_";
 // Fatal arms of the provisioner (exit 10-17) + the cloud-init gate + one stage per readiness reason.
 const PROVISIONER_FATAL_ARMS = ["config", "device", "discriminate", "key", "format", "open", "wire", "mount"] as const;
-const READINESS_REASONS = ["token", "vector", "volume", "luks"] as const;
+const READINESS_REASONS = ["token", "vector", "volume", "luks", "kernel"] as const;
 // Stages that page although the provisioner emits them at level WARNING (the boot continues): the off-host
 // header copy failed (escrow=missing). A closed list; adding to it is a deliberate paging decision.
 const PAGE_AT_WARNING = [`${PROV}escrow`];
@@ -132,7 +132,7 @@ describe("fresh-boot LUKS Sentry routing: the routers", () => {
     expect(got.length).toBeGreaterThan(0);
     expect(new Set(got).size).toBe(got.length);
     expect(sorted(got)).toEqual(sorted(PAGE_STAGES));
-    expect(PAGE_STAGES.length).toBe(14);
+    expect(PAGE_STAGES.length).toBe(15);
   });
 
   it("web_luks_boot_warning routes EXACTLY the non-paging stages (both directions)", () => {
@@ -407,7 +407,7 @@ describe("fresh-boot LUKS Sentry routing: MUTATION rows (each extractor must fli
   });
 
   it("a new unrouted readiness reason is seen", () => {
-    const mutated = bootstrap.replace("else REASON=luks", "elif [ \"$X\" != 1 ]; then REASON=newreason\nelse REASON=luks");
+    const mutated = bootstrap.replace("else REASON=kernel", "elif [ \"$X\" != 1 ]; then REASON=newreason\nelse REASON=kernel");
     expect(mutated).not.toBe(bootstrap);
     expect(sorted(readinessReasons(mutated))).not.toEqual(sorted(READINESS_REASONS));
   });

@@ -2129,7 +2129,7 @@ resource "sentry_alert" "web_luks_boot_fatal" {
     {
       logic_type = "any-short"
       conditions = [
-        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,workspaces_luks_provision_escrow" } },
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,fresh_boot_not_ready_kernel,workspaces_luks_provision_escrow" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
