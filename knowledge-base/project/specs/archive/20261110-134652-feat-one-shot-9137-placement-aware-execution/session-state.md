@@ -58,3 +58,11 @@
 - Discoverability: `bash apps/web-platform/scripts/exec-placement-probe.sh` → `exec-placement: ok` (rc 0).
 - `test-all.sh --affected` skipped — `--capacity` reported CAPACITY_CONTENDED (2 sibling worktree runs); targeted suites substituted per risk-tier-and-fix-rounds.md guidance. `next build` left to CI (no module-load surface changed; comment/test/doc-only edits).
 - Verdict: **PASS**.
+
+## Ship Phase — merge queue soak (2026-11-10 ~19:30Z)
+- Status: PR #12554 in merge queue at position 8 (was 9; head entry #12553 merged), auto-merge armed, all required checks green.
+- Operator acks (in-session, recorded on PR comment): sequential-fallback review coverage accepted; merge authorizes prod infra applies (apply-web-platform-infra.yml :8445 accept + SOLEUR_HOST_PRIVATE_IP env + publish, apply-deploy-pipeline-fix.yml).
+- Review: sequential-fallback 15/15 seats + fix-round 6/6 (P1 probe= bypass found+fixed). QA PASS 169/169. Compound done.
+- CI fixes landed by this session: devin@cognition.ai author rewrite (cla-check), byok leaf-mock repoint x3 suites, model.likec4.json regen, betterstack SYSLOG_IDENTIFIER probe fix, fixture-relative-assert baseline, required-checks coverage literals (S4 retirement dropped a required context).
+- Advisory (non-required) reds tracked: #12506 (deploy-script-tests pin drift), #12609 (CodeQL pii-redact attribution), #12610 (merge-group coverage literals — fixed in this PR).
+- Remaining: queue soak to MERGED → postmerge verify (apply workflows + release + AC12 placement_decision soak probe scripts/followthroughs/placement-decision-forward-9137.sh, tracker #12587) → cleanup-merged worktree reap.
