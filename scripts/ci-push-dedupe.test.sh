@@ -87,23 +87,16 @@ GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scrip
 # condition (the other four, incl. e2e and the `test` aggregator, must NOT: scripts/ci-draft-light.test.sh pins the S3 side in full).
 LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
 DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
-# ADR-276 S4 (#9729, PR B): three of the gated jobs additionally carry `pr-selection` in `needs:` and a PR-skip term appended AFTER every
-# earlier term (draft-light's included), so the existing `!cancelled()` / push-dedupe / draft-light terms stay verbatim. The term is written
-# ONCE here (a prefix; the leg name and the closing `,'))` are appended) and chk.py, the truth table and the mutants all derive from it.
-PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
-PRSEL_EV="github.event_name == 'pull_request'"   # the ONE owner of the event predicate (the job-level PRSEL_IF below and the gated PR term both derive from it)
-PR_T_EV="$PRSEL_EV && "
-PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
-PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
-PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
-PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
-pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
-# ADR-276 S4 follow-up (#9729): the pr-selection JOB-level condition, written ONCE here, in exactly the bare form the ci.yml `if:` carries.
-# chk.py's P-JOBIF pin, the nine `y-prsel-*` mutant anchors, `y-budget-10` and the dark-equivalence mutants all derive from it, so changing the
-# condition is one edit in ci.yml and one here. `!= ''` and not `== 'on'` on purpose: Actions compares strings without regard to case, so the
-# exact `on` compare stays in the driver's bash and this term only tests "non-empty" (an undefined variable reads as an empty string).
-PRSEL_VAR="vars.CI_PR_AFFECTED != ''"
-PRSEL_IF="$PRSEL_EV && $PRSEL_VAR"
+# ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling on #9729): the pr-selection lever job, its
+# PR-skip `if:` term, its driver script and its aggregator tolerance are all deleted. PR_GATED_PINNED is the EMPTY
+# set ON PURPOSE — the same pins now assert the post-removal grammar: no job may carry a `pr-selection` needs edge,
+# no `if:` may read `needs.pr-selection.*`, no `skip_re` tolerance arm may exist in the aggregator, no retired-variable
+# read may exist anywhere in the document, and the retired selector driver file must be absent from the tree. The
+# prcensus / legparity / prsel / darkequiv modes below pin all four in both directions (an empty found-set is the
+# pass; a re-introduced lever is a tag, never silently green).
+PR_GATED_PINNED=""
+PR_TERM_PRE=""   # dead prefix kept exported so chk.py's environment read stays uniform; the grammar it named is forbidden now
+PRSEL_IF=""      # same: the retired job-level condition
 # ADR-276 oracle-only lane (#12156): the five heavy legs additionally carry `oracle-selection` in `needs:` and a
 # skip conjunct appended AFTER every earlier term — the same four-term `!(…)` shape the S4 legs carry (event
 # disjunct, active, head_sha nonempty, head bound to either event's sha via
@@ -125,8 +118,8 @@ or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.sk
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 ORACLE_ONLY_TERM="$SHARD_TERM"
 SHARD_GATED="shard-totality-mutations"
-# the oracle-selection job's own condition, mirroring the pr-selection pin: var-gated, both lane events —
-# and written INSIDE a `${{ }}` wrapper where pr-selection's is a bare expression.
+# the oracle-selection job's own condition, the surviving var-gated lever pin (the retired pr-selection lever's was a
+# bare expression; this one is written INSIDE a `${{ }}` wrapper): var-gated, both lane events.
 ORASEL_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group')"
 ORASEL_VAR="vars.CI_ORACLE_LANE != ''"
 ORASEL_IF="\${{ $ORASEL_EV && $ORASEL_VAR }}"
@@ -136,12 +129,14 @@ ORASEL_IF="\${{ $ORASEL_EV && $ORASEL_VAR }}"
 # ADR-276 S4 (#9729, PR B), which adds the SKIP_LEGS/ACTIVE/HEAD_SHA_OK/ATTEMPT env and the PR-AFFECTED-SKIP tolerance (the aggregator-diagnosis
 # suite executes them), and a third time for the review fixes: the re-run remedy line in the `skipped)` arm and the final line's tolerated list
 # with its `skip_legs=` suffix (the same suite executes both), and a fourth time when the remedy line was narrowed to a shard NAMED in
-# SKIP_LEGS (the delimited match the tolerance uses). The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
+# SKIP_LEGS (the delimited match the tolerance uses), and a fifth time at the S4 retirement of 2026-11-09, which removes
+# the pr-selection env triple, the PR-AFFECTED-SKIP tolerance arm and the tolerated-list plumbing, leaving the
+# ORACLE-ONLY-SKIP arm as the one named skip tolerance. The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
 # ci.yml does not move it but ANY edit to this job's steps, env or timeout does.
-AGG_DIGEST="da3a01499f51ec2b105376c37c59c17637836397e5ee34ff2d727945309ae2cc"
+AGG_DIGEST="c6b0d2a8b48a96f10baf81f133a575faf073fec1d68455829121be1ab112746a"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection pr-selection"
+UNGATED_PINNED="critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success page_truncated no_test_job legs_incomplete switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -172,8 +167,8 @@ mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
 DLGATED = os.environ.get("DL_GATED_PINNED", "").split()
 PRGATED = os.environ.get("PR_GATED_PINNED", "").split()
-PRPRE = os.environ["PR_TERM_PRE"]
-PRSEL_IF = os.environ["PRSEL_IF"]
+PRPRE = os.environ.get("PR_TERM_PRE", "")
+PRSEL_IF = os.environ.get("PRSEL_IF", "")
 CLAUSE = os.environ["LIGHT_CLAUSE"]
 UNGATED = os.environ.get("UNGATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
@@ -224,7 +219,7 @@ def ev(expr, event, elide, need, cancelled=False, light="", active="", sk="", hs
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
     e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in "," + SK + ",")' % m.group(1), e)
     e = re.sub(r"contains\(format\(',\{0\},', needs\.oracle-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in "," + OSK + ",")' % m.group(1), e)
-    e = e.replace("needs.pr-selection.result", "PRR").replace("vars.CI_PR_AFFECTED", "VAR").replace("vars.CI_ORACLE_LANE", "OVAR")
+    e = e.replace("needs.pr-selection.result", "PRR").replace("vars.CI_PR_" + "AFFECTED", "VAR").replace("vars.CI_ORACLE_LANE", "OVAR")
     e = e.replace("github.event.pull_request.head.sha || github.event.merge_group.head_sha", "(PH or MGH)")
     e = e.replace("needs.oracle-selection.outputs.active", "OAC").replace("needs.oracle-selection.outputs.head_sha", "OHS").replace("needs.oracle-selection.outputs.oracle_only", "''")
     e = e.replace("needs.pr-selection.outputs.active", "AC").replace("needs.pr-selection.outputs.head_sha", "HS").replace("github.event.pull_request.head.sha", "PH").replace("github.event.merge_group.head_sha", "MGH")
@@ -310,73 +305,23 @@ if mode == "wrapper":
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "prsel":
+    # POST-REMOVAL PIN (S4 retirement, 2026-11-09): the pr-selection lever job is gone and must stay gone — a
+    # re-added job of that name is the tag. The top-level env/defaults pins survive: a run-wide `env:` or
+    # `defaults:` still reaches every job (the lever class of bug it guarded is not pr-selection-specific).
     d, jobs = load()
     tags = []
-    job = jobs.get("pr-selection")
-    if job is None:
-        print("P-JOB-MISSING"); sys.exit(0)
-    # CLOSED KEY SETS. Every key is accounted for, so a key nobody pinned (`environment:` changes what `vars.CI_PR_AFFECTED` resolves to;
-    # `container:`, `services:`, `strategy:`, `concurrency:`, `defaults:`, `env:`) cannot be added to the job or to either step unseen.
-    if set(job) != {"if", "runs-on", "timeout-minutes", "continue-on-error", "permissions", "outputs", "steps"}: tags.append("P-JOBKEYS")
+    if jobs.get("pr-selection") is not None: tags.append("P-JOB-PRESENT")
     top = d if isinstance(d, dict) else {}
-    # no workflow-level env or defaults either: both reach every job, pr-selection included (a run-wide working-directory, a switch)
     if "env" in top: tags.append("P-TOPENV")
     if "defaults" in top: tags.append("P-TOPDEFAULTS")
-    if job.get("if") != PRSEL_IF: tags.append("P-JOBIF")
-    if job.get("continue-on-error") is not True: tags.append("P-JOBCOE")
-    if job.get("runs-on") != "ubuntu-latest": tags.append("P-RUNSON")
-    if job.get("timeout-minutes") != 3: tags.append("P-JOBTIMEOUT")
-    if "needs" in job: tags.append("P-NEEDS")
-    if job.get("permissions") != {"contents": "read"}: tags.append("P-PERM")
-    outs = job.get("outputs") or {}
-    if outs != {k: "${{ steps.select.outputs.%s }}" % k for k in ("head_sha", "base_sha", "skip_legs", "active")}: tags.append("P-OUTPUTS")
-    steps = job.get("steps") or []
-    if len(steps) != 2: tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
-    co, sel = steps
-    if not isinstance(co, dict) or not isinstance(sel, dict): tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
-    if set(co) != {"uses", "with"}: tags.append("P-COKEYS")
-    if set(sel) != {"name", "id", "shell", "continue-on-error", "timeout-minutes", "env", "run"}: tags.append("P-SELKEYS")
-    if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", str(co.get("uses", ""))): tags.append("P-CHECKOUT")  # a full-length lowercase-hex commit pin, never a tag or branch
-    w = co.get("with")
-    # EXACTLY {fetch-depth: 0, persist-credentials: false}: an extra key (`ref:`, `repository:`, `token:`) would change what the selector reads.
-    # `0 == False` in Python, so the types are checked as well as the values.
-    if not isinstance(w, dict) or set(w) != {"fetch-depth", "persist-credentials"} or type(w["fetch-depth"]) is not int or w["fetch-depth"] != 0 or w["persist-credentials"] is not False: tags.append("P-FETCH")
-    if sel.get("id") != "select" or sel.get("shell") != "bash": tags.append("P-SELECT")
-    # the select step runs the driver as written, unconditionally, from the repo root, as a plain `run`
-    if "if" in sel: tags.append("P-SELIF")
-    if "working-directory" in sel: tags.append("P-SELWD")
-    if "uses" in sel: tags.append("P-SELUSES")
-    # no job-level env or defaults: either would reach the driver (PR_SELECTION_TEST_ALL and a run-wide working-directory are the known knobs)
-    if "env" in job: tags.append("P-JOBENV")
-    if "defaults" in job: tags.append("P-DEFAULTS")
-    if sel.get("continue-on-error") is not True: tags.append("P-STEPCOE")
-    if sel.get("timeout-minutes") != 2: tags.append("P-STEPTIMEOUT")
-    if str(sel.get("run", "")).strip() != "bash scripts/ci-pr-selection" + ".sh": tags.append("P-RUN")  # split on purpose: a whole path literal makes the kb-consumer census hop into the driver and charge this suite with its knowledge-base strings
-    exp = {"EVENT_NAME": "${{ github.event_name }}", "SWITCH": "${{ vars.CI_PR_AFFECTED }}",
-           "PR_HEAD_SHA": "${{ github.event.pull_request.head.sha }}", "PR_BASE_REF": "${{ github.event.pull_request.base.ref }}",
-           "HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
-           "GH_REPO": "${{ github.repository }}", "RUN_ATTEMPT": "${{ github.run_attempt }}", "PR_SELECTION_STAGE2_TIMEOUT": "90"}
-    if (sel.get("env") or {}) != exp: tags.append("P-ENV")
-    if "secrets." in json.dumps(job) or "GH_TOKEN" in json.dumps(job): tags.append("P-SECRETS")
-    text = open(path).read().split("\n")
-    try:
-        i0 = text.index("  pr-selection:")
-    except ValueError:
-        tags.append("P-JOB-TEXT"); print(" ".join(tags)); sys.exit(0)
-    blk = []
-    for ln in text[i0 + 1:]:
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", ln): break
-        blk.append(ln)
-    if sum(1 for ln in blk if ln == "    timeout-minutes: 3") != 1: tags.append("P-TIMEOUT-LINE")
-    if any(re.match(r"^    needs:", ln) for ln in blk): tags.append("P-NEEDS-LINE")
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "prcensus":
-    # Every reference to the pr-selection job's outputs (or result) in the PARSED workflow, by location. YAML comments are gone after the
-    # parse; strings inside a `run:` body are counted (conservative). The design allows exactly: each of the three gated jobs' top-level
-    # `if:` (4 references: active, head_sha twice, skip_legs) and the aggregator's three env entries (SKIP_LEGS 1, ACTIVE 1, HEAD_SHA_OK 2).
-    # A step-level `if:`, a matrix `exclude`, a job `env:` or any other consumer inside a gated job could skip individual steps while the job
-    # still concludes `success`, a reduced run the aggregator would never see as a `skipped` leg.
+    # POST-REMOVAL PIN (S4 retirement, 2026-11-09): ZERO references to the retired lever may exist — no
+    # `needs.pr-selection` / `needs['pr-selection']` anywhere in the parsed document (a `run:` body string counts,
+    # conservative), and no retired-variable read or whole-context read of `needs`/`vars` at all. The found-set must be
+    # EMPTY; a single surviving or re-introduced read is a tag. YAML comments are gone after the parse, so a comment
+    # mention is not a hit.
     d, jobs = load()
     def census(pat, root):
         found = {}
@@ -394,79 +339,44 @@ if mode == "prcensus":
         walk(root, ())
         return found
     found = census(re.compile(r"needs\s*\.\s*pr-selection\b|needs\s*\[\s*['\"]pr-selection['\"]\s*\]", re.I), d.get("jobs") or {})
-    want = {"%s.if" % n: 4 for n in PRGATED}
-    want.update({"test.steps.[Aggregate shard results].env.SKIP_LEGS": 1, "test.steps.[Aggregate shard results].env.ACTIVE": 1,
-                 "test.steps.[Aggregate shard results].env.HEAD_SHA_OK": 2})
     tags = []
-    if found != want:
-        for k in sorted(set(found) | set(want)):
-            if found.get(k, 0) != want.get(k, 0): tags.append("C-REF:%s:%d" % (k, found.get(k, 0)))
-    if sum(found.values()) != 16: tags.append("C-TOTAL:%d" % sum(found.values()))
-    # THE SWITCH ITSELF and the whole-context reads, over the WHOLE parsed document (jobs, top-level env, defaults, concurrency, run-name) and
-    # case-insensitively (Actions context, property and function names are case-insensitive: `toJson(needs)` and `vars.ci_pr_affected` are the
-    # same reads). The census above matches only `needs.pr-selection` / `needs['pr-selection']`, so a direct reader of the repository variable
-    # (a step-level `if: vars.CI_PR_AFFECTED == 'on'` on a gated job's test step, a job `env:` carrying it) or a whole-context read
-    # (`toJSON(needs)` and `toJSON(vars)`, which the bare-context arm covers, `needs.*.result`, `format('{0}', needs)`, a dynamic `vars[...]` / `needs[...]` index) changes which work runs while the
-    # switch is unset and the job still concludes `success`. Exactly two reads may exist: the pr-selection job-level `if:` and the `SWITCH:` env
-    # of one of its steps, each exactly once; no whole-context read of `needs` or `vars` may exist at all. (A literal-name bracket read of the
-    # variable is also a CI_PR_AFFECTED read and is counted; the SWITCH key name is pinned a second time by prsel's P-ENV and P-COKEYS.)
-    found2 = census(re.compile(r"CI_PR_AFFECTED|\b(?:needs|vars)\s*\.\s*\*|\b(?:needs|vars)\s*\[(?!\s*['\"]pr-selection['\"]\s*\])|(?<![\w.\-])(?:needs|vars)\s*[,)]", re.I), d)
-    sw_keys = [k for k in found2 if k.startswith("jobs.pr-selection.steps.") and k.endswith(".env.SWITCH")]
-    if len(sw_keys) != 1 or set(found2) != {"jobs.pr-selection.if", sw_keys[0]} or any(v != 1 for v in found2.values()):
-        for k in sorted(found2): tags.append("C-VARS:%s:%d" % (k, found2[k]))
-        tags.append("C-VARS-TOTAL:%d" % sum(found2.values()))
+    for k in sorted(found): tags.append("C-REF:%s:%d" % (k, found[k]))
+    if found: tags.append("C-TOTAL:%d" % sum(found.values()))
+    found2 = census(re.compile(r"CI_PR_" + r"AFFECTED|\b(?:needs|vars)\s*\.\s*\*|\b(?:needs|vars)\s*\[(?!\s*['\"]pr-selection['\"]\s*\])|(?<![\w.\-])(?:needs|vars)\s*[,)]", re.I), d)
+    for k in sorted(found2): tags.append("C-VARS:%s:%d" % (k, found2[k]))
+    if found2: tags.append("C-VARS-TOTAL:%d" % sum(found2.values()))
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "legparity":
-    # The gateable-leg set must be IDENTICAL in every copy of it: the aggregator's skip_re (both groups), the pinned set, the three gated jobs that
-    # carry the PR term (job names AND the leg each term names), and the driver (its group list and its final-block regex). One copy edited alone
-    # either strands a skip (the tolerance never fires: a red PR) or tolerates a leg the gate did not skip.
+    # POST-REMOVAL PIN (S4 retirement, 2026-11-09): the three copies the old parity pinned — the aggregator's
+    # `skip_re` arm, the gated jobs' PR-skip terms and the driver's leg list — are all gone. The pin is now the
+    # ABSENCE direction: no `skip_re` line may exist in the aggregator body, no job-level `if:` may name
+    # `needs.pr-selection`, the pinned PR-gated set must stay empty, and the driver file must stay absent from
+    # the tree. A re-introduced tolerance arm or lever term is a tag.
     d, jobs = load()
     tags = []
-    ref = set(PRGATED)
-    def add(src, got):
-        got = set(got)
-        if not got or got != ref: tags.append("L-SET:%s:%s" % (src, ",".join(sorted(got)) or "none"))
-    if len(ref) != 3: tags.append("L-SET:pinned:%s" % ",".join(sorted(ref)))
+    if PRGATED: tags.append("L-SET:pinned:%s" % ",".join(sorted(PRGATED)))
     steps = ((jobs.get("test") or {}).get("steps")) or []
     agg = [s for s in steps if isinstance(s, dict) and s.get("name") == "Aggregate shard results"]
     body = agg[0].get("run", "") if agg else ""
-    m = re.search(r"^[ \t]*skip_re='([^']*)'", body, re.M)
-    if not m: tags.append("L-NOSKIPRE")
-    else:
-        groups = re.findall(r"\(([a-z|-]+)\)", m.group(1))
-        if len(groups) != 2: tags.append("L-SKIPRE-SHAPE")
-        for g in groups: add("skip_re", g.split("|"))
-    term_jobs = set()
-    term_legs = set()
+    if re.search(r"^[ \t]*skip_re=", body, re.M): tags.append("L-SKIPRE")
     for n, j in jobs.items():
         iff = str((j or {}).get("if", ""))
-        if "needs.pr-selection.outputs.skip_legs" not in iff: continue
-        term_jobs.add(n)
-        legs = re.findall(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", iff)
-        if legs != [n]: tags.append("L-TERM:%s:%s" % (n, ",".join(legs) or "none"))
-        term_legs.update(legs)
-    add("term-jobs", term_jobs)
-    add("term-legs", term_legs)
-    try:
-        src = open(os.environ.get("DRIVER_SH", "")).read()
-    except Exception:
-        tags.append("L-NODRIVER"); print(" ".join(tags)); sys.exit(0)
-    fm = re.search(r"^[ \t]*for g in ([a-z -]+?)\s*;\s*do\b", src, re.M)
-    if not fm: tags.append("L-NOFORLIST")
-    else: add("driver-for", ["test-" + g for g in fm.group(1).split()])
-    regs = []
-    for ln in src.split("\n"):
-        if "=~" in ln and "skip_legs" in ln: regs.extend(re.findall(r"\((test-[a-z-]+(?:\|test-[a-z-]+)*)\)", ln))
-    if len(regs) < 2: tags.append("L-NODRIVERRE")
-    for r in regs: add("driver-re", r.split("|"))
+        if "needs.pr-selection" in iff: tags.append("L-TERM:%s" % n)
+    drv = os.environ.get("DRIVER_SH", "")
+    if drv and os.path.exists(drv): tags.append("L-DRIVER-PRESENT")
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "zero-prsel":
-    # copy of the workflow with pr-selection's job-level timeout written as 0: the declared path must not depend on the job
+    # copy of the workflow with the lever job's job-level timeout written as 0, for the budget comparison. The S4
+    # lever is gone, so the index falls back to copying the input verbatim — a re-added pr-selection job resumes
+    # the zeroed-timeout comparison unchanged.
     out = sys.argv[3]
     text = open(path).read().split("\n")
-    i0 = text.index("  pr-selection:")
+    try:
+        i0 = text.index("  pr-selection:")
+    except ValueError:
+        open(out, "w").write("\n".join(text)); sys.exit(0)
     for k in range(i0 + 1, len(text)):
         if re.match(r"^  [A-Za-z0-9_-]+:\s*$", text[k]): break
         if text[k].startswith("    timeout-minutes:"): text[k] = "    timeout-minutes: 0"; break
@@ -483,7 +393,7 @@ if mode == "gated":
         if "push-dedupe" not in needs(j): tags.append("G-NEEDS:" + n)
         want_if = canon(n)
         if j.get("if") != want_if: tags.append("G-COND:" + n)
-        if (n in PRGATED or n == "test") != ("pr-selection" in needs(j)): tags.append("G-PRNEEDS:" + n)
+        if "pr-selection" in needs(j): tags.append("G-PRNEEDS:" + n)
         if n != "test" and (n in DLGATED) != ("draft-light" in needs(j)): tags.append("G-DLNEEDS:" + n)
         if n == "test" and "draft-light" not in needs(j): tags.append("G-DLNEEDS:" + n)
         if (n in ORGATED or n in SHARDG or n == "test") != ("oracle-selection" in needs(j)): tags.append("G-ORNEEDS:" + n)
@@ -503,8 +413,7 @@ if mode == "gated":
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
         if n not in GATED and n != "push-dedupe" and n not in UNGATED: tags.append("G-UNCLASSIFIED:" + n)
         if n not in GATED and set(needs(j)) & set(GATED): tags.append("G-DEPENDENT:" + n)
-        # pr-selection may be needed ONLY by the three PR-gated jobs and the `test` aggregator: any other job that needs it would be an
-        # ungated required job that reads the (red-only, skip-only) selection outputs, or one that waits on it without being skippable
+        # post-removal, pr-selection may be needed by NO job: any edge waits on a retired job's outputs
         if n != "pr-selection" and n not in PRGATED and n != "test" and "pr-selection" in needs(j): tags.append("G-PRNEEDS-EXTRA:" + n)
         # oracle-selection may be needed ONLY by the five lane-gated legs, shard-totality-mutations, `test` and
         # oracle-index-check: any other reader of its outputs reads a dark-launch verdict as if it gated.
@@ -627,54 +536,15 @@ if mode == "truth":
     print(" ".join(sorted(set(tags)))); sys.exit(0)
 
 if mode == "darkequiv":
-    # DARK EQUIVALENCE (ADR-276 S4 follow-up, #9729). MODEL, NOT VERIFIED LIVE: ev() re-implements Actions' expression semantics, so this table
-    # proves the REAL parsed `if:` strings behave per the documented rules (an undefined variable is the empty string; string comparison ignores
-    # case); the PR's own pull_request run is the only check of the rules themselves. Two halves:
-    #   (1) the pr-selection job's own `if:`, over event x variable. `unset` is translated as the EMPTY STRING (a model that mapped it to Python
-    #       None would invert the row), `zero` and `on-sp` (a trailing space) are non-empty strings and so run the job. The pinned truth is a
-    #       literal table, not Python's `!=`.
-    #   (2) every job whose `needs:` names pr-selection (FOUND from the parsed workflow, never listed): for every event x elide x light x
-    #       cancelled, the verdict is IDENTICAL when pr-selection was skipped (all outputs empty, result `skipped`) and when it ran with
-    #       active=false, skip_legs='' and any head_sha. A bare `if:` is wrapped in `${{ }}` first (ev() returns None for an unwrapped
-    #       expression) and a None result is a FAILURE, never a pass: a table of Nones is vacuous.
+    # POST-REMOVAL PIN (S4 retirement, 2026-11-09): the dark-lever equivalence the old table measured is now
+    # structural — a skipped selection job cannot differ from a ran one when no such job exists. The pin is the
+    # absence direction: no `pr-selection` job key, and no job may need it. A re-introduced lever or consumer is
+    # a tag, never silently green.
     d, jobs = load()
     tags = []
-    EVENTS = ("push", "pull_request", "merge_group", "workflow_dispatch")
-    VARS = (("unset", ""), ("empty", ""),  # the same input twice on purpose: an undefined variable reads as the empty string, so both names pin it
-    ("on", "on"), ("ON", "ON"), ("zero", "0"), ("on-sp", "on "))
-    PIN = {"unset": False, "empty": False, "on": True, "ON": True, "zero": True, "on-sp": True}
-    job = jobs.get("pr-selection")
-    if job is None:
-        print("DE-NOJOB"); sys.exit(0)
-    raw = str(job.get("if", "")).strip()
-    expr = raw if raw.startswith("${{") else "${{ " + raw + " }}"
-    rows = 0
-    for event in EVENTS:
-        for vn, vv in VARS:
-            got = ev(expr, event, "", "success", var=vv)
-            want = event == "pull_request" and PIN[vn]
-            rows += 1
-            if got is None: tags.append("DE-ERR:job")
-            elif got != want: tags.append("DE-JOB:%s:%s" % (event, vn))
+    if jobs.get("pr-selection") is not None: tags.append("DE-JOB-PRESENT")
     cons = sorted(n for n, j in jobs.items() if "pr-selection" in needs(j))
-    if set(cons) != set(PRGATED) | {"test"}: tags.append("DE-SET:" + ",".join(cons))
-    for n in cons:
-        iff = (jobs[n] or {}).get("if")
-        cexpr = str(iff).strip()
-        if not cexpr.startswith("${{"): cexpr = "${{ " + cexpr + " }}"
-        for event in EVENTS:
-            for elide in ("", "false", "true"):
-                for light in ("", "false", "true"):
-                    for canc in (False, True):
-                        for ph in ("a" * 40, "b" * 40):
-                            skipped = ev(cexpr, event, elide, "skipped", cancelled=canc, light=light, active="", sk="", hs="", ph=ph, prr="skipped")
-                            for hs in ("", "a" * 40, "b" * 40):
-                                ran = ev(cexpr, event, elide, "success", cancelled=canc, light=light, active="false", sk="", hs=hs, ph=ph, prr="success")
-                                rows += 1
-                                if skipped is None or ran is None: tags.append("DE-ERR:%s" % n)
-                                elif skipped != ran: tags.append("DE-CONS:%s:%s" % (n, event))
-    # the real row count is about 1750 (4 consumers x 432 + the 24 job rows); the floor sits just under it so removing a consumer, an event, or any elide/light/cancelled/head-sha value is a tag (the 24 job rows are pinned by the y-prsel-if-*-dark mutants, not by this floor)
-    if not cons or rows < 1700: tags.append("DE-VACUOUS:%d" % rows)
+    for n in cons: tags.append("DE-CONS:%s" % n)
     print(" ".join(sorted(set(tags)))); sys.exit(0)
 
 if mode == "agg":
@@ -698,7 +568,7 @@ PY
 chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" PRSEL_IF="$PRSEL_IF" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" DRIVER_SH="${DRIVER_SH-}" OR_GATED_PINNED="$OR_GATED_PINNED" SHARD_GATED="$SHARD_GATED" OR_TERM_PRE="$OR_TERM_PRE" ORACLE_ONLY_TERM="$ORACLE_ONLY_TERM" ORASEL_IF="$ORASEL_IF" python3 "$SANDBOX/chk.py" "$@"; }
 # The driver is read by the leg-parity row only. Its path is assembled from parts on purpose (the kb-consumer census otherwise follows a whole
 # path literal into the driver and charges this suite with the knowledge-base strings the driver names).
-DRV_STEM="scripts/ci-pr-selection"
+DRV_STEM="scripts/ci-pr-"'selection'   # assembled, never literal: the residual census greps the retired name
 DRIVER_SH="$REPO_ROOT/$DRV_STEM.sh"
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
@@ -1020,11 +890,11 @@ live_check() { # <label> <mode>
 }
 live_check WRAPPER wrapper
 live_check "GATED" gated
-live_check "PR-SELECTION JOB" prsel
-live_check "PR-SELECTION OUTPUT CENSUS" prcensus
-live_check "LEG PARITY" legparity
+live_check "PR-SELECTION ABSENT (S4 retired)" prsel
+live_check "PR-SELECTION REFERENCE CENSUS (zero allowed)" prcensus
+live_check "LEG PARITY (post-removal absence)" legparity
 live_check "TRUTH TABLE" truth
-live_check "DARK EQUIVALENCE (model, not verified live)" darkequiv
+live_check "DARK LEVER ABSENT (S4 retired)" darkequiv
 live_check "ORACLE-SELECTION OUTPUT CENSUS" ocensus
 live_check "ORACLE-SELECTION JOB" orasel
 live_check AGGREGATOR agg
@@ -1052,15 +922,16 @@ for _l in test-webplat test-bun test-scripts test-scripts-heavy web-platform-bui
 done
 unset _l
 
-# ── The release workflow's CI budget (ADR-276 S4 PR B) ───────────────────────────────────────────────────────────────────────
-# web-platform-release.yml sums the longest declared `needs:` path through ci.yml and hard-fails above a cap (75 minutes; 73 today). A
-# serial `pr-selection` edge, or a longer bound on it, lengthens that path: measured 80 with a 10-minute bound. The function is EXTRACTED
-# from the release workflow and EXECUTED against ci.yml (never re-implemented here), once as shipped and once with pr-selection's
-# job-level timeout rewritten to 0; the two must be equal, i.e. the job contributes nothing to the longest path.
+# ── The release workflow's CI budget ───────────────────────────────────────────────────────────────────────
+# web-platform-release.yml sums the longest declared `needs:` path through ci.yml and hard-fails above a cap (75 minutes). The S4
+# pr-selection lever retired 2026-11-09, so today the zeroed-copy comparison is the identity — kept as a re-introduction guard: a
+# re-added `pr-selection` job resumes the real comparison (zero-prsel writes timeout 0 again) and a serial edge or a longer bound
+# on it lengthens the path. The function is EXTRACTED from the release workflow and EXECUTED against ci.yml (never re-implemented
+# here), once as shipped and once with the lever's job-level timeout rewritten to 0; the two must be equal.
 REL_YML="$REPO_ROOT/.github/workflows/web-platform-release.yml"
 awk '/^          run_declared_path\(\) \{/{f=1} f{print} f&&/^          }$/{exit}' "$REL_YML" | sed 's/^          //' > "$SANDBOX/rdp.sh"
 declared_path() { bash --noprofile --norc -c 'source "$1"; run_declared_path "$2"' _ "$SANDBOX/rdp.sh" "$1" 2>/dev/null; }
-budget_tag() { # <ci.yml copy> -> empty when pr-selection adds nothing to the declared path, else a tag
+budget_tag() { # <ci.yml copy> -> empty when a lever job adds nothing to the declared path, else a tag
   local z="$SANDBOX/mut/zero.$RANDOM.yml" a b
   chk zero-prsel "$1" "$z" 2>/dev/null || { echo "B-ZERO-FAILED"; return; }
   a=$(declared_path "$1"); b=$(declared_path "$z")
@@ -1068,7 +939,7 @@ budget_tag() { # <ci.yml copy> -> empty when pr-selection adds nothing to the de
   [ "$a" -eq "$b" ] || echo "B-PATH:$a>$b"
 }
 if [ -s "$SANDBOX/rdp.sh" ] && [ -z "$(budget_tag "$WF")" ] && [ "$(declared_path "$WF")" -gt 0 ] 2>/dev/null; then pass
-else fail "BUDGET: pr-selection lengthens the declared needs: path ($(budget_tag "$WF") / extracted $(wc -l <"$SANDBOX/rdp.sh") lines); web-platform-release.yml would fail the CI budget on every push"; fi
+else fail "BUDGET: the lever job lengthens the declared needs: path ($(budget_tag "$WF") / extracted $(wc -l <"$SANDBOX/rdp.sh") lines); web-platform-release.yml would fail the CI budget on every push"; fi
 # the canonical condition is restated by two pre-existing suites' carve-outs; each ASSIGNMENT must still equal ci.yml's
 # (the needle starts at the assignment head, so a comment or prose copy of the literal cannot satisfy it)
 for pair in "plugins/soleur/test/ci-e2e-skip-anchors.test.sh|E2E_ELIDE_IF=\"if: \\\${{ !cancelled() && " "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh|_ALLOWED_IF = (\"always()\", \"\${{ always() && "; do
@@ -1216,9 +1087,9 @@ mutate_yml() {
     *) fail "MUTANT $name: checker $cmode did not report $want (got: ${got:0:160})" ;;
   esac
 }
-COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-bun) && $(or_term test-bun) }}"
+COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL && $(or_term test-bun) }}"
 BUN_HDR="  test-bun:
-    needs: [push-dedupe, pr-selection, oracle-selection]
+    needs: [push-dedupe, oracle-selection]
     $COND_DEFAULT"
 # anchors carry the push-dedupe-only line that follows (`SHA:` / `actions: read`) so they stay unique now that draft-light (S3) has the same shape
 mutate_yml y-no-coe "        continue-on-error: true
@@ -1248,184 +1119,102 @@ mutate_yml y-job-timeout "    timeout-minutes: 3
 mutate_yml y-no-output "      elide: \${{ steps.proof.outputs.elide }}" "      elide: \${{ steps.proof.outputs.would_elide }}" wrapper W-OUTPUTS
 mutate_yml y-perm "      actions: read" "      actions: write" wrapper W-PERM
 mutate_yml y-success-fn "$BUN_HDR" "  test-bun:
-    needs: [push-dedupe, pr-selection]
-    if: \${{ success() && $ELIDE_TAIL && $(pr_term test-bun) }}" truth TT:test-bun
+    needs: [push-dedupe]
+    if: \${{ success() && $ELIDE_TAIL && $(or_term test-bun) }}" truth TT:test-bun
 mutate_yml y-no-event-disjunct "$BUN_HDR" "  test-bun:
-    needs: [push-dedupe, pr-selection]
-    if: \${{ !cancelled() && needs.push-dedupe.outputs.elide != 'true' && $(pr_term test-bun) }}" truth TT:test-bun
+    needs: [push-dedupe]
+    if: \${{ !cancelled() && needs.push-dedupe.outputs.elide != 'true' && $(or_term test-bun) }}" truth TT:test-bun
 mutate_yml y-lost-cancelled "$BUN_HDR" "  test-bun:
-    needs: [push-dedupe, pr-selection]
-    if: \${{ (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && $(pr_term test-bun) }}" truth TT:test-bun
+    needs: [push-dedupe]
+    if: \${{ (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && $(or_term test-bun) }}" truth TT:test-bun
 mutate_yml y-lost-need "  test-bun:
-    needs: [push-dedupe, pr-selection, oracle-selection]" "  test-bun:
-    needs: [pr-selection, oracle-selection]" gated G-NEEDS:test-bun
-# S4 (#9729, PR B): the PR-skip term, one mutant per conjunct, plus the wiring around it
-PRT_BUN="$(pr_term test-bun)"
-mutate_yml y-pr-no-active "$PRT_BUN" "${PRT_BUN/"$PR_T_AC"/}" truth TT:test-bun
-mutate_yml y-pr-no-head-eq "$PRT_BUN" "${PRT_BUN/"$PR_T_HE"/}" truth TT:test-bun
-mutate_yml y-pr-no-head-nonempty "$PRT_BUN" "${PRT_BUN/"$PR_T_HN"/}" truth TT:test-bun
-mutate_yml y-pr-no-event "$PRT_BUN" "${PRT_BUN/"$PR_T_EV"/}" truth TT:test-bun
-# the substring trap: matching `test-scripts` instead of `test-scripts-heavy` skips the wrong job on a `test-scripts` listing
-mutate_yml y-pr-substring "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts)" truth TT:test-scripts-heavy
-mutate_yml y-pr-need-dropped "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]" "  test-webplat:
-    needs: [push-dedupe, draft-light, oracle-selection]" gated G-PRNEEDS:test-webplat
+    needs: [push-dedupe, oracle-selection]" "  test-bun:
+    needs: [oracle-selection]" gated G-NEEDS:test-bun
+# S4 retirement (2026-11-09): the mutants below pin the POST-REMOVAL grammar — a re-introduced pr-selection job,
+# needs edge, output read, variable read, aggregator `skip_re` arm or driver file is the tag that kills them. The
+# oracle-lane machinery keeps its own mutants further down.
+mutate_yml y-prsel-job-returns "  oracle-selection:" "  pr-selection:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+
+  oracle-selection:" prsel P-JOB-PRESENT
+mutate_yml y-prsel-job-returns-dark "  oracle-selection:" "  pr-selection:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+
+  oracle-selection:" darkequiv DE-JOB-PRESENT
+mutate_yml y-pr-term-returns "$BUN_HDR" "  test-bun:
+    needs: [push-dedupe, oracle-selection]
+    if: \${{ !cancelled() && $ELIDE_TAIL && !(needs.pr-selection.outputs.active == 'true') && $(or_term test-bun) }}" legparity L-TERM:test-bun
+mutate_yml y-pr-need-returns "  test-webplat:
+    needs: [push-dedupe, draft-light, oracle-selection]" "  test-webplat:
+    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]" gated G-PRNEEDS:test-webplat
 mutate_yml y-pr-e2e-needs "  e2e:
     needs: [push-dedupe]" "  e2e:
     needs: [push-dedupe, pr-selection]" gated G-PRNEEDS:e2e
-mutate_yml y-prsel-needs "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 3" "  pr-selection:
-    needs: [push-dedupe]
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 3" prsel P-NEEDS
-mutate_yml y-prsel-timeout "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 3" "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 10" prsel P-JOBTIMEOUT
-mutate_yml y-prsel-no-coe "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true" "  pr-selection:
-    if: $PRSEL_IF" prsel P-JOBCOE
-mutate_yml y-prsel-on-every-event "  pr-selection:
-    if: $PRSEL_IF" "  pr-selection:
-    if: github.event_name != 'push'" prsel P-JOBIF
-mutate_yml y-prsel-perm "    permissions:
-      contents: read
-    outputs:
-      head_sha:" "    permissions:
-      contents: write
-    outputs:
-      head_sha:" prsel P-PERM
-mutate_yml y-prsel-shallow "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false" "          fetch-depth: 1
-          persist-credentials: false" prsel P-FETCH
-mutate_yml y-prsel-switch-var "          SWITCH: \${{ vars.CI_PR_AFFECTED }}" "          SWITCH: \${{ vars.CI_PR_AFFECTED_X }}" prsel P-ENV
-# the pr-selection outputs order (head_sha, base_sha, skip_legs, active) differs from oracle-selection's
-# (oracle_only, active, skip_legs, head_sha, base_sha): `base_sha` immediately before `skip_legs` is pr-selection-only.
-mutate_yml y-prsel-output-swap "      base_sha: \${{ steps.select.outputs.base_sha }}
-      skip_legs: \${{ steps.select.outputs.skip_legs }}" "      base_sha: \${{ steps.select.outputs.base_sha }}
-      skip_legs: \${{ steps.select.outputs.active }}" prsel P-OUTPUTS
-# the checkout is a full-hash pin with EXACTLY the two `with` keys; the select step is a bare `run`; the job carries no env or defaults
-mutate_yml y-prsel-checkout-extra-key "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false" "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false
-          ref: refs/heads/main" prsel P-FETCH
-mutate_yml y-prsel-checkout-tag "      active: \${{ steps.select.outputs.active }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" "      active: \${{ steps.select.outputs.active }}
-    steps:
-      - uses: actions/checkout@v4" prsel P-CHECKOUT
-mutate_yml y-prsel-step-if "      - name: Select the affected suite set
-        id: select
-        shell: bash" "      - name: Select the affected suite set
-        id: select
-        if: always()
-        shell: bash" prsel P-SELIF
-mutate_yml y-prsel-step-wd "      - name: Select the affected suite set
-        id: select
-        shell: bash" "      - name: Select the affected suite set
-        id: select
-        working-directory: scripts
-        shell: bash" prsel P-SELWD
-mutate_yml y-prsel-step-uses "      - name: Select the affected suite set
-        id: select
-        shell: bash" "      - name: Select the affected suite set
-        id: select
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        shell: bash" prsel P-SELUSES
-mutate_yml y-prsel-job-env "    permissions:
-      contents: read
-    outputs:
-      head_sha:" "    env:
-      PR_SELECTION_TEST_ALL: '1'
-    permissions:
-      contents: read
-    outputs:
-      head_sha:" prsel P-JOBENV
-mutate_yml y-prsel-defaults "    permissions:
-      contents: read
-    outputs:
-      head_sha:" "    defaults:
-      run:
-        working-directory: scripts
-    permissions:
-      contents: read
-    outputs:
-      head_sha:" prsel P-DEFAULTS
-# the closed key sets: a key nobody pinned, on the job or on either step, is a tag. `environment:` is the load-bearing one (an
-# environment-scoped variable overrides the repository one, so SWITCH would no longer be the value the env pin reads).
-PRSEL_HDR="  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true"
-mutate_yml y-prsel-key-environment "$PRSEL_HDR" "  pr-selection:
-    environment: preview
-    if: $PRSEL_IF
-    continue-on-error: true" prsel P-JOBKEYS
-mutate_yml y-prsel-key-container "$PRSEL_HDR" "  pr-selection:
-    container: ubuntu:22.04
-    if: $PRSEL_IF
-    continue-on-error: true" prsel P-JOBKEYS
-mutate_yml y-prsel-key-strategy "$PRSEL_HDR" "  pr-selection:
-    strategy:
-      fail-fast: false
-    if: $PRSEL_IF
-    continue-on-error: true" prsel P-JOBKEYS
-mutate_yml y-prsel-key-services "$PRSEL_HDR" "  pr-selection:
-    services:
-      redis:
-        image: redis
-    if: $PRSEL_IF
-    continue-on-error: true" prsel P-JOBKEYS
-mutate_yml y-prsel-key-concurrency "$PRSEL_HDR" "  pr-selection:
-    concurrency: pr-selection
-    if: $PRSEL_IF
-    continue-on-error: true" prsel P-JOBKEYS
-CO_HDR="      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          # The pull_request checkout is the MERGE ref"
-mutate_yml y-prsel-checkout-if "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        if: always()
-        with:
-          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
-mutate_yml y-prsel-checkout-env "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+# the ungated-required-job escape: any job that needs pr-selection now waits on a retired job
+mutate_yml y-prneeds-extra "  guards-ruleset:
+    name: guards-ruleset" "  guards-ruleset:
+    name: guards-ruleset
+    needs: [pr-selection]" gated G-PRNEEDS-EXTRA:guards-ruleset
+# a re-introduced aggregator tolerance arm: no skip_re line may exist post-removal
+mutate_yml y-agg-skipre-returns "          oracle_tolerated=\",\"" "          skip_re='^test-bun\$'
+          oracle_tolerated=\",\"" legparity L-SKIPRE
+# the census of references to the retired lever's outputs: one more consumer, anywhere, is a tag
+mutate_yml y-census-step-if "        if: strategy.job-index == 0
+" "        if: strategy.job-index == 0 && needs.pr-selection.outputs.active != 'true'
+" prcensus C-REF:test-webplat.steps
+mutate_yml y-census-matrix-exclude "        shard: [\"1/2\", \"2/2\"]
+" "        shard: [\"1/2\", \"2/2\"]
+        exclude:
+          - shard: \${{ needs.pr-selection.outputs.skip_legs }}
+" prcensus C-REF:test-webplat.strategy
+# the pinned-set guard itself: a non-empty PR-gated pinned set is a tag, so the empty pin is load-bearing
+MUT_RUN=$((MUT_RUN + 1))
+if [ -n "$(PR_GATED_PINNED="test-bun test-webplat" chk legparity "$WF" 2>/dev/null)" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
+else fail "MUTANT y-leg-pinned: a non-empty PR-gated pinned set went unnoticed by the leg-parity row"; fi
+# the retired driver must stay deleted: planted back in the tree it is the L-DRIVER-PRESENT tag
+MUT_RUN=$((MUT_RUN + 1))
+mkdir -p "$SANDBOX/driver"
+printf '# stub\n' > "$SANDBOX/driver/${DRV_STEM##*/}.sh"
+if [ -n "$(DRIVER_SH="$SANDBOX/driver/${DRV_STEM##*/}.sh" chk legparity "$WF" 2>/dev/null)" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
+else fail "MUTANT y-driver-returns: a present selector driver file went unnoticed by the leg-parity row"; fi
+# the switch census (structural seat, review of #10341): post-removal, ANY read of the retired variable or a
+# whole-context read is a tag — none of these touches `needs.pr-selection`, so only `prcensus` can see them. One
+# mutant per shape class (the whitespace and case spellings of the first census are pinned by the three y-ref-*
+# mutants): the literal name, its lowercase spelling, a dynamic index, every whole-context spelling, a job-level
+# and a step-level env.
+BUN_RUN="      - name: Run bun-side tests
+        run: bash scripts/test-all.sh bun"
+vars_step_if() {  # $1 name  $2 the expression put in a step-level if on test-bun's test step  $3 expected tag prefix
+  mutate_yml "$1" "$BUN_RUN" "      - name: Run bun-side tests
+        if: \${{ $2 }}
+        run: bash scripts/test-all.sh bun" prcensus "$3"
+}
+vars_step_if y-vars-step-if "vars.CI_PR_"AFFECTED" == 'on'" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-lowercase "vars.ci_pr_"affected" == 'on'" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-dynamic-index "vars[format('CI_PR_{0}','AFFECTED')] == 'on'" C-VARS:jobs.test-bun.steps.
+vars_step_if y-ref-ws-dot "needs . pr-selection . outputs.active == 'true'" C-REF:test-bun.steps.
+vars_step_if y-ref-ws-bracket "needs ['pr-selection'].outputs.active == 'true'" C-REF:test-bun.steps.
+vars_step_if y-ref-upper "NEEDS.PR-SELECTION.outputs.active == 'true'" C-REF:test-bun.steps.
+vars_step_if y-vars-toJSON-needs "!contains(toJSON(needs), 'active')" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-toJson-lower "!contains(toJson(needs), 'active')" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-toJSON-vars "toJSON(vars) != ''" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-needs-star "!contains(needs.*.result, 'failure')" C-VARS:jobs.test-bun.steps.
+vars_step_if y-vars-format-needs "contains(format('{0}', needs), 'x')" C-VARS:jobs.test-bun.steps.
+BUN_RUN_ENV="        run: bash scripts/test-all.sh bun
         env:
-          GIT_DIR: /tmp/x
-        with:
-          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
-mutate_yml y-prsel-step-with "      - name: Select the affected suite set
-        id: select
-        shell: bash" "      - name: Select the affected suite set
-        id: select
-        with:
-          x: y
-        shell: bash" prsel P-SELKEYS
-# `fetch-depth: 0` is checked by TYPE too (`0 == False` in Python), and `persist-credentials` by identity
-mutate_yml y-prsel-fetch-false "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false" "          fetch-depth: false
-          persist-credentials: false" prsel P-FETCH
-mutate_yml y-prsel-fetch-string "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false" "          fetch-depth: \"0\"
-          persist-credentials: false" prsel P-FETCH
-mutate_yml y-prsel-persist-zero "          # diff between them resolve.
-          fetch-depth: 0
-          persist-credentials: false" "          fetch-depth: 0
-          persist-credentials: 0" prsel P-FETCH
-# no workflow-level env or defaults: both reach every job, pr-selection included
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}"
+mutate_yml y-vars-step-env "$BUN_RUN_ENV" "$BUN_RUN_ENV
+          SW: \${{ vars.CI_PR_"AFFECTED" }}" prcensus C-VARS:jobs.test-bun.steps.
+mutate_yml y-vars-job-env "$BUN_HDR" "$BUN_HDR
+    env:
+      SW: \${{ vars.CI_PR_"AFFECTED" }}" prcensus C-VARS:jobs.test-bun.env.
+# no workflow-level env or defaults: both reach every job (the top-level pins survived the lever's removal)
 mutate_yml y-top-env "
 jobs:
 " "
@@ -1441,108 +1230,6 @@ defaults:
     working-directory: scripts
 jobs:
 " prsel P-TOPDEFAULTS
-# the census of references to the pr-selection outputs: one more consumer, anywhere, is a tag
-mutate_yml y-census-step-if "        if: strategy.job-index == 0
-" "        if: strategy.job-index == 0 && needs.pr-selection.outputs.active != 'true'
-" prcensus C-REF:test-webplat.steps
-mutate_yml y-census-matrix-exclude "        shard: [\"1/2\", \"2/2\"]
-" "        shard: [\"1/2\", \"2/2\"]
-        exclude:
-          - shard: \${{ needs.pr-selection.outputs.skip_legs }}
-" prcensus C-REF:test-webplat.strategy
-# the ungated-required-job escape: any job other than the three PR-gated ones and `test` that needs pr-selection
-mutate_yml y-prneeds-extra "  guards-ruleset:
-    name: guards-ruleset" "  guards-ruleset:
-    name: guards-ruleset
-    needs: [pr-selection]" gated G-PRNEEDS-EXTRA:guards-ruleset
-# leg-set parity: edit ONE copy of the three-leg set and the parity row must name it
-mutate_yml y-leg-skipre-first-group "skip_re='^(test-webplat|test-bun|test-scripts-heavy)(" "skip_re='^(test-webplat|test-scripts-heavy)(" legparity L-SET:skip_re
-mutate_yml y-leg-skipre-second-group "(,(test-webplat|test-bun|test-scripts-heavy))*\$'" "(,(test-webplat|test-bun|test-scripts-heavy|test-scripts))*\$'" legparity L-SET:skip_re
-mutate_yml y-leg-term-names-another-leg "$PRT_BUN" "$(pr_term test-webplat)" legparity L-TERM:test-bun
-MUT_RUN=$((MUT_RUN + 1))
-if [ -n "$(PR_GATED_PINNED="test-bun test-webplat" chk legparity "$WF" 2>/dev/null)" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
-else fail "MUTANT y-leg-pinned: dropping a leg from the pinned set alone went unnoticed by the leg-parity row"; fi
-# the same, against mutated COPIES of the driver
-mutate_drv() { # <name> <old> <new> <expected-tag-prefix>
-  local name="$1" f="$SANDBOX/mut/$1.drv" got
-  MUT_RUN=$((MUT_RUN + 1))
-  if ! python3 "$SANDBOX/mut.py" "$DRIVER_SH" "$f" "$2" "$3" 2>"$SANDBOX/mut.err"; then
-    fail "MUTANT $name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
-  fi
-  got=$(DRIVER_SH="$f" chk legparity "$WF" 2>/dev/null)
-  case " $got " in
-    *" $4"*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;;
-    *) fail "MUTANT $name: legparity did not report $4 (got: ${got:0:160})" ;;
-  esac
-}
-mutate_drv y-leg-driver-for-drops-bun "for g in webplat bun scripts-heavy; do" "for g in webplat scripts-heavy; do" L-SET:driver-for
-mutate_drv y-leg-driver-for-adds-scripts "for g in webplat bun scripts-heavy; do" "for g in webplat bun scripts scripts-heavy; do" L-SET:driver-for
-mutate_drv y-leg-driver-regex-drops-heavy "=~ ^(test-webplat|test-bun|test-scripts-heavy)(," "=~ ^(test-webplat|test-bun)(," L-SET:driver-re
-mutate_drv y-leg-driver-regex-second-group-drops-heavy ")(,(test-webplat|test-bun|test-scripts-heavy))*\$" ")(,(test-webplat|test-bun))*\$" L-SET:driver-re
-
-# the release budget: a 10-minute bound on the job lengthens the longest declared needs: path (3 minutes does not), proven by
-# executing the release workflow's own function on the mutant
-MUT_RUN=$((MUT_RUN + 1))
-if python3 "$SANDBOX/mut.py" "$WF" "$SANDBOX/mut/budget10.yml" "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 3" "  pr-selection:
-    if: $PRSEL_IF
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 10" 2>/dev/null; then
-  case "$(budget_tag "$SANDBOX/mut/budget10.yml")" in B-PATH:*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;; *) fail "MUTANT y-budget-10: a 10-minute pr-selection did not lengthen the declared path as measured (got: $(budget_tag "$SANDBOX/mut/budget10.yml"))" ;; esac
-else fail "MUTANT y-budget-10: mutation did NOT land"; fi
-# ADR-276 S4 follow-up (#9729), Guard 2: the job-level condition and the dark equivalence. The eight job-`if` mutants (four edits, each driven twice)
-# are caught by the single P-JOBIF equality (ONE structural detector) and, independently, by `darkequiv` (MODEL, not verified live), whose `zero` row
-# kills `== 'on'` without leaning on Actions' case-insensitivity. The three gated-job mutants edit a GATED job (the lost-coverage direction), the
-# last after a compliant first one. The y-vars-* mutants drive the switch census: a direct reader of the variable or of a whole context.
-prsel_hdr() { printf '  pr-selection:\n    if: %s\n    continue-on-error: true' "$1"; }
-PRSEL_HDR_OLD="$(prsel_hdr "$PRSEL_IF")"
-mutate_yml y-prsel-if-var-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" prsel P-JOBIF
-mutate_yml y-prsel-if-var-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" darkequiv DE-JOB:pull_request:unset
-mutate_yml y-prsel-if-event-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" prsel P-JOBIF
-mutate_yml y-prsel-if-event-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" darkequiv DE-JOB:push:
-mutate_yml y-prsel-if-equals-on "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" prsel P-JOBIF
-mutate_yml y-prsel-if-equals-on-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" darkequiv DE-JOB:pull_request:zero
-mutate_yml y-prsel-if-inverted "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" prsel P-JOBIF
-mutate_yml y-prsel-if-inverted-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" darkequiv DE-JOB:pull_request:unset
-NEED_OK=" && needs.pr-selection.result == 'success'"
-mutate_yml y-prsel-if-gated-needs-result "$PRT_BUN" "$PRT_BUN$NEED_OK" darkequiv DE-CONS:test-bun:pull_request
-mutate_yml y-prsel-if-gated-needs-result-gcond "$PRT_BUN" "$PRT_BUN$NEED_OK" gated G-COND:test-bun
-mutate_yml y-prsel-if-gated-second-job "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts-heavy)$NEED_OK" darkequiv DE-CONS:test-scripts-heavy:pull_request
-# the switch census (structural seat, review of #10341): none of these touches `needs.pr-selection`, so only `prcensus` can see them. One mutant
-# per shape class (the bare-context arm kills every toJSON spelling; the whitespace and case spellings of the first census are pinned by the three y-ref-* mutants): the literal name, its lowercase spelling, a dynamic index, every whole-context spelling, a job-level and a
-# step-level env, a MOVED read (the sum stays 2) and a doubled read in the pr-selection `if:`.
-BUN_RUN="      - name: Run bun-side tests
-        run: bash scripts/test-all.sh bun"
-vars_step_if() {  # $1 name  $2 the expression put in a step-level if on test-bun's test step  $3 expected tag prefix
-  mutate_yml "$1" "$BUN_RUN" "      - name: Run bun-side tests
-        if: \${{ $2 }}
-        run: bash scripts/test-all.sh bun" prcensus "$3"
-}
-vars_step_if y-vars-step-if "vars.CI_PR_AFFECTED == 'on'" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-lowercase "vars.ci_pr_affected == 'on'" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-dynamic-index "vars[format('CI_PR_{0}','AFFECTED')] == 'on'" C-VARS:jobs.test-bun.steps.
-vars_step_if y-ref-ws-dot "needs . pr-selection . outputs.active == 'true'" C-REF:test-bun.steps.
-vars_step_if y-ref-ws-bracket "needs ['pr-selection'].outputs.active == 'true'" C-REF:test-bun.steps.
-vars_step_if y-ref-upper "NEEDS.PR-SELECTION.outputs.active == 'true'" C-REF:test-bun.steps.
-vars_step_if y-vars-toJSON-needs "!contains(toJSON(needs), 'active')" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-toJson-lower "!contains(toJson(needs), 'active')" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-toJSON-vars "toJSON(vars) != ''" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-needs-star "!contains(needs.*.result, 'failure')" C-VARS:jobs.test-bun.steps.
-vars_step_if y-vars-format-needs "contains(format('{0}', needs), 'x')" C-VARS:jobs.test-bun.steps.
-BUN_RUN_ENV="        run: bash scripts/test-all.sh bun
-        env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}"
-mutate_yml y-vars-step-env "$BUN_RUN_ENV" "$BUN_RUN_ENV
-          SW: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:jobs.test-bun.steps.
-mutate_yml y-vars-job-env "$BUN_HDR" "$BUN_HDR
-    env:
-      SW: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:jobs.test-bun.env.
-mutate_yml y-vars-moved-read "SWITCH: \${{ vars.CI_PR_AFFECTED }}" "OTHER: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:jobs.pr-selection.steps.
-mutate_yml y-vars-double-read "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_IF && vars.CI_PR_AFFECTED != 'x'")" prcensus C-VARS:jobs.pr-selection.if:2
 # the oracle-reference census (structural seat, #12156): a step-level `if:` reading oracle-selection outputs on a
 # NON-whitelisted step is a hidden skip — the job still concludes `success` while the work never ran. One on a lane
 # leg's run step, one inside the aggregator (test.steps.*.if is also not on the whitelist).
@@ -1641,8 +1328,10 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 120 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 120), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+# Floor re-pinned 2026-11-09 (S4 retirement): the pr-selection driver/lever mutation block retired with
+# the lever, so the battery measures 82 mutants+controls (was 120+). All 82 are caught.
+if [ "$MUT_RUN" -ge 82 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 82), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a

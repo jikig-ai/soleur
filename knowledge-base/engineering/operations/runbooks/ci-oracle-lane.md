@@ -14,9 +14,9 @@ manifest), `scripts/ci-oracle-lane-legs.tsv` (the K=5 leg assignment), `scripts/
 
 ## What the lane is
 
-A repair diff that touches only oracle data — `scripts/ci-pr-affected-audit.accept.tsv`,
-the `AFFECTED_*_PATHS` edge arrays inside
-`scripts/lib/test-affected-paths.sh`, plus documentation (`knowledge-base/**/*.md`, root `*.md`) —
+A repair diff that touches only oracle data — the `AFFECTED_*_PATHS` edge arrays inside
+`scripts/lib/test-affected-paths.sh` (in-extent hunks only), plus documentation
+(`knowledge-base/**/*.md`, root `*.md`; the audit accept-table member retired with S4, 2026-11-09) —
 changes no executable path, so the full battery proves nothing about it. The `oracle-selection` job in
 `.github/workflows/ci.yml` classifies a `pull_request` or `merge_group` diff once per run; when EVERY changed
 path is inside that surface the five heavy `test` legs (`test-webplat`, `test-bun`, `test-scripts`,
@@ -71,7 +71,7 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
   parsed safely (>500 files is `too_many_files`).
 - `non_oracle_status`, `non_oracle_mode`, `odd_path` — a changed entry carried a status outside M/A/D, a mode
   outside {000000,100644,100755}, or a non-printable/`::`/`,`-containing path.
-- `excluded` — a committed exclusion-list path (`scripts/ci-pr-affected-replay.py`, `scripts/test-all.sh`,
+- `excluded` — a committed exclusion-list path (`scripts/test-all.sh`,
   `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`, other `scripts/lib/**`, and the lane's own
   machinery: `scripts/ci-oracle-lane.sh`, `scripts/ci-oracle-lane.test.sh`, `scripts/ci-oracle-lane-suites.txt`,
   `scripts/ci-oracle-lane-legs.tsv`).
@@ -148,8 +148,8 @@ canary per step 3.
    <base.ref>` then `git diff $(git merge-base <p2> FETCH_HEAD) <p2>` — neither endpoint is the merge
    ref itself (#12418); `merge_group`: the payload's `head_sha`/`base_sha`
    (`gh api repos/{owner}/{repo}/actions/runs/<id>` → `.head_sha`; the base is the batch's base commit). Then
-   diff `base..head` and re-apply the surface check mentally — every path must be accept.tsv, an in-extent
-   `AFFECTED_*_PATHS` hunk, or a doc path. The expected `would_skip` list is the FIVE legs, or the FOUR-leg
+   diff `base..head` and re-apply the surface check mentally — every path must be an in-extent
+   `AFFECTED_*_PATHS` hunk or a doc path (the audit accept-table member retired with S4, 2026-11-09). The expected `would_skip` list is the FIVE legs, or the FOUR-leg
    variant (`test-webplat` retained) when the diff touched `knowledge-base/engineering/architecture/diagrams/*`
    — the diagrams carve-out, which keeps the web-platform leg because diagrams feed its surface.
 3. **Authorized activation PR** (executed by #12300, merged 2026-11-08): remove the
@@ -178,19 +178,21 @@ and the sentinel registrations.
 
 ## After any driver edit: the sentinel
 
-`scripts/ci-oracle-lane.sh` and `scripts/ci-pr-selection.sh` carry parallel merge-ref/diff plumbing that can
-drift (ruling T5) — a fix to one is consciously ported to the other, never assumed to transfer.
+`scripts/ci-oracle-lane.sh` is the surviving consumer of the merge-ref/diff plumbing it once shared with
+the S4 selector driver (retired 2026-11-09 — the ruling-T5 porting discipline applies to any
+future classifier of the same shape).
 
 **Ports landed (dated):** the #12418 three-dot diff-base fix was ported to `scripts/ci-pr-selection.sh` as
-#12484 (2026-11-09) — the selector's `pull_request` diff is now `merge-base(HEAD^2, live base)..HEAD^2` with
-the same `bad_base_ref`/`base_fetch`/`no_merge_base` fail-closed reasons and the same refs/heads/-pinned
-unconditional fetch, wired from `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` in the pr-selection
-step env. One deliberate ordering difference, per each driver's own doctrine: the oracle resolves the base
-after its pre-classification switch gate; the selector resolves it after the cheap env gates (event, merge
-shape, fork, re-run) and before the listing, because its stage 1 runs on every well-formed `pull_request` run.
-A second deliberate divergence, same T5 doctrine: the selector's base fetch is wrapped in `timeout 30`
-(`GUARD:G2-BASE-FETCH`) while the oracle's fetch stays unguarded — a bound considered for back-port as a
-follow-up.
+#12484 (2026-11-09; the selector was retired the same day) — the selector's `pull_request` diff became
+`merge-base(HEAD^2, live base)..HEAD^2` with the same `bad_base_ref`/`base_fetch`/`no_merge_base` fail-closed
+reasons and the same refs/heads/-pinned unconditional fetch, wired from
+`PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` in the pr-selection step env. One deliberate
+ordering difference, per each driver's own doctrine: the oracle resolves the base after its
+pre-classification switch gate; the selector resolved it after the cheap env gates (event, merge shape,
+fork, re-run) and before the listing, because its stage 1 ran on every well-formed `pull_request` run.
+A second deliberate divergence, same T5 doctrine, still OPEN against the surviving driver: the selector's
+base fetch was wrapped in `timeout 30` (`GUARD:G2-BASE-FETCH`) while the oracle's fetch stays unguarded —
+a bound still considered for back-port as a follow-up.
 
 After ANY edit
 to the driver, the manifest, the leg `if:` conjuncts, the aggregator arm or the push-dedupe proof:

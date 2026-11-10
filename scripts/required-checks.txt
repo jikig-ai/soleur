@@ -258,31 +258,19 @@ sentry-destroy-required
 #      protect. Do not add it.
 vendor-pin-required
 
-# #10859 — ci.yml `affected-index-ratchet` (PR3b flip, ADR-276 ruling (a) of
-# 2026-11-06): the affected-index audit as a strict-zero ratchet, advisory since
-# PR3a, required now that the observation window certified PASS and the budget
-# owner ruled. The job runs on pull_request and merge_group only (written
-# positively) — a required context must report on every PR.
-#
-# ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: ALLOWED_PATHS =
-# {knowledge-base/project/weakness-digest.md} and the ratchet's live set is
-# computed from suite files and their named paths; a bot PR touches no suite
-# file, so live minus accepted is unchanged and the synthetic green equals the
-# real verdict (ADR-139 per-gate rule; re-derive if ALLOWED_PATHS widens).
-affected-index-ratchet
-
 # #10859 — ci.yml `oracle-review-required` (PR3b, ADR-276 ruling (a) of
-# 2026-11-06): the bound owner-review sentinel for the affected-index oracle
-# surface — the only arm of this feature's oracle control. pull_request: the
-# BASE commit's RATCHET_ORACLE ∩ diff must be empty, the author deruelle, or a
+# 2026-11-06): the bound owner-review sentinel for the oracle surface
+# (scripts/ci-oracle-surface.txt — re-scoped off the retired replay.py
+# RATCHET_ORACLE by the S4 retirement of 2026-11-09). pull_request: the
+# BASE commit's resolved oracle list ∩ diff must be empty, the author deruelle, or a
 # deruelle APPROVED review bound to the head SHA must exist; merge_group: every
 # member's queued head must show its LATEST oracle-review-required check-run
 # completed/success (the self-loop is closed by member enumeration, never
 # self-report). Fail-closed on every unknown.
 #
 # ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: the pull_request arm
-# classifies on the BASE commit's RATCHET_ORACLE, and ALLOWED_PATHS ∩
-# RATCHET_ORACLE = ∅ (pinned by
+# classifies on the BASE commit's resolved oracle list, and ALLOWED_PATHS ∩
+# oracle surface = ∅ (pinned by
 # plugins/soleur/test/bot-synthetic-unreachability.test.sh), so every bot PR is
 # verdict `not-oracle` and the synthetic green asserts exactly that — never a
 # fabricated review act. The residual goes LIVE the instant an oracle path is

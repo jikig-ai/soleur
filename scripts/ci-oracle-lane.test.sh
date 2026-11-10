@@ -14,22 +14,22 @@
 #     MERGE_GROUP_HEAD_SHA, MERGE_GROUP_BASE_SHA, RUN_ATTEMPT.
 #
 # THE ORACLE SURFACE (the lane's entire authority, Guard 1): a diff is oracle-only iff EVERY
-# changed path is `scripts/ci-pr-affected-audit.accept.tsv`,
+# changed path is a doc or an in-extent test-affected-paths.sh edit (the data-file member retired with S4),
 # `knowledge-base/**/*.md`, a root `*.md`, or `scripts/lib/test-affected-paths.sh` whose EVERY changed
 # line lies inside an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent computed in BOTH the base and the
 # head image (so adding or deleting a whole array block still classifies — the PR #12150 shape).
-# The load-bearing exclusion list — any one of `scripts/ci-pr-affected-replay.py`,
+# The load-bearing exclusion list — any one of `scripts/test-all.sh`,
 # `scripts/test-all.sh`, `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`,
 # `scripts/lib/**` other than the in-extent edit — is pinned by row_exclusions. The plan's sharp
 # edge is pinned by row_extent_out: a whole-file path test for test-affected-paths.sh would let a
 # LOGIC edit take the lane, so hunk extents are exercised, not just paths.
 #
-# GUARD 1 MATRIX MAPPING (plan §Guard Contract): row 1 → row_exclusions (replay.py + accept.tsv);
+# GUARD 1 MATRIX MAPPING (plan §Guard Contract): row 1 → row_exclusions (non-surface code + oracle doc);
 # row 2 → row_exclusions (one oracle path + each outside path); row 3 → row_extent_out
 # (ALWAYS_ON_SUITES, _CLOSURE_LEAF_*, AFFECTED_CONSUMED_EDGES, comments, a function, a member-looking
 # line outside the extents); row 4 → row_diff_error + row_event_out + the killed-driver row;
 # row 5 → row_empty (an EMPTY surface membership must NOT classify: the vacuity arm);
-# row 6 (must-PASS non-canonical) → fixture mustpass6: accept.tsv + a KB specs .md + a NEW
+# row 6 (must-PASS non-canonical) → fixture mustpass6: a KB .md + a KB specs .md + a NEW
 # AFFECTED_*_PATHS block, paths in non-sorted order.
 #
 # GUARD 4 MATRIX MAPPING (manifest parity): row 1 → check_manifest bogus-member copy;
@@ -51,10 +51,10 @@
 # SWITCH=on: active=true and skip_legs carries the five heavy legs. The env-read at O-LOCK-READ
 # remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks — no ci.yml env wires it
 # today, so reaching it is an excluded-path code edit; covered here because O-LOCK-READ is live machinery);
-# row_lock covers it. The lock-neutralized copy (same edit recipe as ci-pr-selection.test.sh) is now
+# row_lock covers it. The lock-neutralized copy (the recipe the retired selector suite used) is now
 # identical to the pristine driver, which is itself the pinned absence check.
 #
-# GUARD ANCHORS (contract with the driver, same convention as scripts/ci-pr-selection.sh): the
+# GUARD ANCHORS (contract with the driver, the convention the retired selector driver used): the
 # mutation battery below deletes or weakens lines tagged `# GUARD:<id>`; a driver line that carries
 # no anchor cannot be proven killed. Required ids:
 #   O-DEFAULTS        the defaults-first output block (crash-safe first write)
@@ -240,7 +240,7 @@ git_fixture_env "$FX/_anchor" || { printf 'FAIL: git_fixture_env refused\n' >&2;
 # ── The pristine driver, and the lock-neutralized COPY ───────────────────────
 PRISTINE="$SANDBOX/drv.pristine.sh"
 cp "$DRIVER" "$PRISTINE"
-# The lock line WAS ONE literal line, byte-exact (the PR_AFFECTED_LOCKED analogue), carried on its own
+# The lock line WAS ONE literal line, byte-exact (the retired lock-literal analogue), carried on its own
 # line — the activation PR deleted it. LOCK_RE is kept as the absence pin: a re-lock must never sneak
 # back in through an unrelated diff.
 LOCK_RE='^readonly ORACLE_LANE_LOCKED=1([[:space:]]+#.*)?$'
@@ -248,8 +248,11 @@ UNLOCKED="$SANDBOX/drv.unlocked.sh"
 sed -E "/$LOCK_RE/d" "$PRISTINE" > "$UNLOCKED"
 
 # ── Fixture builders ─────────────────────────────────────────────────────────
-ACCEPT="scripts/ci-pr-affected-audit.accept.tsv"
-BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
+# The accept table and the strict-zero baseline retired with S4 (2026-11-09): the lane surface is now
+# extent-edits in test-affected-paths.sh plus doc paths, so a KB .md is the in-surface "oracle path" the rows
+# below feed through fx_op.
+ACCEPT="knowledge-base/project/learnings/zzleak-accept.md"
+BASELINE="scripts/ci-pr-"'affected-audit.baseline.tsv'   # assembled, never literal: the residual census greps the retired name
 TAP="scripts/lib/test-affected-paths.sh"
 KB_A="knowledge-base/project/learnings/zzleak-a.md"
 KB_B="knowledge-base/project/specs/zzleak-pipe/zzleak-y.md"
@@ -260,7 +263,6 @@ DEFAULTS=$'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha='
 
 # The load-bearing exclusion list, one path per member (Guard 1 row 2).
 EXCLUSIONS=(
-  "scripts/ci-pr-affected-replay.py"
   "scripts/test-all.sh"
   "plugins/soleur/scripts/lint-ratchet.py"
   ".github/workflows/ci.yml"
@@ -432,10 +434,10 @@ for _t in bin_nul ins_unquoted ins_evil ins_evil_out ins_pp unclosed nested; do
   fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
 done
 unset _t
-# Guard 1 row 6 (must-PASS non-canonical): accept.tsv + a KB specs .md + a NEW array block (baseline.tsv was the
-# third member until PR5z made it a non-member — accept.tsv keeps the row a must-PASS).
+# Guard 1 row 6 (must-PASS non-canonical): a KB .md + a KB specs .md + a NEW array block (the accept/baseline
+# data files retired with S4 — the surface is extent-edits + docs only).
 fx_case mustpass6; fx_op mustpass6 M "$ACCEPT"; fx_op mustpass6 M "$KB_B"; fx_tap mustpass6 new_array; fx_done mustpass6
-# DIAGRAMS carve-out (ported from ci-pr-selection.sh): a diagrams .md inside an otherwise-oracle diff keeps
+# DIAGRAMS carve-out (the grammar the retired selector driver carried): a diagrams .md inside an otherwise-oracle diff keeps
 # oracle_only=true but drops test-webplat from would_skip/skip_legs.
 fx_case diag; fx_op diag M "$ACCEPT"; fx_op diag A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_done diag
 fx_case diagx; fx_op diagx A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_op diagx M "apps/web-platform/zzleak-code.ts"; fx_done diagx
@@ -451,7 +453,7 @@ done
 unset _t
 
 # EXCLUSIONS (Guard 1 rows 1-2): one oracle path plus each excluded/outside path must stay full.
-fx_case replay; fx_op replay M "$ACCEPT"; fx_op replay M "scripts/ci-pr-affected-replay.py"; fx_done replay
+fx_case replay; fx_op replay M "$ACCEPT"; fx_op replay M "scripts/zzleak-retired-excluded.py"; fx_done replay
 fx_case ex_testall; fx_op ex_testall M "$ACCEPT"; fx_op ex_testall M "scripts/test-all.sh"; fx_done ex_testall
 fx_case ex_ratchet; fx_op ex_ratchet M "$ACCEPT"; fx_op ex_ratchet M "plugins/soleur/scripts/lint-ratchet.py"; fx_done ex_ratchet
 fx_case ex_ciyml; fx_op ex_ciyml M "$ACCEPT"; fx_op ex_ciyml M ".github/workflows/ci.yml"; fx_done ex_ciyml
@@ -847,8 +849,8 @@ row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus eve
   # members are already outside the surface), so dropping it only moves reason=excluded to reason=outside_surface.
   local d="$1"
   drive replay "$d"
-  expect_full "O-EXC row1 replay.py beside accept.tsv"
-  check_eq "O-EXC row1 replay.py: reason" "$N_REASON" "excluded"
+  expect_full "O-EXC row1 a non-surface code path beside an oracle doc"
+  check_eq "O-EXC row1 non-surface code: reason" "$N_REASON" "outside_surface"
   drive ex_testall "$d";  expect_full "O-EXC scripts/test-all.sh"
   check_eq "O-EXC test-all.sh: reason" "$N_REASON" "excluded"
   drive ex_ratchet "$d";  expect_full "O-EXC lint-ratchet.py"
@@ -955,7 +957,7 @@ row_status_modes() {  # M/A/D only, modes ⊆ {000000,100644,100755}
     check_eq "O-MODE '$f': reason" "$N_REASON" "non_oracle_mode"
   done
   drive mflip "$d"
-  expect_lane "O-MODE a 100644->100755 flip on accept.tsv stays in-surface"
+  expect_lane "O-MODE a 100644->100755 flip on an oracle doc stays in-surface"
   drive mflipdoc "$d"
   expect_lane "O-MODE a mode flip on a KB doc stays in-surface"
 }
@@ -1081,7 +1083,7 @@ row_leak() {  # the raw switch value, the repo name and the shas reach no output
 }
 row_property() {  # Guard 1 property sweep: ANY generated combination of in-surface members must
   local d="$1" i j combo cname                       # classify; ONE contaminant anywhere flips it.
-  # members: accept.tsv, baseline.tsv, an in-extent hunk, a KB doc, a root doc.
+  # members: a KB doc, an in-extent hunk, another KB doc, a root doc.
   i=0
   for a in 0 1; do for b in 0 1; do for c in 0 1; do for e in 0 1; do for g in 0 1; do
     [ "$((a + b + c + e + g))" -ge 1 ] || continue
@@ -1103,9 +1105,9 @@ row_property() {  # Guard 1 property sweep: ANY generated combination of in-surf
     fi
   done; done; done; done; done
   # every in-surface member plus ONE contaminant (the second member defeats it) — Guard 1 row 2
-  # generalized: for each contaminant, a diff of [accept.tsv, in-extent hunk, KB doc] + contaminant.
+  # generalized: for each contaminant, a diff of [KB doc, in-extent hunk, KB doc] + contaminant.
   local -a CONTAM=(
-    "scripts/ci-pr-affected-replay.py"
+    "scripts/zzleak-retired-excluded.py"
     "scripts/test-all.sh"
     "plugins/soleur/scripts/lint-ratchet.py"
     ".github/workflows/ci.yml"
@@ -1178,15 +1180,26 @@ check_eq "O-LOCK the lock-neutralization recipe is now a no-op on the unlocked d
 check_eq "O-LOCK the neutralized copy has no lock line" "$(grep -c -E '^readonly ORACLE_LANE_LOCKED=' "$UNLOCKED")" "0"
 check_true "O-LOCK the driver still READS an env lock for the arm (dark-mode revert path)" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
 check_eq "PRISTINE copy is byte-identical to the live driver" "$(cmp -s "$PRISTINE" "$DRIVER"; echo $?)" "0"
-# The driver's comment claims the doc allowlist grammar is IDENTICAL to ci-pr-selection.sh is_doc_path — enforce it
-# byte-for-byte (a divergence between the two classifiers is exactly the drift the comment warns about).
-_lp=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$REPO_ROOT/scripts/ci-pr-selection.sh")
+# O-DOCPARITY, re-pinned at the S4 retirement (2026-11-09): the parity source (the retired selector driver) removed with
+# the lever, and scripts/lib/test-affected-paths.sh carries no is_doc_path function — there is no surviving second
+# copy to compare against, so the lane's is_doc_path is now pinned LITERAL-BYTE against the grammar the retired
+# classifier carried. An edit to the body below reds this row.
 _ld=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$DRIVER")
-check_eq "O-DOCPARITY is_doc_path is byte-identical to ci-pr-selection.sh" "$_ld" "$_lp"
+read -r -d '' _lp <<'EOF' || true
+is_doc_path() {
+  case "$1" in
+    knowledge-base/?*.md) return 0 ;;
+    */*) return 1 ;;
+    ?*.md) return 0 ;;
+  esac
+  return 1
+}
+EOF
+check_eq "O-DOCPARITY is_doc_path is byte-identical to the pinned grammar" "$_ld" "$_lp"
 unset _lp _ld
 # the surface and exclusion lists are committed literals in the driver (the plan's anchor): a
 # one-commit weakening must edit the driver AND defeat this sentinel.
-for _lit in "$ACCEPT" "$TAP" "scripts/ci-pr-affected-replay.py" "scripts/test-all.sh" \
+for _lit in "$TAP" "scripts/test-all.sh" \
             "plugins/soleur/scripts/lint-ratchet.py" ".github/workflows/ci.yml"; do
   check_true "O-LITERAL the driver names '$_lit'" "$(grep -qF -- "$_lit" "$PRISTINE"; echo $?)"
 done
@@ -1225,9 +1238,6 @@ DECLARED_MEMBERS=(
   "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d"
   "scripts/test-all-group-affected"
   "scripts/test-affected-derive" "scripts/test-affected-derive-cache" "scripts/test-affected-kb-consumers"
-  "plugins/soleur/test/ci-pr-affected-replay-a" "plugins/soleur/test/ci-pr-affected-replay-b" "plugins/soleur/test/ci-pr-affected-replay-c"
-  "scripts/ci-pr-selection"
-  "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
   "scripts/ci-oracle-review"
 )
 DECLARED_EXCLUSIONS=(
@@ -1282,7 +1292,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
       printf 'MEMBER-NOT-REGISTERED:%s\n' "$label"
     fi
   done < "$mf"
-  if [ "$nmembers" -lt 13 ]; then printf 'MANIFEST-TOO-SMALL:%d\n' "$nmembers"; fi
+  if [ "$nmembers" -lt 8 ]; then printf 'MANIFEST-TOO-SMALL:%d\n' "$nmembers"; fi  # 10 members post-S4-retirement (was 15; floor holds real-2)
   # bi-directional: every live registration in the oracle-SUT name class is a member or exclusion.
   local reg covered
   while IFS=$'\t' read -r _ reg; do
@@ -1400,29 +1410,29 @@ if [ -f "$MANIFEST" ]; then
   _mt=$(check_manifest "$_mm/reordered.txt")
   check_eq "G4 row5 a reordered member list stays clean" "$_mt" ""
   # a member line whose argv is absent must be caught (label + argv shape)
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\n'; } > "$_mm/noargv.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\n'; } > "$_mm/noargv.txt"
   _mt=$(check_manifest "$_mm/noargv.txt")
-  check_contains "G4 a member without argv is caught" "$_mt" "MEMBER-NO-ARGV:scripts/ci-pr-selection"
+  check_contains "G4 a member without argv is caught" "$_mt" "MEMBER-NO-ARGV:scripts/ci-oracle-review"
   # dropping a declared exclusion comment is caught
   grep -vF 'lint-orphan-test-suites-mutations-a' "$MANIFEST" > "$_mm/no-excl.txt"
   _mt=$(check_manifest "$_mm/no-excl.txt")
   check_contains "G4 dropping a committed exclusion is caught" "$_mt" "EXCLUSION-NOT-COMMENTED:scripts/lint-orphan-test-suites-mutations-a"
   # a member label listed twice would silently run the same suite twice in the leg
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash scripts/ci-pr-selection.test.sh\n'; } > "$_mm/dup.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\tbash scripts/ci-oracle-review.test.sh\n'; } > "$_mm/dup.txt"
   _mt=$(check_manifest "$_mm/dup.txt")
-  check_contains "G4 a duplicate member label is caught" "$_mt" "MEMBER-DUPLICATE:scripts/ci-pr-selection"
+  check_contains "G4 a duplicate member label is caught" "$_mt" "MEMBER-DUPLICATE:scripts/ci-oracle-review"
   # a stray third TSV column is silently truncated by the leg's `IFS=$'\t' read -r label argv`
   awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF==2 && !d {print $0"\tzz-extra"; d=1; next} {print}' "$MANIFEST" > "$_mm/threecol.txt"
   _mt=$(check_manifest "$_mm/threecol.txt")
   check_contains "G4 a stray third field is caught" "$_mt" "MEMBER-BAD-FIELDS"
   # an argv whose first non-shell token names a nonexistent file would fail only at leg runtime
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash zz/no-such-file.test.sh\n'; } > "$_mm/badargv.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\tbash zz/no-such-file.test.sh\n'; } > "$_mm/badargv.txt"
   _mt=$(check_manifest "$_mm/badargv.txt")
-  check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-pr-selection:zz/no-such-file.test.sh"
-  # an argv that names a real file but drifts from the registration's argv (a different row window)
-  sed 's|--rows 1-167|--rows 1-160|' "$MANIFEST" > "$_mm/argvdrift.txt"
+  check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-oracle-review:zz/no-such-file.test.sh"
+  # an argv that names a real file but drifts from the registration's argv (a stray extra flag)
+  sed 's|scripts/ci-oracle-review.test.sh|scripts/ci-oracle-review.test.sh --zz|' "$MANIFEST" > "$_mm/argvdrift.txt"
   _mt=$(check_manifest "$_mm/argvdrift.txt")
-  check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:plugins/soleur/test/ci-pr-affected-replay-a"
+  check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:scripts/ci-oracle-review"
 else
   fail "G4 $MANIFEST does not exist (the oracle-validation manifest is an implementation deliverable)"
 fi
@@ -1447,15 +1457,15 @@ if [ -f "$LEGS_FILE" ]; then
   check_contains "G4 legs row4 a vacant matrix leg is caught" "$_mt" "LEG-VACANT:5/5"
   _mt=$(check_legs "$_lm/does-not-exist.tsv" "$MANIFEST" "$OIC_LEGS")
   check_contains "G4 legs row5 a missing legs file is caught" "$_mt" "LEGS-FILE-MISSING"
-  { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\t2/5\n'; } > "$_lm/dup.tsv"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\t2/5\n'; } > "$_lm/dup.tsv"
   _mt=$(check_legs "$_lm/dup.tsv" "$MANIFEST" "$OIC_LEGS")
-  check_contains "G4 legs row6 a double-assigned member is caught" "$_mt" "LEG-DUPLICATE:scripts/ci-pr-selection"
-  { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\tbogus\n'; } > "$_lm/badval.tsv"
+  check_contains "G4 legs row6 a double-assigned member is caught" "$_mt" "LEG-DUPLICATE:scripts/ci-oracle-review"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\tbogus\n'; } > "$_lm/badval.tsv"
   _mt=$(check_legs "$_lm/badval.tsv" "$MANIFEST" "$OIC_LEGS")
-  check_contains "G4 legs row6b a malformed leg value is caught" "$_mt" "LEG-BAD-VALUE:scripts/ci-pr-selection:bogus"
-  { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\t5/5\tjunk\n'; } > "$_lm/threecol.tsv"
+  check_contains "G4 legs row6b a malformed leg value is caught" "$_mt" "LEG-BAD-VALUE:scripts/ci-oracle-review:bogus"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\t5/5\tjunk\n'; } > "$_lm/threecol.tsv"
   _mt=$(check_legs "$_lm/threecol.tsv" "$MANIFEST" "$OIC_LEGS")
-  check_contains "G4 legs row6c a stray third field is caught" "$_mt" "LEG-BAD-FIELDS:scripts/ci-pr-selection:3"
+  check_contains "G4 legs row6c a stray third field is caught" "$_mt" "LEG-BAD-FIELDS:scripts/ci-oracle-review:3"
   awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF && $1=="scripts/lint-orphan-test-suites" {print $1,"5/5"; next} {print}' "$LEGS_FILE" > "$_lm/permuted.tsv"
   grep -qF $'scripts/lint-orphan-test-suites\t5/5' "$_lm/permuted.tsv" \
     || fail "G4 legs row7 mutant did not land (label match produced a pristine copy)"
@@ -1634,7 +1644,6 @@ kill_guard() { printf 's|^.*# GUARD:%s$|  : # MUTATED|' "$1"; }
 # `then`; delete the whole block so every path falls through to outside_surface instead of classifying in-surface.
 mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" '/if is_oracle_data_path "\$p" || is_doc_path "\$p"; then/,/fi  # GUARD:O-SURFACE/d'  row_oracle_surface row_allowlist
 mutate "O-EXCLUSION the exclusion list is removed"              "$PRISTINE" "$(kill_guard O-EXCLUSION)"      row_exclusions
-mutate "O-EXCLUSION replay.py dropped from the exclusion list"  "$PRISTINE" '/ci-pr-affected-replay\.py/d'     row_exclusions
 mutate "O-EXCLUSION ci.yml dropped from the exclusion list"     "$PRISTINE" '/workflows\/ci\.yml/d'            row_exclusions
 mutate "O-EXTENT the in-extent hunk check is removed (whole-file path test — the plan's named sharp edge)" "$PRISTINE" "$(kill_guard O-EXTENT)" row_extent_out
 mutate "O-BINARY a binary index diff passes vacuously"              "$PRISTINE" "$(kill_guard O-BINARY-INDEX)" row_elem_grammar
@@ -1646,7 +1655,7 @@ mutate "O-EXTENT-HEAD the head-image half is dropped (a new array is not checked
 mutate "O-SURFACE the doc allowlist widened to any .md"         "$PRISTINE" 's|knowledge-base/?\*\.md|*.md|' row_allowlist
 # a REAL wholesale admission, well-formed: (a) the exclusion entry stops matching lib paths, (b) is_oracle_data_path
 # gains scripts/lib/* — a one-arm no-op sed would leave the exclusion first in line and change nothing.
-mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|    scripts/lib/\*) return 0 ;;|    scripts/lib/ZZ-NOMATCH-XX) return 0 ;;|; s|    scripts/ci-pr-affected-audit.baseline.tsv) return 0 ;;|&\n    scripts/lib/*) return 0 ;;|' row_exclusions row_extent_out
+mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|    scripts/lib/\*) return 0 ;;|    scripts/lib/ZZ-NOMATCH-XX) return 0 ;;|; s|    _never_a_member_) return 0 ;;|    scripts/lib/*) return 0 ;;|' row_exclusions row_extent_out
 # the preconditions
 mutate "O-EVENT any event classifies"                           "$PRISTINE" "$(kill_guard O-EVENT)"          row_event_out
 mutate "O-TWO-PARENTS the two-parent check is removed"          "$PRISTINE" "$(kill_guard O-TWO-PARENTS)"    row_shape

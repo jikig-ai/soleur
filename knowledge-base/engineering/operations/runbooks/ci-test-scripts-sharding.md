@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=476 → 1-158/159-316/317-476, re-pinned 2026-11-07 with the PR3b accept-bound mutants) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -347,11 +347,11 @@ span to the NEXT registered mark.
   PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
   `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
   spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
-  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  the retired replay battery's median 1,322,511 ms (~22 min) and
   `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
   green runs, both on legs already holding ~10 min of other work. Suite
   sums ≈ wall clock (queue time was not the driver). Split to
-  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-158/159-316/317-473` of 473)
+  the retired replay triple's `--rows` arms (1-158/159-316/317-473 of 473)
   and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
   inside the same relevance gates; arm prices seeded at CI-median × local
   arm-share — the first green run carrying real arm timings is the
@@ -514,8 +514,7 @@ cannot execute.
 2. **Relevance**: shared `<NAME>_PATHS` array in
    `scripts/lib/test-relevance-paths.sh` + `RELEVANCE_ARRAYS` row in
    `scripts/lint-orphan-test-suites.sh`; `AFFECTED_CONSUMED_EDGES` rows per
-   arm label in `scripts/lib/test-affected-paths.sh`; `is_pr_gated_decline`
-   in `scripts/ci-pr-selection.sh`; `GATED` rows in
+   arm label in `scripts/lib/test-affected-paths.sh`; `GATED` rows in
    `scripts/test-all-infra-coverage-notice.test.sh`; pr-battery-gate
    constants (`L_*`/`ARRAYS`/`own_file`/`add_arm`/`arm_id`) in
    `scripts/test-all-pr-battery-gate.test.sh`.
@@ -528,9 +527,9 @@ cannot execute.
    --write` for both TSVs — the distinct-legs post-pass must pin each
    `-<letter>` sibling on a different leg.
 5. **Guards**: re-pin totality-mutations' verbatim `run_suite … --rows`
-   anchors if the argv lines moved; run the affected-index ratchet and add
-   declared edges or accept rows for every newly flagged (suite, path)
-   pair.
+   anchors if the argv lines moved; add declared edges in
+   `scripts/lib/test-affected-paths.sh` for every newly flagged (suite, path)
+   pair (the accept-table path retired with S4, 2026-11-09).
 6. **Seeding prices**: a hand-seeded arm price stamps `src=estimate` in
    `scripts/suite-durations.tsv` — never `measured`. An estimate supplies
    weight but stays out of the floor median and the measured-only drift
