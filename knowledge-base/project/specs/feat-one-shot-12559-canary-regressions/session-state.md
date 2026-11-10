@@ -24,3 +24,14 @@
 ## Operator Constraints
 
 - constraint: canary #12557 should be confirmed green-and-merged first — it is the live proof the post-apply producer set covers all 11 contexts on merge_group.
+
+## Work Phase
+
+- Status: complete; commit f30c0a45b6 pushed.
+- Verification (run after the plan-phase timeout above): `bash scripts/test-affected-kb-consumers.test.sh` → 31/31 green in this worktree; `bash scripts/markdown-lint.sh --repo-sweep` → 1903 files clean; markdownlint on ADR-276 → zero findings; baseline diff = exactly the five predicted two-column rows.
+- Affected-gate note: `test-all.sh --affected` reported one unrelated timeout flake (`skill-security-scan` calibration, 180s cap exceeded at load ~40; isolated re-run green at 42.8s) — tracked as #12583.
+
+## Review Phase
+
+- Panel: 4 seats (non-code class) — git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst. PANEL_SHA f30c0a45b6.
+- Findings: zero P1/P2. P3: security-sentinel informational — the bare `knowledge-base` row is the widest of the five (same breadth as the existing ci-oracle-lane rows; design-inherent, exact-tuple match means non-dir-string refs still flag); code-quality P3s fixed inline (tasks.md checkboxes, this provenance note).
