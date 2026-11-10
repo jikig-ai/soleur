@@ -59,7 +59,7 @@ Technical forks raised while planning #12517, each ruled by the CTO agent (bindi
 
 ## Review rulings (PR #12518 review, 2026-11-10)
 
-| Decision | Kind | Ruling |
+| Item | Class | Ruling |
 |---|---|---|
 | R36 credential on a CONNECT (structural map rows 8 and 12) | technical | Ruled by CTO agent, 2026-11-10: every `secrets` rule carries `methods: [GET, HEAD, POST, PUT, PATCH, DELETE]` as the primary control, and the hook passes a CONNECT only with the router credential, no tunnel context and SNI equal to the host (407 with a subreason otherwise), with c6 probes to http_listen, to https_listen over TLS and inside a tunnel - only the method filter holds on every listener |
 | R37 plain HTTP inside a tunnel (structural map row 2) | technical | Ruled by CTO agent, 2026-11-10: in step 0b the hook refuses any non-CONNECT request whose SNI is not its host (`guard-refused` `no-tls`, no row) and a plain-HTTP-in-tunnel c6 probe is scored - R28 vended plain HTTP and only the hook can tell TLS from plaintext |
