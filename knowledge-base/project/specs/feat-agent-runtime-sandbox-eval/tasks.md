@@ -51,6 +51,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - The CLI's own Messages API, settings and policy-limit calls go direct under production `NO_PROXY`; the `agent-env.ts` caveat does not hold for SDK 0.3.311 (R33).
 - The SDK sandbox's `denyRead` does not govern the Read tool; production's boundary is `canUseTool`'s file-tool containment, which the driver reuses. Bare `allowedTools` entries shadow `canUseTool`.
 - Name constraints hold for curl (OpenSSL), git (GnuTLS) and Node; a CN-only leaf for an inject host is accepted and one for a non-inject name rejected (R31).
+- The SDK raises a `SandboxNetworkAccess` permission request for every host outside the sandbox's `allowedDomains`; production's `createCanUseTool` has no arm for it and denies it as an unknown tool, entitled sessions included (filed as #12585, Phase 4, blocking #11637; CTO R34, R35). The driver answers it as the #11637 change must.
 - `gh=2.96.0` is no longer in the rolling apt repo; the image falls back to the newest, as production does (2.103.3 recorded).
 
 ## Phase 2: Run and record
