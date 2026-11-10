@@ -38,7 +38,7 @@ This plan makes execution placement-aware **at the app layer** (CTO ruling, 2026
   decides per class.
 - `portable` executes wherever the call lands (web-1 or web-2 — the issue's actual goal:
   losing web-1 no longer drops portable work).
-- `host-affine`, `volume-bound`, unknown, missing-fnId `forceExecution` and unclassifiable
+- `host-affine`, `volume-bound`, unknown and unclassifiable
   calls are forwarded **verbatim** — raw body, all signature headers, full query — to the
   exec host over pinned TLS, and the response is streamed back.
 - Fail-closed everywhere: a host that cannot establish it is the exec host **refuses** the
@@ -171,11 +171,11 @@ directly.
   deploy with an empty value → emit a distinct `placement.exec_identity_missing` error plus a
   no-SSH recovery step.
 - **T3:** pinned TLS reusing `PROXY_TLS_KEY`/`PROXY_TLS_CERT` (`loadProxyTlsClientCa`,
-  `rejectUnauthorized: true` — never false); receiver on the existing :8443 HTTPS server's
-  request handler or a sibling listener — implementer's choice, same material + private bind.
-  Unverified at ruling: whether the proxy cert carries IP SANs / what identity check the
-  existing dial performs — the implementer MUST reuse the existing dial shape, never write a
-  new one.
+  `rejectUnauthorized: true` — never false); receiver is a sibling listener, same
+  material + private bind (tightened at plan review — the :8443 wss server's 10 s hello
+  deadline would kill streamed HTTP steps). Verified post-ruling: `proxy-tls.ts` states
+  the cert carries SANs over every web host's private IP, so the default IP hostname
+  check passes — no `checkServerIdentity` override.
 - **T4:** primary target only; fallback (a) stays deferred (Non-Goals restates its triggers).
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -234,12 +234,12 @@ PUT and `?probe=` requests bypass the forwarder entirely):
 
 | Condition | Decision |
 |---|---|
-| Not a step call (GET/PUT/`?probe=`/no `fnId` and no `forceExecution`) | `execute` locally — unchanged semantics on any host |
+| Not a step call (GET/PUT/`?probe=`) | `execute` locally — unchanged semantics on any host |
 | Class `portable` | `execute` locally |
 | Class `host-affine`/`volume-bound`, host IS exec (`SOLEUR_HOST_PRIVATE_IP === "10.0.1.10"`) | `execute` locally |
 | Same, host NOT exec | `forward` to `https://10.0.1.10:8443/api/inngest` with `EXEC_FORWARD_HEADER` set, raw body + all headers + query preserved, streamed response |
 | Same, marked `EXEC_FORWARD_HEADER`, host NOT exec | `refuse` — loop-guard, never re-forward |
-| `SOLEUR_HOST_PRIVATE_IP` unset/empty | `refuse` with `placement.exec_identity_missing` (distinct error per T2 dissent) |
+| `SOLEUR_HOST_PRIVATE_IP` unset/empty | `refuse` — HTTP 503 (retriable, NEVER a `NonRetriable` shape: a late-NIC deploy must stall ticks, not kill runs) with the distinct `placement.exec_identity_missing` error |
 | fnId absent-but-step-shaped, or unknown after prefix/suffix strip | treated as pinned (fail-closed direction) |
 
 - **Marked requests are only honored on the private-TLS ingress.** The receiver on the
@@ -248,17 +248,23 @@ PUT and `?probe=` requests bypass the forwarder entirely):
   simplest honest implementation — the marker is only trusted because it arrived on the
   private listener; a forged marker on the public path fails signature or is ignored by the
   non-exec refusal rule).
-- **Signature verification stays where it is:** the non-exec host forwards raw bytes
-  without verifying; only the exec host's `serve()` verifies — a wrong-host call is refused
-  BEFORE signature work, which is safe because refusal leaks nothing the unsigned request
-  didn't already carry.
-- **Receiver options (implementer's choice per T3):** (i) a `request` handler for
-  `/api/inngest` on the existing 8443 HTTPS server inside `session-proxy.ts`
-  (`createServer` already exists; today only `upgrade` is consumed), or (ii) a sibling
-  `https.createServer` on a dedicated port using the same `loadProxyTlsServerOptions()`
-  material, published on the private IP. Option (i) needs no new port publish; if the
-  listener's publish is loopback-degraded (`net.ipv4.ip_nonlocal_bind` fallback), forwarding
-  fails closed → visible pinned-fn stall, which T3 accepted as the dependency.
+- **Signature gate before forwarding:** the non-exec host forwards only calls carrying an
+  `x-inngest-signature` header (missing → refuse; a rate-limited warn row logs the attempt)
+  and otherwise forwards raw bytes without verifying; only the exec host's `serve()`
+  performs the HMAC check. Without this, any public caller could POST `?fnId=<pinned>` and
+  reach web-1's private listener through web-2 — a surface that today admits only peers
+  (plan-review P5). A forged-but-present signature still cannot execute — the exec host
+  verifies.
+- **Receiver: a sibling `https.createServer` on a dedicated port** (e.g. 8444) using
+  `loadProxyTlsServerOptions()` material, bound to the private IP, reusing the relay's
+  peer admission (`isAllowedProxyPeer` / `SOLEUR_PROXY_PEER_ALLOWLIST`), published like
+  :8443 in ci-deploy.sh. It invokes the app's own `/api/inngest` handler **in-process**
+  (the `origin-tls.ts` pattern — a transport sharing every handler, never a second app).
+  The existing :8443 wss server is NOT the receiver: its `HELLO_DEADLINE_MS` (10 s)
+  destroys any socket that has not completed a WebSocket hello — an HTTP step call that
+  streams for minutes would be killed mid-run (plan-review P1). If the listener's publish
+  is loopback-degraded (`net.ipv4.ip_nonlocal_bind` fallback), forwarding fails closed →
+  visible pinned-fn stall, which T3 accepted as the dependency.
 - **Dial:** reuse `loadProxyTlsClientCa()` + the session-proxy dial shape
   (`{ ca, rejectUnauthorized: true }`) on an `https`/undici agent; if Node's default
   hostname check rejects the IP dial (cert SAN question flagged UNVERIFIED in T3), use the
@@ -366,7 +372,7 @@ forwarder live), not a future state.
   exports).
 - `server/inngest/exec-forward-client.ts`: the pinned-TLS outbound dial
   (`loadProxyTlsClientCa` + relay dial shape), verbatim body/header/query forwarding,
-  streamed response pass-through, bounded connect/read timeouts with a distinct
+  streamed response pass-through, a bounded connect timeout plus per-chunk idle timeout with a distinct
   `placement.forward_failed` error (fail-closed — never fall back to local execution).
 - Receiver: `request` handler for `/api/inngest` on the existing 8443 HTTPS server in
   `session-proxy.ts` (option (i)) OR sibling listener (option (ii)) — strips nothing,
@@ -409,7 +415,7 @@ forwarder live), not a future state.
   streamed forward.
 - `apps/web-platform/test/server/inngest/exec-placement-forward.test.ts` — Guard
   Contract suite (synthesized fixtures).
-- `apps/web-platform/test/server/inngest/exec-placement-probe.sh` — committed probe
+- `apps/web-platform/scripts/exec-placement-probe.sh` — committed probe
   script for the Observability discoverability test (prints `exec-placement: ok`).
 
 ## Files to Edit
@@ -441,13 +447,13 @@ forwarder live), not a future state.
 
 ### Guard 1 — served-set/classifier parity
 
-- **Property.** Every function id the `serve()` registry can receive resolves to exactly
+**Property.** Every function id the `serve()` registry can receive resolves to exactly
   one `EXECUTION_PLACEMENT` class through the forwarder's classifier — including
   `<id>-failure` handlers (inherit parent).
-- **Assembly.** The route's functions array (the serve() chokepoint — its own guard (a)
+**Assembly.** The route's functions array (the serve() chokepoint — its own guard (a)
   already pins the set), the classifier's strip rules, and the manifest keys. No second
   class table may exist — the forwarder imports `EXECUTION_PLACEMENT`, it does not copy.
-- **Mutation matrix.**
+**Mutation matrix.**
   | Mutation | Expected |
   |---|---|
   | Register a `cron-*.ts` function in the serve array with no manifest row | RED |
@@ -459,37 +465,37 @@ forwarder live), not a future state.
 
 ### Guard 2 — fail-closed direction (decision matrix)
 
-- **Property.** No code path executes a pinned-class (`host-affine`/`volume-bound`),
-  unknown-class, or unclassifiable step call on a non-exec host; a host that cannot
+**Property.** No code path executes a pinned-class (`host-affine`/`volume-bound`),
+  unknown-class, or unclassifiable step call on a non-exec host; a POST with no `fnId`/no `probe` is treated as pinned-class; a host that cannot
   establish exec identity refuses rather than guesses.
-- **Assembly.** Every branch of `decidePlacement`: method/marker/identity/class inputs —
+**Assembly.** Every branch of `decidePlacement`: method/marker/identity/class inputs —
   the chokepoint is the single decision function; the route handler must call it (wired
   in Phase 1) rather than re-implementing classification inline.
-- **Mutation matrix.**
+**Mutation matrix.**
   | Mutation | Expected |
   |---|---|
   | `SOLEUR_HOST_PRIVATE_IP` unset on a host receiving a pinned call | `refuse` (never `execute`) |
   | `SOLEUR_HOST_PRIVATE_IP` = `10.0.1.11` (web-2) + pinned call | `forward` to `10.0.1.10`, marker set |
   | Marked call arriving on non-exec host | `refuse` — never re-forward (loop) |
-  | `fnId` absent on a step-shaped POST (`forceExecution`) | `forward`, not `execute` |
+  | POST with no `fnId` and no `probe` | `forward` — the receiving SDK on the exec host rejects it; direction stays fail-closed |
   | `?probe=` request on non-exec host | `execute` locally (must-PASS — probes answer anywhere) |
   | GET/PUT registration on non-exec host | `execute` locally (must-PASS) |
   | Forwarder removed from the route (serve() exposed directly) | suite RED — a test asserts the POST export is wrapped, e.g. via a request-shaped probe asserting marker behavior |
 
 ### Guard 3 — forwarder wire fidelity
 
-- **Property.** A forwarded request is byte-faithful: identical method, path, full query
+**Property.** A forwarded request is byte-faithful: identical method, path, full query
   (incl. `fnId`), all signature headers and the raw body reach the exec host; the response
   streams back without buffering; the marker header is added and nothing else mutates the
   envelope.
-- **Assembly.** The forward function's single fetch call — method, URL construction,
+**Assembly.** The forward function's single fetch call — method, URL construction,
   header pass-through (minus Host), body pass-through, response pass-through, timeout
   config, TLS options (`ca` + `rejectUnauthorized: true`).
-- **Mutation matrix.**
+**Mutation matrix.**
   | Mutation | Expected |
   |---|---|
-  | Drop `x-inngest-signature` (or any inbound header) from the forward | RED (assert header-set equality modulo Host/marker) |
-  | Buffer the response body before returning | RED (assert the Response body is the upstream stream object) |
+  | Drop an inbound end-to-end header from the forward | RED (assert header-set equality modulo Host, the marker, and the RFC 7230 hop-by-hop set) |
+  | Buffer the response body before returning | RED — assert behaviour: the first chunk is emitted before the upstream completes (behavioural, not object identity) |
   | `rejectUnauthorized: false` or `ca` omitted | RED (assert TLS options literally) |
   | Marker header omitted on forward | RED (assert `EXEC_FORWARD_HEADER` present) |
   | Target URL derived from request Host or env instead of the pin constant | RED (assert the literal `https://10.0.1.10:` origin) |
@@ -498,20 +504,21 @@ forwarder live), not a future state.
 
 ### Guard 4 — pin-target drift
 
-- **Property.** The `10.0.1.10` constant, `inngest-host.tf`'s `sdk_url` host, and
+**Property.** The `10.0.1.10` constant, `inngest-host.tf`'s `sdk_url` host, and
   `variables.tf`/`network.tf`'s web-1 private IP are one source of truth — the exec host is
   the host that already carries the registration poll AND the LUKS workspaces volume.
-- **Assembly.** `server/inngest/exec-placement.ts` constant, `infra/inngest-host.tf`
+**Assembly.** `server/inngest/exec-placement.ts` constant, `infra/inngest-host.tf`
   `sdk_url`, `infra/variables.tf` (or `network.tf`) `web_hosts["web-1"].private_ip`,
-  `hcloud_volume_attachment.workspaces_luks` host reference.
-- **Mutation matrix.**
+  the `workspaces_luks` volume's host-binding declaration under `apps/web-platform/infra/` — resolved by name at guard-authoring time (the resource set that mounts the LUKS workspaces volume on web-1; if no attachment resource exists, the guard binds the pin to the web-1 `hcloud_server`/`hcloud_server_network` pair instead and the volume coupling is recorded as a stated residual).
+**Mutation matrix.**
   | Mutation | Expected |
   |---|---|
   | Change the constant to `10.0.1.11` | RED |
   | Change `sdk_url` host | RED |
-  | Repoint `workspaces_luks` attachment to web-2 | RED — the pin constant must follow the volume; the guard binds pin ↔ volume holder, not pin ↔ string |
+  | Repoint the workspaces-LUKS host binding to web-2 | RED — the pin constant must follow the volume holder; if no declarable attachment resource exists the row binds pin ↔ `hcloud_server_network.web["web-1"]` instead and the volume coupling is a stated residual |
   | `SOLEUR_HOST_PRIVATE_IP` injection line removed from the prod docker-run tuple | RED (docker-run-tuple.test.sh row) |
   | must-PASS: constants consistent (real tree, unmutated) | GREEN |
+  | Introduce a TOTAL read deadline on the forward | RED — streamed steps outlive any total deadline; only connect + per-chunk idle timeouts are legal |
 
 ## Observability
 
@@ -538,7 +545,7 @@ logs:
   where: "pino -> journald -> Vector -> Better Stack (feature=inngest-exec-placement)"
   retention: Better Stack standard retention
 discoverability_test:
-  command: "bash apps/web-platform/test/server/inngest/exec-placement-probe.sh"
+  command: "bash apps/web-platform/scripts/exec-placement-probe.sh"
   expected_output: "exec-placement: ok"
 ```
 
@@ -549,7 +556,7 @@ at_rest: "no new persistent store — nothing persists; step payloads transit me
 in_transit:
   - connection: "web-2 app -> web-1 exec listener (private net, 10.0.1.10)"
     tls: "pinned self-signed CA — PROXY_TLS_CERT via loadProxyTlsClientCa"
-    cert_verification: "on (rejectUnauthorized: true; identity check per the existing relay dial — flagged UNVERIFIED at ruling, verified at implementation)"
+    cert_verification: "on (rejectUnauthorized: true + default identity check — the cert carries SANs over every web host's private IP, proxy-tls.ts header)"
     does_not_defend: "a holder of prd env (the cert is an env value — same exposure as the relay itself); compromise of the exec host itself"
     disclosed_as: "host-to-host relay TLS (same posture as session-proxy)"
   - connection: "inngest host -> app.soleur.ai step calls (existing)"
@@ -671,7 +678,12 @@ existing route.
 - [ ] AC8: Guard 4 pins `10.0.1.10` against `inngest-host.tf` `sdk_url` AND the web-1 private
   IP source AND the `workspaces_luks` attachment — mutating any one reddens it.
 - [ ] AC9: `docker-run-tuple.test.sh` (and `ci-deploy.test.sh` fixture) pins
-  `-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND"` on prod and empty on canary.
+  `-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND"` on prod and empty on canary, and names the
+  first-boot tuple's value (resolved IP or recorded stall-until-first-deploy residual).
+- [ ] AC9b: A refused pinned call returns HTTP 503 (retriable) — an `agent-on-spawn` run
+  refused during an identity-missing window recovers within the SDK retry window after
+  the redeploy runbook step; a forward carrying no `x-inngest-signature` header is refused
+  before any dial.
 - [ ] AC10: `placement_decision`/`forward_failed`/`exec_identity_missing` log rows carry
   fnId, class, decision and host identity; the discoverability probe prints
   `exec-placement: ok` under 15 s.
@@ -692,7 +704,7 @@ existing route.
 - Identity edge cases: `SOLEUR_HOST_PRIVATE_IP` unset vs empty vs `0.0.0.0` vs `10.0.1.10`
   vs `10.0.1.11` vs whitespace-padded.
 - Classification edge cases: `-failure` suffix, unknown id, doubled/missing prefix,
-  `forceExecution` header with no `fnId`, `?probe=` + `fnId` combos.
+  POST with no `fnId` and no `probe`, `?probe=` + `fnId` combos.
 - TLS: dial with `rejectUnauthorized: true` and pinned CA; an untrusted-cert fixture fails
   closed; expired/absent material fails closed with a Sentry mirror (not a crash loop).
 - Concurrency: two parallel pinned calls forward independently; a retried call within the
@@ -774,4 +786,49 @@ file paths (`route.ts`, `execution-placement.ts`, `ci-deploy.sh`, `session-proxy
 
 ## Plan Review Revisions
 
-(filled after the review panel runs)
+Panel run 2026-11-10 (condensed eng panel + spec-flow, spawned via `claude -p`; CPO sign-off
+recorded separately). Mechanical findings auto-applied; taste findings persisted to
+`decision-challenges.md` per headless policy.
+
+**Applied (mechanical):** P1 sibling-listener receiver (the :8443 `HELLO_DEADLINE_MS` would
+kill streamed HTTP steps — option (i) removed); P2 `workspaces_luks` attachment is not a
+declared TF resource → Guard 4/AC8 name the resolvable binding instead; P3 `forceExecution`
+is an internal SDK flag, not HTTP-visible → decision rows rewritten as "POST with no `fnId`
+and no `probe` → forward"; P4 connect + per-chunk idle timeouts only (no total deadline —
+would recreate the 524 double-run); P5 `x-inngest-signature` presence gate before forwarding
+(the private listener must not become reachable to anonymous public traffic); P6
+`https.request`/undici `Agent` transport + hop-by-hop header strip + behavioural stream
+assertion; P7 cert carries web-host private-IP SANs (`proxy-tls.ts` header) → default
+identity check, hedge removed; P8 first-boot `docker run` tuple in `cloud-init.yml` covered
+(AC9 + residual option); P9 refusal returns HTTP 503 retriable, never `NonRetriable` (AC9b).
+
+**CPO sign-off:** APPROVED with conditions — threshold holds (arguably already breached
+since the 2026-11-08 flip); founder-visible stall state deferred as a scope-out follow-up;
+duplicate-billing risk addressed by construction (retried calls re-forward to the exec host
+and JOIN the single-flight — recorded in Risks); Phase 4 unpin recommended rather than
+default-deferred (kept as gated-optional phase); `user-impact-reviewer` must re-verify the
+stall-visibility and duplicate-billing items at review time.
+
+## Deepen-pass record (soleur:deepen-plan, 2026-11-10)
+
+Gate outcomes: 4.6 User-Brand Impact — PASS (single-user incident + scope content); 4.7
+Observability — PASS (5 fields, allowlisted `bash` verb, literal `exec-placement: ok`,
+sub-15s probe); 4.8 PAT shapes — PASS (none); 4.9 UI wireframe — N/A (no UI-surface files);
+4.10 Encryption Posture — PASS (TLS declared per hop, no exception needed); 4.11 Guard
+Contract — PASS (`lint-guard-contract.py` green: 4 entries, matrices ≥3 rows incl.
+own-dispatch and must-PASS rows); 4.12 Scope Check — PASS (5 asks mapped, inferred items
+justified); 4.13 Task Design — N/A (no new autonomous-task surface); 4.4 precedent-diff —
+covered (pinned-TLS dial reuses `session-proxy`/`proxy-tls.ts` precedent verbatim, named in
+the plan); 4.45 verify-the-negative — spot-checked the plan's NEVER/fail-closed claims
+against the cited files (all held; the two that didn't — `SOLEUR_PROXY_BIND` identity,
+`hcloud_volume_attachment.workspaces_luks` — were corrected pre-commit via the T2 re-ruling
+and panel P2); 4.5 network-outage — no trigger patterns in Overview/Problem/Hypotheses;
+4.55 downtime — no new downtime class (standard rolling deploy + ADR-078 drain lease; the
+forwarder adds no host replace or migration).
+
+## Downtime & Cutover
+
+No downtime-inducing operation: the change rides the standard rolling deploy (canary +
+drain) with the ADR-078 deploy lease; no host replace, no migration, no singleton cutover.
+The one new publish (sibling listener port on the private IP) is additive — it serves
+nothing until the forwarder ships in the same image.
