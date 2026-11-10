@@ -424,7 +424,7 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
+scripts/followthroughs/ci-push-dedupe-soak-9512	185400	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
