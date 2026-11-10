@@ -403,7 +403,9 @@ inspect_record() {
         {Error:{Code:2,Message:$msg,Stack:("synthetic stack\nbuild-arg echo SENTRY_AUTH_TOKEN=" + $tok)}} end)'
 }
 
-GRAMMAR='^SOLEUR_GHCR_PUSH_FAILED image=[^ ]+ version=[^ ]+ attempt=([1-9][0-9]*|invalid) run=[^ ]+ class=(push_denied|push_other|not_push|unknown) denial=(denied: [a-z_]+: [a-z_]+|withheld|see-step-log) runbook=knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed\.md$'
+# The runbook path is spliced in from RUNBOOK_REL (dots escaped) rather than spelled here: a second, regex-escaped
+# literal is a reference the kb-consumers ratchet cannot resolve to the file, so it reads it as the parent directory.
+GRAMMAR='^SOLEUR_GHCR_PUSH_FAILED image=[^ ]+ version=[^ ]+ attempt=([1-9][0-9]*|invalid) run=[^ ]+ class=(push_denied|push_other|not_push|unknown) denial=(denied: [a-z_]+: [a-z_]+|withheld|see-step-log) runbook='"${RUNBOOK_REL//./\\.}"'$'
 
 STUB_INVOCATIONS=0
 # run_case <name>: runs the marker body with the fixture files under $TMP_ROOT/<name>/ and leaves
