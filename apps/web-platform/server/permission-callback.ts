@@ -302,7 +302,7 @@ export interface CanUseToolDeps {
   connectedRepoSlug?: string;
   /**
    * #4672 — the durable approval flow for the slice-1 gated tools (`APPROVAL_REQUIRED_TOOLS`). ABSENT is the dormant
-   * state and the gated branch is then exactly the in-memory review gate (ADR-305). When present, the flag seam it
+   * state and the gated branch is then the in-memory review gate (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1) (ADR-305). When present, the flag seam it
    * carries is read once per gate; off (or unreadable) falls through to the same in-memory gate. Never wired to a
    * module that can decide an approval (the agent shares this process): see approval/decide.ts.
    */
@@ -311,7 +311,7 @@ export interface CanUseToolDeps {
    * Set only by the cc dispatcher (ADR-309 addendum). When true, an `APPROVAL_REQUIRED_TOOLS` member that the approval
    * flow gave no verdict for (the `approval` dependency is absent, the flag is off, or the flag read failed) is DENIED
    * with the static unavailable text instead of falling through to the in-memory review card. Unset (the legacy runner and
-   * every existing fixture) leaves the gated branch unchanged. See the ADR-309 Addendum.
+   * every existing fixture) leaves the gated branch unchanged (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1). See the ADR-309 Addendum.
    */
   approvalFailClosed?: boolean;
 }
@@ -1594,7 +1594,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
 
         // #4672 — the durable, action-bound approval flow for the slice-1 tools. `null` = flag off or unreadable: fall
-        // through to the in-memory review gate below, unchanged. Anything else is the final verdict (allow only on a
+        // through to the in-memory review gate below (push: Owner only, #12197 D1). Anything else is the final verdict (allow only on a
         // consumed approval; every error, timeout and abort is a static deny).
         if (deps.approval && isApprovalRequiredTool(toolName)) {
           const approvalVerdict = await runApprovalGate({
