@@ -18,6 +18,16 @@ None. No .tf or boot-byte change needed, so CTO stop condition 6 did not fire. R
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto, learnings-researcher, functional-discovery, spec-flow-analyzer, dhh/kieran/simplicity/security/test-design/observability/architecture reviewers.
 
+## Review Phase
+- Status: complete at f4745ea7dc (Review-Evidence comment posted on PR #12563).
+- Full panel 13/13 on a72628e87b; fix rounds 1-2 (9 seats); verification pass (4 seats); 28 fixed inline, 8 wontfix, deferred #12608. CTO rulings 20-28.
+
+### Errors
+- Removed sandbox /var/tmp/soleur-sbx.code-quality.knZP85ie after its seat reported; ownership not proven before removal.
+- One lead Bash call cd'd into the scratchpad (outside the worktree); no git command ran there.
+- Several fix/seat agents wrote files through Bash heredoc/python instead of Edit/Write (sandbox or single-line edits; all disclosed).
+- Round-2 F11 prose pushed postmerge SKILL.md 50 bytes over its 48000-byte ceiling (lint-skill-body-budget red on the pull_request run); trimmed in 19c5070092. The fix agent's verification list did not include that repo-global lint.
+
 ## Operator Constraints
 
 - constraint: Only merge group or dispatch runs are Guard 1 evidence, a push run is not. State run kind and leg with every CI claim.
