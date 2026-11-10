@@ -41,8 +41,10 @@ covers the esbuild bundle layout; the Next-compiled routes and pages rely on the
 
 The `approval-queue` flag is global (`workspaceId: null`), so the card pages and the decide and reauth routes require the flag AND
 the configured founder: `isLegalSurfaceEnabled` in `surface.ts` (flag on, and the user id equals `LEGAL_ACCEPTANCE_FOUNDER_ID`; an unset or
-malformed variable disables the surface for everyone). Anyone else gets the same 404 as with the flag off. Turning the flag on is the
-operator's act.
+malformed variable disables the surface for everyone). Anyone else gets the same 404 as with the flag off. The flag is ON in production
+for every workspace on its only listing (2026-11-08 23:51 +01:00: Doppler prd `FLAG_APPROVAL_QUEUE=1`, Flagsmith segment `role-prd` enabled,
+and every server read evaluates with role `prd`), so the configured founder id, not the flag, is what keeps the card to one account.
+Turning the flag on or off is the operator's act, and an agent session does not do it.
 
 The card's wording depends on the kind declared for the text key in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`): `terms` or
 `acknowledgement`. There is no default. A registered text with no declared kind renders no card, is a 404 on the card page, the decide route

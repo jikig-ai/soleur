@@ -265,11 +265,11 @@ assert "host-set loops guard against an empty CUTOVER_HOSTS (min-cardinality)" "
 # ============================================================================
 VARIABLES_TF="$REPO_ROOT/apps/web-platform/infra/variables.tf"
 RELEASE_YML="$REPO_ROOT/.github/workflows/web-platform-release.yml"
-CUTOVER_HOSTS_VAL=$(grep -oP 'CUTOVER_HOSTS:[[:space:]]*"\K[^"]+' "$WF")
+CUTOVER_HOSTS_VAL=$(grep -oP 'CUTOVER_HOSTS:[[:space:]]*"\K[^"]+' "$WF") || true
 CUTOVER_SORTED=$(printf '%s' "$CUTOVER_HOSTS_VAL" | tr ',' '\n' | sort | paste -sd,)
 # Canonical set from variables.tf web_hosts private_ip entries (the `default` map).
 CANON_TF=$(grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' "$VARIABLES_TF" \
-  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
+  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,) || true
 # Canonical set from web-platform-release.yml WEB_HOST_PRIVATE_IPS. The file
 # carries TWO identical declarations (deploy job env + verify-peer-deploy job
 # env — job env does not cross the boundary; equality pinned by the peer-gate

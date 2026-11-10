@@ -18,6 +18,15 @@
 #   ORACLE_LANE_LOCKED   env re-lock (dark-mode revert path)         (=1 keeps active=false; no ci.yml env wires it —
 #                                                                     wiring is itself an excluded-path code edit)
 #   PR_HEAD_SHA          github.event.pull_request.head.sha         (pull_request)
+#   PR_BASE_REF          github.event.pull_request.base.ref         (pull_request; the live base ref to fetch —
+#                                                                     branch-name grammar only, never a refspec.
+#                                                                     Trust model: a real refs/heads/ base tip is
+#                                                                     attacker-influenceable only to the degree
+#                                                                     GitHub's own three-dot Files view is — a
+#                                                                     base containing PR-side commits hides them
+#                                                                     identically in both. The pin kills only the
+#                                                                     EXTRA surface: hex/tags/ resolving outside
+#                                                                     the named branch)
 #   HEAD_REPO            github.event.pull_request.head.repo.full_name  (pull_request; a fork head is full)
 #   MERGE_GROUP_HEAD_SHA github.event.merge_group.head_sha          (merge_group; the whole queued batch is diffed)
 #   MERGE_GROUP_BASE_SHA github.event.merge_group.base_sha          (merge_group)
@@ -38,7 +47,8 @@
 #   skip_legs    a comma list over    {test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
 #                                     written ONLY when active
 #   head_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^2 of the merge ref; merge_group: MERGE_GROUP_HEAD_SHA
-#   base_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^1; merge_group: MERGE_GROUP_BASE_SHA
+#   base_sha     ^([0-9a-f]{40})?$    pull_request: merge-base(HEAD^2, live base ref) — the base the diff ran
+#                                     against (#12418); merge_group: MERGE_GROUP_BASE_SHA
 # The step also prints ONE `::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE ...` line (fixed tokens only: a path, a
 # ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step summary.
 # The notice carries, in this order: event, switch, locked, attempt, files, reason, oracle_only, would_skip, active.
@@ -47,16 +57,14 @@
 # `invalid` is any non-empty value but `on`, `unset` is empty).
 #
 # THE SURFACE (the lane's entire authority). A diff is oracle-only iff EVERY changed path is one of:
-#   * scripts/ci-pr-affected-audit.accept.tsv
-#     (baseline.tsv is NOT a member — PR5z strict zero deleted it; a re-add is the `baseline-reintroduced`
-#      alarm shape the advisory ratchet names, so it must pay the full battery: see is_oracle_data_path)
 #   * scripts/lib/test-affected-paths.sh — AND every changed hunk line lies inside an AFFECTED_*_PATHS array extent
 #     computed in BOTH the base and head images (a NEW or DELETED whole array block still classifies: its lines are
 #     inside the extent on the side that carries it; any hunk line outside extents — ALWAYS_ON_SUITES, _CLOSURE_LEAF_*,
 #     AFFECTED_CONSUMED_EDGES, comments, functions — disqualifies the whole diff)
-#   * a doc path — `knowledge-base/**/*.md` or a root-level `*.md`, the IDENTICAL grammar to ci-pr-selection.sh
-#     is_doc_path (real oracle repairs carry pipeline planning artifacts; PR #12128's measured file list)
-# THE EXCLUSION LIST (any one path ⇒ full battery, no lane): scripts/ci-pr-affected-replay.py, scripts/test-all.sh,
+#   * a doc path — `knowledge-base/**/*.md` or a root-level `*.md` (the grammar the retired S4 selector driver
+#     is_doc_path carried; this copy is now the canonical one — pinned by ci-oracle-lane.test.sh's O-DOCPARITY
+#     byte-pin, real oracle repairs carry pipeline planning artifacts; PR #12128's measured file list)
+# THE EXCLUSION LIST (any one path ⇒ full battery, no lane): scripts/test-all.sh,
 # plugins/soleur/scripts/lint-ratchet.py, .github/workflows/ci.yml, and any other scripts/lib/** path — the ratchet's
 # own oracle machinery that is CODE. Load-bearing and pinned by the sentinel (Guard 1). The list is deliberately
 # outcome-redundant with the surface (every member is already outside it) — it stays as defence in depth, so a future
@@ -141,9 +149,10 @@ case "${RUN_ATTEMPT:-}" in
 esac
 
 # ---- the surface ----------------------------------------------------------------------------------------------------
-# The doc allowlist: knowledge-base/**/*.md or a root-level *.md — IDENTICAL grammar to ci-pr-selection.sh is_doc_path
-# (the file NAME must end in `.md`; `knowledge-base/?*.md` demands a non-empty remainder after the prefix; a root-level
-# `.md` alone does not qualify; a root-level file has no `/` in it).
+# The doc allowlist: knowledge-base/**/*.md or a root-level *.md — the grammar the retired S4 selector driver
+# is_doc_path carried (the file NAME must end in `.md`; `knowledge-base/?*.md` demands a non-empty remainder after
+# the prefix; a root-level `.md` alone does not qualify; a root-level file has no `/` in it). This copy is now the
+# canonical implementation — pinned literal-byte by ci-oracle-lane.test.sh's O-DOCPARITY row.
 is_doc_path() {
   case "$1" in
     knowledge-base/?*.md) return 0 ;;
@@ -153,13 +162,13 @@ is_doc_path() {
   return 1
 }
 
-# The literal ratchet data file. baseline.tsv is deliberately NOT a member: PR5z (#10861) deleted it for strict zero,
-# so the only diff that can ever touch that path is a re-introduction — exactly the `baseline-reintroduced` shape the
-# ratchet names as an alarm. Keeping it admitted would lane-skip the one forbidden shape while the only remaining
-# catch is an advisory job; a baseline path falls through to outside_surface and pays the full battery.
+# The oracle DATA-file surface: EMPTY post-S4-retirement (2026-11-09) — the accept table and the strict-zero
+# baseline's alarm shape retired with the ratchet, so the lane's surface is now extent-edits in
+# scripts/lib/test-affected-paths.sh plus doc paths only. The function is kept (zero members) so the call site
+# and the sentinel's shape stay stable; a future oracle data file joins the case list here.
 is_oracle_data_path() {
   case "$1" in
-    scripts/ci-pr-affected-audit.accept.tsv) return 0 ;;
+    _never_a_member_) return 0 ;;
   esac
   return 1
 }
@@ -168,7 +177,6 @@ is_oracle_data_path() {
 # predicate runs, so `scripts/lib/*` here means "any other scripts/lib/**".
 is_excluded_path() {
   case "$1" in
-    scripts/ci-pr-affected-replay.py) return 0 ;;
     scripts/test-all.sh) return 0 ;;
     plugins/soleur/scripts/lint-ratchet.py) return 0 ;;
     .github/workflows/ci.yml) return 0 ;;
@@ -271,9 +279,7 @@ run() {
     [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:O1-HEAD-IS-GITHUB-SHA
     [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O-PRHEAD
     head_sha="$p2"
-    base_sha="$p1"
-    diff_base="HEAD^1"
-    diff_head="HEAD"
+    diff_head="$p2"
 
     # (3a) full on a fork head.
     reason=fork
@@ -301,6 +307,27 @@ run() {
   # value. Deliberately before the diff: an off switch must never pay the classification cost.
   reason=switch_off
   [ "$sw" = on ] || return 0  # GUARD:O1-SWITCH-GATE
+
+  if [ "$EVENT_NAME" = pull_request ]; then
+    # The pull_request diff is GitHub three-dot — merge-base(HEAD^2, live base) .. HEAD^2. Never the merge
+    # ref's first parent (it freezes at merge-ref computation and re-counts main-side changes the branch
+    # already merged, #12418) and never the merge RESULT against that base (its tree carries the base-side
+    # arc whenever the frozen parent is ahead of the fork point — the common case for a PR that has not
+    # synced main). The fetch is unconditional — a payload base.sha can be stale-but-resolvable and would
+    # freeze the same defect class (CTO ruling 2026-11-09) — and is pinned to refs/heads/ so a hex- or
+    # tags/-shaped base.ref cannot FETCH_HEAD a commit outside the named branch. The grammar is a
+    # deliberate superset of refname rules (git-invalid-but-safe names simply fail the fetch) while still
+    # rejecting `+`/`:`/leading `-` — refspec writes and option injection. Deliberately AFTER the switch
+    # gate, on this file's own doctrine: an off switch must never pay the classification cost.
+    reason=bad_base_ref
+    [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:O-BASE-REF
+    reason=base_fetch
+    git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:O-BASE-FETCH
+    reason=no_merge_base
+    diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:O-NO-MERGE-BASE
+    [ -n "$diff_base" ] || return 0  # belt: merge-base's rc on no-ancestor varies by git version; unreachable today
+    base_sha="$diff_base"
+  fi
 
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error
@@ -369,7 +396,7 @@ run() {
   reason=oracle
   oracle_only=true
   would_skip="$ORACLE_SKIP_SET"
-  # The diagrams carve-out (ported from ci-pr-selection.sh: diagrams paths feed the web-platform surface, so a doc
+  # The diagrams carve-out (the grammar the retired selector driver carried: diagrams paths feed the web-platform surface, so a doc
   # class that includes one keeps test-webplat running even when the lane otherwise qualifies). Per-run skip reach
   # is this list plus shard-totality-mutations, which is gated on `active` alone — by design (ci-push-dedupe.test.sh SHARD_TERM).
   [ "$diagrams" = 1 ] && would_skip="test-bun,test-scripts,test-scripts-heavy,web-platform-build"

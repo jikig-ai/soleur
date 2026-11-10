@@ -167,7 +167,7 @@ $findings"
 
 t_no_executable_target() {
   if _has_executable_target "$WORKFLOW"; then
-    local hits; hits=$(_strip_comments "$WORKFLOW" | grep -nE -- '-target=' | head -5)
+    local hits; hits=$(_strip_comments "$WORKFLOW" | grep -nE -- '-target=' | head -5) || true
     _report "T1 no executable -target= in apply-sentry-infra.yml (full-root plan)" fail \
       "found:
 $hits"
@@ -371,7 +371,7 @@ t_sigpipe_mechanism_is_real() {
 
   local rc=0 rc_fixed=0 body
   ( set -o pipefail; grep -vE '^ZZZ_NEVER_MATCHES' "$big" | grep -q 'MATCH_ME_FIRST' ) || rc=$?  # sigpipe-demo: intentional (this IS the reproduction)
-  body=$(grep -vE '^ZZZ_NEVER_MATCHES' "$big")
+  body=$(grep -vE '^ZZZ_NEVER_MATCHES' "$big") || true
   ( set -o pipefail; grep -q 'MATCH_ME_FIRST' <<<"$body" ) || rc_fixed=$?
   rm -f "$big"
 

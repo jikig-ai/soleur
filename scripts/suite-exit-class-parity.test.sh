@@ -256,7 +256,7 @@ _parity_name_guard_arm() {
   done
   # Fixture self-check: if the shadow did not take effect the three rows above
   # would pass for the ORDINARY reason and prove nothing.
-  local probe; probe=$(kill -l 65 2>/dev/null); local prc=$?
+  local probe prc; if probe=$(kill -l 65 2>/dev/null); then prc=0; else prc=$?; fi
   cases=$((cases+1))
   if (( prc == 0 )) && [[ -z "$probe" ]]; then
     ok "name-guard fixture self-check: the permissive-kill shadow is in effect"

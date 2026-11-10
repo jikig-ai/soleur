@@ -46,9 +46,11 @@ _report() {
 # Mirror the workflow's bash pipeline exactly so the test exercises the
 # same control flow the gate runs in CI. Returns "rdel:ndel:dcount:rc"
 # where rc encodes the gate's exit (0 pass, 1 trip). HEAD_MSG passed as
-# arg so the [ack-destroy] branch is exercised identically.
+# arg so the [ack-destroy] branch is exercised identically; the optional
+# third arg is the EVENT_MSGS_JSON array (`toJSON(github.event.commits.*.message)`)
+# so the below-tip concat (#12501) is exercised identically too.
 _run_gate() {
-  local fixture="$1" head_msg="$2"
+  local fixture="$1" head_msg="$2" event_msgs_json="${3:-}"
   local counts rdel ndel dcount ack rc=0
   if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
     echo "ERROR:ERROR:ERROR:99"
@@ -61,9 +63,15 @@ _run_gate() {
     return
   fi
   dcount=$((rdel + ndel))
+  # The ack can sit below the tip when the merge queue coalesces: the squash
+  # carrying the token is in event.commits, not head_commit (#12501). Same
+  # concat as apply-github-infra.yml's plan step.
+  local policy_msgs="$head_msg" more_msgs
+  more_msgs="$(jq -r 'join("\n")' <<<"${event_msgs_json:-null}" 2>/dev/null || true)"
+  [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && policy_msgs="${policy_msgs}"$'\n'"${more_msgs}"
   ack=false
-  # Byte-identical to apply-github-infra.yml:244.
-  if [[ "$head_msg" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+  # Byte-identical to apply-github-infra.yml's plan-step [ack-destroy] regex.
+  if [[ "$policy_msgs" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
     ack=true
   fi
   if [[ "$dcount" -gt 0 ]] && [[ "$ack" != "true" ]]; then
@@ -182,6 +190,40 @@ t_repository_file_replace_trips() {
   fi
 }
 
+# T9 (#12501): the [ack-destroy] can sit BELOW the tip when the merge queue
+# coalesces — the squash that changed the infra is in event.commits, not
+# head_commit. The gate reads HEAD_MSG + every push commit's message
+# (EVENT_MSGS_JSON → jq join), so a below-tip ack still resolves.
+t_ack_destroy_below_tip_allows() {
+  local head="docs: merge-queue coalesced tip (#12482)"
+  local events='["infra: retire legacy ruleset\n\n[ack-destroy]\n\nRefs #12501.","docs: merge-queue coalesced tip (#12482)"]'
+  local out; out=$(_run_gate "$FIXTURES/tfplan-nested-block-removal.json" "$head" "$events")
+  if [[ "$out" == "0:1:1:0" ]]; then
+    _report "T9 [ack-destroy] below the tip (event.commits) allows nested removal through (rc=0)" ok
+  else
+    _report "T9 [ack-destroy] below the tip (event.commits) allows nested removal through" fail "got '$out' want '0:1:1:0'"
+  fi
+}
+
+# T10 (#12501): pin the workflow feed — the mirror above is only as honest as
+# the bytes it mirrors. Every commit-message reader in apply-github-infra.yml
+# must carry the EVENT_MSGS_JSON env and read the combined POLICY_MSGS var,
+# never $HEAD_MSG alone. Anchored on the READ (the regex literal is already
+# byte-pinned by test-destroy-guard-regex-parity.sh).
+t_workflow_feeds_all_push_messages() {
+  local wf="$REPO_ROOT/.github/workflows/apply-github-infra.yml"
+  local feeds skip_reads ack_reads
+  feeds=$(grep -cF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' "$wf" || true)
+  skip_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[skip-github-apply\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
+  ack_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[ack-destroy\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
+  if [[ "$feeds" -ge 2 && "$skip_reads" -eq 1 && "$ack_reads" -eq 1 ]]; then
+    _report "T10 workflow feeds event.commits to both readers via POLICY_MSGS" ok
+  else
+    _report "T10 workflow feeds event.commits to both readers via POLICY_MSGS" fail \
+      "feeds=$feeds (want >=2) skip-reads=$skip_reads ack-reads=$ack_reads (want 1 each)"
+  fi
+}
+
 t_resource_delete_trips
 t_repository_file_replace_trips
 t_nested_removal_trips
@@ -190,6 +232,8 @@ t_ack_destroy_allows_nested
 t_real_baseline_zero
 t_ack_destroy_substring_rejected
 t_mixed_delete_and_nested
+t_ack_destroy_below_tip_allows
+t_workflow_feeds_all_push_messages
 
 # ANTI-VACUITY FLOOR (#7493 review). Without it this suite's success condition was `fail == 0`,
 # which an EMPTY suite satisfies: deleting all eight invocations above printed
@@ -197,7 +241,7 @@ t_mixed_delete_and_nested
 # to refuse, and it was absent from the harness asserting the guard that protects the published
 # manifest from being deleted. The floor is an equality, not a `>=`: a dropped test and a silently
 # skipped one are the same defect, and a `>=` is satisfiable by adding an unrelated row.
-MIN_ASSERTIONS=8
+MIN_ASSERTIONS=10
 asserted=$(( pass + fail ))
 if [[ "$asserted" -ne "$MIN_ASSERTIONS" ]]; then
   _report "anti-vacuity floor" fail "only $asserted assertion(s) ran, expected exactly $MIN_ASSERTIONS"

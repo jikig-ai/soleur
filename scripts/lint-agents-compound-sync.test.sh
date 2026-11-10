@@ -339,7 +339,7 @@ t6b_dropped_stderr_redirect_is_caught() {
   # invocation's own code block can fail here.
   sed -i 's/ 2>&1$//' "$root/plugins/soleur/skills/compound/SKILL.md"
   local remaining
-  remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md")
+  remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md") || true
   # Fixture self-check: if the decoys are gone, this case would pass for the
   # wrong reason and prove nothing.
   if (( remaining < 2 )); then

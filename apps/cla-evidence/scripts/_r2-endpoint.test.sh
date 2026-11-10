@@ -27,8 +27,8 @@ fail=0
 check() {
   local url="$1" outfile
   outfile=$(mktemp)
-  ( assert_r2_endpoint "$url" ) >"$outfile" 2>&1
-  local rc=$?
+  local rc
+  if ( assert_r2_endpoint "$url" ) >"$outfile" 2>&1; then rc=0; else rc=$?; fi
   printf '%s\t%s' "$rc" "$(cat "$outfile")"
   rm -f "$outfile"
 }

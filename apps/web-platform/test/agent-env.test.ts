@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { buildAgentEnv } from "../server/agent-env";
+import { AGENT_ENV_ALLOWLIST, ALLOWED_SERVICE_ENV_VARS, AGENT_GIT_GLOBAL_CONFIG, buildAgentEnv } from "../server/agent-env";
 
 // Force the production branch of the plugin-path guard (mirrors the harness in
 // plugin-path.test.ts). The `buildAgentEnv` describe's afterEach calls
@@ -58,6 +58,12 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
   // launch-check refuses to file issues or write its report when unattended; a hosted session is unattended (ADR-314).
   LAUNCH_CHECK_HEADLESS: "1",
+  // #9600 git config-carrier pin, applied to every session (git-auth or not): see the describe below.
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/usr/local/share/soleur/agent.gitconfig",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.bareRepository",
+  GIT_CONFIG_VALUE_0: "explicit",
 };
 
 describe("buildAgentEnv", () => {
@@ -221,6 +227,85 @@ describe("buildAgentEnv", () => {
     const envWithout = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
     const envWith = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, {});
     expect(Object.keys(envWith).length).toBe(Object.keys(envWithout).length);
+  });
+
+  // #9600 — the git config-carrier pin. A bare repository committed into an untrusted connected repo is a
+  // working config carrier after a plain clone (the real-git proof is in safe-bash-git-config-exec.test.ts);
+  // `safe.bareRepository=explicit` makes git ignore it. The pin must hold for every session shape.
+  describe("git config-carrier pin (#9600)", () => {
+    const PIN = {
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/usr/local/share/soleur/agent.gitconfig",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "safe.bareRepository",
+      GIT_CONFIG_VALUE_0: "explicit",
+    } as const;
+    const CREDS = [
+      { value: "sk-ant-test", scheme: "api_key" as const },
+      { value: "sk-oauth-test", scheme: "oauth_token" as const },
+    ];
+    const OPTS = [
+      undefined,
+      {},
+      { ghToken: "ghs_minted_install_token" },
+      { gitAskpassScriptPath: "/workspaces/w/.askpass.sh", gitInstallationToken: "ghs_install_token_value" },
+      { egressProxy: { workspaceId: "w", token: "t", port: 3128 } },
+    ];
+
+    test("present for every auth scheme x session shape (with and without git-auth)", () => {
+      let n = 0;
+      for (const cred of CREDS) {
+        for (const opts of OPTS) {
+          const out = buildAgentEnv(cred, undefined, opts);
+          for (const [k, v] of Object.entries(PIN)) expect(out[k], `${cred.scheme} ${JSON.stringify(opts)} ${k}`).toBe(v);
+          n++;
+        }
+      }
+      expect(n).toBe(CREDS.length * OPTS.length); // floor: the loop really ran every combination
+    });
+
+    test("GIT_CONFIG_GLOBAL is the image-owned identity file (never /dev/null, never HOME), shared with the Dockerfile", () => {
+      expect(AGENT_GIT_GLOBAL_CONFIG).toBe("/usr/local/share/soleur/agent.gitconfig");
+      const out = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(out.GIT_CONFIG_GLOBAL).toBe(AGENT_GIT_GLOBAL_CONFIG);
+      expect(out.GIT_CONFIG_GLOBAL).not.toBe("/dev/null");
+    });
+
+    // The pin is spread into the overrides, so what keeps it from being displaced is that NO later source
+    // (the ambient allowlist, the BYOK service-token set) can name a GIT_CONFIG_* variable. Assert THAT
+    // set-level property directly: a behavioural "ambient value cannot displace it" test passes only
+    // because of this filtering and would stay green if the filtering were removed along with a re-assert.
+    test("no ambient-allowlisted or service-token variable may be a GIT_CONFIG_* name", () => {
+      expect([...AGENT_ENV_ALLOWLIST].filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]); // the SHIPPED list, not the test copy
+      expect(AGENT_ENV_ALLOWLIST.length).toBeGreaterThan(0);
+      expect([...ALLOWED_SERVICE_ENV_VARS].filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]);
+      expect(ALLOWED_SERVICE_ENV_VARS.size).toBeGreaterThan(0); // the set really was enumerated
+    });
+
+    test("an ambient GIT_CONFIG_* process value never reaches the agent env and the pin is exactly one config pair", () => {
+      const keys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_GLOBAL"];
+      const saved = keys.map((k) => [k, env[k]] as const);
+      try {
+        env.GIT_CONFIG_COUNT = "9";
+        env.GIT_CONFIG_KEY_0 = "core.fsmonitor";
+        env.GIT_CONFIG_VALUE_0 = "/tmp/evil";
+        env.GIT_CONFIG_GLOBAL = "/tmp/evil-gitconfig";
+        const out = buildAgentEnv(
+          { value: "sk-ant-test", scheme: "api_key" },
+          { GIT_CONFIG_VALUE_0: "all", GIT_CONFIG_COUNT: "0" },
+        );
+        for (const [k, v] of Object.entries(PIN)) expect(out[k], k).toBe(v);
+        expect(Object.keys(out).filter((k) => /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)).sort()).toEqual([
+          "GIT_CONFIG_KEY_0",
+          "GIT_CONFIG_VALUE_0",
+        ]);
+      } finally {
+        for (const [k, v] of saved) {
+          if (v === undefined) delete env[k];
+          else env[k] = v;
+        }
+      }
+    });
   });
 
   // --- GH_TOKEN injection (Issue A — Concierge gh-auth, AC3) ---------------
@@ -394,6 +479,39 @@ describe("buildAgentEnv", () => {
         if (saved === undefined) delete mutableEnv.CLAUDE_PLUGIN_ROOT;
         else mutableEnv.CLAUDE_PLUGIN_ROOT = saved;
       }
+    });
+  });
+
+  // --- claudeTmpDir / TMPDIR injection (#11764) ------------------------------
+  // Direct unit pin of the injection itself (not a mirroring mock): TMPDIR is
+  // the lever every descendant mktemp reads, so opts.claudeTmpDir must land on
+  // BOTH CLAUDE_CODE_TMPDIR and TMPDIR, and the per-dispatch value must beat
+  // the ambient allowlist copy (TMPDIR is in AGENT_ENV_ALLOWLIST).
+  describe("claudeTmpDir injection (#11764)", () => {
+    test("sets CLAUDE_CODE_TMPDIR and re-pins TMPDIR to the per-tenant dir", () => {
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { claudeTmpDir: "/x" },
+      );
+      expect(env.CLAUDE_CODE_TMPDIR).toBe("/x");
+      expect(env.TMPDIR).toBe("/x");
+    });
+
+    test("claudeTmpDir beats an ambient process.env.TMPDIR (the allowlist copy loses)", () => {
+      vi.stubEnv("TMPDIR", "/ambient-shared-tmp");
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { claudeTmpDir: "/x" },
+      );
+      expect(env.TMPDIR).toBe("/x");
+    });
+
+    test("absent claudeTmpDir forwards the ambient TMPDIR unchanged (backward compatible)", () => {
+      const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(env.TMPDIR).toBe("test-tmpdir"); // the beforeEach ambient value
+      expect(env).not.toHaveProperty("CLAUDE_CODE_TMPDIR");
     });
   });
 });

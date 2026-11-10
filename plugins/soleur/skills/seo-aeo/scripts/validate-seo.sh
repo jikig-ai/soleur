@@ -112,7 +112,7 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
     # check above; production robots.txt always has the line.
     if [[ -f "$SITE_DIR/robots.txt" ]] && grep -qiE '^Sitemap:' "$SITE_DIR/robots.txt"; then
       ROBOTS_HOST=$(grep -iE '^Sitemap:' "$SITE_DIR/robots.txt" \
-        | sed -E 's|^[Ss]itemap:[[:space:]]*(https?://[^/]+).*|\1|' | head -1)
+        | sed -E 's|^[Ss]itemap:[[:space:]]*(https?://[^/]+).*|\1|' | head -1) || true
       if [[ "$SITEMAP_HOSTS" != "$ROBOTS_HOST" ]]; then
         fail "sitemap host ($SITEMAP_HOSTS) does not match robots.txt Sitemap line ($ROBOTS_HOST)"
       else

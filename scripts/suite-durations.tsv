@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1261
-# generated-at=2026-11-08T03:56:53Z
+# default-weight-ms=1251
+# generated-at=2026-11-09T23:02:38Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -96,6 +96,7 @@ apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	535	measured
 apps/web-platform/scripts/seed-live-verify-user.test.sh	379	measured
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	14387	measured
 apps/web-platform/scripts/supabase-local.test.sh	400	measured
+apps/web-platform/scripts/verify-required-secrets.test.sh	1272	floor
 apps/web-platform/test/parse-gitleaks-allowlists	300	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	12147	measured
 plugins/soleur/scripts/affected-tests.test.sh	1222	floor
@@ -105,6 +106,7 @@ plugins/soleur/scripts/emit-decision.test.sh	424	measured
 plugins/soleur/scripts/merge-effect-class.test.sh	1222	floor
 plugins/soleur/scripts/pipeline-tally.test.sh	5462	measured
 plugins/soleur/scripts/precommit-guard.test.sh	796	measured
+plugins/soleur/scripts/required-set-report.test.sh	7068	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25922	measured
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	294	measured
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	4954	measured
@@ -192,11 +194,6 @@ plugins/soleur/test/ci-concurrency-key.test.sh	2117	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
-plugins/soleur/test/ci-pr-affected-replay-a	160004	measured
-plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
-plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1222	floor
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	948	measured
 plugins/soleur/test/claude-code-action-auth.test.sh	1132	measured
@@ -394,11 +391,10 @@ scripts/check-web-host-escrow-config	144584	measured
 scripts/ci-demand-census	19491	measured
 scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
-scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
-scripts/ci-pr-selection	1222	floor
+scripts/ci-parked-hold	7000	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
 scripts/compound-promote	1076	measured
@@ -429,7 +425,6 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
@@ -438,6 +433,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
+scripts/followthroughs/mq-lever-e-verdict-12269	1251	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
@@ -452,6 +448,8 @@ scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
 scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
+scripts/host-kernel-cadence-12008	1251	floor
+scripts/host-tcp-exposure	1251	floor
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
 scripts/image-cve-db-pin	1223	floor
@@ -480,6 +478,7 @@ scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/jobs1-stopgap-7432	1222	floor
 scripts/learning-retrieval-bench	922	measured
+scripts/legal-acceptance-counts	5000	floor
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1222	floor
@@ -751,3 +750,4 @@ tests/scripts/zot-disk-sample	435	measured
 tests/scripts/zot-inventory	17903	measured
 tests/scripts/zot-inventory-assert-marker	3908	measured
 tests/scripts/zot-log-channel-probe	3650	measured
+# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)

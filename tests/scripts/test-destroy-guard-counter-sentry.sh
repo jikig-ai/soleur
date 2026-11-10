@@ -44,7 +44,7 @@ COUNTS="$REPO_ROOT/scripts/sentry-destroy-counts.sh"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0
-EXPECTED_TESTS=21
+EXPECTED_TESTS=23
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -60,7 +60,9 @@ _report() {
 # Mirror the workflow's bash pipeline exactly so the test exercises the
 # same control flow the gate runs in CI. Returns "rdel:ndel:rfor:dcount:rc"
 # where rc encodes the gate's exit (0 pass, 1 trip). HEAD_MSG passed as
-# arg so the [ack-destroy] branch is exercised identically.
+# arg so the [ack-destroy] branch is exercised identically; the optional
+# third arg is the EVENT_MSGS_JSON array (`toJSON(github.event.commits.*.message)`)
+# so the below-tip concat (#12501) is exercised identically too.
 #
 # The arithmetic is NOT re-derived here. It used to be — `dcount=$((rdel + ndel))`
 # hand-rolled in this helper — which made this the FOURTH copy of the sum that
@@ -71,7 +73,7 @@ _report() {
 # plan while the real gate tripped, or vice versa, with no test going red either
 # way. So the helper `eval`s the shipped script, exactly as both workflow jobs do.
 _run_gate() {
-  local fixture="$1" head_msg="$2"
+  local fixture="$1" head_msg="$2" event_msgs_json="${3:-}"
   local ack rc=0
   local resource_deletes resource_creates resource_forgets nested_deletes destroy_count
   if ! eval "$(bash "$COUNTS" "$fixture" 2>/dev/null)"; then
@@ -86,9 +88,15 @@ _run_gate() {
       return
     fi
   done
+  # The ack can sit below the tip when the merge queue coalesces: the squash
+  # carrying the token is in event.commits, not head_commit (#12501). Same
+  # concat as apply-sentry-infra.yml's plan step.
+  local policy_msgs="$head_msg" more_msgs
+  more_msgs="$(jq -r 'join("\n")' <<<"${event_msgs_json:-null}" 2>/dev/null || true)"
+  [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && policy_msgs="${policy_msgs}"$'\n'"${more_msgs}"
   ack=false
   # Byte-identical to apply-sentry-infra.yml's [ack-destroy] regex.
-  if [[ "$head_msg" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+  if [[ "$policy_msgs" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
     ack=true
   fi
   if [[ "$dcount" -gt 0 ]] && [[ "$ack" != "true" ]]; then
@@ -437,6 +445,40 @@ t_updates_only_yields_zero_forgets() {
   fi
 }
 
+# T22 (#12501): the [ack-destroy] can sit BELOW the tip when the merge queue
+# coalesces — the squash that changed the infra is in event.commits, not
+# head_commit. The gate reads HEAD_MSG + every push commit's message
+# (EVENT_MSGS_JSON → jq join), so a below-tip ack still resolves.
+t_ack_destroy_below_tip_allows() {
+  local head="docs: merge-queue coalesced tip (#12482)"
+  local events='["sentry: retire scheduled-foo monitor\n\n[ack-destroy]\n\nRefs #12501.","docs: merge-queue coalesced tip (#12482)"]'
+  local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-resource-delete.json" "$head" "$events")
+  if [[ "$out" == "1:0:0:1:0" ]]; then
+    _report "T22 [ack-destroy] below the tip (event.commits) allows sentry delete through (rc=0)" ok
+  else
+    _report "T22 [ack-destroy] below the tip (event.commits) allows sentry delete through" fail "got '$out' want '1:0:0:1:0'"
+  fi
+}
+
+# T23 (#12501): pin the workflow feed — the mirror above is only as honest as
+# the bytes it mirrors. Every commit-message reader in apply-sentry-infra.yml
+# must carry the EVENT_MSGS_JSON env and read the combined POLICY_MSGS var,
+# never $HEAD_MSG alone. Anchored on the READ (the regex literal is already
+# byte-pinned by test-destroy-guard-regex-parity.sh).
+t_workflow_feeds_all_push_messages() {
+  local wf="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
+  local feeds skip_reads ack_reads
+  feeds=$(grep -cF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' "$wf" || true)
+  skip_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[skip-sentry-apply\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
+  ack_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[ack-destroy\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
+  if [[ "$feeds" -ge 2 && "$skip_reads" -eq 1 && "$ack_reads" -eq 1 ]]; then
+    _report "T23 workflow feeds event.commits to both readers via POLICY_MSGS" ok
+  else
+    _report "T23 workflow feeds event.commits to both readers via POLICY_MSGS" fail \
+      "feeds=$feeds (want >=2) skip-reads=$skip_reads ack-reads=$ack_reads (want 1 each)"
+  fi
+}
+
 t_resource_delete_trips
 t_no_changes_passes
 t_ack_destroy_allows_resource_delete
@@ -458,6 +500,8 @@ t_forget_must_be_summed_into_destroy_count
 t_no_changes_still_emits_forgets_key
 t_workflow_displays_forget_addresses
 t_updates_only_yields_zero_forgets
+t_ack_destroy_below_tip_allows
+t_workflow_feeds_all_push_messages
 
 echo "=== $pass passed, $fail failed ==="
 # HARNESS FLOOR (#7650 review). A commented-out dispatch line reads green

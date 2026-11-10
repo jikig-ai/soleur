@@ -77,6 +77,7 @@ plugins/soleur/hooks/bare-root-cwd-guard.sh|adopted — declare -F fallback only
 plugins/soleur/hooks/operator-stage-approval.sh|adopted — declare -F fallback only
 plugins/soleur/scripts/run-in-pid-namespace.sh|adopted — declare -F fallback only
 plugins/soleur/scripts/monitor-pr-checks.sh|adopted — declare -F fallback only (LF-only variant on the required-set read)
+plugins/soleur/scripts/required-set-report.sh|adopted — declare -F fallback only (LF-only variant on the required-set read)
 plugins/soleur/scripts/resolve-regenerable-conflicts.sh|adopted — declare -F fallback only
 plugins/soleur/scripts/domain-model-drift.sh|adopted — declare -F fallback only
 plugins/soleur/skills/ship/scripts/battery-owed.sh|adopted — declare -F fallback only

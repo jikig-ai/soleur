@@ -45,7 +45,7 @@ fi
 
 # Pattern 1: Linear issue identifier shape.
 if grep -qE '\b[A-Z]{2,}-[0-9]+\b' <<<"$input"; then
-  match=$(printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1)
+  match=$(printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1) || true
   echo "FAIL: telemetry payload contains Linear identifier shape: $match" >&2
   exit 1
 fi
@@ -58,7 +58,7 @@ fi
 
 # Pattern 3: UUID-style ID (Linear's internal issue UUIDs).
 if grep -qE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' <<<"$input"; then
-  match=$(printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1)
+  match=$(printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1) || true
   echo "FAIL: telemetry payload contains UUID-style identifier: $match" >&2
   exit 1
 fi

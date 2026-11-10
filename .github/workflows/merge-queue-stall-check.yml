@@ -118,9 +118,11 @@ name: Merge queue stall check
 # below removes the largest class (entries deep in a healthy drain), not all of them.
 #
 # FALSE-POSITIVE FILTER (L10): only entries that can legitimately be BUILDING are
-# aged against the threshold, i.e. `position <= MAX_ENTRIES_TO_BUILD` (2, equal to
+# aged against the threshold, i.e. `position <= MAX_ENTRIES_TO_BUILD` (1, equal to
 # max_entries_to_build in infra/github/ruleset-ci-required.tf; the suite asserts
-# the equality). An entry deeper in a healthy drain burst waits its turn
+# the equality). Lowered 2->1 on #12269: the aging window now covers only the
+# head entry — a deeper entry pending past the threshold is expected under the
+# serialized drain and is NO LONGER reported as a suspected stall. An entry deeper in a healthy drain burst waits its turn
 # (~15 min per merge) and can legitimately exceed 45 min from `enqueuedAt` without
 # being stalled. GraphQL MergeQueueEntry fields used (read from the live schema via
 # introspection, no entries were readable): enqueuedAt (DateTime!), position (Int!),
@@ -169,7 +171,7 @@ jobs:
       # Mirror of max_entries_to_build in infra/github/ruleset-ci-required.tf: only
       # entries at position <= this can be building, so only they are aged (see
       # FALSE-POSITIVE FILTER). The suite fails if this drifts from the .tf.
-      MAX_ENTRIES_TO_BUILD: '2'
+      MAX_ENTRIES_TO_BUILD: '1'
     steps:
       - name: Detect stalled merge-queue entries and file an issue
         run: |
@@ -350,7 +352,9 @@ jobs:
           # queue_candidate_cause <pr> <enqueuedAt> <oid>: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
           # entry's LATEST temp ref shows a failed load whose run carries the entry's own commit (head_sha equals <oid>, the
           # entry's validated 40-hex headCommit.oid; a missing or malformed <oid> names no cause), else leaves them empty
-          # (the caller resets them per entry).
+          # (the caller resets them per entry). It also sets BUILD_YOUNG on EVERY path (0 unless the
+          # PROMOTED-HEAD RE-AGING arm below vetoes the filing): 1 = the entry's own merge_group build is
+          # younger than the threshold — a filing veto, not a cause.
           # Never fails the step. Called only AFTER the dedupe check.
           #
           # Signature (inferred from run records; GitHub does not document it): a workflow file that cannot be loaded
@@ -363,7 +367,8 @@ jobs:
           # a ref suffix), so workflow_id is the join key. If GitHub changes the signature the failure is safe: the
           # issue stays "suspected".
           queue_candidate_cause() {
-            local pr="$1" enq="$2" oid="${3-}" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w hs HIST_WARNED=0
+            local pr="$1" enq="$2" oid="${3-}" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w hs HIST_WARNED=0 mg_age_s
+            BUILD_YOUNG=0   # per-entry filing veto for the caller, reset on EVERY path (PROMOTED-HEAD RE-AGING below)
             # Pin the collation for the oid check below: a locale-ordered [0-9a-f] range can admit non-ASCII letters
             # (bash 5.3 under en_US.utf8 accepted 39 hex digits plus an accented e). Function-local, restored on return.
             local LC_ALL=C
@@ -387,6 +392,35 @@ jobs:
             since="$(date -u -d "@$(( enq_s - 300 ))" +%Y-%m-%dT%H:%M:%SZ)"
             fetch_runs push PUSH_LIST || return 0
             fetch_runs merge_group MG_LIST || return 0
+            # PROMOTED-HEAD RE-AGING (#12507): under max_entries_to_build=1 a depth-2+ entry promotes
+            # into the build window already older than the threshold — enqueuedAt then measures queue
+            # WAIT, not build age, and the probe files a SUSPECTED stall at the START of the entry's
+            # own legitimate build (the promotion class this arm exists for). Re-age from the build
+            # itself: the newest created_at among MG_LIST runs whose head_sha byte-equals the entry's
+            # headCommit.oid (the same oid join the cause naming below uses; fetch_runs already
+            # limited MG_LIST to this PR's temp refs, and all of the entry's merge_group runs —
+            # ci.yml included — share its headCommit.oid and its build start). The NEWEST matching
+            # run starts the clock (a retried/rebuilt group re-ages from its latest attempt).
+            # -1 means NO oid-matching merge_group run — the true suspect, an old head with no build
+            # at all — and it, an unparseable reply, and an age at or over the threshold all fall
+            # through to the unchanged filing path; a null or malformed oid never reaches here (the
+            # guard above) and keeps enqueuedAt-only aging. Reads $now/$threshold_s from the step;
+            # the :- defaults keep the function safe when driven standalone (the L24 row calls it
+            # directly).
+            mg_age_s="$(jq -r --arg oid "$oid" --argjson now "${now:-$(date -u +%s)}" '
+              [ .[] | select((.head_sha // "") == $oid) | (try (.created_at | fromdateiso8601) catch empty) ]
+              | if length == 0 then -1 else (($now - max) | floor) end' <<<"$MG_LIST" 2>/dev/null)" || true
+            if [[ "$mg_age_s" == "-1" ]]; then
+              echo "::notice::merge-queue-stall: PR #${pr}: no merge_group run carries the entry's headCommit.oid, or none with a parseable created_at — an old head with no build at all; the enqueuedAt verdict stands."
+            elif [[ "$mg_age_s" =~ ^-?[0-9]+$ ]]; then
+              if [[ "$mg_age_s" -lt "${threshold_s:-$(( ${STALL_THRESHOLD_MINUTES:-45} * 60 ))}" ]]; then
+                BUILD_YOUNG=1
+                echo "::notice::merge-queue-stall: PR #${pr}: enqueuedAt is older than ${STALL_THRESHOLD_MINUTES:-45}m but its own merge_group build is only $(( mg_age_s / 60 ))m old (promoted head); not filing."
+                return 0
+              fi
+            else
+              echo "::warning::merge-queue-stall: could not re-age PR #${pr} from its merge_group runs (unparseable reply); keeping the enqueuedAt verdict."
+            fi
             # LATEST temp ref = newest created_at across both lists (a superseded ref's stale failure must not
             # name a cause for the live one); on it, a failed push run with name == path (and a path and run URL of the
             # expected shape) whose workflow_id has no merge_group run on the same ref is a CANDIDATE. unique_by
@@ -423,6 +457,9 @@ jobs:
 
           # Declared once (set -u), reset for EVERY entry inside the loop below.
           CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
+          # Set by queue_candidate_cause on EVERY path (it resets it at the top): 1 = the entry's own
+          # merge_group build is younger than the threshold (promoted head, #12507) — a filing veto.
+          BUILD_YOUNG=0
 
           while IFS=$'\t' read -r pr age url state enq oid; do
             [[ -z "$pr" ]] && continue
@@ -440,6 +477,11 @@ jobs:
             fi
             CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
             queue_candidate_cause "$pr" "$enq" "$oid"
+            # A promoted head whose own merge_group build is younger than the threshold is a healthy
+            # slow queue, not a stall (#12507); the ::notice:: inside the lookup already said why.
+            if [[ "$BUILD_YOUNG" -eq 1 ]]; then
+              continue
+            fi
             cause_suffix="(suspected, verify first)"
             plain_title="merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}"
             title="$plain_title"

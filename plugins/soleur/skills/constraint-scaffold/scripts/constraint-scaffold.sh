@@ -100,7 +100,7 @@ esac
 # on founder hosts where `realpath -m` does not exist (BSD/macOS). Prints nothing on a missing dir.
 physdir() { ( cd -- "$1" 2>/dev/null && pwd -P ); }
 # physpath <path>: physical path of a file that may not exist yet, via its (existing) parent.
-physpath() { local d; d="$(physdir "$(dirname -- "$1")")" || return 1; [[ -n "$d" ]] && printf '%s/%s' "$d" "$(basename -- "$1")"; }
+physpath() { local d; d="$(physdir "$(dirname -- "$1")")" || return 1; [[ -n "$d" ]] || return 1; printf '%s/%s' "$d" "$(basename -- "$1")"; }
 # assert_fixture_dir: the CANONICAL copy (byte-for-byte; fixture-dir-operand-assert.test.sh pins every copy). It refuses an
 # empty, relative, `..`-bearing or filesystem-root operand; the stage-a refresh calls it before each write.
 assert_fixture_dir() {

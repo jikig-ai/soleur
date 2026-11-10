@@ -1480,7 +1480,7 @@ else
     log "ERROR: /etc/default/webhook-deploy not found — cannot source DOPPLER_TOKEN"
     exit 1
   fi
-  TOKEN=$(grep -oP '(?<=^DOPPLER_TOKEN=)dp\.\S+' /etc/default/webhook-deploy | head -n1)
+  TOKEN=$(grep -oP '(?<=^DOPPLER_TOKEN=)dp\.\S+' /etc/default/webhook-deploy | head -n1) || true
   if [[ -z "$TOKEN" ]]; then
     log "ERROR: webhook-deploy env file has no DOPPLER_TOKEN — aborting"
     exit 1

@@ -6021,8 +6021,8 @@ case "$COMPONENT" in
     # plus VECTOR_CLI_VERSION / VECTOR_CLI_SHA256 (TR9 PR-5)).
     image_env=$(docker inspect "$IMAGE:$TAG" -f '{{range .Config.Env}}{{println .}}{{end}}')
     docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
-    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
-    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-) || true
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-) || true
     # `|| true` is load-bearing: ci-deploy.sh runs under `set -euo pipefail`;
     # grep-no-match returns 1, which `pipefail` propagates as the pipeline
     # exit, which `$(...)` captures as the assignment exit. set -e then exits

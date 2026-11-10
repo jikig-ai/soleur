@@ -1070,3 +1070,123 @@ required context only through the `member workflow-yaml-strict` row of the
 - **PyYAML.** PyYAML is assumed preinstalled on `ubuntu-latest`, not verified. The guard prints
   `pyyaml=<version>` on every summary line (that run output is the evidence), exits 2 if it is missing,
   and has no pip fallback.
+
+## Amendment — 2026-11-08 (#12396): `parked-hold`, a server-side member step for the `parked` label
+
+Status: the `parked` merge hold (the label, the `.claude/hooks/ship-operator-step-gate.sh` text matcher and the
+drain-prs triage tier from #12197/#12342) was a best-effort local guardrail. This amendment adds the server-side
+check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision record). Append-only.
+
+- **Decision.** Two member steps join the `secret-guards` umbrella in `.github/workflows/secret-scan.yml`:
+  `parked-hold` (runs `scripts/ci-parked-hold.sh`) and `parked-hold-selftest` (runs
+  `scripts/ci-parked-hold.test.sh` against a stubbed `gh`, no `GH_TOKEN`, no network). Each carries the
+  step-level condition `!cancelled() && (pull_request || merge_group)` exactly as `waiver-discipline` does,
+  and each has its own `member ... 'pull_request,merge_group'` line in the `aggregate` step
+  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint gained the parsed key allow-list and the aggregate-shape rules, see the structural invariant below). No job-level
+  `if:`. No Terraform, ruleset, canonical-JSON or `required-checks.txt` list change: the required context is
+  still the umbrella `secret-guards`, so this PR applies nothing to production.
+- **Why hosted in `secret-guards`.** `secret-scan.yml` already triggers on `labeled`/`unlabeled`; `ci.yml` does
+  not, and adding the types there would re-run the whole suite on every label event under
+  `cancel-in-progress`. A new top-level required context would need a ruleset apply, a canonical-JSON edit and a
+  bot synthetic for no gain over a member of an existing umbrella. The semantic misfit (a label hold inside a
+  secret scanner) is accepted and recorded in `scripts/required-checks.txt`.
+- **Evaluation.** The labels are read LIVE (`gh api repos/<repo>/pulls/<n>`), never from the event payload
+  (a re-run reuses a stale payload). Label names compare case-insensitively. The response body must name the
+  expected PR number and carry a label array, or the check fails closed. One bounded retry (two attempts) so a
+  single transient API 5xx does not stall the queue; a persistent failure, an unparseable body, a missing PR or a
+  non-matching queue ref fails closed with a fixed annotation (never label text or a body). On `merge_group` the
+  PR number comes from `github.event.merge_group.head_ref` with the `mg_arm` regex of
+  `scripts/ci-oracle-review.sh`. Unlike `mg_arm`, the check does not enumerate queue entries: with SQUASH each
+  position runs its own `merge_group` build, and each build judges the PR named by its own ref.
+  The failure annotation is fixed text that tells a reader not to lift the hold (`PR #N is held for the operator
+  (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held
+  anyway.`); the three "label state unreadable" annotations end `re-run the check (this is not a parked hold)`.
+  Neither carries label text or a response body.
+- **Structural invariant (member step keys and the aggregate).** `scripts/lib/umbrella-member.sh` `member()` reads
+  each step's `conclusion`, and `continue-on-error: true` makes a failed step's conclusion `success` (the failure
+  survives only in `outcome`, which `member()` prints but does not judge); a `shell:` template that never runs the
+  command is a second one-key neutraliser. On either parked-hold step either would disarm the hold with the
+  umbrella still green. It is pinned twice, from the PARSED workflow (PyYAML), not from a text match, so no YAML
+  spelling of a key (bare, double-quoted, single-quoted, first key of a list item, flow mapping, job level) gets past
+  it. `scripts/lint-umbrella-aggregate.sh` allow-lists the job keys and step keys of every umbrella (a required
+  umbrella may carry no `continue-on-error`, `shell`, `defaults` or job-level `if`; a `uses:` must be an
+  `owner/repo@<40-hex>` action, so a local composite action cannot hide a step); restricts each member step's
+  `if:` to `!cancelled()` plus an allow-listed set of comparison atoms (a `&& false`, a trailing comment naming
+  `!cancelled()` and a top-level `||` are rejected); requires every `member` call to match one strict shape whose
+  4th and 5th arguments are exactly the `conclusion` and `outcome` expressions of the ids in the 3rd (a constant
+  or another step's verdict is rejected); and requires the aggregate to be a fixed statement sequence ending in
+  the `if [ "$failed" -ne 0 ]` tail (an early `exit`, a statement after the tail, `|| true` between the `||` links
+  are rejected). `scripts/ci-parked-hold.test.sh` re-pins the two parked-hold steps and the job by the same
+  parsed allow-list and feeds the lint one mutated copy of the workflows per rule (sections D and G, each
+  mutation-proven in a sandbox copy). The lint also allow-lists the TOP-LEVEL keys of the three umbrella workflows
+  (`name`, `on`, `permissions`, `concurrency`, `env`, `jobs`), so a workflow-level `defaults.run.shell` is rejected
+  like the job-level one (measured: none of the three files carries a top-level `defaults:`); it rejects `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `BASH_FUNC_*` and `GITHUB_*` names in any `env` mapping (workflow, job or
+  step) of an umbrella, except the two `GITHUB_*` names the tree measured in use (`GITHUB_BASE_REF`,
+  `GITHUB_REPOSITORY`) (a `BASH_ENV` file holding an EXIT trap turns the aggregate's `exit 1` into success);
+  pins the aggregate step's `env` to exactly `EVENT_NAME: ${{ github.event_name }}`; rejects a step with both `uses`
+  and `run`, and an empty `jobs:` (a clean annotated failure, not a traceback); and its census reads `*.yml` and
+  `*.yaml`. The tree was swept: the only umbrella that uses `continue-on-error` is the advisory `guards-advisory`
+  (several of its steps, the harness-discovery ones; the number is deliberately not written here, re-measure with
+  the one-liner in the lint header; not a required context), which the lint exempts by name from that one key.
+  `quality-advisory` is NOT exempt from it (it has none); it is allowed only its job-level `if`/`needs`.
+  PyYAML is a dependency of the lint and of the suite that runs it in the `secret-guards` job: its presence on the
+  runner (`ubuntu-24.04` for `secret-guards`, `ubuntu-latest` for `test-scripts`) is assumed, not installed or
+  verified here, exactly as the required `workflow-duplicate-keys` member already assumes it. The assumption has
+  precedent in the same `test-scripts` job: `git grep -n 'import yaml' scripts` finds
+  `scripts/digest-oracle-guard.test.sh:55`, `scripts/ci-draft-light.test.sh:60` and
+  `scripts/ci-push-dedupe.test.sh:67`, each of which hard-fails (exit 2) when `import yaml` fails. The lint prints
+  `pyyaml=<version>` on success (that run output is the evidence), and a missing PyYAML fails the lint (exit 2)
+  rather than skipping it; a missing PyYAML would also turn the required `parked-hold-selftest` member red, because
+  section G of the suite runs the lint.
+  Residuals this does NOT close: (i) a member group is an OR over its arms, so a dead arm next to a live sibling of
+  the same member (for example `scan-install`, which runs on every event) stays green; (ii) the `run:` bodies of
+  member steps are not inspected by the lint (the parked-hold steps' bodies are executed by section E of the
+  suite, the others are not); (iii) a never-true event comparison inside an allow-listed `if:` atom cannot be
+  detected; (iv) there is no check that `secret-guards` has a single producer.
+- **What "server-side enforced" means.** The check binds auto-merge, the merge queue and every identity subject
+  to the required checks, including Actions tokens and the `schedule` skill's `gh pr merge --squash --auto`.
+  Draft status stays the first hold (`gh pr ready` flips it with no check; this check covers parked-and-ready).
+  `admin-merge-ready.sh` grades every required context, so a parked PR is red there with no edit.
+- **Stated residuals (not hidden).**
+  1. Any identity with triage access can run `gh pr edit --remove-label parked`; that fires `unlabeled`, and the
+     re-run is green. An allowlist of the last unlabeling actor (`issues/N/events`) was considered and left out
+     as scope.
+  2. The ruleset's bypass actors (OrganizationAdmin and Admin role, `pull_request` mode) are not bound: an
+     admin-credentialed `gh pr merge --admin` passes. `admin-merge-ready.sh` is the shipped gate for that path.
+  3. A `parked` label applied by an Actions actor with `GITHUB_TOKEN` fires no `labeled` run (a GitHub rule), so
+     a parked bot PR keeps its fabricated-green `secret-guards` synthetic until its `merge_group` run. The only
+     live bot-PR producer today (`weakness-miner.yml` through `bot-pr-with-synthetic-checks`) passes no labels.
+     A later HUMAN label fires a real `labeled` run that supersedes the synthetic; for a `GITHUB_TOKEN`-created PR
+     that is unverified, and the flip evidence is defined in `scripts/required-checks.txt`.
+  4. Each queue entry is judged by its own `merge_group` build (queue grouping `ALLGREEN`,
+     `max_entries_to_merge = 3`): a label added to an entry AFTER its build ran is not seen. Mitigation is dequeue
+     per `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`.
+  5. CODEOWNERS rows for `scripts/ci-parked-hold.sh`, `scripts/ci-parked-hold.test.sh` and
+     `scripts/lib/umbrella-member.sh` route review but are advisory until branch protection enforces code-owner
+     review (the ruleset has no `require_code_owner_review`). A PR that removes the member is judged by its own
+     weakened workflow file; that is the limit of any in-repo check, and review is the control.
+  6. An unreadable GitHub API fails closed: a transient outage is cleared by a re-run, a prolonged one by an
+     admin bypass.
+  7. A seconds-wide window between the label write and the new check-run: until the `labeled` run reports, the
+     previous green `secret-guards` run is still the latest, so an auto-merge that fires inside that window is
+     not held.
+  8. Renaming or deleting the `parked` label disarms the check: it matches the literal name, so a renamed label
+     is no longer seen and a deleted one is gone. (The local hook also blocks `gh label delete|edit` on a
+     checkout that carries it, which is defence in depth only.)
+  9. A stacked PR whose base is not `main` is outside the ruleset (it targets `main` only), so neither the
+     required context nor this check binds it.
+- **ASSUMPTION to re-check (ADR-270 per-position build).** The decision not to enumerate queue entries rests on
+  this premise: each `merge_group` entry pays its own cumulative build under `ALLGREEN`, and a grouped `head_ref`
+  names only the deepest member. If `grouping_strategy` (or `max_entries_to_merge`) changes so that one build
+  covers several entries, a lower entry's label is no longer judged by its own build and this check must
+  enumerate the entries as `mg_arm` does. The queue-ref regex is parity-pinned to the one in
+  `scripts/ci-oracle-review.sh` and `scripts/merge-queue-cla-verify.sh` by `scripts/ci-parked-hold.test.sh`.
+- **Local hook.** `.claude/hooks/ship-operator-step-gate.sh` stays as defence in depth; its header and the
+  drain-prs skill no longer call the hold best-effort-only but point at this check. The follow-through probe
+  `scripts/followthroughs/parked-merge-hold-enforcement-12342.sh` (it re-evaluated this very route) is deleted.
+- **Hook cost measured (item 5, 2026-11-08).** The hook with a PATH-stubbed `gh`, `gh pr merge <n> --squash`
+  statements chained with `;`, median of five runs on a host at load average about 41 (so absolute numbers are
+  inflated): 1 statement 218 ms, 10 statements 577 ms, 100 statements 4954 ms (about 47 ms per statement, one
+  stubbed `gh pr view` per statement). The 100-statement run exceeds the 200 ms threshold ruled in T3, so the
+  per-statement cost is tracked in #12449 rather than fixed here.
