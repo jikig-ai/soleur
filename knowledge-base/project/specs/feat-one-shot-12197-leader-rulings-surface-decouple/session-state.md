@@ -27,3 +27,7 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:gdpr-gate, soleur:sp
 - constraint: Never use DATABASE_URL; no production writes; do not touch the approval-queue flag (no flag-flip script runs).
 - constraint: Merge only through the merge queue after PR-attached CI is green; archive plan and spec inside the PR; check served build_sha on https://app.soleur.ai/health after deploy.
 - constraint: PR body Ref #12197, #12365, #12366, #12449; closes none. Skip feature tweet. Do not comment on those issues.
+
+### Work-phase gate (2026-11-10)
+
+- Local affected gate (169 of 752 suites) stopped mid-run on the operator's instruction ("stop the affected test run and rely on CI"); no verdict was obtained. The required CI `test` context is the gate for this PR. Targeted suites run by the implementers: legal-acceptance + c4 vitest 941/941, web-egress 25/25, tsc rc=0, c4 freshness 4/4, c4 parity 13/13, new e2e 2/2, authenticated project 80 passed / 1 load flake (AC10, passed 6/6 on isolated re-run).
