@@ -394,7 +394,6 @@
 1	plugins/soleur/test/c4-model-freshness.test.sh
 2	plugins/soleur/test/check-deps-adapter-drift.test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
-1	plugins/soleur/test/ci-pr-affected-replay.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 1	plugins/soleur/test/collision-precheck.test.sh
 1	plugins/soleur/test/compaction-state-hook.test.sh
@@ -460,9 +459,8 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-oracle-lane.sh
 2	scripts/ci-oracle-lane.test.sh
-8	scripts/ci-oracle-review.sh
+12	scripts/ci-oracle-review.sh
 1	scripts/ci-parked-hold.test.sh
-8	scripts/ci-pr-selection.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh

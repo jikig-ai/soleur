@@ -526,11 +526,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
   "plugins/soleur/test/ci-head-verdict.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
-AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
-  ".github/workflows/ci.yml"  # plugins/soleur/test/ci-pr-affected-preactivation.test.sh:434
-  "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
-  "scripts/lib/test-affected-paths.sh"  # THIS FILE
-)
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
   "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
   "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
@@ -1122,7 +1117,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # pull-card.test.sh greps and parses the marker registry through a $REPO_ROOT path the derive does not
-# select. The three query-script names are skill-text needles, accepted in scripts/ci-pr-affected-audit.accept.tsv.
+# select. The three query-script names are skill-text needles (the accept table that carried them retired with the S4 evidence layer, 2026-11-09).
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_PULL_CARD_TEST_SH_PATHS=(
   "apps/web-platform/server/git-lock-marker-telemetry.ts"  # plugins/soleur/skills/incident/test/pull-card.test.sh:17
   "plugins/soleur/skills/incident/test/pull-card.test.sh"
@@ -2058,7 +2053,6 @@ AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   ".github/workflows/web-platform-release.yml"
   "glob:plugins/soleur/test/*ci-test-aggregator-diagnosis.test*.sh"  # real read; anchor churn 9 commits/90d
   "glob:plugins/soleur/test/*ci-e2e-skip-anchors.test*.sh"  # real read; exact-file spelling would reveal 15 accept rows
-  "scripts/ci-pr-selection.sh"
   "scripts/ci-push-dedupe.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -2079,19 +2073,6 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/required-checks.txt"
 )
 
-# scripts/ci-pr-selection (#9729, ADR-276 S4) — the suite EXECUTES the pr-selection driver against throwaway git fixtures and a stub
-# runner, derives the trigger list from what scripts/test-all.sh sources and the --pr-gated decline labels from its text, and reads
-# the git-fixture env library. Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that
-# drives its floor).
-AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
-  "plugins/soleur/test/lib/git-fixture-env.sh"
-  "scripts/ci-pr-selection.sh"
-  "scripts/ci-pr-selection.test.sh"
-  "scripts/guard-vacuity-floor.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/test-all.sh"
-)
-
 # scripts/ci-oracle-lane (#12156, ADR-276 amendment) — the suite EXECUTES the oracle-lane driver against throwaway git
 # fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the lock env-read and the
 # fail-closed defaults) and asserts manifest↔registration parity for scripts/ci-oracle-lane-suites.txt. ci.yml is an
@@ -2104,18 +2085,19 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   "scripts/suite-durations.tsv"  # check_legs() joins it for the per-leg budget trigger — its state feeds the verdict
   "scripts/ci-oracle-lane.sh"
   "scripts/ci-oracle-lane.test.sh"
-  "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
   "scripts/lib/test-affected-paths.sh"
 )
 
 # scripts/ci-oracle-review (#10859, PR3b) — the suite executes the driver scripts/ci-oracle-review.sh under
 # PATH stubs, reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin, and reads
 # .github/workflows/ci.yml for the job-wiring pins (the awk extraction of the oracle-review-required job
-# block the review fix round added at scripts/ci-oracle-review.test.sh:426). Naming-only paths
-# (scripts/ci-pr-affected-replay.py — a fixture's RATCHET_ORACLE text and the stub-git dispatch glob) carry
-# accept rows; the suite never opens them.
+# block the review fix round added at scripts/ci-oracle-review.test.sh:426), and opens
+# scripts/ci-oracle-surface.txt for the committed oracle-list pins. Naming-only paths
+# (the retired replay module's name lives in legacy-fallback fixture text) carry
+# no real reads; the suite never opens them.
 AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
   ".github/workflows/ci.yml"
+  "scripts/ci-oracle-surface.txt"
   "scripts/ci-oracle-review.sh"
   "scripts/ci-oracle-review.test.sh"
   "scripts/merge-queue-cla-verify.sh"
@@ -2152,11 +2134,12 @@ AFFECTED_SCRIPTS_LEGAL_ACCEPTANCE_COUNTS_PATHS=(
 )
 
 # plugins/soleur/test/bot-synthetic-unreachability.test.sh (#10859, PR3b) — reads the composite action's
-# ALLOWED_PATHS, imports RATCHET_ORACLE from the live replay module, and pins the two new required contexts in
-# required-checks.txt. Edge set = the files it opens.
+# ALLOWED_PATHS, reads the committed oracle surface list (the replay-module import retired with the S4
+# evidence layer, 2026-11-09), and pins the oracle-review-required context in required-checks.txt. Edge
+# set = the files it opens.
 AFFECTED_PLUGINS_SOLEUR_TEST_BOT_SYNTHETIC_UNREACHABILITY_TEST_SH_PATHS=(
   ".github/actions/bot-pr-with-synthetic-checks/action.yml"
-  "scripts/ci-pr-affected-replay.py"
+  "scripts/ci-oracle-surface.txt"
   "scripts/required-checks.txt"
   "scripts/lib/test-affected-paths.sh"
   "plugins/soleur/test/bot-synthetic-unreachability.test.sh"
@@ -4155,7 +4138,6 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "glob:.github/workflows/*scheduled-zot-restart-loop.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
   "glob:knowledge-base/engineering/architecture/decisions/*ADR-027-process-local-state-for-runners.md"  # names-as-data mention; anchor apps/web-platform/infra/ci-deploy.sh churned 40 commits/90d — accept row refused, declared-not-scanned
   "glob:knowledge-base/engineering/architecture/decisions/*ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
-  "glob:scripts/*ci-pr-affected-audit.accept.tsv"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
   "glob:scripts/*image-cve-triage.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
   "glob:scripts/*inngest-key-rotate.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
   "glob:scripts/followthroughs/*inngest-hostmetrics-trim-11602.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
@@ -4319,8 +4301,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
 )
 # ---------------------------------------------------------------------------
 # S4 PR4 (#10860) code-edge drain. The arrays from here to the end of the file declare, for suites that had no
-# AFFECTED_*_PATHS block, the files the suite really executes, sources or opens. Rubric:
-# knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md section 7, "The drain rubric"; per-pair
+# AFFECTED_*_PATHS block, the files the suite really executes, sources or opens. The rubric runbook retired
+# with the S4 evidence layer (2026-11-09); per-pair
 # evidence: knowledge-base/project/specs/archive/20261025-151757-feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv.
 # Exact files only, grouped by edge kind (scratch-root spreads, incidents-lib spreads, single-edge arrays), then by suite path.
 # An edge whose declaration reveals more mentions was held back (#10959).
@@ -4985,34 +4967,6 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
-# grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
-# the GIT_ var census, the required-checks fixture copy); the suite file is shared by all three
-# labels, so all three arrays carry the same edges.
-AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
-  "scripts/ci-draft-light.test.sh"
-  "scripts/ci-pr-affected-preactivation.sh"
-  "scripts/ci-push-dedupe.test.sh"
-  "scripts/required-checks.txt"
-  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
-  "scripts/ci-draft-light.test.sh"
-  "scripts/ci-pr-affected-preactivation.sh"
-  "scripts/ci-push-dedupe.test.sh"
-  "scripts/required-checks.txt"
-  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
-  "scripts/ci-draft-light.test.sh"
-  "scripts/ci-pr-affected-preactivation.sh"
-  "scripts/ci-push-dedupe.test.sh"
-  "scripts/required-checks.txt"
-  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 
 
 # scripts/host-tcp-exposure (#12008): reads every Terraform file in the infra directory as TEXT (no host, no

@@ -10,8 +10,9 @@
 # members is a vacuous gate and reds.
 #
 # MEMBERSHIP (decision-challenges T3): every registration whose SUT is the oracle/selector machinery — the affected-set
-# index, its derive path, the audit replay battery, the census linter that is the AFFECTED_*_PATHS census authority,
-# and the two selection levers that read the index. Guard 4 pins the pin BI-DIRECTIONALLY: manifest ≡ this declared
+# index, its derive path, the census linter that is the AFFECTED_*_PATHS census authority, the oracle-selection lever
+# and the oracle-review sentinel. (The audit replay battery and the S4 pr-selection lever retired 2026-11-09 — #9729
+# ruling.) Guard 4 pins the pin BI-DIRECTIONALLY: manifest ≡ this declared
 # oracle-SUT set minus the exclusion list below, so a NEW oracle-machinery registration cannot silently escape the leg.
 #
 # The root `*.md` surface member admits AGENTS.md/CLAUDE.md edits (T2): those are covered by the rule-corpus lints
@@ -27,11 +28,11 @@
 #                                                 affected gate's own test list, not the index the lane protects
 #   plugins/soleur/test/affected-tests-pool-default.test.sh   same shape: glob-registered pool-default suite, adjacent not oracle SUT
 #   scripts/audit-suite-reads                     runtime-read recorder; adjacent machinery, not the oracle/selector SUT
-#   tests/scripts/lint-ratchet                    the ratchet LINTER's suite — adjacent machinery (the ratchet's own
-#                                                 affected-index-ratchet job already runs on the reduced set)
+#   tests/scripts/lint-ratchet                    the ratchet LINTER's suite — adjacent machinery (the shared
+#                                                 lint-ratchet tool is oracle-surface, its own suite is not)
 #   scripts/pre-push-ratchet-lane                 local pre-push lane, not part of the hosted oracle validation
 #   plugins/soleur/test/bot-synthetic-unreachability.test.sh   SUT is the bot-PR fabrication bound
-#                                                 (ALLOWED_PATHS x RATCHET_ORACLE disjointness), adjacent
+#                                                 (ALLOWED_PATHS x oracle-surface disjointness), adjacent
 #                                                 machinery — the #6049 ceiling, not the index oracle
 #   plugins/soleur/test/ci-path-gating.test.sh     path-gating classifier, adjacent machinery
 #   scripts/ci-oracle-lane                        SUT is the lane driver itself, unreachable by a lane-eligible diff
@@ -47,9 +48,4 @@ scripts/test-all-group-affected	bash scripts/test-all-group-affected.test.sh
 scripts/test-affected-derive	bash scripts/test-affected-derive.test.sh
 scripts/test-affected-derive-cache	bash scripts/test-affected-derive-cache.test.sh
 scripts/test-affected-kb-consumers	bash scripts/test-affected-kb-consumers.test.sh
-plugins/soleur/test/ci-pr-affected-replay-a	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-167
-plugins/soleur/test/ci-pr-affected-replay-b	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 168-333
-plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 334-499
-scripts/ci-pr-selection	bash scripts/ci-pr-selection.test.sh
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	bash plugins/soleur/test/ci-pr-affected-preactivation.test.sh
 scripts/ci-oracle-review	bash scripts/ci-oracle-review.test.sh
