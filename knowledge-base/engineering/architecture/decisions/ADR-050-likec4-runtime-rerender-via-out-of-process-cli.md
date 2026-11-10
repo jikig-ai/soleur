@@ -483,26 +483,40 @@ allowed, so there only the env pin and the file-tool guard hold.
   tracked `.gitattributes`. This exposure predates the change and reaches server secrets; the earlier
   "sandbox-contained, not cross-tenant" framing applies to the agent's own git only.
 - > **Superseded in part, 2026-11-09 follow-on (Ref #9601), the host-side git bullet above:** the consumers it
-  > lists, plus the git-data key-auth push and fetch, now run through one leaf, `server/host-git.ts`: the shared
-  > hardening arguments, `safe.bareRepository=explicit`, `protocol.ext.allow=never`, signing off, and a scrubbed
-  > environment with the image identity file as the global config. `GIT_WORK_TREE=<workspace>` is set on working-tree
-  > commands, and `GIT_ALLOW_PROTOCOL` on the two network arms (`https` installation-auth, `ssh` key-auth). Correction of
-  > the premise above: `inflight-checkpoint` spread `process.env`; it did not scrub it. Measured on git 2.56 and pinned by
-  > `test/host-git-consumers-real-git.test.ts`: closed are fsmonitor (in `.git/config`, through a `commondir` redirect and
-  > in `config.worktree`), hooks, a signing program, a `core.worktree` redirect to another directory, and the
-  > local-exec transports (`uploadpack` on a local-path remote, `ext::`), plus server-secret exposure to any helper that
-  > runs. STILL OPEN, each a `RESIDUAL` row, not a control: `filter.*` drivers (through `.git/info/attributes`, a
-  > `commondir` redirect or a tracked `.gitattributes`), `merge.*.driver`, repo-config remote, proxy and TLS settings
-  > (`url.<x>.insteadOf` is followed, and the key-auth arm then dials the rewritten host with its host-key pin options
-  > still on the command), and the consumer's own auth variable (the installation token in the legacy arm; in the
-  > key-auth arm a helper that runs can read the 0600 transport key file during the push), and a gitfile `.git` the agent
-  > wrote that names another repository's gitdir: `GIT_WORK_TREE` pins the working tree, not the git directory, so the
-  > auto-commit lands in the foreign repository (measured: its history moved; cross-tenant WRITE, a follow-up shape check
-  > is the candidate closure, not done here). `--attr-source` was measured
-  > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). The structural closure remains the
-  > isolated-`GIT_DIR` path, which is operator-held and unchanged. Census-only host-side callers (not routed through the
-  > helper): `workspace.ts`, `git-config-atomic.ts`, `worktree-config-seed.ts`, `push-branch.ts` (legacy branch),
-  > `context-queries-hook.ts`, `git-worktree-validity.ts` and the cron helpers.
+  > lists, plus the git-data key-auth push and fetch, `workspace.ts` provisioning and the `context-queries-hook`
+  > `ls-files`, now run through one leaf, `server/host-git.ts`: the shared hardening arguments,
+  > `safe.bareRepository=explicit`, `protocol.ext.allow=never`, `core.alternateRefsCommand=`, signing off, and a scrubbed
+  > environment with the image identity file as the global config. For a call with a workspace `cwd` it sets
+  > `GIT_WORK_TREE`, `GIT_DIR` and `GIT_COMMON_DIR` to the workspace itself and REFUSES a `.git` that is a gitfile, a
+  > symlink or carries `commondir` (a preflight, not a structural control). `GIT_ALLOW_PROTOCOL` is required on every
+  > call: `https` (installation-auth), `ssh` (key-auth), `none` (every local-only consumer, which also stops a promisor
+  > or `file` remote reached from a local verb). The git-data push goes to the explicit server-derived URL, and a
+  > `url.*` preflight guard (shared with the fetch) refuses any effective `url.*` rewrite: the host-key pin limits which
+  > host key is trusted, NOT which repository path on that host is written, so same-host cross-repo writes are limited by
+  > the explicit URL plus that preflight, which is not a structural control (the receiving side checks fencing and
+  > namespace per ref, not caller ownership, and there is one transport key). Correction of the premise above:
+  > `inflight-checkpoint` spread `process.env`; it did not scrub it. Measured on git 2.56 and pinned by
+  > `test/host-git-consumers-real-git.test.ts` and `test/host-git.test.ts`: closed are fsmonitor (in `.git/config`, in
+  > `config.worktree`; through `commondir` it is refused), hooks, a signing program, a `core.worktree` redirect to another
+  > directory, and the local-exec transports (`uploadpack` on a local-path or promisor remote, `ext::`,
+  > `core.alternateRefsCommand`). The scrubbed environment hides server variables from a helper that reads ONLY ITS OWN
+  > environment. It gives NO secrecy against a helper that reads the server's `/proc/<pid>/environ` (same uid; measured):
+  > any carrier that still executes is a full same-uid compromise, including other tenants' workspace directories,
+  > because the sandbox protects only the agent's own process tree. STILL OPEN, each a `RESIDUAL` row or a named
+  > census item, not a control: `filter.*` drivers (through `.git/info/attributes`, `.git/config` or a tracked
+  > `.gitattributes`), `merge.*.driver`, repo-config remote, proxy and TLS settings (`url.<x>.insteadOf` toward an https
+  > host is followed on the legacy arm, and the askpass script answers for any host, so the installation token can be
+  > sent to a rewritten host; the askpass body is shared with the operator-held isolated arm and is not edited here), and
+  > the consumer's own auth variable (the installation token in the legacy arm; in the key-auth arm a helper that runs
+  > can read the 0600 transport key file during the push). The foreign-gitdir refusal is measured for `session-sync` and
+  > for `ensureGitDataRemote`; the other consumers share the helper and the census, with no row naming a foreign store.
+  > Sites that run host git on an agent-authored `.git` WITHOUT the shared hardening (census-only, not routed here):
+  > `git-config-atomic.ts`, `worktree-config-seed.ts`, `git-worktree-validity.ts`, `push-branch.ts` (the file holds the
+  > operator-held isolated push; its direct `cat-file` / `config user.*` calls run unhardened), and the cron helpers;
+  > their writes follow a gitfile or `commondir` redirect (read from source, not measured). `--attr-source` was measured
+  > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). Structural options NOT done here: running
+  > host git where the server's `/proc` entry is not visible (`bwrap --unshare-pid --proc`), a non-dumpable server
+  > (`PR_SET_DUMPABLE=0`), and the isolated-`GIT_DIR` path (operator-held, unchanged).
 - Scripts that assume a bare-root layout (`worktree-manager.sh` calls `git -C <bare common dir>
   rev-parse --is-bare-repository`) fail under `safe.bareRepository=explicit`; a normal-clone Concierge
   workspace is unaffected, and a legitimate bare repository needs `--git-dir` or `GIT_DIR`.

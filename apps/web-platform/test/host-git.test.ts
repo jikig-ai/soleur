@@ -84,7 +84,7 @@ describe("hostGitInvocation: environment", () => {
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
   });
 
-  it("scrubs the server environment: a server-only variable never reaches the child; GIT_DIR and GIT_EXEC_PATH are dropped", () => {
+  it("scrubs the server environment: a server-only variable is absent from the child's environment; GIT_DIR and GIT_EXEC_PATH are dropped", () => {
     // A developer or CI shell may set TLS / proxy keys; they are forwarded only when set (next row), so clear them here.
     for (const k of ["SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"]) delete process.env[k];
     process.env.SERVER_ONLY_SENTINEL = "must-not-leak";

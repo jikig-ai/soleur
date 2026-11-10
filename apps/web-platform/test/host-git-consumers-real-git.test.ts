@@ -4,7 +4,8 @@
 // `.git` an agent session can author. Every row here plants an agent-authorable carrier, drives the REAL code
 // path of one consumer and asserts EFFECTS:
 //   A1  no closable carrier ran (canary file untouched; a foreign worktree is not staged, committed or overwritten);
-//   A2  the server-only sentinel is absent from the environment of every helper that did run;
+//   A2  the server-only sentinel is absent from the OWN environment of every helper that did run (this says nothing
+//       about a helper that reads the server's /proc environ: any carrier that executes is a same-uid compromise);
 //   A3  the consumer's own operation still succeeded.
 // `RESIDUAL` rows pin what is NOT closed. They are measured open items, not controls: a change in either
 // direction fails them on purpose.
@@ -594,7 +595,7 @@ describe("RESIDUAL rows: measured open items, not controls", () => {
   for (const d of DRIVERS) {
     for (const id of d.residual) {
       const p = planterById(id);
-      it(`RESIDUAL ${d.id}: ${id} still runs; the server sentinel does not reach it`, async () => {
+      it(`RESIDUAL ${d.id}: ${id} still runs; the server sentinel is absent from its own environment`, async () => {
         expect(rawTwin(p), `carrier ${id} is not live on ${gitVersion}`).toBe(true);
         await runCell(d, p);
         residualRows++;

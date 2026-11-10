@@ -160,7 +160,8 @@ core.fsmonitor=false -c core.attributesFile=/dev/null` plus a scrubbed env with 
 Consequences carried into the design: `-c` arguments close fsmonitor, hooks, `config.worktree`, attribute-file
 sources and (with one added flag) commit signing; they do not close `filter.*`, `merge.*.driver` or URL rewriting.
 Two further carriers need ENV, not `-c`: `GIT_WORK_TREE=<cwd>` (foreign worktree) and `GIT_ALLOW_PROTOCOL`
-(local-exec transports on the network arms). The env scrub closes server-secret exposure to any helper that runs, but a
+(local-exec transports on the network arms; the review round made it required on every call). The env scrub hides server
+variables from a helper that reads only its own environment (not from a same-uid helper reading `/proc`), and a
 consumer's own auth variable still reaches it. Open items are pinned as residuals (CTO F4, R7). Not yet measured
 (Phase 1 measures them and pins the ones that fire, or drops the matching helper addition): `remote.origin.url`/`pushurl`,
 `http.proxy`, `http.sslVerify`, URL-scoped `credential.<url>.helper`, `merge.verifySignatures` on `pull`,
@@ -426,10 +427,9 @@ Post-merge (operator-free, agent-run, carry-forward): the Sentry read in Phase 6
 > config. It adds `-c` arguments, a few environment pins (`GIT_WORK_TREE`, `GIT_ALLOW_PROTOCOL` on the two network
 > arms) and a scrubbed environment, which close fsmonitor, hooks, `config.worktree`, attribute-file sources, commit
 > signing, a `core.worktree` redirect, the measured local-exec transport carriers (`uploadpack` on a local-path remote,
-> `ext::`) and server-secret exposure to any helper that runs. It does NOT close `filter.*` drivers (through
+> `ext::`). The scrubbed environment hides server variables only from a helper that reads its own environment (a same-uid helper can read the server's `/proc` environ). It does NOT close `filter.*` drivers (through
 > `.git/info/attributes`, a `commondir` redirect or a tracked `.gitattributes`), `merge.*.driver`, repo-config remote,
-> proxy and TLS settings (including `url.<x>.insteadOf` toward an https or ssh host), a gitfile `.git` pointing at a
-> foreign gitdir unless the measured shape check below says otherwise, or any other repo-config execution path that
+> proxy and TLS settings (including `url.<x>.insteadOf` toward an https or ssh host), or any other repo-config execution path that
 > was not measured. A consumer's own auth variable still reaches any helper that runs: the installation token in the
 > legacy arm, and in the key-auth arm a helper that runs can READ the 0600 transport key file during the push (the
 > pinned host key protects the handshake, not the file). Those are pinned by tests as measured open items. It says
@@ -451,7 +451,7 @@ Legal: not relevant. No public, marketing or legal text changes; any legal wordi
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the end-of-session auto-commit or pull silently stops (identity loss, or a scrubbed environment that breaks the HTTPS clone or pull), so a user's knowledge-base edits never reach their GitHub repository, or a new session cannot open the workspace; the visible symptom is "Sync pull failed - continuing with local state" and unpushed work. After this change the two auto-commit failures also reach Sentry.
-- **If this leaks, the user's data / workflow is exposed via:** a prompt-injected agent session in one workspace plants a `.git` carrier (a `commondir` redirect to a directory it authored); the server's next host-side git run, outside the sandbox, executes the carrier's helper with the server's environment, which holds the database service-role key, the BYOK encryption key and the git-data transport key. That reaches other tenants, not only the author. After this change the server-only variables do not reach a helper that runs. A `filter.*` or `merge.*.driver` helper still runs and still sees the consumer's own auth variable: the installation token of that same user's repository in the legacy arm, and, in the key-auth push, the `GIT_SSH_COMMAND` that names the cross-tenant git-data transport key file, which a same-uid helper that runs can read during the push. Repo-config remote rewriting toward an https or ssh host can still redirect a tokened fetch or pull. Those are pinned residuals, not controls. The env pins (`GIT_WORK_TREE`, `GIT_ALLOW_PROTOCOL` on the network arms) close the measured foreign-worktree and local-exec transport carriers; any other repo-config execution path that was not measured remains open.
+- **If this leaks, the user's data / workflow is exposed via:** a prompt-injected agent session in one workspace plants a `.git` carrier (a `commondir` redirect to a directory it authored); the server's next host-side git run, outside the sandbox, executes the carrier's helper with the server's environment, which holds the database service-role key, the BYOK encryption key and the git-data transport key. That reaches other tenants, not only the author. After this change the server-only variables are absent from the OWN environment of a helper that runs, but a same-uid helper can still read the server's `/proc/<pid>/environ` (measured in review), so any carrier that executes is a full same-uid compromise, including other tenants' workspace directories (the sandbox protects only the agent's own tree). A `filter.*` or `merge.*.driver` helper still runs and still sees the consumer's own auth variable: the installation token of that same user's repository in the legacy arm, and, in the key-auth push, the `GIT_SSH_COMMAND` that names the cross-tenant git-data transport key file, which a same-uid helper that runs can read during the push. Repo-config remote rewriting toward an https host can still redirect a tokened fetch or pull (the askpass script answers for any host and is shared with the operator-held isolated arm). The review round added: a `.git` that is a gitfile, a symlink or carries `commondir` is refused before git runs (a preflight; measured for session-sync and `ensureGitDataRemote`), `GIT_ALLOW_PROTOCOL` is required on every call (`none` for local-only consumers), and the git-data push goes to the explicit server-derived URL behind a `url.*` preflight guard. Those are pinned residuals, not controls. The env pins (`GIT_WORK_TREE`, `GIT_ALLOW_PROTOCOL` on the network arms) close the measured foreign-worktree and local-exec transport carriers; any other repo-config execution path that was not measured remains open.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** ratified by the CTO 2026-11-09 for the preceding git-read change and carried forward unchanged: execution needs only one prompt-injected session in one workspace, and the server-environment reach is cross-tenant, so `aggregate pattern` would understate it.
 
@@ -588,3 +588,22 @@ None. Queried open `code-review` issues for `session-sync.ts`, `ensure-workspace
 - The CTO's operator-needed actions: none (both rounds).
 - Carry-forward: the 24-hour post-deploy Sentry read against the pre-deploy baseline (Phase 6), owned by the session that runs `soleur:postmerge`.
 - Not measured: the prod TLS/egress canary (HTTPS clone and pull under the scrubbed env inside the prod container); the token path of any network arm; the key-auth arm's real handshake against a rewritten host (only the pinned ssh options are asserted); the in-sandbox delivery of the agent env pin (unchanged); the image identity file under the host-side path beyond the Dockerfile build-time check; `remote.origin.url`/`pushurl`, `http.proxy`, `http.sslVerify` and URL-scoped `credential.<url>.helper` until Phase 1 measures them.
+
+## Review-round addendum (2026-11-09, appended; earlier sections above are the plan as written)
+
+The 13-seat review panel changed the shipped design in the ways below; each is a "Ruled by CTO agent, 2026-11-09" row in
+`decision-challenges.md` (review round). The plan text above that conflicts with these points is superseded by them.
+
+- `allowProtocol` is required on every call (`none` for local-only consumers): a promisor or `file` remote reached from a
+  local verb ran `remote.<n>.uploadpack` (measured). This amends R8b.
+- `-c core.alternateRefsCommand=` joins the helper-only arguments (measured to run on fetch with `objects/info/alternates`).
+- A call with a workspace `cwd` refuses a `.git` that is a gitfile, a symlink or carries `commondir`, and pins `GIT_DIR` and
+  `GIT_COMMON_DIR` to the workspace. This flips the earlier "shape check is a follow-up" ruling. A preflight, not a structural control.
+- The git-data push targets the explicit server-derived URL, and a `url.*` preflight guard (`git-data-url-guard.ts`) is shared
+  with the fetch.
+- `extraEnv` accepts only an allowlist of the call-sites' own names; TLS/proxy passthrough is https-arm only; `cwd` must be
+  absolute and is refused with `clone`/`init`.
+- `workspace.ts` provisioning and the `context-queries-hook` `ls-files` are routed through the helper (planted fsmonitor ran on both).
+- The Sentry auto-commit mirrors carry a classified failure (stage, exit status, closed bucket), not the raw error.
+- Wording: the scrub is NOT a secrecy control against a same-uid helper that reads `/proc/<pid>/environ` (measured); any
+  executing carrier is a full same-uid compromise including other tenants' workspace directories.

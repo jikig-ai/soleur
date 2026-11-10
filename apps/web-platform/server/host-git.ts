@@ -68,8 +68,8 @@ const EXTRA_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 /**
  * The environment of a scrubbed child. An ALLOWLIST from the base environment (PATH, LANG, LC_ALL, TMPDIR, HOME)
- * plus explicit extras; nothing else is inherited, so no installation token, API key or Doppler credential can
- * reach a helper that runs in a clone. HOME is NOT the real home (no `~/.config/gh`, no git config): it is the
+ * plus explicit extras; nothing else is inherited, so a helper that reads only its own environment sees no installation
+ * token, API key or Doppler credential (a same-uid helper can still read the server's /proc environ). HOME is NOT the real home (no `~/.config/gh`, no git config): it is the
  * temp dir.
  */
 export function buildScrubbedEnv(extra: Readonly<Record<string, string>>, base: BaseEnv = process.env): Record<string, string> {
