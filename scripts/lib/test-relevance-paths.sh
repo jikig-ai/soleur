@@ -220,6 +220,10 @@ TEST_ALL_AFFECTED_BATTERY_PATHS=(
 # name rather than duplicated (the issue's "reusing that array, not adding a second one") — every
 # gated array must resolve in THIS file's scope because the orphan linter's RELEVANCE_ARRAYS
 # expansion sources no other lib. Its own comment survives as the pointer left in the old spot.
+# Dual-census contract: this array must stay free of a same-named definition in
+# test-affected-paths.sh (sourced second — it would shadow this one), AND it must keep
+# PR_GATE_MACHINERY_PATHS, which is what carries scripts/lib/test-affected-paths.sh into the set
+# the affected-declarations census requires.
 AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
   "scripts/lib/"                                          # walks $REPO_ROOT/scripts/lib as a tree — corpus operand, see PR_GATE_CORPUS_ALLOWLIST
   "scripts/lib/test-contention.sh"                        # named operand

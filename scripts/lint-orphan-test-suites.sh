@@ -787,6 +787,16 @@ else
       continue
     fi
 
+    # CROSS-FILE SHADOW GUARD (#9340 review): the same array name defined in
+    # scripts/lib/test-affected-paths.sh would silently SHADOW this edge set — both consumers
+    # source REL_LIB first and AFF_LIB second, so the later definition wins for --pr-gated and
+    # --affected alike. A merge or revert that revives the pre-#9340 definition must red, not
+    # quietly restore the narrower edge set.
+    if grep -qE "^${arr_name}=\(" "$REPO_ROOT/scripts/lib/test-affected-paths.sh" 2>/dev/null; then
+      echo "ERROR: ${arr_name} is defined in scripts/lib/test-affected-paths.sh AND ${REL_LIB} -- the affected-lib definition shadows the gated edge set for both consumers. Keep exactly one definition (in ${REL_LIB})." >&2
+      fails=$((fails + 1))
+    fi
+
     # `${a[@]+"${a[@]}"}` so an EMPTY array does not trip `set -u` on bash < 4.4.
     eval "rel_elems=( \${${arr_name}[@]+\"\${${arr_name}[@]}\"} )"
 

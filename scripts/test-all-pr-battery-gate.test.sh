@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# test-all-pr-battery-gate — ADR-262 Guard 1: the pull_request gate over the five self-test
-# mutation batteries (#9323).
+# test-all-pr-battery-gate — ADR-262 Guard 1: the pull_request gate over the six self-test
+# mutation batteries (#9323, #9340).
 #
 # PROPERTY. On a `pull_request` CI run a gated battery is declined if and only if the PR's net diff
 # (rename sources included) contains none of its subject paths and none of the gate-machinery paths.
@@ -14,7 +14,7 @@
 # positive recorded line exactly once (an absent `[skip]` also describes an rc=4 or an empty
 # selection) and every DECLINE assertion requires the printed `[skip] <label> (relevance)` line.
 # Mutants are applied to COPIES with a block-scoped substitution that asserts exactly one landing
-# (the five call sites are near-identical, so an unscoped s/// lands on the wrong site), checked with
+# (the call sites are near-identical, so an unscoped s/// lands on the wrong site), checked with
 # `bash -n`, and graded CAUGHT only when the arm named for them fails — a syntax-broken mutant reds
 # everything and must not read as caught. The instrument control runs first: the pristine copy must
 # go green on every arm before any mutant is read.
@@ -368,7 +368,7 @@ grade_arms() {
     if (( ${#only[@]} )); then local keep=0 o; for o in "${only[@]}"; do [[ "$o" == "$id" ]] && keep=1; done; (( keep )) || continue; fi
     ARM_WHY=""
     case "$extra" in
-      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD") ;;
+      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR") ;;
       TEST_GROUP=scripts-heavy) UNIVERSE=("$L_REG" "$L_TAG") ;;
       *) UNIVERSE=("${ALL_LABELS[@]}") ;;
     esac
@@ -565,13 +565,13 @@ for arr in "${ARRAYS[@]}"; do
   mutant "lost-optin-$arr" 's = sub_once(s, "_diff_touches --pr-gated \"${'"$arr"'[@]}\"", "_diff_touches \"${'"$arr"'[@]}\"", "call site")' docs-only
 done
 
-# row 8b: a sixth --pr-gated site the arms do not exercise reds the set-equality assertion
-SIXTH_DIR="$TMP/mut-sixth-site"; build_runner "$SIXTH_DIR" 1 || harness_die "could not build the sixth-site runner"
-mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi", "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")' || harness_die "the sixth-site mutation did not land"
-bash -n "$SIXTH_DIR/scripts/test-all.sh" || harness_die "the sixth-site mutant does not parse"
+# row 8b: an extra --pr-gated site the arms do not exercise reds the set-equality assertion
+SIXTH_DIR="$TMP/mut-extra-site"; build_runner "$SIXTH_DIR" 1 || harness_die "could not build the extra-site runner"
+mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi", "skip_suite \"scripts/test-all-affected-d\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh --rows 37-38\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")' || harness_die "the extra-site mutation did not land"
+bash -n "$SIXTH_DIR/scripts/test-all.sh" || harness_die "the extra-site mutant does not parse"
 MUT_N=$((MUT_N + 1))
-if [[ "$(derive_sites "$SIXTH_DIR/scripts/test-all.sh")" != "$want_sites" ]]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant sixth-site: the set-equality assertion goes RED on an unexercised --pr-gated site"
-else fail "mutant sixth-site: SURVIVED — a sixth --pr-gated site is invisible to the dispatch check"; fi
+if [[ "$(derive_sites "$SIXTH_DIR/scripts/test-all.sh")" != "$want_sites" ]]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant extra-site: the set-equality assertion goes RED on an unexercised --pr-gated site"
+else fail "mutant extra-site: SURVIVED — an extra --pr-gated site is invisible to the dispatch check"; fi
 
 # row 9: rename-only slips the predicate when the rename-source append is dropped
 mutant rename-sources-dropped 's = sub_once(s, "$(git -c core.quotePath=false diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null || true)\n$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null || true)", "")' rename-only
