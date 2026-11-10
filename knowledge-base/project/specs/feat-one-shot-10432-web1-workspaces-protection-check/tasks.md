@@ -68,6 +68,18 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
 - [x] R.2 Code: workflow, suite, `gha-expr.py` revert, `mutation-proofs.md` (rulings 20 item 2, 21-23, 26, 27; R1, R3,
   R4 code half, R6 workflow copies, R7-R10)
 
+## Review round 2 (PR #12563, ledger F1-F12, CTO ruling 28)
+
+- [x] R2.1 Code: the shape check pins exact sets (ordered step list, per-step keys, env names and `if:`, workflow env names,
+  checkout SHA and identity, notify `with:`, expression context roots); the harness refuses an unmodelled context or action
+  (H11e); `rb_line_ok` pins the exact wrapper, stdin construct, curl argument grammar and token-name count; per-case
+  verdict-line counts; N4 re-scoped to the job's own comment block with ruling 28's requirements and bans; derived
+  cross-entry ban; negative controls for the sum clause, n1c's 404 clause and the new H15/H17 mutants; FLOOR 278
+- [x] R2.2 Docs: ruling 28's four text changes and decision-challenges row 28; ADR-119 email and window (iii) corrections,
+  #12608; pin literals removed from the 6604 note, the read-back prose and the ADR-119 bump sentence; 6604 verify-block
+  note on lines 1 and 3; 6894 regenerated bullet; postmerge `volume-gone` prose; fail-fast wording; plan constants
+- [ ] R2.3 F12 (6894 "Read-backs after `destroy`" to `--only-secrets` + stdin header): skipped, see the round-2 report
+
 ## Phase 5 — After merge
 
 - [ ] 5.1 First run on `main` (scheduled, or a `workflow_dispatch` watched with Monitor): `verdict=matches-declared` and `(clean)` in both `(inngest)` and `(web1)` legs

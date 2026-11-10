@@ -771,9 +771,9 @@ changes it in three ways; the `git grep` output stays the source of truth:
 - In `.github/workflows/scheduled-terraform-drift.yml` there are now exactly two `readonly VOLUME_ID_PIN=` lines (the two orphan
   sweeps). The sole-copy probe's pin moved to the `volume_id:` of the `inngest` include row of the `sole-copy-protection-check`
   matrix (ADR-282, addendum of 2026-11-10). Row N1 pins that row to ADR-282, and row N1b pins the two sweep copies equal to that row.
-- `plugins/soleur/test/sole-copy-drift-check.test.sh` carries the id in more places than the one `VOL_ID`: the `use_entry
-  inngest` `VOL_ID`, the Python harness's `INNGEST_ID` constant, and test-data literals. Change every occurrence in that file in
-  the same edit.
+- `plugins/soleur/test/sole-copy-drift-check.test.sh` carries the id in more places than one: the `inngest` pair of
+  `_ids_of` (which `use_entry inngest` reads into `VOL_ID`), the Python harness's `INNGEST_ID` constant, and test-data
+  literals. Change every occurrence in that file in the same edit.
 - One more record-only place: a dated live-probe comment in `apps/web-platform/infra/betterstack-logs-alerts.tf` (the
   wrong-volume alert's quiet control, 2026-10-29).
 

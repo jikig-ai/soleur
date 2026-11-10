@@ -71,8 +71,9 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    that a re-dispatch then plans, completing the raw-volume create.
 
    > **Note (2026-11-10, #10432).** The example id `106406962` above is the 2026-07 orphaned volume and stays as the
-   > record. The live `hcloud_volume.workspaces_luks` is `106443278` (ADR-119, addendum of 2026-11-10). It holds the only
-   > copy of every workspace and is never the `<ID>` this retired step names.
+   > record. The live `hcloud_volume.workspaces_luks` is the id ADR-119's addendum of 2026-11-10 states (the read-back at
+   > the end of this runbook names it). It holds the only copy of every workspace and is never the `<ID>` this retired step
+   > names.
 
 1. **Provision the encrypted volume (additive, zero downtime).** *(FIRST cutover only — skip if you
    ran Step 0, which already leaves the five resources in state.)*
@@ -369,7 +370,9 @@ forever — which the escrow proof + off-host header backup exist to prevent.
      `missing-token` (exit 3) instead of sending an empty bearer header, and the header reaches curl on stdin, never on its
      argument list. `jq` runs inside the wrapper, after the token check, so the `missing-token` word is printed as is rather
      than fed to `jq`. Each request is bounded by `--max-time 30`. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
-     delete-protection flag (read-only token)" at the end of this runbook.)
+     delete-protection flag (read-only token)" at the end of this runbook. Lines 1 and 3 also pass on a token minted in
+     another Hetzner project (a 404 and an empty list are what any project answers); only lines 2 and 4 tell the two apart,
+     because on another project's token they print `null` instead of the volume list and the flag.)
 
    > **web-1 lost (note, 2026-10-01, #6604 PR B).** web-1 is not replaceable by automation (ADR-148;
    > the replace path refuses it by name), and after step 7 there is no plaintext copy to fall back on.
@@ -1214,7 +1217,7 @@ have no heartbeat here and read `unknown` by design.
 ## Read back the delete-protection flag (read-only token)
 
 The read-back the web-1 workspaces volume issues of the `sole-copy-protection-check` job point at (ADR-119, addendum of
-2026-11-10). It is read-only: one GET of volume `106443278` (`hcloud_volume.workspaces_luks`) with the Hetzner
+2026-11-10). It is read-only: one GET of the volume the command names (`hcloud_volume.workspaces_luks`) with the Hetzner
 Read-permission token, the token passed to curl as a config on stdin, and one word of output. It is the same shape as the
 section 5c step 3 read-back in `inngest-luks-cutover-6894.md`.
 

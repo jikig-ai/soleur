@@ -103,8 +103,10 @@ two-step route, not an out-of-band call:
 1. A PR sets the volume's delete-protection attribute to false (and edits the Guard 1 rows, the parity-test pin and the
    census rows, if any, that it trips); the per-merge apply lands it, so live state equals the HCL again. The PR must also
    remove the cause of any current halt in the same change and must not carry `[skip-web-platform-apply]`, and it opens a
-   dated re-protect follow-through issue before it merges. Its post-merge read-back expects `not-protected`, which is not a
-   failure.
+   dated re-protect follow-through issue before it merges. Its probe is event-grep, never the Date shape: it exits 0 only
+   on a later `scheduled-terraform-drift` run on `main` whose `sole-copy-protection-check (inngest)` leg succeeded and
+   emitted `sole-copy-check verdict=matches-declared entry=inngest`, 2 before the issue's date and 5 (ACTION REQUIRED)
+   after it. Its post-merge read-back expects `not-protected`, which is not a failure.
 2. Then dispatch `inngest-host-replace`: the volume now plans as a no-op, which both dispatch gates accept.
 3. Then a re-protect PR restores the attribute and the guards. The unprotected window (from step 1's apply to step 3's)
    is a stated cost: once step 1 lands, the HCL, the live state and the drift plan agree on `false` and nothing alerts, so

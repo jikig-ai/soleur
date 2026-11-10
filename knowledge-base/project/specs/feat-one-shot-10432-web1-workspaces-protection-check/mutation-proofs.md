@@ -205,3 +205,131 @@ shellcheck on the suite: 0 warning or error findings (as on `origin/main`); the 
 `guard-vacuity-floor` 32/32 rc 0; `fixture-dir-operand-assert` 71/71 rc 0; `fixture-relative-assert` 61/63 rc 1, the same
 pre-existing `scripts/ci-oracle-review.sh` row (13 sites against a baseline of 12) and no row of this suite;
 `token-drift-workflow-causes` 402/402 rc 0; `workspaces-luks.test.sh` 63/63 rc 0.
+
+## Review round 2 (2026-11-10, PR #12563 at 5f4cff5590, ledger F1-F12 and W7, CTO ruling 28): fix round
+
+The rows above stay as written. This section supersedes them where it says so.
+
+Final suite: `=== Results: 278/278 passed, 0 failed ===`, rc 0, `FLOOR=278` (from 257), `TABLE_ROWS=149` (unchanged: no
+case-table row was added or deleted). The 21 new assertions are S2 rows (17 job rows and 3 workflow-env rows) and H11e.
+H5, H14, H15 and H17 each stay one assertion that has more cases.
+
+**The structural fix.** Each deny-list of the first round is now an exact set or string taken from the current workflow.
+The sets are the step sequence, each step's key set, `env` and whitespace-collapsed `if`, the workflow `env` names, the
+checkout SHA (`re.fullmatch`, found by identity, so `checkout-count` counts every checkout) and the notify action and its
+`with:` (W7). The expression context roots are pinned over the job `if`/`name` and every step's `if`/`name`/`env`/`with`. At run time the
+harness now refuses an unmodelled context or action (rc 3) instead of treating it as null. `rb_line_ok` pins the exact
+wrapper, the exact printf-to-stdin construct, a closed curl-argument grammar after it, the token-name count, the
+Authorization count and a tail check. The read/write name is still banned. The argv-header spelling ban is gone.
+
+Every mutant below is a COPY in the allocated sandbox `soleur-sbx.r2fix10432` (`knowledge-base/engineering` copied in).
+Workflow mutants run the suite with `SOLE_COPY_DRIFT_WF=<copy>`, and suite mutants run a mutated copy
+`plugins/soleur/test/zz-mut-<name>.test.sh`. The generator exits non-zero unless each edit lands exactly once in its
+scope. Each run is PID 1 of its own namespace (`soleur-sandbox.sh run-isolated`). Control first: 278/278 rc 0, run
+again 278/278 rc 0 after the last suite edit. On every workflow mutant, `S2/control` also fails (the unmutated-job
+control now sees the violation). The matching `S2/r2 ...: mutation did not land` line is expected, because the copy
+already carries the in-process mutant.
+
+### Workflow mutants
+
+| Ledger | Mutant (on a workflow copy) | Red, named | Result |
+| --- | --- | --- | --- |
+| F1 | an anonymous `someorg/someaction@v1` step before the probe | S1 `step-sequence`, `step-key:checkout:name`, `step-key-missing:checkout:*`; then FATAL `unmodelled action` | rc 2 |
+| F1 | an extra `run: 'true'` step after the checkout | S1 `step-sequence`, `step-key:checkout:run`, ... | 135/278 |
+| F1 | two steps swapped | S1 `step-sequence`; X19 | 275/278 |
+| F1 | the checkout on `actions/checkout@v4` | S1 `checkout-uses`; FATAL `unmodelled action: actions/checkout@v4` | rc 2 |
+| F1 | `if: false` on the checkout | S1 `step-key:checkout:if`, `step-if:checkout`, `expr-context:checkout.if:False` | rc 2 |
+| F1 | a second checkout of another ref | S1 `step-sequence`, `checkout-count:2` | 275/278 |
+| F2 | `runner.os` in the finding filer's `if` | S1 `step-if:file_finding`, `expr-context:file_finding.if:runner`; FATAL `unmodelled context: runner` | rc 2 |
+| F2 | `runner.os` in the notify `if` | S1 `step-if:notify`, `expr-context:notify.if:runner` | rc 2 |
+| F2 | `runner.os` in the Doppler CLI step's `if` | S1 `step-key:doppler_cli:if`, `step-if:doppler_cli`, `expr-context:doppler_cli.if:runner` | rc 2 |
+| F2 | the probe's `TF_PATH` chosen by `runner.os` | S1 `expr-context:probe.env:runner` | rc 2 |
+| F3 | `DOPPLER_API_HOST`, `HTTPS_PROXY`, `LD_PRELOAD` in the probe env (3 copies) | S1 `step-env:probe` | 275/278 each |
+| F3 | `HTTPS_PROXY`, `CURL_CA_BUNDLE` in the workflow env (2 copies) | S1 `wf-env` | 275/278 each |
+| W7 | a token in the email subject | S1 `notify-with` | 273/278 |
+| F4 | the gate's lines print no `verdict=` | the per-case verdict-line count: 198 "the gate printed 0 verdict line(s), want 1" | 129/278 |
+| F4 | the gate's clean line written `verdict:` | the same count, 45 lines | 241/278 |
+| F4 | the probe's finish line removed | the same count, 149 "the probe printed 0 verdict line(s), want 1" | 162/278 |
+| F9 | the gate's timeout raised to 5 | S1 `step-key:gate:timeout-minutes`, `job-timeout` | 275/278 |
+| F6 | the Inngest filer body names the web-1 volume | F1, F12 x4, X5 ("names nothing of the other entry", `soleur-web-platform-data-luks` and `106443278` are in the ban) | 272/278 |
+| ruling 28 | "Guard B4 is the forcing function" in the job comment | N4 | 276/278 |
+| ruling 28 | the marker line moved into the drift-check job's comment | N4 (`lacks "sole-copy-check verdict=matches-declared entry=web1"`) | 276/278 |
+| ruling 28 | a per-row forcing function naming B4 (observability C) | N4 | 276/278 |
+| ruling 28 | "Re-evaluate by" added to the job comment | N4 | 276/278 |
+
+The rc 2 rows also fail S1 by the named label first. The run then stops at the runtime refusal, so no Results line is
+printed, and the suite's outer wrapper turns that into a FATAL.
+
+On each N4 workflow copy, H17 also fails. The cause is that its own copy of the same mutant cannot land on a file that
+already carries it.
+
+### Suite mutants (a guard clause deleted)
+
+| Ledger | Clause deleted | Red, named | Result |
+| --- | --- | --- | --- |
+| F1 | the step-sequence pin | S2 r2 (anonymous action, extra run step, swap) | 275/278 |
+| F3 | the step-env pin | S2 BASH_ENV, S2 r2 DOPPLER_API_HOST, HTTPS_PROXY, LD_PRELOAD | 274/278 |
+| F1 | the step-if pin | S2 filer loses `always()`, S2 probe back on the implicit `success()` | 276/278 |
+| F2 | the run-time refusal of an unmodelled context | H11e | 277/278 |
+| F1 | the run-time refusal of an unmodelled action | H11e | 277/278 |
+| F1 | the checkout pin made a prefix match | S2 r2 the checkout on a mutable tag | 277/278 |
+| F2 | the expression-context pin | S2 r2 x6 (`runner.os` x4, `vars`, `matrix['subject']`) | 272/278 |
+| F3 | the workflow env back to a deny-list | S2 BASH_ENV, S2 r2 HTTPS_PROXY, CURL_CA_BUNDLE, LD_PRELOAD | 274/278 |
+| W7 | the notify `with:` pin | S2 r2 a token in the email subject | 277/278 |
+| F4 | the verdict-line counts | H5 (`_iv_noprobeline`, `_iv_nogateline`, `_iv_twogatelines`) | 277/278 |
+| F1 | the checkout identity (`checkout-count`) | S2 r2 a second checkout of another ref | 277/278 |
+| F9 | the step-bound sum clause | S2 r2 a step bound raised past the job cap | 277/278 |
+| F7 | N1c's expect-404 clause | H14 `verify-block-404-get-names-the-pin` | 277/278 |
+| F8 | `rb_line_ok`'s tail check | H15 `vb-jq-outside-the-wrapper`, `vb-jq-outside-single-quoted` | 277/278 |
+| F8 | `rb_line_ok`'s curl grammar | H15 `H-from-a-variable` | 277/278 |
+| F8 | `rb_line_ok`'s token-name count | H15 `kept-second-curl-user` (second pass, below) | 277/278 |
+| F8 | `rb_line_ok`'s exact-wrapper prefix AND its tail check | H15 `wrapper-other-config`, `wrapper-exits-on-missing`, `vb-jq-*` (second pass) | 277/278 |
+| ruling 28 | N4's pairing ban (`B4[^.]*forcing function`, either order) | H17 `job-per-row-forcing-function`, `adr-guard-b4-is-the-web-1-forcing-function` | 277/278 |
+| ruling 28 | N4's "Re-evaluate by" ban | H17 `job-re-evaluate-by` | 277/278 |
+| ruling 28 | N4's "never the Date shape" requirement | H17 `job-never-the-date-shape-removed` | 277/278 |
+| ruling 28 | N4's marker requirement | H17 `adr-marker-removed`, `job-marker-removed`, `adr-marker-names-inngest`, ... | 277/278 |
+| ruling 28 | N4's comment scope back to "every comment line before the job" | H17 `job-marker-in-the-drift-check-comment` | 277/278 |
+| F6 | the derived other-entry name and id dropped from the ban | 278/278 alone (no current text names the other entry). Paired with the workflow copy whose Inngest body names web-1: 278/278 rc 0, so that mutant survives without the guard and the guard is what kills it (the workflow row above). | pair |
+
+**`rb_line_ok`, first pass and second pass.** In the first battery, three clause deletions survived (278/278 rc 0): the
+token-name count, the stdin-construct count and the exact-wrapper prefix. No H15 row isolated them. The second pass
+settled each one:
+
+- token-name count: H15 row `kept-second-curl-user` (a second `curl -u ":$HCLOUD_TOKEN_READONLY"` inside the wrapper) was
+  added. Only the name count sees it.
+- stdin-construct count: EQUIVALENT, so the clause was removed. Without the construct, the grammar sees the whole line,
+  which cannot start with `--max-time`. A second copy of the construct is a fourth token name.
+- exact-wrapper prefix: EQUIVALENT to the tail check, which strips that wrapper. On a line that does not start with the
+  wrapper, the text after the first quote is the wrapper body, never a bare comment. Two H15 rows were added
+  (`wrapper-other-config`, `-c prd` in place of `-c prd_terraform`; `wrapper-exits-on-missing`, the flag dropped). Deleting
+  the prefix alone: 278/278 rc 0, the declared equivalence. Deleting the prefix and the tail check: 277/278, H15 names both
+  rows.
+
+Both equivalences are listed in the suite header. Second-pass control: 278/278 rc 0, run on the final suite. The
+grammar and tail-check deletions were proven again on the final suite with the same named reds.
+
+**F12 skipped.** The 6894 "Read-backs after `destroy`" line is read by a test. The suite's N1 reads every
+`--only-secrets HCLOUD_TOKEN_READONLY` line of 6894. On a copy where that line is converted to the read-only
+`--only-secrets` form, N1 goes red: 277/278, "the inngest row's volume_id='106903269' does not equal the suite's Inngest
+id". Converting the line needs an N1 expect-404 exception like N1c's, so the line is untouched.
+
+**F7.** The three literal copies of the web-1 id outside the addendum were removed: the 6604 note, the 6604 read-back
+prose and the ADR-119 bump sentence. Each now points at the id that ADR-119's addendum of 2026-11-10 states. That makes
+the ADR's N1c claim (one stated id, read from the section) true. The guard is H14's existing rows plus
+`verify-block-404-get-names-the-pin`.
+
+Lints and ratchets (final tree):
+
+- `token-drift-workflow-causes` 402/402 rc 0.
+- `workspaces-luks.test.sh` 63/63 rc 0 and `inngest-luks-sole-copy.test.sh` 89/89 rc 0.
+- `deploy-arm.test.sh` 79/79 rc 0 and `workflow-run-deploy-invariants.test.sh` 82/82 rc 0. These are the readers of the
+  postmerge SKILL.md.
+- `check-workflow-duplicate-keys` OK (114 files).
+- actionlint: 17 findings, equal to `origin/main`.
+- shellcheck on the suite: 0 warning or error findings. Note-level count 63, up from 53, all SC2016 on the `$` literals
+  of the new mutant strings.
+- `guard-vacuity-floor` 32/32 rc 0 and `fixture-dir-operand-assert` 71/71 rc 0.
+- `fixture-relative-assert` 61/63 rc 1. The failing row is the same pre-existing `scripts/ci-oracle-review.sh` one (13
+  against a baseline of 12), not a row of this suite.
+- `lint-guard-contract.py` on the plan rc 0.
+- `gha-expr.py` byte-identical to `origin/main`.

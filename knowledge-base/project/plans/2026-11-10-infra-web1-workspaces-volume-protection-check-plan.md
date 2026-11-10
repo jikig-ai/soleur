@@ -242,7 +242,8 @@ only `merge_group` or `workflow_dispatch` runs count as Guard 1 evidence.
 
 `fail-fast: false` is load-bearing (P6): with the default `true`, a red leg cancels the other, still-running leg. That
 leg's filers are `always()`, so they still run, but its probe is skipped or killed: it never reaches its own verdict,
-and with an empty verdict its could-not-perform filer files a false `(name-unreadable)` p2 issue and its gate goes red.
+and with an empty verdict its could-not-perform filer files a false `(name-unreadable)` p2 issue, and the leg ends
+cancelled (its always() gate exits 1, but a fail-fast cancel concludes the leg `cancelled`, not `failure`).
 Each leg keeps every step timeout; the job ceiling is 20 minutes, above the 16-minute sum of step bounds (review
 round 1, R10: main's 10 was below that sum, so a slow leg could be cancelled mid-filer).
 
@@ -287,8 +288,10 @@ empty string; the harness refuses it. `gha-expr.py` keeps today's "absent is nul
 
 ### Suite structure
 
-- **Per-entry constants** set by one helper, `use_entry inngest|web1`: `ENTRY`, `NAME`, `VOL_ID`, `TF_REL`, `TF_RES`,
-  `SUBJ`, `ADR_ID`, `OTHER_ID`, `OTHER_NAME`, `OK_KEYS`, `TITLE_DIFF`, `TITLE_GONE`, `TITLE_NOCRED`, `TITLE_UNREAD`.
+- **Per-entry constants** set by one helper, `use_entry inngest|web1`: `ENTRY`, `OTHER_ENTRY`, `NAME`, `VOL_ID`, `TF_REL`,
+  `TF_RES`, `TF_STEM`, `OTHER_ID`, `OTHER_NAME`, `OK_KEYS`, `TITLE_DIFF`, `TITLE_GONE`, `TITLE_NOCRED`, `TITLE_UNREAD`, the
+  per-arm `LEAD_*`/`REMEDY_*`/`DECISION` lines and `OTHER_WORDS` (`SUBJ` and `ADR_ID` were deleted in review round 1, R8).
+  The name/id pairs come from `_ids_of` (h.py's `INNGEST_ID`/`WEB1` are a second copy, tied by `id_placement:row`).
   These are the suite's oracle and are written independently of the workflow (titles spelled out per entry, not built
   from the workflow's rows). The suite starts in `use_entry inngest`, so every existing row runs unchanged.
   `use_entry` OWNS these names: today's top-level assignments (`NAME`/`VOL_ID` in the case machinery, `OK_KEYS` after
@@ -490,6 +493,11 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    (ii) a reviewed lift reads `unprotected-as-declared` (green). Guard B4 in `apps/web-platform/infra/workspaces-luks.test.sh`
    only makes the lift reviewed (the lift PR must edit it); the lift PR must also open a dated re-protect follow-through
    issue before it merges (ADR-282 step 1), and that issue is the only forcing function back to protected (CTO ruling 20).
+   Its probe is event-grep, never the Date shape (CTO ruling 28, amending ruling 20: a Date-shape `exit 0` closes the issue
+   as PASS on its date, and the sweeper holds no Hetzner token): exit 0 only on a later `scheduled-terraform-drift` run on
+   `main`, after the issue's `earliest`, whose web1 leg succeeded and emitted `sole-copy-check verdict=matches-declared
+   entry=web1` (`entry=inngest` for the Inngest row); 2 before the pinned date, 5 after it, 3 on a failed read. (iii) A leg
+   that reads no flag files the p2 could-not-perform issue only (no email unless a filer fails).
 2. `infra-credential-tiers-8209.md` register row, the ADR-282 appended note, the runbook 6894 checklist and both runbook
    6604 edits (Files to Edit). Run the new 6604 one-liner once, read-only, and record its word (`protected` expected)
    in `mutation-proofs.md`; a `missing-token` or `read-failed` answer is reported, never worked around with the
@@ -597,6 +605,14 @@ are cross-entry; `N*` are pins.
 | Finding filer catch-all | `*)` arm deleted or made non-failing -> WX16 | same |
 | Expression strictness | `check()` lets an unknown matrix key through -> H11b, H11c (`gha-expr.py` unchanged from `main`, CTO ruling 21) | same |
 | Row selection | zero or two rows match the entry -> H11d (C8, the swapped-order must-PASS, deleted by ruling 23) | same |
+| Step list (review round 2) | an extra `uses:` or `run:` step, two steps swapped, a second checkout -> S1/S2 `step-sequence`, `checkout-count`; the harness refuses an unmodelled action -> H11e | same (one job) |
+| Step `if:` and keys | any step's `if:` edited, added (checkout `if: false`) or removed -> S2 `step-if:<id>`, `step-key:<id>:if` | same |
+| Expression contexts | a `runner`/`vars`/`env`/`job` context, or a modelled root read by index, in any `if:`/`env:`/`with:`/`name:` -> S2 `expr-context:<loc>:<root>`; at run time -> H11e | same |
+| Env names | a probe env `DOPPLER_API_HOST`/`HTTPS_PROXY`/`LD_PRELOAD`, a workflow env `HTTPS_PROXY`/`CURL_CA_BUNDLE`/`LD_PRELOAD` -> S2 `step-env:probe`, `wf-env` | same |
+| Checkout and notify actions | checkout on a tag (`@v4`) -> S2 `checkout-uses`; a notify `with:` value changed -> S2 `notify-with` | same |
+| Verdict lines present | the gate's clean or `::error::` echo stripped of `verdict=`, or the probe's finish echo removed -> the per-case verdict-line count (H5 `_iv_noprobeline`, `_iv_nogateline`, `_iv_twogatelines`) | same |
+| Runbook 6604 read-only lines | an argv header in any spelling, a second token channel (`-u`, `--oauth2-bea`, URL credentials, a second curl in the wrapper), another Doppler config or the wrapper without `--no-exit-on-missing-only-secrets`, `jq` outside the wrapper -> H15 (exact wrapper, exact stdin construct, curl argument grammar, token-name count 3, tail check) | n/a (6604 is the web-1 runbook) |
+| Forcing-function prose | "Guard B4 … forcing function" in either word order, `Re-evaluate by`, the marker removed or moved to another job's comment -> N4 (H17) | same |
 
 ## Guard Contract
 

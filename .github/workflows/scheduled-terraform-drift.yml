@@ -1884,8 +1884,8 @@ jobs:
   # `matrix.adr` in its `with:` inputs, which its action hands to its own run through `env:`. The per-row PROSE of the finding
   # filer lives in its `case "${ENTRY}:${VERDICT}"` arms, so the Inngest strings stay byte-identical in place.
   # `fail-fast: false` is load-bearing: with the default, a red leg cancels the other leg, whose probe is then skipped
-  # (`!cancelled()`) while its always() filers still run, so the healthy leg files a false `(name-unreadable)` p2 and goes
-  # red. Each leg keeps every bound below.
+  # (`!cancelled()`) while its always() filers still run, so the healthy leg files a false `(name-unreadable)` p2, and the
+  # leg ends cancelled. Each leg keeps every bound below.
   # The subject is the per-row title prefix: dedupe and the clear step match exact titles, so one leg never comments on,
   # or closes, the other leg's issues (the suite proves the two title sets are disjoint on one shared issue store).
   #
@@ -1908,9 +1908,13 @@ jobs:
   # (green, warned), not a finding. After a lift applied through the reviewed route the leg reads `unprotected-as-declared`
   # (green) by design, and the forcing function is outside this job. For both rows it is the same: the lift PR must open a
   # dated re-protect follow-through issue before it merges (ADR-282 step 1), and that issue is the only forcing function; no
-  # check stops a lift PR that merges without it. For `web1`, Guard B4 in apps/web-platform/infra/workspaces-luks.test.sh
-  # pins `delete_protection = true`, so it makes the lift reviewed (the lift PR must edit that guard); nothing in B4 forces
-  # the volume back to protected.
+  # check stops a lift PR that merges without it. Its probe is event-grep, never the Date shape (a Date-shape `exit 0`
+  # closes the issue as PASS on its date with the volume still unprotected): it exits 0 only on a later run of this
+  # workflow on main whose leg for the row succeeded and emitted `sole-copy-check verdict=matches-declared entry=web1`
+  # (`entry=inngest` for the Inngest row), 2 before the issue's date and 5 after it. Keep `entry=` in the probe and gate
+  # lines; that probe reads it. For `web1`, Guard B4 in apps/web-platform/infra/workspaces-luks.test.sh pins
+  # `delete_protection = true`, so it makes the lift reviewed (the lift PR must edit that guard); nothing in B4 forces the
+  # volume back to protected.
   #
   # NOTHING CONSUMES THIS JOB'S CONCLUSION. cron-terraform-drift.ts only dispatches the workflow and never reads the
   # run, and no Sentry check-in covers this job (tracked: #10430), so a red run alone reaches nobody: the issue
