@@ -459,7 +459,7 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-oracle-lane.sh
 2	scripts/ci-oracle-lane.test.sh
-12	scripts/ci-oracle-review.sh
+13	scripts/ci-oracle-review.sh
 1	scripts/ci-parked-hold.test.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
