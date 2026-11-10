@@ -20,9 +20,12 @@ requires_cpo_signoff: true
 Ref #12008 (item 1, code half only). Public-repository rule (ADR-322): this file carries no kernel string,
 vulnerability id, host address or exposure verdict. Per-host answers stay in the session.
 
-**Scope status (2026-11-10):** the owner chose to fold the web-1 rebirth (#9421, make web-1 a disposable host born
-like web-2) into this PR. Part 1 below (kernel currency at every web birth) is planned and CTO-ruled. Part 2 (web-1
-rebirth) is in research; its section is added after the coupling inventory and a CTO ruling.
+**Scope status (2026-11-10):** the owner asked to retire web-1 and make every web host identical, Terraform-born
+cattle (#9421), with a small dedicated bastion (approved, ~€4–5/month) and a private Hetzner load balancer for
+Inngest (approved, ~€5–6/month). The CTO ruled that this cannot land in one PR (a merge cannot birth a host, and
+deleting web-1's code while it runs would destroy it at merge, with users' uncommitted work on its disk). This PR
+carries Part 1 (kernel currency at every birth) and Part 2a (make web hosts generic, no running host changed). The
+later PRs are listed under "Part 2 — PR sequence".
 
 ## Overview
 
@@ -181,12 +184,92 @@ serving or failover target until re-replaced green; one row per new failure: `st
 file an issue, do not re-dispatch; `timeout` after `kernel_reboot` → read Sentry host events, the Better Stack journal
 and the Hetzner server status, then re-dispatch).
 
-## Part 2 — web-1 rebirth (#9421)
+## Part 2 — identical web hosts, dedicated bastion, web-1 retirement (#9421)
 
-Pending: coupling inventory (research agent) and a CTO ruling on the sequence. Known so far
-(`web-host-replace.md` "`web-1` is refused"): the hardcoded `workspaces_luks` attachment, the app DNS record, the
-web-1-pinned `terraform_data` SSH provisioners (incl. the seccomp and AppArmor sandbox controls), and the by-id
-`/mnt/data` pin to the superseded plaintext volume.
+**Inventory (research agent, 2026-11-10, file anchors verified by it).** 26 `terraform_data` resources pin web-1
+(22 `server.tf`, 3 `workspaces-luks.tf`, 1 `ci-ssh-key.tf`). 23 are redundant at birth: web-2's path (baked
+`host_script_files` + `soleur-host-bootstrap.sh` + `cloud-init.yml`) already delivers them, including the seccomp
+profile (`--security-opt seccomp=` in `cloud-init.yml`, fail-closed presence test in the bootstrap) and the AppArmor
+profile (`apparmor_parser -r`, `--security-opt apparmor=soleur-bwrap`); proven offline by parity tests only. 3 are
+gaps: the two luks-monitor resources (web-1 is the `primary` profile; births are `standby`) and
+`workspaces_boot_unlock_install` (the legacy volume, deleted with web-1). Hub roles found on web-1 or web-2: the
+`ssh.` ingress jump to git-data (ADR-220), web-2 SSH provisioning via web-1 (`HostKeyAlias=web-1`), the `deploy.`
+webhook, the Inngest SDK URL and `cutover-inngest.yml` at web-1's private IP, the tunnel connector (web-2), the
+`registry.` tcp ingress, the CI SSH key install, git-data's SSH source allowlist, the jump in `git-data-cutover.yml`,
+`WEB_HOST_PRIVATE_IPS` literals, the `dns.tf` apex record. Data only on web-1: the `workspaces_luks` volume
+(pre-flip trees; never destroyed, detached and archived) and root-disk worktrees under `/var/lib/soleur/worktrees`
+(users' uncommitted work; lost with the server).
+
+**CTO ruling (2026-11-10, binding).**
+
+- Bastion: `hcloud_server.bastion` in a new `bastion.tf` in the web-platform root (not a new root), `var.bastion_server_type`
+  default cx23, hel1, amd64; its own small `bastion-cloud-init.yml` with the bounded apt step and Part 1's settle step
+  (same test); no public inbound; egress only to Cloudflare, apt, Sentry, Doppler; nftables allowlist to git-data:22,
+  each web host's :9000 and the registry endpoint (each further row needs a cited consumer); git-data's SSH source
+  allowlist gains the bastion. Host key generated in Terraform (`tls_private_key` ed25519, delivered via cloud-config
+  `ssh_keys`), so the pin exists before birth and survives a replace. Gated `bastion-host-create` /
+  `bastion-host-replace` routes with an inverted plan gate; the per-merge apply halts on a bastion create.
+- No SSH-delivered config to web hosts; config only via the baked image + cloud-init. A CI test fails if a
+  `terraform_data` with a `connection` block targets any web key (after web-1 is gone).
+- Deploys: one ingress hostname per web host (`deploy-<key>.`, `for_each` over `var.web_hosts`) through the bastion's
+  connector to each host's :9000; CI posts to each; rebirth-on-release rejected.
+- Inngest: a private Hetzner load balancer selecting web hosts by label, with a health check (ADR-100 Decision 1's
+  "private VIP when active-active-N").
+- New host is `web-3`, not a reused `web-1` key (avoids the refusal arms, the `moved` blocks and the same-host-name
+  Sentry match class, #6969). Private IP hand-picked, validated unique and inside the subnet.
+- Before destroy: pause new sessions, wait for zero live sessions, flush every dirty worktree to
+  `refs/checkpoints/<conversationId>` on git-data (reuse `inflight-checkpoint.ts`; no `git stash`, no `git add -A`),
+  then a read-only, non-SSH count of unflushed worktrees must read zero; the destroy gate refuses otherwise.
+- ADR: one new ADR "Dedicated bastion; web hosts are identical cattle", with pointer amendments to ADR-220,
+  ADR-100 Decision 1 and ADR-143 D2.
+- Dissent: the bastion is a single point for the management plane (not user traffic), bounded by its replace route;
+  egress-tokens directory creation at birth and any host-bound cron state are unverified (decided by the census in
+  this PR); the 23 redundant provisioners are first proven live by web-3's birth, and the destroy PR must quote
+  web-3's readiness row and probe results.
+
+### Part 2a — in THIS PR (merging changes no running host)
+
+1. `var.web_hosts` gains keyed fields: `lb_weight` (default 0; web-1 = 1, web-2 = today's `var.web2_lb_weight`
+   value), `luks_monitor_profile` and `jump` (validated exactly one host each; both still web-1, so nothing changes).
+   Validation: `private_ip` unique and inside the subnet.
+2. `cloudflare-lb.tf`: pool origins become a `dynamic "origins"` block over `var.web_hosts`; weights reproduce today's
+   live values exactly. `server.tf`: `web_tunnel_connector` reads a keyed field instead of `each.key == "web-2"`.
+3. `WEB_HOST_PRIVATE_IPS` derived in HCL (`inngest-host.tf`); a parity test pins every workflow copy to the derived
+   list.
+4. `lb-weight-gate.sh`: the literal `web-2` soak precondition becomes "any key at weight 0" (with its tests).
+5. A ratchet test counting the literal web-1 private IP and the string `"web-1"` outside an allowlist, with today's
+   count as the ceiling; later PRs must drive it to zero.
+6. A census (doc + test rows) of host-bound state: egress-tokens directory at birth, cron state, Better Stack
+   heartbeat per host.
+7. The new ADR (Part 1's and this one, or one ADR with two decisions; decided in work via `soleur:architecture`).
+
+Acceptance for 2a: `terraform plan` on the web-platform root shows **no** change to any server, volume, attachment,
+tunnel or LB pool (an origin reorder is a change: verify the dynamic block keeps today's order); the ratchet, parity,
+gate and census tests pass.
+
+### Part 2 — PR sequence after this one (owner acts in bold)
+
+| PR | Content | Owner act |
+|---|---|---|
+| 2 | Bastion code, cloud-init, routes; git-data source allowlist | **`bastion-host-create`, `plan_only` then real run** |
+| 3 | Management-plane retarget: `ssh.`, `registry.`, connector, CI key to the bastion; git-data workflows | **go on the merge** (changes the live tunnel); web-1 stays as the way back |
+| 4 | Per-host `deploy-<key>.` hostnames; private LB for Inngest | **go on the merge** (cost approved 2026-11-10) |
+| 5 | `web-3` entry | **`web-host-create` for web-3, then raise its weight** |
+| 6 | Flush tooling + unflushed-worktree count | **pause new sessions; go on the flush; count must read zero** |
+| 7 | Destroy route; delete web-1 code; ratchet reaches zero; volume detached and kept | **`Operator-reserved:` the destroy** |
+
+Each later PR is planned in its own session from this plan; #9421 tracks the sequence.
+
+## Files to Edit (Part 2a; anchors confirmed in work)
+
+- `apps/web-platform/infra/variables.tf` (`var.web_hosts` fields + validations)
+- `apps/web-platform/infra/cloudflare-lb.tf` (dynamic origins)
+- `apps/web-platform/infra/server.tf` (`web_tunnel_connector`)
+- `apps/web-platform/infra/inngest-host.tf` (derived IP list)
+- `.github/workflows/apply-web-platform-infra.yml` and other workflows carrying `WEB_HOST_PRIVATE_IPS` (parity)
+- `apps/web-platform/infra/lb-weight-gate.sh` + `lb-weight-gate.test.sh`
+- new tests: ratchet, parity, census (registered like the Part 1 suite)
+- `knowledge-base/engineering/architecture/decisions/` ADR-220, ADR-100, ADR-143 pointer amendments
 
 ## Files to Edit (Part 1)
 
@@ -404,7 +487,7 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
    trail (expected order: `kernel_reboot`, second `runcmd_start`, `cloud_init_complete`, `fresh_boot_ready`).
 2. (Agent, read-only) Reader run: kernel column for the new host, the verdict's `kernel=1`, and the live LB pool
    (new origin enabled and healthy).
-3. `Operator-authorizes:` the web-1 rebirth through the route Part 2 makes possible (sequence set by the Part 2 ruling).
+3. Later PRs 2–7 (Part 2 — PR sequence) each carry their own owner acts; none is authorized by this PR.
 4. inngest/registry/git-data stay on #12503.
 
 ## Scope Check
@@ -419,6 +502,7 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
 | 4 | "Evaluate Ubuntu 26.04 LTS (Linux 7.0, supported to 2031) as a separate migration" [issue #12008] | — | descoped — justification: split to #12615 (CTO ruling) |
 | 5 | "Did we patch the docker images as well in addition to hosts?" [brief] | — | descoped — justification: answered in session; containers share the host kernel |
 | 6 | "shall we reboot or treat the hosts as immutable and just destroy them and have new machines instead?" [brief] | Overview; ADR | mapped — hosts are destroyed and re-born; the one reboot is inside the new host's birth |
+| 8 | "Shall we consider a small bastion server/host instead?" [brief] | Part 2 ruling, PR 2–3 | mapped (later PRs) |
 | 7 | "we should take the opportunity to destroy web-1 abd have its replacement be a proper terraform based approach like web-2 so we are con,sistent in how we manage our infrastructure" + "web-2 already takes traffic. So do 2" [brief] | Part 2 | mapped (in research) |
 
 ### Plan-Item Provenance
@@ -432,11 +516,27 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
 | `cloud-init-user-data-size.test.ts` | — | inferred — justification: enforcing budget gate (P6) |
 | runbooks | ask 1 | asked |
 | ADR + ADR-263 addendum | — | inferred — justification: records the ADR-257 exception |
-| Part 2 (web-1 rebirth) | ask 7 | asked |
+| Part 2a (keyed `var.web_hosts`, dynamic LB origins, derived IP lists, generalized soak gate, ratchet, census) | ask 7 | asked |
+| Bastion, private LB (later PRs) | "Shall we consider a small bastion server/host instead?" + approvals [brief] | asked |
 
 ### Split Assessment
 
-Recomputed once Part 2 is listed. The owner chose a single combined PR (ask 7, "do 2").
+- Subsystems touched: 4 — apps/web-platform, scripts, .github, knowledge-base (plugins/soleur only on a re-baseline)
+- Planned files: ~25 | Estimated changed lines: ~650
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: this PR = Part 1 + Part 2a; PRs 2–7 follow (CTO ruling). The owner asked for one combined PR; the
+  split was presented with the CTO's reasons (a merge cannot birth a host; deleting web-1 code while it runs destroys
+  it at merge) and the owner accepted the bastion design built on it (2026-11-10).
+
+## Acceptance Criteria (Part 2a)
+
+- [ ] `var.web_hosts` has `lb_weight`, `luks_monitor_profile`, `jump` with validations (exactly one primary profile, exactly one jump, unique in-subnet `private_ip`); today's values reproduce the current config.
+- [ ] LB pool origins come from a `dynamic` block over `var.web_hosts`; `web_tunnel_connector` reads a keyed field.
+- [ ] `WEB_HOST_PRIVATE_IPS` is derived in HCL and a parity test pins every workflow copy.
+- [ ] `lb-weight-gate.sh` no longer names `web-2` literally; its tests cover a third key.
+- [ ] Ratchet test for the web-1 private IP literal and `"web-1"` outside an allowlist, ceiling = today's count.
+- [ ] Host-bound-state census committed with test rows.
+- [ ] `terraform plan` (web-platform root) shows no change to servers, volumes, attachments, tunnel or LB pool; result quoted in the PR body.
 
 ## Acceptance Criteria (Part 1)
 

@@ -19,14 +19,17 @@ runbook can only detect the gap after the fact (#12503).
 ## Goals
 
 - A replaced web host comes up on the archive's current generic kernel.
-- The host reboots at most once per birth, only when the running kernel differs from the installed generic kernel,
-  and is graded healthy only after that reboot (amended 2026-11-10, CTO re-ruling: graded single reboot).
+- The host reboots at most once per birth, early in runcmd, only when the running kernel differs from the installed
+  generic kernel; all provisioning runs once, after the reboot (CTO ruling C, 2026-11-10).
+- Web hosts become generic (keyed `var.web_hosts` fields, dynamic LB origins, derived IP lists), changing no running
+  host, as PR 1 of 7 toward identical cattle web hosts with a dedicated bastion and web-1 retired (#9421).
 - Merging changes no running host.
 
 ## Non-Goals
 
 - Inngest, registry and git-data cloud-init (separate owner-authorized PRs; #12503 narrowed to them).
-- Any act on the web host the replace path refuses (owner decision; #9421 is the permanent route).
+- The bastion, the management-plane retarget, per-host deploy hostnames, the private Inngest LB, the web-3 birth,
+  the worktree flush and the web-1 destroy (PRs 2–7, see the plan's Part 2 sequence).
 - A baked/snapshot image, a pinned kernel version, or a full package upgrade.
 - The newer-LTS migration evaluation (split to its own deferred issue).
 - A public status page or in-app banner system.
@@ -35,13 +38,11 @@ runbook can only detect the gap after the fact (#12503).
 
 - FR1: The bounded apt step in `apps/web-platform/infra/cloud-init.yml` installs the generic kernel meta package inside
   the existing `timeout` + retry + named-stage contract (a failure is a named fatal, never silent).
-- FR2: As the last runcmd step (after vector install, before the readiness verdict), a baked helper compares the
-  running kernel with the one the generic kernel meta package points to; on a mismatch it records a pending marker
-  and the current boot id under `/var/lib/soleur`, enables a one-shot post-reboot unit and reboots once. A second
-  mismatched boot is a named fatal, never another reboot.
-- FR3: The readiness verdict is emitted after that reboot by the post-reboot unit (after the volume, LUKS and the
-  app container are up and egress enforcement is re-proven), and it requires the running kernel to match and, after
-  a reboot, the boot id to differ. The replace job's boot trail waits longer when it sees the reboot stage.
+- FR2: Right after the bounded apt step (before any Doppler, docker, `/mnt/data` or LUKS work), a check compares the
+  running kernel with the one the generic kernel meta package points to; on a mismatch it records a marker under
+  `/var/lib/soleur`, reboots once and runcmd runs again from the start on the new kernel (CTO ruling C, 2026-11-10).
+  A second pass still mismatched is a named fatal, never another reboot.
+- FR3: The readiness verdict reports `kernel=` and is not-ready when the running kernel is not the installed one.
 - FR4: The cadence runbook gains a "first-boot kernel" note stating what a replace now guarantees and that the
   post-replace reader verification stays mandatory.
 
@@ -52,7 +53,7 @@ runbook can only detect the gap after the fact (#12503).
 - TR2: `plugins/soleur/test/cloud-init-user-data-size.test.ts` still passes (`WEB_GZIP_BUDGET` 25,000 on the
   base64-gzip render, ~180 B headroom); all logic is baked into `soleur-host-bootstrap.sh`.
 - TR3: No edit to `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`, inngest or git-data cloud-init.
-- TR4: An ADR records the decision ("First-boot kernel upgrade and reboot on host create").
+- TR4: ADRs record the kernel-at-birth mechanism (the one ADR-257 exception) and the bastion + identical-cattle design.
 - TR5: PR, commits and filed issues use routine refresh wording only (ADR-322, CLO).
 
 ## Acceptance
