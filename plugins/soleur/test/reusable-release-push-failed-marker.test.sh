@@ -166,12 +166,16 @@ check_absent() { # <desc> <needle> <file>...
 # otherwise hold both the conservation check and the floor below. Counters are unwound afterwards; the verdict is
 # reported with printf + exit, never through a helper under test.
 st_passes=$passes st_fails=$fails st_cases=$cases
-# check_absent's fixture is TWO files, and the needle sits mid-word in the SECOND: a helper that scans only the first
-# file, or greps with -x (whole line) or -w (whole word), finds nothing and passes, so the self-test exits 2.
-SELFTEST_FILE_A="$TMP_ROOT/selftest.clean"
+# check_absent is driven twice over THREE files, the needle mid-word on a mid-file line: once with it ONLY in the
+# MIDDLE file (clean, needle, clean), once ONLY in the FIRST. A helper that scans only the first file, only the last
+# (`"${@: -1}"`), skips the first, or greps with -x (whole line) or -w (whole word) finds nothing in one of the two
+# and passes, so the self-test exits 2. Callers pass `stdout stderr summary output`; a last-only helper reads output alone.
+SELFTEST_FILE_A="$TMP_ROOT/selftest.clean-a"
 SELFTEST_FILE_B="$TMP_ROOT/selftest.needle"
+SELFTEST_FILE_C="$TMP_ROOT/selftest.clean-c"
 printf 'nothing to see\n' > "$SELFTEST_FILE_A"
-printf 'before\nxxselftest-needleyy tail\n' > "$SELFTEST_FILE_B"
+printf 'before\nxxselftest-needleyy tail\nafter\n' > "$SELFTEST_FILE_B"
+printf 'still nothing\n' > "$SELFTEST_FILE_C"
 selftest_expect_fail() { # <helper name> <command...>: the command must raise fails by exactly one
   local name="$1" before="$fails"
   shift
@@ -185,11 +189,12 @@ selftest_expect_fail check_eq check_eq "selftest check_eq (expected FAIL)" "a" "
 # A glob-matching check_eq (`== $3` unquoted) reads "a*" as a pattern and passes "ab".
 selftest_expect_fail check_eq_glob check_eq "selftest check_eq is literal, not a glob (expected FAIL)" "ab" "a*"
 selftest_expect_fail check check "selftest check (expected FAIL)" false
-selftest_expect_fail check_absent check_absent "selftest check_absent (expected FAIL)" "selftest-needle" "$SELFTEST_FILE_A" "$SELFTEST_FILE_B"
+selftest_expect_fail check_absent_middle check_absent "selftest check_absent, needle in the middle file (expected FAIL)" "selftest-needle" "$SELFTEST_FILE_A" "$SELFTEST_FILE_B" "$SELFTEST_FILE_C"
+selftest_expect_fail check_absent_first check_absent "selftest check_absent, needle in the first file (expected FAIL)" "selftest-needle" "$SELFTEST_FILE_B" "$SELFTEST_FILE_A" "$SELFTEST_FILE_C"
 selftest_expect_fail matches check "selftest matches (expected FAIL)" matches "x" '^y$'
 selftest_expect_fail not check "selftest not (expected FAIL)" not true
 selftest_expect_fail in_order check "selftest in_order (expected FAIL)" in_order 1 1
-if [[ "$cases" -ne $((st_cases + 7)) || "$passes" -ne "$st_passes" ]]; then
+if [[ "$cases" -ne $((st_cases + 8)) || "$passes" -ne "$st_passes" ]]; then
   printf 'FATAL: helper self-test accounting broken (cases %s -> %s, passes %s -> %s)\n' "$st_cases" "$cases" "$st_passes" "$passes" >&2
   exit 2
 fi
@@ -327,10 +332,14 @@ PY
 )
 check "S17c every use of class in the body is a literal assignment or a read (got: $class_forms)" matches "$class_forms" '^total=[1-9][0-9]* bad=0$'
 check "S17d the runbook class table has a row for unmeasured (the email's fallback)" grep -qE '^\| `unmeasured` \|' "$REPO_ROOT/$RUNBOOK_REL"
-gh_run_lines=$(grep -cE '(^|[`[:space:]])gh run (list|view|rerun)( |$)' "$REPO_ROOT/$RUNBOOK_REL" || true)
-gh_run_scoped=$(grep -E '(^|[`[:space:]])gh run (list|view|rerun)( |$)' "$REPO_ROOT/$RUNBOOK_REL" | grep -cE 'gh run (list|view|rerun) ([^ ]+ )?-R jikig-ai/soleur( |$)' || true)
-check "S17e the runbook carries gh run commands (control)" test "$gh_run_lines" -ge 6
-check_eq "S17f every gh run command in the runbook names the repo with -R" "$gh_run_scoped" "$gh_run_lines"
+# S17e/f count COMMANDS, not lines: each `gh run <verb>` (any verb: list, view, rerun, watch, download, ...) is cut at
+# the first shell separator or code-span end (| ; & ` ) ), so a second command chained onto an already-scoped line is
+# its own occurrence and must carry -R itself. -R must sit on the command's first line.
+gh_run_cmds=$(grep -oE 'gh run [a-z][a-z-]*[^`|;&)]*' "$REPO_ROOT/$RUNBOOK_REL" || true)
+gh_run_total=$(printf '%s' "$gh_run_cmds" | grep -c . || true)
+gh_run_scoped=$(printf '%s' "$gh_run_cmds" | grep -cE ' -R jikig-ai/soleur( |$)' || true)
+check "S17e the runbook carries gh run commands (control)" test "$gh_run_total" -ge 7
+check_eq "S17f every gh run command in the runbook names the repo with -R" "$gh_run_scoped" "$gh_run_total"
 email_runbook=$(grep -oE '<code>[a-z0-9-]+\.md</code>' "$EMAIL_BODY" | sed -E 's#</?code>##g' | sort -u | tr '\n' ' ')
 check_eq "S18 the email names exactly one runbook file, the marker's" "$email_runbook" "${RUNBOOK_REL##*/} "
 check "S18b the runbook file the email names exists" test -f "$REPO_ROOT/$(dirname "$RUNBOOK_REL")/${email_runbook% }"
