@@ -113,3 +113,5 @@ The hermetic rows run on every push in `egress-injector-policy.test.ts` and `egr
 ## Re-measure trigger
 
 These results describe the pinned versions above. Re-measure when any of these changes: the Agent SDK version, the claude-code CLI version, the iron-proxy digest, `buildAgentSandboxConfig` or `buildAgentEnv`, `egress-forwarder.mjs` or `egress-gateway-squid.conf`, the approval RPCs (`create_approval_request`, `decide_approval`, `consume_approval`, `get_approval_status`), or the hook and policy files. The results also go stale when this PR merges, until #11637 owns the job (ADR-325).
+
+**Note (2026-11-10, CTO overlap ruling):** run 42883871262 measured Agent SDK 0.3.311. Open PR #12553 moves the pin to 0.3.321, so the SDK-version trigger above fires when it merges. The re-measure on the new pin is a precondition #11637 owns before adoption. If #12553 merges before this PR, the sync push re-runs the spike on 0.3.321. That run's link is then recorded here, and GO stands only if all nine criteria pass again.
