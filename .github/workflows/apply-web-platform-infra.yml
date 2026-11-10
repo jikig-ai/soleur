@@ -765,7 +765,7 @@ jobs:
             echo "::error::[ack-destroy] does NOT reach this HALT (acking an unrelated delete would ack this one too)."
             echo "::error::Remediation depends on what you intended:"
             echo "::error::  • Not intended → an upstream change forced a replace (length, keepers, count gate, a reference). Revert it."
-            echo "::error::  • Intended rotation → no per-merge route exists (ADR-323 Decision 9; dual-key _PREVIOUS is not built). Stop and escalate."
+            echo "::error::  • Intended rotation → no per-merge route exists. The verifier accepts an accept-only slot (ADR-323 Decision 9); the replace route is #12538, never a -replace here (it writes the new key into the same Tier-A-readable state). Stop and escalate."
             echo "::error::  • CREATE of random_bytes.proxy_hello_hmac → most likely lost state; on a FIRST birth Doppler prd also lacks the key and the release gate refuses until an owner-run full apply mints it. Do NOT apply from here: a new value splits the hosts. A lone create of the Doppler copy is not refused."
             echo "::error::  • Bare update of doppler_secret.proxy_hello_hmac_key → most likely an out-of-band edit. Restore the previous value unless the key LEAKED (restoring re-installs it; ADR-323 Decision 9); never apply over it."
             echo "::error::  • Retiring the relay (proxy-TLS gate variable off) destroys this pair and is closed here: it needs a separately reviewed route that also drops PROXY_HELLO_HMAC_KEY from verify-required-secrets.sh."
