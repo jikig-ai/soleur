@@ -90,7 +90,11 @@ co-occurs with is not enough.
    `$D` variable in `--body-file`, and User-Impact lines it did not accept. Recovery: added
    `--milestone`, a literal path, and `--label meta/machinery`. **Prevention:** already
    skill-enforced: `review/SKILL.md` prescribes running it as its own Bash call with an absolute
-   `--body-file`. Read that section before filing.
+   `--body-file`. Read that section before filing. It recurred twice at ship (#12602), for two
+   reasons. First, `User-Impact:` needs a named surface word, and a 0-line fix is inside the
+   inline threshold, so an operator *decision* issue takes `Mandated-By:`. Second, a `sed` that
+   fixes the body in the same Bash call as `gh issue create` is invisible to the hook: PreToolUse
+   reads the file before the command runs. Edit the body in one call and file in the next.
 5. **A probe subagent was stopped by a safety classifier while writing the defensive SDK
    driver.** Recovery: the orchestrator wrote `mod-probe.mjs` and ran it in the container.
    **Prevention:** for a security-property probe, write the driver in the orchestrator and give
