@@ -106,12 +106,13 @@ let helloKeys: ProxyHelloKeys | null = null;
  *
  * The accept-only slot (absent by default, so it ships dark):
  * - unset or empty: `null`, silently;
- * - set but not 64 lowercase hex: `null`, plus one `proxy-hello.accept-also-ignored` event;
+ * - set but not 64 lowercase hex: `null`, plus one `loadProxyHelloKeys.accept-also-ignored` event, whether or not
+ *   `current` is loaded;
  * - byte-equal to `current`: kept (accepting one key twice is harmless), plus one warn-level
- *   `proxy-hello.accept-also-equals-current` event; `relay_hello_key_fp` then shows equal values;
- * - well-formed and distinct: kept, plus one warn-level `proxy-hello.accept-also-active` event (the slot sits
+ *   `loadProxyHelloKeys.accept-also-equals-current` event; `relay_hello_key_fp` then shows equal values;
+ * - well-formed and distinct: kept, plus one warn-level `loadProxyHelloKeys.accept-also-active` event (the slot sits
  *   outside Terraform, so a planted slot must not be silent; the event is expected during a rotation);
- * - set while `current` is null: no extra event (the listener refuses to start and reports no-hello-key).
+ * - well-formed while `current` is null: no extra event (the listener refuses to start and reports no-hello-key).
  * Every event text is a constant: no value, length or prefix. Each fires once per process (cached).
  */
 export function loadProxyHelloKeys(): ProxyHelloKeys {
@@ -126,22 +127,21 @@ export function loadProxyHelloKeys(): ProxyHelloKeys {
       if (!HELLO_KEY_RE.test(rawAlso)) {
         reportSilentFallback(null, {
           feature: "control_plane_route",
-          op: "proxy-hello.accept-also-ignored",
-          message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set but malformed — ignored; the relay accepts the current key only",
-          extra: { reason: "malformed" },
+          op: "loadProxyHelloKeys.accept-also-ignored",
+          message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set but malformed — ignored",
         });
       } else {
         acceptAlso = Buffer.from(rawAlso, "hex");
         if (current !== null && acceptAlso.equals(current)) {
           warnSilentFallback(null, {
             feature: "control_plane_route",
-            op: "proxy-hello.accept-also-equals-current",
+            op: "loadProxyHelloKeys.accept-also-equals-current",
             message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO equals the current hello key — kept, but it adds no second key",
           });
         } else if (current !== null) {
           warnSilentFallback(null, {
             feature: "control_plane_route",
-            op: "proxy-hello.accept-also-active",
+            op: "loadProxyHelloKeys.accept-also-active",
             message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set — the relay also accepts a second hello key (expected only during a rotation)",
           });
         }

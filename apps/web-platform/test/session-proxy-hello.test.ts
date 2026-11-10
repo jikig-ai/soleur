@@ -660,9 +660,9 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
     expect((await run(port, [signProxyHello(KEY, U, W)])).ready).toBe(true);
   });
 
-  it("slot malformed: listens, exactly 1 accept-also-ignored event (reason malformed), the slot is absent", async () => {
+  it("slot malformed: listens, exactly 1 accept-also-ignored event (no extra), the slot is absent", async () => {
     const port = await listen(startWith(KEY_HEX, ACCEPT_HEX.toUpperCase()));
-    expect(reports()).toEqual([{ op: "proxy-hello.accept-also-ignored", extra: { reason: "malformed" } }]);
+    expect(reports()).toEqual([{ op: "loadProxyHelloKeys.accept-also-ignored", extra: undefined }]);
     expect(warnOps()).toEqual([]);
     expect(fpLines().map((l) => l[1])).toEqual([`relay_hello_key_fp current=${helloKeyFingerprint(KEY)} accept_also=none`]);
     expect((await run(port, [signProxyHello(ACCEPT_KEY, U, W)])).ready).toBe(false);
@@ -672,7 +672,7 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
   it("slot equal to current: listens, exactly 1 warn-level accept-also-equals-current event, the line shows equal values", async () => {
     await listen(startWith(KEY_HEX, KEY_HEX));
     expect(reports()).toEqual([]);
-    expect(warnOps()).toEqual(["proxy-hello.accept-also-equals-current"]);
+    expect(warnOps()).toEqual(["loadProxyHelloKeys.accept-also-equals-current"]);
     const fp = helloKeyFingerprint(KEY);
     expect(fpLines().map((l) => l[1])).toEqual([`relay_hello_key_fp current=${fp} accept_also=${fp}`]);
     assertNoKeyMaterial();
@@ -681,7 +681,7 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
   it("slot well-formed and distinct: exactly 1 warn-level accept-also-active event (no value, no fingerprint), and an accept-also hello is admitted", async () => {
     const port = await listen(startWith(KEY_HEX, ACCEPT_HEX));
     expect(reports()).toEqual([]);
-    expect(warnOps()).toEqual(["proxy-hello.accept-also-active"]);
+    expect(warnOps()).toEqual(["loadProxyHelloKeys.accept-also-active"]);
     const payload = JSON.stringify(namedWarn.mock.calls);
     expect(payload).not.toContain(helloKeyFingerprint(KEY));
     expect(payload).not.toContain(helloKeyFingerprint(ACCEPT_KEY));
@@ -712,7 +712,7 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
 
   it("slot malformed, current absent: no listener, 1 accept-also-ignored then 1 no-hello-key event", () => {
     expect(startWith("", "zz")).toBeNull();
-    expect(reports().map((r) => r.op)).toEqual(["proxy-hello.accept-also-ignored", "createProxyServer.no-hello-key"]);
+    expect(reports().map((r) => r.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored", "createProxyServer.no-hello-key"]);
     expect(warnOps()).toEqual([]);
     expect(fpLines()).toEqual([]);
   });
@@ -726,7 +726,7 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
   it("call twice: the loader's event fires once per process, while each listener start prints its own fingerprint line", async () => {
     await listen(startWith(KEY_HEX, ACCEPT_HEX));
     await listen(createProxyServer({ onProxiedSession, ...BASE, bindAddress: "127.0.0.1" }));
-    expect(warnOps()).toEqual(["proxy-hello.accept-also-active"]);
+    expect(warnOps()).toEqual(["loadProxyHelloKeys.accept-also-active"]);
     expect(fpLines()).toHaveLength(2);
   });
 

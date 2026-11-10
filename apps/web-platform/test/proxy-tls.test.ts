@@ -247,6 +247,7 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
   const CURRENT_HEX = randomBytes(32).toString("hex");
   const ALSO_HEX = randomBytes(32).toString("hex");
   const SLOT = "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO";
+  const MALFORMED_MESSAGE = "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set but malformed — ignored";
   const ops = () => [
     ...mockReportSilentFallback.mock.calls.map((c) => ({ level: "error", err: c[0], op: c[1]?.op as string, opts: c[1] })),
     ...mockWarnSilentFallback.mock.calls.map((c) => ({ level: "warn", err: c[0], op: c[1]?.op as string, opts: c[1] })),
@@ -291,17 +292,41 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     ["uppercase", () => ALSO_HEX.toUpperCase()],
     ["trailing newline", () => ALSO_HEX + "\n"],
     ["non-hex char", () => ALSO_HEX.slice(0, 63) + "g"],
-  ])("slot malformed (%s): acceptAlso is null, exactly 1 accept-also-ignored error event with reason malformed", (_n, value) => {
+  ])("slot malformed (%s): acceptAlso is null, exactly 1 accept-also-ignored error event with exactly the constant payload", (_n, value) => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
     vi.stubEnv(SLOT, value());
     const keys = loadProxyHelloKeys();
     expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
     expect(keys.acceptAlso).toBeNull();
-    expect(ops().map((o) => [o.level, o.op])).toEqual([["error", "proxy-hello.accept-also-ignored"]]);
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["error", "loadProxyHelloKeys.accept-also-ignored"]]);
     const [only] = ops();
     expect(only.err).toBeNull();
-    expect(only.opts).toMatchObject({ feature: "control_plane_route", extra: { reason: "malformed" } });
+    // Exact: any extra key (a length, a prefix, an `extra` object) fails.
+    expect(only.opts).toEqual({ feature: "control_plane_route", op: "loadProxyHelloKeys.accept-also-ignored", message: MALFORMED_MESSAGE });
     assertNoKeyMaterial();
+  });
+
+  test("the malformed-slot message is CONSTANT: two malformed inputs of different lengths, with and without a current key, give one identical message", () => {
+    const messages: string[] = [];
+    for (const [current, slot] of [
+      [CURRENT_HEX, "zz"],
+      [CURRENT_HEX, ALSO_HEX.slice(1)],
+      ["", "zz"],
+      ["", ALSO_HEX + "a"],
+    ] as const) {
+      __resetProxyHelloKeyForTests();
+      mockReportSilentFallback.mockClear();
+      mockWarnSilentFallback.mockClear();
+      vi.stubEnv("PROXY_HELLO_HMAC_KEY", current);
+      vi.stubEnv(SLOT, slot);
+      loadProxyHelloKeys();
+      expect(ops().map((o) => o.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored"]);
+      messages.push(String(ops()[0].opts?.message));
+    }
+    expect(new Set(messages)).toEqual(new Set([MALFORMED_MESSAGE]));
+    expect(MALFORMED_MESSAGE).not.toMatch(/\d/);
+    // True with no current key too: it claims nothing about which key the relay accepts.
+    expect(MALFORMED_MESSAGE).not.toMatch(/current/i);
   });
 
   test("slot equal to current: KEPT, exactly 1 warn-level accept-also-equals-current event", () => {
@@ -309,7 +334,7 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     vi.stubEnv(SLOT, CURRENT_HEX);
     const keys = loadProxyHelloKeys();
     expect(keys.acceptAlso?.toString("hex")).toBe(CURRENT_HEX);
-    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "proxy-hello.accept-also-equals-current"]]);
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "loadProxyHelloKeys.accept-also-equals-current"]]);
     expect(ops()[0].err).toBeNull();
     expect(ops()[0].opts).toMatchObject({ feature: "control_plane_route" });
     assertNoKeyMaterial();
@@ -321,7 +346,7 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     const keys = loadProxyHelloKeys();
     expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
     expect(keys.acceptAlso?.toString("hex")).toBe(ALSO_HEX);
-    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "proxy-hello.accept-also-active"]]);
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "loadProxyHelloKeys.accept-also-active"]]);
     expect(ops()[0].err).toBeNull();
     expect(ops()[0].opts?.extra).toBeUndefined();
     assertNoKeyMaterial();
@@ -341,7 +366,7 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     const keys = loadProxyHelloKeys();
     expect(keys.current).toBeNull();
     expect(keys.acceptAlso).toBeNull();
-    expect(ops().map((o) => o.op)).toEqual(["proxy-hello.accept-also-ignored"]);
+    expect(ops().map((o) => o.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored"]);
   });
 
   test("each op has its own constant message text (Sentry groups by message), naming no value", () => {
@@ -363,9 +388,9 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
   });
 
   test.each([
-    ["malformed", () => "not-a-key", "proxy-hello.accept-also-ignored"],
-    ["equal to current", () => CURRENT_HEX, "proxy-hello.accept-also-equals-current"],
-    ["distinct", () => ALSO_HEX, "proxy-hello.accept-also-active"],
+    ["malformed", () => "not-a-key", "loadProxyHelloKeys.accept-also-ignored"],
+    ["equal to current", () => CURRENT_HEX, "loadProxyHelloKeys.accept-also-equals-current"],
+    ["distinct", () => ALSO_HEX, "loadProxyHelloKeys.accept-also-active"],
   ])("call twice (%s): the event fires exactly once (cached loader), and the slot is not re-read", (_n, value, op) => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
     vi.stubEnv(SLOT, value());
