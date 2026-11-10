@@ -74,9 +74,11 @@ const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
 
 /**
  * The relay hello keys this process loaded. `current` signs and verifies; `acceptAlso` (PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO)
- * is verify-only (ADR-323 Decision 9). The object is frozen and redacting: `JSON.stringify` and `util.inspect` print a placeholder, and both slots are
- * non-enumerable, so a copy of the set (spread, Object.assign, structuredClone) carries no key. A Buffer read out of
- * it (`keys.current`) is a raw key: never log it.
+ * is verify-only (ADR-323 Decision 9). The object is frozen and redacting: `JSON.stringify` and `util.inspect` (default
+ * options, `showHidden`, or `customInspect: false`) print no key, and both slots are non-enumerable, so a copy of the set
+ * (spread, Object.assign, structuredClone) carries no key. Not covered: `util.inspect` with BOTH `showHidden: true` and
+ * `customInspect: false` prints the bytes, and no in-process code can prevent that. A Buffer read out of the set
+ * (`keys.current`) is a raw key: never log it.
  */
 export type ProxyHelloKeys = Omit<HelloVerifyKeys, "current"> & { readonly current: Buffer | null };
 
@@ -84,7 +86,8 @@ const KEYS_PLACEHOLDER = "[proxy-hello-keys]";
 
 function redactingKeySet(current: Buffer | null, acceptAlso: Buffer | null): ProxyHelloKeys {
   // Every property is non-enumerable: `keys.current` reads work, while a spread, Object.assign, Object.entries,
-  // structuredClone or util.inspect({customInspect: false}) copy or print no key.
+  // structuredClone or util.inspect({customInspect: false}) copy or print no key. The inspect.custom hook covers
+  // util.inspect({showHidden: true}); showHidden together with customInspect: false bypasses both and prints the bytes.
   const set = Object.defineProperties({} as ProxyHelloKeys, {
     current: { value: current },
     acceptAlso: { value: acceptAlso },

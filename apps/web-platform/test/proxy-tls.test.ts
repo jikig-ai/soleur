@@ -240,7 +240,7 @@ describe("loadProxyHelloKeys().current (#12289): a 32-byte Buffer only for exact
   });
 });
 
-// #8211 (ADR-323 Decision 9, B3) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO. Verify-only, never signed
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO. Verify-only, never signed
 // with, absent by default. Each loader state is asserted with its exact Sentry events (named spies), and every event
 // payload is scanned for the fixture keys' hex and base64 forms. Keys are synthesized per run.
 describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
@@ -414,7 +414,7 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
     expect(SLOT in process.env).toBe(false);
   });
 
-  test("the key set is frozen and redacting: JSON.stringify, util.inspect (customInspect on or off), spread, Object.assign, Object.entries and structuredClone never carry a key byte, while property reads still work", () => {
+  test("the key set is frozen and redacting: JSON.stringify, util.inspect (customInspect on or off; showHidden with the hook), spread, Object.assign, Object.entries and structuredClone never carry a key byte, while property reads still work", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
     vi.stubEnv(SLOT, ALSO_HEX);
     const keys = loadProxyHelloKeys();
@@ -434,6 +434,11 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
       inspect({ nested: keys }, { depth: 5 }),
       inspect(keys, { customInspect: false }),
       inspect({ nested: keys }, { customInspect: false, depth: 5 }),
+      // showHidden lists non-enumerable properties, so only the inspect.custom hook keeps these redacted. (showHidden
+      // together with customInspect: false does print the bytes: no in-process code can prevent that combination.)
+      inspect(keys, { showHidden: true }),
+      inspect(keys, { showHidden: true, customInspect: true }),
+      inspect({ nested: keys }, { showHidden: true, depth: 5 }),
       JSON.stringify({ ...keys }),
       inspect({ ...keys }),
       JSON.stringify(Object.assign({}, keys)),
@@ -452,10 +457,13 @@ describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
         expect(out).not.toContain(hex);
         expect(out).not.toContain(spaced.slice(0, 23)); // util.inspect's `<Buffer 01 23 ...>` form
         expect(out).not.toContain(Array.from(bytes).slice(0, 8).join(",")); // JSON's `{"data":[1,35,...]}` form
+        expect(out.replace(/\s+/g, "")).not.toContain(Array.from(bytes).slice(0, 8).join(",")); // showHidden's one-byte-per-line form
         expect(out).not.toContain(bytes.toString("base64"));
       }
     }
     expect(JSON.stringify(keys)).toBe('"[proxy-hello-keys]"');
+    expect(inspect(keys)).toBe("[proxy-hello-keys]");
+    expect(inspect(keys, { showHidden: true })).toBe("[proxy-hello-keys]");
     expect(JSON.stringify({ ...keys })).toBe("{}");
     expect(Object.entries(keys)).toEqual([]);
     expect(Object.keys(structuredClone(keys))).toEqual([]);
