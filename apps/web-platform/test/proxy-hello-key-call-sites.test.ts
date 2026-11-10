@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -49,16 +49,22 @@ const hits = new Map<string, string[]>([
   [SHEBANG, []],
 ]);
 for (const f of [...new Set(LISTED)]) {
-  const p = join(REPO, f);
-  let st;
+  // Open once, then fstat and read the SAME descriptor: a check on the path followed by a read of the path is a
+  // check-then-use race (CodeQL js/file-system-race). O_NOFOLLOW refuses a symlink at open (ELOOP).
+  let fd: number;
   try {
-    st = lstatSync(p);
+    fd = openSync(join(REPO, f), constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
-    continue; // tracked but deleted in the working tree
+    continue; // tracked but deleted in the working tree, or a symlink
   }
-  if (!st.isFile()) continue; // symlinks, submodule gitlinks
+  let buf: Buffer | undefined;
+  try {
+    if (fstatSync(fd).isFile()) buf = readFileSync(fd); // directories (submodule gitlinks) are skipped
+  } finally {
+    closeSync(fd);
+  }
+  if (buf === undefined) continue;
   scanned.push(f);
-  const buf = readFileSync(p);
   for (const [needle, list] of hits) if (buf.includes(needle)) list.push(f);
 }
 
