@@ -7186,6 +7186,12 @@ if want_scripts; then
   # a mutation battery on the binding/latest-run/missing axes, and the cla-verify enumeration parity pin).
   # Same explicit-registration and LAST-in-block reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-oracle-review" bash scripts/ci-oracle-review.test.sh
+  # #12396: the parked-hold member step of secret-guards, EXECUTED under a stubbed gh (live label read, fail-closed rows,
+  # the workflow run: block under the runner shell, mutation rows). Declared edge set, not always-on.
+  run_suite "scripts/ci-parked-hold" bash scripts/ci-parked-hold.test.sh
+  # #12429: the credential-free pre-flag counts helper, EXECUTED against a stubbed fetch (key validation, jq -e parse,
+  # fail-closed rows, mutants). Declared edge set, not always-on.
+  run_suite "scripts/legal-acceptance-counts" bash scripts/legal-acceptance-counts.test.sh
   # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
   # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
   # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh

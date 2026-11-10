@@ -399,6 +399,7 @@ scripts/ci-draft-light	6
 scripts/ci-leg-balance-9232	8
 scripts/ci-oracle-lane	4
 scripts/ci-oracle-review	5
+scripts/ci-parked-hold	5
 scripts/ci-pr-selection	2
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5
@@ -483,6 +484,7 @@ scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/jobs1-stopgap-7432	1
 scripts/learning-retrieval-bench	7
+scripts/legal-acceptance-counts	5
 scripts/lib/bearer-curl.test.sh	7
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1

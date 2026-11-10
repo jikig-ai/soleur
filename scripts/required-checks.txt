@@ -84,7 +84,8 @@ skill-security-scan PR gate
 #     (`lint fixture content`), waiver-discipline (`waiver discipline
 #     (issue:#NNN trailer)`), rename-guard (`rename-guard (allowlist
 #     destinations)`), allowlist-diff (`allowlist-diff (.gitleaks.toml paths
-#     surface)`).
+#     surface)`), parked-hold and parked-hold-selftest (added 2026-11-08,
+#     #12396).
 #       - scan + lint-fixture-content: EARNED — the composite action reproduces
 #         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
 #         posting any synthetic (action.yml); the greens are earned, not
@@ -101,6 +102,26 @@ skill-security-scan PR gate
 #         destinations under apps/web-platform/**, and the .gitleaks.toml paths
 #         surface) are disjoint from ALLOWED_PATHS = {weakness-digest.md} ->
 #         intersection EMPTY.
+#       - parked-hold / parked-hold-selftest: NOT content-scoped — they read
+#         the PR's LIVE label list (scripts/ci-parked-hold.sh), not the diff,
+#         so the content-scoped reachability argument does not apply and none
+#         is made. Hosted in this umbrella because secret-scan.yml already
+#         triggers on labeled/unlabeled (ci.yml does not); a semantic misfit
+#         for a secret scanner, accepted over a new top-level required context
+#         (which would need a ruleset apply). The bot synthetic for
+#         `secret-guards` is UNCHANGED. The member is unreachable at synthesis
+#         for the current bot producers because the composite action's
+#         `labels` input is caller-fixed (swept: `grep -rn
+#         "bot-pr-with-synthetic-checks" .github` -> weakness-miner.yml is the
+#         only live caller and it never passes `parked`). A later HUMAN label
+#         fires a real `labeled` run that supersedes the synthetic (latest
+#         check-run per name wins); for a PR created with GITHUB_TOKEN that is
+#         UNVERIFIED. Flip evidence: a human-labeled bot PR that shows NO new
+#         `secret-guards` run means the member must be reproduced in the
+#         action's Phase-4 ceiling (live label read before posting any
+#         synthetic). A `parked` label applied by an Actions actor with
+#         GITHUB_TOKEN fires no `labeled` run either (a GitHub rule), so such
+#         a PR keeps its synthetic green until its merge_group run.
 #   quality-guards (.github/workflows/pr-quality-guards.yml job
 #     `quality-guards`)
 #     members: enforce, markdown-lint, guard-script-fixture-tests (context was

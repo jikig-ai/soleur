@@ -20887,6 +20887,743 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "j89zs",
+      "x": 0,
+      "y": 11500,
+      "name": "23 Inbox - legal text row variance (founder acceptance record)",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-inset",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Iuak0",
+          "name": "Sidebar",
+          "width": 240,
+          "height": "fill_container",
+          "fill": "$bg",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "kvf37",
+              "name": "Soleur",
+              "fill": "$gold",
+              "content": "Soleur",
+              "fontFamily": "$font-ui",
+              "fontSize": 18,
+              "fontWeight": "700"
+            },
+            {
+              "type": "rectangle",
+              "id": "fZup4",
+              "name": "spacer",
+              "fill": "#00000000",
+              "width": "fill_container",
+              "height": 12
+            },
+            {
+              "type": "frame",
+              "id": "QdWmx",
+              "name": "Nav Command Center",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "kx8wm",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "ycwj2",
+                      "name": "layout-dashboard",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "layout-dashboard",
+                      "library": "lucide",
+                      "fill": "$text-muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "0JTtu",
+                      "name": "Command Center",
+                      "fill": "$text-secondary",
+                      "content": "Command Center",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "LqFKC",
+              "name": "Nav Inbox",
+              "width": "fill_container",
+              "fill": "$surface-2",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "mIdQV",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "0IY2Z",
+                      "name": "inbox",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "inbox",
+                      "library": "lucide",
+                      "fill": "$text-primary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "CtP6y",
+                      "name": "Inbox",
+                      "fill": "$text-primary",
+                      "content": "Inbox",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "hqoic",
+                  "name": "Nav badge",
+                  "fill": "$danger",
+                  "cornerRadius": 10,
+                  "padding": [
+                    1,
+                    7
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Trpzh",
+                      "name": "2",
+                      "fill": "#FFFFFF",
+                      "content": "1",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rHpQN",
+              "name": "Nav Knowledge Base",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ERTxT",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "d6ekx",
+                      "name": "book-open",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "book-open",
+                      "library": "lucide",
+                      "fill": "$text-muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "krnEm",
+                      "name": "Knowledge Base",
+                      "fill": "$text-secondary",
+                      "content": "Knowledge Base",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "gFRxV",
+              "name": "Nav Routines",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Erx2V",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "9qswD",
+                      "name": "repeat",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "repeat",
+                      "library": "lucide",
+                      "fill": "$text-muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "DQRwK",
+                      "name": "Routines",
+                      "fill": "$text-secondary",
+                      "content": "Routines",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "14hjw",
+              "name": "Nav Settings",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ElISz",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "7q8Rc",
+                      "name": "settings",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "settings",
+                      "library": "lucide",
+                      "fill": "$text-muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Y3Jqz",
+                      "name": "Settings",
+                      "fill": "$text-secondary",
+                      "content": "Settings",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "2iLYs",
+          "name": "sidebar divider",
+          "fill": "$border",
+          "width": 1,
+          "height": "fill_container"
+        },
+        {
+          "type": "frame",
+          "id": "AReNM",
+          "name": "Main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 32,
+          "padding": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "pmyyY",
+              "name": "Inbox column",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Oskpb",
+                  "name": "Inbox",
+                  "fill": "$text-primary",
+                  "content": "Inbox",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "WDZ3K",
+                  "name": "Tabs",
+                  "gap": 24,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Do4oX",
+                      "name": "Active",
+                      "fill": "$gold",
+                      "content": "Active",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "qq1ro",
+                      "name": "Archived",
+                      "fill": "$text-muted",
+                      "content": "Archived",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "Jt7bv",
+                  "name": "tabs rule",
+                  "fill": "$border",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "SjPTi",
+                  "name": "NEEDS YOU · 2",
+                  "fill": "$danger",
+                  "content": "NEEDS YOU · 1",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "nTvry",
+                  "name": "Inbox row - legal text pending (action_required)",
+                  "width": "fill_container",
+                  "fill": "#EF44440F",
+                  "cornerRadius": 8,
+                  "stroke": "#EF44444D",
+                  "strokeWidth": 1,
+                  "gap": 14,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "7fo5Y",
+                      "name": "Severity dot",
+                      "fill": "$danger",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "frame",
+                      "id": "TtwLq",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "YPTtB",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "OeT3s",
+                              "name": "Approval needed: send email ",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Acknowledge \"How your decisions are recorded and kept\"?",
+                              "lineHeight": 1.45,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "YxZNV",
+                              "name": "12m ago",
+                              "fill": "$text-muted",
+                              "content": "",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "gNP5n",
+                          "name": "Chief of Staff · Q4 pallet p",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "How your decisions are recorded and kept, version 2026-11-07",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "zzCz6",
+                          "name": "Meta",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "6hd2L",
+                              "name": "Open to see the exact email ",
+                              "fill": "$text-muted",
+                              "content": "Needs your answer",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "Jipyc",
+                  "name": "FYI",
+                  "fill": "$text-muted",
+                  "content": "FYI",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "wxj5g",
+                  "name": "Inbox row - legal text answered (info)",
+                  "width": "fill_container",
+                  "fill": "$surface-1",
+                  "cornerRadius": 8,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "gap": 14,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "ScASX",
+                      "name": "Severity dot",
+                      "fill": "$text-muted",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "frame",
+                      "id": "PrdGB",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "YvxBe",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "6fQ91",
+                              "name": "Weekly pipeline summary is r",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "You acknowledged \"How your decisions are recorded and kept\"",
+                              "lineHeight": 1.45,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "eERdc",
+                              "name": "Mon 08:00",
+                              "fill": "$text-muted",
+                              "content": "",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "JtJZh",
+                          "name": "Routines · task completed",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "How your decisions are recorded and kept, version 2026-11-07",
+                          "lineHeight": 1.45,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kql0d",
+              "name": "Annotations",
+              "width": 340,
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gvoT2",
+                  "name": "DESIGN NOTES",
+                  "fill": "$text-muted",
+                  "content": "DESIGN NOTES",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "5hyZ6",
+                  "name": "Note 1",
+                  "width": "fill_container",
+                  "fill": "$surface-1",
+                  "cornerRadius": 8,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "FTjuI",
+                      "name": "1 · Reuses inbox-item-row",
+                      "fill": "$gold",
+                      "content": "1 · Legal row, one per declared text",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "MsjRD",
+                      "name": "Severity action_required: re",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Same row as an approval, but the title is the deck string (Acknowledge \"<label>\"?) and the sub line is the deck meta line (<label>, version <version>). Opens /dashboard/approvals/legal/<key>. No timestamp.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "k9AZl",
+                  "name": "Note 2",
+                  "width": "fill_container",
+                  "fill": "$surface-1",
+                  "cornerRadius": 8,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "SnCQQ",
+                      "name": "2 · No Approve or Deny on th",
+                      "fill": "$gold",
+                      "content": "2 · No checkbox, no expiry chip",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "bYZAA",
+                      "name": "Deciding without seeing the ",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "A spacer holds the checkbox column (alignment). No expiry chip unless the text has a valid-until date; then the deck chip \"Open until <date>, end of day UTC\" shows.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "TbtvJ",
+                  "name": "Note 3",
+                  "width": "fill_container",
+                  "fill": "$surface-1",
+                  "cornerRadius": 8,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "clZ6g",
+                      "name": "3 · No Mark done / Archive",
+                      "fill": "$gold",
+                      "content": "3 · No archive, no mark done",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "eT5Jq",
+                      "name": "An unresolved approval canno",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Legal rows are absent from the Archived tab and cannot be bulk-archived. The row is a link only; the answer is given on the card page.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "3rIEN",
+                  "name": "Note 4",
+                  "width": "fill_container",
+                  "fill": "$surface-1",
+                  "cornerRadius": 8,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jbSG6",
+                      "name": "4 · Expiry chip",
+                      "fill": "$gold",
+                      "content": "4 · States",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "pouMQ",
+                      "name": "Gold, amber under 1 hour. Ro",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Pending = NEEDS YOU (red dot, counts in the nav badge). Accepted, declined, change requested and expired = FYI (no badge). There is no separate replaced state: a text whose hash changed with no answer for the new hash is simply pending again for the new version.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {

@@ -64,6 +64,24 @@ function fyi(n: number): MergedInboxItem[] {
   }));
 }
 
+function legalItem(state: "pending" | "accepted" | "declined"): MergedInboxItem {
+  const pending = state === "pending";
+  return {
+    kind: "legal" as const,
+    id: "founder-acceptance-record",
+    severity: pending ? ("action_required" as const) : ("info" as const),
+    pinned: false as const,
+    outstanding: pending,
+    legal: {
+      key: "founder-acceptance-record",
+      label: "How your decisions are recorded and kept",
+      version: "2026-11-07",
+      validUntil: null,
+      state,
+    },
+  };
+}
+
 beforeEach(() => useSWRMock.mockReset());
 afterEach(() => cleanup());
 
@@ -172,5 +190,26 @@ describe("InboxNavBadge (outstanding action_required)", () => {
     expect(dot).toHaveTextContent("5");
     expect(dot.className).toMatch(/ring-soleur-bg-surface-1/);
     expect(dot).toHaveAttribute("aria-hidden", "true");
+  });
+
+  // Founder legal text (Ref #12197): a pending text is a decision (counted); an answered one is FYI that never lights the dot,
+  // because there is no read_at to clear it (a dot that cannot be cleared would stay on for good).
+  it("counts a pending legal row as one decision", async () => {
+    useSWRMock.mockReturnValue({ data: [legalItem("pending")], error: undefined });
+    await renderBadge();
+    expect(screen.getByTestId("inbox-nav-badge")).toHaveAccessibleName("1 item needs your decision");
+  });
+
+  it.each(["accepted", "declined"] as const)("an %s legal row alone shows neither a count nor the FYI dot", async (state) => {
+    useSWRMock.mockReturnValue({ data: [legalItem(state)], error: undefined });
+    await renderBadge();
+    expect(screen.queryByTestId("inbox-nav-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-nav-badge-dot")).not.toBeInTheDocument();
+  });
+
+  it("an answered legal row does not hide a real unread FYI dot beside it", async () => {
+    useSWRMock.mockReturnValue({ data: [legalItem("accepted"), ...fyi(1)], error: undefined });
+    await renderBadge();
+    expect(screen.getByTestId("inbox-nav-badge-dot")).toBeInTheDocument();
   });
 });

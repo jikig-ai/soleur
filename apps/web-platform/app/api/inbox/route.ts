@@ -6,6 +6,7 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { fetchInboxSources } from "@/server/inbox-sources";
 import { mergeAndRank } from "@/lib/inbox-severity";
 import { enrichApprovalInboxRows } from "@/server/approval/inbox-enrich";
+import { loadLegalInboxRows } from "@/server/legal-acceptance/inbox-rows";
 
 /**
  * GET /api/inbox — the unified, severity-ranked attention inbox
@@ -21,6 +22,10 @@ import { enrichApprovalInboxRows } from "@/server/approval/inbox-enrich";
  * `.eq("user_id", …)` re-narrowing (it would hide the shared inbox from
  * co-Owners). A source-grep gate (test) asserts no createServiceClient under
  * app/api/inbox/**.
+ *
+ * Founder legal texts (Ref #12197): for the ACTIVE view only (read concurrently with the other sources), `loadLegalInboxRows` adds one derived row per declared legal text
+ * behind `isLegalSurfaceEnabled` (flag AND founder). It reads through THIS request's user-context client (RLS) and never
+ * throws: a failure omits the legal rows, reports pageReadFailed, and the other items still return 200.
  *
  * Ordering (mergeAndRank, load-bearing): non-archived statutory pinned first
  * (uncapped) → severity rank → recency DESC. The client renders in this order
@@ -39,6 +44,11 @@ async function getHandler(req: Request, user: VerifiedUser) {
 
   const supabase = await createClient();
 
+  // The archived view never carries a legal row (it has no archive state). For the active view the legal read starts NOW, before
+  // the two source reads and the enrichment, and is awaited after them: it is independent of both, and it never rejects (the
+  // loader gates, reports and returns [] on any failure), so an early 500 below leaves no unhandled rejection behind.
+  const legalRowsPromise = archived ? Promise.resolve([]) : loadLegalInboxRows(supabase, user.id);
+
   try {
     const { inboxRows, emailRows } = await fetchInboxSources(supabase, {
       archived,
@@ -48,7 +58,8 @@ async function getHandler(req: Request, user: VerifiedUser) {
       supabase as unknown as Parameters<typeof enrichApprovalInboxRows>[0],
       inboxRows,
     );
-    return NextResponse.json({ items: mergeAndRank(enriched, emailRows) });
+    const legalRows = await legalRowsPromise;
+    return NextResponse.json({ items: mergeAndRank(enriched, emailRows, legalRows) });
   } catch (error) {
     // No PII: never log sender/subject/title — only the pseudonymous id.
     reportSilentFallback(error, {

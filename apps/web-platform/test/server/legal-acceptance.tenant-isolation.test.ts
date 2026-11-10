@@ -745,3 +745,164 @@ describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () 
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 186 (#12429, ADR-319 amendment 2026-11-08): the credential-free pre-flag aggregate (Guard 2).
+// ---------------------------------------------------------------------------------------------------------------
+const countsFn = (t: Txn, key: string = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.legal_acceptance_hash_counts(${key}::text) as r`;
+    return r.r;
+  });
+
+describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () => {
+  test("a key with no rows answers total 0 and an empty by_hash", async () => {
+    await scenario(async (t) => {
+      expect(await countsFn(t, "no-rows-for-this-key")).toEqual({ total: 0, by_hash: [] });
+    });
+  });
+
+  test("two founders on two hashes are both counted, ordered by hash, and the answer carries no per-row field", async () => {
+    await scenario(async (t, c) => {
+      const sessionB = randomUUID();
+      await verifiedIntent(t, c.userA, c.sessionA, { hash: H1 });
+      await record(t, web(c), { hash: H1 });
+      await verifiedIntent(t, c.userB, sessionB, { hash: H2 });
+      await record(t, web(c, c.userB, sessionB), { hash: H2 });
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 2,
+        by_hash: [
+          { text_hash: H1, count: 1 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      // Guard 2 row 4: nothing about who decided, what they decided, when, or the note.
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+      for (const r of out.by_hash) expect(Object.keys(r).sort()).toEqual(["count", "text_hash"]);
+      expect(JSON.stringify(out)).not.toMatch(new RegExp(`${c.userA}|${c.userB}|accept|decline|request_changes|requested_edit`));
+    });
+  });
+
+  // One fresh founder per decision row: the shape is what the product writes (a founder decides once per key and hash).
+  const decideAsNewFounder = async (t: Txn, hash: string) => {
+    const user = randomUUID();
+    const session = randomUUID();
+    await t`insert into auth.users (id, email) values (${user}, ${`n-${user}@example.test`})`;
+    await verifiedIntent(t, user, session, { hash });
+    await record(t, { sub: user, session_id: session }, { hash });
+  };
+
+  test("two rows under H1 and one under H2 are counted 2 and 1 (total 3), ordered by hash, with no per-row field", async () => {
+    await scenario(async (t) => {
+      await decideAsNewFounder(t, H2);
+      await decideAsNewFounder(t, H1);
+      await decideAsNewFounder(t, H1);
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 3,
+        by_hash: [
+          { text_hash: H1, count: 2 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+    });
+  });
+
+  // Set-based seeding for the cap case: the question there is how the counts function behaves over 21 distinct hashes, not how
+  // a decision is made (the cases above drive the product write path). Twenty-one product-path decisions are about 130 round
+  // trips to the dev database and exceeded the runner's 16 s default. The write-door setting is the one the product function
+  // sets around its own INSERT, and each row gets the consumed, confirmed intent the guard trigger demands (same user, key,
+  // hash, version, session; verified_at = reauth_at). The trigger still computes row_hash. now() is fixed inside the
+  // transaction, so verified_at and reauth_at match.
+  const seedRows = async (t: Txn, hashes: string[]) => {
+    const csv = hashes.join(",");
+    await t`insert into public.legal_reauth_event (id, user_id, key, text_hash, version, session_id, expires_at, verified_at, consumed_at)
+            select md5('e' || h)::uuid, md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'seed-session',
+                   now() + interval '30 minutes', now(), now()
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'on', true)`;
+    await t`insert into public.legal_acceptance (founder_id, key, text_hash, version, choice, reauth_method, reauth_at, session_id, event_id)
+            select md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'accept', 'email-code', now(), 'seed-session', md5('e' || h)::uuid
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'off', true)`;
+  };
+
+  test("exactly 20 distinct hashes are answered in full; a 21st is refused (54000) with a static message, never truncated", async () => {
+    await scenario(async (t) => {
+      const hashes = Array.from({ length: 21 }, (_, i) => (i + 1).toString(16).padStart(64, "0"));
+      await seedRows(t, hashes.slice(0, 20));
+      const full = await countsFn(t);
+      expect(full.total).toBe(20);
+      expect(full.by_hash.map((r: { text_hash: string }) => r.text_hash)).toEqual(hashes.slice(0, 20));
+      await seedRows(t, [hashes[20]]);
+      let err: { code?: string; message?: string } | null = null;
+      try {
+        await t.savepoint(async () => {
+          await countsFn(t);
+        });
+      } catch (e) {
+        err = e as { code?: string; message?: string };
+      }
+      expect(err?.code).toBe("54000");
+      expect(err?.message ?? "").toMatch(/too many distinct hashes/);
+      expect(err?.message ?? "").not.toContain(KEY);
+    });
+  }, 60_000);
+
+  test("a different key's rows are not counted", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      expect(await countsFn(t, "some-other-key")).toEqual({ total: 0, by_hash: [] });
+      expect((await countsFn(t)).total).toBe(1);
+    });
+  });
+
+  test("a user identity is refused (42501) and so are anon; EXECUTE is service_role only", async () => {
+    await scenario(async (t, c) => {
+      await failsWith(t, /42501|service role only|permission denied/, () =>
+        as(t, "authenticated", { sub: c.userA }, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+      await failsWith(t, /permission denied/, () => as(t, "anon", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+    });
+  });
+
+  test("a malformed key raises 22023 with a static message that does not echo the key", async () => {
+    await scenario(async (t) => {
+      for (const k of ["Bad Key", "", "UPPER", "a".repeat(64)]) {
+        let err: { code?: string; message?: string } | null = null;
+        try {
+          await t.savepoint(async () => {
+            await as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [k]));
+          });
+        } catch (e) {
+          err = e as { code?: string; message?: string };
+        }
+        expect(err?.code).toBe("22023");
+        if (k.length > 0) expect(err?.message ?? "").not.toContain(k);
+      }
+      await failsWith(t, /22023|invalid input/, () => as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts(null::text)")));
+    });
+  });
+
+  test("the 186 verify sentinel reports bad = 0 on the live catalog", async () => {
+    await scenario(async (t) => {
+      const verify = readFileSync(path.join(__dirname, "../../supabase/verify/186_legal_acceptance_hash_counts.sql"), "utf8");
+      const out = (await t.unsafe(verify)) as any[];
+      expect(out.length).toBeGreaterThanOrEqual(6);
+      expect(out.filter((r) => Number(r.bad) !== 0).map((r) => r.check_name)).toEqual([]);
+    });
+  });
+
+  test("the 186 down file drops only the function: the record table and the 185 objects remain", async () => {
+    await scenario(async (t) => {
+      const down = readFileSync(path.join(__dirname, "../../supabase/migrations/186_legal_acceptance_hash_counts.down.sql"), "utf8");
+      await t.unsafe(down);
+      const [f] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'legal_acceptance_hash_counts'`;
+      expect(f.n).toBe(0);
+      const [kept] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('legal_acceptance_ack_state', 'ack_legal_acceptance', 'verify_legal_acceptance')`;
+      expect(kept.n).toBe(3);
+    });
+  });
+});
