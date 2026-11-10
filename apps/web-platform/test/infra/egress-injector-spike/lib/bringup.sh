@@ -214,7 +214,9 @@ spike_upstream_root() {
 spike_wait_log() { # container, literal line prefix, seconds
   local i
   for ((i = 0; i < $3 * 2; i++)); do
-    docker logs "$1" 2>&1 | grep -q -- "$2" && return 0
+    # Not `docker logs | grep -q` under pipefail: grep exiting at the first match can kill docker logs with SIGPIPE,
+    # and the pipeline then reads as no match.
+    grep -q -- "$2" < <(docker logs "$1" 2>&1) && return 0
     sleep 0.5
   done
   return 1
@@ -322,9 +324,6 @@ ENV
   printf -v "SPIKE_SESS_${id}_CONV" '%s' "$conv"
   printf -v "SPIKE_SESS_${id}_TUNNEL" '%s' "$((18080 + idx * 10))"
 }
-
-# The decoy value, for the stub's config and the log scans only (read from the session's file; never printed).
-spike_session_decoy() { tr -d '\n' < "$SPIKE_WORK/run/$1/secrets/decoy.token"; }
 
 # spike_start_hook <hook config json path on host>. Runs with --network host (R21) as the app uid; mounts the shared
 # run dir (sockets) and its private dir (service-role key, HMAC key, server keys, router passwords).

@@ -101,6 +101,22 @@ for r in d["records"]:
         print(f"::error title=injector spike criterion {r['criterion']}::{r['verdict']}: {r.get('reason') or r.get('observation')}")
 PY
   fi
+  # The verdict and one row per record on the run's summary page, so a reader (or an agent with the run URL) sees
+  # the outcome without downloading the artifact. Records carry ids and reasons only, never a secret value.
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    python3 -I - "$SPIKE_OUT" "$SPIKE_WORK/verdict.final" >> "$GITHUB_STEP_SUMMARY" <<'PY' || echo "WARN finalize: could not write the step summary"
+import json, sys
+d = json.load(open(sys.argv[1]))
+final = next((l.strip().split("=", 1)[1] for l in open(sys.argv[2]) if l.startswith("verdict=")), "INCONCLUSIVE")
+cell = lambda s: str(s).replace("|", "\\|").replace("\n", " ")[:600]
+print(f"## Egress injector spike: {final}\n")
+print("| Criterion | Verdict | Observation or reason |")
+print("|---|---|---|")
+for r in sorted(d.get("records", []), key=lambda r: (r.get("criterion", 0), str(r.get("verdict")))):
+    print(f"| {r.get('criterion')} | {r.get('verdict')} | {cell(r.get('reason') or r.get('observation') or '')} |")
+print()
+PY
+  fi
   echo "INJECTOR_SPIKE_OUT=$SPIKE_OUT"
   exit "$rc"
 }
@@ -150,26 +166,60 @@ mint_plain_root() {
     -out "$dir/ca.pem" 2>/dev/null || return 1
 }
 
-# Instrument self-test (run before any arm): the record path, the floor and the verdict program must each be able
-# to produce BOTH outcomes, or nothing downstream of them is evidence.
+# Instrument self-test (run before any arm): the record path, the judged-record path, the floor and the verdict
+# program must each be able to produce BOTH outcomes, or nothing downstream of them is evidence. A failure is
+# reported with printf and exit, never through the helpers under test (a recorder or judge that always said `pass`
+# would otherwise report its own failure as a pass). The results file it leaves is written with printf too.
+_selftest_die() {
+  printf 'FAIL SELFTEST: %s\n' "$1"
+  [[ "${GITHUB_ACTIONS:-}" == "true" ]] && printf '::error title=injector spike harness::SELFTEST: %s\n' "$1"
+  printf '{"verdict": "INCONCLUSIVE", "records": [], "harness": "SELFTEST"}\n' > "$SPIKE_OUT"
+  exit 1
+}
+
+# _selftest_verdict <records.jsonl> <out.json>: wraps the records the helpers appended and prints verdict.mjs's line.
+_selftest_verdict() {
+  python3 -I -c 'import json, sys
+json.dump({"records": [json.loads(l) for l in open(sys.argv[1]) if l.strip()]}, open(sys.argv[2], "w"))' "$1" "$2" \
+    || _selftest_die "cannot wrap $1"
+  node "$SPIKE_DIR/verdict.mjs" "$2" 2>/dev/null
+}
+
 harness_selftest() {
-  local t="$SPIKE_WORK/selftest" out
-  mkdir -p "$t" || return 1
-  : > "$t/empty.json"
+  local t="$SPIKE_WORK/selftest" out c saved="$SPIKE_RECORDS"
+  mkdir -p "$t" || _selftest_die "mkdir $t"
   printf '{"records":[]}\n' > "$t/empty.json"
   out="$(node "$SPIKE_DIR/verdict.mjs" "$t/empty.json" 2>/dev/null)"
-  [[ "$out" == "verdict=INCONCLUSIVE" ]] || { echo "FAIL SELFTEST: empty records did not read INCONCLUSIVE ($out)"; return 1; }
+  [[ "$out" == "verdict=INCONCLUSIVE" ]] || _selftest_die "empty records did not read INCONCLUSIVE ($out)"
   python3 -I -c '
 import json
 print(json.dumps({"records": [{"criterion": c, "verdict": "pass", "observation": "selftest"} for c in range(1, 10)]}))
 ' > "$t/go.json"
   out="$(node "$SPIKE_DIR/verdict.mjs" "$t/go.json" 2>/dev/null)"
-  [[ "$out" == "verdict=GO" ]] || { echo "FAIL SELFTEST: nine passes did not read GO ($out)"; return 1; }
-  local saved="$SPIKE_RECORDS"
-  SPIKE_RECORDS="$t/records.jsonl"
-  record_verdict 4 pass "selftest-observation" >/dev/null
-  record_verdict 4 fail "selftest-observation" >/dev/null
-  [[ "$(wc -l < "$SPIKE_RECORDS")" -eq 2 ]] || { SPIKE_RECORDS="$saved"; echo "FAIL SELFTEST: record_verdict did not append"; return 1; }
+  [[ "$out" == "verdict=GO" ]] || _selftest_die "nine passes did not read GO ($out)"
+  # Through record_verdict: eight passes and one fail must read NO-GO; nine passes must read GO.
+  SPIKE_RECORDS="$t/rv-fail.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  record_verdict 9 fail "selftest-observation" >/dev/null
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/rv-fail.json")"
+  [[ "$out" == "verdict=NO-GO" ]] || _selftest_die "a fail pushed through record_verdict did not read NO-GO ($out)"
+  SPIKE_RECORDS="$t/rv-go.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8 9; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/rv-go.json")"
+  [[ "$out" == "verdict=GO" ]] || _selftest_die "nine passes through record_verdict did not read GO ($out)"
+  # Through spike_record_judged (the path every arm's judge takes): a judged fail must read NO-GO, a judged pass GO.
+  printf 'fail\nfailed: selftest check\n' > "$t/judge-fail.txt"
+  printf 'pass\nall checks held: selftest check\n' > "$t/judge-pass.txt"
+  SPIKE_RECORDS="$t/judged-fail.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  spike_record_judged 9 "$t/judge-fail.txt" >/dev/null
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/judged-fail.json")"
+  [[ "$out" == "verdict=NO-GO" ]] || _selftest_die "a fail pushed through spike_record_judged did not read NO-GO ($out)"
+  SPIKE_RECORDS="$t/judged-pass.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  spike_record_judged 9 "$t/judge-pass.txt" >/dev/null
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/judged-pass.json")"
+  [[ "$out" == "verdict=GO" ]] || _selftest_die "a pass pushed through spike_record_judged did not read GO ($out)"
   SPIKE_RECORDS="$saved"
   echo "SOLEUR_SPIKE_SELFTEST ok"
 }

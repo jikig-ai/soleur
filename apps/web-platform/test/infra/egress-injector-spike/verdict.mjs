@@ -5,7 +5,7 @@
 //   GO            criteria 1-9 all pass, each backed by a positive observation
 //   NO-GO         every criterion 1-9 has a measured verdict and at least one fails (exit 0, CTO R3)
 //   INCONCLUSIVE  any criterion missing or unmeasurable, an unknown id or verdict value, a pass with no observation,
-//                 or a stored top-level verdict that disagrees with the records (exit 1)
+//                 a pass whose observation starts with `failed:` (a recorder or judge defect), or a stored top-level verdict that disagrees with the records (exit 1)
 // The floor counts DISTINCT criterion ids, never lines. A measured failure of criterion 2 or 5 is F1 evidence
 // (flip fact F1 holds) even when the overall verdict is INCONCLUSIVE.
 import { readFileSync } from "node:fs";
@@ -35,6 +35,13 @@ export function computeVerdict(results) {
     if (v === "pass" && !(typeof r.observation === "string" && r.observation.trim() !== "")) {
       v = "unmeasurable";
       reason = "no-positive-observation";
+    }
+    // A judge prints `failed: ...` only beside `fail`; a pass carrying it is a recorder or judge defect (a harness
+    // error), never a pass.
+    if (v === "pass" && r.observation.trim().startsWith("failed:")) {
+      harness.push(`pass-with-failed-observation:${id}`);
+      v = "unmeasurable";
+      reason = "pass-with-failed-observation";
     }
     if (v === "unmeasurable" && !reason) reason = "unrecorded";
     const prior = best.get(id);

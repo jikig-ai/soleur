@@ -22,8 +22,10 @@
 // spec.json: { workspace, home, routerPort, routerCredentialFile, caBundle, arm: "A"|"B", denyReadExtra: [..],
 //              script: [{ id, tool: "Bash"|"Read"|"WebFetch", input: {...} }], declaredFiles: [{ id, file }],
 //              timeoutMs }
-// Output: exactly one line `SDK_EGRESS_RESULT <json>` with { arm, env: {proxy vars present, NO_PROXY}, steps: [{id,
-// tool, isError, content, hits}] }. Every declared secret value is replaced by `<declared:ID>` in `content` and
+// Output: exactly one line `SDK_EGRESS_RESULT <json>` with { arm, env: {proxy vars present, NO_PROXY}, thrown (the
+// query's own exception, empty when it ran to completion; the suite treats a non-empty one as a harness failure),
+// declaredCount and declaredDropped (declared values scanned, and the ids dropped as shorter than 8 characters),
+// steps: [{id, tool, isError, content, hits}] }. Every declared secret value is replaced by `<declared:ID>` in `content` and
 // reported in `hits` (Guard 1 records surfaces by id, never by value). Exit 0 unless the driver itself failed.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -40,8 +42,10 @@ type Spec = {
   workspace: string; home: string; routerPort: number; routerCredentialFile: string; caBundle: string;
   arm: "A" | "B" | "N"; denyReadExtra: string[]; script: Step[]; timeoutMs?: number;
   // transform: "pem-body" declares the longest base64 line of a PEM (a leak rarely carries the armour lines);
-  // "basic-b64" declares base64("x-access-token:" + value), the form git carries.
-  declaredFiles: { id: string; file: string; transform?: "pem-body" | "basic-b64" }[];
+  // "basic-b64" declares base64("x-access-token:" + value), the form git carries; "cred-password" declares the part
+  // of a `user:password` file after the first colon (the bare password); "basic-cred" declares base64 of the whole
+  // `user:password` file (the Proxy-Authorization Basic form).
+  declaredFiles: { id: string; file: string; transform?: "pem-body" | "basic-b64" | "cred-password" | "basic-cred" }[];
   // A control string the driver writes into the workspace before the run; the scan must find it (Guard 1 row 2).
   planted?: { id: string; value: string; path: string };
   // Files a sandboxed step wrote with everything it observed; scanned IN FULL after the run (tool output reaching
@@ -126,9 +130,15 @@ async function main() {
     const raw = readFileSync(d.file, "utf8").trim();
     if (d.transform === "pem-body") return raw.split("\n").filter((l) => !l.startsWith("-----")).sort((a, b) => b.length - a.length)[0] ?? "";
     if (d.transform === "basic-b64") return Buffer.from(`x-access-token:${raw}`).toString("base64");
+    if (d.transform === "cred-password") return raw.split(":").slice(1).join(":");
+    if (d.transform === "basic-cred") return Buffer.from(raw).toString("base64");
     return raw;
   };
   const declared = spec.declaredFiles.map((d) => ({ id: d.id, value: derive(d) })).filter((d) => d.value.length >= 8);
+  // A value under 8 characters is not scanned (too short to match without false hits); the count makes that visible
+  // so a judge can require every declared surface to be scanned.
+  const declaredCount = declared.length;
+  const declaredDropped = spec.declaredFiles.filter((d) => !declared.some((x) => x.id === d.id)).map((d) => d.id);
   if (spec.planted) declared.push({ id: spec.planted.id, value: spec.planted.value });
   const redact = (s: string) => {
     let t = s;
@@ -239,7 +249,7 @@ async function main() {
     steps.push({ id: `scan:${f}`, tool: "Bash", isError: !readable, content: `bytes=${Buffer.byteLength(text)} readable=${readable}`, hits });
   }
   const envSummary = { noProxy: env.NO_PROXY, proxyVars: ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].filter((k) => env[k]) };
-  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps, permissionCalls: permissionCalls.slice(0, 40), networkDecisions, ...(spec.streaming ? { streaming: { deltas, stderrTls } } : {}) });
+  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, declaredCount, declaredDropped, steps, permissionCalls: permissionCalls.slice(0, 40), networkDecisions, ...(spec.streaming ? { streaming: { deltas, stderrTls } } : {}) });
   process.exit(0);
 }
 

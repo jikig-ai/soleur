@@ -11,6 +11,8 @@
 #                                       runs probes/sdk-egress-driver.mts in the app container for that session
 #   spike_stub_since <offset>          -> prints stub records after line <offset> (JSON lines)
 #   spike_stub_seq                     -> prints the current record count (a window start)
+#   spike_psql <what> <sql>            -> one read; prints PSQL_ERROR on failure and names it via spike_harness_err
+#   spike_harness_err <reason>         -> the running criterion (SPIKE_CUR) records `unmeasurable harness:<reason>`
 
 spike_seed_init() {
   mkdir -p "$SPIKE_WORK/seed" || harness_fail SEED "mkdir"
@@ -77,9 +79,29 @@ spike_drive() {
     > "$SPIKE_WORK/drive-$sess-$arm.out" 2> "$SPIKE_WORK/drive-$sess-$arm.err"
   sed -n 's/^SDK_EGRESS_RESULT //p' "$SPIKE_WORK/drive-$sess-$arm.out" | tail -1 > "$outf"
   [[ -s "$outf" ]] || { echo "driver $sess/$arm printed no result: $(grep -v SENTRY "$SPIKE_WORK/drive-$sess-$arm.err" | tail -2 | tr '\n' ' ' | head -c 300)"; return 1; }
-  # A driver that failed reports {"error": ...}; that is a harness failure, never a result with zero steps.
-  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(1 if d.get("error") or not (d.get("steps") or "streaming" in d) else 0)' "$outf" \
+  # A driver that failed reports {"error": ...}, and one whose query threw reports a non-empty `thrown` (its steps
+  # are whatever ran before the throw); both are harness failures, never a result to judge.
+  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(1 if d.get("error") or d.get("thrown") or not (d.get("steps") or "streaming" in d) else 0)' "$outf" \
     || { echo "driver $sess/$arm failed: $(head -c 300 "$outf")"; return 1; }
+}
+
+# Harness inputs (CTO R3: NO-GO only when every criterion has a MEASURED verdict). A helper that cannot read an
+# input it was asked for names the reason here, under the criterion whose arm is running (SPIKE_CUR); that
+# criterion then records `unmeasurable harness:<reason>` whatever its judge printed, so a failed read is never
+# scored as a product failure (or a pass).
+SPIKE_CUR=0
+spike_harness_err() { printf '%s\n' "$1" >> "$SPIKE_WORK/harness-err-$SPIKE_CUR"; }
+
+# spike_psql <what> <sql>: one psql read. On a non-zero exit it prints the sentinel PSQL_ERROR (never an empty
+# string a caller could read as "no rows") and names the failure as a harness input error.
+spike_psql() {
+  local out
+  if out="$(psql "$DB_URL" -X -At -v ON_ERROR_STOP=1 -F: -c "$2" 2>>"$SPIKE_WORK/psql.err")"; then
+    [[ -z "$out" ]] || printf '%s\n' "$out"
+  else
+    spike_harness_err "PSQL $1"
+    echo PSQL_ERROR
+  fi
 }
 
 # Stub windows are LINE offsets in the record file, not the stub's in-memory sequence number (which a stub restart
@@ -92,21 +114,30 @@ spike_stub_since() { tail -n +"$(( $1 + 1 ))" "$SPIKE_STUB_RECORDS" 2>/dev/null 
 # /run/spike entirely. Extras (@WS@ substituted): declaredFiles are appended, other keys set.
 spike_spec() {
   python3 -I - "$1" "$2" "$3" "$4" "$(cat "$SPIKE_WORK/run/$2/state/router.port")" "${5:-}" <<'PYSPEC' || harness_fail DRIVER "spec $2/$3"
-import json, sys
+import json, sys, uuid
 out, sess, arm, steps_file, rp, extras_file = sys.argv[1:7]
 steps = json.load(open(steps_file))
-ws = f"/home/soleur/spike-{sess}-{arm}-{abs(hash(steps_file)) % 100000}/ws"
+# A fresh workspace per spec (uuid4: Python's str hash() is randomized per process, so it named nothing stable).
+ws = f"/home/soleur/spike-{sess}-{arm}-{uuid.uuid4().hex[:12]}/ws"
 for st in steps:  # the steps may name the workspace as @WS@
     st["input"] = json.loads(json.dumps(st["input"]).replace("@WS@", ws))
+# Every session (Guard 1 row 3, run 42820800719: session E's decoy went unscanned), each credential in every form
+# a leak could take (bare password, Basic base64), and the harness-held secrets copied to /run/spike/declared
+# (masked for every sandbox like the rest of /run/spike). PEM keys are declared by criterion 1 only: session E's CA
+# key is deleted at its session end (criterion 9), and a missing declared file fails the driver.
+per_session = (("decoy", "decoy.token", None), ("router-session", "router-session.cred", None),
+               ("router-session-pw", "router-session.cred", "cred-password"), ("router-session-basic", "router-session.cred", "basic-cred"),
+               ("router-injector", "router-injector.cred", None), ("router-injector-pw", "router-injector.cred", "cred-password"),
+               ("router-injector-basic", "router-injector.cred", "basic-cred"), ("forwarder", "forwarder.token", None),
+               ("forwarder-basic", "forwarder.cred", "basic-cred"))
+declared = [{"id": f"{s}-{k}", "file": f"/run/spike/{s}/secrets/{f}", **({"transform": t} if t else {})}
+            for s in ("sessA", "sessB", "sessC", "sessD", "sessE") for k, f, t in per_session]
+declared += [{"id": f"harness-{k}", "file": f"/run/spike/declared/{k}"}
+             for k in ("service-role.key", "anon.key", "hmac.key", "ownerA.jwt", "ownerB.jwt")]
 json.dump({"workspace": ws, "home": "/home/soleur", "routerPort": int(rp),
            "routerCredentialFile": f"/run/spike/{sess}/secrets/router-session.cred",
            "caBundle": f"/run/spike-pub/{sess}/bundle.pem", "arm": arm, "denyReadExtra": ["/run/spike"],
-           "declaredFiles": [{"id": f"{s}-{k}", "file": f"/run/spike/{s}/secrets/{f}"}
-                             # Every session (Guard 1 row 3, run 42820800719: session E's decoy went unscanned).
-                             for s in ("sessA", "sessB", "sessC", "sessE")
-                             for k, f in (("decoy", "decoy.token"), ("router-session", "router-session.cred"),
-                                          ("router-injector", "router-injector.cred"), ("forwarder", "forwarder.token"))],
-           "script": steps, "timeoutMs": 300000}, open(out, "w"))
+           "declaredFiles": declared, "script": steps, "timeoutMs": 300000}, open(out, "w"))
 if extras_file:
     spec = json.load(open(out))
     extras = json.loads(open(extras_file).read().replace("@WS@", ws))
@@ -120,6 +151,7 @@ PYSPEC
 # off are refused. Verdict from the stub's record (which decoy arrived where) and the approval_request row count.
 arm_c4() {
   local d="$SPIKE_WORK/c4" seqA seqC
+  SPIKE_CUR=4
   mkdir -p "$d" || harness_fail DRIVER "mkdir c4"
   cat > "$d/steps.json" <<'JSON'
 [
@@ -130,7 +162,7 @@ arm_c4() {
 ]
 JSON
   local rows0
-  rows0="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id IN ('$CONV_A', '$CONV_C')" 2>/dev/null)"
+  rows0="$(spike_psql "c4 row count before" "SELECT count(*) FROM public.approval_request WHERE conversation_id IN ('$CONV_A', '$CONV_C')")"
   seqA="$(spike_stub_seq)"
   spike_spec "$d/specA.json" sessA B "$d/steps.json"
   spike_drive sessA B "$d/specA.json" "$d/outA.json" || { record_verdict 4 unmeasurable "harness:DRIVER sessA"; return; }
@@ -140,7 +172,7 @@ JSON
   spike_drive sessC B "$d/specC.json" "$d/outC.json" || { record_verdict 4 unmeasurable "harness:DRIVER sessC"; return; }
   spike_stub_since "$seqC" > "$d/stubC.jsonl"
   local rows1
-  rows1="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id IN ('$CONV_A', '$CONV_C')" 2>/dev/null)"
+  rows1="$(spike_psql "c4 row count after" "SELECT count(*) FROM public.approval_request WHERE conversation_id IN ('$CONV_A', '$CONV_C')")"
   python3 -I - "$d" "$rows0" "$rows1" > "$d/verdict.txt" <<'PYC4'
 import json, sys
 d, rows0, rows1 = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -167,7 +199,7 @@ checks = {
   "GraphQL query vended": "code=200" in obs["A.graphqlQuery"] and obs["stub.A.graphql"],
   "read outside the allowlist refused": "code=403" in obs["A.outsideRead"] and not obs["stub.A.outside"],
   "flag off refuses every read": "code=403" in obs["C.restRead"] and "cloned=no" in obs["C.clone"] and "code=403" in obs["C.graphqlQuery"] and not obs["stub.C.anyRealDecoy"],
-  # A delta, not an absolute: criterion 3 runs first and leaves rows on conversation A by design.
+  # A delta, not an absolute: criterion 2's gated push runs first and leaves a row on conversation A by design.
   "the reads created no approval row": rows0.isdigit() and rows0 == rows1,
 }
 json.dump({"observations": obs, "checks": checks}, open(f"{d}/raw.json", "w"))
@@ -179,13 +211,20 @@ PYC4
   spike_record_judged 4 "$d/verdict.txt"
 }
 
-# A judge prints `pass|fail` then one observation line. Anything else (a crashed judge) is unmeasurable, never a
-# record_verdict refusal that would end the suite without finalizing.
+# A judge prints `pass|fail` then one observation line, or `unmeasurable` then a `harness:<reason>` line (a harness
+# input it needed is missing). Anything else (a crashed judge) is unmeasurable, never a record_verdict refusal that
+# would end the suite without finalizing. A harness input error named for the criterion (spike_harness_err)
+# overrides whatever the judge printed.
 spike_record_judged() {
-  local v o
+  local v o herr="$SPIKE_WORK/harness-err-$1"
+  if [[ -s "$herr" ]]; then
+    record_verdict "$1" unmeasurable "harness:$(head -1 "$herr" | head -c 200)"
+    return
+  fi
   v="$(sed -n 1p "$2" 2>/dev/null)"; o="$(sed -n 2p "$2" 2>/dev/null)"
   case "$v" in
     pass|fail) [[ -n "$o" ]] && record_verdict "$1" "$v" "$o" || record_verdict "$1" unmeasurable "harness:JUDGE no observation" ;;
+    unmeasurable) [[ "$o" == harness:* ]] && record_verdict "$1" unmeasurable "$o" || record_verdict "$1" unmeasurable "harness:JUDGE unmeasurable without a harness reason" ;;
     *) record_verdict "$1" unmeasurable "harness:JUDGE produced no verdict" ;;
   esac
 }
@@ -205,7 +244,9 @@ spike_claude_stream() { # <dir>
   spike_cx sessA "$d/liveness.sh" "$d/liveness.out"
   printf '[]\n' > "$d/stream-steps.json"; printf '{"streaming": true}\n' > "$d/stream-extras.json"
   spike_spec "$d/spec-stream.json" sessA B "$d/stream-steps.json" "$d/stream-extras.json"
-  spike_drive sessA B "$d/spec-stream.json" "$d/out-stream.json" || printf '{"error": "driver"}\n' > "$d/out-stream.json"
+  # A failed streaming driver is a harness failure of the criterion this leg serves (2 or 8), never a scored "none".
+  spike_drive sessA B "$d/spec-stream.json" "$d/out-stream.json" \
+    || { spike_harness_err "DRIVER claude streaming leg"; printf '{"error": "driver"}\n' > "$d/out-stream.json"; }
   docker exec "$SPIKE_APP_CTR" sh -c "tail -n +$((rseq + 1)) /run/spike/sessA/logs/router.log" > "$d/router-stream.log" 2>/dev/null
   spike_stub_since "$seq" > "$d/stub-stream.jsonl"
   python3 -I - "$d" "$appip" "$sqip" > "$d/stream.json" <<'PYST'
@@ -240,6 +281,7 @@ PYST
 # router's forwarder branch, a gated sandboxed push (CTO R32), and the CLI's own streaming (CTO R30 as amended by R33).
 arm_c2() {
   local d="$SPIKE_WORK/c2" arm seq rseq
+  SPIKE_CUR=2
   mkdir -p "$d" || harness_fail DRIVER "mkdir c2"
   cat > "$d/steps.json" <<'JSON'
 [
@@ -352,11 +394,12 @@ spike_cx() {
     -e GIT_CONFIG_GLOBAL=/dev/null -e GIT_CONFIG_NOSYSTEM=1 -e HOME=/home/soleur "$SPIKE_APP_CTR" bash -s < "$2" > "$3" 2>&1
 }
 
-spike_rows() { # conversation -> "status:count status:count ..."
-  psql "$DB_URL" -X -At -F: -c "SELECT status, count(*) FROM public.approval_request WHERE conversation_id = '$1' GROUP BY status ORDER BY status" 2>/dev/null | tr '\n' ' '
+# Row reads go through spike_psql: a failed read prints PSQL_ERROR and marks the running criterion unmeasurable.
+spike_rows() { # conversation -> "status:count status:count ..." (empty: no rows)
+  spike_psql "rows of a conversation" "SELECT status, count(*) FROM public.approval_request WHERE conversation_id = '$1' GROUP BY status ORDER BY status" | tr '\n' ' '
 }
-spike_latest_pending() { psql "$DB_URL" -X -At -c "SELECT id FROM public.approval_request WHERE conversation_id = '$1' AND status = 'pending' ORDER BY created_at DESC LIMIT 1" 2>/dev/null; }
-spike_row_status() { psql "$DB_URL" -X -At -c "SELECT status FROM public.approval_request WHERE id = '$1'" 2>/dev/null; }
+spike_latest_pending() { spike_psql "latest pending row" "SELECT id FROM public.approval_request WHERE conversation_id = '$1' AND status = 'pending' ORDER BY created_at DESC LIMIT 1"; }
+spike_row_status() { spike_psql "row status" "SELECT status FROM public.approval_request WHERE id = '$1'"; }
 
 # spike_decide <owner label> <approval id> <approve|deny>: decide_approval with the owner's JWT from a real sign-in.
 spike_decide() {
@@ -386,6 +429,7 @@ EOS
 
 # Starts the expiry arm (session E, rows created with a 60 s TTL). Returns at once; arm_c3 finishes it.
 arm_c3_expiry_start() {
+  SPIKE_CUR=3
   mkdir -p "$SPIKE_WORK/c3" || harness_fail DRIVER "mkdir c3"
   _c3_push_script sessE exp "expiry e1" "$SPIKE_WORK/c3/exp.sh"
   spike_cx sessE "$SPIKE_WORK/c3/exp.sh" "$SPIKE_WORK/c3/exp1.out"
@@ -393,29 +437,40 @@ arm_c3_expiry_start() {
   C3_EXP_T0="$(date +%s)"
 }
 
+# Criterion 3 runs on session D, its own fresh conversation (CTO R16): no other arm's rows are on it, so every row
+# count and every reason below is this arm's own. Session C (flag off) and session E (expiry) are their own too.
 arm_c3() {
-  local d="$SPIKE_WORK/c3" seq h0 p1 p2 x id obs="$SPIKE_WORK/c3/obs.jsonl"
+  local d="$SPIKE_WORK/c3" seq h0 p1 p2 x g obs="$SPIKE_WORK/c3/obs.jsonl"
+  SPIKE_CUR=3
   mkdir -p "$d" && : > "$obs" || harness_fail DRIVER "mkdir c3"
   note() { python3 -I -c 'import json, sys; print(json.dumps({"k": sys.argv[1], "v": sys.argv[2]}))' "$1" "$2" >> "$obs"; }
+  # The push script's exit line, found by its key (git's own output lines may follow or precede it).
+  prc() { sed -n 's/.*\(push_rc=[^ ]*\).*/\1/p' "$1" | tail -1; }
+  # reason_since <hook line offset> <session>: the reason of the last POST refusal the hook marked for that session
+  # since the offset (empty when nothing was refused), so each probe is judged on its own refusal, not on any 403.
+  reason_since() {
+    spike_hook_markers_since "$1" | grep -E '^SOLEUR_EGRESS_VEND_REFUSED ' | grep -F "session=$2 " | grep -F ' method=POST ' \
+      | sed -n 's/.* reason=\([a-z-]*\).*/\1/p' | tail -1
+  }
   h0="$(spike_hook_lines)"
   seq="$(spike_stub_seq)"
 
-  # Push lifecycle on session A (CTO R16).
-  _c3_push_script sessA life "life 1" "$d/l1.sh"
-  spike_cx sessA "$d/l1.sh" "$d/l1a.out"; note push1 "$(tail -1 "$d/l1a.out")"; note rows1 "$(spike_rows "$CONV_A")"
+  # Push lifecycle.
+  _c3_push_script sessD life "life 1" "$d/l1.sh"
+  spike_cx sessD "$d/l1.sh" "$d/l1a.out"; note push1 "$(prc "$d/l1a.out")"; note rows1 "$(spike_rows "$CONV_D")"
   note stub1_receivepack "$(spike_stub_since "$seq" | grep -c '"path":"/spike/alpha.git/git-receive-pack"')"
-  spike_cx sessA "$d/l1.sh" "$d/l1b.out"; note push1_retry "$(tail -1 "$d/l1b.out")"; note rows1_retry "$(spike_rows "$CONV_A")"
-  p1="$(spike_latest_pending "$CONV_A")"; note p1 "${p1:+present}"
+  spike_cx sessD "$d/l1.sh" "$d/l1b.out"; note push1_retry "$(prc "$d/l1b.out")"; note rows1_retry "$(spike_rows "$CONV_D")"
+  p1="$(spike_latest_pending "$CONV_D")"; note p1 "${p1:+present}"
   note deny "$(spike_decide ownerA "$p1" deny)"
-  spike_cx sessA "$d/l1.sh" "$d/l1c.out"; note push1_after_deny "$(tail -1 "$d/l1c.out")"; note rows_after_deny "$(spike_rows "$CONV_A")"
-  p2="$(spike_latest_pending "$CONV_A")"; note p2_new "$([[ -n "$p2" && "$p2" != "$p1" ]] && echo yes || echo no)"
+  spike_cx sessD "$d/l1.sh" "$d/l1c.out"; note push1_after_deny "$(prc "$d/l1c.out")"; note rows_after_deny "$(spike_rows "$CONV_D")"
+  p2="$(spike_latest_pending "$CONV_D")"; note p2_new "$([[ -n "$p2" && "$p2" != "$p1" ]] && echo yes || echo no)"
   seq="$(spike_stub_seq)"
   note approve "$(spike_decide ownerA "$p2" approve)"
-  spike_cx sessA "$d/l1.sh" "$d/l1d.out"; note push1_approved "$(tail -1 "$d/l1d.out")"; note p2_status "$(spike_row_status "$p2")"
+  spike_cx sessD "$d/l1.sh" "$d/l1d.out"; note push1_approved "$(prc "$d/l1d.out")"; note p2_status "$(spike_row_status "$p2")"
   note stub_after_approve "$(spike_stub_since "$seq" | grep '"path":"/spike/alpha.git/git-receive-pack"' | grep -c '"auth_class":"real-decoy"')"
   seq="$(spike_stub_seq)"
-  _c3_push_script sessA life "life 2" "$d/l2.sh"
-  spike_cx sessA "$d/l2.sh" "$d/l2.out"; note push2_new_hash "$(tail -1 "$d/l2.out")"; note rows_end "$(spike_rows "$CONV_A")"
+  _c3_push_script sessD life "life 2" "$d/l2.sh"
+  spike_cx sessD "$d/l2.sh" "$d/l2.out"; note push2_new_hash "$(prc "$d/l2.out")"; note rows_end "$(spike_rows "$CONV_D")"
   note stub_push2 "$(spike_stub_since "$seq" | grep '"path":"/spike/alpha.git/git-receive-pack"' | grep -c '"auth_class":"real-decoy"')"
 
   # REST binding (CPO C4): a row approved for body X does not authorize body Y, another path, or another repo.
@@ -428,27 +483,65 @@ case "$STEP" in
   zrepo) post zrepo '{"title":"spike X","head":"a","base":"main"}' '' /repos/spike/outside/pulls ;;
   x2) post x2 '{"title":"spike X","head":"a","base":"main"}' 'Idempotency-Key: spike-1' /repos/spike/alpha/pulls ;;
   x3) post x3 '{"title":"spike X","head":"a","base":"main"}' 'Idempotency-Key: spike-1' /repos/spike/alpha/pulls ;;
+  offpost) post offpost '{"title":"spike flag off","head":"a","base":"main"}' '' /repos/spike/alpha/pulls ;;
 esac
 EOS
-  rest() { { echo "STEP=$1"; cat "$d/rest.sh"; } > "$d/rest-$1.sh"; spike_cx sessA "$d/rest-$1.sh" "$d/rest-$1.out"; note "rest_$1" "$(tail -1 "$d/rest-$1.out")"; }
+  rest() { # <step> [<session>, default sessD]
+    local s="${2:-sessD}" h; h="$(spike_hook_lines)"
+    { echo "STEP=$1"; cat "$d/rest.sh"; } > "$d/rest-$1.sh"; spike_cx "$s" "$d/rest-$1.sh" "$d/rest-$1.out"
+    note "rest_$1" "$(tail -1 "$d/rest-$1.out")"; note "rest_$1_reason" "$(reason_since "$h" "$s")"
+  }
   seq="$(spike_stub_seq)"
-  rest x1; x="$(spike_latest_pending "$CONV_A")"; note approve_x "$(spike_decide ownerA "$x" approve)"
+  rest x1; x="$(spike_latest_pending "$CONV_D")"; note approve_x "$(spike_decide ownerA "$x" approve)"
   rest y1; rest zpath; rest zrepo
   note stub_binding_misses "$(spike_stub_since "$seq" | grep '"method":"POST"' | grep -c '"auth_class":"real-decoy"')"
   rest x2; note x_status "$(spike_row_status "$x")"
   note stub_x2 "$(spike_stub_since "$seq" | grep '"method":"POST"' | grep '"auth_class":"real-decoy"' | head -1)"
   rest x3
 
-  # Flag input off (session C): a listed write is refused flag-off, with no row.
+  # GraphQL mutation lifecycle (plan: criterion 3 covers "REST POST and GraphQL mutation"). The top field is in the
+  # policy's graphql-mutation rule (mutation_fields: createPullRequest, addComment). Pending with one new row, then
+  # approved, then the identical body vends once and consumes the row, then a replay is refused.
+  cat > "$d/gql.sh" <<'EOS'
+curl -sS -o /dev/null -w "$STEP=%{http_code}\n" --cacert "$CA" -x "$P" -H 'content-type: application/json' \
+  --data '{"query":"mutation M { addComment(input: {subjectId: \"spike-subject\", body: \"spike synthetic\"}) { clientMutationId } }","operationName":"M"}' \
+  https://api.github.com/graphql
+EOS
+  gql() {
+    local h; h="$(spike_hook_lines)"
+    { echo "STEP=$1"; cat "$d/gql.sh"; } > "$d/gql-$1.sh"; spike_cx sessD "$d/gql-$1.sh" "$d/gql-$1.out"
+    note "gql_$1" "$(tail -1 "$d/gql-$1.out")"; note "gql_$1_reason" "$(reason_since "$h" sessD)"
+  }
+  gvend() { spike_stub_since "$1" | grep -F '"path":"/graphql"' | grep -F '"method":"POST"' | grep -c '"auth_class":"real-decoy"'; }
+  seq="$(spike_stub_seq)"; note gql_rows0 "$(spike_rows "$CONV_D")"
+  gql g1; note gql_rows1 "$(spike_rows "$CONV_D")"; note gql_vend_pending "$(gvend "$seq")"
+  g="$(spike_latest_pending "$CONV_D")"; note gql_row "${g:+present}"; note gql_approve "$(spike_decide ownerA "$g" approve)"
+  seq="$(spike_stub_seq)"
+  gql g2; note gql_status "$(spike_row_status "$g")"; note gql_vend_approved "$(gvend "$seq")"
+  seq="$(spike_stub_seq)"
+  gql g3; note gql_vend_replay "$(gvend "$seq")"
+
+  # Flag input off (session C): every vend is refused flag-off, with no row. C's own clone is refused like every
+  # other vend (it would leave no working copy, and a push from a missing copy measured nothing), so the copy is
+  # cloned through session D into C's directory and only the push goes through C. git stops at the refused push
+  # advertisement (GET) and never sends its POST, so a listed REST write through C carries the POST.
+  local hoff seqoff
+  printf '%s\n' 'HTTPS_PROXY="$P" GIT_SSL_CAINFO="$CA" git clone -q https://github.com/spike/alpha.git /home/soleur/c3-sessC-off 2>&1 | tail -1; test -d /home/soleur/c3-sessC-off/.git && echo cloned=yes || echo cloned=no' > "$d/off-clone.sh"
+  spike_cx sessD "$d/off-clone.sh" "$d/off-clone.out"; note off_clone "$(tail -1 "$d/off-clone.out")"
   _c3_push_script sessC off "flag off" "$d/off.sh"
-  spike_cx sessC "$d/off.sh" "$d/off.out"; note push_flag_off "$(tail -1 "$d/off.out")"; note rows_c "$(spike_rows "$CONV_C")"
+  hoff="$(spike_hook_lines)"; seqoff="$(spike_stub_seq)"
+  spike_cx sessC "$d/off.sh" "$d/off.out"; note push_flag_off "$(prc "$d/off.out")"
+  note off_push_markers "$(spike_hook_markers_since "$hoff" | grep -E '^SOLEUR_EGRESS_VEND_REFUSED ' | grep -F 'session=sessC ' | sed -n 's/.* method=\([A-Z]*\) .* reason=\([a-z-]*\).*/\1:\2/p' | tr '\n' ' ')"
+  rest offpost sessC
+  note off_stub_real "$(spike_stub_since "$seqoff" | grep -c '"auth_class":"real-decoy"')"
+  note rows_c "$(spike_rows "$CONV_C")"
 
   # Expiry (session E, 60 s TTL started at topology-ready): pending near 50 s, then expired, then REJECT expired.
   local waited=$(( $(date +%s) - C3_EXP_T0 ))
   (( waited < 50 )) && sleep $(( 50 - waited ))
   note exp_at_50s "$(spike_row_status "$C3_EXP_ID")"
   waited=$(( $(date +%s) - C3_EXP_T0 )); (( waited < 66 )) && sleep $(( 66 - waited ))
-  spike_cx sessE "$d/exp.sh" "$d/exp2.out"; note push_after_expiry "$(tail -1 "$d/exp2.out")"; note exp_final "$(spike_row_status "$C3_EXP_ID")"
+  spike_cx sessE "$d/exp.sh" "$d/exp2.out"; note push_after_expiry "$(prc "$d/exp2.out")"; note exp_final "$(spike_row_status "$C3_EXP_ID")"
   # Diagnostics for the expiry path (no secrets: git's own messages, marker fields, iron-proxy audit fields).
   note exp1_out "$(tr '\n' ' ' < "$SPIKE_WORK/c3/exp1.out" | head -c 400)"
   note exp2_out "$(tr '\n' ' ' < "$d/exp2.out" | head -c 400)"
@@ -459,7 +552,7 @@ EOS
 
   spike_hook_markers_since "$h0" | grep -E '^SOLEUR_EGRESS_VEND' | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' > "$d/markers.txt"
   python3 -I - "$d" > "$d/verdict.txt" <<'PYC3'
-import json, sys
+import json, re, sys
 d = sys.argv[1]
 o = {}
 for l in open(f"{d}/obs.jsonl"):
@@ -467,28 +560,37 @@ for l in open(f"{d}/obs.jsonl"):
 m = open(f"{d}/markers.txt").read().splitlines()
 def reasons(sess):
     return [x.split(" reason=")[1].split()[0] for x in m if f"session={sess} " in x and " reason=" in x]
-def vends(sess, cls):
-    return [x for x in m if x.startswith("SOLEUR_EGRESS_VEND ") and f"session={sess} " in x and f"class={cls} " in x]
-ra, rc, re_ = reasons("sessA"), reasons("sessC"), reasons("sessE")
-hookreqs = [x for x in m if f"session=sessA " in x and " method=CONNECT" not in x and x.startswith("SOLEUR_EGRESS_VEND")]
+ra, rc, re_ = reasons("sessD"), reasons("sessC"), reasons("sessE")
+hookreqs = [x for x in m if "session=sessD " in x and " method=CONNECT" not in x and x.startswith("SOLEUR_EGRESS_VEND")]
 pend = lambda s: int(dict(p.split(":") for p in s.split()).get("pending", 0)) if s.strip() else 0
+# A refused push is git's own non-zero exit; a missing or non-numeric push_rc (a script that never reached the
+# push) is never read as refused.
+refused = lambda v: re.fullmatch(r"push_rc=[1-9][0-9]*", v or "") is not None
+off_markers = o["off_push_markers"].split()
 checks = {
-  "no row: push refused pending, one pending row": o["push1"] != "push_rc=0" and "pending" in ra and pend(o["rows1"]) == 1,
+  "no row: push refused pending, one pending row": refused(o["push1"]) and "pending" in ra and pend(o["rows1"]) == 1,
   "no real token on the refused POST git-receive-pack": o["stub1_receivepack"] == "0",
-  "retry before decision keeps one row": o["push1_retry"] != "push_rc=0" and o["rows1"] == o["rows1_retry"],
+  "retry before decision keeps one row": refused(o["push1_retry"]) and o["rows1"] == o["rows1_retry"],
   "owner deny -> rejected reported, then a new pending row": o["deny"] == "200" and "rejected" in ra and o["p2_new"] == "yes",
   "approve -> vend, consumed exactly once": o["approve"] == "200" and o["push1_approved"] == "push_rc=0" and o["p2_status"] == "consumed" and o["stub_after_approve"] == "1",
-  "a new hash after consume needs a new row": o["push2_new_hash"] != "push_rc=0" and o["stub_push2"] == "0",
-  "REST X pending, then approved": o["rest_x1"] == "x1=403" and o["approve_x"] == "200",
-  "binding: body Y, another path, another repo get no real token": o["rest_y1"] == "y1=403" and o["rest_zpath"] == "zpath=403" and o["rest_zrepo"] == "zrepo=403" and o["stub_binding_misses"] == "0",
-  "approved X consumed once, Idempotency-Key stripped": o["rest_x2"] == "x2=201" and o["x_status"] == "consumed" and '"idempotency_key":false' in o["stub_x2"] and o["rest_x3"] == "x3=403",
-  "flag off: refused flag-off, no row": o["push_flag_off"] != "push_rc=0" and "flag-off" in rc and o["rows_c"].strip() == "",
+  "a new hash after consume needs a new row": refused(o["push2_new_hash"]) and o["stub_push2"] == "0",
+  "REST X pending, then approved": o["rest_x1"] == "x1=403" and o["rest_x1_reason"] == "pending" and o["approve_x"] == "200",
+  "binding: body Y and another path are new pending actions, another repo is not allowlisted, none gets a real token":
+      o["rest_y1"] == "y1=403" and o["rest_y1_reason"] == "pending" and o["rest_zpath"] == "zpath=403" and o["rest_zpath_reason"] == "pending"
+      and o["rest_zrepo"] == "zrepo=403" and o["rest_zrepo_reason"] == "not-allowlisted" and o["stub_binding_misses"] == "0",
+  "approved X consumed once, Idempotency-Key stripped, a replay is a new pending action": o["rest_x2"] == "x2=201" and o["x_status"] == "consumed" and '"idempotency_key":false' in o["stub_x2"] and o["rest_x3"] == "x3=403" and o["rest_x3_reason"] == "pending",
+  "GraphQL mutation: pending with one new row, no real token": o["gql_g1"] == "g1=403" and o["gql_g1_reason"] == "pending" and pend(o["gql_rows1"]) == pend(o["gql_rows0"]) + 1 and o["gql_row"] == "present" and o["gql_vend_pending"] == "0",
+  "GraphQL mutation: approved, the identical body vends once and consumes the row": o["gql_approve"] == "200" and o["gql_g2"] == "g2=200" and o["gql_status"] == "consumed" and o["gql_vend_approved"] == "1",
+  "GraphQL mutation: a replay after consume is refused, no real token": o["gql_g3"] == "g3=403" and o["gql_g3_reason"] != "" and o["gql_vend_replay"] == "0",
+  "flag off: a push from an existing copy and a listed REST write are refused flag-off, no row, no real token":
+      o["off_clone"] == "cloned=yes" and refused(o["push_flag_off"]) and bool(off_markers) and all(x.endswith(":flag-off") for x in off_markers)
+      and o["rest_offpost"] == "offpost=403" and o["rest_offpost_reason"] == "flag-off" and o["off_stub_real"] == "0" and o["rows_c"].strip() == "",
   "expiry: pending at ~50 s, then REJECT expired": o["exp_at_50s"] == "pending" and "expired" in re_ and o["exp_final"] == "expired",
   # Guard 2 row 8: no client in this arm sends an Authorization header, so every request the hook saw must carry
   # none; one there means header replacement ran before the hook.
   "the hook ran before header replacement (client_auth=0 on every request)": bool(hookreqs) and all(" client_auth=0" in x or x.endswith("client_auth=0") for x in hookreqs),
 }
-json.dump({"observations": o, "reasons": {"sessA": ra, "sessC": rc, "sessE": re_}, "checks": checks}, open(f"{d}/raw.json", "w"))
+json.dump({"observations": o, "reasons": {"sessD": ra, "sessC": rc, "sessE": re_}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
 print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
@@ -503,6 +605,7 @@ PYC3
 # ---------------------------------------------------------------------------------------------------------------
 arm_c5() {
   local d="$SPIKE_WORK/c5" seqB seqA ra rb tb
+  SPIKE_CUR=5
   mkdir -p "$d" || harness_fail DRIVER "mkdir c5"
   ra="$(cat "$SPIKE_WORK/run/sessA/state/router.port")"; rb="$(cat "$SPIKE_WORK/run/sessB/state/router.port")"
   tb="$SPIKE_SESS_sessB_TUNNEL"
@@ -586,6 +689,7 @@ _c9_leaf_cn_only() { # <ca dir> <out prefix> <cn>
 
 arm_c9() {
   local d="$SPIKE_WORK/c9" L="$SPIKE_WORK/run/c9"
+  SPIKE_CUR=9
   mkdir -p "$d" "$L" || harness_fail DRIVER "mkdir c9"
   local ca="$SPIKE_WORK/run/sessA/ca" cab="$SPIKE_WORK/run/sessB/ca"
   mint_leaf "$ca" "$L/inject" "DNS:api.github.com" && mint_leaf "$ca" "$L/noninject" "DNS:evil.example" \
@@ -605,17 +709,29 @@ echo "lib curl $(curl --version | head -1 | grep -oE '(OpenSSL|GnuTLS)/[0-9.]+' 
 echo "lib git $(ldd "$(git --exec-path)/git-remote-https" 2>/dev/null | grep -oE 'lib(gnutls|ssl)[^ ]*' | sort -u | tr '\n' ' ')"
 echo "lib node openssl/$(node -p process.versions.openssl)"
 try() { # <leaf> <request host> [<label>]
-  port=$((port + 1)); local lab="${3:-$1}" h="$2"
+  port=$((port + 1)); local lab="${3:-$1}" h="$2" up=no rc ge c
   openssl s_server -quiet -accept "127.0.0.1:$port" -cert "$L/$1.pem" -key "$L/$1.key" -www >/dev/null 2>&1 & local sp=$!
-  for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
-  local hc="$h"; [ "$h" = "127.0.0.1" ] && hc=127.0.0.1
-  curl -sS -o /dev/null --max-time 8 --noproxy '*' --cacert "$BUNDLE" --connect-to "$hc:$port:127.0.0.1:$port" "https://$hc:$port/" 2>/dev/null; echo "res $lab curl $([ $? -eq 0 ] && echo accept || echo reject)"
-  local ge; ge="$(GIT_SSL_CAINFO="$BUNDLE" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 timeout 10 git -c "http.curloptResolve=$hc:$port:127.0.0.1" ls-remote "https://$hc:$port/x.git" 2>&1)"
-  # accept only on an HTTP-level answer from the server, so a refused connection can never read as accepted
-  if printf '%s' "$ge" | grep -qiE 'certificate|ssl|tls'; then echo "res $lab git reject"
-  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error|http'; then echo "res $lab git accept"
+  for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && { up=yes; break; }; sleep 0.1; done
+  # A row whose listener never came up measured nothing: every client reads `nolisten`, neither accept nor reject,
+  # so the row fails whichever outcome it expects.
+  if [ "$up" != yes ]; then
+    for c in curl git node; do echo "res $lab $c nolisten"; done
+    kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null; return
+  fi
+  # curl: accept on exit 0, reject only on exit 60 (the peer certificate failed verification); any other exit (a
+  # refused or reset connection, a timeout) is an error, never a rejection.
+  curl -sS -o /dev/null --max-time 8 --noproxy '*' --cacert "$BUNDLE" --connect-to "$h:$port:127.0.0.1:$port" "https://$h:$port/" 2>/dev/null; rc=$?
+  case "$rc" in 0) echo "res $lab curl accept" ;; 60) echo "res $lab curl reject rc=60" ;; *) echo "res $lab curl error rc=$rc" ;; esac
+  ge="$(GIT_SSL_CAINFO="$BUNDLE" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 timeout 10 git -c "http.curloptResolve=$h:$port:127.0.0.1" ls-remote "https://$h:$port/x.git" 2>&1)"
+  # reject only on git's own certificate or SSL message; accept only on an HTTP-level answer from the server (never a
+  # bare "http", which matches git's echo of the URL itself), so a refused connection reads neither.
+  if printf '%s' "$ge" | grep -qiE 'certificate|ssl'; then echo "res $lab git reject"
+  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error'; then echo "res $lab git accept"
   else echo "res $lab git unknown"; fi
-  NODE_EXTRA_CA_CERTS="$BUNDLE" timeout 10 node -e 'const [h,p]=process.argv.slice(1); require("https").get({host:"127.0.0.1",port:+p,servername:h==="127.0.0.1"?undefined:h,headers:{host:h}},r=>{console.log("accept");process.exit(0)}).on("error",e=>{console.log("reject "+e.code);process.exit(0)})' "$hc" "$port" 2>/dev/null | sed "s/^/res $lab node /"
+  # node: reject only on a certificate or TLS verification code; ECONNREFUSED, ECONNRESET and the like are errors.
+  # Node has no code for a name-constraint violation: it reports code UNSPECIFIED with the message "permitted subtree
+  # violation" or "excluded subtree violation" (measured 2026-11-10, node openssl/3.5.9), so that pair is a rejection.
+  NODE_EXTRA_CA_CERTS="$BUNDLE" timeout 10 node -e 'const [h,p]=process.argv.slice(1); const cert=/^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|HOSTNAME_MISMATCH|IP_ADDRESS_MISMATCH|PERMITTED_SUBTREE_VIOLATION|EXCLUDED_VIOLATION|SUBTREE_TYPE_NOT_SUPPORTED|UNSUPPORTED_(NAME_SYNTAX|CONSTRAINT_TYPE|CONSTRAINT_SYNTAX)|NAME_CONSTRAINTS_|INVALID_(CA|PURPOSE|NON_CA)|PATH_LENGTH_EXCEEDED)/; require("https").get({host:"127.0.0.1",port:+p,servername:h==="127.0.0.1"?undefined:h,headers:{host:h}},r=>{console.log("accept");process.exit(0)}).on("error",e=>{const c=String(e.code||""), nc=c==="UNSPECIFIED"&&/^(permitted|excluded) subtree violation$/.test(String(e.message||"")); console.log((cert.test(c)||nc?"reject ":"error ")+c+(nc?":"+String(e.message).split(" ")[0]+"-subtree-violation":""));process.exit(0)})' "$h" "$port" 2>/dev/null | sed "s/^/res $lab node /"
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
 }
 try inject api.github.com
@@ -643,7 +759,8 @@ d, fa, fb, kb, ka, sessb, c2 = sys.argv[1:8]
 res, libs = {}, {}
 for line in open(f"{d}/tls.out"):
     p = line.split()
-    if p[:1] == ["res"] and len(p) >= 4: res[f"{p[1]}.{p[2]}"] = p[3]
+    # The outcome word first (accept, reject, error, unknown, nolisten), then its detail (curl's exit, node's code).
+    if p[:1] == ["res"] and len(p) >= 4: res[f"{p[1]}.{p[2]}"] = " ".join(p[3:])
     if p[:1] == ["lib"]: libs[p[1]] = " ".join(p[2:])
 bundle_b = open(f"{sessb}/../../pub/sessB/bundle.pem").read() if os.path.exists(f"{sessb}/../../pub/sessB/bundle.pem") else ""
 fp_in_b = False
@@ -714,12 +831,13 @@ _c7_warm() { # wait until session B's allowlisted read vends again through iron-
 
 arm_c7() {
   local d="$SPIKE_WORK/c7" h1 h2 seq rows0 rows1 id
+  SPIKE_CUR=7
   mkdir -p "$d" || harness_fail DRIVER "mkdir c7"
   h1="$(sha256sum "$SPIKE_DIR/approval-hook.mjs" "$SPIKE_DIR/policy.mjs" | awk '{print $1}' | tr '\n' ' ')"
-  rows0="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'" 2>/dev/null)"
+  rows0="$(spike_psql "c7 row count before" "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'")"
   seq="$(spike_stub_seq)"
   _c7_rest pass1 "$d/pass1.out"
-  rows1="$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'" 2>/dev/null)"
+  rows1="$(spike_psql "c7 row count after" "SELECT count(*) FROM public.approval_request WHERE conversation_id = '$CONV_B'")"
   local m1
   m1="$(docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep 'session=sessB ' | grep 'method=POST' | tail -1 | grep -oE '(sub)?reason=[a-z-]+' | tr '\n' ' ')"
   # Pass 2: restart only the hook, with the overlay layered on the base policy.
@@ -796,37 +914,48 @@ EOS
 }
 
 arm_c8() {
-  local d="$SPIKE_WORK/c8" kong seq
+  local d="$SPIKE_WORK/c8" kong seq hs he
+  SPIKE_CUR=8
   mkdir -p "$d" && : > "$d/windows.jsonl" || harness_fail DRIVER "mkdir c8"
-  window() { # <label> <stub seq at start> <hook marker lines at start>
-    python3 -I -c 'import json, sys; print(json.dumps({"label": sys.argv[1], "seq": int(sys.argv[2]), "hook": int(sys.argv[3])}))' "$1" "$2" "$3" >> "$d/windows.jsonl"
+  window() { # <label> <stub seq at start>
+    python3 -I -c 'import json, sys; print(json.dumps({"label": sys.argv[1], "seq": int(sys.argv[2])}))' "$1" "$2" >> "$d/windows.jsonl"
   }
-  kong="$(docker ps --filter 'name=supabase_kong' --format '{{.Names}}' | head -1)"
+  kong="$(docker ps --filter "label=$SPIKE_SUPA_LABEL" --filter 'name=supabase_kong' --format '{{.Names}}' | head -1)"
   # Positive control: a healthy hook, the same clients (sessA; the writes are refused pending, the read vends).
-  window control "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients control sessA "$d/control.out"
+  window control "$(spike_stub_seq)"; _c8_clients control sessA "$d/control.out"
   # Stalled: the hook is alive but its RPC cannot finish (the API gateway is paused); its 5 s deadline answers.
+  # Without the gateway container the stalled window cannot run: a missing harness input, never a scored failure.
+  echo 0 > "$d/hook-timeouts.txt"
   if [[ -n "$kong" ]]; then
     docker pause "$kong" >/dev/null 2>&1
-    window stalled "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients stalled sessA "$d/stalled.out"
+    window stalled "$(spike_stub_seq)"; hs="$(spike_hook_lines)"
+    _c8_clients stalled sessA "$d/stalled.out"
+    he="$(spike_hook_lines)"
     docker unpause "$kong" >/dev/null 2>&1
+    # Only the stalled window's markers (lines hs+1..he), anchored on the refusal marker and session A.
+    if (( he > hs )); then
+      docker logs "$SPIKE_HOOK_CTR" 2>&1 | sed -n "$((hs + 1)),${he}p" \
+        | grep -E '^SOLEUR_EGRESS_VEND_REFUSED .*session=sessA .*reason=hook-timeout( |$)' | wc -l | tr -d ' ' > "$d/hook-timeouts.txt"
+    fi
+  else
+    spike_harness_err "KONG no supabase_kong container for this stack (stalled window not run)"
   fi
-  docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep -c 'reason=hook-timeout' > "$d/hook-timeouts.txt"
   # Frozen: the hook process is frozen (cgroup freezer, the SIGSTOP of R27); iron-proxy has no deadline of its own.
   docker pause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
   # A frozen hook makes each inject-host client wait until its own timeout (R27: recorded, not scored), so the per-client
   # cap is shorter here and the script's cap longer, or the read and the SSE never run (run 42809989901).
-  window frozen "$(spike_stub_seq)" "$(spike_hook_lines)"; C8_CLIENT_CAP=15 SPIKE_CX_TIMEOUT=200 _c8_clients frozen sessA "$d/frozen.out"
+  window frozen "$(spike_stub_seq)"; C8_CLIENT_CAP=15 SPIKE_CX_TIMEOUT=200 _c8_clients frozen sessA "$d/frozen.out"
   docker unpause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
   # Killed hook.
   docker kill "$SPIKE_HOOK_CTR" >/dev/null 2>&1
-  window hookKilled "$(spike_stub_seq)" 0; _c8_clients hookKilled sessA "$d/hookKilled.out"
+  window hookKilled "$(spike_stub_seq)"; _c8_clients hookKilled sessA "$d/hookKilled.out"
   docker exec "$SPIKE_APP_CTR" sh -c 'cat /run/spike/sessA/logs/iron-proxy.log' 2>/dev/null | tr -d '\000' | grep -a '"action":"error"' | grep -ac 'approval-hook' > "$d/iron-hook-errors.txt"
   # Killed router (session B): all of B's egress fails.
   docker exec "$SPIKE_APP_CTR" sh -c 'kill "$(cat /run/spike/sessB/state/router.pid)"' >/dev/null 2>&1
-  window routerKilled "$(spike_stub_seq)" 0; _c8_clients routerKilled sessB "$d/routerKilled.out"
+  window routerKilled "$(spike_stub_seq)"; _c8_clients routerKilled sessB "$d/routerKilled.out"
   # Killed iron-proxy (session A): inject hosts fail; the forwarder branch (open-web SSE) still streams.
   docker exec "$SPIKE_APP_CTR" sh -c 'kill "$(cat /run/spike/sessA/state/iron.pid)"' >/dev/null 2>&1
-  window ironKilled "$(spike_stub_seq)" 0; _c8_clients ironKilled sessA "$d/ironKilled.out"
+  window ironKilled "$(spike_stub_seq)"; _c8_clients ironKilled sessA "$d/ironKilled.out"
   cp "$SPIKE_STUB_RECORDS" "$d/stub-all.jsonl"
   # CTO R30/R33: the CLI's own streaming, after confirming iron-proxy is really gone.
   local iron_dead=no
@@ -886,6 +1015,7 @@ PYC8
 # ---------------------------------------------------------------------------------------------------------------
 arm_c1() {
   local d="$SPIKE_WORK/c1" ipid fpid planted
+  SPIKE_CUR=1
   mkdir -p "$d" || harness_fail DRIVER "mkdir c1"
   ipid="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/state/iron.pid 2>/dev/null)"
   fpid="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/state/forwarder.pid 2>/dev/null)"
@@ -914,11 +1044,15 @@ steps = [
 ]
 json.dump(steps, open(steps_out, "w"))
 declared = []
-for s in ("sessA", "sessB", "sessC", "sessE"):
+for s in ("sessA", "sessB", "sessC", "sessD", "sessE"):
     r = f"/run/spike/{s}"
     declared += [{"id": f"{s}-decoy-basic", "file": f"{r}/secrets/decoy.token", "transform": "basic-b64"},
                  {"id": f"{s}-ca-key", "file": f"{r}/ca/ca.key", "transform": "pem-body"},
-                 {"id": f"{s}-hookclient-key", "file": f"{r}/hookclient/client.key", "transform": "pem-body"}]
+                 {"id": f"{s}-hookclient-key", "file": f"{r}/hookclient/client.key", "transform": "pem-body"},
+                 {"id": f"{s}-hook-server-key", "file": f"/run/spike/declared/{s}-server.key", "transform": "pem-body"}]
+# The three roots' keys (hook server, hook client, test upstream): harness-held, copied to /run/spike/declared.
+declared += [{"id": f"harness-{k}", "file": f"/run/spike/declared/{k}.key", "transform": "pem-body"}
+             for k in ("hook-server-root", "hook-client-root", "upstream-root")]
 json.dump({"declaredFiles": declared, "planted": {"id": "planted-control", "value": planted, "path": "@WS@/planted.txt"},
            "scanFiles": ["@WS@/.spike-scan.txt"]}, open(extras_out, "w"))
 PYC1S
@@ -932,12 +1066,16 @@ PYC1S
 import json, sys
 d, ctl = sys.argv[1], sys.argv[2]
 o = json.load(open(f"{d}/out.json"))
+spec = json.load(open(f"{d}/spec.json"))
 st = {s["id"]: s for s in o.get("steps", [])}
 scan = next((s for k, s in st.items() if k.startswith("scan:")), {})
+# Every declared surface must be scanned: the driver drops a value under 8 characters silently from its scan.
+want_declared = len(spec.get("declaredFiles", []))
 cli = ["readDecoy", "readCaKey", "readHookSocket", "readHookClientKey", "readIronYaml", "readInjectorEnviron", "readInjectorCmdline", "readForwarderEnviron", "webfetchDecoy"]
 leaks = {k: s.get("hits") for k, s in st.items() if [h for h in (s.get("hits") or []) if h != "planted-control"]}
 refused = {k: (st.get(k, {}).get("isError") is True and not st.get(k, {}).get("hits")) for k in cli}
 checks = {
+  "every declared secret surface was scanned (declaredCount equals the declared files, none dropped)": want_declared > 0 and o.get("declaredCount") == want_declared and not o.get("declaredDropped"),
   "the sandbox scan is live (planted control found in the scanned file)": "planted-control" in (scan.get("hits") or []) and "readable=true" in (scan.get("content") or ""),
   "no session secret in anything the sandbox or the tools returned": not leaks,
   "sandboxed Bash cannot connect() the hook socket": "connected" not in (st.get("sandboxHookConnect", {}).get("content") or "") and "error" in (st.get("sandboxHookConnect", {}).get("content") or ""),
@@ -946,7 +1084,8 @@ checks = {
   "every CLI-tier Read/WebFetch of a secret surface is refused": all(refused.values()),
 }
 json.dump({"steps": {k: {"isError": s.get("isError"), "hits": s.get("hits"), "content": (s.get("content") or "")[:300]} for k, s in st.items()},
-           "leaks": leaks, "cli_refused": refused, "proc_environ_control_bytes": ctl, "checks": checks}, open(f"{d}/raw.json", "w"))
+           "leaks": leaks, "cli_refused": refused, "proc_environ_control_bytes": ctl,
+           "declared": {"files": want_declared, "scanned": o.get("declaredCount"), "dropped": o.get("declaredDropped")}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
 print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
@@ -962,6 +1101,7 @@ PYC1
 # ---------------------------------------------------------------------------------------------------------------
 arm_c6() {
   local d="$SPIKE_WORK/c6" ra fwd seq canary
+  SPIKE_CUR=6
   mkdir -p "$d" || harness_fail DRIVER "mkdir c6"
   ra="$(cat "$SPIKE_WORK/run/sessA/state/router.port")"; fwd="$(cat "$SPIKE_WORK/run/sessA/state/forwarder.port")"
   canary="spkcanary_$(_spike_rand 18)"; mask "$canary"
@@ -990,9 +1130,9 @@ c tunnelSessionBRouterCred --cacert \$BUN -x "http://\$binj@127.0.0.1:$SPIKE_SES
 c httpListenConnect --cacert \$BUN -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" https://api.github.com/repos/spike/alpha
 c httpListenAbsolute -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" http://api.github.com/repos/spike/alpha
 c httpsListen -k --resolve "api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2)):127.0.0.1" "https://api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2))/repos/spike/alpha"
-curl -sS --max-time 8 "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/metrics" > /tmp/c6-metrics.txt 2>&1; curl -sS --max-time 8 "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/" >> /tmp/c6-metrics.txt 2>&1
-echo "metrics bytes=\$(wc -c < /tmp/c6-metrics.txt) secrets=\$(for f in \$A/secrets/decoy.token \$A/secrets/router-session.cred \$A/secrets/router-injector.cred \$A/secrets/forwarder.token; do grep -cF "\$(cat \$f)" /tmp/c6-metrics.txt; done | awk '{n += \$1} END {print n + 0}')"
-rm -f /tmp/c6-metrics.txt
+# The metrics listener's /metrics body, kept for the judge: it is graded only when it is a Prometheus exposition (a
+# 404 page carries no metrics, so "no secret in it" would be a vacuous pass), with the same secret list as the logs.
+curl -sS --max-time 8 -o /run/spike/c6-metrics.txt -w 'metrics http=%{http_code}\n' "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/metrics" 2>/dev/null || echo "metrics http=000"
 EOS
   seq="$(spike_stub_seq)"
   docker exec -i -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" bash -s < "$d/c6.sh" > "$d/probes.out" 2>&1
@@ -1026,17 +1166,17 @@ PYS
   docker logs "$SPIKE_HOOK_CTR" > "$d/logs/hook.log" 2>&1
   spike_squid_log > "$d/logs/squid.log"
   docker logs "$SPIKE_STUB_CTR" > "$d/logs/stub-stdout.log" 2>&1
-  python3 -I - "$d" "$canary" "$SPIKE_WORK/run" > "$d/verdict.txt" <<'PYC6'
+  python3 -I - "$d" "$canary" "$SPIKE_WORK/run" "$SPIKE_WORK" > "$d/verdict.txt" <<'PYC6'
 import base64, json, os, re, sys
-d, canary, run = sys.argv[1:4]
-o, reach = {}, {}
+d, canary, run, work = sys.argv[1:5]
+o, reach, metrics_http = {}, {}, ""
 for line in open(f"{d}/probes.out"):
     m = re.match(r"^(\w+) http=(\d{3}) connect=(\d{3})$", line.strip())
     if m: o[m.group(1)] = (m.group(2), m.group(3))
     m = re.match(r"^reach (\d+) (open|closed)$", line.strip())
     if m: reach[m.group(1)] = m.group(2)
-    m = re.match(r"^metrics bytes=(\d+) secrets=(\S+)$", line.strip())
-    if m: o["metrics"] = (m.group(1), m.group(2))
+    m = re.match(r"^metrics http=(\d{3})$", line.strip())
+    if m: metrics_http = m.group(1)
 stub = [json.loads(l) for l in open(f"{d}/stub.jsonl") if l.strip()]
 n, e, aa = (json.load(open(f"{d}/{f}")) for f in ("out-n.json", "out-e.json", "out-n-allowall.json"))
 stepc = lambda o, i: next((s.get("content") or "" for s in o.get("steps", []) if s["id"] == i), "")
@@ -1044,24 +1184,49 @@ ncontent, econtrol, ldirect, lforced = stepc(n, "unentitled"), stepc(e, "entitle
 traces = [int(x) for x in open(f"{d}/unentitled-traces.txt").read().split()]
 ndec, edec = n.get("networkDecisions") or [], e.get("networkDecisions") or []
 codes = lambda txt: [ln.split()[-1] for ln in txt.splitlines() if ln.startswith(("http", "forced"))]
-secrets = []
-for s in os.listdir(run):
+# The secret list (R10's intent; the structural map): every session's credentials in each form a leak could take
+# (raw, bare password, Basic base64), its CA, hook client and hook server keys, and the harness-held keys and owner
+# tokens. A fixed list, so a missing file is a named harness input error, never a silently shorter scan.
+b64 = lambda s: base64.b64encode(s.encode()).decode()
+pem_body = lambda t: max((l for l in t.splitlines() if l and not l.startswith("-----")), key=len, default="")
+FORMS = {"raw": lambda r: r, "pw": lambda r: r.split(":", 1)[1] if ":" in r else "", "basic": b64,
+         "x-access": lambda r: b64(f"x-access-token:{r}"), "pem": pem_body}
+specs = []
+for s in ("sessA", "sessB", "sessC", "sessD", "sessE"):
     sec = f"{run}/{s}/secrets"
-    if os.path.isdir(sec):
-        for f in ("decoy.token", "router-session.cred", "router-injector.cred", "forwarder.token"):
-            p = f"{sec}/{f}"
-            if os.path.exists(p):
-                v = open(p).read().strip()
-                secrets.append((f"{s}/{f}", v))
-                if f == "decoy.token": secrets.append((f"{s}/decoy-basic", base64.b64encode(f"x-access-token:{v}".encode()).decode()))
+    specs += [(f"{s}/decoy", f"{sec}/decoy.token", "raw"), (f"{s}/decoy-basic", f"{sec}/decoy.token", "x-access"),
+              (f"{s}/router-session", f"{sec}/router-session.cred", "raw"), (f"{s}/router-session-pw", f"{sec}/router-session.cred", "pw"),
+              (f"{s}/router-session-basic", f"{sec}/router-session.cred", "basic"),
+              (f"{s}/router-injector", f"{sec}/router-injector.cred", "raw"), (f"{s}/router-injector-pw", f"{sec}/router-injector.cred", "pw"),
+              (f"{s}/router-injector-basic", f"{sec}/router-injector.cred", "basic"),
+              (f"{s}/forwarder", f"{sec}/forwarder.token", "raw"), (f"{s}/forwarder-basic", f"{sec}/forwarder.cred", "basic"),
+              (f"{s}/ca-key", f"{run}/{s}/ca/ca.key", "pem"), (f"{s}/hookclient-key", f"{run}/{s}/hookclient/client.key", "pem"),
+              (f"{s}/hook-server-key", f"{work}/hookpriv/{s}/server.key", "pem")]
+specs += [("service-role-key", f"{work}/service-role.key", "raw"), ("anon-key", f"{work}/anon.key", "raw"),
+          ("hmac-key", f"{work}/hookpriv/hmac.key", "raw"), ("ownerA-jwt", f"{work}/seed/ownerA.jwt", "raw"),
+          ("ownerB-jwt", f"{work}/seed/ownerB.jwt", "raw")]
+specs += [(f"{k}-key", f"{work}/{k}/ca.key", "pem") for k in ("hook-server-root", "hook-client-root", "upstream-root")]
+secrets, missing = [], []
+for k, p, form in specs:
+    try:
+        secrets.append((k, FORMS[form](open(p).read().strip())))
+    except OSError:
+        missing.append(k)
+short = [k for k, v in secrets if len(v) < 8]
+hits = lambda text: [k for k, v in secrets if len(v) >= 8 and v in text] + (["body-canary"] if canary in text else [])
+planted_id, planted = next(((k, v) for k, v in secrets if k == "sessA/decoy"), ("sessA/decoy", ""))
 logs, log_leaks, log_live = {}, {}, {}
 for f in sorted(os.listdir(f"{d}/logs")):
     text = open(f"{d}/logs/{f}", errors="replace").read()
     logs[f] = len(text)
-    control = text + "\n" + canary + "\n"
-    log_live[f] = len(text) > 0 and canary in control
-    hits = [k for k, v in secrets if len(v) >= 8 and v in text] + (["body-canary"] if canary in text else [])
-    if hits: log_leaks[f] = hits
+    # The control: a copy of THIS log with a decoy-shaped value and the canary planted, through the same `hits`
+    # expression the real scan uses; it must find both, or the scan below proves nothing for this log.
+    control_hits = hits(text + "\n" + planted + "\n" + canary + "\n") if planted else []
+    log_live[f] = len(text) > 0 and planted_id in control_hits and "body-canary" in control_hits
+    if hits(text): log_leaks[f] = hits(text)
+metrics_text = open(f"{run}/c6-metrics.txt", errors="replace").read() if os.path.exists(f"{run}/c6-metrics.txt") else ""
+metrics_prom = re.search(r"^# (HELP|TYPE) ", metrics_text, re.M) is not None
+o["metrics"] = {"http": metrics_http, "bytes": len(metrics_text), "prometheus": metrics_prom, "hits": hits(metrics_text)}
 no_real_token = not any(r["auth_class"] == "real-decoy" for r in stub)
 checks = {
   "deny-CIDR, localhost and link-local targets refused at squid": all(o.get(k, ("", ""))[1] == "403" for k in ("denyCidr", "localhost", "linkLocal")),
@@ -1073,19 +1238,26 @@ checks = {
   "tunnel_listen refuses no credential, the session credential and session B's router credential (407)": all(o.get(k, ("", ""))[1] == "407" for k in ("tunnelNoCred", "tunnelSessionCred", "tunnelSessionBRouterCred")),
   "http_listen and https_listen yield no vend (R28 tunnel guard)": o.get("httpListenAbsolute", ("", ""))[0] in ("403", "502", "000") and o.get("httpListenConnect", ("", ""))[1] in ("403", "407") and o.get("httpsListen", ("", ""))[0] == "403",
   "no real token reached the stub from any listener probe": no_real_token,
-  "metrics carry no secret": o.get("metrics", ("0", "err"))[1] == "0",
-  "every log is non-empty and its control copy finds the canary": all(log_live.values()) and len(log_live) >= 4,
+  "metrics carry no secret (graded on a Prometheus exposition at /metrics)": metrics_http == "200" and metrics_prom and not o["metrics"]["hits"],
+  "every log is non-empty and its control copy (a planted decoy and the canary) is found by the same scan": all(log_live.values()) and len(log_live) >= 4,
   "no log carries a secret or the body canary": not log_leaks,
 }
 json.dump({"probes": o, "listener_reachability_recorded": reach, "unentitled": ncontent, "unentitled_decisions": ndec,
            "unentitled_traces_stub_router_squid": traces, "entitled_control": econtrol, "loopback_direct": ldirect,
            "loopback_forced": lforced, "entitled_decisions": edec,
            "recorded_only_unentitled_with_network_allowed": stepc(aa, "unentitled"),
-           "log_sizes": logs, "log_leaks": log_leaks, "checks": checks, "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"},
+           "log_sizes": logs, "log_leaks": log_leaks, "checks": checks,
+           "secret_list": {"declared": len(specs), "scanned": len(secrets) - len(short), "missing": missing, "short": short},
+           "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"},
           open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
-print("pass" if not failed else "fail")
-print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+if missing or short or not specs:
+    # Floor: the scan ran on a shorter list than declared, so neither a pass nor a fail is measured.
+    print("unmeasurable")
+    print(f"harness:SECRET_LIST {len(missing)} missing, {len(short)} under 8 characters: {', '.join((missing + short)[:6])}")
+else:
+    print("pass" if not failed else "fail")
+    print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
 PYC6
   observe c6 "$d/raw.json"
   spike_record_judged 6 "$d/verdict.txt"

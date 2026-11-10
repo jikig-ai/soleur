@@ -95,8 +95,9 @@ RT_PORT="$(wait_line "$S/logs/router.log" 'connect-router-listening [0-9]+' 10 |
 echo "$RT_PORT" > "$S/state/router.port"
 touch "$S/state/ready"
 
-# Stay alive (the forwarder's and router's ppid watchdogs need a live parent) until the suite asks us to stop, or a
-# child dies (criterion 8 kills them on purpose; the suite reads which one through the pid files).
+# Stay alive (the forwarder's and router's ppid watchdogs need a live parent) until the suite removes state/run. The
+# loop watches only that file: a child that dies (criterion 8 kills them on purpose) does not end it, and the suite
+# reads which one died through the pid files.
 touch "$S/state/run"
 while [[ -e "$S/state/run" ]]; do sleep 1; done
 for p in forwarder iron router; do kill "$(cat "$S/state/$p.pid")" 2>/dev/null; done

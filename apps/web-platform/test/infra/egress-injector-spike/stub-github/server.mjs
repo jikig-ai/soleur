@@ -71,7 +71,13 @@ function gitBackend(req, res, cfg, url) {
   };
   if (req.headers["content-encoding"]) env.HTTP_CONTENT_ENCODING = req.headers["content-encoding"];
   const child = spawn("git", ["http-backend"], { env, stdio: ["pipe", "pipe", "ignore"] });
+  // A backend that exits before reading the whole body (EPIPE) must not crash the stub.
+  child.stdin.on("error", () => {});
   req.pipe(child.stdin);
+  // A client that goes away mid-response must not leave the backend running.
+  res.on("close", () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  });
   let head = Buffer.alloc(0);
   let headerDone = false;
   child.stdout.on("data", (chunk) => {

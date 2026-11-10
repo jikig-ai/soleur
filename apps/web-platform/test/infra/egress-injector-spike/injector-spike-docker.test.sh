@@ -13,7 +13,8 @@
 #   SESSION_UP SEED DRIVER
 #
 # Arms (lib/arms.sh), all nine built: 1 sandbox scan and CLI-tier probes; 2 transport in arms A and B, the gated
-# sandboxed push and the CLI's own streaming (CTO R29, R32, R30/R33); 3 approval lifecycle, binding and expiry; 4
+# sandboxed push and the CLI's own streaming (CTO R29, R32, R30/R33); 3 approval lifecycle (git push, REST and GraphQL
+# mutation on its own conversation), binding, flag off and expiry; 4
 # allowlisted reads; 5 cross-session; 6 ADR-278 controls, listeners and log grep (R28); 7 the add-verb overlay; 9 CA
 # scope (R31); 8 failure modes, last, because it stops the hook, a router and an injector. A criterion whose arm
 # cannot run records `unmeasurable` with a named harness reason, so such a run reads INCONCLUSIVE, never a pass.
@@ -47,9 +48,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Internal deadline: the job has 30 minutes; at 25 the suite records what it has and finalizes INCONCLUSIVE.
-SPIKE_DEADLINE=$(( $(date +%s) + ${INJECTOR_SPIKE_DEADLINE_S:-1500} ))
-check_deadline() { (( $(date +%s) < SPIKE_DEADLINE )) || harness_fail DEADLINE "internal 25-minute deadline reached during: $1"; }
+# Internal deadline, counted from suite start: the workflow gives this step 25 minutes (the job 45, for the
+# Supabase pre-pull before it); at 22 the suite records what it has and finalizes INCONCLUSIVE, leaving the step
+# time to write the results the upload step needs. Checked between stages and before every arm.
+SPIKE_DEADLINE_S="${INJECTOR_SPIKE_DEADLINE_S:-1320}"
+SPIKE_DEADLINE=$(( $(date +%s) + SPIKE_DEADLINE_S ))
+check_deadline() { (( $(date +%s) < SPIKE_DEADLINE )) || harness_fail DEADLINE "internal $(( SPIKE_DEADLINE_S / 60 ))-minute deadline reached before: $1"; }
 
 export SPIKE_COMMIT SPIKE_DATE SPIKE_MACHINE SPIKE_SDK_PIN SPIKE_IRON_PROXY_DIGEST
 SPIKE_COMMIT="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -69,6 +73,19 @@ harness_selftest || harness_fail SELFTEST "instrument self-test failed"
 # --- Local Supabase stack (CTO F-a, R5, R21) -------------------------------------------------------------------------
 SUPA="$WP/scripts/supabase-local.sh"
 DB_URL="postgres://postgres:postgres@127.0.0.1:54322/postgres"
+# This project's stack, by the label supabase-local.sh scopes on (com.supabase.cli.project=<config.toml project_id>),
+# so another Supabase stack on the host is never the one paused, widened or written to.
+SPIKE_SUPA_PROJECT="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$WP/supabase/config.toml" | head -1)"
+[[ -n "$SPIKE_SUPA_PROJECT" ]] || harness_fail SUPABASE_GUARD "no project_id in supabase/config.toml"
+SPIKE_SUPA_LABEL="com.supabase.cli.project=$SPIKE_SUPA_PROJECT"
+# Every write below (reset, migrations, seeding) goes to DB_URL: it must name a loopback IP literal, never a name a
+# resolver could point elsewhere, or the suite stops before its first write.
+python3 -I -c 'import ipaddress, sys, urllib.parse
+h = urllib.parse.urlsplit(sys.argv[1]).hostname or ""
+try:
+    sys.exit(0 if ipaddress.ip_address(h).is_loopback else 1)
+except ValueError:
+    sys.exit(1)' "$DB_URL" || harness_fail SUPABASE_GUARD "DB_URL host is not a loopback IP literal"
 ( cd "$WP" && bash "$REPO/.github/scripts/ghcr-pull-with-retry.sh" "$SUPA" start ) > "$SPIKE_WORK/supabase-start.log" 2>&1 \
   || harness_fail SUPABASE_START "supabase-local.sh start failed (log: $(tail -3 "$SPIKE_WORK/supabase-start.log" | tr '\n' ' '))"
 ( cd "$WP" && "$SUPA" assert --require-stack ) > "$SPIKE_WORK/supabase-assert.log" 2>&1 \
@@ -80,7 +97,10 @@ check_deadline "supabase start"
 psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE TABLE IF NOT EXISTS public._schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), content_sha TEXT);" \
   > "$SPIKE_WORK/bootstrap.log" 2>&1 || harness_fail MIGRATIONS "migration-tracking bootstrap failed"
-( cd "$WP" && DATABASE_URL="$DB_URL" ALLOW_UNMERGED_DEV_APPLY=1 bash scripts/run-migrations.sh --bootstrap=skip ) \
+# run-migrations.sh prefers DATABASE_URL_POOLER over DATABASE_URL: an inherited pooler URL (or any remote Supabase
+# variable) would send the migrations elsewhere, so each is removed from its environment.
+( cd "$WP" && env -u DATABASE_URL_POOLER -u SUPABASE_ACCESS_TOKEN -u NEXT_PUBLIC_SUPABASE_URL -u SUPABASE_URL \
+    DATABASE_URL="$DB_URL" ALLOW_UNMERGED_DEV_APPLY=1 bash scripts/run-migrations.sh --bootstrap=skip ) \
   > "$SPIKE_WORK/migrations.log" 2>&1 || harness_fail MIGRATIONS "run-migrations.sh failed (log: $(tail -3 "$SPIKE_WORK/migrations.log" | tr '\n' ' '))"
 check_deadline "migrations"
 
@@ -113,8 +133,9 @@ grep -qx 'guard ok' "$SPIKE_WORK/guard.log" || harness_fail SUPABASE_GUARD "guar
 # CTO R5 / D4: widen the closed tool_name CHECK for the one spike tool name, inside the database container, looking
 # the constraint up in pg_constraint rather than assuming its name. The new expression is the old one OR the spike
 # name, so every existing name keeps its meaning. Recorded as input for the migration #11637 owns.
-DB_CTR="$(docker ps --filter 'name=supabase_db' --format '{{.Names}}' | head -1)"
-[[ -n "$DB_CTR" ]] || harness_fail CHECK_WIDEN "no supabase_db container"
+mapfile -t db_ctrs < <(docker ps --filter "label=$SPIKE_SUPA_LABEL" --filter 'name=supabase_db' --format '{{.Names}}')
+[[ ${#db_ctrs[@]} -eq 1 ]] || harness_fail CHECK_WIDEN "expected exactly one supabase_db container labelled $SPIKE_SUPA_LABEL, found ${#db_ctrs[@]}"
+DB_CTR="${db_ctrs[0]}"
 TOOL_NAME="$(hook_eval 'console.log(hook.SPIKE_TOOL_NAME)')"
 [[ "$TOOL_NAME" =~ ^[a-z_]+$ ]] || harness_fail CHECK_WIDEN "unexpected spike tool name"
 docker exec -i "$DB_CTR" psql --no-psqlrc -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
@@ -157,6 +178,7 @@ spike_seed_user ownerB WS_B
 spike_new_conversation "$WS_A" CONV_A
 spike_new_conversation "$WS_B" CONV_B
 spike_new_conversation "$WS_A" CONV_C
+spike_new_conversation "$WS_A" CONV_D
 spike_new_conversation "$WS_A" CONV_E
 spike_sign_in ownerA
 spike_sign_in ownerB
@@ -175,14 +197,16 @@ for repo in alpha beta outside; do
 done
 
 # Sessions: A (workspace A, flag on, spike/alpha), B (workspace B, flag on, spike/beta), C (workspace A, flag OFF),
-# E (workspace A, flag on, rows created with a 60 s TTL: criterion 3's expiry arm).
+# D (workspace A, flag on, spike/alpha: criterion 3's own fresh conversation, CTO R16), E (workspace A, flag on,
+# rows created with a 60 s TTL: criterion 3's expiry arm).
 spike_session_prepare sessA 0 "$WS_A" "$CONV_A"
 spike_session_prepare sessB 1 "$WS_B" "$CONV_B"
 spike_session_prepare sessC 2 "$WS_A" "$CONV_C"
 spike_session_prepare sessE 3 "$WS_A" "$CONV_E"
+spike_session_prepare sessD 4 "$WS_A" "$CONV_D"
 python3 -I - "$SPIKE_WORK/stub/config.json" "$SPIKE_WORK/run" <<'PYSTUB' || harness_fail STUB_START "stub config"
 import json, sys
-decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC", "sessE")]
+decoys = [{"id": s, "value": open(f"{sys.argv[2]}/{s}/secrets/decoy.token").read()} for s in ("sessA", "sessB", "sessC", "sessD", "sessE")]
 json.dump({"listen": {"host": "0.0.0.0", "port": 443}, "certFile": "/stub/leaf.pem", "keyFile": "/stub/leaf.key",
            "repoRoot": "/stub/repos", "recordFile": "/stub/records.jsonl", "decoys": decoys}, open(sys.argv[1], "w"))
 PYSTUB
@@ -196,11 +220,12 @@ cp "$SPIKE_WORK/service-role.key" "$SPIKE_WORK/hookpriv/service-role.key" \
   || harness_fail HOOK_START "copy hook inputs"
 ( umask 077 && python3 -I -c 'import secrets; print(secrets.token_hex(32))' > "$SPIKE_WORK/hookpriv/hmac.key" ) \
   || harness_fail HOOK_START "hmac key"
-python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$API_URL" "$WS_A:$CONV_A" "$WS_B:$CONV_B" "$WS_A:$CONV_C" "$WS_A:$CONV_E" <<'PYHOOK' || harness_fail HOOK_START "hook config"
+python3 -I - "$SPIKE_WORK/hookpriv/hook.json" "$API_URL" "$WS_A:$CONV_A" "$WS_B:$CONV_B" "$WS_A:$CONV_C" "$WS_A:$CONV_E" "$WS_A:$CONV_D" <<'PYHOOK' || harness_fail HOOK_START "hook config"
 import json, sys
 out, url = sys.argv[1], sys.argv[2]
 specs = [("sessA", sys.argv[3], ["spike/alpha"], True, None), ("sessB", sys.argv[4], ["spike/beta"], True, None),
-         ("sessC", sys.argv[5], ["spike/alpha"], False, None), ("sessE", sys.argv[6], ["spike/alpha"], True, 60)]
+         ("sessC", sys.argv[5], ["spike/alpha"], False, None), ("sessE", sys.argv[6], ["spike/alpha"], True, 60),
+         ("sessD", sys.argv[7], ["spike/alpha"], True, None)]
 sessions = []
 for sid, wc, repos, flag, ttl in specs:
     ws, conv = wc.split(":")
@@ -213,6 +238,16 @@ json.dump({"supabaseUrl": url, "serviceRoleKeyFile": "/run/spike-hook/service-ro
            "policyFiles": ["/app/test/infra/egress-injector-spike/policy.yaml"],
            "clientRootCertFile": "/run/spike-hook/client-root.pem", "sessions": sessions}, open(out, "w"))
 PYHOOK
+# Guard 1 / R10: copies of the harness-held secrets (the service-role, anon and HMAC keys, the owner tokens, each
+# session's hook server key and the three roots' keys) where the SDK driver can read them to declare and scan for
+# them. /run/spike is masked for every sandbox, like the session secrets beside it.
+dcl="$SPIKE_WORK/run/declared"
+( umask 077 && mkdir -p "$dcl" \
+    && cp "$SPIKE_WORK/service-role.key" "$SPIKE_WORK/anon.key" "$SPIKE_WORK/hookpriv/hmac.key" \
+          "$SPIKE_WORK/seed/ownerA.jwt" "$SPIKE_WORK/seed/ownerB.jwt" "$dcl/" \
+    && for s in sessA sessB sessC sessD sessE; do cp "$SPIKE_WORK/hookpriv/$s/server.key" "$dcl/$s-server.key" || exit 1; done \
+    && for r in hook-server-root hook-client-root upstream-root; do cp "$SPIKE_WORK/$r/ca.key" "$dcl/$r.key" || exit 1; done ) \
+  || harness_fail SESSION_PREP "declared secret copies"
 spike_fix_owner "$SPIKE_WORK/run"
 spike_fix_owner "$SPIKE_WORK/hookpriv"
 spike_fix_owner "$SPIKE_WORK/stub"
@@ -220,6 +255,7 @@ spike_start_hook
 spike_session_up sessA
 spike_session_up sessB
 spike_session_up sessC
+spike_session_up sessD
 spike_session_up sessE
 echo "SOLEUR_SPIKE_STAGE stage=topology-ready"
 check_deadline "topology"
@@ -227,14 +263,14 @@ check_deadline "topology"
 arm_c3_expiry_start
 
 # --- Arms (lib/arms.sh) ------------------------------------------------------------------------------------------
-arm_c1
-arm_c2
-arm_c3
-arm_c4
-arm_c5
-arm_c6
-arm_c7
-arm_c9
+check_deadline "criterion 1"; arm_c1
+check_deadline "criterion 2"; arm_c2
+check_deadline "criterion 3"; arm_c3
+check_deadline "criterion 4"; arm_c4
+check_deadline "criterion 5"; arm_c5
+check_deadline "criterion 6"; arm_c6
+check_deadline "criterion 7"; arm_c7
+check_deadline "criterion 9"; arm_c9
 # Last: criterion 8 stops the hook, a router and an injector.
-arm_c8
+check_deadline "criterion 8"; arm_c8
 finalize

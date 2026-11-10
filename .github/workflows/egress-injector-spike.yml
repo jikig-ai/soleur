@@ -21,6 +21,35 @@ on:
       - "apps/web-platform/test/egress-injector-policy.test.ts"
       - "apps/web-platform/test/egress-injector-router.test.ts"
       - ".github/workflows/egress-injector-spike.yml"
+      # Everything else the suite reads (derived from the paths lib/bringup.sh, the suite and probes/ open):
+      # the image and its pins, the production run tuple and its posture inputs, the unchanged egress chain, the
+      # server modules the SDK driver imports, the local Supabase stack and its migrations, and the CI helpers.
+      - "apps/web-platform/package.json"
+      - "apps/web-platform/package-lock.json"
+      - "apps/web-platform/tsconfig.json"
+      - "apps/web-platform/Dockerfile"
+      - "apps/web-platform/infra/lib/docker-run-tuple.py"
+      - "apps/web-platform/infra/ci-deploy.sh"
+      - "apps/web-platform/infra/cloud-init.yml"
+      - "apps/web-platform/infra/seccomp-bwrap.json"
+      - "apps/web-platform/infra/apparmor-soleur-bwrap.profile"
+      - "apps/web-platform/infra/bwrap-shim/**"
+      - "apps/web-platform/infra/egress-forwarder.mjs"
+      - "apps/web-platform/infra/egress-gateway-squid.conf"
+      - "apps/web-platform/infra/egress-auth-helper.sh"
+      - "apps/web-platform/infra/egress-deny-cidrs.txt"
+      - "apps/web-platform/infra/egress-gw-image.provenance.md"
+      - "apps/web-platform/server/agent-env.ts"
+      - "apps/web-platform/server/agent-runner-sandbox-config.ts"
+      - "apps/web-platform/server/sandbox.ts"
+      - "apps/web-platform/server/tool-path-checker.ts"
+      - "apps/web-platform/server/tool-pattern-checker.ts"
+      - "apps/web-platform/supabase/migrations/**"
+      - "apps/web-platform/supabase/config.toml"
+      - "apps/web-platform/scripts/supabase-local.sh"
+      - "apps/web-platform/scripts/run-migrations.sh"
+      - ".github/scripts/ghcr-pull-with-retry.sh"
+      - ".github/scripts/supabase-pre-pull-images.sh"
   workflow_dispatch: {}
 
 permissions:
@@ -29,7 +58,8 @@ permissions:
 jobs:
   injector-spike:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, as rls-authz-fuzz.yml (#11386): the Supabase pre-pull alone can take minutes before the suite starts.
+    timeout-minutes: 45
     concurrency:
       group: sandbox-eval-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
@@ -70,7 +100,10 @@ jobs:
         working-directory: apps/web-platform
         run: npm ci --ignore-scripts
 
+      # The step's own cap; the suite finalizes INCONCLUSIVE at its internal 22-minute deadline first, so the upload
+      # below (which runs after a step timeout: that is a step failure, not a cancellation) has a results file.
       - name: Run the injector spike suite
+        timeout-minutes: 25
         env:
           INJECTOR_SPIKE_OUT: ${{ runner.temp }}/injector-spike-results.json
           INJECTOR_SPIKE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
