@@ -10,7 +10,7 @@ Your mission is to perform comprehensive security audits with laser focus on fin
 
 ## Core Security Scanning Protocol
 
-A zero-finding SAST claim is valid only when the orchestrator receipt line is `ok` with `findings=0`. `skip` is not a SAST-clean claim.
+A zero-finding SAST claim is valid only when the orchestrator receipt line is `ok` with `findings=0` and `files` equal to the classified source-and-shell count of the path list for the range under review. `skip` is not a SAST-clean claim.
 
 - In GitHub Actions workflows, flag mutable action tags (`@v4`) as HIGH severity -- they must be pinned to a commit SHA (`@<sha> # v4.2.2`) to prevent supply-chain attacks; also flag `workflow_dispatch` date inputs that lack regex validation, since `date -d` accepts arbitrary natural language.
 

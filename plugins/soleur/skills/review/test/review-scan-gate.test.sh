@@ -103,7 +103,11 @@ case "\$mode" in
         *) [ -f "\$a" ] && cat "\$a" >&2 ;;
       esac
     done
-    printf '%s\\n' '{"paths":{"scanned":[]},"results":[]}'
+    python3 - "$arm/targets" <<'PY'
+import json, sys
+files=[ln.rstrip("\n") for ln in open(sys.argv[1]) if ln.strip()]
+print(json.dumps({"paths":{"scanned":files},"results":[]}))
+PY
     exit 0
     ;;
   short)
@@ -255,7 +259,7 @@ printf 'Ran 99 rules on 99 files\n' >"$arm/work/a.ts"
 out="$(run_gate "$arm" "$arm/work/a.ts")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=semgrep files=1 rules=0 findings=0" ]; then
   ok "file body Ran line is not the summary"
 else
   no "file body Ran line is not the summary (rc=$rc line=$first)"
@@ -283,6 +287,20 @@ else
   no "files=0 on an ok semgrep line is a rejected shape"
 fi
 
+# --- a non-ts source suffix is still a target ---
+arm="$(new_arm)"
+write_semgrep "$arm" plural
+printf 'export const a = 1;\n' >"$arm/work/a.ts"
+printf 'export const b = 1;\n' >"$arm/work/b.js"
+out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/b.js")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=semgrep files=2 rules=2 findings=0" ]; then
+  ok "js suffix counts as a source target"
+else
+  no "js suffix counts as a source target (rc=$rc line=$first)"
+fi
+
 # --- test/ copy maps back to ok ---
 arm="$(new_arm)"
 write_semgrep "$arm" plural
@@ -305,6 +323,34 @@ if grep -q "$arm/work/test/t.ts" "$arm/semgrep.args"; then
   no "test path must be scanned as a copy"
 else
   ok "test path is scanned as a copy"
+fi
+
+# --- two test files must both be scanned ---
+arm="$(new_arm)"
+write_semgrep "$arm" plural
+mkdir -p "$arm/work/test"
+printf 'export const t = 1;\n' >"$arm/work/test/t.ts"
+printf 'export const u = 2;\n' >"$arm/work/test/u.ts"
+out="$(run_gate "$arm" "$arm/work/test/t.ts" "$arm/work/test/u.ts")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=semgrep files=2 rules=2 findings=0" ]; then
+  ok "both test files map back"
+else
+  no "both test files map back (rc=$rc line=$first)"
+fi
+arm="$(new_arm)"
+write_semgrep "$arm" short
+mkdir -p "$arm/work/test"
+printf 'export const t = 1;\n' >"$arm/work/test/t.ts"
+printf 'export const u = 2;\n' >"$arm/work/test/u.ts"
+out="$(run_gate "$arm" "$arm/work/test/t.ts" "$arm/work/test/u.ts")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 1 ] && printf '%s\n' "$first" | grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse '; then
+  ok "a short test-file scan refuses"
+else
+  no "a short test-file scan refuses (rc=$rc line=$first)"
 fi
 
 # --- exit 7 refuses ---
@@ -425,6 +471,12 @@ if grep -q 'findings=0' "$sentinel"; then
   ok "security-sentinel requires the ok receipt"
 else
   no "security-sentinel requires the ok receipt"
+fi
+phrase='classified source-and-shell count'
+if grep -q "$phrase" "$SKILL" && grep -q "$phrase" "$sentinel" && grep -q "$phrase" "$canon"; then
+  ok "zero-finding claim names the classified count"
+else
+  no "zero-finding claim names the classified count"
 fi
 
 # --- marker registration ---

@@ -31,6 +31,7 @@ A non-zero rule count can still miss the language under scan. That residual is a
 ## Consequences
 
 - Review seats, including `semgrep-sast` and the shellcheck seat, quote the receipt. They do not invoke semgrep or shellcheck.
+- An inline review that spawns no seat still runs the script before a zero-finding SAST claim. The claim needs `files` equal to the classified source-and-shell count of the path list for the range under review.
 - A clean security verdict without an `ok` receipt with `findings=0` is not evidence.
 - The secret-scan pre-push gate stays on its own contract. A review that skips because nothing is scannable still runs the sentinel.
 - The opt-in review workflow prototype is not this gate. The skill is the authority.
