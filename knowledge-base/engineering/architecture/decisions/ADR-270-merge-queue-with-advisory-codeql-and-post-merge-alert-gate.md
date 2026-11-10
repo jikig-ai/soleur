@@ -1177,6 +1177,44 @@ close comment reads "dismissed or fixed", and the recorded per-alert reason
 carries the actual state. `keep-open` and lookup-failure still keep the
 tracker open.
 
+### Addendum 2026-11-09 (#12508): authored bot PRs enqueue explicitly — the #12489 counter-instance
+
+The 2026-10-07 addendum ("enqueue while BEHIND") measured that GitHub enqueues
+an armed PR whose head is behind `main` on its own under
+`strict_required_status_checks_policy`, and Decision 5's queue-mode design
+rests on it ("no explicit enqueue and no ruleset change"). PR #12489 is a
+counter-instance. On 2026-11-09 the publish workflow authored the
+`vinngest-v1.1.70` pin-bump PR, armed auto-merge at 13:30Z with every required
+check SUCCESS — and it never entered the queue: `isInMergeQueue: false`,
+`mergeStateStatus: BLOCKED` at 18:47Z+, 5h20m and counting, while the pin-drift
+guard ran red on every head carrying the tag (`test-infra` monitor leg, run
+42670134044; `deploy-script-tests` on #12506). An armed auto-merge request on a
+BEHIND head does not self-update and, on this evidence, does not reliably
+self-enqueue either; the un-bounded remediation was a human noticing and
+pushing an update.
+
+Decision: the machinery that authors a PR with armed auto-merge enqueues it
+explicitly. `bump-inngest-bootstrap-pin.sh`, immediately after a successful
+`gh pr merge --auto --squash` arm (and only in the arm branch — the
+mirror_only/withheld paths are unchanged), resolves the PR's GraphQL node id
+and calls `enqueuePullRequest` (`pullRequestId` only; `jump` is never set —
+the jump variant is operator-urgency tooling, see
+`knowledge-base/engineering/operations/runbooks/merge-queue-jump.md`) as the
+already-minted soleur-infra App token — the actor ADR-285 requires, since
+`github-actions[bot]`-armed enqueues receive zero `merge_group` runs. A
+rejection (permission, already-queued, schema drift) warns and continues:
+armed auto-merge remains the fallback, strictly better than the no-enqueue
+path it replaces. The red window for a pin bump is thereby bounded by one
+`merge_group` CI cycle instead of a human-in-the-loop interval.
+
+Scope: this addendum records a counter-instance to the self-enqueue
+measurement as it applies to authored bot PRs and rules that this repo's
+authoring machinery enqueues explicitly. It does not amend the Phase 7
+queue-wait design, which waits for the same self-enqueue on human/agent PRs
+and still needs no explicit enqueue of its own; whether #12489's stall was a
+general regression or specific to App-authored arming is unmeasured. The
+dated bodies above are left as written.
+
 ### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
 The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.
