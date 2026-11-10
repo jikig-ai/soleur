@@ -200,7 +200,6 @@ ALWAYS_ON_SUITES=(
   # no file-based query can ever return it (the #8023/#8092/#8177 class).
   "scripts/lint-agents-enforcement-tags-unit"
   "scripts/lint-credential-path-literals"
-  "scripts/lint-cve-safe-status"
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
   "scripts/lint-infra-no-human-steps"
@@ -362,6 +361,7 @@ ALWAYS_ON_SUITES=(
   #   plugins/soleur/test/check-deps-adapter-drift.test.sh   -> AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS
   #   plugins/soleur/test/token-drift-workflow-causes.test.sh -> AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS
   #   .claude/hooks/grep-q-pipe-guard.test.sh                -> AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS
+  #   scripts/lint-cve-safe-status (#12348, CTO ruling E5)   -> AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS
   #   scripts/lint-encryption-posture                        -> AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS
   #   plugins/soleur/test/gitleaks-merge-commit.test.sh      -> AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS
   #   scripts/lint-gh-argv-arg-live                          -> AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS
@@ -1001,6 +1001,21 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
 # full source-closure derive in the pre-pass -- price it before adding one.
+# #12348 (CTO ruling E5): the lint-cve-safe-status UNIT suite runs on synthesized fixtures in
+# temp repos plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's
+# phrase anchors in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict
+# changes only when one of these files changes. Its local 5-run median (14,705 ms) is over
+# LOCAL_FAST_CAP_MS=10000, so it is edge-selected; the always-on corpus property is carried by
+# the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member `cve-safe-status`.
+AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
+  "scripts/test-all.sh"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.sh"
   "scripts/lint-agents-compound-sync.test.sh"

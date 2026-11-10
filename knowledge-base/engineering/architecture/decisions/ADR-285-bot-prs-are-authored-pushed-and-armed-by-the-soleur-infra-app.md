@@ -134,3 +134,6 @@ command for the leftover branch; otherwise the next scheduled run takes a new da
   --retry-all-errors` (the pinned installs elsewhere got the same flags; `sha256sum -c` unchanged). Pin moved
   `5f736544…40fe` → `5f6a943e…71c1`; the change is logged in the composite CHANGELOG. CI refused the drifted composite
   until the re-pin landed in the same PR, as designed.
+- 2026-11-10 — third `WM_COMPOSITE_PIN` re-pin (#12348): the run body gained a `lint-cve-safe-status --paths`
+  earned-green block over the staged paths (ADR-322). Pin moved `5f6a943e…71c1` → `86c9711a…5710`; the change is logged
+  in the composite CHANGELOG. The panel review missed the drift; a fix-round review seat caught it before CI did.

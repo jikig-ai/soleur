@@ -90,7 +90,7 @@ template rather than shipping the monolith.
 | `supabase-loopback-warn.sh` | soleur-coupled | Supabase vendor stack check (ADR-153). |
 | `worktree-write-guard.sh` | generic-after-extraction | Blocks writes to the main checkout while worktrees exist — repo-generic idea (v2); couplings = `incidents.sh`/`hook-input.sh` sourcing. |
 
-## Census — `scripts/lint-*` (48)
+## Census — `scripts/lint-*` (51)
 
 | File | Verdict | Rationale |
 |---|---|---|
@@ -104,7 +104,7 @@ template rather than shipping the monolith.
 | `lint-bot-synthetic-statuses.sh` | generic-after-extraction | `[skip ci]` ban on bot PRs is generic (v2); same named exemptions. |
 | `lint-conversations-update-callsites.sh` | soleur-coupled | `apps/web-platform/server` module boundary. |
 | `lint-credential-path-literals.py` | soleur-coupled | SCAN_DIRS = `plugins/` + `knowledge-base/`. |
-| `lint-cve-safe-status.py` | soleur-coupled | ADR-322 disclosure-hygiene lint over every tracked `knowledge-base/**` file. |
+| `lint-cve-safe-status.py` | soleur-coupled | `SCAN_ROOT` = `knowledge-base/`, file-count floor sized to this repo; ADR-322. |
 | `lint-diagnosis-claims.sh` | generic-after-extraction | "CI message may not name a cause the job did not measure" is generic (v2); scope names `apps/web-platform/infra/`. |
 | `lint-distribution-content.sh` | soleur-coupled | `knowledge-base/marketing/distribution-content/` marker lint. |
 | `lint-doppler-description-length.py` | soleur-coupled | Doppler description contract over `*.tf`. |

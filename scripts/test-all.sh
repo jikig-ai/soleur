@@ -4367,7 +4367,7 @@ _aff_runner_banner() {
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
 # #12348: +2 always-on (the advisory-id/safe-status pairing lint: unit suite + -live tree scan); re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+_MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate

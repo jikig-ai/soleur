@@ -68,8 +68,8 @@
 # That disjointness is the encryption-posture sweep's alone. The `test` sweep
 # also reaches the digest through always-on suites that read knowledge-base/
 # wholesale: scripts/generate-kb-index-live (predates #12348; the bot action
-# does not reproduce it) and, since #12348, scripts/lint-cve-safe-status,
-# which scans knowledge-base/ wholesale — but only on diffs the oracle lane
+# does not reproduce it) and, since #12348, scripts/lint-cve-safe-status-live
+# (the no-argument lint run), which scans knowledge-base/ wholesale — but only on diffs the oracle lane
 # (scripts/ci-oracle-lane.sh) does not skip. The always-running full scan is
 # the `guards-ruleset` member `cve-safe-status` (below). The credential-path
 # overlap reaches the digest via `guards-ruleset` (credential-path-guard), not

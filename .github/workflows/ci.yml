@@ -774,8 +774,8 @@ jobs:
       - name: Encryption posture — Layer A repo-sweep (ADR-140)
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
-  # ─── guards-ruleset (#12089): ONE required-context umbrella over the eight
-  # small guard jobs that each used to burn a runner slot — the
+  # ─── guards-ruleset (#12089): ONE required-context umbrella over the small
+  # guard jobs (eight at the fold; cve-safe-status joined in #12348) that each used to burn a runner slot — the
   # `lint-bot-statuses` fold precedent (#8149) applied to the required set. The
   # REQUIRED CONTEXT is this job's `name:` — `guards-ruleset` — pinned in
   # infra/github/ruleset-ci-required.tf +
@@ -913,7 +913,8 @@ jobs:
       # are exactly the PRs this lint exists for, so this member is the gate
       # that always runs. Same checkout rule as credential-path-guard: no
       # sparse-checkout, no paths filter, never `--paths`/`|| true` (the lint's
-      # file-count floor refuses a narrowed scan, but do not lean on it).
+      # file-count floor refuses a narrowed tree scan; it does not apply to
+      # --paths mode, which scans only the paths it is given).
       # Pinned by plugins/soleur/test/required-checks-canonical-parity.test.sh. ──
       - id: cve-safe-status
         if: ${{ !cancelled() }}
