@@ -830,3 +830,123 @@ PYC1
   observe c1 "$d/raw.json"
   spike_record_judged 1 "$d/verdict.txt"
 }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 6: ADR-278 controls do not regress; no secret or request body is logged. Scored per CTO R28: iron-proxy's
+# listeners yield no vend or credential from container loopback or session B (their TCP reachability is recorded,
+# not scored: they share the app container's loopback by construction), and stay unreachable from the sandbox.
+# ---------------------------------------------------------------------------------------------------------------
+arm_c6() {
+  local d="$SPIKE_WORK/c6" ra fwd seq canary
+  mkdir -p "$d" || harness_fail DRIVER "mkdir c6"
+  ra="$(cat "$SPIKE_WORK/run/sessA/state/router.port")"; fwd="$(cat "$SPIKE_WORK/run/sessA/state/forwarder.port")"
+  canary="spkcanary_$(_spike_rand 18)"; mask "$canary"
+  cat > "$d/c6.sh" <<EOS
+A=/run/spike/sessA; B=/run/spike/sessB; BUN=/run/spike-pub/sessA/bundle.pem
+acred=\$(cat \$A/secrets/router-session.cred); binj=\$(cat \$B/secrets/router-injector.cred)
+c() { curl -sS -o /dev/null --max-time 12 -w "\$1 http=%{http_code} connect=%{http_connect}\n" "\${@:2}" 2>/dev/null || true; }
+P="http://\$acred@127.0.0.1:$ra"
+# ADR-278 controls through the chain: forwarder branch (IP literals, port 80) and injector branch (inject name, port 80).
+c denyCidr --cacert \$BUN -x "\$P" https://10.0.0.1/
+c localhost --cacert \$BUN -x "\$P" https://127.0.0.1/
+c linkLocal --cacert \$BUN -x "\$P" https://169.254.169.254/
+c port80Open -x "\$P" --proxytunnel http://sse.open-web.spike.test:80/
+c port80Inject -x "\$P" --proxytunnel http://github.com:80/
+c forwarderBadToken --cacert \$BUN -x "http://x:not-the-token@127.0.0.1:$fwd" https://sse.open-web.spike.test/
+# The body canary rides a forwarder-branch POST and an injector-branch POST (refused pending); neither may be logged.
+c canaryOpen --cacert \$BUN -x "\$P" --data "$canary" https://sse.open-web.spike.test/sink
+c canaryInject --cacert \$BUN -x "\$P" -H 'content-type: application/json' --data "{\"title\":\"$canary\",\"head\":\"a\",\"base\":\"main\"}" https://api.github.com/repos/spike/alpha/pulls
+# iron-proxy's listeners from container loopback: reachability (recorded) and the vend outcome (scored).
+for port in $SPIKE_SESS_sessA_TUNNEL $((SPIKE_SESS_sessA_TUNNEL + 1)) $((SPIKE_SESS_sessA_TUNNEL + 2)) $((SPIKE_SESS_sessA_TUNNEL + 3)); do
+  (exec 3<>"/dev/tcp/127.0.0.1/\$port") 2>/dev/null && echo "reach \$port open" || echo "reach \$port closed"
+done
+c tunnelNoCred --cacert \$BUN -x "http://127.0.0.1:$SPIKE_SESS_sessA_TUNNEL" https://api.github.com/repos/spike/alpha
+c tunnelSessionCred --cacert \$BUN -x "http://\$acred@127.0.0.1:$SPIKE_SESS_sessA_TUNNEL" https://api.github.com/repos/spike/alpha
+c tunnelSessionBRouterCred --cacert \$BUN -x "http://\$binj@127.0.0.1:$SPIKE_SESS_sessA_TUNNEL" https://api.github.com/repos/spike/alpha
+c httpListenConnect --cacert \$BUN -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" https://api.github.com/repos/spike/alpha
+c httpListenAbsolute -x "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 1))" http://api.github.com/repos/spike/alpha
+c httpsListen -k --resolve "api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2)):127.0.0.1" "https://api.github.com:$((SPIKE_SESS_sessA_TUNNEL + 2))/repos/spike/alpha"
+curl -sS --max-time 8 "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/metrics" > /tmp/c6-metrics.txt 2>&1; curl -sS --max-time 8 "http://127.0.0.1:$((SPIKE_SESS_sessA_TUNNEL + 3))/" >> /tmp/c6-metrics.txt 2>&1
+echo "metrics bytes=\$(wc -c < /tmp/c6-metrics.txt) secrets=\$(for f in \$A/secrets/decoy.token \$A/secrets/router-session.cred \$A/secrets/router-injector.cred \$A/secrets/forwarder.token; do grep -cF "\$(cat \$f)" /tmp/c6-metrics.txt; done | awk '{n += \$1} END {print n + 0}')"
+rm -f /tmp/c6-metrics.txt
+EOS
+  seq="$(spike_stub_seq)"
+  docker exec -i -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" bash -s < "$d/c6.sh" > "$d/probes.out" 2>&1
+  spike_stub_since "$seq" > "$d/stub.jsonl"
+  # Unentitled session (no egress at all) and the sandbox's view of the listeners.
+  cat > "$d/steps-n.json" <<'JSON'
+[ {"id": "openWeb", "tool": "Bash", "input": {"command": "curl -sS -o /dev/null --max-time 10 -w 'code=%{http_code}' https://sse.open-web.spike.test/ 2>&1; echo; curl -sS -o /dev/null --max-time 10 -w 'code=%{http_code}' https://api.github.com/ 2>&1"}} ]
+JSON
+  spike_spec "$d/spec-n.json" sessA N "$d/steps-n.json"
+  spike_drive sessA N "$d/spec-n.json" "$d/out-n.json" || { record_verdict 6 unmeasurable "harness:DRIVER unentitled"; return; }
+  python3 -I - "$d/steps-sb.json" "$SPIKE_SESS_sessA_TUNNEL" <<'PYS'
+import json, sys
+t = int(sys.argv[2])
+cmd = "; ".join(f"(exec 3<>/dev/tcp/127.0.0.1/{p}) 2>/dev/null && echo 'sbreach {p} open' || echo 'sbreach {p} closed'" for p in range(t, t + 4))
+json.dump([{"id": "sandboxListeners", "tool": "Bash", "input": {"command": cmd}}], open(sys.argv[1], "w"))
+PYS
+  spike_spec "$d/spec-sb.json" sessA B "$d/steps-sb.json"
+  spike_drive sessA B "$d/spec-sb.json" "$d/out-sb.json" || { record_verdict 6 unmeasurable "harness:DRIVER sandbox listeners"; return; }
+  # Log grep (deepen pass): every log is non-empty and a control copy carrying the canary is found first.
+  mkdir -p "$d/logs"
+  docker exec "$SPIKE_APP_CTR" sh -c 'cd /run/spike && for s in sess*; do for f in $s/logs/*.log; do [ -f "$f" ] && { echo "=== $f"; tr -d "\000" < "$f"; }; done; done' > "$d/logs/app.log" 2>/dev/null
+  docker logs "$SPIKE_HOOK_CTR" > "$d/logs/hook.log" 2>&1
+  spike_squid_log > "$d/logs/squid.log"
+  docker logs "$SPIKE_STUB_CTR" > "$d/logs/stub-stdout.log" 2>&1
+  python3 -I - "$d" "$canary" "$SPIKE_WORK/run" > "$d/verdict.txt" <<'PYC6'
+import base64, json, os, re, sys
+d, canary, run = sys.argv[1:4]
+o, reach = {}, {}
+for line in open(f"{d}/probes.out"):
+    m = re.match(r"^(\w+) http=(\d{3}) connect=(\d{3})$", line.strip())
+    if m: o[m.group(1)] = (m.group(2), m.group(3))
+    m = re.match(r"^reach (\d+) (open|closed)$", line.strip())
+    if m: reach[m.group(1)] = m.group(2)
+    m = re.match(r"^metrics bytes=(\d+) secrets=(\S+)$", line.strip())
+    if m: o["metrics"] = (m.group(1), m.group(2))
+stub = [json.loads(l) for l in open(f"{d}/stub.jsonl") if l.strip()]
+n = json.load(open(f"{d}/out-n.json")); sb = json.load(open(f"{d}/out-sb.json"))
+ncontent = next((s.get("content") or "" for s in n.get("steps", []) if s["id"] == "openWeb"), "")
+sbcontent = next((s.get("content") or "" for s in sb.get("steps", []) if s["id"] == "sandboxListeners"), "")
+secrets = []
+for s in os.listdir(run):
+    sec = f"{run}/{s}/secrets"
+    if os.path.isdir(sec):
+        for f in ("decoy.token", "router-session.cred", "router-injector.cred", "forwarder.token"):
+            p = f"{sec}/{f}"
+            if os.path.exists(p):
+                v = open(p).read().strip()
+                secrets.append((f"{s}/{f}", v))
+                if f == "decoy.token": secrets.append((f"{s}/decoy-basic", base64.b64encode(f"x-access-token:{v}".encode()).decode()))
+logs, log_leaks, log_live = {}, {}, {}
+for f in sorted(os.listdir(f"{d}/logs")):
+    text = open(f"{d}/logs/{f}", errors="replace").read()
+    logs[f] = len(text)
+    control = text + "\n" + canary + "\n"
+    log_live[f] = len(text) > 0 and canary in control
+    hits = [k for k, v in secrets if len(v) >= 8 and v in text] + (["body-canary"] if canary in text else [])
+    if hits: log_leaks[f] = hits
+no_real_token = not any(r["auth_class"] == "real-decoy" for r in stub)
+checks = {
+  "deny-CIDR, localhost and link-local targets refused at squid": all(o.get(k, ("", ""))[1] == "403" for k in ("denyCidr", "localhost", "linkLocal")),
+  "port-80 targets refused on both router branches": o.get("port80Open", ("", ""))[1] == "403" and o.get("port80Inject", ("", ""))[1] == "403",
+  "the forwarder refuses a bad token (407)": o.get("forwarderBadToken", ("", ""))[1] == "407",
+  "an unentitled session has no route": "code=000" in ncontent and "code=200" not in ncontent,
+  "the sandbox cannot reach any iron-proxy listener": sbcontent.count("closed") == 4 and "open" not in sbcontent,
+  "tunnel_listen refuses no credential, the session credential and session B's router credential (407)": all(o.get(k, ("", ""))[1] == "407" for k in ("tunnelNoCred", "tunnelSessionCred", "tunnelSessionBRouterCred")),
+  "http_listen and https_listen yield no vend (R28 tunnel guard)": o.get("httpListenAbsolute", ("", ""))[0] in ("403", "502", "000") and o.get("httpListenConnect", ("", ""))[1] in ("403", "407") and o.get("httpsListen", ("", ""))[0] == "403",
+  "no real token reached the stub from any listener probe": no_real_token,
+  "metrics carry no secret": o.get("metrics", ("0", "err"))[1] == "0",
+  "every log is non-empty and its control copy finds the canary": all(log_live.values()) and len(log_live) >= 4,
+  "no log carries a secret or the body canary": not log_leaks,
+}
+json.dump({"probes": o, "listener_reachability_recorded": reach, "unentitled": ncontent, "sandbox_listeners": sbcontent,
+           "log_sizes": logs, "log_leaks": log_leaks, "checks": checks, "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"},
+          open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC6
+  observe c6 "$d/raw.json"
+  spike_record_judged 6 "$d/verdict.txt"
+}

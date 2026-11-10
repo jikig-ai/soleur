@@ -7,7 +7,7 @@
 // denyReadExtra })` and its env with the production `buildAgentEnv(..., { egressProxy })`, pointed at the session's
 // connect-router instead of the forwarder (the router takes the forwarder's place in front of the sandbox). Arm "A"
 // keeps that env as is; arm "B" removes the four inject hosts from NO_PROXY (CTO R11; a production change #11637
-// owns). The CA bundle variables are added on top (SSL_CERT_FILE, GIT_SSL_CAINFO, NODE_EXTRA_CA_CERTS).
+// owns); arm "N" is an unentitled session (no egressProxy, no allowWebEgress, WebFetch disallowed as production does). The CA bundle variables are added on top (SSL_CERT_FILE, GIT_SSL_CAINFO, NODE_EXTRA_CA_CERTS).
 //
 // The model is kept out of the assertion path: an in-process stub Messages API plays the spec's `script` (one
 // scripted tool call per turn: Bash, Read or WebFetch) and captures each tool result from the next request.
@@ -38,7 +38,7 @@ import { patternEscapesWorkspace } from "/app/server/tool-pattern-checker.ts";
 type Step = { id: string; tool: "Bash" | "Read" | "WebFetch"; input: Record<string, unknown> };
 type Spec = {
   workspace: string; home: string; routerPort: number; routerCredentialFile: string; caBundle: string;
-  arm: "A" | "B"; denyReadExtra: string[]; script: Step[]; timeoutMs?: number;
+  arm: "A" | "B" | "N"; denyReadExtra: string[]; script: Step[]; timeoutMs?: number;
   // transform: "pem-body" declares the longest base64 line of a PEM (a leak rarely carries the armour lines);
   // "basic-b64" declares base64("x-access-token:" + value), the form git carries.
   declaredFiles: { id: string; file: string; transform?: "pem-body" | "basic-b64" }[];
@@ -124,12 +124,14 @@ async function main() {
   process.env.HOME = spec.home;
   if (spec.planted) writeFileSync(spec.planted.path, `${spec.planted.value}\n`, { mode: 0o600 });
 
-  const sandbox = buildAgentSandboxConfig(spec.workspace, { allowWebEgress: true, denyReadExtra: spec.denyReadExtra });
+  // Arm "N" is an UNENTITLED session (criterion 6): no egress proxy and no web-egress sandbox posture.
+  const entitled = spec.arm !== "N";
+  const sandbox = buildAgentSandboxConfig(spec.workspace, { allowWebEgress: entitled, denyReadExtra: spec.denyReadExtra });
   const routerPw = readFileSync(spec.routerCredentialFile, "utf8").trim().split(":").slice(1).join(":");
   // buildAgentEnv only exports CLAUDE_PLUGIN_ROOT and requires it under /app/; the spike loads no plugin from it.
   const pluginDir = "/app/test/infra/egress-injector-spike";
   const base = buildAgentEnv({ value: "decoy-api-key-sentinel", scheme: "api_key" }, {}, {
-    egressProxy: { workspaceId: "session", token: routerPw, port: spec.routerPort }, pluginPath: pluginDir,
+    ...(entitled ? { egressProxy: { workspaceId: "session", token: routerPw, port: spec.routerPort } } : {}), pluginPath: pluginDir,
   });
   const env: Record<string, string> = { ...base };
   if (spec.arm === "B") {
@@ -153,7 +155,7 @@ async function main() {
       prompt: "run the scripted steps",
       options: {
         abortController: controller, cwd: spec.workspace, env, sandbox,
-        permissionMode: "default", disallowedTools: ["WebSearch"],
+        permissionMode: "default", disallowedTools: entitled ? ["WebSearch"] : ["WebSearch", "WebFetch"],
         canUseTool: async (name: string, input: Record<string, unknown>) => {
           if (isFileTool(name) && (pathFieldsEscape(input, (p: string) => isPathInWorkspace(p, spec.workspace)) || patternEscapesWorkspace(name, input))) {
             return { behavior: "deny", message: "Access denied: outside workspace" };
