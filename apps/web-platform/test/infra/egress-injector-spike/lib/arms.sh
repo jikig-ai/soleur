@@ -9,8 +9,8 @@
 #   spike_sign_in <label>              -> writes $SPIKE_WORK/seed/<label>.jwt (the owner's access token)
 #   spike_drive <session> <arm> <spec json file on host> <out file>
 #                                       runs probes/sdk-egress-driver.mts in the app container for that session
-#   spike_stub_since <seq>             -> prints stub records after <seq> (JSON lines)
-#   spike_stub_seq                     -> prints the last stub record seq
+#   spike_stub_since <offset>          -> prints stub records after line <offset> (JSON lines)
+#   spike_stub_seq                     -> prints the current record count (a window start)
 
 spike_seed_init() {
   mkdir -p "$SPIKE_WORK/seed" || harness_fail SEED "mkdir"
@@ -78,19 +78,14 @@ spike_drive() {
   sed -n 's/^SDK_EGRESS_RESULT //p' "$SPIKE_WORK/drive-$sess-$arm.out" | tail -1 > "$outf"
   [[ -s "$outf" ]] || { echo "driver $sess/$arm printed no result: $(grep -v SENTRY "$SPIKE_WORK/drive-$sess-$arm.err" | tail -2 | tr '\n' ' ' | head -c 300)"; return 1; }
   # A driver that failed reports {"error": ...}; that is a harness failure, never a result with zero steps.
-  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(1 if d.get("error") or not d.get("steps") else 0)' "$outf" \
+  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(1 if d.get("error") or not (d.get("steps") or "streaming" in d) else 0)' "$outf" \
     || { echo "driver $sess/$arm failed: $(head -c 300 "$outf")"; return 1; }
 }
 
-spike_stub_seq() { python3 -I -c 'import json, sys
-n = 0
-for l in open(sys.argv[1]):
-    if l.strip(): n = max(n, json.loads(l)["seq"])
-print(n)' "$SPIKE_STUB_RECORDS"; }
-
-spike_stub_since() { python3 -I -c 'import json, sys
-for l in open(sys.argv[1]):
-    if l.strip() and json.loads(l)["seq"] > int(sys.argv[2]): print(l.strip())' "$SPIKE_STUB_RECORDS" "$1"; }
+# Stub windows are LINE offsets in the record file, not the stub's in-memory sequence number (which a stub restart
+# resets, measured 2026-11-10: records after a restart fell below the window start).
+spike_stub_seq() { if [[ -f "$SPIKE_STUB_RECORDS" ]]; then wc -l < "$SPIKE_STUB_RECORDS" | tr -d ' '; else echo 0; fi; }
+spike_stub_since() { tail -n +"$(( $1 + 1 ))" "$SPIKE_STUB_RECORDS" 2>/dev/null | grep -v '^$' || true; }
 
 # spike_spec <out file> <session> <arm A|B> <steps json file> [<extras json file>]: a driver spec for that session.
 # The workspace is a fresh synthetic directory under the app user's HOME (never the checkout); the sandbox masks
@@ -194,51 +189,151 @@ spike_record_judged() {
   esac
 }
 
+# The CLI's own streaming leg (CTO R30 as amended by R33), shared by criteria 2 and 8. Runs the driver's streaming
+# mode on session A and judges the PATH from the stub's record of POST /v1/messages: its peer is either the app
+# container's address on the stub network (direct) or squid's (through the router's forwarder branch). A harness SSE
+# through the router in the same window proves the router log was being written. Writes <dir>/stream.json:
+# {deltas, route: direct|forwarder|injector|none, router_alive, peers, checks...}.
+spike_claude_stream() { # <dir>
+  local d="$1" rseq seq appip sqip
+  appip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SPIKE_NET_EXT\").IPAddress}}" "$SPIKE_APP_CTR" 2>/dev/null)"
+  sqip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SPIKE_NET_EXT\").IPAddress}}" "$SPIKE_SQUID_CTR" 2>/dev/null)"
+  rseq="$(docker exec "$SPIKE_APP_CTR" sh -c 'wc -l < /run/spike/sessA/logs/router.log' 2>/dev/null)"; [[ "$rseq" =~ ^[0-9]+$ ]] || rseq=0
+  seq="$(spike_stub_seq)"
+  printf '%s\n' 'curl -sS -N --max-time 15 --cacert "$CA" -x "$P" https://sse.open-web.spike.test/sse 2>/dev/null | grep -c "^event: tick"' > "$d/liveness.sh"
+  spike_cx sessA "$d/liveness.sh" "$d/liveness.out"
+  printf '[]\n' > "$d/stream-steps.json"; printf '{"streaming": true}\n' > "$d/stream-extras.json"
+  spike_spec "$d/spec-stream.json" sessA B "$d/stream-steps.json" "$d/stream-extras.json"
+  spike_drive sessA B "$d/spec-stream.json" "$d/out-stream.json" || printf '{"error": "driver"}\n' > "$d/out-stream.json"
+  docker exec "$SPIKE_APP_CTR" sh -c "tail -n +$((rseq + 1)) /run/spike/sessA/logs/router.log" > "$d/router-stream.log" 2>/dev/null
+  spike_stub_since "$seq" > "$d/stub-stream.jsonl"
+  python3 -I - "$d" "$appip" "$sqip" > "$d/stream.json" <<'PYST'
+import json, sys
+d, appip, sqip = sys.argv[1:4]
+o = json.load(open(f"{d}/out-stream.json"))
+deltas = (o.get("streaming") or {}).get("deltas")
+router = open(f"{d}/router-stream.log").read()
+recs = [json.loads(l) for l in open(f"{d}/stub-stream.jsonl") if l.strip()]
+msgs = [r for r in recs if r["host"] == "api.anthropic.com" and r["method"] == "POST" and r["path"].startswith("/v1/messages")]
+peers = sorted({r.get("peer") for r in msgs})
+side = sorted({f'{r["path"]} {r.get("peer")}' for r in recs if r["host"] == "api.anthropic.com" and r["path"].startswith("/api/claude_code/")})
+alive = "branch=forwarder host=sse.open-web.spike.test" in router
+via_router = "host=api.anthropic.com" in router
+if "branch=injector host=api.anthropic.com" in router: route = "injector"
+elif msgs and peers == [appip] and not via_router: route = "direct"
+elif msgs and peers == [sqip] and "branch=forwarder host=api.anthropic.com" in router: route = "forwarder"
+else: route = "none"
+ok = deltas == 50 and alive and route in ("direct", "forwarder")
+json.dump({"deltas": deltas, "route": route, "router_alive": alive, "message_peers": peers, "app_ip": appip, "squid_ip": sqip,
+           "side_calls": side, "liveness_events": open(f"{d}/liveness.out").read().strip(),
+           # The stub answers only on its own TLS listener with its own leaf, so a recorded POST /v1/messages means the
+           # CLI's TLS peer was the stub's own certificate (the CLI printed no TLS line on stderr: stderr_tls below).
+           "stub_own_certificate": bool(msgs), "stderr_tls": (o.get("streaming") or {}).get("stderrTls"), "ok": ok}, sys.stdout)
+PYST
+}
+
 # Criterion 2 (transport), arms A and B on session A. Arm A is the exact buildAgentEnv output (records where GitHub
-# traffic goes); arm B removes the inject hosts from NO_PROXY (#11637's change). Recorded raw for every client; the
-# verdict waits on the two clients not built yet (git push with a pre-approved row, and claude streaming).
+# traffic goes); arm B removes the inject hosts from NO_PROXY (#11637's change). Each client reads its own REST path,
+# so the stub record attributes every vend to one client. Scored in arm B: git clone and fetch, gh REST and GraphQL,
+# Node fetch with NODE_USE_ENV_PROXY=1 (CTO R29; the default env is recorded), curl, the open-web SSE on the
+# router's forwarder branch, a gated sandboxed push (CTO R32), and the CLI's own streaming (CTO R30 as amended by R33).
 arm_c2() {
-  local d="$SPIKE_WORK/c2" arm seq
+  local d="$SPIKE_WORK/c2" arm seq rseq
   mkdir -p "$d" || harness_fail DRIVER "mkdir c2"
   cat > "$d/steps.json" <<'JSON'
 [
  {"id": "clone", "tool": "Bash", "input": {"command": "git clone -q https://github.com/spike/alpha.git @WS@/c 2>&1 | tail -1; test -d @WS@/c/.git && echo cloned=yes || echo cloned=no"}},
  {"id": "fetch", "tool": "Bash", "input": {"command": "git -C @WS@/c fetch -q origin 2>&1 | tail -1; echo fetch_rc=${PIPESTATUS[0]}"}},
- {"id": "ghRest", "tool": "Bash", "input": {"command": "GH_TOKEN=spike-placeholder gh api repos/spike/alpha --jq .full_name 2>&1 | tail -1"}},
+ {"id": "ghRest", "tool": "Bash", "input": {"command": "GH_TOKEN=spike-placeholder gh api repos/spike/alpha/c2-gh --jq .full_name 2>&1 | tail -1"}},
  {"id": "ghGraphql", "tool": "Bash", "input": {"command": "GH_TOKEN=spike-placeholder gh api graphql -f query='query Q { viewer { login } }' 2>&1 | tail -1"}},
- {"id": "nodeFetch", "tool": "Bash", "input": {"command": "node -e 'fetch(\"https://api.github.com/repos/spike/alpha\").then(r=>console.log(\"status=\"+r.status)).catch(e=>console.log(\"err=\"+(e.cause?.code||e.message)))' 2>/dev/null"}},
- {"id": "nodeFetchEnvProxy", "tool": "Bash", "input": {"command": "NODE_USE_ENV_PROXY=1 node -e 'fetch(\"https://api.github.com/repos/spike/alpha\").then(r=>console.log(\"status=\"+r.status)).catch(e=>console.log(\"err=\"+(e.cause?.code||e.message)))' 2>/dev/null"}},
- {"id": "curlRest", "tool": "Bash", "input": {"command": "curl -sS -o /dev/null -w 'code=%{http_code}' https://api.github.com/repos/spike/alpha 2>&1"}},
- {"id": "openSse", "tool": "Bash", "input": {"command": "echo events=$(curl -sS -N --max-time 20 https://sse.open-web.spike.test/sse 2>/dev/null | grep -c '^event: tick'); curl -sS -o /dev/null -w 'issuer_verify=%{ssl_verify_result}' https://sse.open-web.spike.test/x 2>&1"}},
+ {"id": "nodeFetch", "tool": "Bash", "input": {"command": "node -e 'fetch(\"https://api.github.com/repos/spike/alpha/c2-node-default\").then(r=>console.log(\"status=\"+r.status)).catch(e=>console.log(\"err=\"+(e.cause?.code||e.message)))' 2>/dev/null"}},
+ {"id": "nodeFetchEnvProxy", "tool": "Bash", "input": {"command": "NODE_USE_ENV_PROXY=1 node -e 'fetch(\"https://api.github.com/repos/spike/alpha/c2-node-envproxy\").then(r=>console.log(\"status=\"+r.status)).catch(e=>console.log(\"err=\"+(e.cause?.code||e.message)))' 2>/dev/null"}},
+ {"id": "curlRest", "tool": "Bash", "input": {"command": "curl -sS -o /dev/null -w 'code=%{http_code}' https://api.github.com/repos/spike/alpha/c2-curl 2>&1"}},
+ {"id": "openSse", "tool": "Bash", "input": {"command": "echo events=$(curl -sS -N --max-time 20 https://sse.open-web.spike.test/sse 2>/dev/null | grep -c '^event: tick')"}},
  {"id": "tlsLibs", "tool": "Bash", "input": {"command": "curl --version | head -1; git version; ldd $(git --exec-path)/git-remote-https 2>/dev/null | grep -oE 'lib(gnutls|ssl|curl)[^ ]*' | sort -u | tr '\\n' ' '"}}
 ]
 JSON
+  rlines() { docker exec "$SPIKE_APP_CTR" sh -c 'wc -l < /run/spike/sessA/logs/router.log' 2>/dev/null; }
   for arm in A B; do
-    seq="$(spike_stub_seq)"
-    local rseq
-    rseq="$(docker exec "$SPIKE_APP_CTR" sh -c 'wc -l < /run/spike/sessA/logs/router.log' 2>/dev/null)"
-    [[ "$rseq" =~ ^[0-9]+$ ]] || rseq=0
+    seq="$(spike_stub_seq)"; rseq="$(rlines)"; [[ "$rseq" =~ ^[0-9]+$ ]] || rseq=0
     spike_spec "$d/spec$arm.json" sessA "$arm" "$d/steps.json"
     spike_drive sessA "$arm" "$d/spec$arm.json" "$d/out$arm.json" || { record_verdict 2 unmeasurable "harness:DRIVER arm $arm"; return; }
     spike_stub_since "$seq" > "$d/stub$arm.jsonl"
     docker exec "$SPIKE_APP_CTR" sh -c "tail -n +$((rseq + 1)) /run/spike/sessA/logs/router.log" > "$d/router$arm.log" 2>/dev/null
   done
-  python3 -I - "$d" <<'PYC2' > "$d/summary.json" || echo "WARN c2 summary failed"
+
+  # CTO R32: one gated push through the sandbox. Run 1 (no row): refused pending, one pending row. The owner approves
+  # that row (create_approval_request then decide_approval, the plan's seeding path). Run 2: the same push vends and
+  # the row moves approved -> consumed. Both runs share one workspace, so run 2 pushes the same commit.
+  local pw=/home/soleur/spike-c2push/ws rows0 id approve st seq1 seq2
+  printf '{"workspace": "%s"}\n' "$pw" > "$d/push-extras.json"
+  cat > "$d/push1.json" <<JSON
+[ {"id": "push1", "tool": "Bash", "input": {"command": "git clone -q https://github.com/spike/alpha.git $pw/p 2>&1 | tail -1; cd $pw/p && git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m 'c2 sandboxed push' && git push -q origin HEAD:main 2>&1 | tail -3; echo push_rc=\${PIPESTATUS[0]}"}} ]
+JSON
+  cat > "$d/push2.json" <<JSON
+[ {"id": "push2", "tool": "Bash", "input": {"command": "cd $pw/p && git push -q origin HEAD:main 2>&1 | tail -2; echo push_rc=\${PIPESTATUS[0]}"}} ]
+JSON
+  rows0="$(spike_rows "$CONV_A")"; seq1="$(spike_stub_seq)"
+  spike_spec "$d/spec-push1.json" sessA B "$d/push1.json" "$d/push-extras.json"
+  spike_drive sessA B "$d/spec-push1.json" "$d/out-push1.json" || { record_verdict 2 unmeasurable "harness:DRIVER push 1"; return; }
+  spike_stub_since "$seq1" > "$d/stub-push1.jsonl"
+  local rows1; rows1="$(spike_rows "$CONV_A")"
+  id="$(spike_latest_pending "$CONV_A")"; approve="$(spike_decide ownerA "$id" approve)"
+  local st_approved; st_approved="$(spike_row_status "$id")"
+  seq2="$(spike_stub_seq)"
+  spike_spec "$d/spec-push2.json" sessA B "$d/push2.json" "$d/push-extras.json"
+  spike_drive sessA B "$d/spec-push2.json" "$d/out-push2.json" || { record_verdict 2 unmeasurable "harness:DRIVER push 2"; return; }
+  spike_stub_since "$seq2" > "$d/stub-push2.jsonl"
+  st="$(spike_row_status "$id")"
+  printf '{"rows_before": "%s", "rows_after_push1": "%s", "approve_http": "%s", "status_after_approve": "%s", "status_after_push2": "%s", "row": "%s"}\n' \
+    "$rows0" "$rows1" "$approve" "$st_approved" "$st" "${id:+present}" > "$d/push-rows.json"
+
+  # The CLI's own streaming (CTO R30 as amended by R33).
+  spike_claude_stream "$d"
+
+  python3 -I - "$d" > "$d/verdict.txt" <<'PYC2'
 import json, sys
 d = sys.argv[1]
-out = {}
+J = lambda f: json.load(open(f"{d}/{f}"))
+L = lambda f: [json.loads(l) for l in open(f"{d}/{f}") if l.strip()]
+summary = {}
 for arm in ("A", "B"):
-    o = json.load(open(f"{d}/out{arm}.json"))
-    recs = [json.loads(l) for l in open(f"{d}/stub{arm}.jsonl") if l.strip()]
-    out[arm] = {
-        "env": o.get("env"), "steps": {s["id"]: s.get("content") for s in o.get("steps", [])},
-        "stub": sorted({f'{r["host"]} {r["method"]} {r["path"]} {r["auth_class"]} {r.get("auth_scheme")}' for r in recs}),
-        "router": sorted({" ".join(w for w in l.split() if w.startswith(("branch=", "host=", "status="))) for l in open(f"{d}/router{arm}.log") if l.strip()}),
-    }
-print(json.dumps(out))
+    o = J(f"out{arm}.json")
+    recs = L(f"stub{arm}.jsonl")
+    summary[arm] = {"env": o.get("env"), "steps": {s["id"]: s.get("content") for s in o.get("steps", [])},
+                    "stub": sorted({f'{r["host"]} {r["method"]} {r["path"]} {r["auth_class"]} {r.get("auth_scheme")} {r.get("decoy_id")}' for r in recs}),
+                    "router": sorted({" ".join(w for w in l.split() if w.startswith(("branch=", "host=", "status="))) for l in open(f"{d}/router{arm}.log") if l.strip()})}
+B, recsB = summary["B"], L("stubB.jsonl")
+step = lambda k: B["steps"].get(k) or ""
+vend = lambda host, path, method="GET": any(r["host"] == host and r["path"].startswith(path) and r["method"] == method and r["auth_class"] == "real-decoy" and r["decoy_id"] == "sessA" for r in recsB)
+p1, p2, rows = J("out-push1.json"), J("out-push2.json"), J("push-rows.json")
+p1c = next((s.get("content") or "" for s in p1.get("steps", []) if s["id"] == "push1"), "")
+p2c = next((s.get("content") or "" for s in p2.get("steps", []) if s["id"] == "push2"), "")
+sp1, sp2 = L("stub-push1.jsonl"), L("stub-push2.jsonl")
+rp = lambda recs: [r for r in recs if r["path"].endswith("/git-receive-pack") and r["method"] == "POST" and r["auth_class"] == "real-decoy"]
+pend = lambda s: int(dict(x.split(":") for x in s.split()).get("pending", 0)) if s.strip() else 0
+stream = J("stream.json")
+checks = {
+  "git clone and fetch through the injector": "cloned=yes" in step("clone") and "fetch_rc=0" in step("fetch") and vend("github.com", "/spike/alpha.git/git-upload-pack", "POST"),
+  "gh REST through the injector (placeholder token replaced)": "spike/alpha" in step("ghRest") and vend("api.github.com", "/repos/spike/alpha/c2-gh"),
+  "gh GraphQL through the injector": '"stub":true' in step("ghGraphql") and vend("api.github.com", "/graphql", "POST"),
+  "Node fetch with NODE_USE_ENV_PROXY=1 through the injector (R29)": "status=200" in step("nodeFetchEnvProxy") and vend("api.github.com", "/repos/spike/alpha/c2-node-envproxy"),
+  "curl through the injector": "code=200" in step("curlRest") and vend("api.github.com", "/repos/spike/alpha/c2-curl"),
+  "open-web SSE untouched on the router's forwarder branch (50/50)": "events=50" in step("openSse") and any("branch=forwarder host=sse.open-web.spike.test" in r for r in B["router"]) and not any("branch=injector host=sse" in r for r in B["router"]),
+  "sandboxed push with no row: refused pending, one pending row, no real token (R32)": "push_rc=0" not in p1c and pend(rows["rows_after_push1"]) == pend(rows["rows_before"]) + 1 and not rp(sp1),
+  "sandboxed push after approval: vended, row approved -> consumed (R32)": rows["approve_http"] == "200" and rows["status_after_approve"] == "approved" and "push_rc=0" in p2c and rows["status_after_push2"] == "consumed" and len(rp(sp2)) == 1,
+}
+checks["claude CLI streaming 50/50 on its own path, never the injector, router log live (R30/R33)"] = stream.get("ok") is True
+summary["push"] = {"rows": rows, "push1": p1c[-300:], "push2": p2c[-300:], "pending_message_reached_agent_R15": p1c[-300:]}
+summary["claude_streaming"] = stream
+summary["checks"] = checks
+json.dump(summary, open(f"{d}/summary.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print(("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed)) + f" (claude route: {stream.get('route')})")
 PYC2
   observe c2 "$d/summary.json"
-  record_verdict 2 unmeasurable "arm-not-implemented:git-push-with-seeded-approval-and-claude-streaming (raw client outcomes recorded under observations c2)"
+  spike_record_judged 2 "$d/verdict.txt"
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -712,11 +807,17 @@ arm_c8() {
   docker exec "$SPIKE_APP_CTR" sh -c 'kill "$(cat /run/spike/sessA/state/iron.pid)"' >/dev/null 2>&1
   window ironKilled "$(spike_stub_seq)" 0; _c8_clients ironKilled sessA "$d/ironKilled.out"
   cp "$SPIKE_STUB_RECORDS" "$d/stub-all.jsonl"
-  python3 -I - "$d" "${kong:+present}" > "$d/verdict.txt" <<'PYC8'
+  # CTO R30/R33: the CLI's own streaming, after confirming iron-proxy is really gone.
+  local iron_dead=no
+  docker exec "$SPIKE_APP_CTR" sh -c 'kill -0 "$(cat /run/spike/sessA/state/iron.pid)"' >/dev/null 2>&1 || iron_dead=yes
+  mkdir -p "$d/stream" && spike_claude_stream "$d/stream"
+  python3 -I - "$d" "${kong:+present}" "$iron_dead" > "$d/verdict.txt" <<'PYC8'
 import json, sys
-d, kong = sys.argv[1], sys.argv[2]
+d, kong, iron_dead = sys.argv[1], sys.argv[2], sys.argv[3]
+stream = json.load(open(f"{d}/stream/stream.json"))
 wins = [json.loads(l) for l in open(f"{d}/windows.jsonl")]
-stub = [json.loads(l) for l in open(f"{d}/stub-all.jsonl") if l.strip()]
+# Windows are line offsets (spike_stub_seq), so each record is placed by its line number, not its seq field.
+stub = [dict(json.loads(l), line=i) for i, l in enumerate(open(f"{d}/stub-all.jsonl"), 1) if l.strip()]
 res = {}
 for w in wins:
     for line in open(f"{d}/{w['label']}.out"):
@@ -726,7 +827,7 @@ for w in wins:
 def real_token_in(label):
     i = [w["label"] for w in wins].index(label)
     lo, hi = wins[i]["seq"], (wins[i + 1]["seq"] if i + 1 < len(wins) else 10**9)
-    return [r for r in stub if lo < r["seq"] <= hi and r["auth_class"] == "real-decoy"]
+    return [r for r in stub if lo < r["line"] <= hi and r["auth_class"] == "real-decoy"]
 inject = ("gitPush", "curlPost", "ghPost", "curlGet")
 fails_fast = lambda lab: all(res.get((lab, c), {}).get("rc", 0) != 0 and res.get((lab, c), {}).get("elapsed", 99) <= 10 for c in inject)
 writes = ("gitPush", "curlPost", "ghPost")
@@ -741,9 +842,11 @@ checks = {
   "killed hook: every inject-host client exits non-zero within 10 s, no real token, iron-proxy's audit names the failed call": fails_fast("hookKilled") and not real_token_in("hookKilled") and iron_errors >= 1,
   "killed router: all of the session's egress fails": all(res.get(("routerKilled", c), {}).get("rc", 0) != 0 for c in inject + ("sse",)),
   "killed iron-proxy: inject-host clients exit non-zero within 10 s, no real token, the forwarder branch still streams": fails_fast("ironKilled") and not real_token_in("ironKilled") and res.get(("ironKilled", "sse"), {}).get("rc") == 0,
+  "killed iron-proxy: claude streaming continues 50/50 on its own path (R30/R33)": iron_dead == "yes" and stream.get("ok") is True,
 }
 json.dump({"results": {f"{a}.{b}": v for (a, b), v in res.items()}, "hook_timeouts": hook_timeouts, "iron_hook_errors": iron_errors,
-           "frozen_client_wait_recorded_not_scored": frozen_wait, "checks": checks}, open(f"{d}/raw.json", "w"))
+           "frozen_client_wait_recorded_not_scored": frozen_wait, "claude_streaming_after_iron_killed": stream,
+           "iron_proxy_dead": iron_dead, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
 print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))

@@ -9,7 +9,8 @@
 //                        the suite creates; push is enabled per repository (http.receivepack)
 //   api.github.com       a REST and GraphQL stub (fixed JSON; no real content)
 //   uploads/codeload     a fixed small body
-//   api.anthropic.com    GET /sse streams 50 server-sent events; GET /api/web/domain_info answers WebFetch's preflight
+//   api.anthropic.com    GET /sse streams 50 server-sent events; GET /api/web/domain_info answers WebFetch's preflight;
+//                        POST /v1/messages streams one text message of 50 deltas (CTO R30: the CLI's own API path)
 //   sse.open-web.spike.test  GET /sse streams 50 events: the open-web SSE for criterion 2 (not in NO_PROXY)
 //
 // Every request appends one JSON line to the record file: host, method, path (no query values), the Authorization
@@ -125,6 +126,38 @@ function sse(res) {
   res.on("close", () => clearInterval(t));
 }
 
+export const STREAM_DELTAS = 50;
+
+function anthropicMessages(req, res) {
+  let raw = "";
+  req.on("data", (c) => { raw += c; if (raw.length > 1 << 20) req.destroy(); });
+  req.on("end", () => {
+    let j = {};
+    try { j = JSON.parse(raw || "{}"); } catch { /* answer anyway */ }
+    const usage = { input_tokens: 1, output_tokens: STREAM_DELTAS };
+    if (!j.stream) {
+      return json(res, 200, { id: "msg_stub", type: "message", role: "assistant", model: j.model ?? "stub", content: [{ type: "text", text: "x" }], stop_reason: "end_turn", usage });
+    }
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    const ev = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+    ev("message_start", { type: "message_start", message: { id: "msg_stub", type: "message", role: "assistant", model: j.model ?? "stub", content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } } });
+    ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    let i = 0;
+    const t = setInterval(() => {
+      i += 1;
+      ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `d${i} ` } });
+      if (i >= STREAM_DELTAS) {
+        clearInterval(t);
+        ev("content_block_stop", { type: "content_block_stop", index: 0 });
+        ev("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: STREAM_DELTAS } });
+        ev("message_stop", { type: "message_stop" });
+        res.end();
+      }
+    }, 10);
+    res.on("close", () => clearInterval(t));
+  });
+}
+
 export function createStub(cfg) {
   const decoys = (cfg.decoys ?? []).map((d) => ({ id: d.id, value: d.value ?? readFileSync(d.file, "utf8").trim() }));
   let seq = 0;
@@ -140,6 +173,8 @@ export function createStub(cfg) {
       seq: ++seq, ts: new Date().toISOString(), host, method: req.method, path: url.pathname,
       query_keys: [...url.searchParams.keys()], auth_class: a.cls, auth_count: a.count, decoy_id: a.decoyId, auth_scheme: a.scheme ?? null,
       idempotency_key: req.headers["idempotency-key"] !== undefined, sni: req.socket.servername ?? null,
+      // CTO R33: which network hop delivered an api.anthropic.com request (the app container directly, or squid).
+      ...(host === "api.anthropic.com" ? { peer: String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "") } : {}),
     };
     appendFileSync(cfg.recordFile, JSON.stringify(rec) + "\n");
     if (host === "api.anthropic.com") {
@@ -147,6 +182,9 @@ export function createStub(cfg) {
       // The CLI's WebFetch domain-safety preflight (measured in the pinned binary: it allows on `can_fetch === true`).
       // Production reaches the real endpoint directly (api.anthropic.com is in NO_PROXY); the stub answers it here.
       if (url.pathname === "/api/web/domain_info") return json(res, 200, { domain: url.searchParams.get("domain") ?? "", can_fetch: true });
+      // CTO R30: the CLI's own Messages API traffic under production's env. One streamed text message of 50 deltas.
+      // The x-api-key value is never logged (the record carries the Authorization class only, which this is not).
+      if (url.pathname.startsWith("/v1/messages") && req.method === "POST") return anthropicMessages(req, res);
       return json(res, 404, { message: "Not Found" });
     }
     // The open-web streaming destination for criterion 2: a non-inject name that is NOT in production NO_PROXY, so a

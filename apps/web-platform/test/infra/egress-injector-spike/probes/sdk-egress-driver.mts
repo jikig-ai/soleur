@@ -47,6 +47,10 @@ type Spec = {
   // Files a sandboxed step wrote with everything it observed; scanned IN FULL after the run (tool output reaching
   // the model is truncated, so a scan of tool results alone would silently drop coverage; Guard 1 row 3).
   scanFiles?: string[];
+  // CTO R30: the CLI's OWN Messages API traffic under production's env. No in-process stub and no
+  // ANTHROPIC_BASE_URL, so the CLI reaches api.anthropic.com however production's env sends it; one tool-less query,
+  // counting the streamed text deltas.
+  streaming?: boolean;
 };
 
 const INJECT_HOSTS = ["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"];
@@ -141,9 +145,15 @@ async function main() {
   Object.assign(env, { SSL_CERT_FILE: spec.caBundle, GIT_SSL_CAINFO: spec.caBundle, NODE_EXTRA_CA_CERTS: spec.caBundle, CLAUDE_CONFIG_DIR: cfgDir });
 
   const results = new Map<string, { isError: boolean; content: string }>();
-  const server = startStub(spec.script, results);
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const server = spec.streaming ? null : startStub(spec.script, results);
+  if (server) {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  } else {
+    delete env.ANTHROPIC_BASE_URL;
+  }
+  let deltas = 0;
+  const stderrTls: string[] = [];
 
   const require = createRequire("/app/package.json");
   const { query } = await import(require.resolve("@anthropic-ai/claude-agent-sdk"));
@@ -162,16 +172,20 @@ async function main() {
           }
           return { behavior: "allow", updatedInput: input };
         },
-        maxTurns: spec.script.length + 2, model: "claude-haiku-5-5", settingSources: [],
+        maxTurns: spec.streaming ? 1 : spec.script.length + 2, model: "claude-haiku-5-5", settingSources: [],
+        includePartialMessages: true,
+        stderr: (line: string) => { if (/certif|NODE_EXTRA_CA|tls|ssl/i.test(line) && stderrTls.length < 20) stderrTls.push(redact(line).text.slice(0, 200)); },
       },
     });
-    for await (const _m of q) { /* results are captured at the stub */ }
+    for await (const m of q as AsyncIterable<any>) {
+      if (m?.type === "stream_event" && m.event?.type === "content_block_delta") deltas += 1;
+    }
   } catch (e) {
     thrown = String(e).slice(0, 300);
   } finally {
     clearTimeout(timer);
     controller.abort();
-    server.close();
+    server?.close();
   }
   const steps: any[] = spec.script.map((s) => {
     const r = results.get(`toolu_${s.id}`);
@@ -187,7 +201,7 @@ async function main() {
     steps.push({ id: `scan:${f}`, tool: "Bash", isError: !readable, content: `bytes=${Buffer.byteLength(text)} readable=${readable}`, hits });
   }
   const envSummary = { noProxy: env.NO_PROXY, proxyVars: ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].filter((k) => env[k]) };
-  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps });
+  out({ arm: spec.arm, env: envSummary, thrown: redact(thrown).text, steps, ...(spec.streaming ? { streaming: { deltas, stderrTls } } : {}) });
   process.exit(0);
 }
 
