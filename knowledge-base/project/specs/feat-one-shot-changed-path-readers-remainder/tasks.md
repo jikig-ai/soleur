@@ -47,5 +47,5 @@ Plan: `knowledge-base/project/plans/2026-11-09-fix-convert-remaining-changed-pat
 
 - [x] 5.1 Targeted single-suite local runs
 - [x] 5.2 Meta-guards: guard-vacuity-floor, fixture-relative-assert, lint-trap-tempfile-ownership, lint-shell-capture-exit (baseline), test-affected-kb-consumers, grep-q-pipe-guard, battery-tag-authorship, vitest plugin-root-anchoring, lint-skill-body-budget, components.test.ts
-- 5.3 Mutation battery in a git-repo scratch copy (green control, mutation-landed check, unique scratchpad names); two targeted fix rounds plus one verification pass
+- [x] 5.3 Mutation battery in a git-repo scratch copy (green control, mutation-landed check, unique scratchpad names); two targeted fix rounds plus one verification pass
 - 5.4 Push (real exit code), required checks, hand-read infra-validation / sandbox-canary-capture-gate, merge, deploy verification
