@@ -1045,7 +1045,7 @@ invariants() { # the checks every case owes, whatever it asserts
     if grep -qF -e "$TOK" -e "$RWTOK" -e "$DOPTOK" -e "$TOKPFX" -e "$RWPFX" -e "$DOPPFX" -e "$OTHER_ID" -e "$CANARY" <<<"$filt"; then CHK+=$'\n    '"a token (or a 6-character prefix of one), the other volume's id or an API label reached $(basename "$f")"; fi
   done
   # NEITHER volume id may reach an issue title, body or comment (a public, notifying sink), whichever leg filed it.
-  if [[ -f "$SCEN/issues.json" ]] && jq -r '.[] | .title, .body, (.comments[]?)' "$SCEN/issues.json" 2>/dev/null | grep -qF -e "$VOL_ID" -e "$OTHER_ID"; then
+  if [[ -f "$SCEN/issues.json" ]] && grep -qF -e "$VOL_ID" -e "$OTHER_ID" < <(jq -r '.[] | .title, .body, (.comments[]?)' "$SCEN/issues.json" 2>/dev/null); then
     CHK+=$'\n    '"a volume id reached an issue title, body or comment"
   fi
   for f in "$CASE"/curl.*.argv; do
@@ -2033,7 +2033,8 @@ else fail "H11a evaluator matrix strictness: $_h11a"; fi
 grep -v 'strict-matrix' "$EXPRLIB" > "$TMP/h11/gha-expr-nostrict.py" || fatal "strip the strict branch"
 h11_run() { # h11_run <evaluator> <env-expression> <entry> [<rows-json>]: runs a one-step job through the harness; prints rc, then stderr
   local d; d=$(mktemp -d "$TMP/h11/r.XXXXXX") || fatal "mktemp h11"
-  printf 'printf "%%s" "$X" > "$OUT_X"\n' > "$d/s1.sh"
+  assert_fixture_dir "$d"
+  printf '%s\n' 'tee -- "$OUT_X" <<<"$X" >/dev/null' > "$d/s1.sh"
   local rows='[{"entry":"inngest","subject":"Inngest store volume"}]'; if [[ -n "${4-}" ]]; then rows="$4"; fi
   jq -n --arg v "$2" --argjson rows "$rows" \
     '{steps: [{id: "s1", run: "x", env: {X: $v}}], strategy: {"fail-fast": false, matrix: {include: $rows}}}' > "$d/job.json"
