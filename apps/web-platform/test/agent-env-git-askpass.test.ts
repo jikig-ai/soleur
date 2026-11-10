@@ -29,12 +29,12 @@ const EXPECTED_GIT_ASKPASS_VARS = {
   GIT_USERNAME: "x-access-token",
   GIT_INSTALLATION_TOKEN: INSTALL_TOKEN,
   GIT_TERMINAL_PROMPT: "0",
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
 } as const;
+// GIT_CONFIG_NOSYSTEM / GIT_CONFIG_GLOBAL moved out of the askpass block (#9600): they ride the
+// config-carrier pin that EVERY session gets, asserted in agent-env.test.ts.
 
 describe("buildAgentEnv — in-sandbox git GIT_ASKPASS injection (item 1a)", () => {
-  test("injects all six GIT_* vars when BOTH askpass inputs are present", () => {
+  test("injects all four GIT_* askpass vars when BOTH askpass inputs are present", () => {
     const env = buildAgentEnv(CRED, undefined, {
       gitAskpassScriptPath: ASKPASS_PATH,
       gitInstallationToken: INSTALL_TOKEN,

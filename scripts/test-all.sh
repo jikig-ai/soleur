@@ -7185,6 +7185,13 @@ if want_scripts; then
   # #12429: the credential-free pre-flag counts helper, EXECUTED against a stubbed fetch (key validation, jq -e parse,
   # fail-closed rows, mutants). Declared edge set, not always-on.
   run_suite "scripts/legal-acceptance-counts" bash scripts/legal-acceptance-counts.test.sh
+  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
+  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
+  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
+  
 fi
 
 # Named bun-test entries — bun shard.

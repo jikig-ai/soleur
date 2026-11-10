@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1272
-# generated-at=2026-11-09T11:03:10Z
+# default-weight-ms=1251
+# generated-at=2026-11-09T19:08:04Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -98,6 +98,7 @@ apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	7
 apps/web-platform/scripts/seed-live-verify-user.test.sh	6
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	8
 apps/web-platform/scripts/supabase-local.test.sh	4
+apps/web-platform/scripts/verify-required-secrets.test.sh	2
 apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/affected-tests.test.sh	8
@@ -437,6 +438,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	3
 scripts/followthroughs/inngest-hostmetrics-trim-11602	7
 scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
+scripts/followthroughs/mq-lever-e-verdict-12269	2
 scripts/followthroughs/parked-green-synthesis-11362	4
 scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4

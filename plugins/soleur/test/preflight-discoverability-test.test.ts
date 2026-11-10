@@ -3130,7 +3130,11 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`) reads the Better Stack incidents API and the
   // Telemetry alert listing with BETTERSTACK_API_TOKEN plus the three BETTERSTACK_QUERY_* secrets (Doppler soleur/prd_terraform).
   // NO SUBSTITUTE: neither the incident list nor the alert listing has an unauthenticated read surface. Genuine.
-  const BASELINE_DECLARED_PROBES = 95;
+  // 95 -> 96 on 2026-11-09 (#12289, PR #12462 signed relay hello): the plan's `## Observability` block declares the Better Stack read
+  // credentials (Doppler prd_terraform) its relay_hello_window / peer-deny discoverability probe needs. PLACEMENT: a child of the
+  // `discoverability_test:` sub-block. TRUTH: the probe is a Better Stack log query with no unauthenticated read surface. NO SUBSTITUTE:
+  // a deployed host's log row is reachable only through that query. Genuine.
+  const BASELINE_DECLARED_PROBES = 96;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

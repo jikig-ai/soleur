@@ -118,9 +118,11 @@ name: Merge queue stall check
 # below removes the largest class (entries deep in a healthy drain), not all of them.
 #
 # FALSE-POSITIVE FILTER (L10): only entries that can legitimately be BUILDING are
-# aged against the threshold, i.e. `position <= MAX_ENTRIES_TO_BUILD` (2, equal to
+# aged against the threshold, i.e. `position <= MAX_ENTRIES_TO_BUILD` (1, equal to
 # max_entries_to_build in infra/github/ruleset-ci-required.tf; the suite asserts
-# the equality). An entry deeper in a healthy drain burst waits its turn
+# the equality). Lowered 2->1 on #12269: the aging window now covers only the
+# head entry — a deeper entry pending past the threshold is expected under the
+# serialized drain and is NO LONGER reported as a suspected stall. An entry deeper in a healthy drain burst waits its turn
 # (~15 min per merge) and can legitimately exceed 45 min from `enqueuedAt` without
 # being stalled. GraphQL MergeQueueEntry fields used (read from the live schema via
 # introspection, no entries were readable): enqueuedAt (DateTime!), position (Int!),
@@ -169,7 +171,7 @@ jobs:
       # Mirror of max_entries_to_build in infra/github/ruleset-ci-required.tf: only
       # entries at position <= this can be building, so only they are aged (see
       # FALSE-POSITIVE FILTER). The suite fails if this drifts from the .tf.
-      MAX_ENTRIES_TO_BUILD: '2'
+      MAX_ENTRIES_TO_BUILD: '1'
     steps:
       - name: Detect stalled merge-queue entries and file an issue
         run: |
