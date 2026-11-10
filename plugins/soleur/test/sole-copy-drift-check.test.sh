@@ -132,7 +132,7 @@ cat > "$TMP/h.py" <<'PYH' || fatal "write h.py"
 import copy, importlib.util, json, os, re, subprocess, sys
 import yaml
 
-WEB1 = "1064" + "43278"   # the OTHER sole-copy volume (web-1); asserted to appear nowhere
+WEB1 = "106443278"   # the web-1 workspaces volume's Hetzner id (a plain literal: runbook pin-bump lists use git grep)
 STEP_IDS = ["doppler_cli", "tf_commit", "probe", "file_finding", "file_unreadable", "clear", "notify", "gate"]
 GH_STEPS = {"tf_commit", "file_finding", "file_unreadable", "clear"}
 
@@ -712,11 +712,13 @@ case "${1:-} ${2:-}" in
   "api "*|"api")
     shift; ep="${1:-}"; shift; filter=""
     while (( $# )); do case "$1" in --jq) filter="$2"; shift 2 ;; *) refuse "api $1" ;; esac; done
-    [[ "$ep" == repos/*/commits\?*path=apps/web-platform/infra/inngest-redis-luks.tf* && "$ep" == *per_page=1* ]] || refuse "api endpoint $ep"
-    echo "gh api commits" >> "$SEQ"
+    # Any declaration file under apps/web-platform/infra/; each path is served its OWN answer ($S/api.<file>.json).
+    [[ "$ep" =~ ^repos/[^/]+/[^/]+/commits\?.*path=apps/web-platform/infra/([a-z0-9-]+)\.tf(\&|$) && "$ep" == *per_page=1* ]] || refuse "api endpoint $ep"
+    pf="${BASH_REMATCH[1]}"
+    echo "gh api commits path=$pf" >> "$SEQ"
     [[ -n "${GH_API_HANG:-}" ]] && exec "${REAL_SLEEP:?}" 25
-    [[ -f "$S/api.json" ]] || { echo "stub: HTTP 404" >&2; exit 1; }
-    jq -r "$filter" "$S/api.json" ;;
+    [[ -f "$S/api.$pf.json" ]] || { echo "stub: HTTP 404" >&2; exit 1; }
+    jq -r "$filter" "$S/api.$pf.json" ;;
   *) refuse "$*" ;;
 esac
 STUB
@@ -730,9 +732,47 @@ REAL_SLEEP=$(command -v sleep) || fatal "sleep not found"
 # ---------------------------------------------------------------------------------------------------------
 # CASE MACHINERY
 # ---------------------------------------------------------------------------------------------------------
-NAME=soleur-inngest-redis-store-luks
-VOL_ID=106903269
-WEB1_ID="1064""43278"
+# PER-ENTRY CONSTANTS: the suite's oracle for each include row, written independently of the workflow (the titles are
+# spelled out, never built from the job's rows). use_entry OWNS every one of these names; nothing else assigns them, so a
+# row that runs past a former assignment site cannot silently fall back to the other entry's values.
+use_entry() { # use_entry inngest|web1
+  case "${1-}" in
+    inngest)
+      ENTRY=inngest
+      NAME=soleur-inngest-redis-store-luks
+      VOL_ID=106903269
+      TF_REL=apps/web-platform/infra/inngest-redis-luks.tf
+      TF_RES=inngest_redis_luks
+      SUBJ="Inngest store volume"
+      ADR_ID=ADR-282
+      OTHER_ID=106443278
+      OTHER_NAME=soleur-web-platform-data-luks
+      OTHER_ENTRY=web1
+      TITLE_DIFF="infra: Inngest store volume delete protection differs from Terraform ($NAME)"
+      TITLE_GONE="infra: Inngest store volume not found at Hetzner ($NAME)"
+      TITLE_NOCRED="infra: the Inngest store volume protection check has no usable credential ($NAME)"
+      TITLE_UNREAD="infra: the Inngest store volume protection check could not read Hetzner ($NAME)" ;;
+    web1)
+      ENTRY=web1
+      NAME=soleur-web-platform-data-luks
+      VOL_ID=106443278
+      TF_REL=apps/web-platform/infra/workspaces-luks.tf
+      TF_RES=workspaces_luks
+      SUBJ="web-1 workspaces volume"
+      ADR_ID=ADR-119
+      OTHER_ID=106903269
+      OTHER_NAME=soleur-inngest-redis-store-luks
+      OTHER_ENTRY=inngest
+      TITLE_DIFF="infra: web-1 workspaces volume delete protection differs from Terraform ($NAME)"
+      TITLE_GONE="infra: web-1 workspaces volume not found at Hetzner ($NAME)"
+      TITLE_NOCRED="infra: the web-1 workspaces volume protection check has no usable credential ($NAME)"
+      TITLE_UNREAD="infra: the web-1 workspaces volume protection check could not read Hetzner ($NAME)" ;;
+    *) fatal "use_entry: unknown entry '${1-}'" ;;
+  esac
+  TF_STEM="${TF_REL##*/}"; TF_STEM="${TF_STEM%.tf}"
+  OK_KEYS="expected=true|name=$NAME"
+}
+use_entry inngest
 # Each fixture token starts with a distinctive 6-character prefix, so the leak invariant can also catch a PARTIAL token
 # (an `echo "${TOKEN:0:6}"` debug line) without matching the ordinary word "synthetic".
 TOK="zq7ro-synthetic-ro_token.0123456789"
@@ -759,7 +799,7 @@ vol() { jq -nc --argjson id "$1" --arg n "$2" --argjson p "$3" --arg c "$CANARY"
 listing() { jq -nc '{volumes: ($ARGS.positional | map(fromjson)), meta: {pagination: {page: 1, per_page: 50, previous_page: null, next_page: null, last_page: 1, total_entries: ($ARGS.positional | length)}}}' --args "$@"; }
 mk_tf() { # mk_tf <workspace> <name> <declared>  -- a synthesized declaration with the traps the awk must survive
   assert_fixture_dir "${1-}"
-  local f="$1/apps/web-platform/infra/inngest-redis-luks.tf"; assert_fixture_dir "$f"; mkdir -p "$(dirname "$f")" || fatal "mkdir tf"
+  local f="$1/$TF_REL"; assert_fixture_dir "$f"; mkdir -p "$(dirname "$f")" || fatal "mkdir tf"
   cat > "$f" <<TFEOF
 # SYNTHESIZED FIXTURE.  # delete_protection = false
 resource "random_password" "other" {
@@ -767,7 +807,7 @@ resource "random_password" "other" {
 }
 
 # name = "not-this-one"
-resource "hcloud_volume" "inngest_redis_luks" {
+resource "hcloud_volume" "$TF_RES" {
   # delete_protection = false
   name              = "$2"   # trailing comment
   size              = var.inngest_redis_volume_size
@@ -789,19 +829,26 @@ resource "hcloud_volume" "decoy" {
 }
 TFEOF
 }
-set_api() { # set_api <live-true|false>  : the project listing = the target volume + a web-1-shaped one
+set_api() { # set_api <live-true|false>  : the project listing = the target volume + the OTHER entry's real-shaped one
   assert_fixture_dir "${CASE-}"
-  listing "$(vol "$VOL_ID" "${CASE_NAME:-$NAME}" "$1")" "$(vol "$WEB1_ID" "soleur-web-workspaces-luks" true)" > "$CASE/listing.json"
+  listing "$(vol "$VOL_ID" "${CASE_NAME:-$NAME}" "$1")" "$(vol "$OTHER_ID" "$OTHER_NAME" true)" > "$CASE/listing.json"
 }
-set_age() { # set_age <minutes|none|future>
-  AGE_MODE="$1"; rm -f "$SCEN/api.json"
+_now() { if [[ -n "${FAKE_NOW:-}" ]]; then printf '%s\n' "$FAKE_NOW"; else date +%s; fi; }
+write_age() { # write_age <file-stem> <minutes|none|future>: the commits answer served for that declaration file
+  rm -f "$SCEN/api.$1.json"
   local ep
-  case "$1" in
+  case "$2" in
     none) return 0 ;;
-    future) ep=$(( $(date +%s) + 7200 )) ;;
-    *) ep=$(( $(date +%s) - $1 * 60 - 10 )) ;;
+    future) ep=$(( $(_now) + 7200 )) ;;
+    *) ep=$(( $(_now) - $2 * 60 - 10 )) ;;
   esac
-  jq -nc --arg d "$(date -u -d "@$ep" +%Y-%m-%dT%H:%M:%SZ)" '[{commit: {committer: {date: $d}}}]' > "$SCEN/api.json"
+  jq -nc --arg d "$(date -u -d "@$ep" +%Y-%m-%dT%H:%M:%SZ)" '[{commit: {committer: {date: $d}}}]' > "$SCEN/api.$1.json"
+}
+set_age() { AGE_MODE="$1"; write_age "$TF_STEM" "$1"; }   # set_age <minutes|none|future>: the CURRENT entry's file
+set_age_other() { # set_age_other <minutes|none|future>: the OTHER entry's file (never the current one's AGE_MODE)
+  local _e="$ENTRY" _stem
+  use_entry "$OTHER_ENTRY"; _stem="$TF_STEM"; use_entry "$_e"
+  write_age "$_stem" "$1"
 }
 new_case() {
   fold_inv; INV_DONE=0
@@ -865,18 +912,29 @@ invariants() { # the checks every case owes, whatever it asserts
   for f in "$CASE"/out/* "$CASE"/*.log "$CASE/summary" "$SCEN/issues.json"; do
     [[ -f "$f" ]] || continue
     filt=$(grep -v '^::add-mask::' "$f" || true)
-    if grep -qF -e "$TOK" -e "$RWTOK" -e "$DOPTOK" -e "$TOKPFX" -e "$RWPFX" -e "$DOPPFX" -e "$WEB1_ID" -e "$CANARY" <<<"$filt"; then CHK+=$'\n    '"a token (or a 6-character prefix of one), the other volume's id or an API label reached $(basename "$f")"; fi
+    if grep -qF -e "$TOK" -e "$RWTOK" -e "$DOPTOK" -e "$TOKPFX" -e "$RWPFX" -e "$DOPPFX" -e "$OTHER_ID" -e "$CANARY" <<<"$filt"; then CHK+=$'\n    '"a token (or a 6-character prefix of one), the other volume's id or an API label reached $(basename "$f")"; fi
   done
+  # NEITHER volume id may reach an issue title, body or comment (a public, notifying sink), whichever leg filed it.
+  if [[ -f "$SCEN/issues.json" ]] && jq -r '.[] | .title, .body, (.comments[]?)' "$SCEN/issues.json" 2>/dev/null | grep -qF -e "$VOL_ID" -e "$OTHER_ID"; then
+    CHK+=$'\n    '"a volume id reached an issue title, body or comment"
+  fi
   for f in "$CASE"/curl.*.argv; do
     [[ -e "$f" ]] || continue
     argv=$(tr '\0' '\n' < "$f"); url=$(grep '^https://' <<<"$argv" || true)
     a "request URL" "$url" "https://api.hetzner.cloud/v1/volumes?name=${CASE_NAME}&per_page=50"
     if grep -qF -e "$TOK" -e "$RWTOK" -e "$TOKPFX" -e "$RWPFX" <<<"$argv"; then CHK+=$'\n    '"a token is on a request's argument list"; fi
     a "request credential channel" "$(cat "${f%.argv}.stdin")" "header = \"Authorization: Bearer ${CASE_TOK}\""
+    if grep -qF -e "$OTHER_NAME" -e "$OTHER_ID" "$f" "${f%.argv}.stdin" "${f%.argv}.env" 2>/dev/null; then CHK+=$'\n    '"a request's argv, stdin or environment carries the other entry's name or id"; fi
   done
+  # The commit-time read asks for THIS entry's declaration file, and nothing else.
+  local _gp
+  while IFS= read -r _gp; do
+    [[ -n "$_gp" ]] || continue
+    a "commits read path" "$_gp" "gh api commits path=$TF_STEM"
+  done < <(grep '^gh api commits' "$SEQ" 2>/dev/null || true)
 }
 end_row() { invariants; CHK+="$INV_ACC"; INV_ACC=""; INV_DONE=1; ROWS_RUN=$((ROWS_RUN + 1)); if [[ -z "$CHK" ]]; then pass "$1 $2"; else fail "$1 $2$CHK"; fi; }
-V="verdict="; OK_KEYS="expected=true|name=$NAME"
+V="verdict="
 warn_has() { grep -qF -- "$1" "$CASE/probe.log" || CHK+=$'\n    '"the warning annotation lacks '$1'"; }
 add_unrelated() { # 36 NEWER open infra-drift issues of other titles (gh lists newest first, default limit 30): a list that is not asked for 100 hides the older one
   jq '. + [range(100; 136) | {number: ., title: ("infra: drift detected in web-platform \(.)"), state: "open", labels: ["infra-drift"], milestone: "", body: "", author: "app/github-actions", comments: []}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"
@@ -1001,13 +1059,13 @@ for _n in soleur-alpha-store zz9-other-name; do
   new_case; tf "$_n" true; go; want_out "${V}matches-declared|expected=true|name=$_n|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip ran skip 0
   end_row "T1/$_n" "a different declared name flows into the request URL and the outputs (a hard-coded name would red)"
 done
-new_case; sed -i 's/^  delete_protection = true # trailing comment$/  delete_protection = false # was true/' "$WS/apps/web-platform/infra/inngest-redis-luks.tf"; live false; go
+new_case; sed -i 's/^  delete_protection = true # trailing comment$/  delete_protection = false # was true/' "$WS/$TF_REL"; live false; go
 want_out "${V}unprotected-as-declared|$(sed 's/true/false/' <<<"$OK_KEYS")|live=false|volume_id=$VOL_ID|http=200"
 end_row T2 "a trailing comment and a commented-out opposite value are ignored (declared false read through them)"
 tf_bad() { # tf_bad <id> <description> <sed-expression> [<expected ::error:: text>]
   new_case; mk_tf "$CASE/ref" "$NAME" true
-  sed -i "$3" "$WS/apps/web-platform/infra/inngest-redis-luks.tf"
-  if cmp -s "$WS/apps/web-platform/infra/inngest-redis-luks.tf" "$CASE/ref/apps/web-platform/infra/inngest-redis-luks.tf"; then CHK+=$'\n    '"the mutation did not land"; fi
+  sed -i "$3" "$WS/$TF_REL"
+  if cmp -s "$WS/$TF_REL" "$CASE/ref/$TF_REL"; then CHK+=$'\n    '"the mutation did not land"; fi
   go; want_out "${V}could-not-read"; want_steps skip ran skip skip 1; want_req 0
   if [[ -n "${4:-}" ]]; then grep -qF -e "$4" "$CASE/probe.log" || CHK+=$'\n    '"the ::error:: text lacks '$4'"; fi
   end_row "$1" "$2 -> could-not-read with no request"
@@ -1020,7 +1078,7 @@ tf_bad T7 "no own delete_protection, only the next resource's decoy" '/^  delete
 tf_bad T8 "an invalid name (uppercase)" 's/^  name  *= "[^"]*"/  name = "BAD_Name"/'
 tf_bad T10 "a BLOCK-commented delete_protection = true on its own lines (Terraform would apply the default false)" 's|^  delete_protection = true.*$|  /*\n  delete_protection = true\n  */|' "a block-comment opener '/*' anywhere in the file"
 tf_bad T11 "a block-commented decoy resource of the real name placed before the real one" 's|^resource "hcloud_volume" "inngest_redis_luks" {|/*\nresource "hcloud_volume" "inngest_redis_luks" {\n  name = "decoy"\n  delete_protection = false\n}\n*/\n&|'
-new_case; ( cat >> "$WS/apps/web-platform/infra/inngest-redis-luks.tf" <<< $'resource "hcloud_volume" "decoy2" {\n  delete_protection = false\n}' ); go
+new_case; ( cat >> "$WS/$TF_REL" <<< $'resource "hcloud_volume" "decoy2" {\n  delete_protection = false\n}' ); go
 want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"
 end_row T9 "a decoy delete_protection = false in a LATER resource does not leak into the block (bounded at its closing brace)"
 
@@ -1052,7 +1110,7 @@ _rverd=matches-declared; if [[ "$_rexp" == false ]]; then _rverd=unprotected-as-
 want_out "${V}${_rverd}|expected=$_rexp|name=$_rname|live=$_rexp|volume_id=$VOL_ID|http=200"
 end_row R1 "the probe on the REAL checkout derives '$_rname' and declared=$_rexp exactly as an independent derivation does (never the literal)"
 for _mut in rename var dup; do
-  new_case; assert_fixture_dir "${WS-}"; _tf="$WS/apps/web-platform/infra/inngest-redis-luks.tf"; assert_fixture_dir "$_tf"; mkdir -p "$(dirname "$_tf")"; cp "$TFREAL" "$_tf"
+  new_case; assert_fixture_dir "${WS-}"; _tf="$WS/$TF_REL"; assert_fixture_dir "$_tf"; mkdir -p "$(dirname "$_tf")"; cp "$TFREAL" "$_tf"
   case "$_mut" in
     rename) sed -i 's/resource "hcloud_volume" "inngest_redis_luks" {/resource "hcloud_volume" "inngest_redis_luks_x" {/' "$_tf" ;;
     var) sed -i '/^resource "hcloud_volume" "inngest_redis_luks" {/,/^}/ s/^  delete_protection = .*/  delete_protection = var.x/' "$_tf" ;;
@@ -1067,10 +1125,6 @@ done
 echo "F: filers, lifecycle, partial failures (a stateful issue store; the whole job is run)"
 # ---------------------------------------------------------------------------------------------------------
 issues() { jq -r "$1" "$SCEN/issues.json"; }
-TITLE_DIFF="infra: Inngest store volume delete protection differs from Terraform ($NAME)"
-TITLE_GONE="infra: Inngest store volume not found at Hetzner ($NAME)"
-TITLE_NOCRED="infra: the Inngest store volume protection check has no usable credential ($NAME)"
-TITLE_UNREAD="infra: the Inngest store volume protection check could not read Hetzner ($NAME)"
 new_scen
 new_case; live false; go
 a "issues filed" "$(issues 'length')" 1; a "title" "$(issues '.[0].title')" "$TITLE_DIFF"
@@ -1180,7 +1234,7 @@ new_case; STUB_ENV+=("CURL_NOFILTER=1"); go
 a "unfiltered listing is not a clean answer" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" volume-not-found
 end_row L2 "with the name= filter dropped the stub serves the unfiltered listing (the other volume among them) -> volume-not-found, proving the filter is what excludes it"
 
-new_case; raw "not json $CANARY $TOK $RWTOK $WEB1_ID"; go
+new_case; raw "not json $CANARY $TOK $RWTOK $OTHER_ID"; go
 want_out "${V}could-not-read|$OK_KEYS|http=200"; want_steps skip ran skip skip 1
 end_row L3 "a malformed body carrying a label, both tokens and the other volume's id is never echoed, filed or published"
 
