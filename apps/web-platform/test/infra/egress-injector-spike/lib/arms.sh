@@ -585,7 +585,12 @@ EOS
   # CTO R40: a push of about 4 MiB is over the 3 MiB body cap: refused body-over-cap, no row, no decoy on the write.
   _c3_big_push_script huge 4194304 "$d/a5.sh"
   note a5_rows0 "$(spike_rows "$CONV_D")"; hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
-  spike_cx sessD "$d/a5.sh" "$d/a5.out"; note a5_push "$(prc "$d/a5.out")"; note a5_rows1 "$(spike_rows "$CONV_D")"
+  # The client side of a refused over-cap body is not deterministic: run 42864371897 printed push_rc=1, run
+  # 42868332624 hung until spike_cx's timeout (rc 124) with the hook's body-over-cap refusal, no row and no write body
+  # at the stub in both. The refusal is judged on those three; the client outcome is recorded (a #11637 finding).
+  local a5rc a5t0; a5t0=$SECONDS
+  spike_cx sessD "$d/a5.sh" "$d/a5.out"; a5rc=$?; note a5_push "$(prc "$d/a5.out")"; note a5_rows1 "$(spike_rows "$CONV_D")"
+  note a5_client "cx_rc=$a5rc elapsed_s=$((SECONDS - a5t0))"
   win a5 "$hw" "$sw"
   note pend_after_a5 "$(spike_rows "$CONV_D")"; spike_settle_pending "$CONV_D" ownerA
 
@@ -709,7 +714,8 @@ checks = {
       o["a4_approve"] == "200" and o["a4_push2"] == "push_rc=0" and o["a4_status"] == "consumed" and vend(a4b, "write", "git-push")
       and len([r for r in rpack("a4b") if blen(r) >= 2 * 1024 * 1024]) == 1,
   "R40 a ~4 MiB push is refused body-over-cap, with no row and no decoy on the write":
-      refused(o["a5_push"]) and refusal(a5, "POST", "guard-refused", "body-over-cap") and o["a5_rows0"] == o["a5_rows1"]
+      (refused(o["a5_push"]) or (o["a5_push"] == "" and o.get("a5_client", "").startswith("cx_rc=124 ")))
+      and refusal(a5, "POST", "guard-refused", "body-over-cap") and o["a5_rows0"] == o["a5_rows1"]
       and not [r for r in rpack("a5") if blen(r) != FLUSH],
   "R40 same connection, HTTP/1.1: a reused connection's unapproved POST is pending, no real token": same_conn("http1.1"),
   "R40 same connection, HTTP/2: a reused connection's unapproved POST is pending, no real token": same_conn("http2"),
@@ -718,7 +724,7 @@ checks = {
 json.dump({"observations": o, "reasons": {"sessD": ra, "sessC": rc, "sessE": re_}, "max_pending": max_pending, "cap_hits": cap_hits,
            "large_push": {"push1_markers": a4a, "push2_markers": a4b, "push1_receive_pack_bodies": [blen(r) for r in rpack("a4a")],
                           "push2_receive_pack_bodies": [blen(r) for r in rpack("a4b")], "probe_seen": vend(a4a, "push-advert", "git-receive-pack-probe")},
-           "over_cap_push": {"markers": a5, "receive_pack_bodies": [blen(r) for r in rpack("a5")]},
+           "over_cap_push": {"markers": a5, "receive_pack_bodies": [blen(r) for r in rpack("a5")], "client": o.get("a5_client", "")},
            "same_connection": {v: {k: x[k] for k in ("get", "post", "markers")} for v, x in a6.items()}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
 print("pass" if not failed else "fail")
