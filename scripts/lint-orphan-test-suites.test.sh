@@ -632,7 +632,7 @@ require_single_surface "$SB" "$LOOPBACK_SUITE" "M13"
 # line empties the surface exactly as deleting the block would, and a single-line anchor cannot
 # be broken by a reflow of the continuation lines around it.
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
-  '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+  '^[[:space:]]*(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   'ZZZ_SURFACE_6_REMOVED_NEVER_MATCHES'
 run_lint "$SB"; rc=$?
 assert_red "M13" "$rc"
