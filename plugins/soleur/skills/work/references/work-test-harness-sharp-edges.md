@@ -96,4 +96,6 @@ already carries — see
 `markdownlint-cli2` never reads a path matched by `.markdownlintignore` (for
 example `knowledge-base/project/`), and still prints a clean-looking summary.
 Lint a `/var/tmp` copy with the pinned binary and `-c .markdownlint.json`, and
-confirm a known-bad copy fails, before reporting clean (#12536).
+confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
+`knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
+session error 5.

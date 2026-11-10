@@ -406,6 +406,12 @@ inspect_record() {
 # The runbook path is spliced in from RUNBOOK_REL (dots escaped) rather than spelled here: a second, regex-escaped
 # literal is a reference the kb-consumers ratchet cannot resolve to the file, so it reads it as the parent directory.
 GRAMMAR='^SOLEUR_GHCR_PUSH_FAILED image=[^ ]+ version=[^ ]+ attempt=([1-9][0-9]*|invalid) run=[^ ]+ class=(push_denied|push_other|not_push|unknown) denial=(denied: [a-z_]+: [a-z_]+|withheld|see-step-log) runbook='"${RUNBOOK_REL//./\\.}"'$'
+# The splice must escape the dots: a line whose runbook path differs only at a dot must NOT match, and the real
+# path must. Without the escape the first row still passes and the second fails.
+GRAMMAR_OK_LINE="SOLEUR_GHCR_PUSH_FAILED image=i version=1.0.0 attempt=1 run=r class=unknown denial=see-step-log runbook=$RUNBOOK_REL"
+check "grammar: the real runbook path matches the spliced grammar" matches "$GRAMMAR_OK_LINE" "$GRAMMAR"
+check "grammar: a runbook path differing only at an escaped dot does not match" \
+  not matches "${GRAMMAR_OK_LINE%.md}Xmd" "$GRAMMAR"
 
 STUB_INVOCATIONS=0
 # run_case <name>: runs the marker body with the fixture files under $TMP_ROOT/<name>/ and leaves
@@ -712,7 +718,7 @@ fi
 # above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_PASSES=803
+MIN_PASSES=805
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' "$REAL_PASSES" "$MIN_PASSES" >&2
   exit 1

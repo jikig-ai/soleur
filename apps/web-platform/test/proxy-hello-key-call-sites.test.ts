@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { extname, join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -30,10 +30,12 @@ const MODULE = "apps/web-platform/server/proxy-hello.ts";
 const REPO = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: __dirname, encoding: "utf8" }).trim();
 
 // Tracked files plus untracked, not-ignored ones (a new file is caught before it is committed). Out of scope, anchored
-// at the repo root: the top-level knowledge-base/ and the real test roots (tests and prose quote the string on
-// purpose). A production module under a nested `test/` or `knowledge-base/` segment (server/test/relay.ts) is scanned.
+// at the repo root: Markdown under the top-level knowledge-base/ and the real test roots (tests and prose quote the
+// string on purpose). Code under knowledge-base/ (a spec's bootstrap.sh, a .py helper) IS scanned: an operator-run
+// script there could carry the string and an HMAC. A production module under a nested `test/` or `knowledge-base/`
+// segment (server/test/relay.ts) is scanned.
 const EXCLUDED =
-  /^(knowledge-base|test|\.github\/scripts\/test|apps\/[^/]+\/test|plugins\/soleur\/test|plugins\/soleur\/skills\/[^/]+\/test)\//;
+  /^(?:knowledge-base\/.*\.md$|(?:test|\.github\/scripts\/test|apps\/[^/]+\/test|plugins\/soleur\/test|plugins\/soleur\/skills\/[^/]+\/test)\/)/;
 const LISTED = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
   cwd: REPO,
   encoding: "utf8",
@@ -44,29 +46,58 @@ const LISTED = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "-
 
 const SHEBANG = "#!/usr/bin/env bash";
 const scanned: string[] = [];
+// Every path the walk does not read, with the reason. Asserted below: a skip the walk cannot account for is a FAIL,
+// so an unreadable or otherwise unexpected file can never hide a planted domain string by being silently dropped.
+const skipped = new Map<string, "absent" | "symlink-to-directory">();
+// Symlinks to files, read through their resolved target (the target may sit in an excluded root).
+const viaSymlink: string[] = [];
 const hits = new Map<string, string[]>([
   [DOMAIN, []],
   [SHEBANG, []],
 ]);
-for (const f of [...new Set(LISTED)]) {
-  // Open once, then fstat and read the SAME descriptor: a check on the path followed by a read of the path is a
-  // check-then-use race (CodeQL js/file-system-race). O_NOFOLLOW refuses a symlink at open (ELOOP).
-  let fd: number;
+// Open once, then fstat and read the SAME descriptor: a check on the path followed by a read of the path is a
+// check-then-use race (CodeQL js/file-system-race). O_NONBLOCK keeps a FIFO from blocking the open; fstat then
+// refuses it as non-regular. Returns the bytes, "directory", or throws (ELOOP for a symlink under O_NOFOLLOW).
+const readRegular = (abs: string, extra: number): Buffer | "directory" => {
+  const fd = openSync(abs, constants.O_RDONLY | constants.O_NONBLOCK | extra);
   try {
-    fd = openSync(join(REPO, f), constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    continue; // tracked but deleted in the working tree, or a symlink
-  }
-  let buf: Buffer | undefined;
-  try {
-    if (fstatSync(fd).isFile()) buf = readFileSync(fd); // directories (submodule gitlinks) are skipped
+    const st = fstatSync(fd);
+    if (st.isDirectory()) return "directory";
+    if (!st.isFile()) throw new Error(`proxy-hello Guard 1 scan: ${abs} is neither a regular file nor a directory`);
+    return readFileSync(fd);
   } finally {
     closeSync(fd);
   }
-  if (buf === undefined) continue;
+};
+for (const f of [...new Set(LISTED)]) {
+  let got: Buffer | "directory";
+  try {
+    got = readRegular(join(REPO, f), constants.O_NOFOLLOW);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      skipped.set(f, "absent"); // tracked but deleted in the working tree
+      continue;
+    }
+    if (code !== "ELOOP") throw e; // EACCES, EMFILE, EIO, ...: never a silent skip
+    // A symlink: read what it points at (followed), so a link into an excluded root is still scanned.
+    got = readRegular(realpathSync(join(REPO, f)), 0);
+    if (got === "directory") {
+      skipped.set(f, "symlink-to-directory"); // its contents are listed and scanned under their own paths
+      continue;
+    }
+    viaSymlink.push(f);
+  }
+  if (got === "directory") throw new Error(`proxy-hello Guard 1 scan: ${f} is a directory that is not a symlink`);
   scanned.push(f);
-  for (const [needle, list] of hits) if (buf.includes(needle)) list.push(f);
+  for (const [needle, list] of hits) if (got.includes(needle)) list.push(f);
 }
+// Tracked symlinks, from git's own index (mode 120000), restricted to the walked population.
+const TRACKED_SYMLINKS = execFileSync("git", ["ls-files", "-s", "-z"], { cwd: REPO, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+  .split("\0")
+  .filter((l) => l.startsWith("120000 "))
+  .map((l) => l.slice(l.indexOf("\t") + 1))
+  .filter((f) => !EXCLUDED.test(f));
 
 const MODULE_SRC = readFileSync(join(REPO, MODULE), "utf8");
 const SF = ts.createSourceFile("proxy-hello.ts", MODULE_SRC, ts.ScriptTarget.Latest, true);
@@ -109,16 +140,36 @@ describe("Guard 1 structure: the accept-only slot never signs (#8211)", () => {
     expect(hits.get(SHEBANG)?.some((f) => f.endsWith(".sh"))).toBe(true);
   });
 
-  it("(a) the exclusion is anchored: only real test roots and the top-level knowledge-base/ are skipped", () => {
+  it("(a) every path the walk did not read is accounted for: deleted from the working tree, or a symlink to a directory", () => {
+    for (const [f, why] of skipped) {
+      if (why === "absent") expect(existsSync(join(REPO, f)), `${f} skipped as absent but present`).toBe(false);
+      else expect(TRACKED_SYMLINKS, `${f} skipped as a symlink but git does not track it as one`).toContain(f);
+    }
+    // Every tracked symlink was either read through its target or skipped as a link to a directory. If the open stops
+    // refusing symlinks (O_NOFOLLOW dropped), file links are read as plain files and this set no longer matches.
+    const linkFiles = TRACKED_SYMLINKS.filter((f) => skipped.get(f) !== "symlink-to-directory" && skipped.get(f) !== "absent");
+    expect([...viaSymlink].sort()).toEqual([...linkFiles].sort());
+    expect(viaSymlink.length, "the tree carries file symlinks, so this arm is not vacuous").toBeGreaterThan(0);
+    // Population conservation: every listed path is read or skipped, nothing else.
+    expect(scanned.length + skipped.size).toBe(new Set(LISTED).size);
+  });
+
+  it("(a) the exclusion is anchored: only real test roots and Markdown under the top-level knowledge-base/ are skipped", () => {
     for (const p of ["knowledge-base/x.md", "apps/web-platform/test/x.test.ts", "plugins/soleur/test/x.sh", "test/x.sh"]) {
       expect(EXCLUDED.test(p), p).toBe(true);
     }
-    for (const p of ["apps/web-platform/server/test/relay.ts", "apps/web-platform/lib/knowledge-base/relay.ts", "plugins/soleur/knowledge-base/x.md"]) {
+    for (const p of [
+      "apps/web-platform/server/test/relay.ts",
+      "apps/web-platform/lib/knowledge-base/relay.ts",
+      "plugins/soleur/knowledge-base/x.md",
+      "knowledge-base/project/specs/archive/x/bootstrap.sh",
+      "knowledge-base/x.md.sh",
+    ]) {
       expect(EXCLUDED.test(p), p).toBe(false);
     }
   });
 
-  it(`(a) the domain string "${DOMAIN}" appears only in proxy-hello.ts (any extension, test roots and knowledge-base/ excluded)`, () => {
+  it(`(a) the domain string "${DOMAIN}" appears only in proxy-hello.ts (any extension, test roots and knowledge-base/ Markdown excluded)`, () => {
     expect(hits.get(DOMAIN)).toEqual([MODULE]);
   });
 
