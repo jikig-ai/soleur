@@ -47,6 +47,8 @@ vendored binary (full record: spec TR7):
 
 > **Pin moved 2026-11-04 (#12026):** the SDK pin is now `0.3.311` (CLI `2.1.311`, one shared binary). The measurements below were taken on 0.3.284 and are a dated record; they were not re-run for this ADR. The rewritten in-sandbox socat bridge (IPv6-first group, readiness watchdog) was re-exercised on 0.3.311 by the NO-EGRESS control arm in `sandbox-wrapped-command-runtime.test.ts` and by `broker-mechanism-spike.test.ts`, both passing under `C4_BWRAP_REQUIRED=1`.
 
+> **Pin moved 2026-11-10 (#12514):** the SDK pin is now `0.3.321` (CLI `2.1.321`, one shared binary). The 0.3.284 measurements below stay a dated record and were not re-run. In a throwaway container on 0.3.321, `sandbox-wrapped-command-runtime.test.ts` (production config, AF_UNIX-deny on and off, the egress arm) passed under `C4_BWRAP_REQUIRED=1`, `broker-mechanism-spike.test.ts` passed 19 / 0 once its version literal moved, and the bridge anchor `TCP6-LISTEN:${` still occurs once in the binary (`knowledge-base/project/specs/feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md`, rows 1.3, 1.4, 1.8).
+
 1. `network.httpProxyPort` is a host-side loopback port the sandbox
    runtime chains to through its own in-netns proxy — the sandboxed
    child's `localhost` is not the container loopback, so a

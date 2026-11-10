@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 import {
+  MIN_AUTOFIX_PAIRS,
   assertPairFloors,
   parseAutofixPairs as parseAutofixPairsFrom,
 } from "./lib/autofix-pairs";
@@ -721,9 +722,9 @@ describe("model-launch-review Haiku 5.5 launch", () => {
   }
 
   test("the pair table has a literal floor (a table-driven test over zero pairs passes vacuously)", () => {
-    // 8 pairs before Haiku 5.5, +2 (dated and undated Haiku 4.5) = 10,
-    // +1 at the Fable 5.2 launch (claude-fable-5-1 became a source id) = 11.
-    expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(11);
+    // The floor is the shared MIN_AUTOFIX_PAIRS (its history lives on that constant), never a
+    // restated literal here: two copies of one floor drift apart on the next launch.
+    expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(MIN_AUTOFIX_PAIRS);
     // The same floor plus the distinct-target floor, as the shared parser states them.
     assertPairFloors(parseAutofixPairs());
   });

@@ -78,12 +78,21 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    `model-launch-review.test.ts` pins it, so a chained table fails fast rather than silently.
    A new or retargeted pair also touches that test file in six places: `CURRENT_IDS`, the `SUPERSEDED`
    map, the synthetic-prefix source string, the id named in the prefix test's floor message, the sed-anchor
-   fixture and the pair-count floor. For a Fable pair, do not merge a `--fix` until the pinned CLI bundle
+   fixture and the pair-count floor. A Fable pair also touches `REVIEWED_ADVISOR_EFFORT` in
+   `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts`: its key set must equal the
+   distinct `claude-fable-` targets of `AUTOFIX_PAIRS`, and each value is the new row's reviewed
+   `default_effort` (re-review the ADR-083 consult effort before writing it). Read that value from the
+   platform binary, outside the repo, never by running it:
+   `grep -a -o -E '\{id:"<new-id>",family:([^{}]|\{[^{}]*\})*\}' <unpacked>/claude | grep -o 'default_effort:"[a-z]*"'`.
+   Expect exactly one row; no `default_effort` in the row means the row has none (Guard 5 then reds), not
+   "medium". For a Fable pair, do not merge a `--fix` until the pinned CLI bundle
    contains the new id (`grep -a` the unpacked platform package). Since #12514 CI enforces this:
    `claude-cli-pin-knows-models.test.ts` derives its id set from the right-hand side of `AUTOFIX_PAIRS`
    (plus the tier literals and the hosted SDK default) and checks it in BOTH pinned binaries, the CLI and
-   the Agent SDK, so a retarget reds until the pins carry the id. `[2b]` stays the hand-run candidate
-   check, and it still probes only the tier literals in `model-tiers.ts` and `constants.ts`.
+   the Agent SDK, so a retarget reds until the pins carry the id. `[2b]` is much narrower than that test:
+   it greps only the INSTALLED `claude-code-linux-x64` binary under `node_modules` (not a candidate
+   version unless that version is installed, and never the Agent SDK binary), and only for the tier
+   literals in `model-tiers.ts` and `constants.ts`, so it checks no `fable` alias target at all.
 
    Then verify item 2b: the new ID must appear in the **pinned** `@anthropic-ai/claude-code`
    bundle (`[2b]` in the audit output). If it reports DRIFT, in ONE PR: (1) bump the pin in
@@ -92,8 +101,9 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    Since #8603 this is also a CI gate: `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts`
    fails any PR whose tier ids are absent from the pinned bundle, whose package.json and
    Dockerfile pins disagree, or whose `AUDIT_EFFORT` the pinned CLI does not accept — so an
-   id-swap PR opened before the bump goes red. `[2b]` stays the hand-run check for CANDIDATE
-   versions. Grep the bundle with `grep -a`
+   id-swap PR opened before the bump goes red. `[2b]` is a hand-run echo of part of that gate (the
+   installed claude-code binary, tier literals only, no `fable` target, no SDK binary); to test a
+   CANDIDATE version, unpack it and grep it as described below. Grep the bundle with `grep -a`
    — the linux-x64 CLI is a compiled binary and a text-mode grep reports zero hits for
    EVERY id, a null result that reads exactly like a real one.
 
@@ -127,6 +137,28 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    (`claude-sonnet-5-5` for the Haiku 5.5 bump): the old pin cannot resolve the new id, so a probe
    on the new id makes the control fail on model resolution instead of on the hook, and the
    comparison measures nothing.
+
+   **Every CLI or SDK bump re-measures the `fable` alias (required, #12514).** The alias is
+   version-agnostic and resolved by the bundled model table, so a bump can move it with no argv change
+   (2.1.311 / 0.3.311 resolved it to Fable 5.1, 2.1.321 / 0.3.321 to Fable 5.2). Measure both the CLI
+   and the Agent SDK platform binaries, new pin and old pin as the control, in a throwaway container
+   (never on a credentialed host; `--rm -u 1000:1000`, tmpfs `HOME`, no repository mount, no docker socket):
+   1. Zero-cost start-up probe with an invalid key:
+      `<bin> -p hi --model fable --output-format stream-json --verbose --max-turns 1` with
+      `ANTHROPIC_API_KEY=sk-ant-invalid-probe`, then read the `system`/`init` event
+      (`jq -c 'select(.type=="system" and .subtype=="init") | {model, claude_code_version}'`). The turn
+      then fails 401; the init event is the measurement of the bundled resolution path.
+   2. One authenticated turn (`-p hi --model fable --max-turns 1 --output-format json`) with the Doppler
+      `ci` key (read-only, never `prd`), recording only `jq '.modelUsage|keys'`. The key goes in a 0600
+      file mounted read-only and is read by the wrapper inside the container
+      (`bash -c 'set +x; IFS= read -r ANTHROPIC_API_KEY < /k/key; export ANTHROPIC_API_KEY; exec …'`),
+      never as `VAR=<value>` on any command line, `env` included (`env -i K=<v> cmd` puts it on env's
+      argv). This catches a server-side alias override the invalid-key probe cannot see, for the ci
+      key's account only.
+
+   Record both results (init `model` + `claude_code_version` per binary, and the `modelUsage` keys) in the
+   `sdk-bump-verified:` trailer and the PR body. A target that differs from the `AUTOFIX_PAIRS` Fable
+   target is a finding, not a pass.
 
    Probe the PLATFORM package, never the `@anthropic-ai` scope: `claude-agent-sdk` and
    `claude-agent-sdk-linux-x64` both carry `claude-sonnet-5`, so a scope-wide grep answers

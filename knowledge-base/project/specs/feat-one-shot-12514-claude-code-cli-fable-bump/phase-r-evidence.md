@@ -131,3 +131,76 @@ Residual `2.1.311` / `0.3.311` hits outside `knowledge-base/` and the locks are 
 Not edited, flagged instead: `knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md:303` says
 the scheduled canary installs CLI 2.1.311, which `CLI_VERSION` 2.1.321 now contradicts. ADR-311 has no 0.3.321
 addendum; #12026 added one.
+
+## Corrections — 2026-11-10 (review of PR #12553)
+
+The rows and sections above are kept as written. These corrections narrow three statements in "Containment (CTO F15)".
+
+- **(a) "the key never appeared on argv" is false.** `phaseR/auth-alias.sh` (line 6) and `phaseR/cron-probe.sh` (line 14)
+  read the key file inside the `bash -c` wrapper and then ran
+  `exec env -i PATH=/usr/bin:/bin HOME="$1" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" … timeout …`. That puts the ci key on
+  `env`'s argv (readable in `/proc/<pid>/cmdline`) until `env` execs `timeout`. The exposure was brief and inside a
+  uid-1000 throwaway container, and the key is the Doppler `ci` key, not `prd`; it is
+  still the exact shape plan step 1.6b forbids. The fix for the next run is to `export` the variable and let `env`
+  inherit it (or drop `env -i` and start the container with a clean environment), never `NAME=<value>` on a command
+  line. The model-launch-review skill's alias re-measure step now says so.
+- **(b) Step 2.7 ran outside the stated containment.** `SANDBOX_CANARY_MODE=capture bash scripts/sandbox-canary-verify-in-image.sh`
+  is the CI capture path, run as is: its `docker run` uses root (no `-u`), Docker's default seccomp profile (not
+  `infra/seccomp-bwrap.json`), passes the key with `-e ANTHROPIC_API_KEY` (from the client environment), mounts
+  `<tree>/apps/web-platform/infra` read-write at `/out`, runs `apt-get`, and pipes the network-fetched
+  `https://bun.sh/install` script into `bash` (the bun version is pinned by argument; the installer script itself is
+  not). So the "Docker flags" and "only mounts" bullets above describe Phase R, not 2.7. 2.7 is recorded as the CI
+  capture path under the CI posture.
+- **(c) "No 321 code ran on the host" is scoped to Phase R.** It holds for the Phase R steps in the verdict table. It does
+  not cover the planning session, which ran the new binaries once on its host for the zero-cost invalid-key alias
+  probe (plan "New Considerations Discovered"; decision-challenges F15).
+
+## R2 — review-round probes (2026-11-10, after the 12-seat review)
+
+Containment matches Phase R: throwaway containers, `-u 1000:1000`, `--security-opt seccomp=infra/seccomp-bwrap.json`, tmpfs
+`/tmp` as HOME, scratch tree copies mounted read-only, no credential directories, no docker socket. The binary sha256 was
+asserted in every run: 321 = `426c3381…`, 311 control = `86dc1fcc…`.
+
+**R2.1 Mod tool calls and `canUseTool`** (review P1; upstream 2.1.321 entry: "mods' own tool calls raise no permission
+prompt"). Setup:
+
+- Driver: `phaseR2/mod-probe.mjs`, with a stub API on 127.0.0.1, `--network none`, and the hosted option shape
+  (`permissionMode: "default"`, `settingSources: []`).
+- `canUseTool` logs every call and denies all of them.
+- The probe mod is three files: `plugin.json`, a `hooks.json` with `modules`, and `register.js`. It calls
+  `$.tool.call` for Bash and Write on `session.start` / `prompt.submit` / `turn.start`.
+
+| Arm | 0.3.321 | 0.3.311 control |
+|---|---|---|
+| no mod | no side effect | no side effect |
+| mod in session cwd `.claude/skills/<name>` at start | not loaded | not loaded |
+| same, planted mid-session (streaming input), watch default and `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` | not loaded | not loaded |
+| mod in HOME `.claude/skills/<name>` | not loaded | not loaded |
+| mod bound via `plugins:[{type:"local"}]` | **Bash and Write ran; `canUseTool` called 0 times** | both sent to `canUseTool`, denied, no side effect |
+| same, with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` or `CLAUDE_CODE_PLUGIN_DIR_WATCH=0` | still ran, 0 calls | denied |
+
+Verdict: the regression is real, but it reaches only a module inside the trusted plugin.
+
+- The workspace and user skills folders never load mods under `settingSources: []`, so there is no agent-writable path.
+- Writing to the trusted plugin directory (`/opt/soleur/plugin`, image content) already lets a `hooks.json` command hook run
+  in-process on 0.3.311. 0.3.321 adds no new reach past that boundary.
+- Defense in depth: `plugin-pretooluse-hooks-web-parity.test.ts` now fails if any hook config of `plugins/soleur` (or its
+  `plugin.json`) declares a hooks module. Shown red with the detector disabled, then green at 35/35.
+- 0.3.321 also loads a new built-in plugin, `cc-plugin-privacy` (vendor code), next to `cc-plugin-plugin-authoring`.
+
+**R2.2 pen-cli `engine-contract-probe.sh`** (review P2). Inputs and method:
+
+- The regenerated 0.3.321 lock and, as a control, the 0.3.311 lock from `main`.
+- Each installed with `npm ci --ignore-scripts` into a container HOME.
+- The Doppler `dev` `PENCIL_CLI_KEY` was read into a 0600 file, mounted read-only, and read into the env inside the container
+  (never on argv). The file was shredded afterwards.
+
+Result: rc 1 on both arms, with byte-identical outcome sets: 38 PASS / 16 FAIL / 4 RECORD. Every FAIL is a design-tool case
+refused by the pen.dev account's plan usage limit, on both arms. Install, `pen status` Active, the REPL signatures, banner and
+prompt, `save()`, and the removed-tool hints all PASS on 0.3.321.
+
+- Not validated: the 16 quota-blocked cases (batch_design, export, read_skill and load fidelity), on either version.
+
+**Not run:** the review-gate `AskUserQuestion` allow round trip. The current schema builds a fresh `{questions, answers}` with
+no `afkTimeoutMs`, so the 2.1.321 denial of that field does not apply. This was verified by reading `server/review-gate.ts`;
+no measurement was taken.

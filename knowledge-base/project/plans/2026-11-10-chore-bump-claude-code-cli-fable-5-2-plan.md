@@ -37,6 +37,12 @@ confirmed). The deepen round ran this bounded panel, not every available agent.
 1. No code from 2.1.321 / 0.3.321 runs before the release-age floor clears; the re-proof runs after Gate G1 on
    the installed tree inside a throwaway container, and every real-key run uses a 0600 key file through a
    wrapper (CTO F15, security review).
+   > **Note 2026-11-10 (F3b):** superseded in part. The operator waived the floor ("waive the floor yes and do it
+   > now", decision-challenges F3b), so the pins moved and Phase R ran on 2026-11-10, before 2026-11-12T19:04Z. The
+   > accepted residual: 2.1.321 / 0.3.321 ship with less than the 3-day community soak the floor exists to buy, so a
+   > yanked or compromised release published in that window is caught only by `npm audit signatures`, the sha256
+   > assertions and the Phase R re-proof, not by elapsed time. The containment half still held for Phase R (with the
+   > exceptions in `phase-r-evidence.md` "Corrections").
 2. An authenticated alias probe closes the gap the invalid-key probes cannot see (CTO F12).
 3. Guards 4 and 5 are specified as pure functions with every mutation row a standing synthetic test, a literal
    `REVIEWED_ADVISOR_EFFORT` key cross-checked against `AUTOFIX_PAIRS`, and parser edge rows (test-design review).
@@ -82,6 +88,15 @@ places that still call the alias target "unverified" (CTO F7). Every ruling is r
 | The `sdk-bump-verified:` ack | Required for a version change of EITHER package; a CLI-only ack must name the cron hook control | Full #12026 evidence set plus the cron hook probe (CTO F4) |
 | Prose: "whether `fable` resolves to 5.2 on the pinned CLI 2.1.311 is unverified" | It is measured: 5.1 | Correct the four sites (CTO F7) |
 | (not in the issue) | The consult's bundled default effort moves "high" (5.1) -> "medium" (5.2) | Accept and record; standing effort row (CTO F9) |
+
+> **Notes 2026-11-10 (review of PR #12553).** The rows above are the decision record and stay as written.
+> (1) Row 1's "the CLI copy only serves the crons, which never send `fable`" is wrong. `event-ship-merge`
+> (`server/inngest/functions/event-ship-merge.ts`) runs `/soleur:ship --headless` through `spawnClaudeEval`, whose
+> `resolveClaudeBin()` picks `/app/node_modules/.bin/claude` (the pinned CLI package), and ship Phase 5.5 spawns the
+> `advisor` tier (`fable`). So both pins sit on a hosted `fable` path; the lockstep move was required for that reason
+> too (ADR-083 2026-11-10 addendum, "a third hosted path"). (2) Row 4's "Wait, no waiver" and the Overview's "the pin
+> commit lands only after 2026-11-12T19:04Z" were overtaken by the operator's F3b waiver; the accepted residual is
+> recorded under Key Improvements item 1.
 
 ## Research Insights
 
@@ -250,6 +265,15 @@ places that still call the alias target "unverified" (CTO F7). Every ruling is r
   masking `/proc`, stops denying the credential paths or re-opens AF_UNIX reach, letting one tenant's Bash read
   a sibling session's sockets, persisted CLI output or credentials; or a cron CLI whose PreToolUse
   allowlist hook stops dispatching, letting a prompt-injected cron run arbitrary commands with its token.
+  > **Note 2026-11-10 (F3b):** add a supply-chain path: the floor was waived, so a malicious 2.1.321 / 0.3.321 caught
+  > by the community inside the 3-day window would already be in the image. Accepted by the operator; the residual is
+  > recorded under Key Improvements item 1.
+- **BYOK tenant whose org is not yet entitled to `claude-fable-5-2`:** Fable 5.2 reaches Team / Enterprise orgs only
+  "once your organization allows it" (availability wording cited by the PR #12553 review, not re-read here), so after the bump a `fable` consult on such a tenant's key can be rejected where
+  5.1 was accepted. The consult gates already handle a rejected advisor spawn: `plugins/soleur/skills/plan/SKILL.md`
+  Step 4.5 retries once with `resolveAdvisorFallback()` (semantic tier `strong`), and ship Phase 5.5 is wired the same
+  way (ADR-083). That tenant gets the consult on the `strong` tier instead of Fable 5.1, with no error surfaced. Not
+  validated: no entitled-vs-unentitled BYOK key was probed.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** the change is a model-alias retarget on paper, but it moves the
   native binary that builds every hosted sandbox. One cross-tenant read is brand-ending for a product whose
@@ -364,6 +388,7 @@ F16): proceed to G1, with these checks. Each is mirrored in `tasks.md` under the
   == the integrity recorded in the PR body in 1.1 (re-run `npm pack` after G1 and assert
   `sha512-` + `openssl dgst -sha512 -binary <tgz> | base64` equals it; the Phase 1 tarballs may be gone); a scratch `npm ci` installs
   binaries with sha256 `426c3381...`. Every platform entry of both packages (all eight) is at the new version.
+
 ### Phase R — Re-proof (after Gate G1 and steps 2.1-2.5), in a throwaway container (CTO F4, F15)
 
 - 1.1r `npm ci` from the regenerated lock (the step 2.5 tree) and a control tree at 2.1.311 / 0.3.311
@@ -424,7 +449,6 @@ F16): proceed to G1, with these checks. Each is mirrored in `tasks.md` under the
   unchanged, opus-5-5 / sonnet-5-5 "medium", fable-5-2 "medium".
 - 1.9 Stop condition: any red not explained by a pin shape blocks the bump; post the failing rows on #12514
   the same day and re-ask the CTO. The PR stays draft.
-
 
 ### Phase 2 (continued) — re-pin, capture, guards, trailer
 
@@ -511,7 +535,9 @@ F16): proceed to G1, with these checks. Each is mirrored in `tasks.md` under the
 - 4.4 Rollback. Triggers (any one): the image sha256 or invalid-key alias probe in 4.1 is wrong; a canary verdict
   other than ok, or an empty `sdk_version`, on web-1 or web-2; any startup-classifier `helper_*` /
   `bwrap_eperm` / `proc_mount_eperm` event from the release in Sentry; a hosted Bash failure report; the cron
-  hook denial missing in 4.3. Method: a revert PR of the squash commit (lockfile, Dockerfile, fixture, pins and
+  hook denial missing in 4.3; a cgroup OOM kill or an unplanned container restart of `soleur-web-platform` on web-1 or
+  web-2 after the release (added 2026-11-10: the SDK platform binary grew from 293,776,752 to 341,910,032 bytes, about
+  +16%, and per-session RSS was not measured, so memory headroom at the new pin is not validated). Method: a revert PR of the squash commit (lockfile, Dockerfile, fixture, pins and
   guards together back to 2.1.311 / 0.3.311; never the pin alone) with its own `sdk-bump-verified:` trailer,
   reusing the #12026 evidence for the `86dc1fcc...` binary that is in production today; the release-age floor
   does not block it (those versions are 15 days old and already locked). Redeploy happens through the normal
@@ -899,6 +925,25 @@ consult quality signal - recorded as decision-challenges F11 (spot read in Phase
 - **Coupling introduced by Guard 4:** a same-week model-launch retarget PR stays red until the pins clear the
   floor, by design (F6r), documented in model-launch-review's release-age passage.
 - **Concurrent worktrees:** long batteries use `SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 setsid nohup`.
+- **Session resume across versions (added 2026-11-10):** the SDK keeps its session jsonl under the agent `HOME`
+  (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, read by `server/agent-prefill-guard.ts`; `HOME` defaults to
+  `/home/soleur`). In `apps/web-platform/infra/ci-deploy.sh` the production and canary `docker run`s mount only
+  `/mnt/data/workspaces`, the plugin dir, the egress-token dir and the Inngest CA, plus a tmpfs `/tmp`; the Dockerfile
+  declares no `VOLUME`. So by the argv the jsonl lives in the container layer and does not survive the image swap in
+  either direction: forward (0.3.311 session, 0.3.321 reader) and on rollback (0.3.321 session, 0.3.311 reader after the
+  revert PR deploys), a resume finds no session file, the same as on every deploy today. Not validated: whether the
+  Doppler `--env-file` sets `HOME` or `CLAUDE_CONFIG_DIR` onto a persisted path (which would make a cross-version read
+  possible, most riskily on rollback, where an older reader meets a newer file), and how a session in flight at the swap
+  behaves (already listed in `phase-r-evidence.md` "Not validated").
+- **Upstream changelog (added 2026-11-10):** the claude-code changelog for 2.1.312 through 2.1.321 was reviewed.
+  Its 2.1.321 entry "mods' own tool calls (`$.tool.call`, `$.mcp.call`) raise no permission prompt" was measured in throwaway
+  containers (phase-r-evidence.md R2). A mod bound through `plugins:[{type:"local"}]` ran Bash and Write on 0.3.321 with
+  `canUseTool` called zero times, while 0.3.311 sent the same calls to `canUseTool` and they were denied. Neither
+  `CLAUDE_CODE_PLUGIN_DIR_WATCH=0` nor `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` stops this. A mod written into the workspace or
+  user `.claude/skills` never loads under `settingSources: []`, at start or mid-session, on either version. So the only path
+  is a module in the trusted plugin. That is the same trust boundary a planted `hooks.json` command hook already crosses on
+  0.3.311, and it is now pinned by a standing test (`plugin-pretooluse-hooks-web-parity.test.ts`: the trusted plugin declares
+  no hooks module).
 
 ## Sharp Edges
 

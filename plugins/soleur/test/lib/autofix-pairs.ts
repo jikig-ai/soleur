@@ -12,7 +12,8 @@
  *     A `)` inside a comment line does not end it (the old `/AUTOFIX_PAIRS=\(([\s\S]*?)\)/` read stopped there).
  *   - A comment line (first non-blank character `#`) is not a pair, so a commented-out pair is not live.
  *   - On a live line everything from an unquoted `#` on is a comment: `"a=b"  # was "c=d"` is ONE pair (a=b).
- *   - Every live token must be `from=to` (double-quoted or bare); anything else throws instead of being dropped.
+ *   - Every live token must be `claude-<id>=claude-<id>` (double-quoted or bare, ids `[0-9a-z-]`); anything else —
+ *     a single-quoted pair, a non-claude side, a stray word — throws with its line number instead of being dropped.
  *   - No block, two blocks, or a block with no closing `)` line throws; it is never read as zero pairs.
  *
  * Floors live in `assertPairFloors`, separate from the parser, so a two-pair synthetic source exercises the
@@ -28,7 +29,7 @@ export const MIN_DISTINCT_TARGETS = 4;
 
 const OPEN_RE = /^[ \t]*AUTOFIX_PAIRS=\((.*)$/;
 const CLOSE_RE = /^[ \t]*\)[ \t]*$/;
-const PAIR_RE = /^([^\s"=#]+)=([^\s"=#]+)$/;
+const PAIR_RE = /^(claude-[0-9a-z-]+)=(claude-[0-9a-z-]+)$/;
 
 /** Split one live line into its words, honouring double quotes and stopping at an unquoted `#`. */
 function lineTokens(line: string, lineNo: number): string[] {
@@ -89,16 +90,18 @@ export function parseAutofixPairs(src: string): AutofixPair[] {
     if (/^[ \t]*#/.test(line)) continue;
     for (const tok of lineTokens(line, lineNo)) {
       const m = PAIR_RE.exec(tok);
-      if (!m) throw new Error(`AUTOFIX_PAIRS_PARSE: token ${JSON.stringify(tok)} on line ${lineNo} is not from=to`);
+      if (!m) {
+        throw new Error(`AUTOFIX_PAIRS_PARSE: token ${JSON.stringify(tok)} on line ${lineNo} is not claude-<id>=claude-<id>`);
+      }
       pairs.push([m[1], m[2]] as const);
     }
   }
   return pairs;
 }
 
-/** The distinct `^claude-` RHS ids (the ids the repository declares current), sorted. */
+/** The distinct RHS ids (the ids the repository declares current), sorted. PAIR_RE already made each one `claude-…`. */
 export function distinctTargets(pairs: readonly AutofixPair[]): string[] {
-  return [...new Set(pairs.map(([, to]) => to).filter((to) => to.startsWith("claude-")))].sort();
+  return [...new Set(pairs.map(([, to]) => to))].sort();
 }
 
 /**

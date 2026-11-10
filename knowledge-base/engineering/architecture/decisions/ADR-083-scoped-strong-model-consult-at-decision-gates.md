@@ -121,3 +121,16 @@ effort override would change effort for every hosted session and is a spend deci
 `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` now checks both pinned binaries for
 every current model id (the `AUTOFIX_PAIRS` targets in `audit-models.sh`, the tier ids and the hosted SDK
 default) and pins the reviewed `default_effort` rows, so a later silent change in either is a red test.
+
+## Addendum — 2026-11-10 (#12514, review correction: a third hosted path)
+
+The 2026-11-10 addendum above names two resolvers (hosted sessions through the Agent SDK binary, local gates through
+the operator's install). There is a third, and it is hosted. `event-ship-merge`
+(`apps/web-platform/server/inngest/functions/event-ship-merge.ts`) runs `/soleur:ship --headless` through
+`spawnClaudeEval` (`_cron-claude-eval-substrate.ts`), whose `resolveClaudeBin()` picks
+`/app/node_modules/.bin/claude`, the pinned `@anthropic-ai/claude-code` package. Ship Phase 5.5 spawns the `advisor`
+tier, which is `fable` on Claude Code, inside that process. So the pinned CLI package is on a hosted `fable` path too,
+and both pins of the pair decide which Fable a hosted consult runs on; the pair moving in lockstep is what keeps
+them equal. The earlier statement that the CLI package is "not on that path" is right only for interactive hosted
+sessions. A fourth resolver sits outside the pair: the GitHub workflows that use `claude-code-action` v1.0.263 run
+its bundled CLI 2.1.311, so a `fable` spawn there still resolves to Fable 5.1 until that action pin moves.

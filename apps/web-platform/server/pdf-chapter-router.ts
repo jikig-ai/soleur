@@ -39,11 +39,11 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { PDF_ROUTING_MODEL } from "./agent-model-defaults";
 import { reportSilentFallback } from "./observability";
 import type { ChapterIndex } from "./pdf-text-extract";
 import { sanitizePromptIdentifier } from "./soleur-go-runner";
 
-const ROUTING_MODEL = "claude-sonnet-5-5";
 const AMBIGUOUS_SENTINEL = "AMBIGUOUS";
 /**
  * Levenshtein-distance ratio threshold for the title-fuzzy-match
@@ -155,7 +155,7 @@ export async function selectChapter(
     const q = query({
       prompt: routerUserStream(userMessage),
       options: {
-        model: ROUTING_MODEL,
+        model: PDF_ROUTING_MODEL,
         systemPrompt,
         // This call passes no `env` or `sandbox`, so the CLI inherits the server
         // environment (W1, ADR-272). A single-request routing turn needs no tool:
