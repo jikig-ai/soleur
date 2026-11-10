@@ -294,10 +294,10 @@ mutate m14
 row_red "row 14: job if is the YAML boolean false (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m15() { ifjob "true"; }
 mutate m15
-row_green "row 15: job if is the YAML boolean true stays GREEN" "contexts=14 producers=13"
+row_green "row 15: job if is the YAML boolean true stays GREEN" "contexts=13 producers=12"
 m16() { ifjob "github.event_name == 'merge_group' || github.event_name == 'pull_request'"; }
 mutate m16
-row_green "row 16: a positive merge_group || pull_request if stays GREEN" "contexts=14 producers=13"
+row_green "row 16: a positive merge_group || pull_request if stays GREEN" "contexts=13 producers=12"
 
 SYN_WF=".github/workflows/merge-queue-cla-synthetics.yml"
 POST_STEP='/^      - name: Re-post cla-check/'
@@ -323,7 +323,7 @@ row_red "row 22: the synthetic posts conclusion=neutral, not success" "merge-gro
 # on the live tree; this row proves the step-level-if rule is scoped to the success poster).
 m23() { sed -i 's/^        if: failure()$/        if: always()/' "$SBX/$SYN_WF"; }
 mutate m23
-row_green "row 23: an if on the failure-report step (not the success poster) stays GREEN" "contexts=14 producers=13"
+row_green "row 23: an if on the failure-report step (not the success poster) stays GREEN" "contexts=13 producers=12"
 
 # Queue-off (rows 24-28): no merge_queue block means no queue and no merge_group producer is
 # required. A rollback PR re-adding CodeQL to the canonical must not go red; the queue-on
@@ -372,15 +372,15 @@ fi
 echo "-- F2 if: forms"
 ifx() { reset_sbx; ifjob "$1"; run_engine "$SBX"; }
 ifx "github.run_attempt > 0 \&\& github.event_name == 'merge_group'"
-row_green "F2a: run_attempt > 0 && merge_group (a numeric comparison with 0 is not a false literal) stays GREEN" "contexts=14 producers=13"
+row_green "F2a: run_attempt > 0 && merge_group (a numeric comparison with 0 is not a false literal) stays GREEN" "contexts=13 producers=12"
 ifx "github.event_name == 'merge_group' || github.ref == 'x' \&\& false"
-row_green "F2b: merge_group || (ref && false): && binds tighter, the first disjunct runs, GREEN" "contexts=14 producers=13"
+row_green "F2b: merge_group || (ref && false): && binds tighter, the first disjunct runs, GREEN" "contexts=13 producers=12"
 ifx "always() \&\& !cancelled()"
-row_green "F2c: always() && !cancelled() (event-independent status form) stays GREEN" "contexts=14 producers=13"
+row_green "F2c: always() && !cancelled() (event-independent status form) stays GREEN" "contexts=13 producers=12"
 ifx "\${{ !cancelled() }}"
-row_green "F2d: !cancelled() alone stays GREEN" "contexts=14 producers=13"
+row_green "F2d: !cancelled() alone stays GREEN" "contexts=13 producers=12"
 ifx "github.event_name == 'merge_group' \&\& !cancelled()"
-row_green "F2e: merge_group && !cancelled() stays GREEN" "contexts=14 producers=13"
+row_green "F2e: merge_group && !cancelled() stays GREEN" "contexts=13 producers=12"
 ifx "github.event_name == 'merge_group' \&\& !true"
 row_red "F2f: merge_group && !true can never run (RED)" "merge-group-coverage: guards-ruleset:"
 ifx "github.event_name == 'merge_group' \&\& !(github.event_name == 'merge_group')"
