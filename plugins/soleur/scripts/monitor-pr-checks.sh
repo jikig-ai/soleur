@@ -82,8 +82,8 @@
 # poll that never reaches this arm (checks pending again) restarts, and re-checks the budget, when BLOCKED returns. Every other
 # precondition failing keeps today's immediate ending with no read. MONITOR_REQUIRED_DWELL_S and MONITOR_REQUIRED_TIMEOUT_S
 # (integers) and MONITOR_REQUIRED_TIMEOUT_BIN (a binary name) are tunables: the defaults are the ruled behaviour and tests shorten
-# them. CI_HEAD_VERDICT_BIN, the resolver seam, must answer both `verdict` and `required`. The inline poll loop in ship Phase 7 does
-# not perform this read yet.
+# them. CI_HEAD_VERDICT_BIN, the resolver seam, must answer both `verdict` and `required`. The inline poll loop in ship Phase 7 reads
+# the set too, through required-set-report.sh (#11544), not through this function.
 #
 # Merge queue (#9454): a PR that is IN the merge queue is neither stale nor stuck, so the BEHIND / BLOCKED /
 # auto-merge-off verdicts below (which tell the caller to sync, wait on protection, or merge by hand) would

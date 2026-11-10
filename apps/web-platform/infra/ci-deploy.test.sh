@@ -1757,8 +1757,8 @@ read_state_reason_and_exit() {
     _reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
     _exit=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
   else
-    _reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
-    _exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+    _reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/') || true
+    _exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://') || true
   fi
   printf -v "$reason_var" '%s' "$_reason"
   printf -v "$exit_var" '%s' "$_exit"
@@ -2139,7 +2139,7 @@ assert_canary_trace_order() {
 
   # Extract ordered DOCKER_TRACE lines
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   if [[ "$traces" == "$expected_order" ]]; then
     PASS=$((PASS + 1))
@@ -2182,7 +2182,7 @@ assert_canary_rollback() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Expected: system|pull|stop|rm|run|run|stop|rm
   # (prune, pull, stale canary cleanup [stop, rm], #8743 seed run, canary run, canary stop, canary rm)
@@ -2220,7 +2220,7 @@ assert_canary_layered_rollback() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Expected on rollback (CANARY_HEALTHY=false): no swap to prod.
   # image|pull|stop|rm|run|run|stop|rm — same shape as the existing rollback
@@ -2291,7 +2291,7 @@ assert_pull_failure() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Should only have prune and pull (which fails), then script exits
   local expected="image|pull"
@@ -2344,7 +2344,7 @@ assert_canary_crash() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (fails)
   # → script exits via set -e
@@ -2374,7 +2374,7 @@ assert_prod_start_failure() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (ok),
   # canary health ok,
@@ -2951,8 +2951,8 @@ assert_bprime_cosign_invocation() {
   local argsfile args sentry ok=1
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
-  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1) || true
+  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1) || true
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
   printf '%s' "$args" | grep -cF -- >/dev/null '--network host' || ok=0
@@ -2992,7 +2992,7 @@ assert_cosign_reads_mounted_config() {
   local argsfile args dc n_user n_dc ok=1 why=""
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1) || true
   rm -f "$argsfile"
   [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
   n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
@@ -6400,10 +6400,10 @@ MOCK
     snap_tag=$(jq -r '.tag // ""' "$snapshot" 2>/dev/null)
     snap_component=$(jq -r '.component // ""' "$snapshot" 2>/dev/null)
   else
-    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
-    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://')
-    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
-    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
+    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://') || true
+    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
+    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
   fi
 
   if [[ "$snap_reason" == "running" ]] && [[ "$snap_exit" == "-1" ]] && \

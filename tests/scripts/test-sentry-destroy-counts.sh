@@ -76,10 +76,10 @@ t_eval_binds_all_caller_vars() {
 t_destroy_count_is_the_sum() {
   local out; out=$(_run "$FIXTURES/tfplan-sentry-issue-alert-nested-delete.json")
   local rd nd rf dc
-  rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
-  nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
+  rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out") || true
+  nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out") || true
   rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
-  dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
+  dc=$(grep -oP '^destroy_count=\K.*' <<<"$out") || true
   if [[ "$rd" == "0" && "$nd" == "1" && "$rf" == "0" && "$dc" == "1" ]]; then
     _report "T3 destroy_count sums resource+nested (nested-only delete is counted)" ok
   else
@@ -92,10 +92,10 @@ t_destroy_count_sums_forgets() {
   printf '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.gone","mode":"managed","change":{"actions":["forget"],"before":{},"after":null}}]}' > "$f"
   local out; out=$(_run "$f")
   local rd nd rf dc
-  rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
-  nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
+  rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out") || true
+  nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out") || true
   rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
-  dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
+  dc=$(grep -oP '^destroy_count=\K.*' <<<"$out") || true
   if [[ "$rd" == "0" && "$nd" == "0" && "$rf" == "1" && "$dc" == "1" ]]; then
     _report "T3b destroy_count sums resource_forgets too (forget-only plan scores 1, not 0)" ok
   else
@@ -148,7 +148,7 @@ t_no_args_fails() {
 # parity test over two copies.
 t_both_jobs_call_the_script() {
   local wf="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
-  local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf")
+  local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf") || true
   # Anchor at line-start (with an optional `declare -i` / `local` prefix) so a
   # re-inlined assignment in ANY of its forms is caught, while an EXPLANATORY
   # COMMENT mentioning `destroy_count=$((…))` (this file's own header, and the

@@ -381,6 +381,45 @@ a seat to call the verb; the scan covers tracked suites and mutation-run scripts
 non-shell code; the namespace does not bound writes, desktop IPC or the session manager; and the real-namespace test rows
 run only where the runner allows user namespaces.
 
+## Amendment 4 (2026-11-09, #11764)
+
+Context: the count-shaped `/tmp` leak recurred a third time (~6.3k top-level
+entries measured 2026-11-01; ~23.4k on 2026-11-09) — `tmp.*` mktemp residue
+plus fixture dirs (`srt-*`, `skill-*`, `pencil-*`, `soleur-*`, `claude-http-*`,
+subagent scratch) whose producers include harnesses and runtimes EXTERNAL to
+the repo. Two mechanisms landed, one on each side of the producer/reclaimer
+split this ADR established:
+
+**TMPDIR routing.** Repo-owned producers that spawn children get TMPDIR
+pointed at an owned sandbox rather than accumulating per-site traps:
+`plugins/soleur/test/test-helpers.sh` exports `TMPDIR` at its `.soleur-owned`
+incident sandbox in the no-outer-root arm (the documented harness exception
+recorded in `scripts/lib/scratch-root.sh` — a test harness is the correct
+TMPDIR exporter, the direct-invocation counterpart of
+`soleur_scratch_session_begin`), and `apps/web-platform/server/agent-env.ts`
+injects `env.TMPDIR = opts.claudeTmpDir` beside `CLAUDE_CODE_TMPDIR` so every
+spawned-agent descendant — hooks, skill scripts, `srt` fixtures,
+`claude-http-*`, subagent scratch — writes under `/tmp/.cs/<tenant>`. Routing
+alone relocates the pile; it does not bound it.
+
+**Owned-base age reaping.** `scripts/tmpfs-guard.sh` gained a fourth arm,
+`reap_owned_cs_base`, over `$TMP_ROOT/.cs`: entries past a 48h floor are
+reaped after the same liveness + recursive-freshness conjuncts Reaper 2 runs
+(the shared `_INUSE_TOP`/`_FRESH_TOP` maps; `_GUARD_BASES` carries the `.cs`
+base as a second-level key source so a live handle under `<tenant>/…` marks
+the tenant dir). The one deliberate omission vs Reaper 2 is the size floor —
+the leak class is count-shaped, invisible to bytes.
+
+**Shared-`/tmp` heuristic reaping remains rejected.** This amendment does not
+weaken the measured ruling in Context: the dry run that marked ~1,500
+"old-but-precious" authored files still stands, and no name/age heuristic
+runs over `/tmp` top level. The `.cs` arm is sound precisely because the base
+is repo-owned — nothing human-authored lives under a machine-assigned
+per-tenant hash dir, so a stale entry there is producer residue by
+construction. The boundary is the ownership of the base, not the shape of
+the predicate: the same age-only predicate over shared `/tmp` remains
+forbidden.
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |

@@ -323,7 +323,7 @@ fi
 PASS=$_ck_p; FAIL=$_ck_f; cases=$((cases - 1))
 detail_clean() { # <detail>: <=120, only A-Za-z0-9=.:_-, starts boot=<8>.
   local d="$1"
-  [[ ${#d} -le 120 ]] && [[ "$d" =~ ^[A-Za-z0-9=.:_-]+$ ]] && [[ "$d" == "boot=$BOOT8."* ]]
+  [[ ${#d} -le 120 && $d =~ ^[A-Za-z0-9=.:_-]+$ && $d == "boot=$BOOT8."* ]]
 }
 no_forbidden() {
   ! awk '$1=="reboot"||$1=="poweroff"||$1=="shutdown"||$1=="halt"{f=1}

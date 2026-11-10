@@ -59,7 +59,8 @@ AUTOFIX_PAIRS=(
   "claude-sonnet-5=claude-sonnet-5-5"
   "claude-sonnet-4-6=claude-sonnet-5-5"
   "claude-sonnet-4-5=claude-sonnet-5-5"
-  "claude-fable-5=claude-fable-5-1"
+  "claude-fable-5=claude-fable-5-2"
+  "claude-fable-5-1=claude-fable-5-2"
   # Haiku 5.5 launch, 2026-10-08. BOTH Haiku 4.5 spellings: the id boundary defined
   # below makes the undated id a different token from the dated one, so one pair alone
   # leaves the other spelling stale forever. Both RHS are the current id, so the
@@ -114,7 +115,7 @@ autofix_from_re() {
 # its own target (`claude-sonnet-5` and `claude-opus-5` now share that shape),
 # so the mismatch fires on the id that is CURRENT rather than only
 # on a longer variant nobody had written yet. `assert_single_hop` does NOT catch
-# either shape ('claude-fable-5-1' is not itself a source id).
+# either shape ('claude-fable-5-2' is not itself a source id).
 #
 # Selection and rewriting MUST use this one boundary, or they can disagree
 # again: the sed cannot fix what only the grep considers stale.
@@ -263,7 +264,7 @@ if [[ "$MODE" == "fix" ]]; then
       from="${pair%%=*}"; to="${pair#*=}"
       # anchored on the SAME boundary as selection (ID_BOUNDARY): preserve the
       # trailing char so a longer/dated variant (claude-opus-4-7-20260101) or a
-      # successor that extends the stale id (claude-fable-5-1) is NOT corrupted
+      # successor that extends the stale id (claude-fable-5-2) is NOT corrupted
       # by a prefix swap.
       sed -i -E "s/${from}${ID_BOUNDARY}/${to}\1/g" "$f"
     done
@@ -340,7 +341,7 @@ if [[ ${#pins[@]} -gt 0 ]]; then
   # UNKNOWN — never as "the pin is fresh".
   if command -v gh >/dev/null 2>&1; then
     _tip="$(gh api repos/anthropics/claude-code-action/releases --jq '.[0].tag_name' 2>/dev/null || true)"
-    _pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)"
+    _pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)" || true
     # These pins are annotated TAG objects, so git/tags resolves them. A pin
     # produced by pin-github-action/Dependabot is a plain COMMIT sha, where
     # git/tags 404s and commits/<sha> is the correct call — try both.

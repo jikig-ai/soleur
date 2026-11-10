@@ -131,7 +131,7 @@ assert_pass() {
   jsonl="$incidents/.claude/.rule-incidents.jsonl"
   local denied_rows=0
   if [[ -f "$jsonl" ]]; then
-    denied_rows=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
+    denied_rows=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || true)
   fi
   if [[ "$exit_code" -eq 0 && "$decision" != "deny" && "$denied_rows" -eq 0 ]]; then
     echo "PASS: $name"
@@ -386,8 +386,8 @@ t11_hook_ordering() {
   local order
   order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command' "$settings" 2>/dev/null)
   local rebase_line ship_line
-  rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
-  ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
+  rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1) || true
+  ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1) || true
   if [[ -n "$rebase_line" && -n "$ship_line" && "$ship_line" -gt "$rebase_line" ]]; then
     echo "PASS: T11 hook ordering (ship-unpushed-commits-gate after pre-merge-rebase)"
     PASS=$((PASS + 1))
@@ -407,8 +407,8 @@ t11_hook_ordering() {
     FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
   else
     order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
-    rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
-    ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
+    rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1) || true
+    ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1) || true
     if [[ -n "$rebase_line" && -n "$ship_line" && "$ship_line" -gt "$rebase_line" ]]; then
       echo "PASS: T11b .devin hook ordering (ship-unpushed-commits-gate after pre-merge-rebase)"
       PASS=$((PASS + 1))

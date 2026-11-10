@@ -98,7 +98,7 @@ LINES=0
 
 if [[ -s "$SHORTSTAT_TMP" ]]; then
   LINES=$(grep -oE '[0-9]+ (insertion|deletion)' "$SHORTSTAT_TMP" \
-    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}') || true
 fi
 
 if (( LINES < SKIP_LINES_THRESHOLD )); then

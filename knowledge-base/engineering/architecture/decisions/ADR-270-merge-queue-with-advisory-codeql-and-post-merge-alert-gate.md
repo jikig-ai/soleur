@@ -277,7 +277,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
 past 45 minutes, below the 120-minute timeout. It ages only entries at
-`position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
+`position <= max_entries_to_build` (now 1 — see Addendum 2026-11-09), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
 0-based the filter admits one extra entry, a false positive, not a miss). Detection
@@ -1176,3 +1176,57 @@ predicate now accepts `dismissed` or `fixed` per referenced alert, the
 close comment reads "dismissed or fixed", and the recorded per-alert reason
 carries the actual state. `keep-open` and lookup-failure still keep the
 tracker open.
+
+### Addendum 2026-11-09 (#12508): authored bot PRs enqueue explicitly — the #12489 counter-instance
+
+The 2026-10-07 addendum ("enqueue while BEHIND") measured that GitHub enqueues
+an armed PR whose head is behind `main` on its own under
+`strict_required_status_checks_policy`, and Decision 5's queue-mode design
+rests on it ("no explicit enqueue and no ruleset change"). PR #12489 is a
+counter-instance. On 2026-11-09 the publish workflow authored the
+`vinngest-v1.1.70` pin-bump PR, armed auto-merge at 13:30Z with every required
+check SUCCESS — and it never entered the queue: `isInMergeQueue: false`,
+`mergeStateStatus: BLOCKED` at 18:47Z+, 5h20m and counting, while the pin-drift
+guard ran red on every head carrying the tag (`test-infra` monitor leg, run
+42670134044; `deploy-script-tests` on #12506). An armed auto-merge request on a
+BEHIND head does not self-update and, on this evidence, does not reliably
+self-enqueue either; the un-bounded remediation was a human noticing and
+pushing an update.
+
+Decision: the machinery that authors a PR with armed auto-merge enqueues it
+explicitly. `bump-inngest-bootstrap-pin.sh`, immediately after a successful
+`gh pr merge --auto --squash` arm (and only in the arm branch — the
+mirror_only/withheld paths are unchanged), resolves the PR's GraphQL node id
+and calls `enqueuePullRequest` (`pullRequestId` only; `jump` is never set —
+the jump variant is operator-urgency tooling, see
+`knowledge-base/engineering/operations/runbooks/merge-queue-jump.md`) as the
+already-minted soleur-infra App token — the actor ADR-285 requires, since
+`github-actions[bot]`-armed enqueues receive zero `merge_group` runs. A
+rejection (permission, already-queued, schema drift) warns and continues:
+armed auto-merge remains the fallback, strictly better than the no-enqueue
+path it replaces. The red window for a pin bump is thereby bounded by one
+`merge_group` CI cycle instead of a human-in-the-loop interval.
+
+Scope: this addendum records a counter-instance to the self-enqueue
+measurement as it applies to authored bot PRs and rules that this repo's
+authoring machinery enqueues explicitly. It does not amend the Phase 7
+queue-wait design, which waits for the same self-enqueue on human/agent PRs
+and still needs no explicit enqueue of its own; whether #12489's stall was a
+general regression or specific to App-authored arming is unmeasured. The
+dated bodies above are left as written.
+
+### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
+
+The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.
+
+**Shipped:** `max_entries_to_build` 2→1 on all four parity surfaces (`infra/github/ruleset-ci-required.tf`, `scripts/create-ci-required-ruleset.sh`, `infra/github/README.md`, `.github/workflows/merge-queue-stall-check.yml` `MAX_ENTRIES_TO_BUILD`). Guard-2 (`T-mq-1`) now sanctions `max_entries_to_build ∈ {1,2}` in both directions — a value-only 1↔2 PR needs no guard edit; `T-mq-1.m14` pins an unsanctioned value to RED and `m15` pins both sanctioned values to GREEN.
+
+**Hazards recorded:** (a) serialized drain — one `merge_group` build in flight at a time; the `test` merge_group p50 (~49m before-window floor) is the soak metric, watched by `scripts/followthroughs/mq-lever-e-verdict-12269.sh` (exit 5 = revert warranted, filed on #12269 with `earliest=<merge>+21d`); (b) stall-probe coverage narrows to `position <= 1` — deeper queued entries pending past 45 min are expected under serialization and no longer reported as stalls.
+
+**Revert recipe:** one PR restoring `2` on the same four surfaces; `apply-github-infra.yml` auto-applies on merge.
+
+**Attribution sample (review pass).** Three sampled cancelled runs (42292851112, 42285771527, 42330322542) had all 42–44 jobs started and ran ~44–50 min before cancellation — in-flight builds discarded by group reformation (repeated same-PR queue refs on 2026-11-06). The flip removes second-build speculation but NOT head-build reformation churn; net benefit is what the soak measures.
+
+**Known hazard — promotion false-positive.** Under `position <= 1` a depth-≥2 entry promotes to head already past the 45-min enqueuedAt threshold during congestion, filing a SUSPECTED stall at the start of its own legitimate build. Filings dedupe per PR and self-close on merge via the drain step; the fix (age from the correlated `merge_group` run's `createdAt` when `headCommit.oid` is non-null) is tracked as a follow-up issue.
+
+**Probe rework (review pass).** The soak probe was reworked after the design-validity pass: inputs are derived in-probe (tracker via the watch's own find-or-file; flip timestamp via `git log -S` pickaxe — `SOLEUR_FT_*` env is a reserved sweeper prefix and `secrets=` forwards names not values), the tracker parse reads the real 8-column seconds schema, and `Report refreshed:` is the postdate carrier (the body has no per-row window column).

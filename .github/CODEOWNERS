@@ -28,6 +28,9 @@
 /scripts/ci-oracle-lane.test.sh                         @deruelle
 /scripts/ci-oracle-lane-suites.txt                      @deruelle
 /scripts/ci-oracle-lane-legs.tsv                        @deruelle
+/scripts/ci-parked-hold.sh                              @deruelle
+/scripts/ci-parked-hold.test.sh                         @deruelle
+/scripts/lib/umbrella-member.sh                         @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh @deruelle
 /scripts/followthroughs/dispatch-recovery-sweeper-11211.sh      @deruelle

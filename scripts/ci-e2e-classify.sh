@@ -19,9 +19,10 @@
 #     two shapes may skip: status A with old mode 000000 and new mode 100644,
 #     and status M with old and new mode both 100644. Every other mode and
 #     status (100755, 120000, 160000, a mode-changing M, an A with a non-null
-#     old mode) emits `true`. This is deliberately STRICTER than the PR B
-#     driver's allowlist in scripts/ci-pr-selection.sh, which also admits
-#     100755: the driver has later stages and a classifier skip has none, so
+#     old mode) emits `true`. This is deliberately STRICTER than the retired PR B
+#     driver's allowlist (removed with the S4 evidence
+#     layer, 2026-11-09), which also admitted 100755: that driver had later stages and a
+#     classifier skip has none, so
 #     the skip admits only plain regular files (defence in depth: no consumer
 #     is known to execute an executable `.md`). Revisit before any widening of
 #     a doc-only allowlist, or if this skip is ever used for a context other

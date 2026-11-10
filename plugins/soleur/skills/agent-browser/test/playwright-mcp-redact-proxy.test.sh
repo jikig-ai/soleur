@@ -116,14 +116,14 @@ session() {
 }
 fact() { python3 "$FACTS" "$@" 2>/dev/null || printf 'ERR'; }
 rcof() { cat "$1/rc" 2>/dev/null || printf 'none'; }
-stderr_has() { [[ -f "$1/stderr.txt" ]] && grep -qF -- "$2" "$1/stderr.txt"; }   # file, never a pipe
-stdout_has() { [[ -f "$1/stdout.bin" ]] && grep -qaF -- "$2" "$1/stdout.bin"; }
+stderr_has() { [[ -f "$1/stderr.txt" ]] || return 1; grep -qF -- "$2" "$1/stderr.txt"; }   # file, never a pipe
+stdout_has() { [[ -f "$1/stdout.bin" ]] || return 1; grep -qaF -- "$2" "$1/stdout.bin"; }
 # leaks <out> <id> — a response for <id> was DELIVERED and carries the sentinel
 leaks() { [[ "$(fact "$1" "$2" found)" == "1" && "$(fact "$1" "$2" sentinel)" != "0" ]]; }
 # delivered_ok <out> <id> — a RESULT for <id> was delivered: not a JSON-RPC error, not an isError result
 delivered_ok() { [[ "$(fact "$1" "$2" found)" == "1" && "$(fact "$1" "$2" jsonrpc_error)" == "0" && "$(fact "$1" "$2" isError)" != "true" ]]; }
 # started <out> — the proxy got past startup: not a refusal, and it logged the child
-started() { [[ "$(rcof "$1")" != "2" && "$(rcof "$1")" != "none" ]] && stderr_has "$1" 'child pgid'; }
+started() { [[ "$(rcof "$1")" != "2" && "$(rcof "$1")" != "none" ]] || return 1; stderr_has "$1" 'child pgid'; }
 text_has() { [[ "$(fact "$1" "$2" text)" == *"$3"* ]]; }
 # `A && B` as a function's last list trips `set -e` when B fails, and pkill on an already-empty group fails
 reap_group() { local pg; pg="$(cat "$1/child_pgid" 2>/dev/null || true)"; if [[ -n "$pg" ]]; then pkill -KILL -g "$pg" 2>/dev/null || true; fi; }

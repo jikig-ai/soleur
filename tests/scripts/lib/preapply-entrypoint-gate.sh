@@ -190,7 +190,7 @@ run_gate() {
 
   local matched_count=0
   if [[ -n "$matched" ]]; then
-    matched_count=$(grep -c '' <<<"$matched")
+    matched_count=$(grep -c '' <<<"$matched") || true
   fi
 
   if [[ "$matched_count" -eq 0 ]]; then

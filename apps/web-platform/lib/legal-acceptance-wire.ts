@@ -3,6 +3,13 @@
 
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 
+/**
+ * The registry key shape, client-safe. It is the same rule as `KEY_RE` in `server/legal-acceptance/canonical.ts` (which imports
+ * node:fs, so the client cannot); `test/legal-acceptance/inbox-rows.test.ts` pins the two together. The Inbox row builds a path from
+ * a key, so it checks this first.
+ */
+export const LEGAL_KEY_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
 export const LEGAL_CHOICES = ["accept", "decline", "request_changes"] as const;
 export type LegalChoiceWire = (typeof LEGAL_CHOICES)[number];
 

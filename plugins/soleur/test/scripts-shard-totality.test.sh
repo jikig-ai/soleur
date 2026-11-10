@@ -155,7 +155,7 @@ sort -u "$WORK/ref_glob" -o "$WORK/ref_glob"
 # Glob members the loop special-cases (`[[ "$f" == "…" ]]` inside the loop) register
 # as literal arm labels instead of `run_suite "$f"` — their coverage already lands
 # in ref_static, so keeping the file path here would double-count it as unassigned
-# (#11562's ci-pr-affected-replay split). Subtract them.
+# (the shape #11562's replay split used, retired with S4). Subtract them.
 grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | sort -u > "$WORK/glob_special"
 comm -23 "$WORK/ref_glob" "$WORK/glob_special" > "$WORK/ref_glob.f" && mv "$WORK/ref_glob.f" "$WORK/ref_glob"
 

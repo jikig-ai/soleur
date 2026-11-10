@@ -12,6 +12,8 @@ superseded 2026-09-03 — see the Fable 5.1 re-tier review below. Sonnet 5 bills
 Fable-vs-Sonnet multiple is now 5×, not 3.3×. The ratios in this paragraph are retained as the
 basis the original decision was made on, not as current pricing.)** All 66 plugin agents use `model: inherit` and no workflow script passed `opts.model`, so a Fable 5 session ran every mechanical subagent step (diff classification, GitHub-issue filing, comment fetching, commit-message generation, report assembly) at top-tier rates. Anthropic's agent-design guidance endorses cheaper-model subagents for sub-tasks, and the web platform already tiers in production (Sonnet crons, Haiku routing, deliberate sonnet→opus upgrades for scoring workloads).
 
+> **Superseded 2026-11-09 (Fable 5.2 launch):** the "5×" Fable-vs-Sonnet multiple above compares Fable 5.1 with Sonnet 5; Fable 5.2 ($8/$40) against Sonnet 5.5 ($2/$10) is 4×. See the 2026-11-09 addendum at the end.
+
 ## Decision
 
 1. **Frontmatter stays `inherit` for all agents** (operator session-model agency preserved; overrides still need written justification).
@@ -454,3 +456,34 @@ call is attributed to whichever key the CLI lists first. No code change.
 ## Addendum — 2026-11-04 (#12026): the SDK-path carve-out is retired
 
 The "SDK-path carve-out" above is retired: the SDK pin is now `@anthropic-ai/claude-agent-sdk` 0.3.311 (>= the 0.3.293 trigger), whose bundled CLI knows `claude-haiku-5-5`. `sandbox-canary.mjs` and `plugin-root-sandbox-propagation-probe.mjs` (and the other SDK-path probes and real-SDK test drivers) now use the Haiku 5.5 id, and `SDK_PATH_CARVEOUT` is deleted from the model-launch-review audit, so `--detect` scans those paths like any other. The re-evaluation trigger "when the SDK pin reaches 0.3.293" has fired. Test-side ids are inside the audit's `/test/` exclusion, so `--detect` never scans them and they are kept on 5.5 by hand; #8643 tracks the remaining coverage boundary (the tier-file harvest does not read SDK-path literals) and now also carries the pdf-chapter-router candidate: its pin blocker is gone, and it stays under the 2026-10-09 Gate 0 spend gate until decided there.
+
+## Addendum — 2026-11-09 (Fable 5.2 launch)
+
+Claude Fable 5.2 (`claude-fable-5-2`) launched 2026-11-09. **Outcome: no pin moves.** Fable reaches Soleur only
+as the version-agnostic `model: fable` alias on the two ADR-083 gates, so there is no pin to move; the
+re-tier review below is recorded because "we looked and changed nothing" is a result.
+
+Every row was re-read from `https://platform.claude.com/docs/en/about-claude/pricing` on 2026-11-09, none
+inherited from the tables above. $/MTok, Anthropic list price:
+
+| model | input | 5m write | 1h write | cache read | output |
+|---|---|---|---|---|---|
+| Fable 5.2 | 8 | 10 | 16 | 0.20 | 40 |
+| Fable 5.1 | 10 | 12.50 | 20 | 0.25 | 50 |
+| Opus 5.5 | 4 | 5 | 8 | 0.20 | 20 |
+| Sonnet 5.5 | 2 | 2.50 | 4 | 0.10 | 10 |
+| Haiku 5.5 (prompt up to 100K) | 0.10 | 0.125 | 0.20 | 0.01 | 0.50 |
+
+Fast mode for Fable 5.2 lists at $16 input / $80 output.
+
+The 5.1 → 5.2 delta that matters for this workload is the cache-read line: this ADR measured Task spawns as
+cache-read dominated (section above), and that rate moved $0.25 → $0.20 (Opus 5.5: $0.20; Sonnet 5.5: $0.10).
+
+`MODEL_PRICING` (`agent-on-spawn-requested.ts`) is untouched: it is a billing constant, and no Fable id appears
+under `apps/web-platform/server/` (`git grep -inwE 'fable|claude-fable[-0-9a-z]*' -- 'apps/web-platform/server/**/*.ts'`
+returns nothing on 2026-11-09).
+
+These are list prices, not spend in effect: whether the `fable` alias resolves to 5.2 on the pinned CLI 2.1.311 is
+unverified and tracked in #12514. Anthropic's claims of up to 30% faster output and about 55% fewer
+safety-classifier blocks are vendor claims, not measured here. What the launch offered and was not adopted is in
+the [ADR-083 addendum](ADR-083-scoped-strong-model-consult-at-decision-gates.md).

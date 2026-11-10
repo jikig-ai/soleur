@@ -1,0 +1,16 @@
+BASE=af764001eebe535b44af468c9f3904f2809f8220 fetched_at=2026-11-09T10:32:53Z
+4 legs launched 10:57:07Z
+collect: python3 -I scripts/ci-pr-affected-replay.py collect --out /var/tmp/s4-rerun-9729-r4 --commits 300 --chunk I/4 --base origin/main  (I=1..4, launched 10:57Z)
+ejections: python3 -I scripts/ci-pr-affected-replay.py ejections --out /var/tmp/s4-rerun-9729-r4 --commits 300 --base origin/main
+audit-accept: python3 -I scripts/ci-pr-affected-replay.py audit --root /var/tmp/s4-audit --all-refs --accept /var/tmp/s4-audit/scripts/ci-pr-affected-audit.accept.tsv  (rc=0)
+audit-bare: python3 -I scripts/ci-pr-affected-replay.py audit --root /var/tmp/s4-audit --all-refs  (rc=1, gap_suites=266 shows the accept file's coverage)
+preactivation: bash scripts/ci-pr-affected-preactivation.sh (on detached /var/tmp/s4-audit)  rc=1 ready=false
+census: bash scripts/ci-demand-census.sh --start 2026-11-08T10:00:00Z --end 2026-11-08T22:00:00Z --workflow ci.yml --summary  (w2)
+        bash scripts/ci-demand-census.sh --start 2026-11-08T22:00:00Z --end 2026-11-09T10:00:00Z --workflow ci.yml --summary  (w1)
+sample: /var/tmp/s4-sample.sh + s4-sample2.sh — 20 most recent pull_request success ci.yml runs; per run: resolve PR, gh api pulls/<n>/files, test-all.sh --print-selection --paths=<list>, price sel=0 non-always_on via suite-durations{,-heavy}.tsv (default 1180ms)
+reader-audit: bash scripts/test-affected-kb-consumers.test.sh (31/31 pass)
+collect-relaunch: same collect command re-run ~13:55Z after legs were killed at 53 units (resumed; base had drifted 3 commits past the pin)
+collect-correction: python3 -I scripts/ci-pr-affected-replay.py collect --out /var/tmp/s4-missing3 --commits 3 --base af764001ee~297  (window tail commits missed by the drifted relaunch)
+aggregate-path: units consolidated to /var/tmp/s4-rerun-9729-r4-final (dedup by sha, 3 out-of-window units dropped, idx renumbered by pinned window position)
+aggregate: python3 -I scripts/ci-pr-affected-replay.py aggregate /var/tmp/s4-rerun-9729-r4-final --expect-commits 300 --out /var/tmp/s4-rerun-9729-r4-final/replay-summary.txt
+verdict: python3 -I scripts/ci-pr-affected-replay.py verdict --a fail --b pass --c within-10% --d pass  -> computed=NO-GO reason=criterion-failed

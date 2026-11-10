@@ -70,6 +70,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-11-07 S4 go/no-go re-ruling computed, verdict NO-GO (#9729; see `## Amendment 2026-11-07 (S4 go/no-go re-ruling, #9729)` below): the strict-zero index now passes criterion (b) and the saving passes (c), but the escape criterion (a) fails on the worst-case bound (19.38% ≥ 12%, numerator swollen by cancelled-run unsettled legs and pre-umbrella job-name drift); the lock stays, nothing is activated, `S4 live` is NOT recorded and the retire-vs-schedule decision returns to the operator per #10448
 - 2026-11-08 oracle-lane validation leg topology amended (#12393): oracle-index-check moved from running the committed manifest serially (measured 65.4 min vs the 30-min bound — activation rolled back 2026-11-08) to a K=5 `strategy.matrix.leg` split under the unchanged job ID, member assignment committed in scripts/ci-oracle-lane-legs.tsv (ADR-240 checked-in shape; check_legs() sentinel parity). Worst leg ~19 min (replay-a floor); +4 sub-minute no-op legs on non-oracle pull_request/merge_group runs is the recorded cost.
 - 2026-11-08 oracle-only fast lane re-activation canary (this PR): `CI_ORACLE_LANE=on` re-armed via `gh variable set` after #12393's K=5 topology landed (merged `780a7176662f`); this docs-only diff is the re-run of the first live canary per the runbook — its pull_request run must classify `oracle_only=true`, print `ORACLE-ONLY-SKIP` for the five legs, and run all 15 manifest members across `oracle-index-check (1/5..5/5)` green inside `timeout-minutes: 30` per leg. `S4 live` is recorded only if this run canaries green; a leg failure or a bound hit rolls back per §Rollback (`gh variable delete CI_ORACLE_LANE`).
+- 2026-11-09 S4 go/no-go fourth re-ruling computed, verdict NO-GO (#9729; see `## Amendment 2026-11-09 (S4 go/no-go re-ruling, #9729)` below): criterion (a) fails the worst-case bound again (cp95 18.41% ≥ 12%; point 0.45% holds); (b)/(d) pass, (c) within-10%; the lock stays, nothing is activated, `S4 live` is NOT recorded and the retire-vs-schedule decision remains operator-owned per #10448
 
 ## Context
 
@@ -675,3 +676,63 @@ What this means for S4: the escape measurement's clean floor held for a third wi
 ## Amendment 2026-11-09 (oracle-selection pull_request diff base, #12418)
 
 Status stays `adopting`. The oracle-lane scope-bound text above describes the pull_request guard's shape as "the merge-ref two-parent shape (`HEAD^1` base, `HEAD^2` the PR head)". The SHAPE is unchanged; the defect #12418 found and this PR fixed is in the diff-base DERIVATION: `diff_base="HEAD^1"` equated the shape's first parent with the intended diff base, but `HEAD^1` freezes at merge-ref computation, so on a branch that already merged `main` the `git diff HEAD^1 HEAD` listing re-counts main-side changes as the PR's own. The misfire direction is denial, never a wrong skip: the re-counted main-side paths push a qualifying diff to `outside_surface`/`excluded`, denying the lane and paying a full battery — a fabricated `oracle_only=true` is impossible because the PR's own delta is always a subset of the classified paths. The pull_request diff is now true GitHub three-dot — `git merge-base HEAD^2 FETCH_HEAD` .. `HEAD^2` — after an unconditional `git fetch --no-tags origin "refs/heads/$PR_BASE_REF"` (the refs/heads/ pin keeps a hex- or tags/-shaped base.ref from resolving a commit outside the named branch); diffing the merge RESULT against the merge-base was ruled out at review because that tree carries the base-side arc whenever the frozen parent is ahead of the fork point — the common case. Two deliberate unchangeds: the two-parent shape guard still names `HEAD^1`/`HEAD^2` (that is what a merge ref IS), and the driver's base-image sourcing stays `git show HEAD^1:` first-parent per #12329 (a different invariant — which tree supplies the classifier, not which commit the diff runs against). `base_sha` on pull_request now emits the resolved merge-base (the base the diff actually ran against; zero workflow consumers). New fail-closed reasons `bad_base_ref`, `base_fetch`, `no_merge_base` join the driver's reason grammar; a payload `pull_request.base.sha` candidate was ruled out (CTO ruling 2026-11-09) because a stale-but-resolvable event-time SHA re-freezes the same defect class. Separately, the S3 follow-through probes described above — #9728's draft-light soak and the push census — were retired in this PR per their RETIREMENT clause: the tracker closed PASS with `S3-EXIT-CENSUS` posted.
+
+## Amendment 2026-11-09 (S4 go/no-go re-ruling, #9729)
+
+Status stays `adopting`. Fourth re-ruling under the same rule of the record, on a fresh 300-commit window (BASE `af764001ee`, ejection window `2026-10-30T09:03:16Z..2026-11-09T12:43:53Z`). **The re-ruled verdict is NO-GO** (`computed=NO-GO reason=criterion-failed` from `verdict --a fail --b pass --c within-10% --d pass`), again on criterion (a)'s worst-case bound. Non-activating, in full: `CI_PR_AFFECTED` stays unset, `PR_AFFECTED_LOCKED` stays in `scripts/ci-pr-selection.sh`, no workflow/ruleset/infra file touched; `S4 live` NOT recorded; activation still needs the budget owner's named-command go-ahead plus the issue's entry gates.
+
+Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-rerun/receipts/go-no-go.md (read from the committed tree; ship archives the spec dir and the gate reads the archived copy)
+
+| Criterion | Measured | Status |
+|---|---|---|
+| (a) escape bound | commits+ejections n=444: attributable=0, unverified_as_escape=2 (point 0.45% ≤ 2%), worst-case 68/444 → cp95 **18.41%** ≥ 12%. Commits alone: 1/300 → 1.57%. | **fail** (bound arm) |
+| (b) index completeness | pinned audit: `unaudited=0 gap_suites=0 stale=0 accepted=1639`, exit 0 | **pass** |
+| (c) net saving | baseline 110.55 → bar 22.11; sample net 69.05 (reading 1, pass); population-weighted ~92% of bar | **within-10%** |
+| (d) reader audit | kb-consumers 31/31; edge:consumed sel=0 | **pass** |
+
+Notes: commits and ejections halves of n=444 were enumerated on bases differing by ~3 edge commits (relaunch/ejections resolved a drifted `origin/main`; corrected-and-disclosed, bound unaffected — receipts provenance note). First window exercising the 2026-11-09 corroboration + classifier changes — corroboration found zero drops (merge_group_on_landed=293/300, missing=0, refused=0), the `unclassified-job` bucket stays at 0 (R3 also 0), flake-cleared=32. Remaining bound driver: `failed-job-without-fail-line` (22) + `queue-oracle-shortfall` synthetic units (40) + unsettled legs (4) — measurement coverage, not escapes. Retire-vs-schedule stays operator-owned.
+- 2026-11-09 S4 retired, verdict NO-GO (#9729; see `## Amendment 2026-11-09 (S4 retirement, #9729)` below): the stage and its evidence layer are torn out after the fourth ruling window — `S4 live` is NEVER recorded, the `pr-selection` lever, the `affected-index-ratchet` required context and the whole replay/preactivation/accept-table evidence layer are removed; the full battery is restored on every event and `oracle-review-required` is re-scoped onto the committed `scripts/ci-oracle-surface.txt`
+
+## Amendment 2026-11-09 (S4 retirement, #9729)
+
+Status stays `adopting`. This amendment records the retirement of stage 4 — a partial reversal of the stage,
+not a new decision — executed per the operator's instruction on the fourth ruling day (ruling comment 6751457876
+on #9729). S4 never activated: the lever shipped dark and locked in PR B (2026-10-14) and the lock was never
+removed; `S4 live` is never recorded.
+
+**The four-window evidence outcome.** Four go/no-go rulings ran against fresh windows: 2026-10-16 NO-GO on
+criterion (b) (index 37%-incomplete), 2026-11-07 NO-GO on criterion (a)'s worst-case bound (19.38% ≥ 12%), the
+2026-11-08 third window NO-GO on the same bound (16.99% ≥ 12%), and 2026-11-09's fourth window NO-GO (`verdict
+--a fail --b pass --c within-10% --d pass`, bound 18.41% ≥ 12%). Across all four windows `attributable=0` — no
+measured escape — but criterion (a) failed on COVERAGE, not on a caught escape: the numerator is swollen by
+unreadable-by-construction units (silent job logs, unsettled suite legs, synthetic oracle-shortfall units), so
+the bound cannot be certified. Criterion (c) fell off its pass for the first time in window 3 and stayed inside
+the band in window 4 (~92-96.7% of the bar on the bar's own denominator), which caps further re-rulings at
+UNDECIDED: another window could not rule GO on (a) and (c) simultaneously with confidence.
+
+**Machinery removed.** The `pr-selection` job, its `needs:` edges, its three `if:` PR-skip terms, its driver
+`scripts/ci-pr-selection.sh` and its test, and the `PR-AFFECTED-SKIP` aggregator tolerance arm with its
+SKIP_LEGS/ACTIVE/HEAD_SHA_OK env; the `affected-index-ratchet` job and its required-context entries (workflow,
+`scripts/required-checks.txt`, the canonical required-status-checks JSON, the Terraform ruleset, the
+admin-merge-ready fixtures); and the whole evidence layer: `scripts/ci-pr-affected-replay.py`,
+`scripts/ci-pr-affected-preactivation.sh`, `scripts/ci-pr-affected-audit.accept.tsv`, the replay/preactivation
+test batteries, their `--rows` arms, lane declarations, TSV rows, affected-paths edge arrays, kb-consumer
+baseline rows and the activation runbook.
+
+**Machinery kept.** The full battery on every event is restored (workflow job count 20, required contexts 11).
+`test-all.sh --affected` and `scripts/lib/test-affected-paths.sh` keep the local affected-run machinery (dead
+suite edges removed). `plugins/soleur/scripts/lint-ratchet.py` stays. The oracle lane (`oracle-selection`,
+`oracle-index-check`, `ORACLE-ONLY-SKIP`, the dark `CI_ORACLE_LANE` switch) is untouched. The
+`oracle-review-required` sentinel keeps its merge-gate role with its oracle list re-scoped from the replay
+module's `RATCHET_ORACLE` onto the committed 11-member `scripts/ci-oracle-surface.txt`, resolved base-first
+(base surface → legacy base replay → HEAD surface); a PR cannot shrink the list that judges it, and an empty or
+unreadable list fails closed as `api`/`shape`, never `not-oracle`.
+
+**Standing dissent pair (re-attempt conditions, recorded not adjudicated).** Re-attempting per-suite selection
+requires BOTH (i) an enumerable queue-entry→run linkage that settles every unreadable unit (cancelled runs,
+silent job logs — the coverage debt criterion (a) could not certify around) AND (ii) a fresh criterion-(c)
+`pass` window — either alone is insufficient, since (i) without (ii) certifies a saving the bar no longer
+measures and (ii) without (i) re-risks the unbound. A second recorded dissent: whether
+`scripts/lib/affected-glob.sh` and `scripts/lib/test-suite-lanes.sh` (sourced at runtime by
+`scripts/test-all.sh`, satisfying the old list's own membership criterion) should join the oracle surface is
+deliberately NOT folded into the teardown — a follow-up issue, not this PR.

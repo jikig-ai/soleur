@@ -187,14 +187,14 @@ test_happy_rearm() {
   local out rc=0
   out=$(run_rearm "$REC") || rc=$?
   assert_eq "exits 0 when all re-arms return 202" "0" "$rc"
-  local n; n=$(grep -c '^BODY:' "$REQ_LOG")
+  local n; n=$(grep -c '^BODY:' "$REQ_LOG") || true
   assert_eq "one POST per record" "2" "$n"
-  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG") || true
   assert_contains "body carries reminder_id (route derives the dedup event id)" "$bodies" '"reminder_id":"rem-1"'
   assert_contains "body carries fire_at (route derives the delivery ts)" "$bodies" '"fire_at":"2026-06-18T12:00:00Z"'
   assert_contains "body carries actor:platform (route 400s without it)" "$bodies" '"actor":"platform"'
   assert_contains "body carries the action object" "$bodies" '"named-check"'
-  local args; args=$(grep '^ARGS:' "$REQ_LOG" | head -1)
+  local args; args=$(grep '^ARGS:' "$REQ_LOG" | head -1) || true
   assert_eq "Bearer secret is NOT on curl's argv" "0" "$(grep -cF 'test-secret' <<<"$args" || true)"
   assert_contains "Bearer travels on the stdin config channel" "$args" "--config -"
   local cfg_in; cfg_in=$(cat "${MOCKBIN}/curl_stdin")
@@ -212,7 +212,7 @@ test_503_aborts_loud() {
   assert_contains "names INNGEST_CUTOVER_QUIESCE as the cause" "$out" "INNGEST_CUTOVER_QUIESCE"
   assert_eq "503 with NO X-Soleur-Unavailable header is NOT reported as backend-refused" "0" "$(grep -c 'backend-refused' <<<"$out" || true)"
   # Must abort on the FIRST 503, not attempt the rest blindly.
-  local n; n=$(grep -c '^BODY:' "$REQ_LOG")
+  local n; n=$(grep -c '^BODY:' "$REQ_LOG") || true
   assert_eq "aborts on first 503 (only 1 POST attempted)" "1" "$n"
   teardown_mock_curl
 }
@@ -283,7 +283,7 @@ MOCK
     SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/api/internal/schedule-reminder" \
     bash "$TARGET" 2>&1) || rc=$?
   assert_eq "self-enumerate path exits 0" "0" "$rc"
-  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG") || true
   assert_contains "re-armed the self-enumerated record" "$bodies" '"reminder_id":"rem-enum"'
   teardown_mock_curl
 }
@@ -330,7 +330,7 @@ MOCK
     INNGEST_CUTOVER_CAPTURE_FILE="$cap_file" \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
   assert_eq "rearm-from-capture exits 0" "0" "$rc"
-  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG") || true
   assert_contains "re-armed the CAPTURED record" "$bodies" '"reminder_id":"rem-CAPTURED"'
   assert_eq "did NOT re-arm the self-enumerated record" "0" "$(echo "$bodies" | grep -c 'rem-SELF' || true)"
   assert_eq "capture file deleted after full success" "0" "$([[ -e "$cap_file" ]] && echo 1 || echo 0)"
@@ -403,7 +403,7 @@ MOCK
     INNGEST_CUTOVER_CAPTURE_FILE="$cap_file" \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
   assert_eq "steady-state rearm exits 0" "0" "$rc"
-  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG") || true
   assert_contains "re-armed the LIVE self-enumerated record" "$bodies" '"reminder_id":"rem-LIVE"'
   assert_eq "did NOT consume the orphan capture" "0" "$(echo "$bodies" | grep -c 'rem-ORPHAN' || true)"
   assert_eq "orphan capture left intact (not deleted by steady-state)" "1" "$([[ -s "$cap_file" ]] && echo 1 || echo 0)"

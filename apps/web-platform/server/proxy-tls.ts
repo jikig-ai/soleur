@@ -68,6 +68,35 @@ export function loadProxyTlsClientCa(): string | null {
   return normalizeProxyPem(process.env.PROXY_TLS_CERT) || null;
 }
 
+const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
+
+let helloKey: { loaded: boolean; key: Buffer | null } = { loaded: false, key: null };
+
+/**
+ * The relay hello-signing key as a 32-byte Buffer, or `null` unless the env value is exactly 64
+ * lowercase hex characters (the shape `random_bytes.proxy_hello_hmac` hex-encodes).
+ *
+ * Read ONCE, cached in module memory, and DELETED from `process.env` (CTO ruling, 2026-11-09, review
+ * of #12462; the precedent is `origin-tls.ts`): every child process the server spawns with the
+ * default or a spread environment would otherwise inherit the key. Call it at server boot, before
+ * any child process can be spawned (index.ts does); a later caller just gets the cached value.
+ * `/proc/<pid>/environ` keeps the original block either way (ADR-323 residual). The key is distinct
+ * from the TLS key by construction: a leaked TLS key must not forge hellos. Rotation is a restart.
+ */
+export function loadProxyHelloKey(): Buffer | null {
+  if (!helloKey.loaded) {
+    const raw = process.env.PROXY_HELLO_HMAC_KEY;
+    helloKey = { loaded: true, key: raw !== undefined && HELLO_KEY_RE.test(raw) ? Buffer.from(raw, "hex") : null };
+    delete process.env.PROXY_HELLO_HMAC_KEY;
+  }
+  return helloKey.key;
+}
+
+/** Test seam: the cache is module state. */
+export function __resetProxyHelloKeyForTests(): void {
+  helloKey = { loaded: false, key: null };
+}
+
 /**
  * Parse a PEM cert's `notAfter` expiry, or `null` when the PEM is
  * absent/unparseable. Pure — used both by the startup expiry log and by tests.

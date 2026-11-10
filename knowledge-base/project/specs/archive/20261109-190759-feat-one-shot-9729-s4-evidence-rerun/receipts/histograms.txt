@@ -1,0 +1,49 @@
+commit-units n=300
+classes: {'clean': 297, 'rule-irrelevant': 2, 'not-evaluable': 1}
+routes:
+  297  clean:-
+  2  rule-irrelevant:-
+  1  not-evaluable:unsettled-jobs: test-webplat (2/2)
+runs_via: {'head-sha': 300}
+
+ejection-units n=144
+classes: {'rule-irrelevant': 45, 'unverified': 2, 'flake-cleared': 32, 'not-evaluable': 65}
+routes:
+  45  rule-irrelevant:-
+  32  flake-cleared:identical-tree-green
+  22  not-evaluable:failed-job-without-fail-line
+  3  not-evaluable:queue-oracle-shortfall: pr-11949 added=6 branches=3
+  3  not-evaluable:queue-oracle-shortfall: pr-12064 added=5 branches=2
+  2  unverified:would-skip-suite-failed
+  2  not-evaluable:queue-oracle-shortfall: pr-11846 added=3 branches=1
+  2  not-evaluable:queue-oracle-shortfall: pr-12009 added=3 branches=1
+  2  not-evaluable:queue-oracle-shortfall: pr-12014 added=4 branches=2
+  2  not-evaluable:queue-oracle-shortfall: pr-12153 added=6 branches=4
+  2  not-evaluable:queue-oracle-shortfall: pr-12329 added=4 branches=2
+  1  not-evaluable:unsettled-jobs: test-scripts (8/8)
+  1  not-evaluable:unsettled-jobs: test-webplat (2/2)
+  1  not-evaluable:unsettled-jobs: test-webplat (1/2)
+  1  not-evaluable:queue-oracle-shortfall: pr-11593 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11598 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11712 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11728 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11753 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11766 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11814 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11842 added=3 branches=2
+  1  not-evaluable:queue-oracle-shortfall: pr-11881 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11895 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11904 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-11950 added=3 branches=2
+  1  not-evaluable:queue-oracle-shortfall: pr-11994 added=3 branches=2
+  1  not-evaluable:queue-oracle-shortfall: pr-12068 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12096 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12166 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12219 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12246 added=3 branches=2
+  1  not-evaluable:queue-oracle-shortfall: pr-12275 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12292 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12300 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12341 added=2 branches=1
+  1  not-evaluable:queue-oracle-shortfall: pr-12379 added=4 branches=3
+  1  not-evaluable:queue-oracle-shortfall: pr-12435 added=2 branches=1

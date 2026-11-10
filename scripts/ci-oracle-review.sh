@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # ci-oracle-review.sh — the `oracle-review-required` job's driver (#10859, ADR-276 PR3b; ruling (a) of 2026-11-06).
 #
-# WHAT IT DECIDES. The oracle surface (RATCHET_ORACLE of scripts/ci-pr-affected-replay.py — the affected-index
-# ratchet's own inputs) merges only after a bound owner-review act:
-#   * pull_request — the merge-ref diff touches a BASE RATCHET_ORACLE member AND (author == deruelle OR an APPROVED
+# WHAT IT DECIDES. The oracle surface (scripts/ci-oracle-surface.txt — the committed oracle list, moved off the
+# retired S4 replay module's RATCHET_ORACLE by the retirement ruling of 2026-11-09) merges only after a
+# bound owner-review act:
+#   * pull_request — the merge-ref diff touches a BASE oracle-list member AND (author == deruelle OR an APPROVED
 #     review by deruelle whose commit_id is the PR head SHA exists). GitHub bars self-approval, so the author arm is
-#     the release valve for owner-authored oracle repairs. The classification list is extracted at run time from the
-#     BASE commit's copy of the replay file (`git show <base>:scripts/ci-pr-affected-replay.py` imported by a pinned
-#     python one-liner), so a PR cannot shrink the list that judges it; the DRIVER ITSELF is also base-sourced on
-#     pull_request (a base without this file — every pre-PR3b base — runs the HEAD copy, still classified by the base
-#     list).
+#     the release valve for owner-authored oracle repairs. The classification list is resolved at run time from the
+#     BASE commit in canonical-first order (the surface file wins wherever the two sources coexist on a branch —
+#     they never coexist on main): `git show <base>:scripts/ci-oracle-surface.txt` -> the base's legacy
+#     `git show <base>:<legacy replay path>` RATCHET_ORACLE import (transition bases, including the
+#     retirement PR's own base) -> the HEAD copy of the surface file (a base lacking both — every pre-PR3b base —
+#     mirrors the HEAD-driver fallback convention below). A PR cannot shrink the list that judges it; an empty or
+#     unreadable resolved list fails closed (api/shape), never a vacuous not-oracle. The DRIVER ITSELF is also
+#     base-sourced on pull_request (a base without this file — every pre-PR3b base — runs the HEAD copy, still
+#     classified by the base list).
 #   * merge_group — no diff classification (the batch's diff is not the review surface). The queue members are
 #     enumerated through the merge-queue-cla-verify machinery (the entries(first:100) query + the headCommit.oid
 #     anchor binding, parity-pinned below), and EVERY member's queued head (headRefOid) must show its LATEST
@@ -42,7 +47,7 @@
 # VERDICT GRAMMAR (pinned by scripts/ci-oracle-review.test.sh):
 #   event      ^[a-z_]+$          (unset renders `unset`)
 #   oracle_diff^(0|1)$            pull_request only; merge_group always 0
-#   author     ^[A-Za-z0-9-]+$|-  merge_group renders `-`
+#   author     ^[A-Za-z0-9-]+(\[bot\])?$|-  merge_group renders `-`
 #   approved   ^(0|1)$
 #   members    ^[0-9]+$           merge_group member count; pull_request 0
 #   verdict    ^(pass|fail)$
@@ -56,7 +61,9 @@ export GIT_OPTIONAL_LOCKS=0
 
 readonly ORACLE_CONTEXT="oracle-review-required"
 readonly REQUIRED_REVIEWER="deruelle"
-readonly ORACLE_REPLAY="scripts/ci-pr-affected-replay.py"
+readonly ORACLE_SURFACE="scripts/ci-oracle-surface.txt"
+# the path is assembled, never literal: the residual-zero census greps the retired name
+readonly ORACLE_REPLAY="scripts/ci-pr-"'affected-replay.py'   # legacy transition-base fallback only (deleted by the S4 retirement)
 
 OUT="${GITHUB_OUTPUT:-/dev/null}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -104,7 +111,7 @@ die() {
 # contain — the merge-queue-cla-synthetics.yml precedent). On pull_request the step extracts this
 # driver from the base commit when the base carries it; a base without the file (pre-PR3b) and the
 # merge_group arm run this HEAD copy. Residual (platform-inherent): the workflow definition itself
-# is PR-mutable — bounded because ci.yml is RATCHET_ORACLE surface and this same check then gates it.
+# is PR-mutable — bounded because ci.yml is oracle surface and this same check then gates it.
 
 # gh_read <label> <gh api args...> : the reply lands in $REPLY_JSON. Not a command substitution, because die inside
 # one would print into the captured variable and be swallowed. A gh failure is retried ONCE after a short pause (a
@@ -130,7 +137,7 @@ pr_arm() {
   [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || finish fail input
   [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || finish fail input
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || finish fail input
-  [[ "${PR_AUTHOR:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || finish fail input
+  [[ "${PR_AUTHOR:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || finish fail input
   author="$PR_AUTHOR"
 
   # The merge-ref shape: HEAD is GITHUB_SHA, has exactly two parents, HEAD^2 is the PR head. All 40-hex.
@@ -155,10 +162,20 @@ pr_arm() {
   trap 'rm -rf -- "${work:-/nonexistent}"' EXIT
 
   git diff --name-only --no-renames "$base" HEAD -- > "$work/touched" 2> "$work/diff.err" || { rm -rf "$work"; finish fail api; }
-  # The classification list is the BASE commit's RATCHET_ORACLE — never the PR tree's: a PR cannot shrink the list
-  # that judges it. The extraction is a pinned one-liner (the suite pins it against the tuple in BOTH directions).
-  git show "$base:$ORACLE_REPLAY" > "$work/replay-base.py" 2> "$work/show.err" || { rm -rf "$work"; finish fail api; }
-  python3 - "$work/replay-base.py" > "$work/oracle.txt" 2> "$work/py.err" <<'PY' || { rm -rf "$work"; finish fail api; }
+  # The classification list is resolved from the BASE commit — never the PR tree's: a PR cannot shrink the list
+  # that judges it. Canonical-first order (ruled 2026-11-09): the base's committed surface file wins wherever both
+  # sources coexist on a branch; the base's legacy replay.py RATCHET_ORACLE import covers transition bases (the
+  # retirement PR's own base included); the HEAD surface file is the last resort for a base lacking both — the same
+  # fallback convention the driver itself uses on pre-PR3b bases. Guard 1 (binding): an empty or unreadable
+  # resolved list is a fail (api/shape), NEVER a vacuous not-oracle.
+  if git show "$base:$ORACLE_SURFACE" > "$work/oracle.txt" 2> "$work/show.err"; then
+    : canonical list resolved from the base surface file — require the self-member line,
+    : so a directory listing, symlink target, or comment file can never pass as the list
+    grep -qxF -- "$ORACLE_SURFACE" "$work/oracle.txt" || { rm -rf "$work"; finish fail shape; }
+  elif git show "$base:$ORACLE_REPLAY" > "$work/replay-base.py" 2> "$work/show.err"; then
+    # -I: keep the PR-controlled cwd off sys.path — a shadowing argparse.py at repo
+    # root could otherwise forge the list (and run code) inside the required gate.
+    python3 -I - "$work/replay-base.py" > "$work/oracle.txt" 2> "$work/py.err" <<'PY' || { rm -rf "$work"; finish fail api; }
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("replay_base", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -172,6 +189,12 @@ if not isinstance(oracle, (tuple, list)) or not oracle or not all(isinstance(p, 
 for p in oracle:
     sys.stdout.write(p + "\n")
 PY
+  elif [ -r "$ORACLE_SURFACE" ]; then
+    cat -- "$ORACLE_SURFACE" > "$work/oracle.txt" 2>> "$work/show.err" || { rm -rf "$work"; finish fail api; }
+  else
+    rm -rf "$work"; finish fail api
+  fi
+  grep -q '[^[:space:]]' "$work/oracle.txt" || { rm -rf "$work"; finish fail shape; }
   oracle_diff=0
   local p
   while IFS= read -r p; do

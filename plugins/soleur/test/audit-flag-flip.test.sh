@@ -162,8 +162,8 @@ done
 # `flip_segment_in_env "\$` excludes the def and the `fs_api -X POST` inside it).
 assert_order() { # $1=script $2=audit_call_regex $3=mutation_call_regex $4=label
   local af mf
-  af=$(grep -nE "$2" "$1" | head -1 | cut -d: -f1)
-  mf=$(grep -nE "$3" "$1" | head -1 | cut -d: -f1)
+  af=$(grep -nE "$2" "$1" | head -1 | cut -d: -f1) || true
+  mf=$(grep -nE "$3" "$1" | head -1 | cut -d: -f1) || true
   if [[ -z "$af" ]]; then
     echo "audit-flag-flip: FAIL — no audit call found in $4" >&2; fail=1; return
   fi

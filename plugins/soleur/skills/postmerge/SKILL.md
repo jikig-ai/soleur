@@ -58,7 +58,7 @@ Check the latest CI run on main triggered by the merge:
 gh run list --branch main --limit 3 --json databaseId,status,conclusion,headSha
 ```
 
-Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background`:
+Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background` (Monitor rules: [monitor-hygiene.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/monitor-hygiene.md)):
 
 ```bash
 for i in $(seq 1 20); do
@@ -357,7 +357,7 @@ complete before any had started.
 
 `git rev-parse --short main` next to `git rev-parse --short origin/main` is the cheap tell when a result looks wrong. Prefer the merge SHA unconditionally: it is immutable, it is the exact tree that merged, and it cannot drift while the phase runs. `origin/main` is an acceptable second choice only immediately after a fetch, and even then a sibling merge can move it mid-phase.
 
-Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes. **Why:** PR #7240 — Phase 4 read `git show main:` while local `main` sat 2 commits behind, reported the PR's own new learning file as MISSING, and the same stale ref undercounted `blkid` occurrences 2-vs-8 in a file the PR had rewritten. **And PR #7770** — Phase 4 addressed the merge SHA correctly, as the paragraphs above instruct, and still reported all 5 spot-checked files MISSING: the worktree had not fetched the merge commit, and git's `exists on disk, but not in <sha>` wording was read as a verdict about the tree. One `git fetch` made all 5 read correctly. Both failures are the same shape — Phase 4 manufacturing a false alarm about the merge it exists to confirm — reached by two different routes, which is why the fetch and the message table above are both load-bearing.
+Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes. **Why:** PRs #7240 and #7770 — a stale local `main` and an unfetched merge commit each made Phase 4 report the PR's own files MISSING, so the fetch and the message table above are both load-bearing ([history](./references/phase4-false-alarm-history.md)).
 
 ## Phase 5: Browser Verification (Conditional)
 

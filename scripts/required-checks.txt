@@ -84,7 +84,8 @@ skill-security-scan PR gate
 #     (`lint fixture content`), waiver-discipline (`waiver discipline
 #     (issue:#NNN trailer)`), rename-guard (`rename-guard (allowlist
 #     destinations)`), allowlist-diff (`allowlist-diff (.gitleaks.toml paths
-#     surface)`).
+#     surface)`), parked-hold and parked-hold-selftest (added 2026-11-08,
+#     #12396).
 #       - scan + lint-fixture-content: EARNED — the composite action reproduces
 #         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
 #         posting any synthetic (action.yml); the greens are earned, not
@@ -101,6 +102,26 @@ skill-security-scan PR gate
 #         destinations under apps/web-platform/**, and the .gitleaks.toml paths
 #         surface) are disjoint from ALLOWED_PATHS = {weakness-digest.md} ->
 #         intersection EMPTY.
+#       - parked-hold / parked-hold-selftest: NOT content-scoped — they read
+#         the PR's LIVE label list (scripts/ci-parked-hold.sh), not the diff,
+#         so the content-scoped reachability argument does not apply and none
+#         is made. Hosted in this umbrella because secret-scan.yml already
+#         triggers on labeled/unlabeled (ci.yml does not); a semantic misfit
+#         for a secret scanner, accepted over a new top-level required context
+#         (which would need a ruleset apply). The bot synthetic for
+#         `secret-guards` is UNCHANGED. The member is unreachable at synthesis
+#         for the current bot producers because the composite action's
+#         `labels` input is caller-fixed (swept: `grep -rn
+#         "bot-pr-with-synthetic-checks" .github` -> weakness-miner.yml is the
+#         only live caller and it never passes `parked`). A later HUMAN label
+#         fires a real `labeled` run that supersedes the synthetic (latest
+#         check-run per name wins); for a PR created with GITHUB_TOKEN that is
+#         UNVERIFIED. Flip evidence: a human-labeled bot PR that shows NO new
+#         `secret-guards` run means the member must be reproduced in the
+#         action's Phase-4 ceiling (live label read before posting any
+#         synthetic). A `parked` label applied by an Actions actor with
+#         GITHUB_TOKEN fires no `labeled` run either (a GitHub rule), so such
+#         a PR keeps its synthetic green until its merge_group run.
 #   quality-guards (.github/workflows/pr-quality-guards.yml job
 #     `quality-guards`)
 #     members: enforce, markdown-lint, guard-script-fixture-tests (context was
@@ -237,31 +258,19 @@ sentry-destroy-required
 #      protect. Do not add it.
 vendor-pin-required
 
-# #10859 — ci.yml `affected-index-ratchet` (PR3b flip, ADR-276 ruling (a) of
-# 2026-11-06): the affected-index audit as a strict-zero ratchet, advisory since
-# PR3a, required now that the observation window certified PASS and the budget
-# owner ruled. The job runs on pull_request and merge_group only (written
-# positively) — a required context must report on every PR.
-#
-# ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: ALLOWED_PATHS =
-# {knowledge-base/project/weakness-digest.md} and the ratchet's live set is
-# computed from suite files and their named paths; a bot PR touches no suite
-# file, so live minus accepted is unchanged and the synthetic green equals the
-# real verdict (ADR-139 per-gate rule; re-derive if ALLOWED_PATHS widens).
-affected-index-ratchet
-
 # #10859 — ci.yml `oracle-review-required` (PR3b, ADR-276 ruling (a) of
-# 2026-11-06): the bound owner-review sentinel for the affected-index oracle
-# surface — the only arm of this feature's oracle control. pull_request: the
-# BASE commit's RATCHET_ORACLE ∩ diff must be empty, the author deruelle, or a
+# 2026-11-06): the bound owner-review sentinel for the oracle surface
+# (scripts/ci-oracle-surface.txt — re-scoped off the retired replay.py
+# RATCHET_ORACLE by the S4 retirement of 2026-11-09). pull_request: the
+# BASE commit's resolved oracle list ∩ diff must be empty, the author deruelle, or a
 # deruelle APPROVED review bound to the head SHA must exist; merge_group: every
 # member's queued head must show its LATEST oracle-review-required check-run
 # completed/success (the self-loop is closed by member enumeration, never
 # self-report). Fail-closed on every unknown.
 #
 # ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: the pull_request arm
-# classifies on the BASE commit's RATCHET_ORACLE, and ALLOWED_PATHS ∩
-# RATCHET_ORACLE = ∅ (pinned by
+# classifies on the BASE commit's resolved oracle list, and ALLOWED_PATHS ∩
+# oracle surface = ∅ (pinned by
 # plugins/soleur/test/bot-synthetic-unreachability.test.sh), so every bot PR is
 # verdict `not-oracle` and the synthetic green asserts exactly that — never a
 # fabricated review act. The residual goes LIVE the instant an oracle path is
