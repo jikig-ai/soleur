@@ -36,8 +36,8 @@ export function isCanonicalUuid(v: unknown): v is string {
   return typeof v === "string" && UUID_RE.test(v);
 }
 
-/** The exact byte string the MAC covers. */
-export function buildHelloMacInput(userId: string, workspaceId: string, ts: string, nonce: string): string {
+/** The exact byte string the MAC covers. Module-private: the sender and the verifier are its only callers. */
+function buildHelloMacInput(userId: string, workspaceId: string, ts: string, nonce: string): string {
   return HELLO_DOMAIN + "\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce;
 }
 
@@ -161,7 +161,9 @@ export function verifyProxyHello(
   const given = Buffer.from(mac, "hex");
   const input = buildHelloMacInput(userId, workspaceId, ts, nonce);
   const matchesCurrent = timingSafeEqual(given, macOf(keys.current, input));
-  const matchesAlso = keys.acceptAlso !== null && timingSafeEqual(given, macOf(keys.acceptAlso, input));
+  // A non-Buffer slot (null, or undefined on a copy of the loaded set) is absent.
+  const acceptAlso = keys.acceptAlso;
+  const matchesAlso = Buffer.isBuffer(acceptAlso) && timingSafeEqual(given, macOf(acceptAlso, input));
   if (!matchesCurrent && !matchesAlso) return { ok: false, reason: "mac" };
 
   const nowS = Math.floor(now() / 1000);

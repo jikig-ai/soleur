@@ -47,9 +47,10 @@ const log = createChildLogger("session-proxy");
  *  `wss://<ownerAddress>:<port>`. */
 export const DEFAULT_PROXY_PORT = 8443;
 
-/** The listener needs a CURRENT hello key; the verify-only slot alone never starts it (ADR-323 Decision 9). */
-function hasCurrentHelloKey(keys: ProxyHelloKeys): keys is HelloVerifyKeys {
-  return keys.current !== null;
+/** The listener needs a CURRENT hello key; the verify-only slot alone never starts it (ADR-323 Decision 9). A copy of
+ *  the loaded set (spread, Object.assign) has no slots, so its `current` is undefined and it has no key either. */
+export function hasCurrentHelloKey(keys: ProxyHelloKeys): keys is HelloVerifyKeys {
+  return Buffer.isBuffer(keys.current);
 }
 
 /**

@@ -44,7 +44,7 @@ vi.mock("@/server/proxy-hello", async (importOriginal) => {
   };
 });
 
-import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES, REFUSE_LINGER_MS, isSendableCloseCode } from "@/server/session-proxy";
+import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES, REFUSE_LINGER_MS, hasCurrentHelloKey, isSendableCloseCode } from "@/server/session-proxy";
 import { proxyClientToOwner } from "@/server/session-proxy";
 import { createReplayCache, helloKeyFingerprint, verifyProxyHello } from "@/server/proxy-hello";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -52,7 +52,7 @@ import { EventEmitter } from "node:events";
 import { signProxyHello } from "@/server/proxy-hello";
 import * as denyReporterModule from "@/server/proxy-deny-report";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
-import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
+import { __resetProxyHelloKeyForTests, loadProxyHelloKeys } from "@/server/proxy-tls";
 import { __resetProxyListenerStatusForTests, getProxyStatus } from "@/server/proxy-listener-status";
 
 const TEST_BIND = { privateBindPrefix: "", bindAddress: "127.0.0.1", port: 0 } as const;
@@ -606,7 +606,7 @@ describe("startup guard: hello key", () => {
   });
 });
 
-// #8211 (ADR-323 Decision 9, B3) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO at the call sites: the
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO at the call sites: the
 // sender signs with CURRENT only, the listener starts only with a CURRENT key, the verifier receives the key set, and
 // every loader state has its exact Sentry events (named spies) plus the relay_hello_key_fp boot line.
 describe("accept-only slot (#8211): call sites, degraded states and the fingerprint line", () => {
@@ -715,6 +715,16 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
     expect(reports().map((r) => r.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored", "createProxyServer.no-hello-key"]);
     expect(warnOps()).toEqual([]);
     expect(fpLines()).toEqual([]);
+  });
+
+  it("the listener guard needs a real Buffer: the loaded set passes, a spread copy of it (no slots) and a null current do not", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
+    vi.stubEnv(SLOT, ACCEPT_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(hasCurrentHelloKey(keys)).toBe(true);
+    expect(hasCurrentHelloKey({ ...keys })).toBe(false);
+    expect(hasCurrentHelloKey(Object.assign({}, keys))).toBe(false);
+    expect(hasCurrentHelloKey({ current: null, acceptAlso: ACCEPT_KEY })).toBe(false);
   });
 
   it("both unset: no listener, exactly 1 no-hello-key event", () => {

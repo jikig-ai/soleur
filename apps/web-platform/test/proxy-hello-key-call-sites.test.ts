@@ -1,110 +1,146 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { execFileSync } from "node:child_process";
+import { lstatSync, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-import { stripComments } from "./helpers/strip-comments";
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — Guard 1 "the accept-only slot never signs", as structure rather
+// than a call-site scan. Only proxy-hello.ts can build the MAC input: (a) the domain string exists nowhere else in the
+// repo, so no other file can rebuild the canonical string; (b) the builder is module-private; (c) the module's export
+// list is pinned, so nothing re-exports or aliases a signing path; (d) inside the module only the verifier reads
+// `acceptAlso`. A second signer has to break one of the four. The behaviour rows (the sender signs with current only,
+// the verifier accepts both, the listener needs current) live in session-proxy-hello.test.ts, proxy-hello.test.ts and
+// proxy-hello-rotation-phases.test.ts.
 
-// #8211 (ADR-323 Decision 9) — Guard 1 at the level of the SET of call sites: the accept-only slot is verify-only.
-// The behaviour rows (session-proxy-hello.test.ts) pin the one sender they drive; this scan pins that it is the only
-// one. (1) Exactly one production call of signProxyHello outside proxy-hello.ts, and its key argument is a const bound
-// to exactly `loadProxyHelloKeys().current`. (2) `acceptAlso` and the slot's env name appear in production code only in
-// the files that need them. A new signer, `acceptAlso ?? current`, or an env-gated slot at the call site turns it RED,
-// including an edit that only takes effect under NODE_ENV=production (the behaviour rows run under NODE_ENV=test).
-// Comments are blanked by the TypeScript parser first, so prose naming these identifiers never counts.
+const DOMAIN = "soleur-proxy-hello-v1";
+const MODULE = "apps/web-platform/server/proxy-hello.ts";
+const REPO = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: __dirname, encoding: "utf8" }).trim();
 
-const ROOT = join(__dirname, "..");
-const PROD_DIRS = ["server", "lib", "app"];
+// Tracked files plus untracked, not-ignored ones (a new file is caught before it is committed). Paths under any
+// `test/` directory and under knowledge-base/ are out of scope: tests and prose quote the string on purpose.
+const EXCLUDED = /(^|\/)test\/|(^|\/)knowledge-base\//;
+const LISTED = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+  cwd: REPO,
+  encoding: "utf8",
+  maxBuffer: 64 * 1024 * 1024,
+})
+  .split("\0")
+  .filter((f) => f !== "" && !EXCLUDED.test(f));
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "node_modules" || e.name.startsWith(".")) continue;
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else if (/\.tsx?$/.test(e.name) && !/\.d\.ts$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(p);
+const SHEBANG = "#!/usr/bin/env bash";
+const scanned: string[] = [];
+const hits = new Map<string, string[]>([
+  [DOMAIN, []],
+  [SHEBANG, []],
+]);
+for (const f of [...new Set(LISTED)]) {
+  const p = join(REPO, f);
+  let st;
+  try {
+    st = lstatSync(p);
+  } catch {
+    continue; // tracked but deleted in the working tree
   }
-  return out;
+  if (!st.isFile()) continue; // symlinks, submodule gitlinks
+  scanned.push(f);
+  const buf = readFileSync(p);
+  for (const [needle, list] of hits) if (buf.includes(needle)) list.push(f);
 }
 
-const ALL_FILES = PROD_DIRS.flatMap((d) => walk(join(ROOT, d)));
-// Only a file whose raw text names a scanned token can name it once comments are blanked, so only those are parsed
-// (parsing every file costs ~20 s). The four relay files are always kept for the vacuity floor.
-const TOKENS = /signProxyHello|acceptAlso|PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO|loadProxyHelloKeys/;
+const MODULE_SRC = readFileSync(join(REPO, MODULE), "utf8");
+const SF = ts.createSourceFile("proxy-hello.ts", MODULE_SRC, ts.ScriptTarget.Latest, true);
+const hasModifier = (n: ts.Node, k: ts.SyntaxKind) =>
+  ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === k);
 
-/** Production sources naming a scanned token, comment-stripped, keyed by path relative to apps/web-platform. */
-const SOURCES: ReadonlyMap<string, string> = new Map(
-  ALL_FILES.map((p) => [p, readFileSync(p, "utf8")] as const)
-    .filter(([, raw]) => TOKENS.test(raw))
-    .map(([p, raw]) => [relative(ROOT, p), stripComments(raw, p)]),
-);
+describe("Guard 1 structure: the accept-only slot never signs (#8211)", () => {
+  it("(a) positive control: the walk reads proxy-hello.ts and files of other types", () => {
+    expect(scanned.length).toBeGreaterThan(1000);
+    expect(scanned).toContain(MODULE);
+    const exts = new Set(scanned.map((f) => extname(f)));
+    for (const e of [".sh", ".mjs", ".yml", ".tf", ".json"]) expect(exts, e).toContain(e);
+    // The same read finds a needle in a non-.ts file, so the content check is not blind outside TypeScript.
+    expect(hits.get(SHEBANG)?.some((f) => f.endsWith(".sh"))).toBe(true);
+  });
 
-const count = (src: string, re: RegExp) => (src.match(new RegExp(re.source, "g")) ?? []).length;
-const filesMatching = (re: RegExp) =>
-  [...SOURCES]
-    .filter(([, src]) => count(src, re) > 0)
-    .map(([f]) => f)
-    .sort();
+  it(`(a) the domain string "${DOMAIN}" appears only in proxy-hello.ts (any extension, tests and knowledge-base excluded)`, () => {
+    expect(hits.get(DOMAIN)).toEqual([MODULE]);
+  });
 
-describe("Guard 1 call sites: the accept-only slot never signs (#8211)", () => {
-  it("the scan sees the production tree (vacuity floor: the known files are present and non-empty)", () => {
-    expect(ALL_FILES.length).toBeGreaterThan(100);
-    for (const f of ["server/proxy-hello.ts", "server/proxy-tls.ts", "server/session-proxy.ts", "server/index.ts"]) {
-      expect(SOURCES.get(f)?.length ?? 0, f).toBeGreaterThan(0);
+  it("(b, c) the export list is exactly the pinned set: no re-export, alias, default export or exported builder", () => {
+    const exported: string[] = [];
+    const other: string[] = [];
+    for (const st of SF.statements) {
+      if (ts.isExportDeclaration(st) || ts.isExportAssignment(st)) {
+        other.push(st.getText(SF));
+        continue;
+      }
+      if (!hasModifier(st, ts.SyntaxKind.ExportKeyword)) continue;
+      if (hasModifier(st, ts.SyntaxKind.DefaultKeyword)) other.push(st.getText(SF).slice(0, 80));
+      else if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) {
+          if (ts.isIdentifier(d.name)) exported.push(d.name.text);
+          else other.push(d.name.getText(SF));
+        }
+      } else if (
+        (ts.isFunctionDeclaration(st) ||
+          ts.isInterfaceDeclaration(st) ||
+          ts.isTypeAliasDeclaration(st) ||
+          ts.isClassDeclaration(st) ||
+          ts.isEnumDeclaration(st)) &&
+        st.name
+      ) {
+        exported.push(st.name.text);
+      } else other.push(ts.SyntaxKind[st.kind]);
     }
-  });
-
-  it("(1) exactly one production call of signProxyHello( outside proxy-hello.ts, in session-proxy.ts", () => {
-    const calls = [...SOURCES]
-      .filter(([f]) => f !== "server/proxy-hello.ts")
-      .flatMap(([f, src]) => Array.from({ length: count(src, /\bsignProxyHello\s*\(/) }, () => f));
-    expect(calls).toEqual(["server/session-proxy.ts"]);
-  });
-
-  it("(1) the signer is never aliased or passed around: outside proxy-hello.ts its only other mention is one plain named import", () => {
-    const sp = SOURCES.get("server/session-proxy.ts") ?? "";
-    expect(count(sp, /\bsignProxyHello\b/)).toBe(2); // the import specifier + the one call
-    expect(sp).not.toMatch(/\bsignProxyHello\s+as\b/);
-    expect(sp).toMatch(/^import \{[^}]*\bsignProxyHello\b[^}]*\} from "\.\/proxy-hello";$/m);
-    const elsewhere = [...SOURCES].filter(([f, src]) => !["server/proxy-hello.ts", "server/session-proxy.ts"].includes(f) && /\bsignProxyHello\b/.test(src));
-    expect(elsewhere.map(([f]) => f)).toEqual([]);
-  });
-
-  it("(1) the one call's key argument is a const bound to exactly loadProxyHelloKeys().current, bound once in its file", () => {
-    const sp = SOURCES.get("server/session-proxy.ts") ?? "";
-    const arg = /\bsignProxyHello\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(sp);
-    expect(arg, "the first argument is a bare identifier").not.toBeNull();
-    const id = (arg as RegExpExecArray)[1];
-    // Unique within the file: one binding of the identifier (const/let/var, a parameter or a destructure would add one).
-    expect(count(sp, new RegExp(`\\b(?:const|let|var)\\s+${id}\\b`))).toBe(1);
-    expect(count(sp, new RegExp(`\\b${id}\\s*=(?!=)`))).toBe(1);
-    expect(count(sp, new RegExp(`[(,]\\s*${id}\\s*[),:=]`))).toBe(1); // only the signer call's own `(id,`
-    // Anchored on the whole statement: `acceptAlso ?? current`, `(env && acceptAlso) || current`, a `!` or a cast fail.
-    expect(sp).toMatch(new RegExp(`^\\s*const ${id} = loadProxyHelloKeys\\(\\)\\.current;\\s*$`, "m"));
-  });
-
-  it("(2) `acceptAlso` is referenced in production code only by the verifier, the loader and the fingerprint line", () => {
-    expect(filesMatching(/\bacceptAlso\b/)).toEqual(["server/proxy-hello.ts", "server/proxy-tls.ts", "server/session-proxy.ts"]);
-  });
-
-  it("(2) in session-proxy.ts every `acceptAlso` sits on the one fingerprint line (2 references, 1 line)", () => {
-    const sp = SOURCES.get("server/session-proxy.ts") ?? "";
-    expect(count(sp, /\bacceptAlso\b/)).toBe(2);
-    const lines = sp.split("\n").filter((l) => /\bacceptAlso\b/.test(l));
-    expect(lines.map((l) => l.trim())).toEqual([
-      'const acceptAlsoFp = helloKeys.acceptAlso === null ? "none" : helloKeyFingerprint(helloKeys.acceptAlso);',
+    expect(other).toEqual([]);
+    expect(exported).toEqual([
+      "HELLO_MAX_BYTES",
+      "SKEW_S",
+      "REPLAY_MAX",
+      "isCanonicalUuid",
+      "signProxyHello",
+      "helloKeyFingerprint",
+      "ReplayCache",
+      "createReplayCache",
+      "HelloVerifyKeys",
+      "verifyProxyHello",
     ]);
+    // The builder exists and is module-private (b).
+    const builder = SF.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === "buildHelloMacInput");
+    expect(builder).toBeDefined();
+    expect(hasModifier(builder as ts.Node, ts.SyntaxKind.ExportKeyword)).toBe(false);
   });
 
-  it("(2) in proxy-hello.ts the signer's body never names `acceptAlso` (only the type and the verifier do)", () => {
-    const ph = SOURCES.get("server/proxy-hello.ts") ?? "";
-    const start = ph.indexOf("export function signProxyHello(");
-    expect(start).toBeGreaterThanOrEqual(0);
-    const body = ph.slice(start, ph.indexOf("\n}\n", start));
-    expect(body).toContain("JSON.stringify");
-    expect(body).not.toMatch(/\bacceptAlso\b/);
-  });
-
-  it("(2) the slot's env name appears in production code only in the loader and the sensitive-key list", () => {
-    expect(filesMatching(/\bPROXY_HELLO_HMAC_KEY_ACCEPT_ALSO\b/)).toEqual(["server/proxy-tls.ts", "server/sensitive-keys.ts"]);
+  it("(d) `acceptAlso` is read only inside verifyProxyHello (the HelloVerifyKeys member declaration aside)", () => {
+    const verifier = SF.statements.find(
+      (s): s is ts.FunctionDeclaration => ts.isFunctionDeclaration(s) && s.name?.text === "verifyProxyHello",
+    );
+    expect(verifier).toBeDefined();
+    const [vStart, vEnd] = [verifier!.getStart(SF), verifier!.getEnd()];
+    const outside: string[] = [];
+    let readsInVerifier = 0;
+    const visit = (n: ts.Node) => {
+      const named =
+        ((ts.isIdentifier(n) || ts.isPrivateIdentifier(n)) && n.text === "acceptAlso") ||
+        ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && n.text === "acceptAlso");
+      if (named) {
+        const pos = n.getStart(SF);
+        const isMemberDecl =
+          ts.isPropertySignature(n.parent) &&
+          n.parent.name === n &&
+          ts.isInterfaceDeclaration(n.parent.parent) &&
+          n.parent.parent.name.text === "HelloVerifyKeys";
+        if (pos >= vStart && pos < vEnd) {
+          if (ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) readsInVerifier += 1;
+        } else if (!isMemberDecl) {
+          const { line } = SF.getLineAndCharacterOfPosition(pos);
+          outside.push(`${line + 1}: ${n.parent.getText(SF).slice(0, 80)}`);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(SF);
+    expect(outside).toEqual([]);
+    expect(readsInVerifier).toBeGreaterThanOrEqual(1); // vacuity floor: the verifier does read the slot
   });
 });

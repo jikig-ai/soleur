@@ -19,7 +19,6 @@ import {
   HELLO_MAX_BYTES,
   REPLAY_MAX,
   SKEW_S,
-  buildHelloMacInput,
   createReplayCache,
   type HelloVerifyKeys,
   helloKeyFingerprint,
@@ -65,10 +64,13 @@ beforeEach(() => {
 });
 
 describe("canonical string and MAC (known-answer vector)", () => {
-  it("builder output equals the hand-assembled spec string", () => {
-    expect(buildHelloMacInput(U, W, String(T0_S), NONCE)).toBe(
-      "soleur-proxy-hello-v1\n" + U + "\n" + W + "\n" + String(T0_S) + "\n" + NONCE,
-    );
+  it("signProxyHello's mac is the HMAC of the literal canonical string (the builder is module-private)", () => {
+    const literal = "soleur-proxy-hello-v1\n" + U + "\n" + W + "\n" + String(T0_S) + "\n" + NONCE;
+    const expected = createHmac("sha256", KEY).update(literal).digest("hex");
+    expect(JSON.parse(signProxyHello(KEY, U, W, { now, nonce: NONCE })).mac).toBe(expected);
+    // The domain prefix is part of the covered string: the same fields without it give a different MAC.
+    const undomained = createHmac("sha256", KEY).update(literal.slice("soleur-proxy-hello-v1\n".length)).digest("hex");
+    expect(expected).not.toBe(undomained);
   });
 
   it("signProxyHello produces a hello whose mac equals the independently computed HMAC", () => {
@@ -313,7 +315,7 @@ describe("replay cache", () => {
   });
 });
 
-// #8211 (ADR-323 Decision 9, B3) — Guard 1: the accept-only slot is verify-only. A hello is admitted if its MAC matches
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — Guard 1: the accept-only slot is verify-only. A hello is admitted if its MAC matches
 // under CURRENT, or under the accept-also key while CURRENT is loaded, and either way it meets the same skew and replay
 // checks. All keys are synthesized per run.
 describe("key set: the accept-only slot (Guard 1)", () => {
@@ -340,6 +342,12 @@ describe("key set: the accept-only slot (Guard 1)", () => {
   it("the accept-also hello is admitted only through the slot: with the slot null it is refused with mac", () => {
     const text = signProxyHello(ACCEPT_KEY, U, W, { now });
     expect(verifyBoth(Buffer.from(text), createReplayCache(), { current: KEY, acceptAlso: null })).toEqual({ ok: false, reason: "mac" });
+  });
+
+  it("a non-Buffer slot is absent: a slot of undefined (a copy of the loaded set) refuses the accept-also hello with mac and does not throw", () => {
+    const copied = { current: KEY, acceptAlso: undefined } as unknown as HelloVerifyKeys;
+    expect(verifyBoth(Buffer.from(signProxyHello(ACCEPT_KEY, U, W, { now })), createReplayCache(), copied)).toEqual({ ok: false, reason: "mac" });
+    expect(verifyBoth(Buffer.from(signProxyHello(KEY, U, W, { now })), createReplayCache(), copied)).toEqual({ ok: true, userId: U, workspaceId: W });
   });
 
   it("a hello signed by a THIRD unrelated key is refused with mac while both slots are set", () => {
