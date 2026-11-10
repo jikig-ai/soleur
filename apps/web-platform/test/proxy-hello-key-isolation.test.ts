@@ -10,6 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACT_PATHS, SENSITIVE_KEY_NAMES, SENSITIVE_LOWER } from "@/server/sensitive-keys";
 import { ALLOWED_SERVICE_ENV_VARS, buildAgentEnv } from "@/server/agent-env";
 import { scrubSentryEvent } from "@/server/sentry-scrub";
+import { __resetProxyHelloKeyForTests, loadProxyHelloKeys } from "@/server/proxy-tls";
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
+  infoSilentFallback: vi.fn(),
+}));
 
 const NAME = "PROXY_HELLO_HMAC_KEY";
 const SERVER_DIR = join(__dirname, "..", "server");
@@ -64,5 +71,67 @@ describe("PROXY_HELLO_HMAC_KEY stays out of the agent surface", () => {
   it.each(["agent-env.ts", "providers.ts"])("%s names the key on no source line", (file) => {
     const src = readFileSync(join(SERVER_DIR, file), "utf8");
     expect(src.split("\n").filter((l) => l.includes(NAME))).toEqual([]);
+  });
+});
+
+// #8211 (ADR-323 Decision 9) — Guard 3: the verify-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is under the same rules,
+// so these rows run over BOTH names (the single-name rows above stay as they were).
+const NAMES = ["PROXY_HELLO_HMAC_KEY", "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO"] as const;
+const VALUES: Record<(typeof NAMES)[number], string> = {
+  PROXY_HELLO_HMAC_KEY: KEY_VALUE,
+  PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO: randomBytes(32).toString("hex"),
+};
+const ROWS = NAMES.map((n) => [n, VALUES[n]] as const);
+
+describe("both hello-key names (Guard 3)", () => {
+  beforeEach(() => {
+    for (const n of NAMES) vi.stubEnv(n, VALUES[n]);
+  });
+
+  it("own dispatch: the name list is exactly the two hello-key names, with distinct synthesized values", () => {
+    expect([...NAMES]).toEqual(["PROXY_HELLO_HMAC_KEY", "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO"]);
+    expect(ROWS).toHaveLength(2);
+    expect(VALUES.PROXY_HELLO_HMAC_KEY).not.toBe(VALUES.PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO);
+  });
+
+  describe.each(ROWS)("%s", (name, value) => {
+    it("is listed for pino and Sentry redaction (exact name, lowercase set, redact paths)", () => {
+      expect(SENSITIVE_KEY_NAMES).toContain(name);
+      expect(SENSITIVE_LOWER.has(name.toLowerCase())).toBe(true);
+      expect(REDACT_PATHS).toContain(name);
+      expect(REDACT_PATHS).toContain(`*.${name}`);
+    });
+
+    it("the Sentry scrubber redacts it inside an extra object", () => {
+      const scrubbed = scrubSentryEvent({ extra: { [name]: value, keep: "visible" } }) as { extra: Record<string, unknown> };
+      expect(JSON.stringify(scrubbed)).not.toContain(value);
+      expect(scrubbed.extra.keep).toBe("visible");
+    });
+
+    it("is not an allowed service env var", () => {
+      expect(ALLOWED_SERVICE_ENV_VARS.has(name)).toBe(false);
+    });
+
+    it("buildAgentEnv never forwards it from process.env, nor as an offered service token name", () => {
+      expect(process.env[name]).toBe(value); // precondition: really set
+      const fromEnv = buildAgentEnv({ value: "sk-ant-test-credential", scheme: "api_key" });
+      const offered = buildAgentEnv({ value: "sk-ant-test-credential", scheme: "api_key" }, { [name]: value });
+      for (const env of [fromEnv, offered]) {
+        expect(Object.keys(env)).not.toContain(name);
+        expect(JSON.stringify(env)).not.toContain(value);
+      }
+    });
+
+    it.each(["agent-env.ts", "providers.ts"])("%s names the key on no source line", (file) => {
+      const src = readFileSync(join(SERVER_DIR, file), "utf8");
+      expect(src.split("\n").filter((l) => l.includes(name))).toEqual([]);
+    });
+
+    it("is absent from process.env after the boot loader runs", () => {
+      __resetProxyHelloKeyForTests();
+      expect(name in process.env).toBe(true);
+      loadProxyHelloKeys();
+      expect(name in process.env).toBe(false);
+    });
   });
 });
