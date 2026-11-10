@@ -16,9 +16,13 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/legal/compliance-posture.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/operations
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/operations/expenses.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms/archive
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/learnings
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
