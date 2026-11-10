@@ -8,7 +8,8 @@ related_adrs: [ADR-068, ADR-118, ADR-263, ADR-282, ADR-320, ADR-241]
 
 # ADR-323: Session relay peers are admitted on the raw socket and every hello is HMAC-signed under a dedicated key
 
-Refs: #12288, #12289, #12290, #12167, #8211. Related: ADR-068 (user-sticky routing, peer allowlist), ADR-118 (proxy cert SANs track the
+Refs: #12288, #12289, #12290, #12167, #8211; amended 2026-11-10 by the accept-only key slot (#8211; follow-ups #12538, #12539).
+Related: ADR-068 (user-sticky routing, peer allowlist), ADR-118 (proxy cert SANs track the
 roster; the hello key joined its count gate in the 2026-11-08 amendment), ADR-263 and ADR-282 (the LUKS no-ack set this PR deliberately
 does not extend), ADR-320 and ADR-241 (Tier-A state readers). Plan:
 `knowledge-base/project/plans/archive/20261109-130604-2026-11-09-feat-signed-relay-hello-pre-tls-allowlist-plan.md`.
@@ -17,6 +18,11 @@ does not extend), ADR-320 and ADR-241 (Tier-A state readers). Plan:
 
 Accepted 2026-11-09. In force at merge of the PR that closes #12288, #12289 and #12290. The deployed signed round trip between the two
 web hosts is a separate precondition for serving external users from the second host; it is not a condition of this decision.
+
+**Amended 2026-11-10** (#8211, PR #12536; CTO rulings B3, B-a to B-e, T1 to T4, D3): the verifier accepts one verify-only slot,
+`PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, absent by default, and each host logs a key fingerprint at start. Decisions 2, 6 and 9, the rotation
+consequence and the considered options change as marked below. The amendment builds the verifier half of a rotation route only: the
+leak route and the rotate mode are #12538, and no rotation phase can run before it lands.
 
 ## Context
 
@@ -41,6 +47,19 @@ the second host:
   keeps the takeover vector open for its whole length. Re-ask the CTO if `agent_sessions_live` is not 0 at release time.
 - **`_PREVIOUS` dual-key verification.** The zero-downtime rotation pattern. Cut: rotation has no route in this PR; the new destroy-guard
   HALT blocks a replace instead.
+- **`_PREVIOUS` two-phase stage-then-clear** (amendment, 2026-11-10). Rejected: every host both signs and verifies, so a host that
+  signs the new key while its peer has not yet loaded it splits the hosts for the stagger. The egress audit token's `_PREVIOUS`
+  pattern (ADR-317) works only because its sender and receiver are different services. The slot is also not named `_PREVIOUS`: in
+  P1 it holds the NEW key.
+- **Two accept slots** (amendment). Rejected: one accept-only slot covers every adjacent phase pair (see Decision 9).
+- **An `accepted_also` counter on `relay_hello_window`** (amendment, ruling T1). Cut: once the fingerprint rows show every host on
+  current = new, no host signs the old key, so the counter adds nothing, and a new field is a parsing hazard on older images. The
+  window grammar is unchanged.
+- **A release-path shape check of the slot in `verify-required-secrets.sh`** (amendment, ruling T2). Cut: it runs only on release
+  restarts, so it cannot be the hard check, and a required entry would block every deploy. The hard checks belong to #12538's rotate
+  mode (requirement (e) below).
+- **A Terraform `-replace` row for the key in `key-rotate.yml`** (amendment). Rejected: it writes the new key into the same
+  Tier-A-readable state, which ADR-320 says does not repair a leak.
 - **A new `ProxyState` value for "no hello key".** Cut: `error` already pages through `relay_listener_down`.
 - **A hello-deadline timer** (slow-peer bound). First cut (the serve-gate probe holds an allowlisted, hello-less upgrade open for 700 ms
   to read `ok`), then REVERSED by the CTO ruling of 2026-11-09 (A2): a 10 s deadline sits far above the 700 ms probe hold and bounds an
@@ -64,6 +83,12 @@ the second host:
    `relay_hello_window accepted=<n> denied=<n> suppressed=<n>` per window with hello activity. That line is the only off-host positive
    signal for a signed round trip, because the serve-gate probe sends no hello. Extras are an enum, counts and the peer address; an
    unauthenticated reason never carries a hello-derived byte.
+   *Amended 2026-11-10:* `createProxyServer` also emits one warn line per container start, right after the key check passes,
+   `relay_hello_key_fp current=<8hex> accept_also=<8hex|none>`. Each value is the first 32 bits of HMAC-SHA256(key,
+   `"soleur-relay-hello-key-fp-v1"`) from `helloKeyFingerprint`, never a raw-key prefix or a plain hash of the key; it is the only
+   key-derived value that may reach a log. It proves the key state each host loaded, off-host and with no SSH, and NOT a serving
+   relay: the bad-port, TLS-setup and listen-error exits after it can still stop the listener. The canary stops at `no_bind` first,
+   so it prints none. The window line's grammar is unchanged.
 3. **Signed hello (#12289).** `{type, userId, workspaceId, ts, nonce, mac}`; `mac` = HMAC-SHA256 under `PROXY_HELLO_HMAC_KEY` over
    `"soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce`. `ts` is Unix seconds as a decimal string,
    `nonce` 32 lowercase hex, `mac` 64 lowercase hex, both ids strict lowercase UUIDs. One shared module builds the canonical string for
@@ -87,6 +112,16 @@ the second host:
    relay TLS enabled and the key absent or malformed, `createProxyServer` returns null, `proxy_state=error` and one constant-text
    `createProxyServer.no-hello-key` event; the check sits after the tls, bind and allowlist checks so `disabled`, `no_bind` and
    `no_allowlist` keep their meaning. Dev and CI without TLS stay `disabled` with no event.
+   *Amended 2026-11-10:* the loader is `loadProxyHelloKeys()`, one cache over both `PROXY_HELLO_HMAC_KEY` and the verify-only slot
+   `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`; both are deleted from `process.env` on the first call whatever their values, and both names are in
+   `sensitive-keys.ts` and pinned by the isolation test. The returned set is frozen and prints a placeholder under `JSON.stringify` and
+   `util.inspect`. The slot is unset by default (silent); malformed reads as absent with one `proxy-hello.accept-also-ignored` event;
+   equal to the current key is kept with one warn-level `proxy-hello.accept-also-equals-current` event; well-formed and distinct is
+   kept with one warn-level `proxy-hello.accept-also-active` event per boot (it sits outside Terraform, so a planted slot must not be
+   silent). Each event text is a constant. The slot alone never starts the listener: a missing current key still gives
+   `createProxyServer.no-hello-key`. The sender signs with the current key only (`signProxyHello` takes one Buffer). The verifier
+   computes both MACs and compares both with `timingSafeEqual` whenever the slot is set, refuses with `mac` only when neither matches,
+   and applies the same skew, replay and AP-2 checks whichever key matched.
 7. **Port parse and listen fence (#12290).** `resolveProxyPort` is a strict `^[0-9]{1,5}$` in 1..65535 parse evaluated at call time (the
    module-load constant is gone); `listen()` is wrapped, a throw closes the server and reports only the error code. The sender uses the
    same parser and never dials with an invalid port.
@@ -104,9 +139,45 @@ the second host:
    HALT refuses. The containers read Doppler only at start, so any change also needs a rolling restart
    of both hosts, and while the relay is down users whose lease sits on the other host get 4014 and retry without limit (the app serves
    only the users routed to the local host). Restoring the previous Doppler value (the route for an out-of-band edit) re-installs a leaked
-   key, so it is not a leak route. A rotation is therefore a separately reviewed change (dual-key `_PREVIOUS` verification, or minting the
-   key outside Terraform per ADR-320 decision 2), not a runbook step; it is recorded on #8211 as an open item before external users are
-   served from the second host.
+   key, so it is not a leak route. A rotation is therefore a separately reviewed change, not a runbook step; it is recorded on #8211 as an
+   open item before external users are served from the second host.
+
+   *Amended 2026-11-10 (#8211):*
+
+   - **The slot.** One accept-only slot, `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, verify-only and dark by default (no new secret is minted).
+   - **Routine rotation is three phases**, each one Doppler change plus one full rolling restart, because each host both signs and
+     verifies: P1 sign old, slot holds new; P2 sign new, slot holds old; P3 sign new, slot unset. Two hosts in adjacent phases complete a
+     signed round trip in both directions, and a skipped phase splits them in the predicted direction;
+     `apps/web-platform/test/proxy-hello-rotation-phases.test.ts` is the executable statement of why.
+   - **A confirmed leak is single-phase,** whatever the live session count: the one-stagger 4014 split is accepted, because three
+     phases keep a leaked key accepted through two rolling restarts plus the gate waits. The leak is declared by a typed `leak` input in
+     the owner's dispatch confirm.
+   - **A single-phase routine rotation** stays allowed while `agent_sessions_live=0` on both hosts; its check-then-act race is an
+     accepted residual.
+   - **Not executable until #12538.** `PROXY_HELLO_HMAC_KEY` is Terraform-managed (`doppler_secret.proxy_hello_hmac_key`, no
+     `ignore_changes`), so any Doppler edit of it trips the `relay_hello_key_changes` HALT. No phase can run until #12538 moves the key
+     out of Terraform (ADR-320 decision 2) and rotates it in the same act.
+   - **Until #12538 lands there is no leak response and no kill switch.** Containment is the pre-TLS allowlist only: a forged hello also
+     needs a roster-host source address. Restoring a previous Doppler value is still not a leak route. Retiring the relay stays a
+     reviewed PR, never a normal-merge act.
+   - **The signed relay probe is deferred** (#12539): a probe hello would raise `accepted` on every deploy and blur the "a real session
+     ran" evidence; the fingerprint line is the smaller variant that ships here.
+
+   **Phase-gate requirements for #12538** (normative; no line grammar is frozen by this amendment):
+
+   - (a) Every roster host shows a `relay_hello_key_fp` row from its **current boot**, and the host count equals the roster size.
+     #12538 chooses the boot-identity field; a `boot=<nonce>` on the fingerprint line is preferred, shipped in an image release before
+     the first rotation.
+   - (b) A fingerprint row proves key state, not a serving relay, so a same-boot `relay_probe proxy_state=listening` row is also
+     required.
+   - (c) Before P1, every roster host shows a fingerprint row, which proves its image knows the slot. One image is pinned from P1
+     through P3: no deploy or rollback mid-rotation. The slot is unset before any rollback below this release, because older images
+     ignore it.
+   - (d) #12538 freezes the line grammars when its parser lands.
+   - (e) #12538's rotate mode shape-checks the slot before writing it, refuses a slot equal to the current key and a P2 slot not
+     equal to the old current key, and runs a per-host fingerprint check after the canary host restarts, before the roll continues.
+     It also adds a Better Stack alert on `accept_also!=none` outside a recorded rotation (a planted slot is otherwise only a
+     warn-level Sentry event).
 
 ## Consequences
 
@@ -137,10 +208,16 @@ the second host:
   the replay window; a `v2` domain tag with the target host would bind it); the first frame is buffered up to the `ws` default
   `maxPayload`, but the pre-hello byte guard terminates a peer past 2048 bytes first; no `maxConnections` cap, because each proxied session holds one connection and a cap below the concurrent-session
   ceiling would refuse legitimate users; replaying a captured hello needs a compromised roster host; the per-process replay cache is
-  cleared by a container restart for up to about 61 s, and a backward clock step can re-admit a purged nonce.
-- **No rotation route.** After this change a replace of the key is an outage: the HALT blocks it on the per-merge path, `_PREVIOUS`
-  dual-key verification is the future pattern (see Decision 9), and retiring the relay (`host_proxy_tls_enabled` false) needs a
-  separately reviewed route and removing the `REQUIRED` entry in the same change.
+  cleared by a container restart for up to about 61 s, and a backward clock step can re-admit a purged nonce. Amended 2026-11-10: each
+  rotation phase is a rolling restart, so every host's in-process replay cache is cleared once per phase; and an accept-also slot
+  planted out of band causes no Terraform drift and no HALT, so its only signals are the per-boot `proxy-hello.accept-also-active`
+  event and `accept_also!=none` on the fingerprint line until #12538 adds the alert.
+- **Rotation route: verifier half built** (amended 2026-11-10). The verifier accepts the accept-only slot, so a three-phase rotation
+  no longer splits the hosts (Decision 9). The rest of the route is #12538: until it lands a replace of the key is still an outage,
+  and the HALT still blocks it on the per-merge path. A Terraform `-replace` is rejected as the route, because it writes the new key
+  into the same Tier-A-readable state, which does not repair a leak (ADR-320). Retiring the relay (`host_proxy_tls_enabled` false)
+  still needs a separately reviewed route and removing the `REQUIRED` entry in the same change. The slot itself stays optional and is
+  not in `verify-required-secrets.sh`.
 - **Coupling.** A missing key blocks every deploy, hotfixes included, until it exists.
 - **Clock assumption.** ±30 s needs NTP on both hosts; `reason=skew` is the symptom.
 
