@@ -30,9 +30,10 @@ WP="$(cd "$SPIKE_DIR/../../.." && pwd)"
 REPO="$(cd "$WP/../.." && pwd)"
 SPIKE_WORK="$(mktemp -d -t soleur-run.$$.XXXXXXXX)" || { echo "FAIL TOOL_UNAVAILABLE: mktemp"; exit 1; }
 SPIKE_RECORDS="$SPIKE_WORK/records.jsonl"
+SPIKE_OBSERVATIONS="$SPIKE_WORK/observations.jsonl"
 # Outside SPIKE_WORK: the EXIT trap removes the work directory, and the results must outlive it.
 SPIKE_OUT="${INJECTOR_SPIKE_OUT:-${TMPDIR:-/tmp}/injector-spike-results.$$.json}"
-export SPIKE_DIR SPIKE_WORK SPIKE_RECORDS SPIKE_OUT
+export SPIKE_DIR SPIKE_WORK SPIKE_RECORDS SPIKE_OUT SPIKE_OBSERVATIONS
 # shellcheck source=lib/harness.sh
 source "$SPIKE_DIR/lib/harness.sh"
 # shellcheck source=lib/bringup.sh
@@ -219,12 +220,11 @@ spike_session_up sessC
 echo "SOLEUR_SPIKE_STAGE stage=topology-ready"
 check_deadline "topology"
 
-# --- Arms not built yet (task 1.8) -----------------------------------------------------------------------------------
-# Recorded honestly so the floor reads INCONCLUSIVE rather than a skip or a pass.
+# --- Arms (lib/arms.sh). Those not built yet are recorded honestly, so the floor reads INCONCLUSIVE, never a pass. --
 record_verdict 1 unmeasurable "arm-not-implemented:sandbox-scan-and-cli-tier-probes"
-record_verdict 2 unmeasurable "arm-not-implemented:sdk-sandbox-clients-arms-a-and-b"
+arm_c2
 record_verdict 3 unmeasurable "arm-not-implemented:approval-lifecycle"
-record_verdict 4 unmeasurable "arm-not-implemented:allowlisted-reads"
+arm_c4
 record_verdict 5 unmeasurable "arm-not-implemented:cross-session"
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"
 record_verdict 7 unmeasurable "arm-not-implemented:add-verb-overlay"

@@ -10,6 +10,10 @@
 #   finalize
 #       Computes the verdict with verdict.mjs over the records, writes INJECTOR_SPIKE_OUT, re-reads it through
 #       verdict.mjs (the stored verdict must agree with the records) and exits with the verdict's exit code.
+#   observe <arm> <json file>
+#       Appends one raw-outcome object ({"arm": ..., ...the file's JSON}) to the observations the results JSON
+#       carries. Raw outcomes are recorded whether or not the criterion reached a verdict (secrets are already
+#       redacted by the producer; this never adds a value of its own).
 #   mask <value>
 #       Masks a generated value in the CI log (`::add-mask::`); a no-op outside Actions.
 #   mint_session_ca <dir> <cn>
@@ -69,10 +73,12 @@ finalize() {
   python3 -I - "$SPIKE_RECORDS" "$draft" <<'PY' || { echo "FAIL FINALIZE: cannot assemble results"; exit 1; }
 import json, os, sys
 records = [json.loads(l) for l in open(sys.argv[1]) if l.strip()] if os.path.exists(sys.argv[1]) else []
+obs_path = os.environ.get("SPIKE_OBSERVATIONS", "")
+observations = [json.loads(l) for l in open(obs_path) if l.strip()] if obs_path and os.path.exists(obs_path) else []
 meta = {k: os.environ.get(v, "") for k, v in {
     "run_url": "INJECTOR_SPIKE_RUN_URL", "commit": "SPIKE_COMMIT", "date": "SPIKE_DATE", "machine": "SPIKE_MACHINE",
     "sdk_pin": "SPIKE_SDK_PIN", "iron_proxy_digest": "SPIKE_IRON_PROXY_DIGEST", "app_image": "SPIKE_APP_IMAGE"}.items()}
-json.dump({"meta": meta, "records": records}, open(sys.argv[2], "w"), indent=2)
+json.dump({"meta": meta, "records": records, "observations": observations}, open(sys.argv[2], "w"), indent=2)
 PY
   verdict="$(node "$SPIKE_DIR/verdict.mjs" "$draft" 2>"$SPIKE_WORK/verdict.err" | sed -n 's/^verdict=//p')"
   [[ -n "$verdict" ]] || verdict="INCONCLUSIVE"
@@ -97,6 +103,13 @@ PY
   fi
   echo "INJECTOR_SPIKE_OUT=$SPIKE_OUT"
   exit "$rc"
+}
+
+observe() {
+  python3 -I -c 'import json, sys
+d = json.load(open(sys.argv[2]))
+print(json.dumps({"arm": sys.argv[1], **(d if isinstance(d, dict) else {"value": d})}))' "$1" "$2" >> "$SPIKE_OBSERVATIONS" \
+    || echo "WARN observe: could not record $1"
 }
 
 mask() {
