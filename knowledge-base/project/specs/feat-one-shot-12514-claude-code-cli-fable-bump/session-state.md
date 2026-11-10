@@ -28,3 +28,10 @@
 
 - constraint: Needs a CTO ruling on the supply-chain bump, the sdk-bump-verified ack, lockfile regeneration, and confirmation that the fable alias resolves to 5.2 on the chosen version.
 - cto_spawns=1 (install.cjs diff ruling, Phase 1.1)
+
+## Work Phase (pre-floor pause, 2026-11-10)
+
+- Done: Phase 1.1 static checks (PR #12553 body), guards 4/5 + AGENT_DEFAULT_MODEL + shared AUTOFIX_PAIRS parser + selection edges (bcb741870b), prose sweep (a7a129c406), F16 plan amendment (e028194729). Pushed.
+- Local verification: targeted vitest 181 pass / 2 fail by design (real-binary rows on 311 pins), tsc rc 0, bun model-launch-review 33/0, orphan lint rc 0.
+- Affected gate: UNRESOLVED, nothing measured - the runner-lib edit forces MODE=full (runner-changed), and the full run was refused (sibling full-gate in flight). Run the full gate after the pin commit, when the 2 by-design rows should be green.
+- Paused: release-age floor clears 2026-11-12T19:04Z. Resume at plan Phase 2.1.
