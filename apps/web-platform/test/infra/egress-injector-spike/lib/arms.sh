@@ -452,7 +452,7 @@ _c3_push_script() { # <session> <name> <msg> <out script file>
 w=/home/soleur/c3-$1-$2
 if [ ! -d "\$w/.git" ]; then HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git clone -q https://github.com/spike/alpha.git "\$w" 2>&1 | tail -1; fi
 cd "\$w" || { echo push_rc=clone-failed; exit 0; }
-if ! git log --format=%s | grep -qx "$3"; then git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "$3"; fi
+if ! git log --format=%s | grep -x "$3" >/dev/null; then git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "$3"; fi
 # Its own branch: other arms push to the same repository, and a push to a moved main is refused by git locally
 # (non-fast-forward) before any request leaves, which measured nothing (run 42809989901, the expiry arm).
 # Its own cap, under spike_cx's 120 s: a timeout there kills the docker CLI, not this push (review H10); 124 if hit.
@@ -894,8 +894,8 @@ try() { # <leaf> <request host> [<label>]
   # bare "http", which matches git's echo of the URL itself), so a refused connection reads neither.
   # The last line git printed, kept (one line, a safe character set) so a reject or accept can be read back.
   local gl; gl="$(printf '%s' "$ge" | tail -1 | tr -c 'A-Za-z0-9 ._:/()-' '_' | head -c 160)"
-  if printf '%s' "$ge" | grep -qiE 'certificate|verif'; then echo "res $lab git reject last=$gl"
-  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error'; then echo "res $lab git accept last=$gl"
+  if printf '%s' "$ge" | grep -iE 'certificate|verif' >/dev/null; then echo "res $lab git reject last=$gl"
+  elif printf '%s' "$ge" | grep -iE 'not found|not valid|repository|returned error' >/dev/null; then echo "res $lab git accept last=$gl"
   else echo "res $lab git unknown last=$gl"; fi
   # node: reject only on a certificate or TLS verification code; ECONNREFUSED, ECONNRESET and the like are errors.
   # Node has no code for a name-constraint violation: it reports code UNSPECIFIED with the message "permitted subtree
