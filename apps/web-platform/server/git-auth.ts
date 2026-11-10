@@ -301,16 +301,15 @@ export async function gitWithInstallationAuth(
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const { hardened, ...execOpts } = opts;
+  // The legacy arm refuses a redirecting `.git` shape BEFORE the mint, so a refused workspace costs no GitHub App token
+  // on every pull, push and fallback call (the shared host-git invocation below repeats the same check).
+  if (hardened === undefined && execOpts.cwd !== undefined) assertWorkspaceGitShape(execOpts.cwd);
   // Checked BEFORE the mint: a malformed isolated directory (a stray `true`, an unbranded object, an unsafe path) or a caller
   // cwd refuses without minting a token or running git. `undefined` is the only legacy value.
   if (hardened !== undefined) {
     assertIsolatedPushDir(hardened);
     if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");
   }
-
-  // The legacy arm refuses a redirecting `.git` shape BEFORE the mint, so a refused workspace costs no GitHub App token
-  // on every pull, push and fallback call (the shared host-git invocation below repeats the same check).
-  if (hardened === undefined && execOpts.cwd !== undefined) assertWorkspaceGitShape(execOpts.cwd);
 
   const token = await generateInstallationToken(installationId);
 
