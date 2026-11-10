@@ -33,7 +33,7 @@ const baseProps: LegalAcceptanceCardProps = {
   validUntil: "2026-11-14",
   state: "pending",
   row: null,
-  flagEnabled: true,
+  surfaceEnabled: true,
   email: "dana@example.com",
   currentVersion: "3",
 };
@@ -198,7 +198,7 @@ describe("pending card: the notices and the read-only mode", () => {
   });
 
   it("with the surface off the text still renders but there are no actions and a plain 'not available yet'", () => {
-    renderCard({ flagEnabled: false });
+    renderCard({ surfaceEnabled: false });
     expect(screen.getByText(KC.pendingNotAvailable)).toBeInTheDocument();
     expect(screen.getByText(/End of version 3/)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();

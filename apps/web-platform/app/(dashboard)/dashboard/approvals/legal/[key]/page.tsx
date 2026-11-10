@@ -44,7 +44,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent(`/dashboard/approvals/legal/${key}`)}`);
 
   // The surface gate first (the founder id only): it decides what this page may show at all.
-  const flagOn = await isLegalSurfaceEnabled(user.id);
+  const surfaceOn = await isLegalSurfaceEnabled(user.id);
 
   let entry;
   try {
@@ -61,7 +61,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
   const kc = legalKindCopy(key);
   const kind = legalTextKind(key);
   if (kc === null || kind === null) {
-    if (flagOn) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key } });
+    if (surfaceOn) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key } });
     notFound();
   }
   const label = legalDisplayLabel(kind, key, entry.body);
@@ -80,7 +80,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
 
   const currentRow = rows.find((r) => r.text_hash === entry.textHash);
   // Surface off: only a recorded answer for the CURRENT text may render it; anything else (pending, expired) stays hidden.
-  const showCurrent = flagOn || currentRow !== undefined;
+  const showCurrent = surfaceOn || currentRow !== undefined;
   const older = rows.filter((r) => r.text_hash !== entry.textHash);
   if (!showCurrent && older.length === 0) notFound();
 
@@ -112,7 +112,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
               validUntil={entry.validUntil}
               state={state}
               row={currentRow ? facts(currentRow) : null}
-              flagEnabled={flagOn}
+              surfaceEnabled={surfaceOn}
               email={user.email ?? null}
               currentVersion={entry.version}
             />
@@ -129,7 +129,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
             validUntil={null}
             state="replaced"
             row={facts(r)}
-            flagEnabled={flagOn}
+            surfaceEnabled={surfaceOn}
             email={null}
             currentVersion={entry.version}
             currentVisible={showCurrent}

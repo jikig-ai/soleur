@@ -26,7 +26,7 @@ export default async function LegalAcceptanceIndexPage() {
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent("/dashboard/approvals/legal")}`);
 
   // The surface gate first (the founder id only): it decides what this page may show at all.
-  const flagOn = await isLegalSurfaceEnabled(user.id);
+  const surfaceOn = await isLegalSurfaceEnabled(user.id);
 
   let entries;
   try {
@@ -42,7 +42,7 @@ export default async function LegalAcceptanceIndexPage() {
     const kc = legalKindCopy(e.key);
     return kind !== null && kc !== null ? [{ ...e, kind, kc }] : [];
   });
-  if (flagOn) {
+  if (surfaceOn) {
     for (const e of entries) if (legalKindCopy(e.key) === null) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key: e.key } });
   }
 
@@ -54,8 +54,8 @@ export default async function LegalAcceptanceIndexPage() {
   }
 
   // Surface off: only the founder's own recorded keys; nothing recorded means there is nothing to show.
-  const visible = flagOn ? declaredEntries : declaredEntries.filter((e) => rows.some((r) => r.key === e.key));
-  if (!flagOn && visible.length === 0) notFound();
+  const visible = surfaceOn ? declaredEntries : declaredEntries.filter((e) => rows.some((r) => r.key === e.key));
+  if (!surfaceOn && visible.length === 0) notFound();
 
   const now = new Date();
   const items = visible.map((e) => ({
@@ -89,7 +89,7 @@ export default async function LegalAcceptanceIndexPage() {
                   {i.label}, version {i.version}
                 </span>
                 <span className="text-sm text-soleur-text-secondary">
-                  {i.state === "pending" && !flagOn ? LEGAL_COPY.index.notAvailable : legalIndexState(i.kc, i.state)}
+                  {i.state === "pending" && !surfaceOn ? LEGAL_COPY.index.notAvailable : legalIndexState(i.kc, i.state)}
                 </span>
               </NavLink>
             </li>

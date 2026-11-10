@@ -29,7 +29,7 @@ const props = (over: Partial<LegalAcceptanceCardProps> = {}): LegalAcceptanceCar
   validUntil: null,
   state: "pending",
   row: null,
-  flagEnabled: true,
+  surfaceEnabled: true,
   email: "dana@example.com",
   currentVersion: entry.version,
   ...over,
@@ -84,7 +84,7 @@ describe("the real acknowledgement text: the DOM presumes no terms", () => {
   });
 
   it("pending, surface off: the not-available line", () => {
-    render(<LegalAcceptanceCard {...props({ flagEnabled: false })} />);
+    render(<LegalAcceptanceCard {...props({ surfaceEnabled: false })} />);
     expect(screen.getByText(KC.pendingNotAvailable)).toBeInTheDocument();
     expect(cardWords()).not.toMatch(TERMS_PRESUMING);
   });
