@@ -351,6 +351,13 @@ EOS
   note exp_at_50s "$(spike_row_status "$C3_EXP_ID")"
   waited=$(( $(date +%s) - C3_EXP_T0 )); (( waited < 66 )) && sleep $(( 66 - waited ))
   spike_cx sessE "$d/exp.sh" "$d/exp2.out"; note push_after_expiry "$(tail -1 "$d/exp2.out")"; note exp_final "$(spike_row_status "$C3_EXP_ID")"
+  # Diagnostics for the expiry path (no secrets: git's own messages, marker fields, iron-proxy audit fields).
+  note exp1_out "$(tr '\n' ' ' < "$SPIKE_WORK/c3/exp1.out" | head -c 400)"
+  note exp2_out "$(tr '\n' ' ' < "$d/exp2.out" | head -c 400)"
+  note exp_id "${C3_EXP_ID:+present}"
+  note exp_rows "$(spike_rows "$CONV_E")"
+  note exp_markers "$(docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep 'session=sessE ' | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' | tail -6 | tr '\n' '|')"
+  note exp_iron "$(docker exec "$SPIKE_APP_CTR" sh -c 'tail -c 20000 /run/spike/sessE/logs/iron-proxy.log' 2>/dev/null | tr -d '\000' | python3 -I "$SPIKE_DIR/lib/iron-audit.py" 6 2>/dev/null)"
 
   spike_hook_markers_since "$h0" | grep -E '^SOLEUR_EGRESS_VEND' | sed -E 's/ request_id=[^ ]+//; s/ action_sha256=[^ ]+//; s/ approval_id=[0-9a-f-]+/ approval_id=<id>/' > "$d/markers.txt"
   python3 -I - "$d" > "$d/verdict.txt" <<'PYC3'
