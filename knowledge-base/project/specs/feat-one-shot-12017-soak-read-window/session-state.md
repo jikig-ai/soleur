@@ -31,3 +31,17 @@
 
 ## Technical Rulings
 - cto_spawns=1 (batched, 4 rows): all assumed defaults APPROVED — CONTROL_ROWS 12-row subset; merged-jq batching (worker model = fallback); MG_MAX_PAGES=10 + rc-3-on-exhaustion; epoch-in-slice. Rows rewritten to `Ruled by CTO agent, 2026-11-10` in decision-challenges.md.
+
+## Work Phase
+- Status: complete (subagent, sequential-fallback)
+- Commits: 116fde7aff (P1 suite bounds), b54687c88d (P2 merged-jq + epoch + post-loop voucher), dc4ea86f07 (P3 bounded pagination), ae1e1ce196+db721ade1b (P4 re-price 185400ms + tasks)
+- Suite: 179/179 assertions, 68/68 mutants, ~2m05s (−51% vs 4m20s baseline); CI est. ≈94–125s vs ~120s target
+- Deviation: r_max_cap 60→40 required 2000→2200s (documented in commit/work-notes)
+
+## Review Phase
+- Status: APPROVE (sequential-fallback panel, 10 seats); trailers committed 698e08bd1b; notes 28e23a83ed
+- Findings: 4×P3 → bundled #12628, resolved in b35fad5a37; fix-round review pending (f18009c6)
+- Reviewed-Coverage: sequential-fallback
+
+## QA Phase
+- Plan Test Scenarios are all unit/mutation-level (fixture rows, mutant kills, CONTROL_ROWS floor) — covered by the suite run; no browser/API E2E surface exists (internal CI tooling).
