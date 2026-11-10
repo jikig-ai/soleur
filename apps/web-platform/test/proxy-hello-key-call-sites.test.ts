@@ -1,13 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname, isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 // #8211, ADR-323 Decision 9 (2026-11-10 amendment, "What keeps the slot verify-only") — Guard 1 "the accept-only slot
 // never signs", as structure rather than a call-site scan. What these rows check, and nothing more:
-//   (a) no other file spells the MAC domain string literally (whole repo, any extension, test roots and the top-level
-//       knowledge-base/ excluded);
+//   (a) no other file spells the MAC domain string literally (whole repo, any extension, test roots and Markdown under
+//       the top-level knowledge-base/ excluded);
 //   (b, c) the export list of proxy-hello.ts is pinned, and the canonical-string builder is not exported;
 //   (d) inside proxy-hello.ts only verifyProxyHello reads `acceptAlso`;
 //   (e) proxy-hello.ts imports node:crypto and nothing else (no other import, no require(, no import();
@@ -31,8 +31,8 @@ const REPO = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: __dirn
 
 // Tracked files plus untracked, not-ignored ones (a new file is caught before it is committed). Out of scope, anchored
 // at the repo root: Markdown under the top-level knowledge-base/ and the real test roots (tests and prose quote the
-// string on purpose). Code under knowledge-base/ (a spec's bootstrap.sh, a .py helper) IS scanned: an operator-run
-// script there could carry the string and an HMAC. A production module under a nested `test/` or `knowledge-base/`
+// string on purpose). Every non-.md file under knowledge-base/ IS scanned: an operator-run script there (a spec's
+// bootstrap.sh, a .py helper) could carry the string and an HMAC. A production module under a nested `test/` or `knowledge-base/`
 // segment (server/test/relay.ts) is scanned.
 const EXCLUDED =
   /^(?:knowledge-base\/.*\.md$|(?:test|\.github\/scripts\/test|apps\/[^/]+\/test|plugins\/soleur\/test|plugins\/soleur\/skills\/[^/]+\/test)\/)/;
@@ -81,9 +81,21 @@ for (const f of [...new Set(LISTED)]) {
     }
     if (code !== "ELOOP") throw e; // EACCES, EMFILE, EIO, ...: never a silent skip
     // A symlink: read what it points at (followed), so a link into an excluded root is still scanned.
-    got = readRegular(realpathSync(join(REPO, f)), 0);
+    let target: string;
+    try {
+      target = realpathSync(join(REPO, f));
+    } catch (re) {
+      throw new Error(`proxy-hello Guard 1 scan: ${f} is a dangling symlink (${(re as NodeJS.ErrnoException).code})`);
+    }
+    got = readRegular(target, 0);
     if (got === "directory") {
-      skipped.set(f, "symlink-to-directory"); // its contents are listed and scanned under their own paths
+      // Skipped only when its contents are scanned under their own paths: inside the repo and not in an excluded
+      // root. A link to a directory outside the repo, or into a test root, would hide whatever it points at.
+      const rel = relative(REPO, target);
+      if (rel.startsWith("..") || isAbsolute(rel) || EXCLUDED.test(`${rel}/`)) {
+        throw new Error(`proxy-hello Guard 1 scan: ${f} links to a directory the walk does not scan (${target})`);
+      }
+      skipped.set(f, "symlink-to-directory");
       continue;
     }
     viaSymlink.push(f);
@@ -147,9 +159,10 @@ describe("Guard 1 structure: the accept-only slot never signs (#8211)", () => {
     }
     // Every tracked symlink was either read through its target or skipped as a link to a directory. If the open stops
     // refusing symlinks (O_NOFOLLOW dropped), file links are read as plain files and this set no longer matches.
+    // No floor on the count: while the tree carries file symlinks this equality is the check, and a tree without
+    // any (the in-scope ones today are .grok/commands/*.md) must not fail for that alone.
     const linkFiles = TRACKED_SYMLINKS.filter((f) => skipped.get(f) !== "symlink-to-directory" && skipped.get(f) !== "absent");
     expect([...viaSymlink].sort()).toEqual([...linkFiles].sort());
-    expect(viaSymlink.length, "the tree carries file symlinks, so this arm is not vacuous").toBeGreaterThan(0);
     // Population conservation: every listed path is read or skipped, nothing else.
     expect(scanned.length + skipped.size).toBe(new Set(LISTED).size);
   });
