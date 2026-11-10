@@ -50,7 +50,8 @@ type Req = {
 // router path produces, `<host>:443` and `<host>`. Rows that test the R28, R36 and R37 guards override them.
 function req(r: Req & { tunnelTarget?: string | null; sni?: string | null }) {
   const h = String(r.host).toLowerCase();
-  return { query: "", headers: {}, body: Buffer.alloc(0), tunnelTarget: `${h}:443`, sni: h, ...r };
+  // REST writes must carry a JSON body (review 2026-11-10); the default here is what gh and the REST clients send.
+  return { query: "", body: Buffer.alloc(0), tunnelTarget: `${h}:443`, sni: h, ...r, headers: { "content-type": "application/json", ...(r.headers ?? {}) } };
 }
 
 function pkt(line: string): string {
@@ -864,7 +865,7 @@ describe("review 2026-11-10 — CTO R36, R37, R39, R40", () => {
   const good = "Basic " + Buffer.from(`router:${SESSION.routerCredential}`).toString("base64");
   const connect = (over: Record<string, unknown>) => req({ method: "CONNECT", host: "api.github.com", path: "", tunnelTarget: null, headers: { "proxy-authorization": good }, ...over });
 
-  it("R36: a CONNECT passes only as tunnel_listen's synthetic CONNECT (router credential, SNI = host, no tunnel)", async () => {
+  it("R36: a CONNECT passes the hook only with the router credential, SNI = host and no tunnel context (the method list is the control for the rest)", async () => {
     const { fake, decider } = setup();
     expect(await decider.decide(connect({}), SESSION)).toMatchObject({ action: "CONTINUE", class: "connect" });
     for (const [over, sub] of [
@@ -951,5 +952,23 @@ describe("verdict.mjs — a pass carrying a failed observation (review F1)", () 
   it("refuses only a pass: a fail with `failed:` beside eight passes is NO-GO", () => {
     const v = verdictMod.computeVerdict({ records: withNine({ verdict: "fail", observation: "failed: x" }) });
     expect(v).toMatchObject({ verdict: "NO-GO", exitCode: 0, failed: [9] });
+  });
+});
+
+describe("review 2026-11-10 fix round — policy holes", () => {
+  it("a REST write whose body is not JSON (form-encoded `_method=DELETE`, or no content type) is refused, not hashed", () => {
+    const at = (ct: string | undefined) => classify({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", body: Buffer.from("_method=DELETE"), headers: ct === undefined ? { "content-type": "" } : { "content-type": ct } });
+    expect(at("application/x-www-form-urlencoded")).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(at("multipart/form-data; boundary=x")).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    expect(at(undefined)).toMatchObject({ verdict: "refused", subreason: "unparseable" });
+    for (const ct of ["application/json", "application/json; charset=utf-8", "application/vnd.github+json", "application/vnd.github.v3+json"]) {
+      expect(classify({ method: "POST", host: "api.github.com", path: "/repos/acme-synth/widget/pulls", body: Buffer.from("{}"), headers: { "content-type": ct } }).verdict, ct).toBe("write");
+    }
+  });
+
+  it("push options are hashed when the capability carries a value (push-options=<v>)", () => {
+    const body = (caps: string, opt: string) => Buffer.concat([Buffer.from([pkt(`${OID_A} ${OID_B} refs/heads/main\0${caps}\n`), "0000", pkt(`${opt}\n`), "0000"].join(""), "latin1"), Buffer.from("PACK-synthetic-bytes")]);
+    const at = (b: Buffer) => hashOf({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: b });
+    expect(at(body("report-status push-options=1", "ci.skip"))).not.toBe(at(body("report-status push-options=1", "deploy=prod")));
   });
 });

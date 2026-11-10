@@ -33,9 +33,11 @@ const DEFAULT_DEADLINE_MS = 5000;
  * iron-proxy's `proxy.max_request_body_bytes` (iron-proxy.config.tmpl.yaml). Above it iron-proxy CUTS the body with no
  * error and forwards the cut copy (internal/transform/body.go, v0.56.0), so a body of this size or more is refused:
  * the hook cannot tell a whole body at the cap from a cut one (CTO R40). It stays below grpc-js's 4 MiB default receive
- * limit, so the hook always receives what iron-proxy has.
+ * limit for the body itself.
  */
 export const BODY_CAP_BYTES = 3 * 1024 * 1024;
+// The gRPC message also carries the headers (Go allows up to about 1 MiB), so a body just under the cap plus large
+// headers can exceed the 4 MiB receive limit; the call then errors and iron-proxy fails the request closed (502).
 const REASONS = new Set([
   "flag-off", "not-allowlisted", "pending", "rejected", "expired", "cap", "retry", "closed",
   "consume-failed", "rpc-error", "guard-refused", "hook-timeout", "no-hook-decision",
@@ -179,11 +181,11 @@ export function createDecider(deps) {
       marker: { name: "SOLEUR_EGRESS_VEND", fields: { ...base, class: cls, rule, approval_id: approvalId ?? "read-allowlist" } },
     });
 
-    // 0. CONNECT through iron-proxy's transform pipeline (R26): the router-only credential, never a vend. Only the
-    // synthetic CONNECT iron-proxy builds for a tunnel_listen tunnel passes: it carries SNI = the CONNECT host and no
-    // tunnel context (tunnel.go tunnelTransformCheck). A CONNECT sent to http_listen has no SNI, and one sent inside a
-    // tunnel has tunnel context; both are refused (CTO R36). The secrets rules' method list is the main control: no
-    // listener attaches the credential to a CONNECT at all.
+    // 0. CONNECT through iron-proxy's transform pipeline (R26): the router-only credential, never a vend. The hook
+    // refuses a CONNECT with no SNI (one sent to http_listen) or with tunnel context (one sent inside a tunnel). It
+    // cannot tell tunnel_listen's synthetic CONNECT (SNI = host, no tunnel; tunnel.go tunnelTransformCheck) from a
+    // CONNECT sent over TLS to https_listen with SNI = host, which it therefore passes: for that one the secrets
+    // rules' method list is the only control, and it keeps the credential off every CONNECT (CTO R36).
     if (n.ok && n.method === "CONNECT") {
       const pw = proxyAuthPassword(n.headers["proxy-authorization"]);
       const sni = request?.sni ? policyLib.normalizeHost(String(request.sni)) : null;

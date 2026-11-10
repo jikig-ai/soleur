@@ -310,7 +310,9 @@ export function parseReceivePack(buf) {
   }
   if (updates.length === 0) throw new Error("receive-pack: no ref update");
   const pushOptions = [];
-  if (capabilities.split(" ").includes("push-options")) {
+  // git negotiates push options with `push-options` or `push-options=<v>` (review 2026-11-10: the bare-token match
+  // left `push-options=1` pushes with unhashed options).
+  if (capabilities.split(" ").some((c) => /^push-options(=|$)/.test(c))) {
     for (;;) {
       const line = readPkt();
       if (line === null) break;
@@ -466,7 +468,10 @@ function canonicalFor(rule, n, bind, repo) {
     }
     return { kind: "git-push", host: n.host, repository: repo, updates: parsed.updates, capabilities: parsed.capabilities, push_options: parsed.pushOptions };
   }
-  // rest
+  // rest. The body must be JSON: GitHub's REST API reads JSON, and a form-encoded body is what a method-override
+  // middleware reads `_method=` from (review 2026-11-10), so anything else is refused rather than hashed.
+  const ctype = (n.headers["content-type"] ?? []).join(",").trim().toLowerCase();
+  if (!/^application\/(?:vnd\.github(?:\.[a-z0-9.+-]+)?\+)?json(?:\s*;.*)?$/.test(ctype)) return null;
   const body = decodedBody(n);
   if (body === null) return null;
   return {
