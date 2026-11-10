@@ -918,7 +918,8 @@ jobs:
           printf '::error::%s\n' "$line"
           bt=$'\x60' # a backtick: the summary line sits in a code span, so a URL never renders as a link
           printf '%s%s%s\n' "$bt" "$line" "$bt" >> "$GITHUB_STEP_SUMMARY" || true
-          # Only class (always one of the four literals above) and attempt leave this step; the email reads them.
+          # Only class (always one of the four literals above) and attempt leave this step; the failure email and
+          # the Slack BLOCKED step read them.
           printf 'class=%s\nattempt=%s\n' "$class" "$attempt" >> "$GITHUB_OUTPUT"
 
       - name: Set docker_pushed output
