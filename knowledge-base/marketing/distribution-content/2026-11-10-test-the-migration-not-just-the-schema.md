@@ -3,7 +3,7 @@ title: "Test the Migration, Not Just the Schema"
 type: pillar
 publish_date: 2026-11-10
 channels: x, bluesky, discord, linkedin-personal
-status: scheduled
+status: published
 issue_reference: "#10730"
 ---
 
