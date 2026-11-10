@@ -21,8 +21,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-// the shared fixture-env builder the fixture-env-adoption ratchet requires of any suite that runs git
-import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,7 +43,21 @@ const IDENT = {
   GIT_AUTHOR_EMAIL: "fixture@example.invalid",
   GIT_COMMITTER_NAME: "Fixture",
   GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  // Fixed dates: two workspaces built from the same content must get IDENTICAL commit ids, whatever second each was built in.
+  // The refs-symlink control relies on the foreign repository's tip existing in the attacker workspace's object store; with
+  // wall-clock dates the two ids differ whenever a second boundary falls between them and the raw commit fails (CI, measured).
+  GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
+  GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
 };
+
+/** The shared fixture-env builder (`plugins/soleur/test/lib/git-fixture-env`), injected by the suite: this helper stays inside apps/web-platform. */
+type FixtureEnvBuilder = (fixtureDir: string) => NodeJS.ProcessEnv;
+let gitFixtureEnv: FixtureEnvBuilder = () => {
+  throw new Error("host-git-carrier-fixture: call useSharedFixtureEnv(gitFixtureEnv) before building a world");
+};
+export function useSharedFixtureEnv(builder: FixtureEnvBuilder): void {
+  gitFixtureEnv = builder;
+}
 
 /**
  * The fixture's own (setup-time) git env: SCRATCH-BUILT, nothing inherited. It takes the shared fixture builder's hermeticity

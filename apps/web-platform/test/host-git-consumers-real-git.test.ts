@@ -15,8 +15,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// the shared fixture-env builder the fixture-env-adoption ratchet requires of any suite that runs git (injected into the fixture helper)
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 import {
   PLANTERS,
+  useSharedFixtureEnv,
   SENTINEL_VAR,
   assertGitFloor,
   dirty,
@@ -98,6 +101,8 @@ import { ensureGitDataRemote } from "@/server/git-data-replication";
 import { checkpointInflightWork, checkpointRefName } from "@/server/inflight-checkpoint";
 import { gitDataFetchRefspecs } from "@/server/git-data-client";
 import { gitDataPushRefspecs } from "@/server/git-data-replication";
+
+useSharedFixtureEnv(gitFixtureEnv);
 
 const USER = "77777777-7777-4777-8777-777777777777";
 const WS_ID = "11111111-1111-4111-8111-111111111111";
