@@ -154,7 +154,7 @@ the second host:
    served from the second host.
 
    *Amended 2026-11-10 (#8211):* this block owns the rotation rationale; other files point here. The open choice in the 2026-11-09
-   parenthetical above is settled: an accept-only slot rotated in three phases instead of a `_PREVIOUS` two-phase slot, plus
+   parenthetical above is settled: an accept-only slot rotated in three phases instead of the two-phase pattern in Considered Options, plus
    #12538's move of the key out of Terraform (ADR-320 decision 2).
 
    - **The slot.** One accept-only slot, `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`, verify-only and dark by default (no new secret is minted).
