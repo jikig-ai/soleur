@@ -17,6 +17,40 @@ brand_survival_threshold: aggregate pattern
 
 Spec lacks valid `lane:` (no spec.md exists for this branch) - defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-10. **Sections enhanced:** Design, Suite structure, Implementation Phases, Arm x loosening
+table, Guard Contract, Observability, User-Brand Impact, Files to Edit, Acceptance Criteria, Test Scenarios.
+**Agents used:** security-sentinel, test-design-reviewer, observability-coverage-reviewer, architecture-strategist, a
+verify-the-negative sweep (no contradictions found); before that, in plan review: spec-flow-analyzer, an advisor
+consult, a sharp-edges catalogue pass, DHH, Kieran, code-simplicity and the CTO (devex lens and rulings 11-15).
+**Verified live:** every cited issue (#10432, #11163, #9927, #10430, #10431, #6590, #12272, #9371 open; #11535 merged;
+#10972 closed), the attribution of 47aa18b44a (#11535, on `main`), the labels `action-required`, `infra-drift`,
+`priority/p1-high` and `priority/p2-medium`, the milestone `Post-MVP / Later`, and every cited rule id.
+
+### Key improvements
+
+1. The filers carry `GH_REPO`, so a leg whose checkout failed still files its p2 issue. Today that gap exists on the
+   Inngest leg and would have been copied to web-1 (row C10).
+2. Runbook 6604 gets a top-level read-only read-back section (`--only-secrets HCLOUD_TOKEN_READONLY`, token to
+   `curl --config -`, one named word per outcome). Its "Verify the retired end state" block is rewritten in the same
+   shape, not just renamed. N3 bans a fallback, an argv header and a second `--only-secrets` on that line.
+3. Per-row RED evidence comes from a scaffold-only workflow copy (Phase 1b.6). There is also a selected-entry
+   invariant, so a no-op `use_entry` cannot turn W rows into passing Inngest cases. H11b/c run against an evaluator copy
+   without its strict branch.
+4. Byte-identity now covers the templated titles, the `TITLES` list, the `file_unreadable` body and the `finish()`
+   notes, by substitution and diff (Phase 4.8, second half). Before, it covered only LEAD/REMEDY/email.
+
+### New considerations discovered
+
+- The ids are public: they appear in the workflow rows, the ADRs, the runbooks and the probe's log line. The
+  issue-body ban keeps recipes out of issues; it is not a confidentiality control.
+- A whole workflow that never runs is caught by the existing `scheduled-terraform-drift` Sentry monitor. It is the
+  job being skipped, or one leg never starting, that stays an accepted residual (#10430). A future check-in keys on the
+  combined `needs.<job>.result`.
+- The Arm table's Inngest-leg cells for templated strings name the web-1 rows, because a revert to the Inngest literal
+  renders identically on the Inngest leg.
+
 PR body must carry `Closes #10432` and `Ref #9927` (never `Closes #9927`). #11163 is closed separately with an
 evidence comment (Phase 6). Draft PR: #12563.
 
@@ -216,9 +250,10 @@ before its filers run. Each leg keeps the 10-minute ceiling and every step timeo
 | `file_finding` | Name `File an issue when the volume protection differs from its declaration`. `env:` adds `ENTRY: ${{ matrix.entry }}`, `SUBJECT`. Titles become `infra: ${SUBJECT} delete protection differs from Terraform (${NAME})` and `infra: ${SUBJECT} not found at Hetzner (${NAME})`. LEAD, REMEDY and a new `DECISION` line come from one `case "${ENTRY}:${VERDICT}"`: the named `inngest:lifted-outside-terraform`, `inngest:volume-not-found`, `web1:lifted-outside-terraform`, `web1:volume-not-found` arms (Inngest strings verbatim; web-1 strings below), then ONE `*)` arm that keeps today's slug and widens its message: `::error::sole_copy_finding_filer_unexpected_verdict — this step ran for an entry and verdict it does not file (${ENTRY:-none}:${VERDICT:-none}).` and `exit 1` (CTO ruling 7's fail-closed arm; one arm covers an unknown verdict and an unknown entry, and the log names which). It reaches the email and a red gate and files no issue. The body's last pointer line becomes `echo "${DECISION}"`. Labels, milestone retry, dedupe and comment shapes are unchanged. |
 | `file_unreadable` | `env:` adds `SUBJECT`, `ADR: ${{ matrix.adr }}`. Titles `infra: the ${SUBJECT} protection check has no usable credential (${NAME})` / `... could not read Hetzner (${NAME})`. Body: `the ${SUBJECT}'s delete-protection flag` and `Decision record: ${ADR}.` Renders identically for Inngest. |
 | `clear` | `env:` adds `SUBJECT`. `TITLES` built from `${SUBJECT}`, including both `(name-unreadable)` forms. The comment that says "The web-1 check (#10432) must use a different title prefix" is rewritten: the subject IS the per-row prefix, and C4/C5 prove the two rows' title sets are disjoint on one shared issue store (dedupe and clear match exact titles). |
+| `file_finding`, `file_unreadable`, `clear` (all three) | `env:` adds `GH_REPO: ${{ github.repository }}`, so `gh issue list/create/comment/close` work when the leg's checkout failed (today they need the `.git` directory; the gap exists on the Inngest leg on `main` and would be copied to web-1). No output or title changes. |
 | `notify` | Name `Email notification (volume protection check)`. `subject: '[INFRA DRIFT] ${{ matrix.subject }} protection check needs attention'`; body: `The twice-daily ${{ matrix.subject }} protection check needs attention.` and `(${{ matrix.adr }})`. Renders identically for Inngest. |
 | `gate` | None. |
-| Job comment block | Rewritten to describe both rows: WHAT IT CHECKS per row, WHY A MATRIX (`fail-fast: false`, one set of steps), the pins (each row's `volume_id`, anchored to ADR-282 / ADR-119), BOUNDED WAITS per leg, and each row's forcing function for a reviewed lift that reads `unprotected-as-declared` (Inngest: the dated re-protect issue, as today; web-1: Guard B4 in `apps/web-platform/infra/workspaces-luks.test.sh`, which pins `delete_protection = true`, so a lift PR must edit that guard in review). Keep `tracked: #10430`, and add one sentence there: a future check-in reads per-leg results, never `needs.sole-copy-protection-check.outputs` (with a matrix those come from whichever leg wrote last). Add an ADDING AN ENTRY list naming every place a third row must touch (the row, the `case` arms, `use_entry`, `matrix-shape`'s count and entry set, an N-pin row and its document, `test-affected-paths.sh`, the 8209 register row, runbook 6894's pin count when the id is the Inngest one); the `*)` arm's message and `matrix-shape`'s failure text say "see ADDING AN ENTRY in the job comment". Drop the SCOPE line naming #10432 (keep #10431). |
+| Job comment block | Rewritten to describe both rows: WHAT IT CHECKS per row, WHY A MATRIX (`fail-fast: false`, one set of steps), the pins (each row's `volume_id`, anchored to ADR-282 / ADR-119), BOUNDED WAITS per leg, and each row's forcing function for a reviewed lift that reads `unprotected-as-declared` (Inngest: the dated re-protect issue, as today; web-1: Guard B4 in `apps/web-platform/infra/workspaces-luks.test.sh`, which pins `delete_protection = true`, so a lift PR must edit that guard in review). Keep `tracked: #10430`, and add one sentence there: a future check-in keys on `needs.sole-copy-protection-check.result`, which for a matrix job is the combined result of both legs (success only when every leg succeeded, so a missing or cancelled leg makes it non-success), and must not rely on job `outputs` (the job declares none; with a matrix they would come from whichever leg wrote last). Add an ADDING AN ENTRY list naming every place a third row must touch (the row, the `case` arms, `use_entry`, `matrix-shape`'s count and entry set, an N-pin row and its document, `test-affected-paths.sh`, the 8209 register row, runbook 6894's pin count when the id is the Inngest one); the `*)` arm's message and `matrix-shape`'s failure text say "see ADDING AN ENTRY in the job comment". Drop the SCOPE line naming #10432 (keep #10431). |
 
 The web-1 strings (public-safe: no id, no command, no API answer, no "sole copy" / "only copy" wording):
 
@@ -298,8 +333,10 @@ silently select the wrong row's data. Only `sole-copy-drift-check.test.sh` impor
     sweeps) and both equal the `inngest` row's `volume_id` (a literal inside this job is an `id-placement` violation).
   - `N1c` (new): the `web1` row's `volume_id` equals the `Hetzner id <pin>` stated inside ADR-119's
     `## Addendum — 2026-11-10 (#10432` section (section-bounded with awk, so a mention elsewhere in the file cannot
-    satisfy it) AND the id in the `v1/volumes/<id>` URL of runbook 6604's new "Read back the delete-protection flag
-    (read-only token)" one-liner (read from that subsection only), and it differs from the `inngest` row's. The section read starts AFTER the heading line, so the bound cannot close on its
+    satisfy it) AND the id in the `v1/volumes/<id>` URL of runbook 6604's new `## Read back the delete-protection flag
+    (read-only token)` one-liner, read with the same bound
+    (`awk '/^## Read back the delete-protection flag \(read-only token\)$/{f=1; next} /^## /{f=0} f'`), exactly one
+    `v1/volumes/<id>` on the `--only-secrets HCLOUD_TOKEN_READONLY` line, and it differs from the `inngest` row's. The section read starts AFTER the heading line, so the bound cannot close on its
     own start line:
     ``awk '/^## Addendum — 2026-11-10 \(#10432/{f=1; next} /^## /{f=0} f' "$ADR119" | grep -oE 'Hetzner id `?[0-9]+`?' | tr -d '`'``
     must yield exactly one match (ADR-119's house style writes ids in backticks). The runbook side mirrors N1: inside
@@ -309,10 +346,13 @@ silently select the wrong row's data. Only `sole-copy-drift-check.test.sh` impor
   - `N3`'s existing `file_unreadable` check `grep -qF 'ADR-282' <<<"$_fu"` becomes a check for `Decision record: ${ADR}.`
     (the literal leaves that step's source), and N3 adds: every `rows.json` `adr` value has a matching
     `knowledge-base/engineering/architecture/decisions/<adr>-*.md` file. `N3` also adds the web-1 pointers: ADR-119 contains `D1 — the sole copy is protected in Terraform` and the heading
-    `## Addendum (2026-10-08): the plaintext backstop is retired`; runbook 6604 contains the subsection heading
-    `Read back the delete-protection flag (read-only token)`. The rendered web-1 text (`ADR-119 D1`, that subsection's
+    `## Addendum (2026-10-08): the plaintext backstop is retired`; runbook 6604 contains the top-level heading
+    `## Read back the delete-protection flag (read-only token)` exactly once. The rendered web-1 text (`ADR-119 D1`, that subsection's
     name, `workspaces-luks-cutover-6604.md`, `soleur:incident`) is asserted by WF1 and WX5, so N3 checks only the
-    document side for web-1.
+    document side for web-1. Over the new subsection's command line only (so the outcome table's prose "does not fall
+    back to `HCLOUD_TOKEN`" stays legal), N3 requires exactly one `--only-secrets`, naming `HCLOUD_TOKEN_READONLY`,
+    and `curl -sS --config -`, and bans `HCLOUD_TOKEN([^_]|$)`, `-H "Authorization` and a `:-` fallback expansion; one
+    mutant row per pattern (a second `--only-secrets HCLOUD_TOKEN`, an argv header, `${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}`).
 - **Counting**: `FLOOR` and `TABLE_ROWS` move to the realized numbers in the same commit as the rows (expected about
   +30 table rows and +50 assertions after the plan-review cuts). The header comment's PROPERTY and COUNTING paragraphs are rewritten for two
   entries.
@@ -345,14 +385,20 @@ silently select the wrong row's data. Only `sole-copy-drift-check.test.sh` impor
   (the two orphan sweeps), plus the `volume_id:` of the `inngest` row in the `sole-copy-protection-check` matrix". An
   operational checklist, not an append-only record.
 - `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md` — (1) an appended, permanent
-  subsection "Read back the delete-protection flag (read-only token)" (outside the dated cutover steps), a copy of
+  top-level section `## Read back the delete-protection flag (read-only token)` (a `##`, not a `###`: the file's last
+  `##` section is the dead-man heartbeat section, and a `###` would nest under it; the runbook's code blocks carry
+  shell comment lines starting with a hash, so every section bound uses `/^## /`), a copy of
   runbook 6894 section 5c step 3's one-liner for id 106443278: `--only-secrets HCLOUD_TOKEN_READONLY
   --no-exit-on-missing-only-secrets`, no fallback to `HCLOUD_TOKEN`, the bearer header passed to `curl --config -` on
   stdin, and one word per outcome (`protected`, `not-protected`, `missing-token`, `volume-gone`, `read-failed`) with its
   exit code. This is the read-back the web-1 REMEDY and DECISION point at, and the one N1c and N3 read. (2) In "Verify
-  the retired end state (read-only ...)", all four GETs read `$HCLOUD_TOKEN_READONLY` instead of `$HCLOUD_TOKEN` (same Doppler config
-  `soleur/prd_terraform`, which the drift job already reads), and the trailing note "Use `HCLOUD_TOKEN_READONLY` once
-  it is provisioned, #9371." becomes a statement that the block uses it (CTO ruling, row 12). The ids, URLs and
+  the retired end state (read-only ...)", all four GETs are rewritten in the 6894 section 5c shape, not just renamed:
+  `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets --
+  sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer
+  %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - ...'` (renaming the variable alone would still inject the
+  read/write token, send an empty bearer header when the read-only one is missing, and put the token in curl's argv). The
+  trailing note "Use `HCLOUD_TOKEN_READONLY` once it is provisioned, #9371." becomes a statement that the block uses it
+  (CTO ruling, row 12). The ids, URLs and
   `jq '.volume.protection.delete'` text that N1c reads are unchanged. #9371 stays open (it is about the cutover job).
 - `scripts/lib/test-affected-paths.sh` — add `apps/web-platform/infra/workspaces-luks.tf`,
   `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md` and
@@ -393,6 +439,12 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    parses.
 5. Run the suite against the unchanged workflow: it must stop RED at E1. Commit the RED rows separately (message names
    the expected RED).
+6. Per-row RED evidence (E1 alone shows nothing about individual rows): run the RED suite through
+   `SOLE_COPY_DRIFT_WF=<copy>` against a scratch copy of the workflow that has ONLY the matrix scaffold (`name:`, both
+   include rows, `fail-fast: false`) with today's hard-coded Inngest steps unchanged. E1 then passes; the 126 existing
+   rows must stay green (the matrix plumbing alone does not break Inngest), and every new W and C row must fail with its
+   own message. List each row and its failure line in `mutation-proofs.md`; a W or C row green against that copy is
+   vacuous and is rewritten before Phase 2.
 
 ### Phase 2 — GREEN: `gha-expr.py` and the workflow
 
@@ -413,8 +465,10 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    `Hetzner id <digits>` form, so N1c's exactly-one bound stays true); the pin-bump list for the web-1 id (the `web1`
    row, this addendum, runbook 6604's read-back subsection, and the suite's `use_entry web1` `VOL_ID`); what the check does not defend (a single diff that
    changes the `.tf`, the row and this addendum proves consistency, not integrity; the outside anchor is live Hetzner
-   state; a mis-minted read-only token is undetectable here, control O5); no Sentry check-in (#10430, held while #6590
-   is open). The web-1 pin bump: if `hcloud_volume.workspaces_luks` is ever recreated, the `web1` row's `volume_id`,
+   state; a mis-minted read-only token is undetectable here, control O5); no Sentry check-in of this job's own (#10430, held
+   while #6590 is open): a workflow that never runs is caught by the `scheduled-terraform-drift` monitor (the
+   drift-check job's check-in), while this job being skipped, or one leg never starting, is the accepted residual; a
+   failed checkout files the p2 issue but sends no email. The web-1 pin bump: if `hcloud_volume.workspaces_luks` is ever recreated, the `web1` row's `volume_id`,
    this addendum's id and runbook 6604's read-back move in the same PR as the `.tf` change (N1c reds the suite on a
    partial bump; the first scheduled run reds on a missed one); the incident owner owns it, as ADR-282 states for the
    Inngest pin. Two accepted windows, stated plainly: (i) the grace keys on the last commit to the whole
@@ -450,8 +504,16 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    `bash plugins/soleur/test/terraform-drift-sentry-leg.test.sh`,
    `bash plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh`, `bash plugins/soleur/test/c4-count-parity.test.sh`,
    `bun test plugins/soleur/test/terraform-target-parity.test.ts`, `bash tests/scripts/test-argv-bearer-sweep.sh`,
-   `bash tests/scripts/test-apply-github-infra-mint-shape.sh`, `bash tests/scripts/test-git-data-wipe-wedge.sh` (from
-   `git grep -l scheduled-terraform-drift`; rerun that census at work time and add any new hit).
+   `bash tests/scripts/test-apply-github-infra-mint-shape.sh`, `bash tests/scripts/test-git-data-wipe-wedge.sh`,
+   `bun test apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` (reads `strategy.matrix`),
+   `bun test apps/web-platform/test/server/inngest/cron-terraform-drift.test.ts`,
+   `bash scripts/check-cloudflare-token-drift.test.sh` (loops over every job),
+   `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh`,
+   `bash apps/web-platform/infra/inngest-provision-rehearsal.test.sh`,
+   `bash scripts/cf-tunnel-liveness-gate-mutations.test.sh`. This list is a floor: the census is
+   `git grep -l scheduled-terraform-drift -- '*.test.*' 'tests/'`, rerun at work time, and every test-file hit runs.
+   Use each suite's documented runner (check the suite's header or `scripts/lib/test-affected-paths.sh` before
+   choosing `bun test` vs `vitest`).
 7. `python3 -I -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/scheduled-terraform-drift.yml`.
 8. Byte-identity of the Inngest strings (the new suite cannot render `origin/main`'s file, since E1 is FATAL without
    the matrix, so this is a text check over the old job's lines):
@@ -464,7 +526,15 @@ today's workflow, with `FLOOR` and `TABLE_ROWS` unchanged:
    ```
 
    Expected output: only the notify `subject:` and `body:` lines (they now carry `${{ matrix.subject }}` /
-   `${{ matrix.adr }}`, and the suite's X rows assert their rendered Inngest text). Confirm at work time that the
+   `${{ matrix.adr }}`, and the suite's X rows assert their rendered Inngest text).
+
+   Second half, for the strings that become templates (every `TITLE=` line of `file_finding` and `file_unreadable`,
+   every element of `clear`'s `TITLES` including both `(name-unreadable)` forms, the `file_unreadable` body lines, and
+   the three volume-naming `finish()` notes): extract the old lines and the new lines into two files under the
+   scratchpad, substitute `${SUBJECT}` -> `Inngest store volume` and `${ADR}` -> `ADR-282` in the new ones (a
+   `python3 -I` one-off over the two files, pure string replacement), and `diff` them; the expected diff is empty.
+   AC2's `TITLE_*` claim is checked the same way: the old top-level `TITLE_*` block and the `use_entry inngest` block
+   are diffed, and the values must be identical (moved verbatim). Confirm at work time that the
    `sed` range end is the job that follows `sole-copy-protection-check` in the file.
 9. `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-11-10-infra-web1-workspaces-volume-protection-check-plan.md`.
 10. A missing summary line or `rc=124` under host load is UNRESOLVED, never a pass or a fail: rerun with a longer bound
@@ -502,10 +572,10 @@ are cross-entry; `N*` are pins.
 | Request URL | `name=` filter dropped -> L2, invariants | request carries the other name -> C1, invariants |
 | 90-minute grace | `tf_commit` path hard-coded to the other file -> C3 (I leg) | `tf_commit` path hard-coded to `inngest-redis-luks.tf` -> C3 (W leg: a 5-minute-old Inngest commit hides a 3-hour-old web-1 lift), WV3b |
 | Grace boundary | 89/91 -> V3b | 89/91 on its own file -> WV3b |
-| Finding filer | title stops using `$SUBJECT` -> F1 title; p1 label dropped -> F1 | `web1` arms deleted (falls to `*)` or to Inngest strings) -> WF1, WF12 (body contains "Inngest"); p1 dropped -> WF1 |
-| Could-not-perform filer | titles stop using `$SUBJECT` -> F6/F8/X7 | web-1 titles collide with Inngest's -> C5, C6; `ADR` literal -> WX9 |
+| Finding filer | title reverts to the Inngest literal -> renders identically on the I leg, so only WF1 sees it; p1 label dropped -> F1 | `web1` arms deleted (falls to `*)` or to Inngest strings) -> WF1, WF12 (body contains "Inngest"); p1 dropped -> WF1 |
+| Could-not-perform filer | titles revert to the Inngest literal -> invisible on the I leg; C5, C6, WX7 catch it | web-1 titles collide with Inngest's -> C5, C6; `ADR` literal -> WX9 |
 | Clear step | `TITLES` lists both subjects -> C4 (a clean Inngest run closes the web-1 finding) | same mutant -> C4 (a clean web-1 run closes the Inngest finding); `(name-unreadable)` forms shared -> C5 |
-| Email | subject literal -> X rows (Inngest rendered subject) | subject literal "Inngest store volume" -> WF1; ADR literal `ADR-282` -> WF1 |
+| Email | subject reverts to the Inngest literal -> invisible on the I leg; WF1 catches it | subject literal "Inngest store volume" -> WF1; ADR literal `ADR-282` -> WF1 |
 | Public safety | Inngest id in a body -> F12, invariants (issues.json ban) | web-1 id in a body -> WF12, invariants (issues.json ban); `recipe_vocab` gains `106443278` -> F13 extension |
 | Token | fallback to the read/write name -> H9, S2 (rw-token-named) | same code edit (the read names one literal on both legs) -> H9 |
 | Row values | a value outside its pattern (e.g. a `tf_resource` with a metacharacter) -> S2/`matrix-shape` | same |
@@ -546,8 +616,11 @@ suite, every case enters through one harness function (`cmd_run`), which selects
 | 11 | The notify subject made the literal "Inngest store volume" | WF1 |
 | 9 | `id-placement` relaxed back to "the web-1 id appears somewhere in the job" (a second copy in a comment passes) | S2 row "the web-1 id in a comment" |
 
-**Harness rows.** RED edits to the SUITE: `use_entry web1` made a no-op (the W rows then assert web-1 strings against
-an Inngest run) -> WV1, WF1; `invariants()` stops reading `issues.json` for ids -> H12; gha-expr's strict branch removed
+**Harness rows.** RED edits to the SUITE: `use_entry web1` made a no-op -> the `use_entry` harness row, the
+selected-entry invariant (`cmd_run` writes the selected row's `entry` into `result.json`; `invariants()` asserts it
+equals `$ENTRY`, and the W table opens with a literal `a "entry" "$ENTRY" web1`), WF1 and WX9 (a full no-op otherwise
+turns every W case into a passing Inngest case); WR1's independent derivation takes its path and resource from
+`use_entry`, never from `rows.json`; `invariants()` stops reading `issues.json` for ids -> H12; gha-expr's strict branch removed
 -> S0b, H11; the gh stub serves one commits answer for every path -> C3. Must-PASS non-canonical inputs: the include rows
 in swapped order (C8); it differs from the canonical in a way the contract permits (row order carries no meaning).
 
@@ -570,8 +643,12 @@ never an empty value.
 | # | Edit | Must turn RED |
 |---|---|---|
 | 1 | `primary()` returns `ctx.get()` for `matrix.*` (today's null) | S0b, H11a |
-| 2 | `check()` stops treating `matrix` refs (dispatch) | H11b (a job whose step env names `matrix.nope` must exit 3) |
-| 3 | Strictness applied only to the first `matrix.*` ref of an expression (second member) | H11c (`matrix.entry == 'web1' && matrix.nope == 'x'`) |
+| 2 | `check()` stops treating `matrix` refs (dispatch) | H11b (a job whose step env names `matrix.nope` must exit exactly 3 with `unresolvable reference: matrix.nope`) |
+| 3 | Strictness applied only to the first `matrix.*` ref of an expression (second member) | H11c (`matrix.entry == 'web1' && matrix.nope == 'x'`, exact rc 3 and the same stderr line) |
+
+H11b and H11c run against a copy of `gha-expr.py` with its strict branch removed, so `check()` alone is under test
+(otherwise the evaluator's own strictness kills the run with a traceback, rc 1, and masks both mutants); an
+instrument control runs the same spec on the pristine harness (rc 3) and with `matrix.nope` removed (rc 0).
 
 **Harness rows.** RED: H11 run through its own `printf` + `exit` reporting (not through the helpers under test).
 Must-PASS: `matrix.entry` present renders its value; a `steps.*` ref absent from the context still renders empty (no
@@ -595,7 +672,7 @@ runbook `workspaces-luks-cutover-6604.md`.
 | 1 | `web1` row id changed by one digit | N1c, WV1 |
 | 2 | The addendum's `Hetzner id` sentence moved outside the addendum section (dispatch of the section bound) | N1c |
 | 3 | A third `readonly VOLUME_ID_PIN=` copy added inside the sole-copy job after the compliant sweeps (second member) | N1b, S2/`id-placement` |
-| 4 | Both rows given the same id | N1c (must differ), S2/`matrix-shape` |
+| 4 | Both rows given the same id | N1c (must differ), S2/`id-placement` (one id then appears twice) |
 
 **Harness rows.** RED: `N1c` reading the whole ADR file instead of the section (an older mention would satisfy it) ->
 covered by row 2. Must-PASS: the addendum text with the id inside backticks or not (the anchor matches the digits).
@@ -627,9 +704,12 @@ delete-protection flag on the volume that holds every user's checked-out reposit
 false p1 issue and email every 12 hours, or, worst, breaks the existing Inngest check so that neither volume is
 watched. The last is why the Inngest rows must stay byte-identical and the legs independent (`fail-fast: false`).
 
-**If this leaks, the user's data is exposed via:** a public issue body that names the volume id, a recipe, or "only
-copy" wording would point at the one object whose deletion loses every workspace. The bodies carry the volume name,
-the verdict and pointers only, and the suite bans both ids and the recipe vocabulary from every rendered body.
+**If this leaks, the user's data is exposed via:** a public issue body that names a recipe, or "only copy" wording,
+would put a searchable, notifying pointer at the one object whose deletion loses every workspace. The bodies carry the
+volume name, the verdict and pointers only, and the suite bans both ids and the recipe vocabulary from every rendered
+body. The ids are not secret: they are public in the workflow's matrix rows, ADR-119/148/282, runbooks 6604 and 6894,
+and the probe's public log line. The ban keeps recipes out of issues; it is not a confidentiality control, and no
+later change should be justified by treating an id as confidential.
 
 **Brand-survival threshold:** aggregate pattern
 
@@ -646,28 +726,34 @@ liveness_signal:
   configured_in: .github/workflows/scheduled-terraform-drift.yml, job sole-copy-protection-check, strategy.matrix.include
 error_reporting:
   destination: GitHub issues labelled infra-drift (exact-title dedupe per leg) and the ops email via .github/actions/notify-ops-email
-  fail_loud: yes; the could-not-perform filer is the complement of every named verdict (an empty verdict files), the gate is red on every non-clean verdict, and the email fires on a finding or on any failed or cancelled filer or clear step
+  fail_loud: yes, with one stated exception; the could-not-perform filer is the complement of every named verdict (an empty verdict files), the gate is red on every non-clean verdict, and the email fires on a finding or on any failed or cancelled filer or clear step. Exception: a failed checkout files the p2 issue (the filers carry GH_REPO, row C10) but sends no email, because notify is a local action that needs the checkout
 failure_modes:
   - mode: web-1 flag lifted outside Terraform
-    detection: probe verdict lifted-outside-terraform on the web1 leg
+    detection: layer 6 (workflow run log) - the probe's ::error::sole-copy-check verdict=lifted-outside-terraform line and the red gate on job "sole-copy-protection-check (web1)"
     alert_route: p1 issue "infra: web-1 workspaces volume delete protection differs from Terraform (soleur-web-platform-data-luks)" plus email
   - mode: web-1 volume missing, duplicated, or carrying another id
-    detection: verdict volume-not-found with reason zero, many or id-mismatch in the leg log and job summary
+    detection: layer 6 (workflow run log) - verdict volume-not-found with reason zero, many or id-mismatch in the leg's log and job summary
     alert_route: p1 issue "infra: web-1 workspaces volume not found at Hetzner (...)" plus email
   - mode: the check cannot run (token absent or rejected, Hetzner unreachable, malformed answer or matrix row, crash)
-    detection: verdict no-token or could-not-read, or an empty verdict
+    detection: layer 6 (workflow run log) - verdict no-token or could-not-read, or an empty verdict
     alert_route: p2 issue under the leg's own could-not-perform title; email only if a filer fails
   - mode: one leg red
-    detection: fail-fast false keeps the other leg running to its own verdict
+    detection: layer 6 (workflow run log) - fail-fast false keeps the other leg running to its own verdict
     alert_route: each leg's own issue
   - mode: one leg cancelled or timed out
-    detection: the probe is skipped and the always() could-not-perform filer runs on that leg with an empty verdict
+    detection: layer 6 (workflow run log) - the probe is skipped and the always() could-not-perform filer runs on that leg with an empty verdict
     alert_route: a p2 issue under that leg's own "(name-unreadable)" title only (row C9)
+  - mode: one leg's checkout fails or times out
+    detection: layer 6 (workflow run log) - the checkout step fails, the probe is skipped, the verdict is empty
+    alert_route: a p2 "(name-unreadable)" issue for that leg (the filers name the repository through GH_REPO, so they work without a checkout; row C10); no email (accepted residual, the notify action is local)
   - mode: one leg never starts while the other is clean
-    detection: none from this job (nothing reads the per-leg conclusion; tracked by #10430)
-    alert_route: the accepted residual, stated with the whole-job residual below
-  - mode: the whole job never runs
-    detection: none from this job (no Sentry check-in, tracked by #10430 and held while #6590 is open); the dispatcher's own scheduled-terraform-drift monitor proves dispatch only
+    detection: none from this job today; the combined `needs.sole-copy-protection-check.result` turns non-success when a leg never runs, so the future #10430 check-in (held while #6590 is open) closes this residual
+    alert_route: the accepted residual, stated in the job comment and the ADR-119 addendum
+  - mode: the whole workflow never runs
+    detection: Sentry monitor scheduled-terraform-drift (the drift-check job's final check-in in the same workflow run)
+    alert_route: that monitor's existing alert; work-time step: confirm read-only that it still routes to a person after the #6590 prune
+  - mode: the workflow runs but this job is skipped
+    detection: none from this job (no Sentry check-in of its own, #10430)
     alert_route: the accepted residual, stated in the job comment and the ADR-119 addendum
 logs:
   where: GitHub Actions run logs and job summaries of scheduled-terraform-drift.yml, per leg
@@ -813,8 +899,8 @@ None: the addendum is true on merge (the check runs from the first scheduled run
   web-1 leg files exactly one issue titled `infra: web-1 workspaces volume delete protection differs from Terraform
   (soleur-web-platform-data-luks)` with labels `action-required`, `infra-drift`, `priority/p1-high` and milestone
   `Post-MVP / Later`, sends the email, and its gate exits 1 (WV2, WF1).
-- AC2 (b): every pre-existing suite row passes with its expected strings unchanged (the Inngest `TITLE_*` constants,
-  `want_out` keys and F/X text assertions are not edited; the one edited existing row is N3's `file_unreadable`
+- AC2 (b): every pre-existing suite row passes with its expected strings unchanged (the Inngest `TITLE_*` constants
+  move verbatim into `use_entry inngest`, checked by the Phase 4.8 second-half diff; `want_out` keys and F/X text assertions are not edited; the one edited existing row is N3's `file_unreadable`
   check, which moves from the literal `ADR-282` to `Decision record: ${ADR}.`), F1 asserts the Inngest body's
   decision line equals today's sentence (`Decision record: ADR-282. Loss modes and the reviewed route: ...`), spelled
   out in full in the suite, and the Phase 4.8 byte-identity check prints nothing
@@ -827,17 +913,17 @@ None: the addendum is true on merge (the check runs from the first scheduled run
   the harness rows H1-H7, H11 and H12 pass, table rows H1-H10 are unchanged, and deleting one new row block on a copy fails the outer count.
 - AC6: the mutation proofs of Phase 4.2 each turn the named row RED (and the swapped-order copy stays green); results are
   listed in `mutation-proofs.md`, and the PR body carries them.
-- AC7: `token-drift-workflow-causes.test.sh`, the four ratchets, `alarm-issue-filing-guard.test.sh`,
-  `terraform-drift-step-order.test.sh`, `terraform-drift-sentry-leg.test.sh`, `heartbeat-reconcile-issue-step.test.sh`,
-  `c4-count-parity.test.sh`, `terraform-target-parity.test.ts`, `tests/scripts/test-argv-bearer-sweep.sh`,
-  `tests/scripts/test-apply-github-infra-mint-shape.sh` and `tests/scripts/test-git-data-wipe-wedge.sh` pass; `lint-guard-contract.py` passes on this plan.
+- AC7: `token-drift-workflow-causes.test.sh`, the ratchets of Phase 4.5, and every test-file hit of the Phase 4.6
+  census pass (the named list there is a floor); `lint-guard-contract.py` passes on this plan.
 - AC9: the PR body carries `Closes #10432` and `Ref #9927` (never `Closes #9927`).
 - AC10: no `.tf`, cloud-init or user_data file is in the diff (`git diff --name-only origin/main...HEAD` lists none).
-- AC11: every `curl` in runbook 6604's "Verify the retired end state" block reads `$HCLOUD_TOKEN_READONLY`
-  (`sed -n '/Verify the retired end state/,/^   > /p' knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`
-  shows four `HCLOUD_TOKEN_READONLY` reads and no read of the bare `$HCLOUD_TOKEN` variable: `grep -c 'Bearer $HCLOUD_TOKEN[^_]'` over the block prints `0`); the new
-  "Read back the delete-protection flag (read-only token)" subsection exists, names `--only-secrets
-  HCLOUD_TOKEN_READONLY` and `v1/volumes/106443278`, and does not name `$HCLOUD_TOKEN"`; N1c and N3 are green.
+- AC11: in runbook 6604's "Verify the retired end state" block
+  (`sed -n '/Verify the retired end state/,/^   > /p' knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`),
+  every `doppler run` line carries `--only-secrets HCLOUD_TOKEN_READONLY` (four lines) and `curl -sS --config -`, and
+  the block carries no `-H "Authorization` and no `HCLOUD_TOKEN` not followed by `_READONLY`
+  (`grep -cE 'HCLOUD_TOKEN([^_]|$)'` over the command lines prints `0`). The new "Read back the delete-protection flag
+  (read-only token)" subsection's command line passes the same checks and names `v1/volumes/106443278`; N1c and N3
+  are green.
 
 ### After merge (automated: Phase 5 / ship Phase 6)
 
@@ -856,16 +942,29 @@ subsection's name, email subject and body); WF3 clean run closes; WF12/each of f
 volume-not-found body (reason pointer, `soleur:incident`); WX7 web-1 `(name-unreadable)` titles cleared; WX9 web-1
 could-not-perform bodies name ADR-119; WX16 the `file_finding` catch-all: an unexpected verdict on a known entry and an
 unknown entry each print `sole_copy_finding_filer_unexpected_verdict` with the `entry:verdict` pair, file no issue,
-send the email and exit 1. The W rows cover only the arms where a row value changes the outcome (CTO Fork 2); the
+send the email and exit 1. Route: both inputs are overrides on `file_finding` alone with the probe still reporting
+`lifted-outside-terraform` (`OVR+=("file_finding:VERDICT=bogus")`, separately `OVR+=("file_finding:ENTRY=zzz")`);
+assert `file_finding` outcome `failure` with rc 1, exactly one slug line carrying `inngest:bogus` /
+`zzz:lifted-outside-terraform`, `issues.json` unchanged, and the email body's `finding filer` failure line (the gate rc
+and "email sent" are not evidence here: a lifted verdict produces both anyway). The W rows cover only the arms where a row value changes the outcome (CTO Fork 2); the
 shared paths (token read, body parse, awk traps, comment-on-existing, HTTP-500 and crash titles) stay single-run on the
 Inngest entry, and their per-entry part, the title, is asserted by C5 and C6.
 
-Cross-entry: C1 request isolation; C2 id isolation; C3 grace isolation (each leg reads its own file's commit time); C4
+Cross-entry (every seeded other-entry issue carries `author: "app/github-actions"`, `state: open`,
+`labels: ["infra-drift"]`, and in the same row and `SCEN` a clean run of the seed's own entry must then close it, so a
+row cannot pass because the fixture fails the clear step's author, label or state filter; C3 writes the other file's
+commit 5 minutes old with `set_age_other` in both directions and asserts it was served, since a missing commits answer
+also yields "no grace"): C1 request isolation; C2 id isolation; C3 grace isolation (each leg reads its own file's commit time); C4
 clear isolation on one shared issue store; C5 `(name-unreadable)` isolation; C6 could-not-perform isolation; C8 rows
 in swapped order (must PASS); C9 a cancelled web-1 leg (`__job_status`
-cancelled, probe skipped) files only under the web-1 `(name-unreadable)` title and leaves every Inngest title alone.
+cancelled, probe skipped) files only under the web-1 `(name-unreadable)` title and leaves every Inngest title alone;
+C10 a web-1 leg whose checkout failed (no `.git` in the case workspace, probe skipped) still files its p2
+`(name-unreadable)` issue, with the gh stub requiring `GH_REPO` when no `.git` is present.
 
-Harness: H1 extended (a neutered stub turns WV2, WV6, WV8 RED); H11 matrix negative controls (H11a gha-expr, H11b `check()`,
+Harness: an N1c runbook-side row (the read-back subsection body emptied on a copy, heading kept, must go RED, proving
+the subsection bound); a `date` shim on PATH that returns `$FAKE_NOW` for a bare `+%s` and passes `-d` through, used by
+V3b and WV3b so the 89/91-minute boundary does not depend on wall-clock drift under host load (expected strings
+unchanged); H1 extended (a neutered stub turns WV2, WV6, WV8 RED); H11 matrix negative controls (H11a gha-expr, H11b `check()`,
 H11c second member, H11d row selection with zero or two matches); H12 the id ban fires on a planted id in an issue body (one leg; the ban does not depend on the leg).
 
 Shape (S2 additions): `fail-fast` true; `fail-fast` absent; a third row; a missing key; a renamed key; a duplicate

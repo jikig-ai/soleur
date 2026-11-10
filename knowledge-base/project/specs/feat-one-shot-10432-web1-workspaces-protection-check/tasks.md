@@ -18,10 +18,12 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
   - [ ] 1.2.3 Shape: `matrix-shape` (strategy keys, `fail-fast` False with absent a violation, exactly 2 rows, exact key set, entry set, per-key value patterns, job `name:`), `id-placement` replacing `web1-id`; their S2 mutants
   - [ ] 1.2.4 Pins: N1 from `rows.json`; N1b = two sweep literals equal to the inngest row; N1c (ADR-119 addendum section with the backtick-tolerant regex, runbook 6604 read-only subsection line); N3 `file_unreadable` check moves to `Decision record: ${ADR}.`, adr-file existence, web-1 document pointers
   - [ ] 1.2.5 Web-1 rows: WV1-WV8, WV3b, WT1, WT3, WR1 (real `workspaces-luks.tf`), WF1, WF3, WF12, WX5, WX7, WX9, WX16
-  - [ ] 1.2.6 Cross-entry rows C1-C6, C8 (must PASS), C9 (cancelled leg)
-  - [ ] 1.2.7 Harness rows: H1 extension, H11a-d, H12, the `use_entry web1` constants row, the N1c empty-addendum and two-match rows
+  - [ ] 1.2.6 Cross-entry rows C1-C6, C8 (must PASS), C9 (cancelled leg), C10 (checkout failed, files via `GH_REPO`); seeds carry the clear step's author/label/state and a same-`SCEN` positive control; C3 writes the other file with `set_age_other`
+  - [ ] 1.2.7 Harness rows: H1 extension, H11a-d (H11b/c against a `gha-expr.py` copy without its strict branch, exact rc 3 and stderr, instrument control), H12, the `use_entry web1` constants row, the selected-entry invariant (`result.json` entry equals `$ENTRY`), the N1c empty-addendum, two-match and emptied-runbook-section rows, the `date` shim for V3b/WV3b
+  - [ ] 1.2.7b WX16 via `file_finding`-only overrides (`VERDICT=bogus`, `ENTRY=zzz`) with the probe reporting lifted; assert step outcome, slug line, `issues.json` unchanged
   - [ ] 1.2.8 F1 asserts today's Inngest decision sentence exactly; `recipe_vocab` gains `106443278`
   - [ ] 1.2.9 Run against the unchanged workflow: RED at E1; commit separately
+  - [ ] 1.2.10 Run the RED suite against a scaffold-only workflow copy (matrix rows, `fail-fast: false`, steps unchanged): the 126 existing rows green, every new W/C row red with its own message; list them in `mutation-proofs.md`
 
 ## Phase 2 — Core implementation
 
@@ -30,8 +32,8 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
   - [ ] 2.2.1 `name:` with `matrix.entry`; `strategy` with `fail-fast: false` and the two include rows
   - [ ] 2.2.2 `tf_commit` and `probe` read row values through `env:`; `readonly VOLUME_ID_PIN="$PIN"`; awk `-v res=` with the `[{]` pattern; the three volume-naming `finish()` notes use `${SUBJECT}`
   - [ ] 2.2.3 `file_finding`: `case "${ENTRY}:${VERDICT}"` with four named arms (Inngest strings copied, never retyped) and one `*)` arm keeping `sole_copy_finding_filer_unexpected_verdict` with the `entry:verdict` pair
-  - [ ] 2.2.4 `file_unreadable`, `clear`, `notify`: `${SUBJECT}` / `${ADR}` / `${{ matrix.* }}`; step names entry-neutral
-  - [ ] 2.2.5 Job comment: both rows, forcing functions (re-protect issue; Guard B4), per-leg check-in note beside `tracked: #10430`, ADDING AN ENTRY list
+  - [ ] 2.2.4 `file_unreadable`, `clear`, `notify`: `${SUBJECT}` / `${ADR}` / `${{ matrix.* }}`; step names entry-neutral; `GH_REPO: ${{ github.repository }}` on `file_finding`, `file_unreadable`, `clear`
+  - [ ] 2.2.5 Job comment: both rows, forcing functions (re-protect issue; Guard B4), the combined-`result` check-in note beside `tracked: #10430`, ADDING AN ENTRY list
 - [ ] 2.3 Suite green; set `FLOOR` and `TABLE_ROWS` to the realized numbers in the same commit
 
 ## Phase 3 — Sibling edits
@@ -39,7 +41,7 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
 - [ ] 3.1 ADR-119: append `## Addendum — 2026-11-10 (#10432, recurring delete-protection check for the volume)` (pin as `Hetzner id 106443278`, correction note without that form, pin-bump list, accepted windows, what it does not defend)
 - [ ] 3.2 ADR-282: append the "pin moves to the matrix row" note
 - [ ] 3.3 Runbook 6894: pin-bump checklist count three -> two plus the inngest row
-- [ ] 3.4 Runbook 6604: append "Read back the delete-protection flag (read-only token)"; switch the four "Verify the retired end state" GETs to `HCLOUD_TOKEN_READONLY`; run the new one-liner once (expect `protected`)
+- [ ] 3.4 Runbook 6604: append top-level `## Read back the delete-protection flag (read-only token)` (6894 5c shape); rewrite the four "Verify the retired end state" GETs in the same shape (`--only-secrets`, missing-token guard, `curl --config -`); run the new one-liner once (expect `protected`; never fall back to the read/write token)
 - [ ] 3.5 `infra-credential-tiers-8209.md` register row: one GET per matrix leg
 - [ ] 3.6 `token-drift-workflow-causes.test.sh` R3b literal
 - [ ] 3.7 `scripts/lib/test-affected-paths.sh`: add `workspaces-luks.tf`, ADR-119, runbook 6604 (sorted)
@@ -50,8 +52,9 @@ Issue #10432 (PR body: `Closes #10432`, `Ref #9927`). Draft PR #12563. Decisions
 - [ ] 4.2 Mutation proofs on copies for every non-S2 Guard 1-3 row; results in `mutation-proofs.md`
 - [ ] 4.3 Delete one new row block on a suite copy: outer count fails
 - [ ] 4.4 `token-drift-workflow-causes.test.sh`; ratchets (`fixture-dir-operand-assert`, `fixture-relative-assert`, `guard-vacuity-floor`, `grep-q-pipe-guard`, `alarm-issue-filing-guard`)
-- [ ] 4.5 Workflow readers: `terraform-drift-step-order`, `terraform-drift-sentry-leg`, `heartbeat-reconcile-issue-step`, `c4-count-parity`, `terraform-target-parity.test.ts`, `tests/scripts/test-argv-bearer-sweep.sh`, `test-apply-github-infra-mint-shape.sh`, `test-git-data-wipe-wedge.sh`; rerun `git grep -l scheduled-terraform-drift` for new hits
-- [ ] 4.6 YAML parse; Phase 4.8 byte-identity check (only the notify `subject:`/`body:` lines listed)
+- [ ] 4.5 Workflow readers: every test-file hit of `git grep -l scheduled-terraform-drift -- '*.test.*' 'tests/'` (floor list in plan Phase 4.6, incl. `sentry-monitor-iac-parity.test.ts`, `cron-terraform-drift.test.ts`, `check-cloudflare-token-drift.test.sh`, `git-data-rung2-rehearsal.test.sh`, `inngest-provision-rehearsal.test.sh`, `cf-tunnel-liveness-gate-mutations.test.sh`)
+- [ ] 4.6 YAML parse; Phase 4.8 byte-identity check (first half: only the notify `subject:`/`body:` lines listed; second half: substituted templates and the moved `TITLE_*` block diff empty)
+- [ ] 4.6b Confirm read-only that the `scheduled-terraform-drift` Sentry monitor still routes to a person
 - [ ] 4.7 `lint-guard-contract.py` on the plan; `git diff --name-only origin/main...HEAD` lists no `.tf`/cloud-init/user_data
 - [ ] 4.8 CI `merge_group` run is the Guard 1 evidence
 
