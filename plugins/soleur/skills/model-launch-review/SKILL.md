@@ -79,8 +79,11 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    A new or retargeted pair also touches that test file in six places: `CURRENT_IDS`, the `SUPERSEDED`
    map, the synthetic-prefix source string, the id named in the prefix test's floor message, the sed-anchor
    fixture and the pair-count floor. For a Fable pair, do not merge a `--fix` until the pinned CLI bundle
-   contains the new id (`grep -a` the unpacked platform package): `[2b]` probes only ids that appear as
-   literals in `model-tiers.ts` and `constants.ts`, and no Fable literal does today (#12514).
+   contains the new id (`grep -a` the unpacked platform package). Since #12514 CI enforces this:
+   `claude-cli-pin-knows-models.test.ts` derives its id set from the right-hand side of `AUTOFIX_PAIRS`
+   (plus the tier literals and the hosted SDK default) and checks it in BOTH pinned binaries, the CLI and
+   the Agent SDK, so a retarget reds until the pins carry the id. `[2b]` stays the hand-run candidate
+   check, and it still probes only the tier literals in `model-tiers.ts` and `constants.ts`.
 
    Then verify item 2b: the new ID must appear in the **pinned** `@anthropic-ai/claude-code`
    bundle (`[2b]` in the audit output). If it reports DRIFT, in ONE PR: (1) bump the pin in
@@ -137,7 +140,10 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    a `lockfile-sync` member re-run inside `guards-ruleset` makes such a PR red regardless. Measured on npm 11.19.0: once the
    lockfile pins the version, `npm install --package-lock-only` under the floor exits 0 and
    leaves the lockfile unchanged, and `npm ci` installs it — the floor gates new resolution,
-   not an already-locked version.
+   not an already-locked version. A same-week `AUTOFIX_PAIRS` retarget PR therefore stays red
+   on `claude-cli-pin-knows-models.test.ts` until a release carrying the id clears the floor
+   and the pins move to it. That is by design (#12514): keep the PR draft and wait, or get the
+   operator's waiver.
 
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
