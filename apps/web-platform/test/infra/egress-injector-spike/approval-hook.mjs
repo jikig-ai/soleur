@@ -10,6 +10,7 @@
 // The decision logic is the exported pure-ish `createDecider(...).decide(request, session)`, tested hermetically in
 // apps/web-platform/test/egress-injector-policy.test.ts over a fake RPC client. Decision order (plan, binding):
 //   0. CONNECT: the router-only credential is required (407 without it); a CONNECT is not a vend (R26)
+//   0b. any other request must arrive on a tunnel whose target is its own host on 443 (R28), else guard-refused
 //   1. flag input off: REJECT every vend, reads included, no row (CTO R2)
 //   2. unparseable / unclassifiable / unlisted write: REJECT not-allowlisted, no row
 //   3. allowlisted read or push advertisement: CONTINUE
@@ -130,7 +131,8 @@ function body(reason, extra = {}) {
 /**
  * deps: { policy (compiled), hmacKey, rpc: {create, consume, status}, toolName, ttlSeconds, deadlineMs, now }.
  * session: { sessionId, conversationId, workspaceId, requesterId, repositories, flagOn, routerCredential, ttlSeconds? }.
- * request: { method, host, path, query, headers, body, requestId? } (headers: name -> string | string[]).
+ * request: { method, host, path, query, headers, body, tunnelTarget, requestId? } (headers: name -> string | string[];
+ *   tunnelTarget: the CONNECT target of the tunnel the request arrived on, or null; CTO R28).
  */
 export function createDecider(deps) {
   const { policy, hmacKey, rpc } = deps;
@@ -171,6 +173,17 @@ export function createDecider(deps) {
         headers: ok ? undefined : { "proxy-authenticate": ['Basic realm="soleur-injector"'] },
         marker: { name: "SOLEUR_EGRESS_CONNECT", fields: { ...base, outcome: ok ? "continue" : "refused-407" } },
       };
+    }
+
+    // 0b. Tunnel guard (CTO R28): every non-CONNECT request must come from a tunnel whose CONNECT target is this
+    // request's host on 443. iron-proxy fills TransformContext.tunnel for requests on tunnel_listen (measured
+    // 2026-11-10) and leaves it empty for http_listen and https_listen, which share the app container's loopback;
+    // without this check a request sent straight to http_listen was vended.
+    if (n.ok) {
+      const t = String(request?.tunnelTarget ?? "").toLowerCase();
+      const m = t.match(/^(.*):443$/);
+      const tunnelHost = m ? m[1].replace(/\.$/, "") : null;
+      if (tunnelHost !== n.host) return refuse("guard-refused", { subreason: "no-tunnel" });
     }
 
     // 1. Flag input off: every vend refused, reads included.
@@ -293,7 +306,7 @@ export function supabaseRpc({ url, key, fetchImpl = fetch }) {
  * (`/path?query`, measured 2026-11-10) with the authority in `host`; an absolute `url` is accepted only when its
  * authority names the same host, otherwise the path is left empty so normalization refuses it (Guard 2 row 14).
  */
-export function fromTransformRequest(httpReq) {
+export function fromTransformRequest(httpReq, context) {
   let path = "";
   let query = "";
   const host = String(httpReq.host ?? "");
@@ -311,7 +324,8 @@ export function fromTransformRequest(httpReq) {
   }
   const headers = {};
   for (const [k, v] of Object.entries(httpReq.headers ?? {})) headers[k] = v?.values ?? [];
-  return { method: httpReq.method, host: httpReq.host, path, query, headers, body: Buffer.from(httpReq.body ?? []) };
+  const tunnelTarget = context?.tunnel?.target ? String(context.tunnel.target) : null;
+  return { method: httpReq.method, host: httpReq.host, path, query, headers, body: Buffer.from(httpReq.body ?? []), tunnelTarget };
 }
 
 /** Headers the hook removes on every request it lets through (criterion 2: a retried POST cannot reuse one approval). */
@@ -387,7 +401,7 @@ async function main(configPath) {
           cb(null, { action: REJECT, response: { status_code: 403, headers: {}, body: Buffer.from(body("guard-refused")) } });
           return;
         }
-        const req = fromTransformRequest(call.request.request ?? {});
+        const req = fromTransformRequest(call.request.request ?? {}, call.request.context);
         decider.decide(req, session).then((d) => {
           if (d.marker) print(d.marker.name, d.marker.fields);
           if (d.action === "CONTINUE") {

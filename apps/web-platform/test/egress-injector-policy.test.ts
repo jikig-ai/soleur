@@ -45,8 +45,10 @@ type Req = {
   body?: Buffer;
 };
 
-function req(r: Req) {
-  return { query: "", headers: {}, body: Buffer.alloc(0), ...r };
+// Every request iron-proxy forwards from a tunnel carries that tunnel's CONNECT target (measured 2026-11-10); the
+// default here is the one the router produces, `<host>:443`. Rows that test the R28 guard override it.
+function req(r: Req & { tunnelTarget?: string | null }) {
+  return { query: "", headers: {}, body: Buffer.alloc(0), tunnelTarget: `${String(r.host).toLowerCase()}:443`, ...r };
 }
 
 function pkt(line: string): string {
@@ -386,6 +388,33 @@ function setup(over: Record<string, unknown> = {}) {
 
 const PUSH = () => req({ method: "POST", host: "github.com", path: "/acme-synth/widget/git-receive-pack", body: receivePack([[OID_A, OID_B, "refs/heads/main"]]) });
 const READ = () => req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget" });
+
+describe("approval-hook.mjs decide() — tunnel guard (CTO R28)", () => {
+  // Measured 2026-11-10: a request sent straight to iron-proxy's http_listen (absolute form, no tunnel) reached the
+  // hook with no tunnel context and was vended. Every non-CONNECT request must come from a tunnel to <host>:443.
+  const read = (tunnelTarget: string | null | undefined) => req({ method: "GET", host: "api.github.com", path: "/repos/acme-synth/widget", tunnelTarget });
+  for (const [label, t] of [["no tunnel context", null], ["undefined", undefined], ["another host", "other.example:443"], ["a non-443 port", "api.github.com:8443"]] as const) {
+    it(`refuses a request with ${label} as guard-refused/no-tunnel, before any RPC`, async () => {
+      const { fake, decider } = setup();
+      const d = await decider.decide(read(t), SESSION);
+      expect(d).toMatchObject({ action: "REJECT", status: 403, reason: "guard-refused", subreason: "no-tunnel" });
+      expect(fake.calls).toHaveLength(0);
+    });
+  }
+  it("runs before the flag-off rule (step 0b)", async () => {
+    const { decider } = setup();
+    expect((await decider.decide(read(null), { ...SESSION, flagOn: false })).subreason).toBe("no-tunnel");
+  });
+  it("a matching tunnel target (any case, trailing dot) proceeds", async () => {
+    const { decider } = setup();
+    expect((await decider.decide(read("API.GitHub.com.:443"), SESSION)).action).toBe("CONTINUE");
+  });
+  it("fromTransformRequest carries context.tunnel.target", () => {
+    const m = hookMod.fromTransformRequest({ method: "GET", url: "/x", host: "github.com", headers: {}, body: Buffer.alloc(0) }, { tunnel: { target: "github.com:443" } });
+    expect(m.tunnelTarget).toBe("github.com:443");
+    expect(hookMod.fromTransformRequest({ method: "GET", url: "/x", host: "github.com", headers: {}, body: Buffer.alloc(0) }).tunnelTarget).toBeNull();
+  });
+});
 
 describe("approval-hook.mjs decide() — per-session TTL (criterion 3's expiry arm)", () => {
   it("a session's ttlSeconds overrides the hook default for the rows it creates", async () => {
