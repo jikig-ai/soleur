@@ -71,6 +71,7 @@ MIN_DAYS=7
 DEADLINE_DAYS=30
 MAX_RUNS=100         # bounds API use: the sweeper token allows ~1000 requests/hour/repo
 IDLE_RUNS=10         # while nothing is activated only a wrong elision matters: a short sample is enough
+MG_MAX_PAGES=10      # bounds the merge_group voucher listing: <=1000 runs, ~40 days of merges
 # 29.08 job-minutes per run, compared as integers: total_seconds * 100 <= 2908 * 60 * runs
 MEAN_LIMIT_HUNDREDTHS_MIN=2908
 MEAN_LIMIT_TEXT="29.08"
@@ -169,8 +170,20 @@ mg_json='[]'
 if [ -n "$oldest" ]; then
   oldest_epoch="$(date -u -d "$oldest" +%s 2>/dev/null)" || fail_api "sample bound $oldest"
   mg_since_iso="$(date -u -d "@$((oldest_epoch - 86400))" +%Y-%m-%dT%H:%M:%SZ)"
-  mg_raw="$(api --paginate "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&per_page=100&created=%3E$mg_since_iso")" \
-    || fail_api "ci.yml merge_group runs"
+  # bounded enumeration (&page=N up to MG_MAX_PAGES, the repo's pr-battery-gate-saving-9323 shape):
+  # the listing stops at the first short page; a page that comes back FULL at the cap means the
+  # voucher set may be truncated, and no verdict is safe on a partial set -> CANNOT ESTABLISH
+  mg_raw=""; mg_full_at_cap=0
+  for ((mg_p = 1; mg_p <= MG_MAX_PAGES; mg_p++)); do
+    mg_page="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&per_page=100&created=%3E$mg_since_iso&page=$mg_p")" \
+      || fail_api "ci.yml merge_group runs (page $mg_p)"
+    mg_n="$(jq -r '.workflow_runs | length' <<<"$mg_page" 2>/dev/null)"
+    [[ "$mg_n" =~ ^[0-9]+$ ]] || fail_api "ci.yml merge_group runs (page $mg_p, malformed body)"
+    mg_raw="$mg_raw$mg_page"$'\n'
+    (( mg_n < 100 )) && break
+    (( mg_p == MG_MAX_PAGES )) && mg_full_at_cap=1
+  done
+  (( mg_full_at_cap )) && { echo "CANNOT ESTABLISH: the merge_group voucher listing still returns full pages at MG_MAX_PAGES=$MG_MAX_PAGES ($((MG_MAX_PAGES * 100))+ runs): the voucher set may be truncated and a wrong-elision verdict on it would be unsafe"; exit 3; }
   mg_json="$(jq -s '[.[] | .workflow_runs[]? | select(.event == "merge_group" and .status == "completed" and .conclusion == "success") | .head_sha]' <<<"$mg_raw" 2>/dev/null)" \
     || fail_api "ci.yml merge_group runs (parse)"
   [ -n "$mg_json" ] || fail_api "ci.yml merge_group runs (empty)"

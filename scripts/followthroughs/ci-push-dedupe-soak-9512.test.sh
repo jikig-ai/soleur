@@ -78,8 +78,15 @@ case "$ep" in
   repos/*/actions/workflows/ci.yml/runs?event=push*) [ -f "$FX/fail-push" ] && { echo "gh: HTTP 500" >&2; exit 1; }; f="$FX/push.json" ;;
   repos/*/actions/workflows/ci.yml/runs?event=merge_group*)
     [ -f "$FX/fail-mg" ] && { echo "gh: HTTP 500" >&2; exit 1; }
-    (( paginate )) || refuse "$ep"
-    cat "$FX"/mg-*.json; exit 0 ;;
+    # the probe bounds this read with &page=N: serve mg-N.json for page N, an empty page beyond the
+    # fixture's page count, and REFUSE a merge_group read carrying no page= (an unbounded
+    # --paginate regression would refuse loudly here, never answer blindly)
+    case "$ep" in
+      *\&page=*) mgp="${ep##*&page=}"; [[ "$mgp" =~ ^[1-9][0-9]*$ ]] || refuse "$ep" ;;
+      *) refuse "$ep" ;;
+    esac
+    if [ -f "$FX/mg-$mgp.json" ]; then cat "$FX/mg-$mgp.json"; else printf '{"workflow_runs":[]}\n'; fi
+    exit 0 ;;
   repos/*/actions/runs/*/jobs\?per_page=100\&filter=latest) [ -f "$FX/fail-jobs" ] && { echo "gh: HTTP 500" >&2; exit 1; }; r="${ep#*runs/}"; f="$FX/jobs-${r%%/*}.json" ;;
   repos/*/issues\?labels=follow-through\&state=open\&per_page=100) f="$FX/issues.json" ;;
   repos/*/collaborators/*/permission)   # the permission endpoint: perms.tsv is `login<TAB>perm|403|404`; stderr texts mirror the real gh
@@ -123,6 +130,8 @@ chmod +x "$TMP/bin/gh"
 #   collabact: the activation is by collab-op (decoy association COLLABORATOR) holding `write`   noneact: by maint-op (decoy association NONE) holding `maintain`
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
 #   nocreated: no comment carries a createdAt (the BODIES view must not need it; the comments view would be rc 2)
+#   mgpages=K  write K FULL synthetic merge_group pages (exercises the probe's page cap)   badcreated:
+#   the oldest run's created_at is unparseable (the runs-slice epoch read must fail the probe, rc 3)
 declare -A FX_SEEN   # build_fx memoization: signature -> fixture already built this run
 build_fx() {
   local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"
@@ -138,12 +147,14 @@ build_fx() {
   rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
   local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 latebatch=0 regcomment=0 nostatus=0 nocreated=0 cr=
+  local mgpages=0 badcreated=0
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;;
       unmatched=*) unmatched="${kv#*=}" ;; early=*) early="${kv#*=}" ;; marker=*) marker="${kv#*=}" ;;
       merged=*) merged="${kv#*=}" ;; pdbad=*) pdbad="${kv#*=}" ;; prefull=*) prefull="${kv#*=}" ;; reactivate) reactivate=1 ;; twoact) twoact=1 ;; twodeact) twodeact=1 ;;
       crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; latebatch) latebatch=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;; nocreated) nocreated=1 ;;
+      mgpages=*) mgpages="${kv#*=}" ;; badcreated) badcreated=1 ;;
       pdred) pdred=1 ;; unmerged) unmerged=1 ;; noissue) noissue=1 ;; adr=*) adr="${kv#*=}" ;; noreg) noreg=1 ;; extra=*) extra="${kv#*=}" ;;
       privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;; collabact) collabact=1 ;; noneact) noneact=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
@@ -158,7 +169,8 @@ build_fx() {
   if (( noreg )); then printf 'run_suite "other" bash other.test.sh\n' > "$fx/test-all.sh"
   elif (( regcomment )); then printf '# run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh\necho "scripts/ci-push-dedupe.test.sh"\n' > "$fx/test-all.sh"
   else printf 'run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh\n' > "$fx/test-all.sh"; fi
-  local i total=$((prefull + early + ne + nf)) runs="" id sha created secs elided mg1="" mg2="" k=0 kind first_elided_sha=""
+  local i total=$((prefull + early + ne + nf)) runs="" id sha created secs elided k=0 kind first_elided_sha="" ciso
+  local -a mge=()   # merge_group page entries: vouchers first, then the noise a voucher check must ignore
   for ((i = 1; i <= total + (${#extra} > 0 ? 1 : 0); i++)); do
     id=$((1000 + i)); sha="sha$(printf '%03d' "$i")"; kind=""
     if (( i <= prefull )); then
@@ -172,7 +184,8 @@ build_fx() {
     else
       created=$((act_epoch + 3600 * i)); elided=0; secs="$es"; kind="$extra"
     fi
-    runs="{\"id\":$id,\"head_sha\":\"$sha\",\"created_at\":\"$(date -u -d "@$created" +%Y-%m-%dT%H:%M:%SZ)\"},$runs"   # newest first
+    ciso="$(date -u -d "@$created" +%Y-%m-%dT%H:%M:%SZ)"; (( badcreated && i == 1 )) && ciso="not-a-date"
+    runs="{\"id\":$id,\"head_sha\":\"$sha\",\"created_at\":\"$ciso\"},$runs"   # newest first
     # cost-accounting decoys on EVERY run: none of these may count (skipped+runner, runner-less+running time, negative duration)
     local decoys='{name:"skipped-with-runner",conclusion:"skipped",runner_id:5,started_at:"2026-10-20T10:00:00Z",completed_at:"2026-10-21T10:00:00Z"},
       {name:"runnerless-timed",conclusion:"cancelled",runner_id:null,started_at:"2026-10-20T10:00:00Z",completed_at:"2026-10-21T10:00:00Z"},
@@ -202,17 +215,38 @@ build_fx() {
         $tsjobs, $decoys]}" > "$fx/jobs-$id.json"
     fi
     if (( elided )) && (( k >= unmatched )); then
-      if (( k % 2 )); then mg1="$mg1{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$sha\"},"
-      else mg2="$mg2{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$sha\"},"; fi
+      mge+=("{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$sha\"}")
     fi
     (( elided )) && k=$((k + 1))
   done
   # noise a correct voucher check must ignore, on the SHA that unmatched=K leaves unvouched: a failed merge_group run and
 # a pull_request run (the in-progress run is equivalent to absent: the success filter already refuses it)
-  mg1="$mg1{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"failure\",\"head_sha\":\"$first_elided_sha\"},{\"event\":\"pull_request\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$first_elided_sha\"},{\"event\":\"merge_group\",\"status\":\"in_progress\",\"conclusion\":null,\"head_sha\":\"$first_elided_sha\"}"
+  mge+=("{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"failure\",\"head_sha\":\"$first_elided_sha\"}")
+  mge+=("{\"event\":\"pull_request\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$first_elided_sha\"}")
+  mge+=("{\"event\":\"merge_group\",\"status\":\"in_progress\",\"conclusion\":null,\"head_sha\":\"$first_elided_sha\"}")
+  mge+=("{\"event\":\"merge_group\",\"status\":\"in_progress\",\"conclusion\":null,\"head_sha\":\"shaZZZ\"}")
   printf '{"workflow_runs":[%s]}\n' "${runs%,}" > "$fx/push.json"
-  printf '{"workflow_runs":[%s]}\n' "${mg1%,}" > "$fx/mg-1.json"
-  printf '{"workflow_runs":[%s{"event":"merge_group","status":"in_progress","conclusion":null,"head_sha":"shaZZZ"}]}\n' "$mg2" > "$fx/mg-2.json"
+  # the fake gh serves one mg-N.json per &page=N and a SHORT page ends the probe's enumeration: pad the
+  # entry list to a FULL first page so the tail page is always fetched and vouchers legitimately span
+  # the page boundary (the coverage the old mg-1/mg-2 split gave --paginate)
+  while (( ${#mge[@]} <= 100 )); do
+    mge+=("{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"fill${#mge[@]}\"}")
+  done
+  { local mpi=1 idx=0 page c
+    while (( idx < ${#mge[@]} )); do
+      page=""
+      for ((c = 0; c < 100 && idx < ${#mge[@]}; c++, idx++)); do page="$page${mge[$idx]},"; done
+      printf '{"workflow_runs":[%s]}\n' "${page%,}" > "$fx/mg-$mpi.json"; mpi=$((mpi + 1))
+    done
+  }
+  if (( mgpages > 0 )); then   # cap-arm override: K FULL synthetic pages, no real vouchers needed
+    rm -f "$fx"/mg-*.json
+    for ((mpi = 1; mpi <= mgpages; mpi++)); do
+      page=""
+      for ((c = 1; c <= 100; c++)); do page="$page{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"mgp${mpi}r${c}\"},"; done
+      printf '{"workflow_runs":[%s]}\n' "${page%,}" > "$fx/mg-$mpi.json"
+    done
+  fi
   if (( noissue )); then printf '[]\n' > "$fx/issues.json"
   else printf '[{"number":4242,"body":"<!-- soleur:followthrough script=scripts/followthroughs/ci-push-dedupe-soak-9512.sh earliest=2026-10-10T00:00:00Z secrets=GH_TOKEN -->"},{"number":4243,"body":"unrelated"}]\n' > "$fx/issues.json"; fi
   # the tracker's comments (staging shape: [{body, author_association (a DECOY the probe must ignore), login?}]; converted to the issue-view shape below)
@@ -422,12 +456,14 @@ r_pdbad5()    { build_fx "$TMP/f25" 10 15 510 2568 pdbad=5;          expect "PAS
 r_pdbad_dark(){ build_fx "$TMP/f26" 0 25 510 2568 noact pdbad=6;     expect "FAIL: a failing push-dedupe is reported while still dark" 1 "push-dedupe job failed in 6 of 10" "$TMP/f26"; }
 r_pdbad_few() { build_fx "$TMP/f27" 0 4 510 2568 noact pdbad=4;      expect "NOT YET: fewer than 5 sampled runs are never judged on push-dedupe failures" 2 "not activated" "$TMP/f27"; }
 r_deadline_edge(){ build_fx "$TMP/f28" 0 25 510 2568 noact;          expect "NOT YET: exactly 30 days after the merge is not yet past the deadline" 2 "not activated" "$TMP/f28" SOAK_NOW_EPOCH=$(( $(date -u -d "$MERGED_ISO" +%s) + 30 * 86400 )); }
+r_mgcap()     { build_fx "$TMP/f29" 10 15 510 2568 mgpages=11;       expect "CANNOT ESTABLISH: a merge_group listing still full at the page cap is never a verdict on a truncated voucher set" 3 "MG_MAX_PAGES=10" "$TMP/f29"; }
+r_badcreated(){ build_fx "$TMP/f30" 10 15 510 2568 badcreated;       expect "CANNOT ESTABLISH: an unparseable created_at fails the push-runs slice, never a per-run skip" 3 "ci.yml push runs" "$TMP/f30"; }
 ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_nine r_six r_seven r_precedence r_jobsfail
           r_decoy_mixed r_decoy_nots r_decoy_pdred r_noperm_act r_noperm_act_elided r_noperm_marker r_nonurl_marker
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
           r_reactivate r_twoact r_twodeact r_latebatch r_idle_cap r_max_cap r_would r_marker_write r_marker_read r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools r_markers r_deact_healthy r_needcomplete)
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_mgcap r_badcreated r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools r_markers r_deact_healthy r_needcomplete)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -465,7 +501,7 @@ if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"
 # merge_group window anchored one day before the OLDEST sampled run (the oldest of c1's runs is act+1h)
 _act=$((NOW_EPOCH - 12 * 86400)); _bound="$(date -u -d "@$((_act + 3600 - 86400))" +%Y-%m-%dT%H:%M:%SZ)"
 if grep -cF 'created=%3E2026-10-10T00:00:00Z' "$TMP/c1/requests.log" >/dev/null && grep -cF 'branch=main&status=completed' "$TMP/c1/requests.log" >/dev/null \
-   && grep -cF "event=merge_group&per_page=100&created=%3E$_bound" "$TMP/c1/requests.log" >/dev/null \
+   && grep -cF "event=merge_group&per_page=100&created=%3E${_bound}&page=" "$TMP/c1/requests.log" >/dev/null \
    && grep -cF '/jobs?per_page=100&filter=latest' "$TMP/c1/requests.log" >/dev/null \
    && grep -cF 'issues?labels=follow-through&state=open&per_page=100' "$TMP/c1/requests.log" >/dev/null; then pass "the queries carry their documented parameters (push window, merge_group bound, jobs filter, open tracker)"
 else fail "the queries lost their parameters: $(head -6 "$TMP/c1/requests.log" | tr '\n' '|')"; fi
@@ -598,6 +634,8 @@ mutant m-voucher-status '.status == "completed" and .conclusion == "success") | 
 mutant m-deadline-edge '(( NOW - merged_epoch > DEADLINE_DAYS * 86400 ))' '(( NOW - merged_epoch >= DEADLINE_DAYS * 86400 ))' r_deadline_edge
 mutant m-heavy-prefix 'test("^test-scripts( |$)")' 'test("^test-scripts")' r_pass
 mutant m-heavy-exact 'test("^test-scripts( |$)")' 'test("^test-scripts$")' r_pass
+# a probe that skips the exhaustion check degrades a truncated voucher set into a normal verdict
+mutant m-mg-cap-silent '(( mg_full_at_cap )) && {' 'false && {' r_mgcap
 # harness controls: the helper must be able to report a SURVIVOR and a CRASH, or its verdicts mean nothing
 CTRL_OK=0
 mutant_probe c-equivalent 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass
@@ -671,7 +709,7 @@ PY
   out="$(env FX="$TMP/shp" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$TMP/shp/ADR-276-fixture.md" SOAK_TEST_ALL="$TMP/shp/test-all.sh" bash "$shape_probe" 2>&1)"; rc=$?
   case "$old" in
     oldest_epoch*) # the fake gh does no server-side filtering: the window bound shows only in the request it was sent
-      grep -cF "event=merge_group&per_page=100&created=%3E$_bound" "$TMP/shp/requests.log" >/dev/null && _shape_bad="$_shape_bad window-unchanged($new)" ;;
+      grep -cF "event=merge_group&per_page=100&created=%3E${_bound}&page=" "$TMP/shp/requests.log" >/dev/null && _shape_bad="$_shape_bad window-unchanged($new)" ;;
     *) [ "$rc" != 0 ] || _shape_bad="$_shape_bad passes($new)" ;;
   esac
 done
