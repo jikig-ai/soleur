@@ -1391,6 +1391,12 @@ no_decoy = lambda w: not any(r["auth_class"] == "real-decoy" for r in W[w]["stub
 def connect_refusals(w):  # the subreasons of the CONNECT refusals the hook marked in that window
     return [m.group(1) for x in W[w]["markers"] if x.startswith("SOLEUR_EGRESS_CONNECT ") and " outcome=refused-407" in x
             for m in [re.search(r" subreason=([a-z-]+)", x)] if m]
+def connect_continued(w):  # did the hook let a CONNECT through in that window?
+    return any(x.startswith("SOLEUR_EGRESS_CONNECT ") and " outcome=continue" in x for x in W[w]["markers"])
+def refused_before_hook(w):  # iron-proxy refused it itself: a TLS error, or a non-2xx with no CONNECT continue
+    m = re.search(r"status=(\S+)", W[w]["out"])
+    st = m.group(1) if m else ""
+    return st != "" and not st.startswith("2") and not connect_continued(w)
 def no_tls(w, method):
     return any(x.startswith("SOLEUR_EGRESS_VEND_REFUSED ") and f" method={method} " in x and re.search(r" reason=guard-refused( |$)", x)
                and re.search(r" subreason=no-tls( |$)", x) for x in W[w]["markers"])
@@ -1414,8 +1420,10 @@ checks = {
       metrics_http == "404" and healthz_http == "200" and not o["metrics"]["healthz_hits"],
   "R36 a CONNECT with the router credential to http_listen is refused no-sni, no real token at the stub":
       "no-sni" in connect_refusals("a1-http-listen") and no_decoy("a1-http-listen"),
-  "R36 a CONNECT with the router credential over TLS to https_listen is refused (subreason recorded), no real token at the stub":
-      bool(connect_refusals("a1-https-listen")) and no_decoy("a1-https-listen"),
+  # Run 42864371897: with no SNI iron-proxy cannot mint a leaf and aborts the handshake (internal_error), so the
+  # CONNECT never reaches the hook; that is a refusal too, recorded in the probe's `out`.
+  "R36 a CONNECT with the router credential over TLS to https_listen is refused (by the hook or by iron-proxy), no real token at the stub":
+      (bool(connect_refusals("a1-https-listen")) or refused_before_hook("a1-https-listen")) and no_decoy("a1-https-listen"),
   "R36 the same over TLS with SNI equal to the CONNECT host gets no real token at the stub (the secrets method list)": no_decoy("a1-https-listen-sni"),
   "R36 a CONNECT with the router credential inside an established tunnel is refused (subreason recorded), no real token at the stub":
       bool(connect_refusals("a1-in-tunnel")) and no_decoy("a1-in-tunnel"),
