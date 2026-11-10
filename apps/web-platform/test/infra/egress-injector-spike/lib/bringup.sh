@@ -98,7 +98,10 @@ spike_apparmor() {
     apparmor_parser -r "$profile" 2>"$SPIKE_WORK/aa.err" \
       || { [[ "$(id -u)" != "0" ]] && sudo -n apparmor_parser -r "$profile" 2>"$SPIKE_WORK/aa.err"; } \
       || harness_fail APPARMOR_UNAVAILABLE "apparmor_parser -r failed: $(head -c 300 "$SPIKE_WORK/aa.err")"
-    grep -q '^soleur-bwrap ' /sys/kernel/security/apparmor/profiles 2>/dev/null \
+    # The profile list is root-readable only on the CI runner (measured, run 42806898443); this suite is not run
+    # under sudo, so the check takes the same sudo -n fallback as the load.
+    { grep -q '^soleur-bwrap ' /sys/kernel/security/apparmor/profiles 2>/dev/null \
+      || sudo -n grep -q '^soleur-bwrap ' /sys/kernel/security/apparmor/profiles 2>/dev/null; } \
       || harness_fail APPARMOR_UNAVAILABLE "profile soleur-bwrap not loaded"
   fi
   if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
