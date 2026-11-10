@@ -433,7 +433,8 @@ export function getAllowlistedChanges(workspacePath: string): string[] {
       ["status", "--porcelain=v1", "-z"],
       { cwd: workspacePath, stdio: "pipe" },
     ).toString();
-  } catch {
+  } catch (err) {
+    mirrorGitRefusal(err, "getAllowlistedChanges");
     return [];
   }
 
@@ -512,6 +513,23 @@ async function authProbe(userId: string, op: string): Promise<boolean> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * A refused `.git` (a gitfile, a symlink, `commondir`, a redirecting entry) stops EVERY sync for that workspace at the
+ * first gate below, so it must not look like "no remote" or "nothing changed": mirror it once, with the reason only (no
+ * path, no user id in the message). Returns true when `err` was a refusal.
+ */
+function mirrorGitRefusal(err: unknown, gate: string): boolean {
+  if (!(err instanceof HostGitRefusedError)) return false;
+  log.warn({ reason: err.reason, gate }, "Host git refused the workspace .git; sync skipped");
+  reportSilentFallback(new Error(`session-sync refused: ${err.reason}`), {
+    feature: "session-sync",
+    op: "git-refused",
+    extra: { gate },
+    message: "Host git refused the workspace .git shape",
+  });
+  return true;
+}
+
 function hasRemote(workspacePath: string): boolean {
   try {
     const result = runConnectedRepoGit(["remote", "-v"], {
@@ -519,7 +537,8 @@ function hasRemote(workspacePath: string): boolean {
       stdio: "pipe",
     });
     return result.toString().trim().length > 0;
-  } catch {
+  } catch (err) {
+    mirrorGitRefusal(err, "hasRemote");
     return false;
   }
 }
@@ -532,7 +551,8 @@ function hasLocalCommits(workspacePath: string): boolean {
       { cwd: workspacePath, stdio: "pipe" },
     );
     return parseInt(result.toString().trim(), 10) > 0;
-  } catch {
+  } catch (outer) {
+    if (mirrorGitRefusal(outer, "hasLocalCommits")) return false;
     // No upstream tracking branch — if we have any commits at all, attempt push.
     // This handles the case where auto-commit created local commits but no
     // upstream tracking branch is set (first push after clone).

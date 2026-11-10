@@ -126,6 +126,26 @@ describe("fetchFromGitData — authorized read", () => {
     expect(gitTransport).not.toHaveBeenCalled();
   });
 
+  it("a url.* rewrite (or a remote named by the explicit URL) in the workspace config REFUSES the fetch: no transport, no cross-tenant read", async () => {
+    rpcMock.mockResolvedValue({ data: true, error: null });
+    for (const lines of [
+      "url.ssh://git@evil.invalid/.insteadof ssh://git@10.0.1.20/\n",
+      "remote.ssh://git@10.0.1.20/mnt/git-data/repositories/x.git.url ssh://git@10.0.1.20/mnt/git-data/repositories/other.git\n",
+    ]) {
+      gitTransport.mockClear();
+      execFileSyncMock.mockImplementation((...a: unknown[]) => {
+        const args = a[1] as string[];
+        if (args.includes("--get-regexp")) return Buffer.from(lines);
+        return Buffer.from("");
+      });
+      await expect(
+        fetchFromGitData({ userId: USER_A, workspaceId: WS_A, worktreeId: WT, workspacePath: "/tmp/ws" }),
+      ).rejects.toThrow(/refused/);
+      expect(gitTransport).not.toHaveBeenCalled();
+    }
+    execFileSyncMock.mockReset().mockReturnValue(Buffer.from(""));
+  });
+
   it("a confirmed member fetches its own worktree namespace into REMOTE-TRACKING refs (never local heads — 3.D data-loss guard)", async () => {
     rpcMock.mockResolvedValue({ data: true, error: null });
     await fetchFromGitData({ userId: USER_A, workspaceId: WS_A, worktreeId: WT, workspacePath: "/tmp/ws" });

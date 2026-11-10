@@ -28,7 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
-import { hostGitInvocation } from "./host-git";
+import { assertWorkspaceGitShape, hostGitInvocation } from "./host-git";
 import { HARDENED_GIT_ARGS, assertIsolatedPushDir, buildIsolatedGitEnv, type IsolatedPushDir } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
@@ -307,6 +307,10 @@ export async function gitWithInstallationAuth(
     assertIsolatedPushDir(hardened);
     if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");
   }
+
+  // The legacy arm refuses a redirecting `.git` shape BEFORE the mint, so a refused workspace costs no GitHub App token
+  // on every pull, push and fallback call (the shared host-git invocation below repeats the same check).
+  if (hardened === undefined && execOpts.cwd !== undefined) assertWorkspaceGitShape(execOpts.cwd);
 
   const token = await generateInstallationToken(installationId);
 

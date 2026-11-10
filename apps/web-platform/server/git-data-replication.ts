@@ -23,8 +23,8 @@ import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
-import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "./host-git";
-import { assertNoUrlRewrite } from "./git-data-url-guard";
+import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
+import { assertNoUrlRewrite, GitDataUrlRewriteError } from "./git-data-url-guard";
 import { readGitDataKeyEnv, type GitDataKeyEnvName } from "./git-data-key";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
@@ -1007,6 +1007,19 @@ export async function replicateToGitData(params: {
         },
       });
       throw err instanceof Error ? err : new Error(String(err));
+    }
+    // A refused workspace (`.git` shape, or a `url.*` / unexpected `remote.*` rewrite) is not a fence reject or a transport
+    // error: label it so triage does not chase the store. The message carries a count or a reason, never a key or a path.
+    if (err instanceof GitDataUrlRewriteError || err instanceof HostGitRefusedError) {
+      reportSilentFallback(err, {
+        feature: "worktree_lease",
+        op: "git_data_replication_refused",
+        extra: { workspaceIdHash: hashUserId(workspaceId), worktreeIdHash: hashUserId(worktreeId), leaseGeneration },
+        message:
+          "git-data replication refused: the workspace config redirects git (a url/remote rewrite or a redirecting .git); " +
+          "the workspace's objects were NOT replicated to the shared store",
+      });
+      throw err;
     }
     reportSilentFallback(err, {
       feature: "worktree_lease",

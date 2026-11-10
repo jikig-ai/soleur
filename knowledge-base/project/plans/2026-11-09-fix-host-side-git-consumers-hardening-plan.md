@@ -607,3 +607,8 @@ The 13-seat review panel changed the shipped design in the ways below; each is a
 - The Sentry auto-commit mirrors carry a classified failure (stage, exit status, closed bucket), not the raw error.
 - Wording: the scrub is NOT a secrecy control against a same-uid helper that reads `/proc/<pid>/environ` (measured); any
   executing carrier is a full same-uid compromise including other tenants' workspace directories.
+- Fix-round additions (same day): the shape refusal also covers symlinked first-level `.git` entries and `refs/*` / `objects/*`
+  children, `objects/info/alternates`, `http-alternates` and `info/grafts`; the git-data guard also refuses any `remote.<name>.*`
+  key whose name is not `origin` or `git-data`; the worktree-config heal (`worktree-config-seed.ts`) is routed through the helper
+  (it WROTE through a redirect, measured); refusals are mirrored to Sentry at the session-sync gates, in provisioning and in the
+  context-queries hook; `workspace.ts` and `worktree-config-seed.ts` are no longer census-only.

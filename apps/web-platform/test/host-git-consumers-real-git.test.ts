@@ -538,6 +538,20 @@ describe("git-data remote: the push target is the explicit URL, and a url.* rewr
     }
   });
 
+  it("a remote NAMED by the explicit URL carrying a pushurl: git resolves the argument as a remote name (control: raw git lands in B); the guard refuses it", () => {
+    const { ws, a, b } = twoTenants();
+    const url = `file://${a}`;
+    w.git(ws, "config", `remote.${url}.url`, url);
+    w.git(ws, "config", `remote.${url}.pushurl`, `file://${b}`);
+    w.git(ws, "push", "-q", "--force", url, "main");
+    expect(tipOf(b), "control: the remote-name carrier is not live").not.toBe("none");
+    expect(() => assertNoUrlRewrite(ws)).toThrow(GitDataUrlRewriteError);
+    // the two expected remotes alone are fine
+    const { ws: ws2 } = newWorkspace(w, "second-ws");
+    w.git(ws2, "remote", "add", "git-data", `file://${a}`);
+    expect(() => assertNoUrlRewrite(ws2)).not.toThrow();
+  });
+
   it("an include.path carrier is covered (the guard reads the EFFECTIVE config); a clean workspace passes", () => {
     const { ws, a, b } = twoTenants();
     expect(() => assertNoUrlRewrite(ws)).not.toThrow();
@@ -654,6 +668,20 @@ describe("RESIDUAL rows: measured open items, not controls", () => {
   });
 });
 
+/** The foreign tenant's loose refs, read from disk (a symlinked refs directory writes here without moving any object count). */
+function refsSnapshot(wsPath: string): string {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(`${p}=${readFileSync(p, "utf8").trim()}`);
+    }
+  };
+  walk(join(wsPath, ".git", "refs"));
+  return out.sort().join("\n");
+}
+
 describe("a .git naming another tenant's repository (gitfile, symlink, commondir) is refused: the foreign history does not move", () => {
   // `GIT_WORK_TREE` pins the working tree, not the git directory; the shape check (host-git.ts) refuses these shapes and
   // `GIT_DIR` / `GIT_COMMON_DIR` pin the workspace's own store. Measured for session-sync only: the other consumers share
@@ -668,6 +696,14 @@ describe("a .git naming another tenant's repository (gitfile, symlink, commondir
       symlinkSync(f, join(ws, ".git"));
     }],
     ["commondir", (ws, f) => writeFileSync(join(ws, ".git", "commondir"), `${f}\n`)],
+    ["refs-symlink", (ws, f) => {
+      rmSync(join(ws, ".git", "refs"), { recursive: true, force: true });
+      symlinkSync(join(f, "refs"), join(ws, ".git", "refs"));
+    }],
+    ["objects-symlink", (ws, f) => {
+      rmSync(join(ws, ".git", "objects"), { recursive: true, force: true });
+      symlinkSync(join(f, "objects"), join(ws, ".git", "objects"));
+    }],
   ];
   for (const [name, plantShape] of shapes) {
     it(`session-sync syncPush with a ${name} .git: refused; raw git (control) moves the foreign repository`, async () => {
@@ -676,6 +712,7 @@ describe("a .git naming another tenant's repository (gitfile, symlink, commondir
       const ctlForeign = newWorkspace(w, `ctl-foreign-${name}`);
       const ctlBefore = w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count");
       const ctlObjectsBefore = w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v");
+      const ctlRefsBefore = refsSnapshot(ctlForeign.ws);
       plantShape(ctl.ws, join(ctlForeign.ws, ".git"));
       writeFileSync(join(ctl.ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
       try {
@@ -684,21 +721,36 @@ describe("a .git naming another tenant's repository (gitfile, symlink, commondir
       } catch {
         /* a redirect may also make the verb fail; the foreign object store is the evidence */
       }
-      const moved =
-        Number(w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count")) > Number(ctlBefore) ||
-        w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v") !== ctlObjectsBefore;
+      const moved = (() => {
+        try {
+          return (
+            Number(w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count")) > Number(ctlBefore) ||
+            w.git(ctlForeign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v") !== ctlObjectsBefore ||
+            refsSnapshot(ctlForeign.ws) !== ctlRefsBefore
+          );
+        } catch {
+          return true; // the foreign repository no longer even lists its own history: the raw write reached it
+        }
+      })();
       expect(moved, `control: carrier ${name} is not live on ${gitVersion}`).toBe(true);
 
       const { ws } = newWorkspace(w);
       const foreign = newWorkspace(w, "foreign-tenant");
       const before = w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count");
       const objectsBefore = w.git(foreign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v");
+      const refsBefore = refsSnapshot(foreign.ws);
       plantShape(ws, join(foreign.ws, ".git"));
       writeFileSync(join(ws, "knowledge-base", "tenant-a-note.md"), "tenant A content\n");
+      H.reportSilentFallback.mockClear();
       await syncPush(USER, ws, {} as never, WS_ID).catch(() => {});
       canaryCheckedRuns++;
+      // the refusal is REPORTED once (reason only), not swallowed as "no remote"
+      const refused = H.reportSilentFallback.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === "git-refused");
+      expect(refused, `a refused ${name} workspace was not reported`).toHaveLength(1);
+      expect((refused[0][0] as Error).message).toBe("session-sync refused: git-dir-shape");
       expect(w.git(foreign.ws, "-c", "core.fsmonitor=false", "rev-list", "--all", "--count")).toBe(before);
       expect(w.git(foreign.ws, "-c", "core.fsmonitor=false", "count-objects", "-v")).toBe(objectsBefore);
+      expect(refsSnapshot(foreign.ws)).toBe(refsBefore);
     });
   }
 });
@@ -802,13 +854,12 @@ describe("census: every host-side git exec site is classified (consistency with 
   // The census proves the classification table agrees with the source IN THE SAME COMMIT; a diff can edit both. The
   // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
   const SERVER = join(__dirname, "..", "server");
-  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts"];
+  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts"];
   const CENSUS_ONLY: Record<string, string> = {
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
     "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",
     "git-worktree-validity.ts": "census-only: own minimal env, rev-parse probe; a redirect only changes its verdict",
     "push-branch.ts": "census-only: the file holds the operator-held isolated-GIT_DIR push; its direct `cat-file` / `config user.*` calls run unhardened (writes follow a redirect, read from source, not measured)",
-    "worktree-config-seed.ts": "census-only: seeds worktree config; executes host git on an agent-authored `.git` without the shared hardening",
   };
   // Cron handlers: classified PER FILE (a new file here is an unclassified hit, not covered by a directory exemption).
   const CRON_CENSUS: Record<string, string> = {
@@ -892,7 +943,7 @@ describe("census: every host-side git exec site is classified (consistency with 
 
 describe("floor", () => {
   it("the battery executed one canary-checked run per closable cell (derived, not a literal)", () => {
-    const shapeRows = 3; // gitfile, symlink, commondir naming a foreign tenant
+    const shapeRows = 5; // gitfile, symlink, commondir, refs symlink, objects symlink naming a foreign tenant
     const expected = DRIVERS.reduce((n, d) => n + d.closable.length + d.refused.length, 0) + shapeRows;
     expect(canaryCheckedRuns).toBe(expected);
     const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 3; // + merge-driver/token, insteadOf, rewritten-host

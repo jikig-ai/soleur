@@ -265,7 +265,7 @@ describe("hostGitInvocation with real git", () => {
     expect(hosted.stdout).not.toContain("n.md");
   });
 
-  it("a .git that carries commondir, is a symlink, or is a gitfile is refused before git runs (control: raw git follows each into the foreign repository)", () => {
+  it("a .git that carries commondir, is a symlink or gitfile, has a symlinked refs/objects entry, or carries alternates/grafts is refused before git runs (the real-git effect controls are in the battery)", () => {
     const victim = join(root, "victim");
     mkdirSync(victim);
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: victim, env: plainEnv() });
@@ -286,6 +286,27 @@ describe("hostGitInvocation with real git", () => {
         },
       ],
     ];
+    const vg = join(victim, ".git");
+    const redirects: Array<[string, (ws: string) => void]> = [
+      ["refs-symlink", (ws) => { rmSync(join(ws, ".git", "refs"), { recursive: true, force: true }); symlinkSync(join(vg, "refs"), join(ws, ".git", "refs")); }],
+      ["objects-symlink", (ws) => { rmSync(join(ws, ".git", "objects"), { recursive: true, force: true }); symlinkSync(join(vg, "objects"), join(ws, ".git", "objects")); }],
+      ["refs-heads-symlink", (ws) => { rmSync(join(ws, ".git", "refs", "heads"), { recursive: true, force: true }); symlinkSync(join(vg, "refs", "heads"), join(ws, ".git", "refs", "heads")); }],
+      ["alternates", (ws) => { mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "objects", "info", "alternates"), `${join(vg, "objects")}\n`); }],
+      ["http-alternates", (ws) => { mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "objects", "info", "http-alternates"), "http://x.invalid/objects\n"); }],
+      ["grafts", (ws) => { mkdirSync(join(ws, ".git", "info"), { recursive: true }); writeFileSync(join(ws, ".git", "info", "grafts"), "\n"); }],
+    ];
+    for (const [name, plant] of redirects) {
+      const ws = join(root, `ws-${name}`);
+      mkdirSync(ws);
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws, env: plainEnv() });
+      plant(ws);
+      expect(() => hostGitInvocation(["status"], { cwd: ws, allowProtocol: "none" }), name).toThrow(HostGitRefusedError);
+    }
+    // a plain workspace with the same entries as real directories and no redirecting file passes (positive control)
+    const clean = join(root, "ws-clean-entries");
+    mkdirSync(clean);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: clean, env: plainEnv() });
+    expect(() => hostGitInvocation(["status"], { cwd: clean, allowProtocol: "none" })).not.toThrow();
     for (const [name, plant] of cases) {
       const ws = join(root, `ws-${name}`);
       mkdirSync(ws);
@@ -314,8 +335,9 @@ describe("hostGitInvocation with real git", () => {
     expect(r.status).not.toBe(0);
   });
 
-  it("core.alternateRefsCommand= keeps an alternates helper from running on fetch (control: raw git runs it)", () => {
-    // mechanism as measured: an empty workspace whose alternates name a populated object store, fetching from it
+  it("core.alternateRefsCommand= keeps an alternates helper from running on fetch (control: raw git runs it); defence in depth behind the alternates refusal", () => {
+    // mechanism as measured: an empty workspace whose alternates name a populated object store, fetching from it. The shape
+    // check now refuses such a workspace outright, so this row drives the argv and env WITHOUT a cwd (no shape check, no pin).
     const origin = join(root, "origin");
     mkdirSync(origin);
     const ident = { ...plainEnv(), GIT_AUTHOR_NAME: "n", GIT_AUTHOR_EMAIL: "n@example.invalid", GIT_COMMITTER_NAME: "n", GIT_COMMITTER_EMAIL: "n@example.invalid" };
@@ -336,7 +358,8 @@ describe("hostGitInvocation with real git", () => {
     spawnSync("git", ["fetch", "-q", "o"], { cwd: ws, env: { ...plainEnv(), GIT_ALLOW_PROTOCOL: "file" }, encoding: "utf8", timeout: 20_000 });
     expect(existsSync(marker), "control: raw git runs the alternates helper").toBe(true);
     rmSync(marker);
-    runHost(ws, ["fetch", "-q", "o"], { allowProtocol: "none:file" });
+    const h = hostGitInvocation(["fetch", "-q", "o"], { allowProtocol: "none:file" });
+    spawnSync("git", h.args, { cwd: ws, env: h.env, encoding: "utf8", timeout: 20_000 });
     expect(existsSync(marker)).toBe(false);
   });
 

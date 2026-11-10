@@ -487,11 +487,16 @@ allowed, so there only the env pin and the file-tool guard hold.
   > `ls-files`, now run through one leaf, `server/host-git.ts`: the shared hardening arguments,
   > `safe.bareRepository=explicit`, `protocol.ext.allow=never`, `core.alternateRefsCommand=`, signing off, and a scrubbed
   > environment with the image identity file as the global config. For a call with a workspace `cwd` it sets
-  > `GIT_WORK_TREE`, `GIT_DIR` and `GIT_COMMON_DIR` to the workspace itself and REFUSES a `.git` that is a gitfile, a
-  > symlink or carries `commondir` (a preflight, not a structural control). `GIT_ALLOW_PROTOCOL` is required on every
+  > `GIT_WORK_TREE`, `GIT_DIR` and `GIT_COMMON_DIR` to the workspace itself and REFUSES a `.git` that is a gitfile or a
+  > symlink, whose first-level entries or `refs/*` / `objects/*` children are symlinks, or that carries `commondir`,
+  > `objects/info/alternates`, `http-alternates` or `info/grafts` (measured: each redirected a read or a write into another
+  > repository). A preflight, not a structural control: a swap after the check is not covered (the `GIT_DIR` pin does not stop
+  > `commondir` or a swapped symlink), and symlinks deeper than `refs/*` and `objects/*` and `modules/` are not examined. `GIT_ALLOW_PROTOCOL` is required on every
   > call: `https` (installation-auth), `ssh` (key-auth), `none` (every local-only consumer, which also stops a promisor
   > or `file` remote reached from a local verb). The git-data push goes to the explicit server-derived URL, and a
-  > `url.*` preflight guard (shared with the fetch) refuses any effective `url.*` rewrite: the host-key pin limits which
+  > preflight guard (shared with the fetch) refuses any effective `url.*` rewrite and any `remote.<name>.*` key whose name is
+  > not `origin` or `git-data` (git resolves a push or fetch argument as a remote NAME first, so a remote named by the
+  > explicit URL defeated it; measured): the host-key pin limits which
   > host key is trusted, NOT which repository path on that host is written, so same-host cross-repo writes are limited by
   > the explicit URL plus that preflight, which is not a structural control (the receiving side checks fencing and
   > namespace per ref, not caller ownership, and there is one transport key). Correction of the premise above:
@@ -508,10 +513,13 @@ allowed, so there only the env pin and the file-tool guard hold.
   > host is followed on the legacy arm, and the askpass script answers for any host, so the installation token can be
   > sent to a rewritten host; the askpass body is shared with the operator-held isolated arm and is not edited here), and
   > the consumer's own auth variable (the installation token in the legacy arm; in the key-auth arm a helper that runs
-  > can read the 0600 transport key file during the push). The foreign-gitdir refusal is measured for `session-sync` and
-  > for `ensureGitDataRemote`; the other consumers share the helper and the census, with no row naming a foreign store.
+  > can read the 0600 transport key file during the push). The foreign-gitdir refusal is measured for `session-sync`,
+  > `ensureGitDataRemote`, `provisionWorkspace`, the worktree-config heal and the `context-queries-hook`; the other consumers
+  > share the helper and the census, with no row naming a foreign store. Refusals are mirrored to Sentry (op `git-refused` from
+  > `session-sync`, `workspace-provision` and `context-queries-hook`; `git_data_replication_refused` from replication). A
+  > refused workspace stops syncing and provisioning git by design: no server code creates a gitfile, a symlink or `commondir`.
   > Sites that run host git on an agent-authored `.git` WITHOUT the shared hardening (census-only, not routed here):
-  > `git-config-atomic.ts`, `worktree-config-seed.ts`, `git-worktree-validity.ts`, `push-branch.ts` (the file holds the
+  > `git-config-atomic.ts`, `git-worktree-validity.ts`, `push-branch.ts` (the file holds the
   > operator-held isolated push; its direct `cat-file` / `config user.*` calls run unhardened), and the cron helpers;
   > their writes follow a gitfile or `commondir` redirect (read from source, not measured). `--attr-source` was measured
   > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). Structural options NOT done here: running

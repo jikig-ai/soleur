@@ -11,7 +11,7 @@ delete process.env.GIT_WORK_TREE;
 
 import { describe, test, expect, afterEach } from "vitest";
 import { execFileSync } from "child_process";
-import { existsSync, readFileSync, rmSync } from "fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { provisionWorkspace } from "../server/workspace";
@@ -109,5 +109,32 @@ describe("workspace provisioning", () => {
         stdio: "pipe",
       }),
     ).toThrow(); // --get on an absent key exits non-zero
+  });
+
+  // Review round: provisioning's git runs through the host-git invocation. `init` takes no cwd/GIT_DIR pin (nothing to pin yet),
+  // so a mistaken pin would make `init` refuse silently inside the "Git init failed" warn. Assert the OUTCOME, not the absence of a throw.
+  test("a fresh workspace ends up with a real .git directory that git resolves", async () => {
+    const path = await provisionWorkspace(randomUUID());
+    expect(statSync(join(path, ".git")).isDirectory()).toBe(true);
+    const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], { cwd: path, stdio: "pipe" }).toString().trim();
+    expect(gitDir).toBe(".git");
+  });
+
+  test("re-provisioning a workspace whose .git is a gitfile naming another repository leaves that repository untouched", async () => {
+    const victimId = randomUUID();
+    const victim = await provisionWorkspace(victimId);
+    // a marker the heal/seed would remove if its writes landed in the victim
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: victim, stdio: "pipe" });
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+    rmSync(join(path, ".git"), { recursive: true, force: true });
+    writeFileSync(join(path, ".git"), `gitdir: ${join(victim, ".git")}\n`);
+    await provisionWorkspace(userId);
+    const marker = execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], { cwd: victim, stdio: "pipe" }).toString().trim();
+    expect(marker).toBe("true");
+    // and no commit landed in the victim's history from the attacker's workspace
+    // (its own provisioning made at most one commit: 0 where the image identity file is absent, as in this test environment)
+    const count = Number(execFileSync("git", ["rev-list", "--all", "--count"], { cwd: victim, stdio: "pipe" }).toString().trim());
+    expect(count).toBeLessThanOrEqual(1);
   });
 });

@@ -18,7 +18,7 @@
 //
 // Only `-c key=value` pairs and environment are used, never a new global option: the built image's git version is
 // not measured here and an unknown global option exits 129 on git 2.38/2.39.
-import { lstatSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
@@ -174,11 +174,19 @@ function enoent(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: string }).code === "ENOENT";
 }
 
+// Files whose mere presence redirects or rewrites what git reads from ANOTHER repository's store. No server code writes
+// them in a workspace (the isolated push creator refuses the same ones).
+const REDIRECTING_GIT_FILES = ["commondir", "objects/info/alternates", "objects/info/http-alternates", "info/grafts"] as const;
+
 /**
- * Refuse a workspace whose `.git` is not a plain directory (a gitfile or a symlink points at another repository) or
- * carries a `commondir` (objects, refs and config then come from another repository). An absent `.git` passes: the
- * pinned `GIT_DIR` then names a path that does not exist and git fails closed. A preflight, not a structural control:
- * a write between this check and the git call is not covered.
+ * Refuse a workspace whose `.git` is not a plain directory (a gitfile or a symlink points at another repository), whose
+ * first-level entries, or the children of `refs/` and `objects/`, are symlinks (measured: a symlinked `refs` or `objects`
+ * wrote a ref and a blob into another repository under the pinned GIT_DIR), or that carries `commondir`,
+ * `objects/info/alternates`, `http-alternates` or `info/grafts`. An absent `.git` passes: the pinned `GIT_DIR` then names a
+ * path that does not exist and git fails closed. A PREFLIGHT, not a structural control: a write between this check and the
+ * git call is not covered (pinning GIT_DIR/GIT_COMMON_DIR does not stop `commondir` or a symlink swapped in after the
+ * check), symlinks deeper than `refs/*` and `objects/*`, and `modules/`, are not examined. Same family as
+ * `probeGitWorktreeShape` (git-worktree-validity.ts), whose semantics differ (an absent `.git` is invalid there).
  */
 export function assertWorkspaceGitShape(cwd: string): void {
   const gitDir = join(cwd, ".git");
@@ -190,13 +198,35 @@ export function assertWorkspaceGitShape(cwd: string): void {
     if (enoent(err)) return;
     throw new HostGitRefusedError("git-dir-shape");
   }
-  try {
-    lstatSync(join(gitDir, "commondir"));
-  } catch (err) {
-    if (enoent(err)) return;
+  const refuse = (): never => {
     throw new HostGitRefusedError("git-dir-shape");
+  };
+  let entries;
+  try {
+    entries = readdirSync(gitDir, { withFileTypes: true });
+  } catch {
+    return refuse();
   }
-  throw new HostGitRefusedError("git-dir-shape");
+  for (const e of entries) if (e.isSymbolicLink()) refuse();
+  for (const sub of ["refs", "objects"]) {
+    if (!entries.some((e) => e.name === sub && e.isDirectory())) continue;
+    let children;
+    try {
+      children = readdirSync(join(gitDir, sub), { withFileTypes: true });
+    } catch {
+      return refuse();
+    }
+    for (const c of children) if (c.isSymbolicLink()) refuse();
+  }
+  for (const rel of REDIRECTING_GIT_FILES) {
+    try {
+      lstatSync(join(gitDir, rel));
+    } catch (err) {
+      if (enoent(err)) continue;
+      refuse();
+    }
+    refuse();
+  }
 }
 
 /**

@@ -3,7 +3,7 @@
 // .git/config.worktree) stops fataling and `git worktree add` runs natively (#4826).
 import { describe, test, expect, afterEach } from "vitest";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { seedWorktreeConfig } from "../server/worktree-config-seed";
@@ -87,5 +87,24 @@ describe("seedWorktreeConfig (heal)", () => {
     made.push(empty);
     expect(() => seedWorktreeConfig(empty)).not.toThrow();
     expect(cfg(empty, "extensions.worktreeConfig")).toBeNull();
+  });
+
+  // Review round: the heal ran `git config` with the full server environment and FOLLOWED a symlinked .git or a commondir into
+  // another repository, then WROTE there (measured). It now goes through the host-git invocation, which refuses those shapes.
+  test.each(["symlinked .git", "commondir"])("a %s naming another repository: the heal does not touch the other repository", (shape) => {
+    const victim = freshRepo();
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: victim, stdio: "pipe", env: gitFixtureEnv(victim) });
+    execFileSync("git", ["config", "core.repositoryformatversion", "1"], { cwd: victim, stdio: "pipe", env: gitFixtureEnv(victim) });
+    const attacker = freshRepo();
+    if (shape === "symlinked .git") {
+      rmSync(join(attacker, ".git"), { recursive: true, force: true });
+      symlinkSync(join(victim, ".git"), join(attacker, ".git"));
+    } else {
+      writeFileSync(join(attacker, ".git", "commondir"), `${join(victim, ".git")}\n`);
+    }
+    expect(() => seedWorktreeConfig(attacker)).not.toThrow();
+    // the victim keeps its own (harmful, but its own) values: the write did not land there
+    expect(cfg(victim, "extensions.worktreeConfig")).toBe("true");
+    expect(cfg(victim, "core.repositoryformatversion")).toBe("1");
   });
 });

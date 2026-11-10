@@ -226,6 +226,7 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
 
       const resolved: string[] = [];
       const skipped: string[] = [];
+      let refusalReported = false; // one Sentry event per hook call, not one per query
       const seen = new Set<string>();
 
       for (const q of queries) {
@@ -265,7 +266,13 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
         } catch (err) {
           // a refused workspace (`.git` is a gitfile, a symlink or carries `commondir`) is not an ordinary git failure
           if (err instanceof HostGitRefusedError) {
-            reportSilentFallback(err, { feature: "context-queries-hook", op: "git-refused", extra: { reason: err.reason } });
+            if (!refusalReported) {
+              refusalReported = true;
+              reportSilentFallback(err, { feature: "context-queries-hook", op: "git-refused", extra: { reason: err.reason } });
+            }
+            // distinct from "no match": the file may exist, the workspace's git was just not consulted
+            skipped.push(`${q} (workspace git unavailable)`);
+            continue;
           }
           skipped.push(`${q} (no committed match)`);
           continue;

@@ -131,6 +131,44 @@ describe("replicateToGitData — gated off (GIT_DATA_STORE_ENABLED unset)", () =
   });
 });
 
+describe("replicateToGitData — the url/remote rewrite guard runs before ANY push (cross-tenant redirect)", () => {
+  beforeEach(() => vi.stubEnv("GIT_DATA_STORE_ENABLED", "true"));
+
+  // The guard asks the effective config for `^(url|remote)\.` through the host-git invocation; the fake answers per scenario.
+  function configAnswers(lines: string): void {
+    execFileSyncMock.mockImplementation((...a: unknown[]) => {
+      const args = stripBlock(a[1] as string[]);
+      if (args[0] === "config" && args[1] === "--get-regexp") {
+        if (lines === "") throw Object.assign(new Error("exit 1"), { status: 1 });
+        return Buffer.from(lines);
+      }
+      return Buffer.from("");
+    });
+  }
+  const run = () => replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 4, userId: USER });
+
+  it.each([
+    ["a url.<base>.insteadOf rewrite", "url.ssh://git@evil.invalid/.insteadof ssh://git@10.0.1.20/\n"],
+    ["a remote named by the explicit URL carrying a pushurl", `remote.${gitDataRemoteUrl(WS)}.pushurl ssh://git@10.0.1.20/mnt/git-data/repositories/other.git\n`],
+  ])("%s: refuses, pushes nothing, and reports the refusal under its own op", async (_n, lines) => {
+    configAnswers(lines);
+    await expect(run()).rejects.toThrow(/refused/);
+    expect(gitPush).not.toHaveBeenCalled();
+    const ops = reportSilentFallback.mock.calls.map((c) => (c[1] as { op?: string }).op);
+    expect(ops).toContain("git_data_replication_refused");
+    expect(ops).not.toContain("git_data_replication_push");
+    // the report carries a count, never the rewritten key or its value
+    expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain("evil.invalid");
+  });
+
+  it("the expected remotes (origin, git-data) and a clean config pass, and the push goes to the explicit URL", async () => {
+    configAnswers("remote.origin.url https://github.com/o/r.git\nremote.git-data.url ssh://x/y\n");
+    await run();
+    expect(gitPush).toHaveBeenCalled();
+    expect((gitPush.mock.calls[0][0] as string[])).toContain(gitDataRemoteUrl(WS));
+  });
+});
+
 describe("replicateToGitData — gated on", () => {
   beforeEach(() => vi.stubEnv("GIT_DATA_STORE_ENABLED", "true"));
 

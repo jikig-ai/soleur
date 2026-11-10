@@ -25,6 +25,7 @@
 import { execFileSync } from "child_process";
 import { statSync } from "node:fs";
 import { join } from "node:path";
+import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("worktree-config-seed");
@@ -52,31 +53,36 @@ function isNonBareWorkingClone(workspacePath: string): boolean {
 export function seedWorktreeConfig(workspacePath: string): void {
   if (!isNonBareWorkingClone(workspacePath)) return;
 
+  // Host git on a workspace an agent session may have authored: the shared host-git invocation (hardening arguments,
+  // scrubbed environment, `.git` shape refusal and pinned GIT_DIR). Before this, the three `git config` calls below ran
+  // with the full server environment and followed a symlinked `.git` or a `commondir` into another repository, and
+  // WROTE there (measured in review).
+  const git = (args: string[]): void => {
+    const h = hostGitInvocation(args, { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE });
+    execFileSync("git", h.args, { cwd: workspacePath, stdio: "pipe", env: h.env });
+  };
+
   // The load-bearing heal: remove extensions.worktreeConfig. Probe presence first so a
   // no-op on a healthy workspace stays silent, and a real failure to clear a PRESENT key
   // is surfaced loudly (that key is what keeps in-sandbox git wedged).
   let hadWorktreeConfig = false;
   try {
-    execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    git(["config", "--get", "extensions.worktreeConfig"]);
     hadWorktreeConfig = true;
-  } catch {
+  } catch (err) {
+    // A refused `.git` shape is not "healthy": say so (the caller mirrors the refusal where it has a user to attribute it to).
+    if (err instanceof HostGitRefusedError) {
+      log.warn({ workspacePath, reason: err.reason }, "worktree config heal skipped: workspace .git refused");
+      return;
+    }
     // absent → healthy, nothing to unset.
   }
   if (!hadWorktreeConfig) return;
 
   try {
-    execFileSync("git", ["config", "--unset-all", "extensions.worktreeConfig"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    git(["config", "--unset-all", "extensions.worktreeConfig"]);
     // Reset the format version bumped alongside the old seed. Harmless if already 0.
-    execFileSync("git", ["config", "core.repositoryformatversion", "0"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    git(["config", "core.repositoryformatversion", "0"]);
     log.warn(
       { workspacePath, sec: true },
       "healed workspace: removed harmful extensions.worktreeConfig (#4826 regression)",

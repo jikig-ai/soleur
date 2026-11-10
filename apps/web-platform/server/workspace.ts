@@ -19,7 +19,7 @@ import {
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { hashUserId, reportSilentFallback } from "./observability";
-import { ALLOW_PROTOCOL_NONE, assertWorkspaceGitShape, hostGitInvocation } from "./host-git";
+import { ALLOW_PROTOCOL_NONE, assertWorkspaceGitShape, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
 import {
@@ -157,6 +157,15 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
     runGit(["commit", "-m", "Initial workspace"], true);
   } catch (err) {
     log.warn({ err, workspaceId }, "Git init failed");
+    // A refused `.git` (gitfile, symlink, commondir, redirecting entry) leaves a workspace that session-sync will also
+    // refuse; the warn above is a breadcrumb only, so raise it (reason only: no path, no id).
+    if (err instanceof HostGitRefusedError) {
+      reportSilentFallback(new Error(`provisionWorkspace refused: ${err.reason}`), {
+        feature: "workspace-provision",
+        op: "git-refused",
+        message: "Host git refused the workspace .git shape during provisioning",
+      });
+    }
   }
 
   // Heal worktree git config HOST-SIDE (#4826): remove any extensions.worktreeConfig
