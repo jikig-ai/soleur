@@ -71,6 +71,11 @@ nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr 10\.0\.1\.2
 # inside another rule's comment does not satisfy it) AND positional: listed BEFORE the terminal default drop, or it is a dead rule. awk reads the
 # whole listing (no early exit, so no SIGPIPE flake). Proves the rule TEXT is live in the right place, not that a container reaches the peer.
 nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443 accept/ { a = NR } /comment "soleur-egress: default drop"/ { d = NR } END { exit !(a && d && a < d) }' || { echo 'ASSERT-FAILED: web-peer-relay-8443-accept'; exit 1; }
+# #9137: the web-peer exec-forward accept (the app container forwards a pinned Inngest step call to
+# https://<exec private ip>:8445 through this chain). Same shape as the relay assert above: anchored on the rule's line
+# start AND the EXACT peer set AND positional (listed BEFORE the terminal default drop, or it is a dead rule). Without it a
+# container on a non-exec host cannot forward and every pinned function stalls while this script reports success.
+nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8445 accept/ { a = NR } /comment "soleur-egress: default drop"/ { d = NR } END { exit !(a && d && a < d) }' || { echo 'ASSERT-FAILED: web-peer-exec-forward-8445-accept'; exit 1; }
 nft list set ip filter soleur_egress_allow | grep -cE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' >/dev/null || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -c 'cidr allowlist' >/dev/null || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set

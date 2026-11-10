@@ -5386,7 +5386,10 @@ case "$COMPONENT" in
     # IP. Prod PUBLISHES 8443 on that IP (-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443": RELAY_PUBLISH_BIND is PROXY_BIND only when the
     # net.ipv4.ip_nonlocal_bind sysctl is 1, else empty = a loopback publish, unreachable by peers) and binds 0.0.0.0 inside (-e SOLEUR_PROXY_BIND=0.0.0.0, SOLEUR_PROXY_PORT=8443). The canary publishes NO 8443 and gets a
     # literal EMPTY bind (the app reports no_bind), so blue/green never collides on the port; it is removed before prod starts.
-    # lib/docker-run-tuple.py pins all of it. Reboot race: see resolve_publish_ip.
+    # Exec-forward (#9137, CTO T2): the pinned-TLS Inngest step-call receiver publishes 8445 the same way (same RELAY_PUBLISH_BIND
+    # semantics — a loopback-degraded publish fails forwarding closed, which T3 accepted) and the prod container self-identifies
+    # via -e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND" (empty on the canary: it serves no step traffic, so a pinned call landing there
+    # refuses). lib/docker-run-tuple.py pins all of it. Reboot race: see resolve_publish_ip.
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
@@ -5411,6 +5414,7 @@ case "$COMPONENT" in
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
       -e SOLEUR_PROXY_BIND= \
+      -e SOLEUR_HOST_PRIVATE_IP= \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5795,6 +5799,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND" \
         -e SOLEUR_PROXY_BIND=0.0.0.0 \
         -e SOLEUR_PROXY_PORT=8443 \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
@@ -5807,6 +5812,7 @@ case "$COMPONENT" in
         -p 0.0.0.0:443:3443 \
         -p 0.0.0.0:3000:3000 \
         -p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443" \
+        -p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445" \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.

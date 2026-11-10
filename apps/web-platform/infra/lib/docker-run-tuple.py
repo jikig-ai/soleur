@@ -107,6 +107,23 @@ RELAY_PORT = "8443"
 RELAY_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (RELAY_PORT, RELAY_PORT)
 RELAY_PROD_ENV = {"SOLEUR_PROXY_BIND": {"0.0.0.0"}, "SOLEUR_PROXY_PORT": {RELAY_PORT}}
 RELAY_CANARY_ENV = {"SOLEUR_PROXY_BIND": {""}}
+# The exec-forward receiver (#9137, CTO T2): a sibling pinned-TLS listener the prod container serves on 8445 so an
+# Inngest step call landing on a non-exec web host can be forwarded to the exec host over the private net. It is
+# published exactly like :8443 (-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445" — an empty RELAY_PUBLISH_BIND is a
+# loopback publish: the peer cannot reach it and forwarding fails closed, the accepted T3 dependency). Exec-host
+# identification travels as an env, not a bind: the prod container gets SOLEUR_HOST_PRIVATE_IP=$PROXY_BIND (the
+# RESOLVED host address — the container cannot see the host's 10.0.1.x NIC itself) which the app compares to the
+# drift-guarded 10.0.1.10 pin; equal -> execute, different -> forward, unset/empty -> refuse (never a local
+# fallback). The canary carries a literal EMPTY value (it serves no step traffic, so a pinned call refuses) and
+# publishes no 8445. The first-boot tuple carries the same identity env resolved at template time (${private_ip},
+# the Terraform-rendered var.web_hosts private_ip — cloud-init's `soleur-wait-nic ${private_ip}` gate precedes the
+# docker run), so a fresh host self-identifies before its first deploy; it publishes no 8445 (same as it publishes
+# no 8443: the exec-forward listener never needs to be reached before the first ci-deploy re-asserts the tuple).
+EXEC_FORWARD_PORT = "8445"
+EXEC_FORWARD_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (EXEC_FORWARD_PORT, EXEC_FORWARD_PORT)
+IDENTITY_PROD_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"$PROXY_BIND"}}
+IDENTITY_CANARY_ENV = {"SOLEUR_HOST_PRIVATE_IP": {""}}
+IDENTITY_FIRST_BOOT_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"${private_ip}"}}
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
 # --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
@@ -122,20 +139,20 @@ TUPLES = {
     "canary": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform-canary", "restart": {"no"},
         "mem_exprs": {"$CANARY_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}, **RELAY_CANARY_ENV),
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}, **RELAY_CANARY_ENV, **IDENTITY_CANARY_ENV),
         "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"}, "scalars": _SCALARS_APP,
     },
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}, **RELAY_PROD_ENV),
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}, **RELAY_PROD_ENV, **IDENTITY_PROD_ENV),
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443", RELAY_PUBLISH}, "scalars": _SCALARS_APP,
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443", RELAY_PUBLISH, EXEC_FORWARD_PUBLISH}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
-        "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}},
+        "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}, **IDENTITY_FIRST_BOOT_ENV},
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
         "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443"}, "scalars": _SCALARS,
     },

@@ -20,6 +20,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
+import { dispatchPlacementAwarePost } from "@/server/inngest/exec-forward-client";
 import { agentOnSpawnRequested, agentOnSpawnSettle } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
@@ -225,4 +226,18 @@ const handlers = serve({
 // interval throwing uncaughtExceptions); inngest@4 fixes createStream
 // upstream (`cancel()` clears the interval, a `closed` flag gates enqueue),
 // so POST is the bare SDK handler again.
-export const { GET, POST, PUT } = handlers;
+//
+// #9137 (ADR-033 amendment 2026-11-10): POST is composed through the
+// placement-aware dispatcher — every step POST is classified by ?fnId against
+// EXECUTION_PLACEMENT and executed locally (portable, or pinned on the exec
+// host), forwarded verbatim to the exec host over pinned TLS (pinned on a
+// non-exec host), or refused fail-closed (unestablished exec identity, a marked
+// call on a non-exec host, or an unsigned forward attempt). GET/PUT
+// registration and `?probe=` requests bypass the dispatcher entirely — the
+// composition below is the ONLY placement hook, so the registration semantics
+// pinned by #5159 (SERVE_HOST) are untouched on any host.
+// dispatchPlacementAwarePost reads env at call time (module-load throws would
+// break `next build`, which loads this file without runtime env).
+export const { GET, PUT } = handlers;
+export const POST: typeof handlers.POST = (req, res) =>
+  dispatchPlacementAwarePost(req, res, handlers.POST);
