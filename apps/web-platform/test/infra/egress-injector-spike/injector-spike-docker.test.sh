@@ -234,6 +234,7 @@ arm_c4
 arm_c5
 record_verdict 6 unmeasurable "arm-not-implemented:adr-278-controls-and-log-grep"
 arm_c7
-record_verdict 8 unmeasurable "arm-not-implemented:failure-modes"
 arm_c9
+# Last: criterion 8 stops the hook, a router and an injector.
+arm_c8
 finalize

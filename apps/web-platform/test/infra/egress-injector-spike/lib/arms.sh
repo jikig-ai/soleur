@@ -644,3 +644,98 @@ PYC7
   observe c7 "$d/raw.json"
   spike_record_judged 7 "$d/verdict.txt"
 }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Criterion 8: failure is visible and closed. Runs LAST (it stops the hook, a router and an injector). Each client
+# runs under its own `timeout -k` and its elapsed time is read from /proc/uptime (monotonic); a positive control
+# through a healthy hook comes first, so a broken CA or a 407 cannot pass as "refused".
+# ---------------------------------------------------------------------------------------------------------------
+_c8_clients() { # <label> <session> <out>: git push (write), curl POST (write), gh POST (write), curl GET (read)
+  cat > "$SPIKE_WORK/c8/clients-$1.sh" <<EOS
+L=$1
+up() { cut -d' ' -f1 /proc/uptime; }
+run() { local n=\$1; shift; local t0 t1 rc; t0=\$(up); timeout -k 2 30 "\$@" >/dev/null 2>&1; rc=\$?; t1=\$(up); echo "c8 \$L \$n rc=\$rc elapsed=\$(echo "\$t1 \$t0" | awk '{printf "%.2f", \$1-\$2}')"; }
+w=/home/soleur/c8-$2
+[ -d "\$w/.git" ] || HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" timeout 30 git clone -q https://github.com/spike/alpha.git "\$w" >/dev/null 2>&1
+[ -d "\$w/.git" ] && git -C "\$w" -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "c8 \$L"
+run gitPush env HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git -C "\$w" push -q origin HEAD:main
+run curlPost curl -sS -f -o /dev/null --cacert "\$CA" -x "\$P" -H 'content-type: application/json' --data "{\"title\":\"c8 \$L\",\"head\":\"a\",\"base\":\"main\"}" https://api.github.com/repos/spike/alpha/pulls
+run ghPost env HTTPS_PROXY="\$P" SSL_CERT_FILE="\$CA" GH_TOKEN=spike-placeholder gh api -X POST repos/spike/alpha/pulls -f title="c8 gh \$L" -f head=a -f base=main
+run curlGet curl -sS -f -o /dev/null --cacert "\$CA" -x "\$P" https://api.github.com/repos/spike/alpha
+run sse sh -c 'test "\$(curl -sS -N --max-time 20 --cacert "\$CA" -x "\$P" https://sse.open-web.spike.test/sse 2>/dev/null | grep -c "^event: tick")" = 50'
+EOS
+  spike_cx "$2" "$SPIKE_WORK/c8/clients-$1.sh" "$3"
+}
+
+arm_c8() {
+  local d="$SPIKE_WORK/c8" kong seq
+  mkdir -p "$d" && : > "$d/windows.jsonl" || harness_fail DRIVER "mkdir c8"
+  window() { # <label> <stub seq at start> <hook marker lines at start>
+    python3 -I -c 'import json, sys; print(json.dumps({"label": sys.argv[1], "seq": int(sys.argv[2]), "hook": int(sys.argv[3])}))' "$1" "$2" "$3" >> "$d/windows.jsonl"
+  }
+  kong="$(docker ps --filter 'name=supabase_kong' --format '{{.Names}}' | head -1)"
+  # Positive control: a healthy hook, the same clients (sessA; the writes are refused pending, the read vends).
+  window control "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients control sessA "$d/control.out"
+  # Stalled: the hook is alive but its RPC cannot finish (the API gateway is paused); its 5 s deadline answers.
+  if [[ -n "$kong" ]]; then
+    docker pause "$kong" >/dev/null 2>&1
+    window stalled "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients stalled sessA "$d/stalled.out"
+    docker unpause "$kong" >/dev/null 2>&1
+  fi
+  docker logs "$SPIKE_HOOK_CTR" 2>&1 | grep -c 'reason=hook-timeout' > "$d/hook-timeouts.txt"
+  # Frozen: the hook process is frozen (cgroup freezer, the SIGSTOP of R27); iron-proxy has no deadline of its own.
+  docker pause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
+  window frozen "$(spike_stub_seq)" "$(spike_hook_lines)"; _c8_clients frozen sessA "$d/frozen.out"
+  docker unpause "$SPIKE_HOOK_CTR" >/dev/null 2>&1
+  # Killed hook.
+  docker kill "$SPIKE_HOOK_CTR" >/dev/null 2>&1
+  window hookKilled "$(spike_stub_seq)" 0; _c8_clients hookKilled sessA "$d/hookKilled.out"
+  docker exec "$SPIKE_APP_CTR" sh -c 'cat /run/spike/sessA/logs/iron-proxy.log' 2>/dev/null | tr -d '\000' | grep -a '"action":"error"' | grep -ac 'approval-hook' > "$d/iron-hook-errors.txt"
+  # Killed router (session B): all of B's egress fails.
+  docker exec "$SPIKE_APP_CTR" sh -c 'kill "$(cat /run/spike/sessB/state/router.pid)"' >/dev/null 2>&1
+  window routerKilled "$(spike_stub_seq)" 0; _c8_clients routerKilled sessB "$d/routerKilled.out"
+  # Killed iron-proxy (session A): inject hosts fail; the forwarder branch (open-web SSE) still streams.
+  docker exec "$SPIKE_APP_CTR" sh -c 'kill "$(cat /run/spike/sessA/state/iron.pid)"' >/dev/null 2>&1
+  window ironKilled "$(spike_stub_seq)" 0; _c8_clients ironKilled sessA "$d/ironKilled.out"
+  cp "$SPIKE_STUB_RECORDS" "$d/stub-all.jsonl"
+  python3 -I - "$d" "${kong:+present}" > "$d/verdict.txt" <<'PYC8'
+import json, sys
+d, kong = sys.argv[1], sys.argv[2]
+wins = [json.loads(l) for l in open(f"{d}/windows.jsonl")]
+stub = [json.loads(l) for l in open(f"{d}/stub-all.jsonl") if l.strip()]
+res = {}
+for w in wins:
+    for line in open(f"{d}/{w['label']}.out"):
+        p = line.split()
+        if p[:1] == ["c8"] and len(p) == 5:
+            res[(p[1], p[2])] = {"rc": int(p[3].split("=")[1]), "elapsed": float(p[4].split("=")[1])}
+def real_token_in(label):
+    i = [w["label"] for w in wins].index(label)
+    lo, hi = wins[i]["seq"], (wins[i + 1]["seq"] if i + 1 < len(wins) else 10**9)
+    return [r for r in stub if lo < r["seq"] <= hi and r["auth_class"] == "real-decoy"]
+inject = ("gitPush", "curlPost", "ghPost", "curlGet")
+fails_fast = lambda lab: all(res.get((lab, c), {}).get("rc", 0) != 0 and res.get((lab, c), {}).get("elapsed", 99) <= 10 for c in inject)
+writes = ("gitPush", "curlPost", "ghPost")
+hook_timeouts = int(open(f"{d}/hook-timeouts.txt").read().strip() or 0)
+iron_errors = int(open(f"{d}/iron-hook-errors.txt").read().strip() or 0)
+frozen_wait = {c: res.get(("frozen", c)) for c in inject}
+checks = {
+  "control: the read vends and the SSE streams through a healthy hook": res.get(("control", "curlGet"), {}).get("rc") == 0 and res.get(("control", "sse"), {}).get("rc") == 0,
+  "control: writes are refused promptly (pending), not hung": all(res.get(("control", c), {}).get("rc", 0) != 0 and res.get(("control", c), {}).get("elapsed", 99) <= 10 for c in writes),
+  "stalled hook: writes exit non-zero within 10 s, hook-timeout emitted, no real token on a write": kong == "present" and all(res.get(("stalled", c), {}).get("rc", 0) != 0 and res.get(("stalled", c), {}).get("elapsed", 99) <= 10 for c in writes) and hook_timeouts >= 1 and not [r for r in real_token_in("stalled") if r["method"] == "POST"],
+  "frozen hook: no real token at the stub, and the non-inject SSE is uninterrupted": not real_token_in("frozen") and res.get(("frozen", "sse"), {}).get("rc") == 0,
+  "killed hook: every inject-host client exits non-zero within 10 s, no real token, iron-proxy's audit names the failed call": fails_fast("hookKilled") and not real_token_in("hookKilled") and iron_errors >= 1,
+  "killed router: all of the session's egress fails": all(res.get(("routerKilled", c), {}).get("rc", 0) != 0 for c in inject + ("sse",)),
+  "killed iron-proxy: inject-host clients exit non-zero within 10 s, no real token, the forwarder branch still streams": fails_fast("ironKilled") and not real_token_in("ironKilled") and res.get(("ironKilled", "sse"), {}).get("rc") == 0,
+}
+json.dump({"results": {f"{a}.{b}": v for (a, b), v in res.items()}, "hook_timeouts": hook_timeouts, "iron_hook_errors": iron_errors,
+           "frozen_client_wait_recorded_not_scored": frozen_wait, "checks": checks}, open(f"{d}/raw.json", "w"))
+failed = [k for k, v in checks.items() if not v]
+print("pass" if not failed else "fail")
+print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+PYC8
+  # R27: a frozen hook cannot emit anything, so the harness names every request it sent in that window.
+  for c in gitPush curlPost ghPost curlGet; do echo "SOLEUR_EGRESS_VEND_REFUSED source=harness reason=no-hook-decision session=sessA client=$c window=frozen"; done
+  observe c8 "$d/raw.json"
+  spike_record_judged 8 "$d/verdict.txt"
+}
