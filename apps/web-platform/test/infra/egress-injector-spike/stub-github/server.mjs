@@ -171,7 +171,7 @@ export function createStub(cfg) {
   // upstream's Connection and Keep-Alive response headers through to its client (seen on the HTTP/1.1 client leg),
   // and with an HTTP/1.1-only stub every HTTP/2 client failed with PROTOCOL_ERROR; with this server both legs work.
   // (A finding for #11637: hop-by-hop headers from an HTTP/1.1 upstream reach the client.)
-  return http2.createSecureServer({ cert: readFileSync(cfg.certFile), key: readFileSync(cfg.keyFile), allowHTTP1: true }, (req, res) => {
+  const server = http2.createSecureServer({ cert: readFileSync(cfg.certFile), key: readFileSync(cfg.keyFile), allowHTTP1: true }, (req, res) => {
     const host = hostOf(req);
     const url = new URL(req.url ?? "/", `https://${host || "stub"}`);
     const a = authClass(req.rawHeaders, decoys);
@@ -223,6 +223,27 @@ export function createStub(cfg) {
     if (host === "api.github.com") return restStub(req, res, url);
     return json(res, 200, { stub: true, host });
   });
+  // CTO R36: a CONNECT that reaches the stub. The request handler never sees one (over HTTP/1.1 Node drops the socket,
+  // over HTTP/2 it answers 405 by itself, and neither writes a record), so without this a credential riding a
+  // CONNECT upstream would be invisible. Both protocols emit `connect`: HTTP/1.1 with (req, socket, head), HTTP/2
+  // with (req, res). Recorded like any request (method CONNECT, the Authorization class, no path), then 405.
+  server.on("connect", (req, second) => {
+    const a = authClass(req.rawHeaders, decoys);
+    const rec = {
+      seq: ++seq, ts: new Date().toISOString(), host: hostOf(req), method: "CONNECT", path: "", query_keys: [],
+      auth_class: a.cls, auth_count: a.count, decoy_id: a.decoyId, auth_scheme: a.scheme ?? null,
+      idempotency_key: req.headers["idempotency-key"] !== undefined, sni: req.socket?.servername ?? null,
+      protocol: typeof second?.writeHead === "function" ? "h2" : "http/1.1",
+    };
+    appendFileSync(cfg.recordFile, JSON.stringify(rec) + "\n");
+    if (typeof second?.writeHead === "function") {
+      second.writeHead(405, { "content-length": 0 });
+      second.end();
+    } else {
+      second?.end("HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+    }
+  });
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

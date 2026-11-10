@@ -49,6 +49,9 @@ source "$SPIKE_DIR/lib/arms.sh"
 spike_finalize_if_needed() { # <harness reason>
   [[ "${SPIKE_FINALIZED:-0}" == 1 ]] && return 0
   SPIKE_FINALIZED=1
+  # The real records, whatever SPIKE_RECORDS points at: the self-test swaps it to scratch files that hold its own
+  # passes, and a signal there must never finalize those into a GO (review H7).
+  SPIKE_RECORDS="$SPIKE_WORK/records.jsonl"
   echo "FAIL $1: the suite ended before finalize"
   local c
   for c in "${SPIKE_CRITERIA[@]}"; do
@@ -94,8 +97,10 @@ DB_URL="postgres://postgres:postgres@127.0.0.1:54322/postgres"
 SPIKE_SUPA_PROJECT="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$WP/supabase/config.toml" | head -1)"
 [[ -n "$SPIKE_SUPA_PROJECT" ]] || harness_fail SUPABASE_GUARD "no project_id in supabase/config.toml"
 SPIKE_SUPA_LABEL="com.supabase.cli.project=$SPIKE_SUPA_PROJECT"
-# Every write below (reset, migrations, seeding) goes to DB_URL: it must name a loopback IP literal, never a name a
-# resolver could point elsewhere, or the suite stops before its first write.
+# The suite's own direct database writes (the migration bootstrap, run-migrations.sh, the CHECK widening's psql, the
+# seed conversations and the row reads) go to DB_URL: it must name a loopback IP literal, never a name a resolver
+# could point elsewhere, or the suite stops before its first write. `db reset` goes through the Supabase CLI against
+# the local stack, and user seeding, sign-in and decide_approval go through API_URL (the R21 guard checks it).
 python3 -I -c 'import ipaddress, sys, urllib.parse
 h = urllib.parse.urlsplit(sys.argv[1]).hostname or ""
 try:
@@ -152,6 +157,10 @@ grep -qx 'guard ok' "$SPIKE_WORK/guard.log" || harness_fail SUPABASE_GUARD "guar
 mapfile -t db_ctrs < <(docker ps --filter "label=$SPIKE_SUPA_LABEL" --filter 'name=supabase_db' --format '{{.Names}}')
 [[ ${#db_ctrs[@]} -eq 1 ]] || harness_fail CHECK_WIDEN "expected exactly one supabase_db container labelled $SPIKE_SUPA_LABEL, found ${#db_ctrs[@]}"
 DB_CTR="${db_ctrs[0]}"
+# The container DB_URL reaches must be the one widened: it publishes 5432 on host port 54322 (the binding address
+# may be 127.0.0.1, 0.0.0.0 or [::]; the port is what ties it to DB_URL).
+db_port="$(docker port "$DB_CTR" 5432/tcp 2>/dev/null)"
+grep -qE ':54322$' <<<"$db_port" || harness_fail CHECK_WIDEN "supabase_db publishes 5432 as '${db_port//$'\n'/ }', not on host port 54322"
 TOOL_NAME="$(hook_eval 'console.log(hook.SPIKE_TOOL_NAME)')"
 [[ "$TOOL_NAME" =~ ^[a-z_]+$ ]] || harness_fail CHECK_WIDEN "unexpected spike tool name"
 docker exec -i "$DB_CTR" psql --no-psqlrc -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
@@ -264,6 +273,8 @@ dcl="$SPIKE_WORK/run/declared"
     && for s in sessA sessB sessC sessD sessE; do cp "$SPIKE_WORK/hookpriv/$s/server.key" "$dcl/$s-server.key" || exit 1; done \
     && for r in hook-server-root hook-client-root upstream-root; do cp "$SPIKE_WORK/$r/ca.key" "$dcl/$r.key" || exit 1; done ) \
   || harness_fail SESSION_PREP "declared secret copies"
+# The one secret-surface list criteria 1 and 6 both read (lib/arms.sh, review H4).
+spike_secret_surfaces
 spike_fix_owner "$SPIKE_WORK/run"
 spike_fix_owner "$SPIKE_WORK/hookpriv"
 spike_fix_owner "$SPIKE_WORK/stub"

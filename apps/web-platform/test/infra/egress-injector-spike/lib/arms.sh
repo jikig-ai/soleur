@@ -109,31 +109,54 @@ spike_psql() {
 spike_stub_seq() { if [[ -f "$SPIKE_STUB_RECORDS" ]]; then wc -l < "$SPIKE_STUB_RECORDS" | tr -d ' '; else echo 0; fi; }
 spike_stub_since() { tail -n +"$(( $1 + 1 ))" "$SPIKE_STUB_RECORDS" 2>/dev/null | grep -v '^$' || true; }
 
+# The ONE list of secret surfaces (R10's intent; review H4). Criterion 1's declared scan and criterion 6's log scan
+# both read $SPIKE_WORK/secret-surfaces.json, and both judges pin its length at SPIKE_SECRET_SURFACES (73), so neither
+# scan can shrink alone. Paths are relative to the run dir (/run/spike in the app container, $SPIKE_WORK/run on the
+# host); the harness-held secrets are the copies under declared/. Transforms are the driver's (none = the raw value).
+# scope "criterion-1": the PEM keys and the decoy's Basic form, declared by criterion 1 only (session E's CA key is
+# deleted at its session end in criterion 9, and a missing declared file fails the driver); "every-arm": the rest.
+SPIKE_SECRET_SURFACES=73
+spike_secret_surfaces() {
+  python3 -I - "$SPIKE_WORK/secret-surfaces.json" <<'PYSS' || harness_fail SESSION_PREP "secret surface list"
+import json, sys
+L = []
+for s in ("sessA", "sessB", "sessC", "sessD", "sessE"):
+    sec = f"{s}/secrets"
+    L += [(f"{s}-decoy", f"{sec}/decoy.token", None, "every-arm"),
+          (f"{s}-router-session", f"{sec}/router-session.cred", None, "every-arm"),
+          (f"{s}-router-session-pw", f"{sec}/router-session.cred", "cred-password", "every-arm"),
+          (f"{s}-router-session-basic", f"{sec}/router-session.cred", "basic-cred", "every-arm"),
+          (f"{s}-router-injector", f"{sec}/router-injector.cred", None, "every-arm"),
+          (f"{s}-router-injector-pw", f"{sec}/router-injector.cred", "cred-password", "every-arm"),
+          (f"{s}-router-injector-basic", f"{sec}/router-injector.cred", "basic-cred", "every-arm"),
+          (f"{s}-forwarder", f"{sec}/forwarder.token", None, "every-arm"),
+          (f"{s}-forwarder-basic", f"{sec}/forwarder.cred", "basic-cred", "every-arm"),
+          (f"{s}-decoy-basic", f"{sec}/decoy.token", "basic-b64", "criterion-1"),
+          (f"{s}-ca-key", f"{s}/ca/ca.key", "pem-body", "criterion-1"),
+          (f"{s}-hookclient-key", f"{s}/hookclient/client.key", "pem-body", "criterion-1"),
+          (f"{s}-hook-server-key", f"declared/{s}-server.key", "pem-body", "criterion-1")]
+L += [(f"harness-{k}", f"declared/{k}", None, "every-arm") for k in ("service-role.key", "anon.key", "hmac.key", "ownerA.jwt", "ownerB.jwt")]
+L += [(f"harness-{k}", f"declared/{k}.key", "pem-body", "criterion-1") for k in ("hook-server-root", "hook-client-root", "upstream-root")]
+json.dump([{"id": i, "rel": r, **({"transform": t} if t else {}), "scope": sc} for i, r, t, sc in L], open(sys.argv[1], "w"), indent=1)
+PYSS
+}
+
 # spike_spec <out file> <session> <arm A|B> <steps json file> [<extras json file>]: a driver spec for that session.
 # The workspace is a fresh synthetic directory under the app user's HOME (never the checkout); the sandbox masks
 # /run/spike entirely. Extras (@WS@ substituted): declaredFiles are appended, other keys set.
 spike_spec() {
-  python3 -I - "$1" "$2" "$3" "$4" "$(cat "$SPIKE_WORK/run/$2/state/router.port")" "${5:-}" <<'PYSPEC' || harness_fail DRIVER "spec $2/$3"
+  python3 -I - "$1" "$2" "$3" "$4" "$(cat "$SPIKE_WORK/run/$2/state/router.port")" "${5:-}" "$SPIKE_WORK/secret-surfaces.json" <<'PYSPEC' || harness_fail DRIVER "spec $2/$3"
 import json, sys, uuid
-out, sess, arm, steps_file, rp, extras_file = sys.argv[1:7]
+out, sess, arm, steps_file, rp, extras_file, surfaces = sys.argv[1:8]
 steps = json.load(open(steps_file))
 # A fresh workspace per spec (uuid4: Python's str hash() is randomized per process, so it named nothing stable).
 ws = f"/home/soleur/spike-{sess}-{arm}-{uuid.uuid4().hex[:12]}/ws"
 for st in steps:  # the steps may name the workspace as @WS@
     st["input"] = json.loads(json.dumps(st["input"]).replace("@WS@", ws))
-# Every session (Guard 1 row 3, run 42820800719: session E's decoy went unscanned), each credential in every form
-# a leak could take (bare password, Basic base64), and the harness-held secrets copied to /run/spike/declared
-# (masked for every sandbox like the rest of /run/spike). PEM keys are declared by criterion 1 only: session E's CA
-# key is deleted at its session end (criterion 9), and a missing declared file fails the driver.
-per_session = (("decoy", "decoy.token", None), ("router-session", "router-session.cred", None),
-               ("router-session-pw", "router-session.cred", "cred-password"), ("router-session-basic", "router-session.cred", "basic-cred"),
-               ("router-injector", "router-injector.cred", None), ("router-injector-pw", "router-injector.cred", "cred-password"),
-               ("router-injector-basic", "router-injector.cred", "basic-cred"), ("forwarder", "forwarder.token", None),
-               ("forwarder-basic", "forwarder.cred", "basic-cred"))
-declared = [{"id": f"{s}-{k}", "file": f"/run/spike/{s}/secrets/{f}", **({"transform": t} if t else {})}
-            for s in ("sessA", "sessB", "sessC", "sessD", "sessE") for k, f, t in per_session]
-declared += [{"id": f"harness-{k}", "file": f"/run/spike/declared/{k}"}
-             for k in ("service-role.key", "anon.key", "hmac.key", "ownerA.jwt", "ownerB.jwt")]
+# Every session (Guard 1 row 3, run 42820800719: session E's decoy went unscanned), each credential in every form a
+# leak could take, and the harness-held secrets: the every-arm part of the one surface list (spike_secret_surfaces).
+declared = [{"id": x["id"], "file": f"/run/spike/{x['rel']}", **({"transform": x["transform"]} if x.get("transform") else {})}
+            for x in json.load(open(surfaces)) if x["scope"] == "every-arm"]
 json.dump({"workspace": ws, "home": "/home/soleur", "routerPort": int(rp),
            "routerCredentialFile": f"/run/spike/{sess}/secrets/router-session.cred",
            "caBundle": f"/run/spike-pub/{sess}/bundle.pem", "arm": arm, "denyReadExtra": ["/run/spike"],
@@ -432,7 +455,8 @@ cd "\$w" || { echo push_rc=clone-failed; exit 0; }
 if ! git log --format=%s | grep -qx "$3"; then git -c user.email=spike@example.invalid -c user.name=spike commit -q --allow-empty -m "$3"; fi
 # Its own branch: other arms push to the same repository, and a push to a moved main is refused by git locally
 # (non-fast-forward) before any request leaves, which measured nothing (run 42809989901, the expiry arm).
-HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:refs/heads/spike-$1-$2 2>&1 | tail -2
+# Its own cap, under spike_cx's 120 s: a timeout there kills the docker CLI, not this push (review H10); 124 if hit.
+HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" timeout 100 git push -q origin HEAD:refs/heads/spike-$1-$2 2>&1 | tail -2
 echo push_rc=\${PIPESTATUS[0]}
 EOS
 }
@@ -445,7 +469,8 @@ if [ ! -d "\$w/.git" ]; then HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git clone -
 cd "\$w" || { echo push_rc=clone-failed; exit 0; }
 if [ ! -f "$1.bin" ]; then head -c $2 /dev/urandom > "$1.bin" && git add "$1.bin" && git -c user.email=spike@example.invalid -c user.name=spike commit -q -m "c3 $1 $2 bytes"; fi
 echo "pack_bytes=\$(git count-objects -v | sed -n 's/^size-pack: //p')k loose=\$(git count-objects | cut -d' ' -f3)k"
-HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" git push -q origin HEAD:refs/heads/spike-sessD-$1 2>&1 | tail -2
+# Its own cap, under spike_cx's 120 s (review H10): push_rc=124 when it is hit, never nothing.
+HTTPS_PROXY="\$P" GIT_SSL_CAINFO="\$CA" timeout 100 git push -q origin HEAD:refs/heads/spike-sessD-$1 2>&1 | tail -2
 echo push_rc=\${PIPESTATUS[0]}
 EOS
 }
@@ -495,7 +520,9 @@ arm_c3() {
   spike_cx sessD "$d/l1.sh" "$d/l1b.out"; note push1_retry "$(prc "$d/l1b.out")"; note rows1_retry "$(spike_rows "$CONV_D")"
   p1="$(spike_latest_pending "$CONV_D")"; note p1 "${p1:+present}"
   note deny "$(spike_decide ownerA "$p1" deny)"
+  local hdeny; hdeny="$(spike_hook_lines)"
   spike_cx sessD "$d/l1.sh" "$d/l1c.out"; note push1_after_deny "$(prc "$d/l1c.out")"; note rows_after_deny "$(spike_rows "$CONV_D")"
+  note push1_after_deny_reason "$(reason_since "$hdeny" sessD)"
   p2="$(spike_latest_pending "$CONV_D")"; note p2_new "$([[ -n "$p2" && "$p2" != "$p1" ]] && echo yes || echo no)"
   seq="$(spike_stub_seq)"
   note approve "$(spike_decide ownerA "$p2" approve)"
@@ -600,8 +627,8 @@ EOS
   local v
   for v in http1.1 http2; do
     cat > "$d/a6-$v.sh" <<EOS
-curl -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 get n=%{num_connects} code=%{http_code}\n" https://api.github.com/repos/spike/alpha \\
-  --next -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 post n=%{num_connects} code=%{http_code}\n" \\
+curl -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 get n=%{num_connects} code=%{http_code} v=%{http_version}\n" https://api.github.com/repos/spike/alpha \\
+  --next -sS --max-time 15 --cacert "\$CA" -x "\$P" --$v -o /dev/null -w "a6 post n=%{num_connects} code=%{http_code} v=%{http_version}\n" \\
   -H 'content-type: application/json' --data '{"title":"c3 same connection $v","head":"a","base":"main"}' https://api.github.com/repos/spike/alpha/pulls
 EOS
     hw="$(spike_hook_lines)"; sw="$(spike_stub_seq)"
@@ -672,12 +699,14 @@ def vend(ms, cls, rule):
     return any(x.startswith("SOLEUR_EGRESS_VEND ") and f" class={cls} " in x and re.search(rf" rule={rule}( |$)", x) for x in ms)
 a6 = {}
 for v in ("http1.1", "http2"):
-    t = dict(re.findall(r"^a6 (get|post) (n=\d+ code=\d{3})$", rd(f"a6-{v}.out"), re.M))
+    t = dict(re.findall(r"^a6 (get|post) (n=\d+ code=\d{3} v=\S+)$", rd(f"a6-{v}.out"), re.M))
     a6[v] = {"get": t.get("get", ""), "post": t.get("post", ""), "markers": mk(f"a6-{v}"), "stub": stub(f"a6-{v}")}
 def same_conn(v):
     x = a6[v]
     posts = [r for r in x["stub"] if r["method"] == "POST" and r["auth_class"] == "real-decoy"]
-    return (x["get"] == "n=1 code=200" and x["post"] == "n=0 code=403" and refusal(x["markers"], "POST", "pending")
+    # The protocol the transfers really used (an ALPN fallback would make the HTTP/2 row a copy of the HTTP/1.1 one).
+    pv = {"http1.1": "1.1", "http2": "2"}[v]
+    return (x["get"] == f"n=1 code=200 v={pv}" and x["post"] == f"n=0 code=403 v={pv}" and refusal(x["markers"], "POST", "pending")
             and any(r["method"] == "GET" and r["auth_class"] == "real-decoy" for r in x["stub"]) and not posts)
 pend_keys = [k for k in o if k.startswith("pend_") or k.endswith(("rows0", "rows1")) or k in ("rows1", "rows1_retry", "rows_after_deny", "rows_end")]
 max_pending = max((pend(o[k]) for k in pend_keys), default=0)
@@ -687,7 +716,8 @@ checks = {
   "no row: push refused pending, one pending row": refused(o["push1"]) and "pending" in ra and pend(o["rows1"]) == 1,
   "no real token on the refused POST git-receive-pack": o["stub1_receivepack"] == "0",
   "retry before decision keeps one row": refused(o["push1_retry"]) and o["rows1"] == o["rows1_retry"],
-  "owner deny -> rejected reported, then a new pending row": o["deny"] == "200" and "rejected" in ra and o["p2_new"] == "yes",
+  "owner deny -> rejected reported on the next push, then a new pending row":
+      o["deny"] == "200" and refused(o["push1_after_deny"]) and o["push1_after_deny_reason"] == "rejected" and o["p2_new"] == "yes",
   "approve -> vend, consumed exactly once": o["approve"] == "200" and o["push1_approved"] == "push_rc=0" and o["p2_status"] == "consumed" and o["stub_after_approve"] == "1",
   "a new hash after consume needs a new row": refused(o["push2_new_hash"]) and o["stub_push2"] == "0",
   "REST X pending, then approved": o["rest_x1"] == "x1=403" and o["rest_x1_reason"] == "pending" and o["approve_x"] == "200",
@@ -708,7 +738,7 @@ checks = {
   # CTO R39: a live ~2 MiB push. No 0000 probe from git fails the first row: the rule is then unmeasured, not passed.
   "R39 large push: git sent the 0000 probe and it vended with no row (git-receive-pack-probe)":
       vend(a4a, "push-advert", "git-receive-pack-probe") and pend(o["a4_rows1"]) == pend(o["a4_rows0"]) + 1,
-  "R39 large push: the real push waits for approval (pending, one new row, no write body at the stub)":
+  "R39 large push: the real push is refused pending (one new row, no write body at the stub)":
       refused(o["a4_push1"]) and refusal(a4a, "POST", "pending") and o["a4_row"] == "present" and not [r for r in rpack("a4a") if blen(r) != FLUSH],
   "R39 large push: after approval it is consumed once and the stub receives the decoy with the whole body (>= 2 MiB)":
       o["a4_approve"] == "200" and o["a4_push2"] == "push_rc=0" and o["a4_status"] == "consumed" and vend(a4b, "write", "git-push")
@@ -860,9 +890,11 @@ try() { # <leaf> <request host> [<label>]
   ge="$(GIT_SSL_CAINFO="$BUNDLE" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 timeout 10 git -c "http.curloptResolve=$h:$port:127.0.0.1" ls-remote "https://$h:$port/x.git" 2>&1)"
   # reject only on git's own certificate or SSL message; accept only on an HTTP-level answer from the server (never a
   # bare "http", which matches git's echo of the URL itself), so a refused connection reads neither.
-  if printf '%s' "$ge" | grep -qiE 'certificate|ssl'; then echo "res $lab git reject"
-  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error'; then echo "res $lab git accept"
-  else echo "res $lab git unknown"; fi
+  # The last line git printed, kept (one line, a safe character set) so a reject or accept can be read back.
+  local gl; gl="$(printf '%s' "$ge" | tail -1 | tr -c 'A-Za-z0-9 ._:/()-' '_' | head -c 160)"
+  if printf '%s' "$ge" | grep -qiE 'certificate|verif'; then echo "res $lab git reject last=$gl"
+  elif printf '%s' "$ge" | grep -qiE 'not found|not valid|repository|returned error'; then echo "res $lab git accept last=$gl"
+  else echo "res $lab git unknown last=$gl"; fi
   # node: reject only on a certificate or TLS verification code; ECONNREFUSED, ECONNRESET and the like are errors.
   # Node has no code for a name-constraint violation: it reports code UNSPECIFIED with the message "permitted subtree
   # violation" or "excluded subtree violation" (measured 2026-11-10, node openssl/3.5.9), so that pair is a rejection.
@@ -1156,9 +1188,9 @@ arm_c1() {
   fpid="$(docker exec "$SPIKE_APP_CTR" cat /run/spike/sessA/state/forwarder.pid 2>/dev/null)"
   [[ "$ipid" =~ ^[0-9]+$ && "$fpid" =~ ^[0-9]+$ ]] || { record_verdict 1 unmeasurable "harness:DRIVER no injector or forwarder pid"; return; }
   planted="spkplant_$(_spike_rand 18)"
-  python3 -I - "$d/steps.json" "$d/extras.json" "$ipid" "$fpid" "$planted" <<'PYC1S' || { record_verdict 1 unmeasurable "harness:DRIVER c1 spec"; return; }
+  python3 -I - "$d/steps.json" "$d/extras.json" "$ipid" "$fpid" "$planted" "$SPIKE_WORK/secret-surfaces.json" <<'PYC1S' || { record_verdict 1 unmeasurable "harness:DRIVER c1 spec"; return; }
 import json, sys
-steps_out, extras_out, ipid, fpid, planted = sys.argv[1:6]
+steps_out, extras_out, ipid, fpid, planted, surfaces = sys.argv[1:7]
 S = "/run/spike/sessA"
 scan = ("{ echo '== env'; env; echo '== ps'; ps -eo args 2>&1; echo '== proc self'; cat /proc/self/environ 2>&1 | tr '\\0' '\\n';"
         " echo '== files'; for f in $(find \"$HOME\" @WS@ /tmp -xdev -type f -size -2M 2>/dev/null | grep -v '/.spike-scan.txt$'); do echo \"== $f\"; cat \"$f\" 2>/dev/null; done;"
@@ -1178,16 +1210,10 @@ steps = [
   {"id": "webfetchDecoy", "tool": "WebFetch", "input": {"url": f"file://{S}/secrets/decoy.token", "prompt": "x"}},
 ]
 json.dump(steps, open(steps_out, "w"))
-declared = []
-for s in ("sessA", "sessB", "sessC", "sessD", "sessE"):
-    r = f"/run/spike/{s}"
-    declared += [{"id": f"{s}-decoy-basic", "file": f"{r}/secrets/decoy.token", "transform": "basic-b64"},
-                 {"id": f"{s}-ca-key", "file": f"{r}/ca/ca.key", "transform": "pem-body"},
-                 {"id": f"{s}-hookclient-key", "file": f"{r}/hookclient/client.key", "transform": "pem-body"},
-                 {"id": f"{s}-hook-server-key", "file": f"/run/spike/declared/{s}-server.key", "transform": "pem-body"}]
-# The three roots' keys (hook server, hook client, test upstream): harness-held, copied to /run/spike/declared.
-declared += [{"id": f"harness-{k}", "file": f"/run/spike/declared/{k}.key", "transform": "pem-body"}
-             for k in ("hook-server-root", "hook-client-root", "upstream-root")]
+# The criterion-1 part of the one surface list (the every-arm part comes with every spec): PEM keys, the decoy's
+# Basic form, the hook server keys and the three roots' keys.
+declared = [{"id": x["id"], "file": f"/run/spike/{x['rel']}", "transform": x["transform"]}
+            for x in json.load(open(surfaces)) if x["scope"] == "criterion-1"]
 json.dump({"declaredFiles": declared, "planted": {"id": "planted-control", "value": planted, "path": "@WS@/planted.txt"},
            "scanFiles": ["@WS@/.spike-scan.txt"]}, open(extras_out, "w"))
 PYC1S
@@ -1197,15 +1223,19 @@ PYC1S
   # injector's /proc environ, so a CLI-tier refusal is a refusal and not an unreadable path.
   local ctl
   ctl="$(docker exec -u "$SPIKE_APP_UID" "$SPIKE_APP_CTR" sh -c "wc -c < /proc/$ipid/environ" 2>/dev/null)"
-  python3 -I - "$d" "${ctl:-0}" > "$d/verdict.txt" <<'PYC1'
+  python3 -I - "$d" "${ctl:-0}" "$SPIKE_WORK/secret-surfaces.json" "$SPIKE_SECRET_SURFACES" > "$d/verdict.txt" <<'PYC1'
 import json, sys
-d, ctl = sys.argv[1], sys.argv[2]
+d, ctl, surfaces, pinned = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 o = json.load(open(f"{d}/out.json"))
 spec = json.load(open(f"{d}/spec.json"))
 st = {s["id"]: s for s in o.get("steps", [])}
 scan = next((s for k, s in st.items() if k.startswith("scan:")), {})
-# Every declared surface must be scanned: the driver drops a value under 8 characters silently from its scan.
+# Every declared surface must be scanned: the driver drops a value under 8 characters silently from its scan. The
+# declared set must be the whole pinned list (73), the same list criterion 6 scans the logs with.
 want_declared = len(spec.get("declaredFiles", []))
+listed = {x["id"] for x in json.load(open(surfaces))}
+declared_ids = {x["id"] for x in spec.get("declaredFiles", []) if x["id"] != "planted-control"}
+list_ok = len(listed) == pinned and declared_ids == listed and want_declared == pinned
 cli = ["readDecoy", "readCaKey", "readHookSocket", "readHookClientKey", "readIronYaml", "readInjectorEnviron", "readInjectorCmdline", "readForwarderEnviron", "webfetchDecoy"]
 leaks = {k: s.get("hits") for k, s in st.items() if [h for h in (s.get("hits") or []) if h != "planted-control"]}
 refused = {k: (st.get(k, {}).get("isError") is True and not st.get(k, {}).get("hits")) for k in cli}
@@ -1220,10 +1250,16 @@ checks = {
 }
 json.dump({"steps": {k: {"isError": s.get("isError"), "hits": s.get("hits"), "content": (s.get("content") or "")[:300]} for k, s in st.items()},
            "leaks": leaks, "cli_refused": refused, "proc_environ_control_bytes": ctl,
-           "declared": {"files": want_declared, "scanned": o.get("declaredCount"), "dropped": o.get("declaredDropped")}, "checks": checks}, open(f"{d}/raw.json", "w"))
+           "declared": {"files": want_declared, "scanned": o.get("declaredCount"), "dropped": o.get("declaredDropped"),
+                        "list": len(listed), "pinned": pinned, "matches_list": declared_ids == listed}, "checks": checks}, open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
-print("pass" if not failed else "fail")
-print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
+if not list_ok:
+    # Floor (H4): the declared set is not the pinned list, so the scan measured something else.
+    print("unmeasurable")
+    print(f"harness:SECRET_LIST criterion 1 declared {want_declared}, list {len(listed)}, pinned {pinned}")
+else:
+    print("pass" if not failed else "fail")
+    print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))
 PYC1
   observe c1 "$d/raw.json"
   spike_record_judged 1 "$d/verdict.txt"
@@ -1287,13 +1323,18 @@ EOS
   printf 'node %s in-tunnel %s %s %s api.github.com\n' "$cp" "$t" "$cr" "$cb" > "$d/win/a1-in-tunnel.sh"
   printf '%s\n' 'curl -sS -o /dev/null --max-time 12 -w "a2 http=%{http_code} connect=%{http_connect}\n" -p -x "$P" http://api.github.com:443/repos/spike/alpha 2>&1' > "$d/win/a2-get.sh"
   printf '%s\n' 'curl -sS -o /dev/null --max-time 12 -w "a2 http=%{http_code} connect=%{http_connect}\n" -p -x "$P" -H "content-type: application/json" --data "{\"title\":\"c6 plain\",\"head\":\"a\",\"base\":\"main\"}" http://api.github.com:443/repos/spike/alpha/pulls 2>&1' > "$d/win/a2-post.sh"
-  local w h sq
+  local w h sq io
   for w in a1-http-listen a1-https-listen a1-https-listen-sni a1-in-tunnel a2-get a2-post; do
     h="$(spike_hook_lines)"; seq="$(spike_stub_seq)"; sq="$(spike_squid_log | wc -l)"
+    io="$(docker exec "$SPIKE_APP_CTR" sh -c 'wc -c < /run/spike/sessA/logs/iron-proxy.log' 2>/dev/null)"; [[ "$io" =~ ^[0-9]+$ ]] || io=0
     spike_cx sessA "$d/win/$w.sh" "$d/win/$w.out"
     spike_hook_markers_since "$h" | grep -E '^SOLEUR_EGRESS_' | grep -F 'session=sessA ' | sed -E 's/ request_id=[^ ]+//' > "$d/win/$w.markers"
     spike_stub_since "$seq" > "$d/win/$w.stub"
     spike_squid_log | tail -n +$((sq + 1)) > "$d/win/$w.squid"
+    # iron-proxy's own audit lines for the window (method, host, path, action, status, error; no header or body), so
+    # a status the probe saw (the SNI variant's 405) is attributed to the component that answered it.
+    docker exec "$SPIKE_APP_CTR" sh -c "tail -c +$((io + 1)) /run/spike/sessA/logs/iron-proxy.log" 2>/dev/null | tr -d '\000' \
+      | python3 -I "$SPIKE_DIR/lib/iron-audit.py" 20 > "$d/win/$w.iron" 2>/dev/null
   done
   # Unentitled session (CTO R34: scored on the driver's deny answer), the entitled positive control, and the sandbox's
   # view of container loopback (direct, and forced through the SDK's proxy where the NO_PROXY rule must deny).
@@ -1321,12 +1362,15 @@ PYS
   # Log grep (deepen pass): every log is non-empty and a control copy carrying the canary is found first.
   mkdir -p "$d/logs"
   docker exec "$SPIKE_APP_CTR" sh -c 'cd /run/spike && for s in sess*; do for f in $s/logs/*.log; do [ -f "$f" ] && { echo "=== $f"; tr -d "\000" < "$f"; }; done; done' > "$d/logs/app.log" 2>/dev/null
-  docker logs "$SPIKE_HOOK_CTR" > "$d/logs/hook.log" 2>&1
+  # stdout only in the log (no 2>&1): a docker error message must never stand in for it. The hook prints its markers
+  # on stdout and the stub its listening line. Their stderr is still scanned for secrets, from its own file.
+  mkdir -p "$d/logs-stderr"
+  docker logs "$SPIKE_HOOK_CTR" > "$d/logs/hook.log" 2> "$d/logs-stderr/hook.stderr.log"
   spike_squid_log > "$d/logs/squid.log"
-  docker logs "$SPIKE_STUB_CTR" > "$d/logs/stub-stdout.log" 2>&1
-  python3 -I - "$d" "$canary" "$SPIKE_WORK/run" "$SPIKE_WORK" > "$d/verdict.txt" <<'PYC6'
+  docker logs "$SPIKE_STUB_CTR" > "$d/logs/stub-stdout.log" 2> "$d/logs-stderr/stub.stderr.log"
+  python3 -I - "$d" "$canary" "$SPIKE_WORK/run" "$SPIKE_WORK" "$SPIKE_WORK/secret-surfaces.json" "$SPIKE_SECRET_SURFACES" > "$d/verdict.txt" <<'PYC6'
 import base64, json, os, re, sys
-d, canary, run, work = sys.argv[1:5]
+d, canary, run, work, surfaces, pinned = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], int(sys.argv[6])
 o, reach, metrics_http, healthz_http = {}, {}, "", ""
 for line in open(f"{d}/probes.out"):
     m = re.match(r"^(\w+) http=(\d{3}) connect=(\d{3})$", line.strip())
@@ -1344,28 +1388,17 @@ ncontent, econtrol, ldirect, lforced = stepc(n, "unentitled"), stepc(e, "entitle
 traces = [int(x) for x in open(f"{d}/unentitled-traces.txt").read().split()]
 ndec, edec = n.get("networkDecisions") or [], e.get("networkDecisions") or []
 codes = lambda txt: [ln.split()[-1] for ln in txt.splitlines() if ln.startswith(("http", "forced"))]
-# The secret list (R10's intent; the structural map): every session's credentials in each form a leak could take
-# (raw, bare password, Basic base64), its CA, hook client and hook server keys, and the harness-held keys and owner
-# tokens. A fixed list, so a missing file is a named harness input error, never a silently shorter scan.
+# The secret list: the one surface list criterion 1 declares (spike_secret_surfaces), pinned at 73, read here from the
+# host side of the run dir. A missing file, a short value or a list of another length is a named harness input error,
+# never a silently shorter scan.
 b64 = lambda s: base64.b64encode(s.encode()).decode()
 pem_body = lambda t: max((l for l in t.splitlines() if l and not l.startswith("-----")), key=len, default="")
-FORMS = {"raw": lambda r: r, "pw": lambda r: r.split(":", 1)[1] if ":" in r else "", "basic": b64,
-         "x-access": lambda r: b64(f"x-access-token:{r}"), "pem": pem_body}
-specs = []
-for s in ("sessA", "sessB", "sessC", "sessD", "sessE"):
-    sec = f"{run}/{s}/secrets"
-    specs += [(f"{s}/decoy", f"{sec}/decoy.token", "raw"), (f"{s}/decoy-basic", f"{sec}/decoy.token", "x-access"),
-              (f"{s}/router-session", f"{sec}/router-session.cred", "raw"), (f"{s}/router-session-pw", f"{sec}/router-session.cred", "pw"),
-              (f"{s}/router-session-basic", f"{sec}/router-session.cred", "basic"),
-              (f"{s}/router-injector", f"{sec}/router-injector.cred", "raw"), (f"{s}/router-injector-pw", f"{sec}/router-injector.cred", "pw"),
-              (f"{s}/router-injector-basic", f"{sec}/router-injector.cred", "basic"),
-              (f"{s}/forwarder", f"{sec}/forwarder.token", "raw"), (f"{s}/forwarder-basic", f"{sec}/forwarder.cred", "basic"),
-              (f"{s}/ca-key", f"{run}/{s}/ca/ca.key", "pem"), (f"{s}/hookclient-key", f"{run}/{s}/hookclient/client.key", "pem"),
-              (f"{s}/hook-server-key", f"{work}/hookpriv/{s}/server.key", "pem")]
-specs += [("service-role-key", f"{work}/service-role.key", "raw"), ("anon-key", f"{work}/anon.key", "raw"),
-          ("hmac-key", f"{work}/hookpriv/hmac.key", "raw"), ("ownerA-jwt", f"{work}/seed/ownerA.jwt", "raw"),
-          ("ownerB-jwt", f"{work}/seed/ownerB.jwt", "raw")]
-specs += [(f"{k}-key", f"{work}/{k}/ca.key", "pem") for k in ("hook-server-root", "hook-client-root", "upstream-root")]
+FORMS = {None: lambda r: r, "cred-password": lambda r: r.split(":", 1)[1] if ":" in r else "", "basic-cred": b64,
+         "basic-b64": lambda r: b64(f"x-access-token:{r}"), "pem-body": pem_body}
+try:
+    specs = [(x["id"], f"{run}/{x['rel']}", x.get("transform")) for x in json.load(open(surfaces))]
+except (OSError, ValueError):
+    specs = []
 secrets, missing = [], []
 for k, p, form in specs:
     try:
@@ -1374,16 +1407,29 @@ for k, p, form in specs:
         missing.append(k)
 short = [k for k, v in secrets if len(v) < 8]
 hits = lambda text: [k for k, v in secrets if len(v) >= 8 and v in text] + (["body-canary"] if canary in text else [])
-planted_id, planted = next(((k, v) for k, v in secrets if k == "sessA/decoy"), ("sessA/decoy", ""))
+planted_id, planted = next(((k, v) for k, v in secrets if k == "sessA-decoy"), ("sessA-decoy", ""))
 logs, log_leaks, log_live = {}, {}, {}
+# A known positive line per log: proof that the file is that log, captured, not an empty file or an error message.
+POSITIVE = {"hook.log": r"^SOLEUR_EGRESS_", "app.log": r"^=== sessA/logs/iron-proxy\.log$",
+            # infra/egress-gateway-squid.conf logs one soleur_json object per request: ts, decision, requested_host, ...
+            "squid.log": r'^\{"ts":"[0-9.]+","decision":"[A-Z_]+",.*"requested_host":"[^"]+"',
+            "stub-stdout.log": r"^stub-github-listening \d+$"}
+log_positive = {}
 for f in sorted(os.listdir(f"{d}/logs")):
     text = open(f"{d}/logs/{f}", errors="replace").read()
     logs[f] = len(text)
+    log_positive[f] = f in POSITIVE and re.search(POSITIVE[f], text, re.M) is not None
     # The control: a copy of THIS log with a decoy-shaped value and the canary planted, through the same `hits`
-    # expression the real scan uses; it must find both, or the scan below proves nothing for this log.
+    # expression the real scan uses; it must find both. The copy proves the scan, the positive line proves the log.
     control_hits = hits(text + "\n" + planted + "\n" + canary + "\n") if planted else []
-    log_live[f] = len(text) > 0 and planted_id in control_hits and "body-canary" in control_hits
+    log_live[f] = log_positive[f] and planted_id in control_hits and "body-canary" in control_hits
     if hits(text): log_leaks[f] = hits(text)
+# The stderr streams (and anything docker said there): scanned for secrets, never a positive control.
+if os.path.isdir(f"{d}/logs-stderr"):
+    for f in sorted(os.listdir(f"{d}/logs-stderr")):
+        text = open(f"{d}/logs-stderr/{f}", errors="replace").read()
+        logs[f"stderr/{f}"] = len(text)
+        if hits(text): log_leaks[f"stderr/{f}"] = hits(text)
 healthz_text = open(f"{run}/c6-healthz.txt", errors="replace").read() if os.path.exists(f"{run}/c6-healthz.txt") else ""
 o["metrics"] = {"note": "metrics listener serves /healthz only (v0.56.0)", "metrics_http": metrics_http, "healthz_http": healthz_http,
                 "healthz_bytes": len(healthz_text), "healthz_hits": hits(healthz_text)}
@@ -1399,17 +1445,36 @@ def connect_refusals(w):  # the subreasons of the CONNECT refusals the hook mark
             for m in [re.search(r" subreason=([a-z-]+)", x)] if m]
 def connect_continued(w):  # did the hook let a CONNECT through in that window?
     return any(x.startswith("SOLEUR_EGRESS_CONNECT ") and " outcome=continue" in x for x in W[w]["markers"])
-def refused_before_hook(w):  # iron-proxy refused it itself: a TLS error, or a non-2xx with no CONNECT continue
+def refused_before_hook(w):  # iron-proxy refused it itself, in one of the shapes measured, with no CONNECT continue
+    # Only what was observed: the TLS alert iron-proxy sends when it cannot mint a leaf without SNI (run 42864371897),
+    # or a 4xx status. `none` (a timeout or a closed socket), ECONNREFUSED and every other error measured nothing.
     m = re.search(r"status=(\S+)", W[w]["out"])
     st = m.group(1) if m else ""
-    return st != "" and not st.startswith("2") and not connect_continued(w)
+    return (st == "error:ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR" or re.fullmatch(r"4\d\d", st) is not None) and not connect_continued(w)
+# The stub records a CONNECT that reaches it (method CONNECT, the Authorization class): a credential riding a CONNECT
+# upstream is a CONNECT record with a real decoy, in any window.
+connects = lambda w: [r for r in W[w]["stub"] if r.get("method") == "CONNECT"]
+no_connect_decoy = all(not any(r["auth_class"] == "real-decoy" for r in connects(w)) for w in W)
+def sni_variant(w="a1-https-listen-sni"):
+    # The hook passes this CONNECT (it looks like tunnel_listen's synthetic one), iron-proxy forwards it upstream, and
+    # the method list keeps the credential off it: exactly one CONNECT at the stub with no Authorization, plus the
+    # hook's continue marker. If none reached the stub (the forwarder or squid stopped it), that is recorded.
+    c = connects(w)
+    if not c:
+        return {"ok": True, "outcome": "no CONNECT reached the stub"}
+    ok = len(c) == 1 and c[0]["auth_class"] == "none" and connect_continued(w)
+    return {"ok": ok, "outcome": f"{len(c)} CONNECT record(s) at the stub, auth {[r['auth_class'] for r in c]}, hook continue {connect_continued(w)}"}
+SNI = sni_variant()
 def no_tls(w, method):
     return any(x.startswith("SOLEUR_EGRESS_VEND_REFUSED ") and f" method={method} " in x and re.search(r" reason=guard-refused( |$)", x)
                and re.search(r" subreason=no-tls( |$)", x) for x in W[w]["markers"])
 o["connect_probes"] = {w: {"out": W[w]["out"], "connect_refusals": connect_refusals(w), "real_decoy_at_stub": not no_decoy(w),
+                           "hook_markers": W[w]["markers"], "iron_audit": [x for x in rdw(f"{w}.iron").strip().split(" | ") if x],
+                           "stub_connects": [{k: r.get(k) for k in ("host", "auth_class", "protocol")} for r in connects(w)],
                            # egress-forwarder.mjs logs no request content: what it received is not observable here.
                            "forwarder": "unmeasured: egress-forwarder.mjs logs no request content", "squid_lines": W[w]["squid"][-4:]}
                        for w in W if w.startswith("a1-")}
+o["connect_probes"]["a1-https-listen-sni"]["outcome"] = SNI["outcome"]
 o["plain_http_in_tunnel"] = {w: {"out": W[w]["out"], "markers": W[w]["markers"][-4:], "real_decoy_at_stub": not no_decoy(w)} for w in W if w.startswith("a2-")}
 no_real_token = not any(r["auth_class"] == "real-decoy" for r in stub)
 checks = {
@@ -1430,27 +1495,30 @@ checks = {
   # CONNECT never reaches the hook; that is a refusal too, recorded in the probe's `out`.
   "R36 a CONNECT with the router credential over TLS to https_listen is refused (by the hook or by iron-proxy), no real token at the stub":
       (bool(connect_refusals("a1-https-listen")) or refused_before_hook("a1-https-listen")) and no_decoy("a1-https-listen"),
-  "R36 the same over TLS with SNI equal to the CONNECT host gets no real token at the stub (the secrets method list)": no_decoy("a1-https-listen-sni"),
+  "R36 the same over TLS with SNI equal to the CONNECT host: passed by the hook, it reaches the stub as one CONNECT with no credential (the secrets method list), or reaches nothing":
+      SNI["ok"] and no_decoy("a1-https-listen-sni"),
+  "R36 no CONNECT record with a real token in any probe window": no_connect_decoy,
   "R36 a CONNECT with the router credential inside an established tunnel is refused (subreason recorded), no real token at the stub":
       bool(connect_refusals("a1-in-tunnel")) and no_decoy("a1-in-tunnel"),
   "R37 a plain-HTTP GET inside a 443 tunnel is refused no-tls, no real token at the stub": no_tls("a2-get", "GET") and no_decoy("a2-get"),
   "R37 a plain-HTTP POST inside a 443 tunnel is refused no-tls, no real token at the stub": no_tls("a2-post", "POST") and no_decoy("a2-post"),
-  "every log is non-empty and its control copy (a planted decoy and the canary) is found by the same scan": all(log_live.values()) and len(log_live) >= 4,
+  "every log holds its known positive line and its control copy (a planted decoy and the canary) is found by the same scan":
+      all(log_live.values()) and set(log_live) == set(POSITIVE),
   "no log carries a secret or the body canary": not log_leaks,
 }
 json.dump({"probes": o, "listener_reachability_recorded": reach, "unentitled": ncontent, "unentitled_decisions": ndec,
            "unentitled_traces_stub_router_squid": traces, "entitled_control": econtrol, "loopback_direct": ldirect,
            "loopback_forced": lforced, "entitled_decisions": edec,
            "recorded_only_unentitled_with_network_allowed": stepc(aa, "unentitled"),
-           "log_sizes": logs, "log_leaks": log_leaks, "checks": checks,
-           "secret_list": {"declared": len(specs), "scanned": len(secrets) - len(short), "missing": missing, "short": short},
+           "log_sizes": logs, "log_positive_line": log_positive, "log_leaks": log_leaks, "checks": checks,
+           "secret_list": {"declared": len(specs), "pinned": pinned, "scanned": len(secrets) - len(short), "missing": missing, "short": short},
            "not_scanned": "the CI job log itself (scanned only by GitHub's masking of every generated value)"},
           open(f"{d}/raw.json", "w"))
 failed = [k for k, v in checks.items() if not v]
-if missing or short or not specs:
+if missing or short or len(specs) != pinned:
     # Floor: the scan ran on a shorter list than declared, so neither a pass nor a fail is measured.
     print("unmeasurable")
-    print(f"harness:SECRET_LIST {len(missing)} missing, {len(short)} under 8 characters: {', '.join((missing + short)[:6])}")
+    print(f"harness:SECRET_LIST list {len(specs)} (pinned {pinned}), {len(missing)} missing, {len(short)} under 8 characters: {', '.join((missing + short)[:6])}")
 else:
     print("pass" if not failed else "fail")
     print("all checks held: " + "; ".join(checks) if not failed else "failed: " + "; ".join(failed))

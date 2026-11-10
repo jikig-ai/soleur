@@ -100,16 +100,17 @@ jobs:
         working-directory: apps/web-platform
         run: npm ci --ignore-scripts
 
-      # The step's own cap: the suite's internal 22-minute deadline plus its longest arm cap (a driver run, 420 s) fits
-      # under it. The suite finalizes INCONCLUSIVE at the deadline, and its TERM trap writes INCONCLUSIVE (TIMEOUT) if
-      # the step is killed first, so the upload below (which runs after a step timeout: that is a step failure, not a
-      # cancellation) has a results file.
+      # The step's own cap: the suite's internal 22-minute deadline plus its longest arm cap fits under it, and the suite
+      # finalizes INCONCLUSIVE at that deadline. `exec` makes the suite the process the runner signals on a step
+      # timeout (the runner signals only the step's own PID), so its TERM/INT trap can write INCONCLUSIVE (TIMEOUT).
+      # That is best effort: bash runs a trap only after the current foreground command returns, and the runner's
+      # SIGKILL follows within seconds, so a timeout in the middle of a long client call can still leave no file.
       - name: Run the injector spike suite
         timeout-minutes: 30
         env:
           INJECTOR_SPIKE_OUT: ${{ runner.temp }}/injector-spike-results.json
           INJECTOR_SPIKE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bash apps/web-platform/test/infra/egress-injector-spike/injector-spike-docker.test.sh
+        run: exec bash apps/web-platform/test/infra/egress-injector-spike/injector-spike-docker.test.sh
 
       - name: Upload raw results
         if: ${{ !cancelled() }}

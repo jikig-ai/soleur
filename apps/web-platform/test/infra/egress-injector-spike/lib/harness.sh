@@ -94,7 +94,15 @@ PY
   node "$SPIKE_DIR/verdict.mjs" "$SPIKE_OUT" > "$SPIKE_WORK/verdict.final" 2>&1
   rc=$?
   cat "$SPIKE_WORK/verdict.final"
+  # The verdict as an annotation (readable through the check-runs API, unlike the step summary), plus an error
+  # annotation carrying the reasons when it is INCONCLUSIVE. GO and NO-GO both exit 0, so the job colour says nothing.
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    local final_v
+    final_v="$(sed -n 's/^verdict=//p' "$SPIKE_WORK/verdict.final" | head -1)"
+    echo "::notice title=injector spike verdict::${final_v:-INCONCLUSIVE}"
+    if [[ "${final_v:-INCONCLUSIVE}" == "INCONCLUSIVE" ]]; then
+      echo "::error title=injector spike verdict::INCONCLUSIVE: $(grep -v '^verdict=' "$SPIKE_WORK/verdict.final" | tr '\n' ';' | head -c 900)"
+    fi
     python3 -I - "$SPIKE_OUT" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -116,7 +124,12 @@ print("| Criterion | Verdict | Observation or reason |")
 print("|---|---|---|")
 for r in sorted(d.get("records", []), key=lambda r: (r.get("criterion", 0), str(r.get("verdict")))):
     print(f"| {r.get('criterion')} | {r.get('verdict')} | {cell(r.get('reason') or r.get('observation') or '')} |")
-print()
+# Every line verdict.mjs printed (missing and unmeasurable criteria, harness errors, F1), so an INCONCLUSIVE beside
+# nine pass rows still says why.
+print("\nverdict.mjs output:\n\n````")
+for line in open(sys.argv[2]):
+    print(line.rstrip("\n"))
+print("````\n")
 PY
   fi
   echo "INJECTOR_SPIKE_OUT=$SPIKE_OUT"
@@ -224,6 +237,24 @@ print(json.dumps({"records": [{"criterion": c, "verdict": "pass", "observation":
   spike_record_judged 9 "$t/judge-pass.txt" >/dev/null
   out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/judged-pass.json")"
   [[ "$out" == "verdict=GO" ]] || _selftest_die "a pass pushed through spike_record_judged did not read GO ($out)"
+  # The R3 mapping: a judge that prints `unmeasurable` must read INCONCLUSIVE, never GO.
+  printf 'unmeasurable\nharness:SELFTEST synthetic missing input\n' > "$t/judge-unmeasurable.txt"
+  SPIKE_RECORDS="$t/judged-unmeasurable.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  spike_record_judged 9 "$t/judge-unmeasurable.txt" >/dev/null
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/judged-unmeasurable.json")"
+  [[ "$out" == "verdict=INCONCLUSIVE" ]] || _selftest_die "an unmeasurable judge output did not read INCONCLUSIVE ($out)"
+  # The harness-error override: an input error named under the running criterion must read INCONCLUSIVE even beside
+  # a judged fail (or a judged pass). Done in the scratch dir, so the real criterion 9 carries no error file after.
+  local saved_work="$SPIKE_WORK" saved_cur="${SPIKE_CUR:-0}"
+  SPIKE_RECORDS="$t/harness-err.jsonl"; : > "$SPIKE_RECORDS"
+  for c in 1 2 3 4 5 6 7 8; do record_verdict "$c" pass "selftest-observation" >/dev/null; done
+  SPIKE_WORK="$t"; SPIKE_CUR=9; rm -f "$t/harness-err-9"
+  spike_harness_err "SELFTEST synthetic input error"
+  spike_record_judged 9 "$t/judge-fail.txt" >/dev/null
+  SPIKE_WORK="$saved_work"; SPIKE_CUR="$saved_cur"
+  out="$(_selftest_verdict "$SPIKE_RECORDS" "$t/harness-err.json")"
+  [[ "$out" == "verdict=INCONCLUSIVE" ]] || _selftest_die "a harness-error file under the running criterion did not read INCONCLUSIVE ($out)"
   SPIKE_RECORDS="$saved"
   echo "SOLEUR_SPIKE_SELFTEST ok"
 }
