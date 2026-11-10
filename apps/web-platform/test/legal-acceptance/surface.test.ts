@@ -5,10 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ reports: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ reports: [] as unknown[][], flag: vi.fn(async () => false) }));
 // The flag is mocked OFF on purpose: the surface must not depend on it (P1). The old flag AND founder would close every case here.
 vi.mock("@/server/approval/flag", () => ({
-  isApprovalQueueEnabled: async () => false,
+  isApprovalQueueEnabled: h.flag,
 }));
 vi.mock("@/server/approval/ops", () => ({
   reportLegalOp: (...args: unknown[]) => {
@@ -45,7 +45,20 @@ describe("legalFounderId", () => {
 describe("isLegalSurfaceEnabled (founder id only)", () => {
   it("flag off and the user is the founder: STILL enabled (the case the old flag AND founder would break)", async () => {
     expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(true);
+    expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
     expect(h.reports).toEqual([]);
+    expect(h.flag).not.toHaveBeenCalled();
+  });
+
+  it("the module source imports nothing from the approval flag (a flag read cannot come back through an import)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../../server/legal-acceptance/surface.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const imports = src.match(/^import .* from "([^"]+)";$/gm) ?? [];
+    expect(imports.map((l) => l.replace(/^.* from "([^"]+)";$/, "$1")).sort()).toEqual(["@/lib/is-uuid", "@/server/approval/ops"]);
+    expect(src).not.toMatch(/isApprovalQueueEnabled|approval\/flag|getFlag|flagsmith/i);
   });
 
   it("another user: disabled, and no report", async () => {

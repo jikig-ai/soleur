@@ -15,7 +15,7 @@ import {
 export const MOCK_SUPABASE_PORT = 54399;
 export const STORAGE_STATE_PATH = "e2e/.auth/user.json";
 /** The legal-acceptance founder's session (#12197): `MOCK_FOUNDER` in mock-supabase.ts. */
-export const FOUNDER_STORAGE_STATE_PATH = "e2e/.auth/founder.json";
+const FOUNDER_STORAGE_STATE_PATH = "e2e/.auth/founder.json";
 
 /** Playwright storage state carrying one mock session in the Supabase SSR auth cookie. */
 function storageStateFor(session: typeof MOCK_SESSION) {

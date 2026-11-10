@@ -62,7 +62,7 @@ async function gotoInbox(page: Page): Promise<void> {
       return;
     } catch (err) {
       lastErr = err;
-      if (!/ERR_ABORTED|ECONNREFUSED|ERR_CONNECTION|ERR_EMPTY_RESPONSE|ERR_NETWORK_CHANGED/.test(String(err))) throw err;
+      if (!/ERR_ABORTED|ECONNREFUSED|ERR_CONNECTION|ERR_EMPTY_RESPONSE|ERR_NETWORK_CHANGED|ERR_NETWORK_IO_SUSPENDED/.test(String(err))) throw err;
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
@@ -91,7 +91,6 @@ test.describe("founder session", () => {
     expect(items.filter((i) => i.kind === "legal").map((i) => i.legal)).toEqual([
       expect.objectContaining({ key: LEGAL_KEY, state: "pending" }),
     ]);
-    expect(inbox.body).not.toContain(TEXT_HASH);
     expect(inbox.body).not.toMatch(ANY_SHA256);
 
     const row = page.getByTestId("legal-inbox-row");

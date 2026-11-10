@@ -33,15 +33,6 @@ export const MOCK_USER = {
   updated_at: "2024-01-01T00:00:00Z",
 };
 
-/**
- * Mint a synthetic JWT-shaped string with a real `iat` claim. The
- * middleware's revocation gate (#4307) decodes the JWT payload to extract
- * `iat` and fail-CLOSES the session if it can't. A literal string token
- * (the prior shape) made every authenticated e2e route redirect to
- * `/login?revoked=session-error`. The signature is intentionally inert —
- * the edge decoder is `Unsafe` (no signature check); the test mock
- * trusts itself.
- */
 type MockUser = typeof MOCK_USER;
 
 /**
@@ -56,7 +47,16 @@ export const MOCK_FOUNDER: MockUser = {
   email: "founder@example.com",
 };
 
-export function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER): string {
+/**
+ * Mint a synthetic JWT-shaped string with a real `iat` claim. The
+ * middleware's revocation gate (#4307) decodes the JWT payload to extract
+ * `iat` and fail-CLOSES the session if it can't. A literal string token
+ * (the prior shape) made every authenticated e2e route redirect to
+ * `/login?revoked=session-error`. The signature is intentionally inert —
+ * the edge decoder is `Unsafe` (no signature check); the test mock
+ * trusts itself.
+ */
+function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER): string {
   const b64url = (obj: object) =>
     Buffer.from(JSON.stringify(obj))
       .toString("base64")
@@ -175,6 +175,12 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           res.end(JSON.stringify({ error: "invalid_grant", error_description: "Invalid code" }));
           return;
         }
+        // Any grant other than a refresh is not modelled: a 400, never a session.
+        if (grantType !== "refresh_token") {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "unsupported_grant_type", error_description: "Not modelled" }));
+          return;
+        }
         // Session refresh: the session follows the refresh token in the body.
         // An unknown token is a 400, so a silent identity swap fails loudly.
         void readBody(req).then(
@@ -185,13 +191,8 @@ export function startMockSupabase(port: number): Promise<http.Server> {
             } catch {
               refreshToken = undefined;
             }
-            const session =
-              refreshToken === MOCK_FOUNDER_SESSION.refresh_token
-                ? MOCK_FOUNDER_SESSION
-                : refreshToken === MOCK_SESSION.refresh_token
-                  ? MOCK_SESSION
-                  : null;
-            if (session === null) {
+            const session = [MOCK_FOUNDER_SESSION, MOCK_SESSION].find((x) => x.refresh_token === refreshToken);
+            if (session === undefined) {
               res.writeHead(400);
               res.end(JSON.stringify({ error: "invalid_grant", error_description: "Invalid Refresh Token" }));
               return;

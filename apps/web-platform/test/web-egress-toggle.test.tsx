@@ -207,7 +207,7 @@ describe("WebEgressToggle — push and gh disclosures (#12469, #12197)", () => {
     const dialogText = screen.getByRole("alertdialog").textContent ?? "";
     expect(count(dialogText, PUSH_DISCLOSURE)).toBe(1);
     expect(count(dialogText, GH_DISCLOSURE)).toBe(1);
-    // the OFF card shows no ON block, so the dialog is the only place on the page that carries them
+    // the OFF card shows no ON block, so the dialog is the only place in the card that carries them
     const bodyText = document.body.textContent ?? "";
     expect(count(bodyText, PUSH_DISCLOSURE)).toBe(1);
     expect(count(bodyText, GH_DISCLOSURE)).toBe(1);
@@ -224,6 +224,14 @@ describe("WebEgressToggle — push and gh disclosures (#12469, #12197)", () => {
     const dlgParas = Array.from(screen.getByRole("alertdialog").querySelectorAll("p")).map((p) => norm(p.textContent ?? ""));
     expect(dlgParas.filter((t) => t === norm(PUSH_DISCLOSURE))).toHaveLength(1);
     expect(dlgParas.filter((t) => t === norm(GH_DISCLOSURE))).toHaveLength(1);
+    // closed set: any paragraph that talks about pushing, credentials or `gh` IS one of the two ruled constants, so an added or
+    // rewritten claim beside them fails here
+    const ruled = new Set([norm(PUSH_DISCLOSURE), norm(GH_DISCLOSURE)]);
+    const claims = (paras: string[]) => paras.filter((t) => /push|credential|\bgh\b/i.test(t));
+    expect(claims(onParas).filter((t) => !ruled.has(t))).toEqual([]);
+    expect(claims(dlgParas).filter((t) => !ruled.has(t))).toEqual([]);
+    expect(claims(onParas)).toHaveLength(2);
+    expect(claims(dlgParas)).toHaveLength(2);
   });
 
   it("neither the ON block nor the enable dialog carries a retired 'can't push to git remotes' phrase", () => {
@@ -273,6 +281,10 @@ describe("push and gh disclosures: the Scope Grants page carries the identical s
       .replace(/"[^"\n]*"/g, '""');
     expect(code).toMatch(/\{PUSH_DISCLOSURE\}/);
     expect(code).toMatch(/\{GH_DISCLOSURE\}/);
+    // each constant is the whole of its own paragraph, PUSH first, nothing appended or interleaved
+    expect(code).toMatch(/<p className="?"?>\{PUSH_DISCLOSURE\}<\/p>\s*<p className="?"?>\{GH_DISCLOSURE\}<\/p>/);
+    expect(code.match(/\{PUSH_DISCLOSURE\}/g)).toHaveLength(1);
+    expect(code.match(/\{GH_DISCLOSURE\}/g)).toHaveLength(1);
     // and the page no longer carries its own copy of either sentence, nor any hand-written push claim
     const pageText = norm(page.replace(/&apos;/g, "'"));
     expect(pageText).not.toContain(norm(GH_DISCLOSURE));

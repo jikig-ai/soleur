@@ -69,7 +69,7 @@ describe("the real acknowledgement text: the DOM presumes no terms", () => {
     expect(cardWords().length).toBeGreaterThan(500);
   });
 
-  it("pending, flag on: title, rows, notices, choices and the locked or open lines", async () => {
+  it("pending, surface on: title, rows, notices, choices and the locked or open lines", async () => {
     render(<LegalAcceptanceCard {...props()} />);
     expect(screen.getByRole("heading", { name: KC.pendingTitle("How your decisions are recorded and kept") })).toBeInTheDocument();
     expect(cardWords()).not.toMatch(TERMS_PRESUMING);
@@ -83,7 +83,7 @@ describe("the real acknowledgement text: the DOM presumes no terms", () => {
     expect(cardWords()).not.toMatch(TERMS_PRESUMING);
   });
 
-  it("pending, flag off: the not-available line", () => {
+  it("pending, surface off: the not-available line", () => {
     render(<LegalAcceptanceCard {...props({ flagEnabled: false })} />);
     expect(screen.getByText(KC.pendingNotAvailable)).toBeInTheDocument();
     expect(cardWords()).not.toMatch(TERMS_PRESUMING);
