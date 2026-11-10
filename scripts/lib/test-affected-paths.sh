@@ -1245,6 +1245,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CHANGED_PATH_READERS_TEST_SH_PATHS=(
   "plugins/soleur/skills/preflight/SKILL.md"  # the sentinel pins each skill's spelling of the helper call
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/references/settle-then-admin-merge.md"  # the steps section EXECUTES its classifier block
+  "plugins/soleur/skills/one-shot/SKILL.md"
+  "plugins/soleur/agents/engineering/review/semgrep-sast.md"  # the prose pins read the converted agents
+  "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md"
+  "scripts/hooks/pre-push"  # extension-less, so the code census cannot see it: held by a PINNED_Z row
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
