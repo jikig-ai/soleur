@@ -545,8 +545,8 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
   after its key check: `relay_hello_key_fp current=<8hex> accept_also=<8hex|none>`. The values are domain-separated HMAC prefixes of
   the keys (never key bytes); equal `current=` values mean the hosts hold the same key. The row proves the key state loaded, not a
   serving relay (read `relay_probe proxy_state=listening` for that), and the canary prints none. Read each host's newest row over
-  30 days (the row is written once per boot, so a short window misses a host that has not restarted recently; to bound the read by
-  the deploy instead, replace `now() - INTERVAL 30 DAY` with the deploy time):
+  30 days (the row is written once per boot, so a short window misses a host that has not restarted recently). The query can
+  also return a host that left the roster inside the window; ignore that row, and read the result for each roster host:
 
   ```bash
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
@@ -560,15 +560,34 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
      GROUP BY host ORDER BY host FORMAT JSONEachRow"
   ```
 
-  Each host's newest row must be newer than that host's deploy time (take it from the deploy-arm run's per-host deploy timestamps,
-  not from the time of the read), and each host's newest row must show the same `current=` and `accept_also=none`. **Reading
-  rule:** `accept_also!=none` outside a recorded rotation is an alarm, because the slot sits outside Terraform and a planted value
-  causes no drift and no HALT. This is a manual read: no automated alert exists until #12538 requirement (e) adds one. The slot's
+  For each roster host, the newest row must be newer than that host's deploy time, and the newest rows must all show the same
+  `current=` and `accept_also=none`. **The deploy time** is the host's newest `CRON_DRAIN: waited ... before prod stop` row.
+  `ci-deploy.sh` journals it on every web-platform swap, right before it stops the old container and starts the new one, so a
+  row from the new boot is always newer than it:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, max(dt) AS deployed
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
+       AND startsWith(JSONExtractString(raw,'message'), 'CRON_DRAIN: waited ')
+     GROUP BY host ORDER BY host FORMAT JSONEachRow"
+  ```
+
+  Do not take the deploy time from the release run or from the time of the read. The deploy-arm run's job logs say when
+  ci-deploy finished on a host, which comes after the new container has started, so a healthy host's row would read as older
+  than it.
+
+  **Reading rule:** `accept_also!=none` outside a recorded rotation is an alarm, because the slot sits outside Terraform and a
+  planted value causes no drift and no HALT. This is a manual read: no automated alert exists until #12538 requirement (e) adds one. The slot's
   other signal is one warn-level `loadProxyHelloKeys.accept-also-active` event per boot. Failure branches:
   - **Two `current=` values differ:** stop and file an issue referencing #8211. Do not roll back: a release that adds this line
     does not change the key value, so the split is pre-existing drift (a sustained `reason=mac` stream is its other symptom).
-  - **A host has no row:** read its `relay_probe proxy_state=` line (query above), then:
-    - `listening` with no fingerprint row: the host runs an image older than this line, or its last boot is outside the window.
+  - **A host has no row newer than its deploy time (or no row):** a newest row older than the host's deploy is a row from an
+    earlier boot, so read it as no row. Read the host's `relay_probe proxy_state=` line (query above), then:
+    - `listening` with no fingerprint row: the host runs an image older than this line.
     - `disabled`, `no_bind`, `no_allowlist` or `error`: no fingerprint row is expected, because the line comes after those checks.
       For `error`, look for `createProxyServer.no-hello-key` (the key check refused).
     - No `relay_probe` row at all: the container is down or its log path is broken; see `relay_probe_silent` above.
