@@ -768,7 +768,26 @@ describe("accept-only slot (#8211): call sites, degraded states and the fingerpr
     expect(reports().map((r) => r.extra?.reason)).toEqual(["replay"]);
   });
 
-  it("the sender signs with CURRENT only: with both keys set, its hello verifies under CURRENT and fails on a verifier holding only the accept-also key", async () => {
+  // Both rows below run under NODE_ENV=test AND NODE_ENV=production. vitest sets test, so a slot choice gated on
+  // production (at the sender's call site, in the loader, or inside signProxyHello) would otherwise pass every row
+  // here while signing with the verify-only slot in production. A gate on any other production-only signal is a
+  // review-time property (ADR-323 Decision 9 amendment). afterEach's vi.unstubAllEnvs() restores NODE_ENV.
+  const NODE_ENVS = ["test", "production"] as const;
+
+  it.each(NODE_ENVS)("NODE_ENV=%s: the listener verifies with CURRENT and the slot, and its fingerprint line names CURRENT", async (nodeEnv) => {
+    vi.stubEnv("NODE_ENV", nodeEnv);
+    expect(process.env.NODE_ENV).toBe(nodeEnv);
+    const port = await listen(startWith(KEY_HEX, ACCEPT_HEX));
+    expect(fpLines().map((l) => l[1])).toEqual([
+      `relay_hello_key_fp current=${helloKeyFingerprint(KEY)} accept_also=${helloKeyFingerprint(ACCEPT_KEY)}`,
+    ]);
+    expect((await run(port, [signProxyHello(KEY, U, W)])).ready).toBe(true);
+    expect((await run(port, [signProxyHello(ACCEPT_KEY, U, W)])).ready).toBe(true);
+  });
+
+  it.each(NODE_ENVS)("NODE_ENV=%s: the sender signs with CURRENT only: with both keys set, its hello verifies under CURRENT and fails on a verifier holding only the accept-also key", async (nodeEnv) => {
+    vi.stubEnv("NODE_ENV", nodeEnv);
+    expect(process.env.NODE_ENV).toBe(nodeEnv);
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
     vi.stubEnv(SLOT, ACCEPT_HEX);
     class FakeWs extends EventEmitter {
