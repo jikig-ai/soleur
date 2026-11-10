@@ -44,10 +44,12 @@ them: edit the constants, nothing else.
 <!-- lint-infra-ignore end -->
 
 Every route starts with its rehearsal (`plan_only` where the workflow offers it) and ends with a reader run. A replace does
-**not** by itself guarantee a patched kernel: no cloud-init file runs a package upgrade, so a new host boots the base image
-plus whatever package state the mirror holds that day. The verification step is therefore mandatory,
+**not** by itself guarantee a patched kernel on every class. Since #12008 a **web** birth installs the archive's generic kernel
+package and boots onto it once before serving ([ADR-326](../../architecture/decisions/ADR-326-web-hosts-boot-once-onto-the-installed-kernel-at-birth.md)),
+and its readiness row refuses `ready` unless the running kernel is that target (`kernel=1`). Other classes still boot the base
+image plus whatever package state the mirror holds that day. The verification step is therefore mandatory on every class,
 and "the uptime reset" without "the kernel changed" means the host was rebuilt but not patched. Whether cloud-init should upgrade
-packages is tracked as #12503; do not edit a cloud-init file to find out (see the registry section).
+packages generally is tracked as #12503; do not edit a cloud-init file to find out (see the registry section).
 
 ## After a typed go
 

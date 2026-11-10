@@ -52,8 +52,13 @@ runbook can only detect the gap after the fact (#12503).
   behaviourally and structurally; `fresh-boot-ready.test.sh` gains the kernel predicate rows.
 - TR2: `plugins/soleur/test/cloud-init-user-data-size.test.ts` still passes (`WEB_GZIP_BUDGET` 25,000 on the
   base64-gzip render, ~180 B headroom); all logic is baked into `soleur-host-bootstrap.sh`.
+  **Amended in work (2026-11-10):** the settle step must be inline (it runs before the baked bootstrap is seeded), so the
+  budget was re-baselined 25,000 -> 25,400 with the measured render (25,192 B local); the verdict change is baked.
 - TR3: No edit to `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`, inngest or git-data cloud-init.
-- TR4: ADRs record the kernel-at-birth mechanism (the one ADR-257 exception) and the bastion + identical-cattle design.
+  **Amended in work (2026-11-10):** Part 2a (same PR) edits `variables.tf` (keyed `var.web_hosts` fields) and derives the
+  inngest host's web IP list (`inngest-host.tf`; same rendered string). No cloud-init file other than `cloud-init.yml` is edited.
+- TR4: ADRs record the kernel-at-birth mechanism (the one ADR-257 exception) and the bastion + identical-cattle design
+  (ADR-326 and ADR-327).
 - TR5: PR, commits and filed issues use routine refresh wording only (ADR-322, CLO).
 
 ## Acceptance

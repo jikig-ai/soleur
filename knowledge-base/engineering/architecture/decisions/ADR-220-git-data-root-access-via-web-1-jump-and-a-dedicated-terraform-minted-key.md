@@ -742,3 +742,9 @@ Dated text above is not rewritten.
   "#8572 paging" precondition holds as configured and verified; email delivery is not yet observed
   (nothing has fired), and the per-id re-erasure path is still the open hard precondition. Record:
   `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`, "Verification 2026-09-28 (#8572)".
+
+## Addendum — 2026-11-10 (#9421) — the jump moves to a dedicated bastion
+
+[ADR-327](ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md) moves the `ssh.` jump off web-1 to a
+dedicated bastion (PR 3 of the #9421 sequence). Until then the jump host is the keyed `jump` field of
+`var.web_hosts` (exactly one host, still web-1), so this record's access path is unchanged.

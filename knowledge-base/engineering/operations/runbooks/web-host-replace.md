@@ -240,6 +240,21 @@ ACTION REQUIRED.
 
 The replace is a targeted apply whose `-target` list never names the load-balancer pool, and the server declares no pinned `primary_ip`, so a replaced web-2 can come back with a NEW public IPv4 while the Cloudflare pool origin still carries the old one (`cloudflare-lb.tf` feeds the origin address from the server's `ipv4_address`). Web-2 serves at weight 1, so the stale origin is unhealthy and traffic falls back to web-1 (B1) until the pool is corrected: a capacity gap, and the released Hetzner address is not yours any more, so do this in the same session as the replace rather than waiting out the 2-day first-deploy check. `mode=serve` cannot do it first: its `web-2 health precondition` refuses while any pool origin reads unhealthy, which the stale origin does. Run `arm=ga-pool-update mode=drain` (no health precondition; it applies the new origin address at weight 0, and the grader pins web-2 at 0 by resolved IP), wait until the pool reports the origin healthy, then run `mode=serve` for the gated 0 to 1.
 
+### The kernel-settle reboot at birth (ADR-326, #12008)
+
+Every create and replace boots once onto the kernel it just installed, right after the bounded apt step. Expect one
+`kernel_reboot` info stage in the boot trail, and about 4 minutes more before `cloud_init_complete`. The trail deadline and the
+host's readiness window both include that time. These are the new failure rows:
+
+| Signal | Meaning | Next action |
+|---|---|---|
+| fatal `stage=kernel_settle` | The target kernel could not be read (dpkg failed or the target was empty), the semaphore was missing, the reboot returned, or a second mismatch happened after the one reboot | Replace again. Read the stage's Sentry event first: a missing semaphore after a cloud-init upgrade means the guard caught a rename, and the step needs a code fix, not another replace |
+| readiness `reason=kernel` (`kernel=0`) | The host reached readiness but runs a kernel other than the target | Do not serve it. Replace it again; a repeat means the settle step is not running, so read the trail for the `kernel_reboot` stage |
+
+**A red replace is not a serving target.** Whatever the failure, do not raise that host's weight or pool it. The drain gate keeps it
+at weight 0 until a green readiness row exists. Re-dispatch the replace with an explicit `-f image_tag=vX.Y.Z`: after a failed
+replace the default pin source may itself be the host that just failed.
+
 ### web-2 boot failed — how to read it
 
 On a host born with the guest-side LUKS path (ADR-263) a fatal provisioner step, or `/mnt/data` not

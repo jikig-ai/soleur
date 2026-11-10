@@ -347,3 +347,11 @@ The "residual exposure" clause (a targeted `destroy`/`-replace` of `workspaces_l
 window) is closed by `prevent_destroy` for every plan that keeps the resource in config. It is not
 closed for a state-only removal (`terraform state rm`, a `removed {}` block), which `prevent_destroy`
 does not see.
+
+## Addendum — 2026-11-10 (#9421) — D2's gated member is a keyed weight
+
+[ADR-327](ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md): the GA pool's origins are one dynamic block
+over `var.web_hosts`, at each host's declared `lb_weight`. A gate can only lower that weight. D2's drain and serve
+acts still land on web-2 through `var.web2_lb_weight`, and `lb-weight-gate.sh` takes the gated key as an input
+(`SOLEUR_GATED_HOST`), so a new key enters the pool drained and gets the same gate. The plan output for today's
+two hosts is unchanged.

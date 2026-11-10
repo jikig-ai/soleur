@@ -530,28 +530,28 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
 
 ## Acceptance Criteria (Part 2a)
 
-- [ ] `var.web_hosts` has `lb_weight`, `luks_monitor_profile`, `jump` with validations (exactly one primary profile, exactly one jump, unique in-subnet `private_ip`); today's values reproduce the current config.
-- [ ] LB pool origins come from a `dynamic` block over `var.web_hosts`; `web_tunnel_connector` reads a keyed field.
-- [ ] `WEB_HOST_PRIVATE_IPS` is derived in HCL and a parity test pins every workflow copy.
-- [ ] `lb-weight-gate.sh` no longer names `web-2` literally; its tests cover a third key.
-- [ ] Ratchet test for the web-1 private IP literal and `"web-1"` outside an allowlist, ceiling = today's count.
-- [ ] Host-bound-state census committed with test rows.
+- [x] `var.web_hosts` has `lb_weight`, `luks_monitor_profile`, `jump` with validations (exactly one primary profile, exactly one jump, unique in-subnet `private_ip`); today's values reproduce the current config.
+- [x] LB pool origins come from a `dynamic` block over `var.web_hosts`; `web_tunnel_connector` reads a keyed field.
+- [x] `WEB_HOST_PRIVATE_IPS` is derived in HCL and a parity test pins every workflow copy.
+- [x] `lb-weight-gate.sh` no longer names `web-2` literally; its tests cover a third key.
+- [x] Ratchet test for the web-1 private IP literal and `"web-1"` outside an allowlist, ceiling = today's count.
+- [x] Host-bound-state census committed with test rows.
 - [ ] `terraform plan` (web-platform root) shows no change to servers, volumes, attachments, tunnel or LB pool; result quoted in the PR body.
 
 ## Acceptance Criteria (Part 1)
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] `linux-image-generic` is on the bounded `apt-get install` line inside `STAGE=apt_install`, and the retry runs `dpkg --configure -a` before attempt 2 (kernel-currency.test.sh structural rows).
-- [ ] The settle item is the runcmd item right after the apt block; every earlier item is on the idempotent allowlist; no Doppler/docker/`/mnt/data`/LUKS reference precedes it (structural rows).
-- [ ] The five settle behaviour cases pass (match; mismatch+no marker → one reboot after `trap - EXIT` and semaphore removal; mismatch+marker → fatal; unreadable → fatal; semaphore absent → fatal).
-- [ ] `soleur-fresh-boot-ready` reports not-ready `kernel` on mismatch or empty target and ready on match (fresh-boot-ready.test.sh rows).
-- [ ] `DEADLINE` and `SOLEUR_FRESH_BOOT_WINDOW_SECONDS` moved together; computed worst cases stay under the create (30 min) and replace (40 min) job limits (budget rows).
-- [ ] Rendered web user_data is under `WEB_GZIP_BUDGET`, or the budget is re-baselined with the measured number in the PR body.
-- [ ] All Guard Contract mutation rows (Guards 1–2) were driven RED once during work; results recorded in the PR body.
-- [ ] The new suite is registered (`suite-shard-legs.tsv` + `guard-vacuity-floor.test.sh` promotion) and CI runs it.
-- [ ] ADR + ADR-263 forward-pointer addendum created; runbooks updated; spec FR2/FR3/TR4 match ruling C; no kernel string, vulnerability id, host address or exposure verdict in any changed file, the PR body or commits (ADR-322).
-- [ ] `plugins/soleur/test/c4-count-parity.test.sh` green.
+- [x] `linux-image-generic` is on the bounded `apt-get install` line inside `STAGE=apt_install`, and the retry runs `dpkg --configure -a` before attempt 2 (kernel-currency.test.sh structural rows).
+- [x] The settle item is the runcmd item right after the apt block; every earlier item is on the idempotent allowlist; no Doppler/docker/`/mnt/data`/LUKS reference precedes it (structural rows).
+- [x] The five settle behaviour cases pass (match; mismatch+no marker → one reboot after `trap - EXIT` and semaphore removal; mismatch+marker → fatal; unreadable → fatal; semaphore absent → fatal).
+- [x] `soleur-fresh-boot-ready` reports not-ready `kernel` on mismatch or empty target and ready on match (fresh-boot-ready.test.sh rows).
+- [x] `DEADLINE` and `SOLEUR_FRESH_BOOT_WINDOW_SECONDS` moved together; computed worst cases stay under the create (30 min) and replace (40 min) job limits (budget rows).
+- [x] Rendered web user_data is under `WEB_GZIP_BUDGET`, or the budget is re-baselined with the measured number in the PR body.
+- [x] All Guard Contract mutation rows (Guards 1–2) were driven RED once during work; results recorded in the PR body.
+- [x] The new suite is registered (`suite-shard-legs.tsv` + `guard-vacuity-floor.test.sh` promotion) and CI runs it.
+- [x] ADR + ADR-263 forward-pointer addendum created; runbooks updated; spec FR2/FR3/TR4 match ruling C; no kernel string, vulnerability id, host address or exposure verdict in any changed file, the PR body or commits (ADR-322).
+- [x] `plugins/soleur/test/c4-count-parity.test.sh` green.
 
 ## Test Scenarios (Part 1)
 
