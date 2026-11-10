@@ -30,3 +30,31 @@
 - constraint: 8620 unblocked for the Inngest row - no hcloud encryption mechanism - record why-not when triaged.
 - constraint: 9927 blocked on the 2026-11-24 inngest-host-replace window plus operator decisions.
 - constraint: 12479 deferred p3.
+
+## Work Phase
+- Status: implementation complete (Tier B fan-out, 4 agents + lead)
+- Commit: f0ab784345 (37 files, +3199/-120)
+- Groups: A server mechanism (exec-placement.ts, exec-forward-client.ts, inngest-exec-receiver.ts :8445, route.ts wrap, index.ts wiring, 2 unit suites); B infra (ci-deploy.sh env+publish, docker-run-tuple pins, cloud-init.yml first-boot env, cron-egress-nftables 8445 accept + postapply assert + runbook row, ci-deploy.test.sh fixtures); C docs (5 ADR edits, model.c4 edge, inngest-server.md runbook); D guard suite (exec-placement-forward.test.ts Guards 1-4 mutation-verified, execution-placement.test.ts Guard-1 extension, exec-placement-probe.sh); lead: Phase-4 unpin (current-workspace-id.ts leaf, byok-resolver re-point, cfo-on-payment-failed + github-on-event re-classed portable, Guard-2 verified)
+- Port note: receiver binds 8445 (plan's "e.g. 8444" superseded — 8444 is the deliberately-wrong sentinel in firewall test fixtures)
+- cto_spawns=2 (plan-time, via claude CLI; T2 re-ruled once)
+- Affected gate: running
+
+## Fix-Round + QA
+
+### Fix-Round (ADR-267, round 1 of cap 2)
+- Panel snapshot: `f0ab7843`; fix range `f0ab7843..5e104f74c0` (da48c9f973 fixes + cfdf4a134c trailer + 5e104f74c0 round-1 closures).
+- Seats (6, sequential-fallback via `claude -p` — no `run_subagent` in harness): security-sentinel (guard-shaped diff), test-design-reviewer, data-integrity-guardian, performance-oracle (path-mapped), code-quality-analyst (finding-seat proxy — prior session's dedup ledger was not persisted, union degraded per risk-tier-and-fix-rounds.md), + 1 fresh-eyes verifier pass.
+- Seat reports: security/perf CLEAN; test-design, data-integrity, code-quality returned convergent P3s.
+- Findings closed inline in 5e104f74c0: stale `?probe=` presence wording (exec-placement.ts decision table, route.ts comment, plan :131/:233/:237/:370/:481/:673, tasks.md:24 — truthiness semantics now `?probe=<non-empty>`); misleading `probe=&fnId=` loop row replaced with `probe=&probe=1` pinning URLSearchParams first-value semantics (SDK parity — a `getAll().some(Boolean)` mutant now reds); package.json dev-script `10.0.1.10` replicated literal bound to `EXEC_HOST_PRIVATE_IP` by a new Guard-4 parity pin; self-contradicting plan residual bullet (8445 chosen + stale fallback tail) trimmed.
+- SDK parity verified against installed `inngest` InngestCommHandler.cjs:781-887 + next.cjs adapter — 20-shape executable matrix, zero mismatches; `Boolean(get("probe"))` === SDK `get(...) || void 0` truthiness incl. dup keys, encoding, case.
+- Verifier pass: VERIFIED on code; one residual P3 (plan/tasks wording) fixed in the same commit. Suites re-run 64/64.
+- Attestation: `review-fix-round:` commit d62d134d52 — `Reviewed-Fix-Round: sequential-fallback 6/6 agents`, `Reviewed-Fix-Range: f0ab7843..5e104f74c0` (no `Reviewed-Coverage:` by design).
+- Tally: seats 21 (15 panel + 6 round), fix_rounds 1.
+
+### QA (soleur:qa, plan Test Scenarios)
+- Plan `## Test Scenarios` = integration-level prose (no Browser:/API verify:/Cleanup: steps) — automated browser QA auto-skipped per skill contract; no dev server started (nothing to clean up).
+- Step 2.6 nav-states gate: skipped — branch diff touches no `app/(dashboard)/**`/`components/dashboard/**`/`layout.tsx` paths.
+- Executable coverage: `vitest run` exec-placement-decision + exec-placement-forward + exec-forward-transport + execution-placement = **169/169 green** (forward fidelity byte-faithful e2e through real TLS fixture + receiver; identity/classification edges; TLS fail-closed; peer allowlist deny).
+- Discoverability: `bash apps/web-platform/scripts/exec-placement-probe.sh` → `exec-placement: ok` (rc 0).
+- `test-all.sh --affected` skipped — `--capacity` reported CAPACITY_CONTENDED (2 sibling worktree runs); targeted suites substituted per risk-tier-and-fix-rounds.md guidance. `next build` left to CI (no module-load surface changed; comment/test/doc-only edits).
+- Verdict: **PASS**.
