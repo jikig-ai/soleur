@@ -29,8 +29,8 @@ Plan: `knowledge-base/project/plans/2026-11-10-feat-leader-rulings-legal-surface
 - [x] 3.1 e2e: second mock founder user, `founder.json`, `e2e-auth` env (`LEGAL_ACCEPTANCE_FOUNDER_ID`, `FLAG_APPROVAL_QUEUE: "0"`, `FLAGSMITH_ENVIRONMENT_KEY: ""`) (plan 7.1 to 7.3)
 - [x] 3.2 e2e spec `nav-states-inbox-legal.e2e.ts` with negative control and two screenshots (plan 7.4)
 - [x] 3.3 Run the spec locally; commit the screenshots as frame 23 evidence (plan 7.5)
-- [ ] 3.4 Verification before ship: tsc, vitest file list, hard-constraint checks (plan Phase 8)
+- [x] 3.4 Verification before ship: tsc, vitest file list, hard-constraint checks (plan Phase 8). Local affected-test run stopped on the operator's instruction; PR CI is the gate.
 - [x] 3.4.1 C4 tests and local `c4-model-freshness.test.sh` (plan 1.9)
 - [x] 3.4.2 `lint-legal-registers.sh`, `lint-questionnaire-identity.sh --all`, `technical-ruling-gate.sh --branch`, markdownlint
-- [ ] 3.5 Phone-width QA (390×844) of the ON block, dialog and callout at review
+- [ ] 3.5 Phone-width QA (390×844) of the ON block, dialog and callout at review. NOT MEASURED: the offline mock cannot render the Scope Grants page (no `workspace_members` handler); tracked in #12605. nav-states gate 37/37 passed.
 - [ ] 3.6 Archive plan and spec in the PR; merge queue after green CI; post-deploy `build_sha` check and read-only Sentry check
