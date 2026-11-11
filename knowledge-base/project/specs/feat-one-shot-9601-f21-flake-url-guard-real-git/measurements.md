@@ -93,3 +93,31 @@ call existed and no row covered it, so N6 could not be killed. The harness times
 otherwise verified). The real-git rows in this PR add R-PUSH-1 and R-PUSH-2 as independent killers.
 
 Not claimed: this is the 11-mutant set above, not the earlier 39-mutant battery, which was not re-run.
+
+## Addendum — 2026-11-11 (review fixes, commit 44f981dcfd)
+
+The sections above are kept as recorded. Three corrections and additions from the review panel:
+
+- **Row IDs renamed.** In the new file, R-PUSH-n is now UG-PUSH-n and R-FETCH-n is now UG-FETCH-n, because the old IDs
+  collided with `git-data-remote-url-wrapper.test.ts`. The AC7 table above uses the old names for the same rows.
+- **AC7's mutant run was on commit 2974cad3c9's tree** (20aa1b169f plus the measurements commit).
+- **The N6 window explanation has a fetch-side analogue that was not measured.** GC1 was run on this branch only.
+
+New rows: each of UG-PUSH-1 and UG-PUSH-2 now runs with and without a local `soleur-store-tip-*` rescue branch.
+UG-PUSH-3 is new: `url.<B>.pushInsteadOf`, whose control lands in B. UG-FAKE pins the fake's push argv. The new file
+has 13 rows. Before these fixes, a guard moved below the rescue push (N6-MOVE) and a guard narrowed to `insteadOf`
+(M-A) both survived the panel's probes.
+
+Mutants were run in a sandbox on the tree later committed as 44f981dcfd, which only added a type-only cast in UG-FAKE after the run. Each was run serially, 3 reps, with the JSON reporter, and every
+restore was hash-checked. Baseline: the new file 13/13 and `git-data-replication.test.ts` 71/71.
+
+| Mutant | Edit | Run set | Reps RED | Killing rows (identical in every rep) |
+|---|---|---|---|---|
+| N6 | drop the push-side `assertNoUrlRewrite` | new file, replication | 3/3 | UG-PUSH-1..3, both rescue shapes (6 rows); the two mocked "runs before ANY push" rows |
+| N6-MOVE | the push-side call moved from before step 1 to before step 2 (the main push) | new file, replication | 3/3 | UG-PUSH-1..3 **with a rescue branch** only (3 rows); replication file 71/71 green |
+| M-A | guard `url.` prefix test narrowed to `^url\..*\.insteadof$` | new file | 3/3 | UG-PUSH-3, both rescue shapes |
+| GC1 | drop the fetch-side `assertNoUrlRewrite` | new file | 3/3 | UG-FETCH-1..3 |
+| H-SPLICE-DROP | helper: no `--receive-pack` splice for push | new file, replication | 3/3 | UG-FAKE only; replication file 71/71 green, including F21, as expected at a race rate this low |
+
+Not claimed: H-SPLICE-DROP's replication green is three runs. It says nothing about the race rate without the wrapper.
+That rate is AC2.

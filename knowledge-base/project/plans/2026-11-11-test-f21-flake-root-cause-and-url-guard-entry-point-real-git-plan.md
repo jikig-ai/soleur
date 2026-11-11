@@ -431,6 +431,10 @@ assert the file's hash equals the committed one. End with `git status --short` e
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one cross-tenant write or read through this path is a breach for that user, so
   the rows that pin the refusal carry the threshold of the surface they guard, even though the diff is test-only.
+- **Residuals these rows do not close (added at review):**
+  - One guard check covers both pushes, so the check-to-use window spans the whole rescue push.
+  - Carriers outside the workspace config (include-based, global or system) have no entry-point row.
+  - The test stores do not carry the production store's pre-receive fence.
 
 `requires_cpo_signoff: true` is set. CPO reviewed at plan time (see Domain Review). `soleur:engineering:review:user-impact-reviewer`
 runs at review time.
@@ -659,3 +663,16 @@ None. Queried 95 open `code-review` issues for `apps/web-platform/test/git-data-
 - Follow-ups not filed (no issue filed, no comment posted): measure a no-op push with push options over the ssh carrier,
   and, if it reproduces, decide whether to skip the main push when nothing changed (CTO R6; CPO condition 1 recorded).
 - Operator never-done items: see `## Operator Holds`.
+
+## Addendum — 2026-11-11 (review)
+
+In the new file, the rows R-PUSH-n and R-FETCH-n are now UG-PUSH-n and UG-FETCH-n, because the old IDs collided with
+`git-data-remote-url-wrapper.test.ts`. The sections above keep the old names.
+
+The review added these rows:
+
+- UG-PUSH-1 and UG-PUSH-2 now run with and without a local rescue branch.
+- UG-PUSH-3: `url.<B>.pushInsteadOf`.
+- UG-FAKE: a pin on the push argv's receive-pack splice.
+
+The review also added three mutants: N6-MOVE, M-A and H-SPLICE-DROP. Their results are in the measurements addendum.

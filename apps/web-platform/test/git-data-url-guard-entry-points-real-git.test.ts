@@ -132,8 +132,8 @@ afterEach(() => {
 });
 
 describe("the fake transport's push argv (the F21 fix)", () => {
-  // The flake this wrapper fixes hit about 2 in 1000 serial no-op pushes, so deleting the splice would leave F21 green
-  // almost every run. This row pins the argv instead.
+  // The race this wrapper fixes hit 2 of 1000 serial no-op pushes in planning (plan, Root cause), so deleting the
+  // splice would leave F21 green almost every run. This row pins the argv instead.
   const capture = (args: string[]): string[] => {
     let seen: string[] = [];
     const exec = ((_f: string, a: string[]) => {
