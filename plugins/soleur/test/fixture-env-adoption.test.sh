@@ -427,11 +427,13 @@ readonly DEFERRED=(
   # would delete those rows. Listed rather than special-cased, like the entries above.
   apps/web-platform/infra/git-data-cutover-access.test.sh
   # Classifier boundary, #12517: the egress-injector spike's stub GitHub serves git smart HTTP by
-  # spawning `git http-backend` (a CGI process, an unclassified verb, so fail-closed MUTATING) with a
-  # fully CONSTRUCTED env: PATH, GIT_PROJECT_ROOT, GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1
-  # and the CGI request variables, nothing inherited. http-backend resolves its bare fixture repo from
-  # GIT_PROJECT_ROOT + PATH_INFO, never by discovery, inside the spike's container. The helper is a
-  # .ts module the container cannot import. Listed rather than special-cased, like the entries above.
+  # spawning `git http-backend` (a CGI process, an unclassified verb, so fail-closed MUTATING) with an
+  # env built from scratch: PATH, GIT_PROJECT_ROOT, GIT_HTTP_EXPORT_ALL=1, GIT_CONFIG_GLOBAL=/dev/null,
+  # GIT_CONFIG_NOSYSTEM=1, REMOTE_USER=stub-user, and the CGI request variables and GIT_PROTOCOL taken
+  # from the request. Nothing is inherited from the stub's env but PATH. http-backend resolves its
+  # bare fixture repo from GIT_PROJECT_ROOT + PATH_INFO, never by discovery, inside the spike's
+  # container. The helper is a .ts module the container cannot import. Listed rather than
+  # special-cased, like the entries above.
   apps/web-platform/test/infra/egress-injector-spike/stub-github/server.mjs
 )
 
