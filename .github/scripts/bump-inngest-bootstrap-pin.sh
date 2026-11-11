@@ -643,15 +643,41 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
       # rebuilds every in-flight entry. Every failure here warns and continues:
       # armed auto-merge remains the fallback, strictly better than the
       # pre-#12508 no-enqueue path.
+      #
+      # Enqueue precondition (#12579 / ADR-270 addendum 2026-11-11): GitHub
+      # refuses enqueuePullRequest while the PR's branch-protection
+      # requirements are unmet — the documented refusal for a pending REQUIRED
+      # check is `Pull request Required status check "<name>" is expected.`
+      # Admission gates on the required-check SET, not the head rollup: failing
+      # non-required (advisory) contexts do NOT block enqueue; a pending or
+      # failed REQUIRED context does (measured: #12520 queued at position 2
+      # with three FAILURE conclusions on non-required deploy-script-tests*
+      # contexts). This arm fires ~5s after PR open, when required checks are
+      # ~always still pending — so a refusal on a fresh PR is EXPECTED noise
+      # (observed on #12562: armed autoMergeRequest.enabledAt, head 0 commits
+      # behind, BLOCKED on pending quality-guards), not a defect. The arm's
+      # value is the case where protection IS met at arm time but armed
+      # auto-merge does not self-enqueue — the #12489 counter-instance. The
+      # refusal reason is echoed in the warning below so an unexpected refusal
+      # is distinguishable from this expected one; re-evaluate the arm's
+      # placement if a refusal is ever observed while required checks are
+      # green (retry-on-check-complete is tracked at #12652).
       pr_node=$(timeout 60 gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
         | jq -r '.id // ""' 2>/dev/null || true)
       if [[ -z "$pr_node" ]]; then
         echo "::warning::could not resolve PR ${PR_NUM}'s GraphQL node id — explicit merge-queue enqueue skipped; armed auto-merge remains"
       elif enq_out=$(timeout 60 gh api graphql -F pr="$pr_node" \
-          -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>/dev/null); then
+          -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>&1); then
         echo "enqueued ${PR_URL} on the merge queue (position $(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$enq_out" 2>/dev/null || echo '?'))"
       else
-        echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
+        # 2>&1 lands the rejection body in enq_out; flatten + strip control
+        # bytes before the line-oriented ::warning:: (annotation-injection
+        # guard, PR #3007 class) and bound at 300 chars — same canonical
+        # pipeline as vinngest-digest-freshness.sh › live_resolve() (200→300
+        # bound is deliberate per #12579's ask). A `timeout 60` kill leaves
+        # enq_out empty; the fallback names it rather than printing a bare dash.
+        enq_reason=$(printf '%s' "$enq_out" | tr '\n' ' ' | tr -d '[:cntrl:]' | cut -c1-300)
+        echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — ${enq_reason:-no stderr captured (timeout or empty response)} — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
       fi
     else
       echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"

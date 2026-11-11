@@ -81,7 +81,7 @@ FAIL=0
 # are fail-only, ZERO counted (the newshape self-check precedent below), so a
 # skipped row charges exactly its declared cost.
 SKIPPED_ASSERTIONS=0
-MIN_ASSERTIONS=712   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows; 712 on 2026-11-09 with #12508: +16 explicit-enqueue rows — enqueue/enqueuefail fixtures plus no-enqueue pins on the held/degraded/mergefail arms); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=723   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows; 712 on 2026-11-09 with #12508: +16 explicit-enqueue rows — enqueue/enqueuefail fixtures plus no-enqueue pins on the held/degraded/mergefail arms; 723 on 2026-11-11 with #12579: +11 refusal-reason rows — reason echo on enqueuefail, the enqueuefailml flatten/single-line/no-esc fixture, and the enqueuefailempty fallback fixture); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -350,9 +350,17 @@ case "$sub" in
     # The #12508 explicit merge-queue enqueue. The recorded call log flattens
     # the -f query= text into the same line, so rows assert the mutation shape
     # (enqueuePullRequest present, `jump` absent) from MOCK_GH_LOG directly.
-    # MOCK_GH_ENQUEUE_FAIL=1 rejects the mutation, exercising warn-and-continue.
+    # MOCK_GH_ENQUEUE_FAIL=1 rejects the mutation single-line, exercising
+    # warn-and-continue; =2 rejects with a two-line stderr carrying a raw ESC
+    # byte (annotation-injection probe — ::warning:: is line-oriented); =3
+    # rejects with EMPTY stderr (the timeout/empty-response shape). =2/=3 pin
+    # the reason-echo's flatten/strip + empty-fallback wiring.
     if [[ " $* " == *enqueuePullRequest* ]]; then
-      [[ "${MOCK_GH_ENQUEUE_FAIL:-0}" == "1" ]] && { echo "gh-stub: enqueuePullRequest rejected" >&2; exit 1; }
+      case "${MOCK_GH_ENQUEUE_FAIL:-0}" in
+        1) echo "gh-stub: enqueuePullRequest rejected" >&2; exit 1 ;;
+        2) printf 'gh-stub: enqueuePullRequest rejected\ngh-stub: \x1b[31mRequired status check "quality-guards" is expected.\n' >&2; exit 1 ;;
+        3) exit 1 ;;
+      esac
       printf '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1,"state":"QUEUED"}}}}\n'
       exit 0
     fi
@@ -1021,6 +1029,52 @@ assert_result    'g1.enqueuefail:result' opened
 assert_out_has   'g1.enqueuefail:warning' '::warning::'
 assert_out_has   'g1.enqueuefail:names'   'enqueuePullRequest'
 assert_gh_called 'g1.enqueuefail:armed'   'gh pr merge .* --auto --squash'
+# The rejection reason now reaches the log: the stub's stderr text exists ONLY
+# on that channel, so a green row proves stderr→enq_out→annotation wiring, not
+# spelling (the warning literal reads "was rejected" — a different string).
+assert_out_has   'g1.enqueuefail:reason'  'gh-stub: enqueuePullRequest rejected'
+
+# MOCK_GH_ENQUEUE_FAIL=2 rejects with a two-line stderr carrying a raw ESC
+# byte. The reason-echo must flatten CR/LF and strip control bytes before the
+# ::warning:: annotation (PR #3007 class) — the second stub line rides INSIDE
+# the warning, never as a raw line of its own.
+new_fixture_repo enqueuefailml
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+MOCK_GH_ENQUEUE_FAIL=2 run_bump enqueuefailml --signed-tag v1.1.38 \
+  --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueuefailml:exit' 0
+assert_result    'g1.enqueuefailml:result' opened
+assert_out_has   'g1.enqueuefailml:warning' '::warning::'
+assert_out_has   'g1.enqueuefailml:reason'  'gh-stub: enqueuePullRequest rejected'
+grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'Required status check "quality-guards" is expected.' \
+  && pass 'g1.enqueuefailml:flatten' \
+  || fail 'g1.enqueuefailml:flatten' "second stderr line not flattened into the warning — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
+! grep -q '^gh-stub:' "$LAST_OUT" \
+  && pass 'g1.enqueuefailml:single-line' \
+  || fail 'g1.enqueuefailml:single-line' "raw stub stderr line leaked — $(grep -n '^gh-stub:' "$LAST_OUT" | head -3 | tr '\n' '|')"
+! grep -qF $'\x1b' "$LAST_OUT" \
+  && pass 'g1.enqueuefailml:no-esc' \
+  || fail 'g1.enqueuefailml:no-esc' "control byte reached the run output"
+
+# MOCK_GH_ENQUEUE_FAIL=3 rejects with EMPTY stderr — the timeout/empty-response
+# shape a `timeout 60` kill also produces; the warning names it, no bare dash.
+new_fixture_repo enqueuefailempty
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+MOCK_GH_ENQUEUE_FAIL=3 run_bump enqueuefailempty --signed-tag v1.1.38 \
+  --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueuefailempty:exit' 0
+assert_result    'g1.enqueuefailempty:result' opened
+assert_out_has   'g1.enqueuefailempty:fallback' 'no stderr captured'
 
 # ---------------------------------------------------------------------------
 # AC8 — supersede: open bot-authored pin PR for an OLDER target is closed with
