@@ -57,18 +57,12 @@ fi
 
 **Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: plan cannot run on main/master. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
 
-**Check for knowledge-base directory and load context:**
-
-Check if `knowledge-base/` directory exists. If it does:
-
-1. Run `git branch --show-current` to get the current branch name
-2. If the branch starts with `feat-`, read `knowledge-base/project/specs/<branch-name>/spec.md` if it exists
-
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `soleur:brainstorm`).
 3. Detect feature from current branch (`feat-<name>` pattern)
+**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read references/spec-kit-intake.md and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it.
 4. Read `knowledge-base/project/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
 

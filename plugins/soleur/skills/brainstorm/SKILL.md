@@ -40,6 +40,8 @@ Brainstorming helps answer **WHAT** to build through collaborative dialogue. It 
 
 <feature_description> #$ARGUMENTS </feature_description>
 
+**Spec Kit directory.** When `$ARGUMENTS` is an existing directory whose last two segments are `specs/<prefix>-<short-name>/` and the branch spec is absent, capture `pwd` before any worktree `cd` and run `"${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.sh"`. A relative `--dir` uses that `--cwd`. An argument that is already absolute is `--dir` as given. Prose, including a sentence that names a live directory, is not intake: do not call the script. On non-zero, stop: do not edit the kit directory, do not run the script again, and do not paste the path as prose. On zero, show the receipt and keep the absolute directory captured before the worktree `cd`. The projected body is the feature description only for the Brainstorm anyway arm. One-shot and Plan first arms pass that absolute directory, not the projected body and not the raw relative token. One-shot forwards it unchanged as plan's arguments. Do not edit the one-shot skill. When the branch spec exists, including zero bytes, do not run the script and do not replace it. An empty spec directory is not the stop.
+
 **If the feature description above is empty, ask the user:** "What would you like to explore? Please describe the feature, problem, or improvement you're thinking about."
 
 Do not proceed until you have a feature description from the user.
@@ -87,7 +89,7 @@ Options:
 2. **Plan first** - Use the **Skill tool**: `skill: soleur:plan` to create a plan before implementing
 3. **Brainstorm anyway** - Continue exploring the idea
 
-If one-shot is selected, pass the original feature description (including any issue references) to `skill: soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through the plan skill.
+If one-shot is selected, stop brainstorm execution. Pass the intake absolute directory when intake ran, otherwise the original feature description. This skips Phases 3, 3.5, and 3.6.
 
 ### Phase 0.1: User-Impact Framing
 
@@ -561,8 +563,9 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
    - **spec.md frontmatter MUST include `lane: <value>`** where `<value>` is the resolved `LANE` from Phase 0.4. spec.md is the canonical post-Phase-3.6 lane source for downstream `plan` and `work` skills (per `## Lane Inference` carry-forward contract). spec.md frontmatter MUST also include `brand_survival_threshold:` matching the Phase 0.1 framing.
+   - If a projected body exists, do not generate a second spec. Step 5 writes that body verbatim only when the file is absent.
 
-5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
+5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path). If the file exists, including a zero-byte file, do not replace it.
 
 6. **Commit and push all brainstorm artifacts:**
 

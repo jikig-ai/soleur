@@ -271,19 +271,19 @@ The script does not write into the caller tree, so there is no first-write exit 
 
 ## Acceptance Criteria
 
-- [ ] `bash plugins/soleur/scripts/spec-kit-intake.sh --probe` prints `spec-kit-intake: ok` and exits 0 (`plugins/soleur/scripts/spec-kit-intake.sh`).
-- [ ] A synthesized `specs/001-demo/spec.md` plus optional `plan.md` and `tasks.md` exits 0, the receipt names moved, unmapped, and never-read entries, and the projected body has Goals, Non-Goals, and FR candidates (`plugins/soleur/test/spec-kit-intake.test.sh`).
-- [ ] A missing `spec.md`, a non-directory, a prefix that is neither 3 digits nor `YYYYMMDD-HHMMSS`, any symlink (including a same-directory link to another basename and a symlinked directory component), a non-regular file, an unreadable file, and a file whose `st_size` is greater than 1048576 each end with one `intake:` line and no projected body. A regular file whose `st_size` equals 1048576 exits 0 (`plugins/soleur/test/spec-kit-intake.test.sh`).
-- [ ] A sentence that mentions an existing `specs/<prefix>-<short-name>/` directory is not passed to the script. The script, if invoked on a path that is not an existing directory, prints `intake: not-a-directory` (`plugins/soleur/skills/brainstorm/SKILL.md`, `plugins/soleur/test/spec-kit-intake.test.sh`).
-- [ ] A non-zero intake ends brainstorm and plan. Neither caller edits the kit directory, re-runs the script, or pastes the path as prose (`plugins/soleur/skills/brainstorm/SKILL.md`, `plugins/soleur/skills/plan/references/spec-kit-intake.md`).
-- [ ] A zero-byte `knowledge-base/project/specs/<branch>/spec.md` stops both brainstorm and plan. Neither runs the script or replaces the file.
-- [ ] An empty `knowledge-base/project/specs/<branch>/` directory does not stop brainstorm or plan. Both still run intake when `spec.md` is absent.
-- [ ] Both clear-requirements handoffs pass the absolute directory captured before the worktree `cd` (`plugins/soleur/skills/brainstorm/SKILL.md`).
-- [ ] `knowledge-base/project/specs/feat-12531-spec-kit-ingestion/spec.md` FR2 and TR2 refuse every symlink, including a same-directory link to another basename, and FR4 keeps a non-`P1` story in the unmapped appendix.
-- [ ] `research.md` content never appears in stdout. The receipt names it under never-read.
-- [ ] The script creates and modifies no file in the fixture directory or the repo.
-- [ ] Brainstorm's `## Feature Description` runs the script before the empty-description question and before the clear-requirements shortcut, and Phase 3.6 does not replace an existing `spec.md` (`plugins/soleur/skills/brainstorm/SKILL.md`).
-- [ ] Plan's `### 0. Load Knowledge Base Context` runs the script only when the branch spec is absent, and on success saves the projected body as that spec (`plugins/soleur/skills/plan/SKILL.md`).
+- [x] `bash plugins/soleur/scripts/spec-kit-intake.sh --probe` prints `spec-kit-intake: ok` and exits 0 (`plugins/soleur/scripts/spec-kit-intake.sh`).
+- [x] A synthesized `specs/001-demo/spec.md` plus optional `plan.md` and `tasks.md` exits 0, the receipt names moved, unmapped, and never-read entries, and the projected body has Goals, Non-Goals, and FR candidates (`plugins/soleur/test/spec-kit-intake.test.sh`).
+- [x] A missing `spec.md`, a non-directory, a prefix that is neither 3 digits nor `YYYYMMDD-HHMMSS`, any symlink (including a same-directory link to another basename and a symlinked directory component), a non-regular file, an unreadable file, and a file whose `st_size` is greater than 1048576 each end with one `intake:` line and no projected body. A regular file whose `st_size` equals 1048576 exits 0 (`plugins/soleur/test/spec-kit-intake.test.sh`).
+- [x] A sentence that mentions an existing `specs/<prefix>-<short-name>/` directory is not passed to the script. The script, if invoked on a path that is not an existing directory, prints `intake: not-a-directory` (`plugins/soleur/skills/brainstorm/SKILL.md`, `plugins/soleur/test/spec-kit-intake.test.sh`).
+- [x] A non-zero intake ends brainstorm and plan. Neither caller edits the kit directory, re-runs the script, or pastes the path as prose (`plugins/soleur/skills/brainstorm/SKILL.md`, `plugins/soleur/skills/plan/references/spec-kit-intake.md`).
+- [x] A zero-byte `knowledge-base/project/specs/<branch>/spec.md` stops both brainstorm and plan. Neither runs the script or replaces the file.
+- [x] An empty `knowledge-base/project/specs/<branch>/` directory does not stop brainstorm or plan. Both still run intake when `spec.md` is absent.
+- [x] Both clear-requirements handoffs pass the absolute directory captured before the worktree `cd` (`plugins/soleur/skills/brainstorm/SKILL.md`).
+- [x] `knowledge-base/project/specs/feat-12531-spec-kit-ingestion/spec.md` FR2 and TR2 refuse every symlink, including a same-directory link to another basename, and FR4 keeps a non-`P1` story in the unmapped appendix.
+- [x] `research.md` content never appears in stdout. The receipt names it under never-read.
+- [x] The script creates and modifies no file in the fixture directory or the repo.
+- [x] Brainstorm's `## Feature Description` runs the script before the empty-description question and before the clear-requirements shortcut, and Phase 3.6 does not replace an existing `spec.md` (`plugins/soleur/skills/brainstorm/SKILL.md`).
+- [x] Plan's `### 0. Load Knowledge Base Context` runs the script only when the branch spec is absent, and on success saves the projected body as that spec (`plugins/soleur/skills/plan/SKILL.md`).
 - [ ] The PR body `soleur:ship` writes for #12653 ends with the TR4 provenance trailer and does not contain an AGPL or MIT notice, and neither skill description claims Spec Kit compatibility.
 - [ ] `bash plugins/soleur/test/spec-kit-intake.test.sh` exits 0.
 
