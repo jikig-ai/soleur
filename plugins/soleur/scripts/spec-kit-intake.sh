@@ -17,8 +17,13 @@ READ_NAMES = ("spec.md", "plan.md", "tasks.md")
 LEAF_TS = re.compile(r"[0-9]{8}-[0-9]{6}-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 LEAF_NUM = re.compile(r"[0-9]{3}-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 ATX = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*\Z")
-USER_STORY = re.compile(r"user\s+story", re.IGNORECASE)
+USER_STORY = re.compile(r"(?<![A-Za-z0-9])user\s+story(?![A-Za-z0-9])", re.IGNORECASE)
 PRIORITY = re.compile(r"\bP[123]\b")
+FENCE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)\Z")
+LABEL_LINE = re.compile(r"(?:moved|unmapped|never-read):")
+DIGEST_LINE = re.compile(
+    r"(?:spec|plan|tasks)\.md (?:absent|[0-9]+ [0-9a-f]{64}(?: not-requirements)?)\Z"
+)
 
 
 def refuse(reason):
@@ -44,7 +49,7 @@ def parts_of(path):
     if not path.startswith("/"):
         refuse("not-a-directory")
     parts = [p for p in path.split("/") if p]
-    if any(p in (".", "..") for p in parts):
+    if any(p == ".." for p in parts):
         refuse("not-a-directory")
     if len(parts) < 2 or parts[-2] != "specs" or not valid_leaf(parts[-1]):
         refuse("not-a-directory")
@@ -95,10 +100,12 @@ def walk(parts):
 def hostile(name):
     if name in MARKERS:
         return True
-    if "\n" in name or "\r" in name or "\x7f" in name:
-        return True
-    if "\u2028" in name or "\u2029" in name:
-        return True
+    for ch in name:
+        code = ord(ch)
+        if code < 32 and code != 9:
+            return True
+        if code in (127, 0x85, 0x2028, 0x2029):
+            return True
     return False
 
 
@@ -140,6 +147,9 @@ def strip_controls(data):
     n = len(data)
     while i < n:
         b = data[i]
+        if b == 0xC2 and i + 1 < n and data[i + 1] == 0x85:
+            i += 2
+            continue
         if b == 0xE2 and i + 2 < n and data[i + 1] == 0x80 and data[i + 2] in (0xA8, 0xA9):
             i += 3
             continue
@@ -151,12 +161,42 @@ def strip_controls(data):
             continue
         out.append(b)
         i += 1
-    return out.decode("utf-8", "replace")
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        refuse("unreadable")
+
+
+def heading_text(raw):
+    return re.sub(r"[ \t]+#+\Z", "", raw)
+
+
+def fence_marks(line):
+    match = FENCE.match(line)
+    if match is None:
+        return None
+    marks = match.group(2)
+    rest = match.group(3)
+    if marks[0] == "`" and "`" in rest:
+        return None
+    return marks[0], len(marks), rest
+
+
+def fence_closer(line, char, length):
+    found = fence_marks(line)
+    if found is None:
+        return False
+    mark, size, rest = found
+    return mark == char and size >= length and rest.strip(" \t") == ""
 
 
 def parse_sections(text):
+    if text.startswith("\ufeff"):
+        text = text[1:]
     lines = text.split("\n")
     i = 0
+    while i < len(lines) and lines[i].strip(" \t") == "":
+        i += 1
     if i < len(lines) and lines[i] == "---":
         i += 1
         while i < len(lines) and lines[i] != "---":
@@ -166,17 +206,17 @@ def parse_sections(text):
     sections = []
     title = None
     body = []
-    fence = False
+    fence = None
     for line in lines[i:]:
-        opener = line.startswith("```") or line.startswith("~~~")
-        if fence:
-            if opener:
-                fence = False
+        if fence is not None:
+            if fence_closer(line, fence[0], fence[1]):
+                fence = None
             if title is not None:
                 body.append(line)
             continue
-        if opener:
-            fence = True
+        opened = fence_marks(line)
+        if opened is not None:
+            fence = (opened[0], opened[1])
             if title is not None:
                 body.append(line)
             continue
@@ -184,7 +224,7 @@ def parse_sections(text):
         if match:
             if title is not None:
                 sections.append((title, "\n".join(body)))
-            title = match.group(1)
+            title = heading_text(match.group(1))
             body = []
             continue
         if title is not None:
@@ -207,8 +247,6 @@ def classify(title, body):
         return "goals", body.strip()
     if folded in ("out of scope", "non-goals", "exclusions"):
         return "nongoals", body.strip()
-    if "P2" in pri or "P3" in pri:
-        return "unmapped", title
     return "unmapped", title
 
 
@@ -225,8 +263,8 @@ def project(text):
             nongoals.append(payload)
         elif kind == "fr" and payload:
             frs.append(payload)
-        elif kind == "unmapped":
-            unmapped.append(payload)
+        else:
+            unmapped.append(title)
     moved = []
     if goals:
         moved.append("Goals")
@@ -275,36 +313,53 @@ def indent(text):
     return "\n".join("    " + line for line in lines)
 
 
-def side_block(name, data):
+def side_block(name, data, text):
     if data is None:
         return "%s absent" % name
-    return digest_line(name, data) + " not-requirements\n" + indent(strip_controls(data))
+    return digest_line(name, data) + " not-requirements\n" + indent(text)
 
 
-def emit(dir_fd, names, spec, plan, tasks):
+def receipt_lines(key, items):
+    if not items:
+        return ["%s: none" % key]
+    return ["%s: %s" % (key, item) for item in items]
+
+
+def forged(projected):
+    for line in projected.split("\n"):
+        if line in MARKERS or LABEL_LINE.match(line) or DIGEST_LINE.match(line):
+            return True
+    return False
+
+
+def emit(names, spec, plan, tasks):
     spec_text = strip_controls(spec)
+    plan_text = None if plan is None else strip_controls(plan)
+    tasks_text = None if tasks is None else strip_controls(tasks)
     moved, unmapped, projected = project(spec_text)
+    if forged(projected):
+        refuse("unreadable")
     never = list(CLOSED_NEVER)
     for name in sorted(names):
         if name in READ_NAMES or name in CLOSED_NEVER:
             continue
         never.append(name)
-    lines = [
-        "moved: %s" % (", ".join(moved) if moved else "none"),
-        "unmapped: %s" % ", ".join(unmapped),
-        "never-read: %s" % ", ".join(never),
-        digest_line("spec.md", spec),
-        side_block("plan.md", plan).split("\n")[0] if plan is not None else "plan.md absent",
-        side_block("tasks.md", tasks).split("\n")[0] if tasks is not None else "tasks.md absent",
-        "--- side-evidence ---",
-        side_block("plan.md", plan),
-        side_block("tasks.md", tasks),
-        "--- projected ---",
-        projected,
-    ]
+    lines = ["moved: %s" % (", ".join(moved) if moved else "none")]
+    lines.extend(receipt_lines("unmapped", unmapped))
+    lines.extend(receipt_lines("never-read", never))
+    lines.extend(
+        [
+            digest_line("spec.md", spec),
+            side_block("plan.md", plan, plan_text).split("\n")[0],
+            side_block("tasks.md", tasks, tasks_text).split("\n")[0],
+            "--- side-evidence ---",
+            side_block("plan.md", plan, plan_text),
+            side_block("tasks.md", tasks, tasks_text),
+            "--- projected ---",
+            projected,
+        ]
+    )
     sys.stdout.write("\n".join(lines))
-    if not projected.endswith("\n"):
-        sys.stdout.write("\n")
 
 
 def take(dir_fd, name, required):
@@ -351,7 +406,7 @@ def run(argv):
         spec = take(dir_fd, "spec.md", True)
         plan = take(dir_fd, "plan.md", False)
         tasks = take(dir_fd, "tasks.md", False)
-        emit(dir_fd, names, spec, plan, tasks)
+        emit(names, spec, plan, tasks)
     finally:
         os.close(dir_fd)
 
