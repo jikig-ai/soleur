@@ -55,6 +55,7 @@ The `apps/web-platform/infra/` tree has no required CI check (#6480), so a diff 
 - A capacity reading anywhere in the budget counts (a transient probe failure on the last poll does not turn a long wait into a stop). A `--capacity` that is never readable is only discovered after the whole budget.
 - If no rc file ever appears the wrapper was reaped (no rc file means a harness reap, SKILL.md): stop the Monitor and read `$LOG`. `$d` lives under `TMPDIR` and is not removed.
 - Run from the repository root with an absolute `TMPDIR`: the script refuses a relative state path.
+- **A deferred or refused battery plus a draft-light CI means no full battery has run before ready.** When the PR adds a new file family (a new test tree, a new probe directory, a new script language), the repo-wide guards that walk every tracked file (orphan-suite lint, fixture-relative ratchet, fixture-env adoption, grep-q-pipe guard, repo-wide containment, the ruff ratchet, the Supabase-endpoint lint, web-platform `tsc`) first fire on the ready run, one cycle each. Run those by name before `gh pr ready`, and read CodeQL's annotations even though it is not required. **Why:** #12518 — seven guards and a CodeQL red first surfaced at ready, three extra CI cycles. See `knowledge-base/project/learnings/2026-11-11-a-deferred-battery-and-a-draft-light-ci-left-six-repo-wide-guards-for-the-ready-run.md`.
 
 ## See also
 

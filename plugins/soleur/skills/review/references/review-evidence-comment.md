@@ -34,3 +34,8 @@ gh pr comment <number> --body "Review-Evidence: head=<short sha reviewed>; soleu
 This is a self-attestation by the reviewing agent, not tamper-proof: anyone with comment access can post the same
 text and it survives later pushes. Read it against the head it names; a head that differs from the PR head, a
 `coverage` other than `full`, or a nonzero `unresolved-P1-P2` is not a pass.
+
+Under a merge queue, the head the comment names must be the head that enters the queue: a fix commit pushed after the
+comment and left unreviewed rides the queue (one PR at a time, so pulling it out costs a full CI cycle per PR ahead).
+Re-review the new commits and post a fresh comment before the PR is enqueued. **Why:** #12518 — four CI-guard fix
+commits entered the queue past the evidence head, and their P3 findings had to be fixed forward in #12633.
