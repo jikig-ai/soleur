@@ -856,7 +856,7 @@ None: the ADR addendum describes the state on merge.
 - [x] AC19 (CTO O1-O4) The timeout report carries `code: "role_read_timeout"` (case 6); the re-check warn carries
   `stage: "after-role-read"`; the abort-during-read warn carries `stage: "owner-role-read"`; the member-deny warn carries
   `conversationId`; `grep -c platform-gate-legacy-card-issued apps/web-platform/server/permission-callback.ts` prints `1`.
-- [ ] AC20 (CTO U1, pre-merge, run by the agent, read-only) Count Better Stack events with
+- [x] AC20 (CTO U1, pre-merge, run by the agent, read-only) Count Better Stack events with
   `decision=platform-gate-push-owner-required` and `role=member` since #12567 merged (ddc35e5a64). If 0, record "0 (weak
   evidence: the flag is on in production)" in the PR body and do no database read. For each hit, map `repo` to its
   workspace and count that workspace's members with Supabase REST GETs using the prd service-role key sent through curl
@@ -865,6 +865,7 @@ None: the ADR addendum describes the state on merge.
   never names or emails. STOP the merge if any hit is in a single-member workspace (a real Owner was misread as a
   member), or if a repo maps to 0 or more than 1 workspace or a read fails (unverified). Amended by the CTO agent,
   2026-11-11 (decision-challenges.md, row "AC20 mechanism").
+  Measured 2026-11-11 about 18:30Z: 0 events across the hot table and the s3 archive since 2026-11-10 18:00:47Z (69,891 rows); positive control: `permission`-context warn lines reach the archive (2026-10-19 09:15Z). Recorded "0 (weak evidence: the flag is on in production)"; no database read.
 
 ### Post-merge (operator)
 
