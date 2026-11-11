@@ -2122,12 +2122,18 @@ else fail "N2 Doppler CLI pin: $_dl"; fi
 # (the TLS trust store variables included), and prose outside the two blocks.
 RB_WRAP='doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '"'"'[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; '
 RB_HDR='printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 '
+rb_line_readback() { # rb_line_readback <volume-id>: the one-word protection read-back line (runbook 6604's, runbook 6894's 5c, postmerge 5.7)
+  printf '%s\n' "$RB_WRAP"'r=$('"$RB_HDR"'-w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/'"$1"') || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'"'"
+}
+rb_line_get404() { # rb_line_get404 <volume-id>: the retired-volume GET that expects 404
+  printf '%s\n' "$RB_WRAP$RB_HDR"'-o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/'"$1""'"'   # expect 404'
+}
 rb_expected() { # rb_expected <web1-pin>: the two blocks as rb_blocks prints them
   local p="$1" q="'"
   printf '%s\n' '@@read-back@@' \
-    "$RB_WRAP"'r=$('"$RB_HDR"'-w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/'"$p"') || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'"$q" \
+    "$(rb_line_readback "$p")" \
     '@@verify@@' \
-    "$RB_WRAP$RB_HDR"'-o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'"$q"'   # expect 404' \
+    "$(rb_line_get404 105149570)" \
     "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'"$q"'   # expect ['"$p"']' \
     "$RB_WRAP$RB_HDR"'"https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'"$q"'   # expect []' \
     "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$p"' | jq ".volume.protection.delete"'"$q"'   # expect true after the SSH-stage apply'
