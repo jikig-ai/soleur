@@ -482,6 +482,52 @@ allowed, so there only the env pin and the file-tool guard hold.
   and its callers. Even the hardened call does not cover `filter.*` drivers, `.git/info/attributes` or a
   tracked `.gitattributes`. This exposure predates the change and reaches server secrets; the earlier
   "sandbox-contained, not cross-tenant" framing applies to the agent's own git only.
+- > **Superseded in part, 2026-11-09 follow-on (Ref #9601), the host-side git bullet above:** the consumers it
+  > lists, plus the git-data key-auth push and fetch, `workspace.ts` provisioning and the `context-queries-hook`
+  > `ls-files`, now run through one leaf, `server/host-git.ts`: the shared hardening arguments,
+  > `safe.bareRepository=explicit`, `protocol.ext.allow=never`, `core.alternateRefsCommand=`, signing off, and a scrubbed
+  > environment with the image identity file as the global config. For a call with a workspace `cwd` it sets
+  > `GIT_WORK_TREE`, `GIT_DIR` and `GIT_COMMON_DIR` to the workspace itself and REFUSES a `.git` that is a gitfile or a
+  > symlink, any of whose first-level entries, any entry under `refs/` or `logs/` (walked recursively) or children of
+  > `objects/` is a symlink, or that carries `commondir`,
+  > `objects/info/alternates`, `http-alternates` or `info/grafts` (measured: each redirected a read or a write into another
+  > repository). A preflight, not a structural control: a swap after the check is not covered (the `GIT_DIR` pin does not stop
+  > `commondir` or a swapped symlink), and a live agent process defeats it quickly (measured: a swapped `refs/heads` symlink hit
+  > within 87 ms), so it checks a pre-poisoned workspace, not a running agent. Not examined: symlinks below `objects/<xx>/` and
+  > `modules/`. Structural options NOT done: freezing the sandbox around host git, or a server-private `GIT_DIR`. `GIT_ALLOW_PROTOCOL` is required on every
+  > call: `https` (installation-auth), `ssh` (key-auth), `none` (every local-only consumer, which also stops a promisor
+  > or `file` remote reached from a local verb). The git-data push goes to the explicit server-derived URL, and a
+  > preflight guard (shared with the fetch) refuses any effective `url.*` rewrite and any `remote.<name>.*` key whose name is
+  > URL-shaped (contains `/`, `:` or `@`; ordinary remotes such as `upstream` and `remote.pushDefault` are untouched) (git resolves a push or fetch argument as a remote NAME first, so a remote named by the
+  > explicit URL defeated it; measured): the host-key pin limits which
+  > host key is trusted, NOT which repository path on that host is written, so same-host cross-repo writes are limited by
+  > the explicit URL plus that preflight, which is not a structural control (the receiving side checks fencing and
+  > namespace per ref, not caller ownership, and there is one transport key). Correction of the premise above:
+  > `inflight-checkpoint` spread `process.env`; it did not scrub it. Measured on git 2.56 and pinned by
+  > `test/host-git-consumers-real-git.test.ts` and `test/host-git.test.ts`: closed are fsmonitor (in `.git/config`, in
+  > `config.worktree`; through `commondir` it is refused), hooks, a signing program, a `core.worktree` redirect to another
+  > directory, and the local-exec transports (`uploadpack` on a local-path or promisor remote, `ext::`,
+  > `core.alternateRefsCommand`). The scrubbed environment hides server variables from a helper that reads ONLY ITS OWN
+  > environment. It gives NO secrecy against a helper that reads the server's `/proc/<pid>/environ` (same uid; measured):
+  > any carrier that still executes is a full same-uid compromise, including other tenants' workspace directories,
+  > because the sandbox protects only the agent's own process tree. STILL OPEN, each a `RESIDUAL` row or a named
+  > census item, not a control: `filter.*` drivers (through `.git/info/attributes`, `.git/config` or a tracked
+  > `.gitattributes`), `merge.*.driver`, repo-config remote, proxy and TLS settings (`url.<x>.insteadOf` toward an https
+  > host is followed on the legacy arm, and the askpass script answers for any host, so the installation token can be
+  > sent to a rewritten host; the askpass body is shared with the operator-held isolated arm and is not edited here), and
+  > the consumer's own auth variable (the installation token in the legacy arm; in the key-auth arm a helper that runs
+  > can read the 0600 transport key file during the push). The foreign-gitdir refusal is measured for `session-sync`,
+  > `ensureGitDataRemote`, `provisionWorkspace`, the worktree-config heal and the `context-queries-hook`; the other consumers
+  > share the helper and the census, with no row naming a foreign store. Refusals are mirrored to Sentry (op `git-refused` from
+  > `session-sync`, `workspace-provision` and `context-queries-hook`; `git_data_replication_refused` from replication). A
+  > refused workspace stops syncing and provisioning git by design: no server code creates a gitfile, a symlink or `commondir`.
+  > Sites that run host git on an agent-authored `.git` WITHOUT the shared hardening (census-only, not routed here):
+  > `git-config-atomic.ts`, `git-worktree-validity.ts`, `push-branch.ts` (the file holds the
+  > operator-held isolated push; its direct `cat-file` / `config user.*` calls run unhardened), and the cron helpers;
+  > their writes follow a gitfile, symlink or `commondir` redirect (measured for `git-config-atomic` and the `push-branch` `config user.*` calls: each set the target repository's `user.name` through a symlinked `.git`). The implicit remotes the legacy arm resolves by name (`remote.origin.*`, `branch.<b>.remote`, e.g. through `include.path`) are not covered by the git-data guard (residual, same family as the askpass-for-any-host item). `--attr-source` was measured
+  > and not adopted (partial; a new global option exits 129 on git 2.38/2.39). Structural options NOT done here: running
+  > host git where the server's `/proc` entry is not visible (`bwrap --unshare-pid --proc`), a non-dumpable server
+  > (`PR_SET_DUMPABLE=0`), and the isolated-`GIT_DIR` path (operator-held, unchanged).
 - Scripts that assume a bare-root layout (`worktree-manager.sh` calls `git -C <bare common dir>
   rev-parse --is-bare-repository`) fail under `safe.bareRepository=explicit`; a normal-clone Concierge
   workspace is unaffected, and a legitimate bare repository needs `--git-dir` or `GIT_DIR`.

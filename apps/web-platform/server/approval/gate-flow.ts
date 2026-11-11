@@ -15,7 +15,7 @@
  *   approved: consume(id, hash, conversation) -> execution grant -> allow(snapshot).
  *
  * Returns `null` ONLY when the flag is off (or unreadable): the caller then runs the in-memory review gate exactly as
- * it did before this module existed.
+ * it did before this module existed (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1).
  */
 
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";

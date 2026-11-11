@@ -27,6 +27,9 @@ export const APPROVAL_REQUIRED_TOOLS = [
 
 export type ApprovalToolName = (typeof APPROVAL_REQUIRED_TOOLS)[number];
 
+/** The push tool. When the approval flow gives no verdict, only the workspace Owner may answer its in-memory card (#12197). */
+export const GITHUB_PUSH_BRANCH_TOOL = `${P}github_push_branch` satisfies ApprovalToolName;
+
 const REQUIRED = new Set<string>(APPROVAL_REQUIRED_TOOLS);
 
 export function isApprovalRequiredTool(toolName: string): toolName is ApprovalToolName {

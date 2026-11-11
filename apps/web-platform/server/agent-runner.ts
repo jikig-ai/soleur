@@ -2260,7 +2260,7 @@ are the requirements to implement.`;
             notifyOfflineUser,
             // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
             // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
-            // Off (today: constant false) the gated branch is the in-memory review gate, unchanged.
+            // Off (or unreadable) the gated branch is the in-memory review gate (push: Owner only, #12197 D1).
             approval: createApprovalGateDeps({
               userId,
               workspaceId: activeWorkspaceId,

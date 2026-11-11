@@ -27,6 +27,7 @@ import { pushBranch } from "./push-branch";
 import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";
 import { validateBranchFormat } from "./branch-validation";
 import { untrustedRowsResponse, type UntrustedSource } from "./untrusted-content";
+import { GITHUB_PUSH_BRANCH_TOOL } from "./approval/tools";
 
 interface BuildGithubToolsOpts {
   installationId: number;
@@ -69,7 +70,7 @@ export const PUSH_FAILED_APPROVAL_SPENT =
   "The Owner's approval for this push is spent. A retry needs a new Owner approval. The branch may or may not have been pushed: tell the user the push failed and why, and ask them to check the remote branch before you ask for a new approval.";
 
 /** The soleur_platform FQN of the approval-gated push tool (the gate, the tier map and the cc registrar key on it). */
-export const GITHUB_PUSH_BRANCH_TOOL_FQN = "mcp__soleur_platform__github_push_branch";
+export const GITHUB_PUSH_BRANCH_TOOL_FQN = GITHUB_PUSH_BRANCH_TOOL;
 
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
@@ -134,7 +135,7 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
   return tool(
     "github_push_branch",
     "Push the current workspace HEAD to a feature branch on the remote. " +
-      "Requires founder approval via review gate. Force-push and push to " +
+      "Requires the workspace Owner's approval. Force-push and push to " +
       "main/master are blocked unconditionally.",
     {
       branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
