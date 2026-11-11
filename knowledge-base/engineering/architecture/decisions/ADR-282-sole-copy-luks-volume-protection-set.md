@@ -690,3 +690,7 @@ Ask-to-row map: ask 1 = O1, ask 2 = O2, ask 3 = O3 + O4 + O5, ask 4 = O6, ask 5 
 ## Addendum - 2026-11-10 (#10432, the pin moves to the matrix row)
 
 Appended; nothing above is edited. The probe's `readonly VOLUME_ID_PIN=` literal is replaced by the `inngest` include row's `volume_id` (the `sole-copy-protection-check` job is now a two-row matrix; its `web1` row covers the web-1 workspaces volume, recorded in ADR-119's addendum of the same date); N1b now pins exactly two sweep copies, both equal to that row. The 2026-10-24 addendum's "exactly three" stays as the dated record. The decision, the pin's value and the Inngest row's titles, verdicts and outputs are unchanged.
+
+## Addendum - 2026-11-11 (#12616, the section-5c read-back's form)
+
+Appended; nothing above is edited. The 2026-10-15 addendum cites its real-API read-back by location (runbook section 5c, step 3). From #12616 that location holds a different command text: the token still reaches curl on a stdin config, and the line now starts `curl --disable --noproxy "*"` and carries `--max-time 30`, the runbook-6604 form. The 2026-10-15 `protected` result was measured on the earlier text. The new text has been run only against stub tools with a synthetic token (recorded in PR #12645), never against the Hetzner API; the next `soleur:postmerge` Phase 5.7 run exercises it.

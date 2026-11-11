@@ -25,7 +25,7 @@ review roster, because the plan-review panel (DHH, Kieran, code-simplicity, the 
 
 1. **Observability section** added, with a discoverability test that prints `0` before the fix and `2` after.
 2. **Precedent diff** against `scripts/lib/bearer-curl.sh` (deepen-plan 4.4).
-3. **The census gains p3** (`curl` plus `api.hetzner.cloud`) and Guard 1 row 10, closing the variable-staged bearer
+3. **The census gains p3** (`curl` plus `api.hetzner.cloud`; widened at review to `api.hetzner.cloud` on any line, ruling 9b) and Guard 1 row 10, closing the variable-staged bearer
    (ruling 8a). On today's files p3 flags the same three lines.
 4. **H18 checks why a row went red, not just that it did.** `n3b` messages carry fixed tags, each row names the tag
    it needs, mutations are confined to their section and checked to have landed there, and the slot check returns
@@ -57,7 +57,8 @@ This plan:
    - A new exact-text row, N3b, covers every Hetzner-bearer line in runbook 6894 and the postmerge skill.
    - A new self-test row, H18, proves N1 and N3b each go red on mutant copies.
 
-The change touches docs, one skill body and one test. Nothing in production changes.
+The change touches docs, one skill body and one test. No host, infra or workflow changes. Merging does ship a patch plugin
+release (`version-bump-and-release.yml` delivers the new `SKILL.md` to plugin users) and a docs-site rebuild (`deploy-docs.yml`).
 
 Ref #9927. Operator holds for that epic stay on #12272 and are not discharged here. #12608 is left untouched.
 
@@ -278,7 +279,7 @@ Every disagreement line starts with a fixed tag, so H18 can tell which check fir
    - (p1) it contains `curl` and also `hcloud_token` or `authorization` — the CTO predicate;
    - (p2) it contains both `hcloud_token` and `authorization` — a strict superset, ruled keep in item 7.1. It catches an
      argv header on a continuation line;
-   - (p3) it contains `curl` and `api.hetzner.cloud` — ruled keep in item 8a. It catches a bearer staged through a
+   - (p3) it contains `api.hetzner.cloud` (review ruling 9b dropped the `curl` requirement) — ruled keep in item 8a. It catches a bearer staged through a
      variable on an earlier line (`T=$HCLOUD_TOKEN_READONLY`, then `curl --oauth2-bearer "$T" https://api.hetzner.cloud/...`),
      where the curl line names neither the token nor `Authorization`.
 
@@ -496,6 +497,8 @@ cover different concerns and are acknowledged:
 - **A real-API re-run of the new 5c form.** Ruling 5 claims none. The next `soleur:postmerge` Phase 5.7 run triggered by
   an `inngest-redis-luks.tf` merge exercises the new form in its normal course.
 - **ADR-282 and the legal destruction record.** They cite the read-back by section, and their dated claims stay true.
+  Review added append-only addenda to ADR-282 (the cited location now holds the new form) and to ADR-280 (this
+  read-back's carve-out from the 2026-10-13 no-`--noproxy` rule), rulings 9a and 9e.
 - **#12608 and every standing operator hold on #12272.**
 
 ## Alternative Approaches Considered
@@ -523,10 +526,11 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
    exposure is the same as in runbook 6604 and is unchanged. The Phase 4 harness checks it: `command -V printf` in both
    shells, and argv-checking stubs on every external command the 5c line runs (ruling 8c).
 4. **curl reading `.curlrc` or a proxy.** Closed by `--disable` first and `--noproxy "*"`.
-5. **A line the census does not see** (a declared limit, narrowed by p3, ruling 8a). A curl call with both the bearer
-   and the URL staged through variables on earlier lines, so that no single line holds `curl` with a token name,
-   `Authorization` or `api.hetzner.cloud`, and no line holds a token name with `Authorization`. Any such construct would
-   be new text in a reviewed diff.
+5. **A line the census does not see** (a declared limit, narrowed by p3, rulings 8a and 9b). A Hetzner call whose URL
+   is held in a variable and whose token is under another name, so that no line holds `api.hetzner.cloud`, `curl` with a
+   token name or `Authorization`, or a token name with `Authorization`. Every literal-URL form is seen, on one line or
+   split over `\` continuations, with any client (H18 rows g1r11 and g1r12). Any such construct would be new text in a
+   reviewed diff.
 6. **Other documents.** Runbook 6604 is covered by N3. Other runbooks are out of scope.
 7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
    an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
@@ -749,7 +753,7 @@ reuses the same copy files for Guard 2 rows 1 and 2, rather than building them t
   The body makes no real-API claim and states that strace was not available. The PR has the `semver:patch`
   label.
 - [ ] **AC9. The diff is confined.** After `git fetch origin main`, `git diff --name-only origin/main...HEAD` lists only the three files plus this
-  branch's plan and spec artifacts.
+  branch's plan and spec artifacts, and the two review-ruled addenda in ADR-280 and ADR-282 (rulings 9a and 9e).
 - [ ] **AC10. Normal merge.** Merged through `soleur:ship` and auto-merge, with no production step and no operator step.
 
 ## Domain Review
