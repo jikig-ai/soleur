@@ -58,4 +58,38 @@ and all 20 whole-file runs used that change. One F21 run started during that two
 
 ## AC7 Mutants
 
-(filled below from the mutant harness)
+Run on commit 20aa1b169f plus this file's previous commit (tree clean at start). Scratch harness: for each mutant, copy the target to
+a pristine copy, apply the anchor replacement after asserting it matches exactly once, run each listed file in its own
+vitest process serially with the JSON reporter, record the failed row names, restore from the pristine copy and assert
+the hash equals the committed one. Every restore hash matched, and `git status --short` was empty at the end.
+
+Baseline (no mutation), 3 reps: `git-data-replication.test.ts` 71/71 and the new file 7/7, every rep.
+
+| Mutant | Edit | Run set | Reps RED | Killing rows (identical in every rep) |
+|---|---|---|---|---|
+| N6 | `git-data-replication.ts`: drop `assertNoUrlRewrite(workspacePath);` before `const pushTarget` | replication, new file | 3/3 | mocked "the url/remote rewrite guard runs before ANY push" x2 (insteadOf, pushurl); R-PUSH-1; R-PUSH-2. **F21, F20 and every other row green in all 3; R-FETCH-* green.** |
+| N6 on old T4 | same | host-git-consumers-real-git, host-git, replication, git-auth | 1/1 | the same two mocked rows only (59 + 29 + 66 rows green in the other files) |
+| GC1 | `git-data-client.ts`: drop `assertNoUrlRewrite(workspacePath);` | new file, git-data-client | 3/3 | R-FETCH-1, R-FETCH-2, R-FETCH-3; mocked "a url.* rewrite ... REFUSES the fetch". R-PUSH-* green. |
+| G-DISPATCH | guard: `if (keys.length > 0) throw` -> `if (false) throw` | new file | 3/3 | R-PUSH-1, R-PUSH-2, R-FETCH-1, R-FETCH-2, R-FETCH-3 (every refusal row) |
+| G-SECOND | guard: remote-name branch -> `return false;` | new file | 3/3 | R-PUSH-2, R-FETCH-2, R-FETCH-3 (R-PUSH-1, R-FETCH-1 green) |
+| G-OVER | guard: remote-name branch -> `return name !== undefined;` | new file | 3/3 | R-PUSH-0 (must-pass input refused) |
+| H-FAKE | helper: drop the `-c url...insteadOf` prefix | new file, replication | 3/3 | R-PUSH-0, R-FETCH-0, R-FETCH-3; replication positive control, F20, both F21 rows |
+| H-SPLICE-FETCH | helper: splice the receive-pack wrapper for every verb, not only `push` | new file | 1/1 | R-FETCH-0, R-FETCH-1, R-FETCH-2, R-FETCH-3 |
+| WS1 | `workspace.ts`: drop `assertWorkspaceGitShape(workspacePath);` | workspace, context-queries-hook | 3/3 | workspace "re-provisioning a workspace whose .git is a gitfile naming another repository leaves that repository untouched" |
+| WS3 | `workspace.ts`: `...(pin ? { cwd: workspacePath } : {})` -> `cwd: workspacePath` | same | 3/3 | workspace "a fresh workspace ends up with a real .git directory that git resolves"; the gitfile re-provisioning row |
+| CQ1 | `context-queries-hook.ts`: drop `cwd: repoRoot` from the ls-files invocation | same | 3/3 | context-queries-hook "a gitfile .git naming another repository is refused: reported once as git-refused, ..." |
+
+No mutant survived, so no row was added for WS1, WS3 or CQ1 (plan 5.1).
+
+H-FAKE, against the plan's prediction: the plan expected every control to go red. The B-carrier controls of R-PUSH-1,
+R-PUSH-2, R-FETCH-1 and R-FETCH-2 stay green, because those carriers route the URL to B by themselves and never use the
+fake's prefix. Only rows that need the route to A go red (the positive rows and R-FETCH-3's inverted control). That is
+the right behaviour, not a gap: a fake that can reach no store is caught by R-PUSH-0 and R-FETCH-0.
+
+N6 on old T4, why it is RED now when the earlier battery (2026-11-10 12:27 CET, scratchpad `lead.out`) recorded
+`SURVIVED ... pass=217`: on PR #12512's branch the push-side guard call arrived in db20b598bf (2026-11-10 11:17 CET), and
+the first rows covering it, the two mocked "runs before ANY push" rows, arrived in 62cece11c7 (12:48 CET). At 12:27 the
+call existed and no row covered it, so N6 could not be killed. The harness timestamp is local time on a CET host (not
+otherwise verified). The real-git rows in this PR add R-PUSH-1 and R-PUSH-2 as independent killers.
+
+Not claimed: this is the 11-mutant set above, not the earlier 39-mutant battery, which was not re-run.
