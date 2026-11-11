@@ -718,10 +718,10 @@ reuses the same copy files for Guard 2 rows 1 and 2, rather than building them t
 
 ## Acceptance Criteria
 
-- [ ] **AC1. The suite passes.** `bash plugins/soleur/test/sole-copy-drift-check.test.sh` exits 0 with
+- [x] **AC1. The suite passes.** `bash plugins/soleur/test/sole-copy-drift-check.test.sh` exits 0 with
   `=== Results: N/N passed, 0 failed ===`, where N equals FLOOR (expected 286). N1, N3, N3b, H14, H15 and H18 are `pass`
   lines.
-- [ ] **AC2. RED came first, and stays re-checkable.** On the unfixed documents (Phase 1 step 3), N3b was a `FAIL`
+- [x] **AC2. RED came first, and stays re-checkable.** On the unfixed documents (Phase 1 step 3), N3b was a `FAIL`
   naming the destroy fence and three unclassified lines. That line is quoted in the PR body. The same result can be
   reproduced at any time without the one-off run (test-design review finding 5): with the base commit pinned as
   `B=408ad9c0e1ae60a344f26e48b90357d6a7fdc22e` (recorded in the PR body; a live merge-base resolves to the fixed tree
@@ -729,31 +729,34 @@ reuses the same copy files for Guard 2 rows 1 and 2, rather than building them t
   and call `n3b` on them with pin `106903269` and retired `106261946`. It prints a `destroy-fence:` line and three
   `unclassified` lines (runbook `:357`, runbook `:408`, skill `:506`). The work session runs this and pastes its output
   under the quoted FAIL line.
-- [ ] **AC3. Every mutant reds its guard.**
+- [x] **AC3. Every mutant reds its guard.**
   - H18 passes: every Guard 1 row 1-10 and Guard 2 row 1-3 is caught with its expected tag, none is `did-not-land` or
     `misplaced`, H-b prints only `slot:`, and H-a and Guard 2 row 4 are silent.
   - For each of the four CTO mutants, the Phase 3 worktree run shows an N3b `FAIL`, plus an N1 `FAIL` for mutants 3 and
     4. These lines are in the PR body.
   - `git diff --quiet -- <file>` held after each Phase 3 restore.
-- [ ] **AC4. No argv bearer in either file.** This prints nothing:
+- [x] **AC4. No argv bearer in either file.** This prints nothing:
   `grep -nE 'curl' knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md plugins/soleur/skills/postmerge/SKILL.md | grep -E -- '(^|[[:space:]"])(-H|--header)' | grep -E 'HCLOUD_TOKEN'`
-- [ ] **AC5. The two 5c copies match.** The runbook 5c fence line and the skill Phase 5.7 fence line are byte-identical,
+- [x] **AC5. The two 5c copies match.** The runbook 5c fence line and the skill Phase 5.7 fence line are byte-identical,
   and `bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh` passes (H2).
-- [ ] **AC6. The other gates pass.** After `git fetch origin main` (a stale ref changes the base),
+- [x] **AC6. The other gates pass.** After `git fetch origin main` (a stale ref changes the base),
   `bash tests/scripts/test-argv-bearer-sweep.sh` and `python3 scripts/lint-skill-body-budget.py --base origin/main` both
   pass.
-- [ ] **AC7. The testing paragraph is corrected.** The old claim is gone:
+- [x] **AC7. The testing paragraph is corrected.** The old claim is gone:
   `tr '\n' ' ' < knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md | tr -s ' ' | grep -c 'It was then run once against the real API'`
   prints `0`. The new wording is present in section 5c: the whitespace-normalized text of the section from
   `## 5c.` to `### Delivery route` contains both `was of the earlier form` and
   `has not been run against the real API`.
-- [ ] **AC8. The PR body is complete.** It carries `Closes #12616`, `Ref #9927`, `## Changelog` and the Phase 4 stub
+- [x] **AC8. The PR body is complete.** It carries `Closes #12616`, `Ref #9927`, `## Changelog` and the Phase 4 stub
   table. The table's call-log column is built from `$FAKE_LOG`: `accepted` on the seven rows that reach curl and
   `n/a, curl not run` on the other three, one table each for bash and dash, and no stub logged `refused:token-on-argv`.
   The body makes no real-API claim and states that strace was not available. The PR has the `semver:patch`
   label.
-- [ ] **AC9. The diff is confined.** After `git fetch origin main`, `git diff --name-only origin/main...HEAD` lists only the three files plus this
+- [x] **AC9. The diff is confined.** After `git fetch origin main`, `git diff --name-only origin/main...HEAD` lists only the three files plus this
   branch's plan and spec artifacts, and the two review-ruled addenda in ADR-280 and ADR-282 (rulings 9a and 9e).
+  Ticked at ship, 2026-11-11, with two recorded widenings: the compound learning plus its routed bullet in
+  `ship/references/ci-run-diagnosis.md`, and the six main-drift files cherry-picked from #12665 byte-identical
+  (decision-challenges ruling 10a and the overlap-vehicle row).
 - [ ] **AC10. Normal merge.** Merged through `soleur:ship` and auto-merge, with no production step and no operator step.
 
 ## Domain Review
