@@ -89,7 +89,7 @@ describe("runner image ships the agent identity-only gitconfig (#9600)", () => {
     expect(run).toContain(AGENT_GIT_GLOBAL_CONFIG);
   });
 
-  it("the build proves the identity comes FROM the file, and the HOME global identity (host-side git) is the same one", () => {
+  it("the build proves the identity comes FROM the file, and the HOME global identity (kept equal for any other process in the image) is the same one", () => {
     expect(run).toContain("git var GIT_AUTHOR_IDENT");
     expect(run).toContain('= "github-actions[bot]"');
     const home = joined.match(/git config --global user\.name "([^"]+)"\s+&&\s+git config --global user\.email "([^"]+)"/);

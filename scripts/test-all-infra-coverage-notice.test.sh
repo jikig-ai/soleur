@@ -416,6 +416,7 @@ GATED=(
   "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/orphan-process-reaper-mutations|AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.

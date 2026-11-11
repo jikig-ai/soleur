@@ -324,12 +324,68 @@ function resolveWorkflowModel(tier) {
   if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
   return resolved
 }
+function resolveWorkflowFallbackTier(tier) {
+  if (tier === 'standard') return 'cheap'
+  if (tier === 'advisor') return 'strong'
+  return null
+}
+function isWorkflowSaturationError(err) {
+  if (!err) return false
+  var status = (typeof err === 'object' && err !== null && ('status' in err || 'statusCode' in err))
+    ? Number(err.status || err.statusCode)
+    : undefined
+  if (status === 429 || status === 529 || status === 503) return true
+  var msg = typeof err === 'string'
+    ? err
+    : (err && err.message) ? String(err.message) : String(err)
+  return /rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests/i.test(msg)
+}
 ;(function (hostAgent) {
   agent = function agent(prompt, opts) {
-    if (opts && typeof opts.model === 'string') {
-      opts.model = resolveWorkflowModel(opts.model)
+    var initialTier = (opts && typeof opts['model'] === 'string') ? opts['model'] : null
+    var currentTier = initialTier
+    var callOpts = opts ? Object.assign({}, opts) : {}
+
+    function handleFallback(err) {
+      if (!isWorkflowSaturationError(err)) throw err
+      var fallbackTier = currentTier ? resolveWorkflowFallbackTier(currentTier) : null
+      if (fallbackTier && fallbackTier !== currentTier) {
+        var fallbackModel = resolveWorkflowModel(fallbackTier)
+        console.warn(
+          'SOLEUR_SATURATION_FALLBACK phase=' + ((opts && opts.phase) || 'unknown') +
+          ' label=' + ((opts && opts.label) || 'unknown') +
+          ' from=' + currentTier +
+          ' to=' + fallbackTier +
+          ' model=' + fallbackModel
+        )
+        currentTier = fallbackTier
+        return execute()
+      }
+      throw err
     }
-    return hostAgent(prompt, opts)
+
+    function execute() {
+      if (currentTier) {
+        var resolved = resolveWorkflowModel(currentTier)
+        callOpts['model'] = resolved
+        if (opts) {
+          opts['model'] = resolved
+        }
+      }
+      try {
+        var res = hostAgent(prompt, callOpts)
+        if (res && typeof res.then === 'function') {
+          return res.then(null, function (err) {
+            return handleFallback(err)
+          })
+        }
+        return res
+      } catch (err) {
+        return handleFallback(err)
+      }
+    }
+
+    return execute()
   }
 })(agent)
 // <!-- harness-model-map:end -->

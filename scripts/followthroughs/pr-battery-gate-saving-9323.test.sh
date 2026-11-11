@@ -76,7 +76,7 @@ FAKE
 chmod +x "$TMP/bin/gh"
 
 # build_fx <dir> <n-runs> <minutes-per-run> [bot-count] [machinery-count] [escape-pr] [tsv-mode] [arts-per-run]
-# tsv-mode: full = every gated skip_suite label (realized ~49 suite-min, PASS), lite = one cheap label
+# tsv-mode: full = every gated skip_suite label (realized ~51 suite-min, PASS), lite = one cheap label
 # (realized ~0.24, FAIL under the bar), none = an empty artifact listing (evidence_absent → NOT YET).
 # arts-per-run: how many suite-timings-(scripts|scripts-heavy)-N artifacts each run carries (a real run has ~11).
 build_fx() {
@@ -88,7 +88,7 @@ build_fx() {
   {   # the run's suite-timings artifact: gated skip rows priced by the committed durations TSVs
     local rows=""
     case "$tsv_mode" in
-      full) for L in "apps/web-platform [unit]" ".github/scripts/test/run-all.sh" "plugins/soleur/test/c4-from-components.test.sh" "scripts/battery-tag-authorship-mutations" "scripts/cf-tunnel-liveness-gate-mutations" "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b" "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d" "tests/scripts/registry-gate-mutation-battery"; do rows+="$L\t0\tskip=relevance\n"; done ;;
+      full) for L in "apps/web-platform [unit]" ".github/scripts/test/run-all.sh" "plugins/soleur/test/c4-from-components.test.sh" "scripts/battery-tag-authorship-mutations" "scripts/cf-tunnel-liveness-gate-mutations" "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b" "scripts/orphan-process-reaper-mutations" "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d" "tests/scripts/registry-gate-mutation-battery"; do rows+="$L\t0\tskip=relevance\n"; done ;;
       lite) rows="plugins/soleur/test/c4-from-components.test.sh\t0\tskip=relevance\n" ;;
       none) : ;;
     esac
@@ -139,7 +139,7 @@ expect() {
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
-build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~49.3 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
+build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~51.5 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
 if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the jobs read is red-run-only"; else pass "a green push run issues no jobs read (the need_min listing bound holds)"; fi
 build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
@@ -152,7 +152,7 @@ build_fx "$TMP/s7" 25 40 0 10;      expect "machinery-touching PRs are excluded 
 build_fx "$TMP/s8" 25 40 10;        expect "bot PRs are excluded (25 - 10 = 15 < 20)" 2 "NOT YET: 15" "$TMP/s8"
 build_fx "$TMP/s9" 25 40;           expect "an unset GH_TOKEN is CANNOT ESTABLISH, never a pass" 3 "GH_TOKEN is not set" "$TMP/s9" GH_TOKEN=
 # --- boundaries and the qualification rules a reviewer found unpinned -----------------------------------
-build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~49 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
+build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~51 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
 build_fx "$TMP/b2" 20 56.1 0 0 "" lite; expect "realized saving under the bar FAILs honestly (0.24 suite-min, never a baseline pass)" 1 "FAIL: mean realized saving" "$TMP/b2"
 build_fx "$TMP/b3" 19 40;           expect "boundary: 19 qualifying runs is NOT YET" 2 "NOT YET: 19" "$TMP/b3"
 build_fx "$TMP/b4" 25 2; sed -i 's/"conclusion":"success"/"conclusion":"failure"/g' "$TMP/b4/runs.json"
@@ -357,8 +357,8 @@ build_fx "$TMP/e1" 25 40 0 0 "" none; expect "missing suite-timings artifact evi
 build_fx "$TMP/m11" 25 40 0 0 "" full 11
                                     expect "11 suite-timings artifacts per run (the real shape, 12 reads/run): 21 fully evidenced under the 260 cap — the old 60 cap starved this to ~5" 0 "qualifying_runs=25 evidenced_runs=21" "$TMP/m11"
 out="$(env FX="$TMP/m11" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 0 && "$out" == *"realized_saving_min=49.3"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
-  pass "11-artifact fixture: cross-artifact dedupe holds (49.3 suite-min, not ~540) and the unpriced gated label is named on the status line"
+if [[ "$rc" == 0 && "$out" == *"realized_saving_min=51.5"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
+  pass "11-artifact fixture: cross-artifact dedupe holds (51.5 suite-min, not ~540) and the unpriced gated label is named on the status line"
 else fail "multi-artifact dedupe/unpriced: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/dx" 25 40 0 0 "" full 2
 mkdir -p "$TMP/dx/zd1" "$TMP/dx/zd2"

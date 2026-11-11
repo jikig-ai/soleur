@@ -579,7 +579,7 @@
                                   "fill": "$text-secondary",
                                   "textGrowth": "fixed-width",
                                   "width": "fill_container",
-                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While a session's web access is running, its commands have no stored credentials.",
                                   "fontFamily": "$font",
                                   "fontSize": 12,
                                   "fontWeight": "normal"
@@ -1196,7 +1196,7 @@
                               "fill": "$text-secondary",
                               "textGrowth": "fixed-width",
                               "width": "fill_container",
-                              "content": "Agents will reach the public internet over HTTPS and could send data to external hosts if compromised or prompt-injected. Sessions run without stored credentials while this is on.",
+                              "content": "Agents will reach the public internet over HTTPS and could send data to external hosts if compromised or prompt-injected. While a session's web access is running, its commands have no stored credentials.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -1329,7 +1329,7 @@
                                   "fill": "$text-secondary",
                                   "textGrowth": "fixed-width",
                                   "width": "fill_container",
-                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While a session's web access is running, its commands have no stored credentials.",
                                   "fontFamily": "$font",
                                   "fontSize": 12,
                                   "fontWeight": "normal"
@@ -1889,7 +1889,7 @@
                               "id": "iVTUX",
                               "name": "Status line",
                               "fill": "$text-secondary",
-                              "content": "On. Sessions run without stored credentials.",
+                              "content": "On. While web access is running, session commands have no stored credentials.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -1955,7 +1955,7 @@
                                   "fill": "$text-secondary",
                                   "textGrowth": "fixed-width",
                                   "width": "fill_container",
-                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While a session's web access is running, its commands have no stored credentials.",
                                   "fontFamily": "$font",
                                   "fontSize": 12,
                                   "fontWeight": "normal"
@@ -12437,7 +12437,7 @@
                           "id": "uZSiZ",
                           "name": "Status line",
                           "fill": "$text-secondary",
-                          "content": "On. Sessions run without stored credentials.",
+                          "content": "On. While web access is running, session commands have no stored credentials.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
@@ -12503,7 +12503,7 @@
                               "fill": "$text-secondary",
                               "textGrowth": "fixed-width",
                               "width": "fill_container",
-                              "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                              "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While a session's web access is running, its commands have no stored credentials.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -12882,7 +12882,7 @@
                               "fill": "$text-secondary",
                               "textGrowth": "fixed-width",
                               "width": "fill_container",
-                              "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                              "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While a session's web access is running, its commands have no stored credentials.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"

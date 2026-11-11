@@ -271,8 +271,10 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/ccla-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/compliance-posture.md
 scripts/lint-orphan-test-suites	knowledge-base/project
 scripts/lint-orphan-test-suites	knowledge-base/project/learnings
+scripts/lint-skill-body-budget	knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base
 scripts/pre-push-ratchet-lane	knowledge-base/legal
@@ -305,8 +307,10 @@ tests/commands/sync-rule-prune	knowledge-base/project
 tests/commands/sync-rule-prune	knowledge-base/project/specs
 tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-freshness.json
 tests/hooks/drop-sentinel-parity	knowledge-base/project
+tests/hooks/emissions	knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/argv-bearer-sweep	knowledge-base/project
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md

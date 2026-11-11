@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# legal-acceptance-counts.sh <key> -- the credential-free pre-flag aggregate check (#12429, ADR-319 amendment 2026-11-08).
+# legal-acceptance-counts.sh <key> -- the credential-free pre-publication aggregate check (#12429, ADR-319 amendment 2026-11-08).
 #
 # Asks the production web app how many decision rows exist for <key>, and whether every one of them is under the registry
 # hash, using ONLY the verify bearer (LEGAL_ACCEPTANCE_VERIFY_TOKEN, read from the secret store by bc_read_token). It never

@@ -200,10 +200,11 @@ build_pristine() {
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
   # ADR-262 Guard 2 reads each --pr-gated battery's OWN text for `$REPO_ROOT/<path>` operands, so the
-  # five battery files must be the real bytes, not the empty placeholders materialised above.
+  # six battery files must be the real bytes, not the empty placeholders materialised above.
   local _bf
   for _bf in tests/scripts/test-registry-gate-mutation-battery.sh scripts/cf-tunnel-liveness-gate-mutations.test.sh \
              scripts/lint-orphan-test-suites.test.sh scripts/battery-tag-authorship-mutations.test.sh \
+             scripts/orphan-process-reaper-mutation.test.sh \
              scripts/test-all-affected.test.sh; do
     cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
   done
