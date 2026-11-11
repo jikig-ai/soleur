@@ -13,46 +13,46 @@ Decisions: `decision-challenges.md` in this directory.
 
 ## 1. Tests first (RED on the current source)
 
-- [ ] 1.0 Do the Phase 1.2-1.3 renames first (constant, reason, warn text), so the RED run isolates the predicate (AC7).
-- [ ] 1.1 Rewrite `apps/web-platform/test/approval/legacy-push-owner-fallback.test.ts` per plan Phase 2.1: the precondition,
+- [x] 1.0 Do the Phase 1.2-1.3 renames first (constant, reason, warn text), so the RED run isolates the predicate (AC7).
+- [x] 1.1 Rewrite `apps/web-platform/test/approval/legacy-push-owner-fallback.test.ts` per plan Phase 2.1: the precondition,
   ten per-tool cases over `APPROVAL_REQUIRED_TOOLS` with the exact titles (including the session-ends and the
   demotion-while-waiting cases), exempt-tool cases over `APPROVAL_EXEMPT_TOOLS` (one shared input), and the cap-race case
   (ONE `createCanUseTool` instance, 4 held cards, 2 deferred Owner role reads, `vi.waitFor` sync points, CTO F10b). Add a
   `setup` `controller` option, the `settled` assertion in case 6 (with `code: "role_read_timeout"`), and the aborted-warn
   assertions in cases 8-9. File-level `afterEach(() => vi.useRealTimers())`. Expected 98 tests.
-- [ ] 1.2 Rewrite the gate-flow dormancy test.each over all eight tools (plan Phase 2.2). Off and boom EACH assert one
+- [x] 1.2 Rewrite the gate-flow dormancy test.each over all eight tools (plan Phase 2.2). Off and boom EACH assert one
   `review_gate` frame and no submit.
-- [ ] 1.3 Run both files with only the predicate unwidened: the ten per-tool cases fail for the seven non-push tools,
+- [x] 1.3 Run both files with only the predicate unwidened: the ten per-tool cases fail for the seven non-push tools,
   the push cases pass (AC7). Run the cap-race case without the re-check: it fails.
 
 ## 2. Source
 
-- [ ] 2.1 `server/permission-callback.ts`: predicate to `isApprovalRequiredTool(toolName)`; new block comment; delete the
+- [x] 2.1 `server/permission-callback.ts`: predicate to `isApprovalRequiredTool(toolName)`; new block comment; delete the
   "Other approval-required tools keep the in-memory card" sentence; cap re-check AFTER the role deny (CTO F10, S3) with
   `stage: "after-role-read"`; `stage: "owner-role-read"` on the abort; the `platform-gate-legacy-card-issued` warn (O4);
   the timeout Error gets `code: "role_read_timeout"` (O1); drop the `GITHUB_PUSH_BRANCH_TOOL` import; update the comment
   above the approval-flow call (Phase 1.1).
-- [ ] 2.1b Re-read the role after Approve when the widened block admitted the call (Phase 1.1b, CTO S1).
-- [ ] 2.2 Rename `PUSH_ROLE_READ_DEADLINE_MS` to `OWNER_ROLE_READ_DEADLINE_MS` (Phase 1.2).
-- [ ] 2.3 Log decision / reason / message renames; keep the Sentry stage tag; add `conversationId` to the member-deny
+- [x] 2.1b Re-read the role after Approve when the widened block admitted the call (Phase 1.1b, CTO S1).
+- [x] 2.2 Rename `PUSH_ROLE_READ_DEADLINE_MS` to `OWNER_ROLE_READ_DEADLINE_MS` (Phase 1.2).
+- [x] 2.3 Log decision / reason / message renames; keep the Sentry stage tag; add `conversationId` to the member-deny
   warn (O3); `ops.ts` doc comment (Phase 1.3).
-- [ ] 2.4 `github_trigger_workflow` description; `email_send` / `email_reply` descriptions (both literals of
+- [x] 2.4 `github_trigger_workflow` description; `email_send` / `email_reply` descriptions (both literals of
   `email_send`) and the `agent-runner.ts:1656` leader-prompt sentence (Phase 1.4, CTO F5, F11).
-- [ ] 2.5 Comment sweeps: `agent-runner.ts`, `permission-callback.ts:305,:314,:396`, `approval/gate-flow.ts`,
+- [x] 2.5 Comment sweeps: `agent-runner.ts`, `permission-callback.ts:305,:314,:396`, `approval/gate-flow.ts`,
   `approval/ops.ts`, `approval/tools.ts` (Phase 1.5, AC15).
-- [ ] 2.6 `scripts/dev-probe-approval-gate.ts`: typed `const approval: ApprovalGateDeps` stub, Owner, flag off, the
+- [x] 2.6 `scripts/dev-probe-approval-gate.ts`: typed `const approval: ApprovalGateDeps` stub, Owner, flag off, the
   four flow functions throwing (Phase 2.6b, CTO F12).
 
 ## 3. Remaining red suites
 
-- [ ] 3.1 `permission-callback-platform-gate-expiry.test.ts`: default Owner approval dep in `makeCtx` (Phase 2.3).
-- [ ] 3.2 `approval/cc-approval-fail-closed.test.ts`: the "approvalFailClosed UNSET" cases (Phase 2.4).
-- [ ] 3.3 Per-file `is_workspace_owner -> true` override in `agent-runner-tools`, `agent-runner-kb-share-tools`,
+- [x] 3.1 `permission-callback-platform-gate-expiry.test.ts`: default Owner approval dep in `makeCtx` (Phase 2.3).
+- [x] 3.2 `approval/cc-approval-fail-closed.test.ts`: the "approvalFailClosed UNSET" cases (Phase 2.4).
+- [x] 3.3 Per-file `is_workspace_owner -> true` override in `agent-runner-tools`, `agent-runner-kb-share-tools`,
   `build-allowed-tools-census`; a STRICT override (fixture workspace and user only) plus a member case in
   `canusertool-tiered-gating` (Phase 2.5); shared helper unchanged.
-- [ ] 3.4 Description pins: `github-tools-read-builder.test.ts` (trigger) and `test/server/email-triage-tools.test.ts`
+- [x] 3.4 Description pins: `github-tools-read-builder.test.ts` (trigger) and `test/server/email-triage-tools.test.ts`
   (email_send, email_reply) (Phase 2.6).
-- [ ] 3.5 Fix any exact `log.warn` / `viewerRole` call-count assertion moved by O4 or S1 (Phase 2.7), then run every
+- [x] 3.5 Fix any exact `log.warn` / `viewerRole` call-count assertion moved by O4 or S1 (Phase 2.7), then run every
   file in plan Phase 2.7 with the JSON reporter and record each passed count.
 
 ## 4. Mutation battery

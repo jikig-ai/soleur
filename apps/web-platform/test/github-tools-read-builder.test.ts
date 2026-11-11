@@ -548,6 +548,13 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     expect(d(hardened, "github_list_pull_requests")).toMatch(/If truncated is true.*smaller per_page/);
   });
 
+  it("the github_trigger_workflow description names the workspace Owner as the approver (#12597, CTO F5)", () => {
+    const legacy = make({ hardened: false }).built.tools as unknown as Array<{ name: string; description: string }>;
+    const desc = legacy.find((t) => t.name === "github_trigger_workflow")?.description ?? "";
+    expect(desc).toContain("Requires the workspace Owner's approval.");
+    expect(desc).not.toContain("founder approval");
+  });
+
   it.each([
     "GITHUB_APP_PRIVATE_KEY is not set",
     "GITHUB_APP_ID is not set",
