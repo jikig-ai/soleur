@@ -541,7 +541,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
   const triggerWf = tool(
     "github_trigger_workflow",
     "Trigger a workflow_dispatch event on the connected repository. " +
-      "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+      "Requires the workspace Owner's approval. Rate limited to 10 triggers per session. " +
       "Use github_read_ci_status first to find workflow IDs.",
     {
       workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),

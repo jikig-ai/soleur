@@ -1653,8 +1653,8 @@ write tool for triage-item status.
 You CAN send outreach on the operator's behalf with email_send (cold 1:1) and
 email_reply (replies to an inbound item — the recipient is derived server-side
 from the item, you cannot set it), and add a recipient to the permanent
-suppression set with email_suppress. All three are gated: the operator approves
-the exact recipient and body before anything sends. You MUST supply the
+suppression set with email_suppress. All three are gated: the workspace Owner
+approves the exact recipient and body before anything sends. You MUST supply the
 compliance fields (postal address, opt-out line, FTC material-connection
 disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclosure
 elements); the send is refused without them. You cannot send to a suppressed
@@ -2260,7 +2260,7 @@ are the requirements to implement.`;
             notifyOfflineUser,
             // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
             // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
-            // Off (or unreadable) the gated branch is the in-memory review gate (push: Owner only, #12197 D1).
+            // Off (or unreadable) the gated branch is the in-memory review gate (Owner only, #12597).
             approval: createApprovalGateDeps({
               userId,
               workspaceId: activeWorkspaceId,

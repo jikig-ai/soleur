@@ -285,8 +285,8 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
     // ───────────────────────────────────────────────────────────────────
     // WRITE tools (#5325). All three are `gated`-tier in TOOL_TIER_MAP — the
     // human review gate (permission-callback) is the trust boundary: the
-    // operator sees the exact recipient + body and approves before the handler
-    // runs. The handlers route through the compliance chokepoint
+    // workspace Owner sees the exact recipient + body and approves before the
+    // handler runs (#12597). The handlers route through the compliance chokepoint
     // (server/email-triage/outbound.ts), which enforces C1–C5 + header guard +
     // recipient allow-list + body-hash integrity check + suppression recheck before any
     // Resend send, and records the WORM outbound_sends audit row.
@@ -294,7 +294,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
     tool(
       "email_send",
       "Send a cold outreach email on the operator's behalf (gated — the " +
-        "operator approves the exact recipient + body before it sends). Routes " +
+        "workspace Owner approves the exact recipient + body before it sends). Routes " +
         "through the compliance chokepoint: it refuses to send unless C1 postal " +
         "address, C2 opt-out line, C4 FTC material-connection disclosure are " +
         "present (and, for EU/UK or unknown jurisdiction, all six Art.14 " +
@@ -353,7 +353,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
     ),
     tool(
       "email_reply",
-      "Reply to an inbound email-triage item (gated — the operator approves " +
+      "Reply to an inbound email-triage item (gated — the workspace Owner approves " +
         "before it sends). The RECIPIENT is derived server-side from the inbound " +
         "item's stored sender — you cannot set the recipient; any recipient you " +
         "pass is ignored. Same compliance chokepoint as email_send (C1–C5 + " +

@@ -35,7 +35,7 @@ import {
   type AgentSession,
 } from "./review-gate";
 import { getToolTier, buildGateCard, buildOfflineGateMessage, pluginToolPrefix, type ToolTier } from "./tool-tiers";
-import { GITHUB_PUSH_BRANCH_TOOL, isApprovalRequiredTool } from "./approval/tools";
+import { isApprovalRequiredTool } from "./approval/tools";
 import { APPROVAL_UNAVAILABLE_DENY, runApprovalGate } from "./approval/gate-flow";
 import { reportApprovalOp } from "./approval/ops";
 import type { ApprovalGateDeps } from "./approval/gate-types";
@@ -302,7 +302,7 @@ export interface CanUseToolDeps {
   connectedRepoSlug?: string;
   /**
    * #4672 — the durable approval flow for the slice-1 gated tools (`APPROVAL_REQUIRED_TOOLS`). ABSENT is the dormant
-   * state and the gated branch is then the in-memory review gate (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1) (ADR-305). When present, the flag seam it
+   * state and the gated branch is then the in-memory review gate, whose card only the workspace Owner may answer for every approval-required tool (#12597) (ADR-305). When present, the flag seam it
    * carries is read once per gate; off (or unreadable) falls through to the same in-memory gate. Never wired to a
    * module that can decide an approval (the agent shares this process): see approval/decide.ts.
    */
@@ -311,7 +311,7 @@ export interface CanUseToolDeps {
    * Set only by the cc dispatcher (ADR-309 addendum). When true, an `APPROVAL_REQUIRED_TOOLS` member that the approval
    * flow gave no verdict for (the `approval` dependency is absent, the flag is off, or the flag read failed) is DENIED
    * with the static unavailable text instead of falling through to the in-memory review card. Unset (the legacy runner and
-   * every existing fixture) leaves the gated branch unchanged (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1). See the ADR-309 Addendum.
+   * every existing fixture) leaves the gated branch on the in-memory card, which only the workspace Owner may answer for every approval-required tool (#12597). See the ADR-309 Addendum.
    */
   approvalFailClosed?: boolean;
 }
@@ -393,12 +393,16 @@ export function gateStatusWriteOp(status: string): "updateConversationStatusGate
 const HOLD_GUARD: StatusGuard = { onlyIfStatusIn: ["active", "waiting_for_user"] };
 const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
 
-/** #12197 D1: the legacy push card's Owner check may not hold a turn: it ends at a deadline or on an abort (both throw). */
-export const PUSH_ROLE_READ_DEADLINE_MS = 5_000;
+/**
+ * #12597 (extends #12197 D1): the legacy card's Owner check, for every approval-required tool, may not hold a turn: it ends
+ * at a deadline or on an abort (both throw). The deadline's Error carries `code: "role_read_timeout"`, so its Sentry report
+ * (describeError ships `code`) tells a timeout from a failed read.
+ */
+export const OWNER_ROLE_READ_DEADLINE_MS = 5_000;
 function readRoleBounded(
   read: () => Promise<"owner" | "member">,
   signals: (AbortSignal | undefined)[],
-  ms: number = PUSH_ROLE_READ_DEADLINE_MS,
+  ms: number = OWNER_ROLE_READ_DEADLINE_MS,
 ): Promise<"owner" | "member"> {
   return new Promise((resolve, reject) => {
     const live = signals.filter((x): x is AbortSignal => x !== undefined);
@@ -412,7 +416,7 @@ function readRoleBounded(
     };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error("viewer role read timed out"));
+      reject(Object.assign(new Error("viewer role read timed out"), { code: "role_read_timeout" }));
     }, ms);
     for (const x of live) {
       if (x.aborted) return onAbort();
@@ -1594,7 +1598,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
 
         // #4672 — the durable, action-bound approval flow for the slice-1 tools. `null` = flag off or unreadable: fall
-        // through to the in-memory review gate below (push: Owner only, #12197 D1). Anything else is the final verdict (allow only on a
+        // through to the in-memory review gate below (Owner only, #12597). Anything else is the final verdict (allow only on a
         // consumed approval; every error, timeout and abort is a static deny).
         if (deps.approval && isApprovalRequiredTool(toolName)) {
           const approvalVerdict = await runApprovalGate({
@@ -1642,12 +1646,14 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
         }
 
-        // #12197 (CTO ruling D1, 2026-11-10): the legacy runner, push only. The approval flow gave no verdict (flag off or
-        // unreadable, or no dependency), so the card below would go to the session's own user. Only the workspace Owner may
-        // answer it: a member, a failed role read or a missing dependency is a static deny (no card, no status write, no
-        // offline notification). The Settings sentence PUSH_DISCLOSURE relies on this. Other approval-required tools keep the
-        // in-memory card (ADR-309, legacy runner divergence).
-        if (toolName === GITHUB_PUSH_BRANCH_TOOL) {
+        // #12597 (CTO ruling 2026-11-11, extends #12197 D1): the legacy runner. The approval flow gave no verdict (flag off or
+        // unreadable, or no dependency), so the card below would go to the session's own user. For every approval-required
+        // tool only the workspace Owner may answer it: a member, a failed or timed-out role read or a missing dependency is a
+        // static deny (no card, no status write, no offline notification), and an Approve is honoured only if the role read
+        // again after the answer is still Owner (see after the card). The Settings sentence PUSH_DISCLOSURE relies on this
+        // for the push. Set once the Owner check admits the call, so the answer-time re-read cannot drift from it.
+        let ownerCheckedDeps: ApprovalGateDeps | undefined;
+        if (isApprovalRequiredTool(toolName)) {
           let role: "owner" | "member" | "unavailable" = "unavailable";
           const approvalDeps = deps.approval;
           if (!approvalDeps) {
@@ -1677,7 +1683,10 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           }
           // Stop pressed (or the session ended) while the role was read: no card, no notification, no status write.
           if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {
-            return gateExpiredDeny("platform", toolName, "aborted", PLATFORM_GATE_EXPIRED_MESSAGE, { delivered: false });
+            return gateExpiredDeny("platform", toolName, "aborted", PLATFORM_GATE_EXPIRED_MESSAGE, {
+              delivered: false,
+              stage: "owner-role-read",
+            });
           }
           if (role !== "owner") {
             log.warn(
@@ -1687,13 +1696,46 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
                 tier,
                 decision: "platform-gate-push-owner-required",
                 role,
+                conversationId: ctx.conversationId,
                 repo: `${ctx.repoOwner}/${ctx.repoName}`,
               },
-              "Platform tool gate refused: only the workspace Owner may approve a push when the approval flow gives no verdict",
+              "Platform tool gate refused: only the workspace Owner may approve an approval-required action when the approval flow gives no verdict",
             );
-            logPermissionDecision("canUseTool-platform-gated", toolName, "deny", `push owner required (${role})`);
+            logPermissionDecision("canUseTool-platform-gated", toolName, "deny", `owner required (${role})`);
             return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
           }
+          // The role read is an await, so a call that passed the cap check above may find the cap full when it resumes (CTO
+          // F10). Nothing is awaited from here to holdForUser's increment, so this re-check is exact; keep it that way.
+          if (pendingGates >= MAX_PENDING_GATES) {
+            log.warn(
+              {
+                sec: true,
+                tool: toolName,
+                tier,
+                decision: "platform-gate-too-many-pending",
+                stage: "after-role-read",
+                repo: `${ctx.repoOwner}/${ctx.repoName}`,
+              },
+              "Platform tool gate refused: too many approvals are already waiting",
+            );
+            logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "too many pending approvals");
+            return { behavior: "deny" as const, message: PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE };
+          }
+          ownerCheckedDeps = approvalDeps;
+          // Card emission is otherwise logged only at info (not shipped): this warn is the production trace of every legacy
+          // card issued for an approval-required tool (CTO O4).
+          log.warn(
+            {
+              sec: true,
+              tool: toolName,
+              tier,
+              decision: "platform-gate-legacy-card-issued",
+              role,
+              conversationId: ctx.conversationId,
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Platform tool gate: legacy in-memory card issued to the workspace Owner (the approval flow gave no verdict)",
+          );
         }
 
         const gateId = randomUUID();
@@ -1754,6 +1796,51 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             behavior: "deny" as const,
             message: PLATFORM_GATE_REJECTED_MESSAGE,
           };
+        }
+
+        // #12597 (CTO S1): the Owner may have been demoted while the card waited. Read the role again before the Approve is
+        // honoured, with the same deadline and the same fail-closed outcomes (a Reject performs nothing, so it skips this).
+        if (ownerCheckedDeps) {
+          const answerDeps = ownerCheckedDeps;
+          let answerRole: "owner" | "member" | "unavailable" = "unavailable";
+          try {
+            answerRole = await readRoleBounded(() => answerDeps.viewerRole(), [options.signal, ctx.controllerSignal]);
+          } catch (err) {
+            // Stop or the session end during this read is handled just below, never reported as a failed read.
+            if (!(options.signal?.aborted === true || ctx.controllerSignal.aborted)) {
+              reportApprovalOp("viewerRoleFailed", err, {
+                toolName,
+                conversationId: ctx.conversationId,
+                workspaceId: answerDeps.workspaceId,
+                userId: ctx.userId,
+                tags: { stage: "legacy-push-owner-check" },
+                extra: { outcome: "denied-on-answer" },
+              });
+            }
+          }
+          if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {
+            return gateExpiredDeny("platform", toolName, "aborted", PLATFORM_GATE_EXPIRED_MESSAGE, {
+              delivered: toolGateDelivered,
+              stage: "owner-role-answer",
+            });
+          }
+          if (answerRole !== "owner") {
+            log.warn(
+              {
+                sec: true,
+                tool: toolName,
+                tier,
+                decision: "platform-gate-push-owner-required",
+                role: answerRole,
+                stage: "on-answer",
+                conversationId: ctx.conversationId,
+                repo: `${ctx.repoOwner}/${ctx.repoName}`,
+              },
+              "Platform tool gate refused: the approver is no longer the workspace Owner, so the Approve is not honoured",
+            );
+            logPermissionDecision("canUseTool-platform-gated", toolName, "deny", `owner required on answer (${answerRole})`);
+            return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
+          }
         }
 
         logPermissionDecision(
