@@ -1977,6 +1977,17 @@
 "id": "1vl3we0kfwysm",
 "title": "Sessions and encrypted keys"
 },
+"1vt7nhdibdejp": {
+"technology": "HTTPS via Cloudflare (app.soleur.ai/api/inngest)",
+"source": {
+"model": "platform.infra.inngest"
+},
+"target": {
+"model": "platform.webapp.api"
+},
+"id": "1vt7nhdibdejp",
+"title": "Invokes function steps at the registered serve URL (Cloudflare-proxied; responses stream — 201 + 3 s heartbeat, ADR-243). The app.soleur.ai load balancer steers each step call to any serving web host, and the app-side exec-placement forwarder (#9137, ADR-033 amendment) routes it by the placement class each served function carries in server/inngest/execution-placement.ts (portable, host-affine, volume-bound): a portable step executes on whichever web host answered; a host-affine, volume-bound or unclassifiable step call is forwarded app-side, verbatim, over pinned TLS to the exec host's dedicated private listener — the ADR-119 LUKS volume holder, web-1 today (10.0.1.10). That web-host-to-web-host hop is internal to the api/hetzner elements, so it is stated here rather than drawn as an edge. The dedicated host's --sdk-url (http://10.0.1.10:3000/api/inngest) is the registration poll only, not the step path"
+},
 "1vx5fvizmnn4r": {
 "technology": "cloudflared ingress → 10.0.1.10 (ORIGIN-relative — ADR-114 I2 discharged, #6594)",
 "source": {
@@ -2151,17 +2162,6 @@
 },
 "id": "241p3diiuvub3",
 "title": "Routes traffic"
-},
-"24xuohm5gdv38": {
-"technology": "HTTPS (supabase-js service client)",
-"source": {
-"model": "platform.webapp.api"
-},
-"target": {
-"model": "platform.infra.supabase"
-},
-"id": "24xuohm5gdv38",
-"title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, executed on web-1); resolves the inbound recipient address through email_inbox_routes inside the claim step (ADR-269)"
 },
 "261o69cwqmbwn": {
 "technology": "HTTPS (git-subdir sparse fetch)",
@@ -2857,6 +2857,17 @@
 "id": "3iwk8dw7n1ck1",
 "title": "Production flag and segment writes via the flag-* operator scripts, gated on a TTY ack in the founder's own terminal. This is the LEGACY TTY path (ADR-249, unchanged by ADR-264): the flag scripts feed flag_flip_audit.approval_method, whose CHECK allows only 'tty-ack' or NULL"
 },
+"3iyo9pq0zq01x": {
+"technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "sentry"
+},
+"id": "3iyo9pq0zq01x",
+"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 20 workflows, in two groups — 14 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -deadman-heartbeat-feeder (#11631 — the archive-fed feeder for the luks-monitor and cost-capture dead-man heartbeats; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES pinned functions on web-1 alone (step requests go to the Cloudflare-proxied serve URL; under #9137 the exec-placement forwarder routes a pinned-class call to the exec host web-1 and fails closed when it is unreachable, and a verifier of web-1's own mount is necessarily pinned; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 28 cron monitors, 15 check in from here and 13 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. NB the #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed 43 monitors but kept their emitters per spec NG4 — 8 workflow + 35 Inngest producers still post check-ins to now-unknown slugs, which Sentry drops (deliberate void-post, tracked by PRUNED_MONITOR_SLUGS); the 15/12 split counts only slugs a live resource answers. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)"
+},
 "3j05altb1wez": {
 "technology": "doppler CLI (config-scoped read/write service token, repo Actions secret)",
 "source": {
@@ -2911,17 +2922,6 @@
 },
 "id": "3mxkvx15xswfp",
 "title": "Opt-in release lookup (SOLEUR_UPDATE_CHECK=1 at session start) and the explicit, user-started /soleur:version compare: git ls-remote --tags against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install only, one unauthenticated compare API request whose URL carries the installed commit hash (for a local checkout, its current commit, possibly one never pushed). Git config isolated (no user config, no ssh, no credentials, https only), each request time-limited, retried at most once per 10 minutes while failing, result cached per install (all commits of a local checkout share one entry) and treated as fresh for 24 hours. Jikigai receives nothing; GitHub sees the user's IP address and user agent. SEPARATELY (ADR-289), the delegation verifier, the hold evaluator, the ship gate (read-only gh api of the epic's comments for execution receipts) and the overlap preflight read the epic's Standing Delegation comment, receipts, workflow runs and open pull requests of the USER'S OWN repository through the user's own authenticated gh CLI, read-only; they run on the user's machine and Jikigai receives nothing."
-},
-"3ng3i3bt14wwr": {
-"technology": "HTTPS via Cloudflare (app.soleur.ai/api/inngest)",
-"source": {
-"model": "platform.infra.inngest"
-},
-"target": {
-"model": "platform.webapp.api"
-},
-"id": "3ng3i3bt14wwr",
-"title": "Invokes function steps at the registered serve URL (Cloudflare-proxied; responses stream — 201 + 3 s heartbeat, ADR-243). Every Inngest function executes on the one step-executing host, web-1: serveHost is app.soleur.ai and cloudflare_record.app resolves to web-1 only. Each served function carries a placement class (portable, host-affine, volume-bound) in server/inngest/execution-placement.ts, defined by the ADR-033 amendment (#7230; placement-aware execution is #9137). The dedicated host's --sdk-url (http://10.0.1.10:3000/api/inngest) is the registration poll only, not the step path"
 },
 "3ni0kpcaquucx": {
 "technology": "stdio JSON-RPC (newline-delimited)",
@@ -3052,17 +3052,6 @@
 "id": "3rdztndk1txsj",
 "title": "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 GHCR-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-136, #6780)"
 },
-"3rrhwiolflaqh": {
-"technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "sentry"
-},
-"id": "3rrhwiolflaqh",
-"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 20 workflows, in two groups — 14 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -deadman-heartbeat-feeder (#11631 — the archive-fed feeder for the luks-monitor and cost-capture dead-man heartbeats; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 28 cron monitors, 15 check in from here and 13 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. NB the #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed 43 monitors but kept their emitters per spec NG4 — 8 workflow + 35 Inngest producers still post check-ins to now-unknown slugs, which Sentry drops (deliberate void-post, tracked by PRUNED_MONITOR_SLUGS); the 15/12 split counts only slugs a live resource answers. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)"
-},
 "3s4uhwwcpdu6u": {
 "technology": "HTTPS",
 "source": {
@@ -3170,6 +3159,17 @@
 },
 "id": "7lwv9h6xngcj",
 "title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a completed non-push release-workflow run (the sha it scans is the one /health serves, never the event's head sha)"
+},
+"8ff82copvnfq": {
+"technology": "HTTPS (supabase-js service client)",
+"source": {
+"model": "platform.webapp.api"
+},
+"target": {
+"model": "platform.infra.supabase"
+},
+"id": "8ff82copvnfq",
+"title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, portable class — executes on whichever web host answers the step call since #9137); resolves the inbound recipient address through email_inbox_routes inside the claim step (ADR-269)"
 },
 "8p9oloc4osac": {
 "source": {
@@ -9820,7 +9820,7 @@
 },
 "parent": null,
 "relations": [
-"3rrhwiolflaqh"
+"3iyo9pq0zq01x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -12372,8 +12372,8 @@
 "parent": "platform",
 "relations": [
 "1mdu5fywiy7vj",
-"24xuohm5gdv38",
 "3jdeou1f8ri15",
+"8ff82copvnfq",
 "up6o3t6hh4oe"
 ],
 "color": "gray",
@@ -16185,7 +16185,7 @@
 },
 "parent": null,
 "relations": [
-"3rrhwiolflaqh"
+"3iyo9pq0zq01x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20970,8 +20970,8 @@
 },
 "parent": null,
 "relations": [
-"24xuohm5gdv38",
-"3jdeou1f8ri15"
+"3jdeou1f8ri15",
+"8ff82copvnfq"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21753,7 +21753,7 @@
 "id": "117s18d",
 "source": "platform.infra.inngest",
 "target": "platform.webapp.api",
-"label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nEvery Inngest function executes on the \none step-executing host, web-1: ",
+"label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nThe app.soleur.ai load balancer steers \neach step call to any serving web host, ",
 "points": [
 [
 3512,
@@ -21912,7 +21912,7 @@
 },
 "parent": null,
 "relations": [
-"3ng3i3bt14wwr"
+"1vt7nhdibdejp"
 ],
 "color": "gray",
 "line": "dashed",
@@ -27330,7 +27330,7 @@
 },
 "parent": null,
 "relations": [
-"3rrhwiolflaqh"
+"3iyo9pq0zq01x"
 ],
 "color": "gray",
 "line": "dashed",

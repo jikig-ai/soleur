@@ -67,6 +67,12 @@ vi.mock("@/server/workspace-resolver", () => ({
   getDefaultWorkspaceForUser: mockGetDefaultWorkspaceForUser,
 }));
 
+// byok-resolver imports from the filesystem-free leaf (#9137); the workspace-resolver
+// re-export resolves to the same binding.
+vi.mock("@/server/current-workspace-id", () => ({
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
+}));
+
 vi.mock("@/server/byok-delegation-ui-resolver", () => ({
   resolveGranteeAcceptanceStatus: mockResolveGranteeAcceptanceStatus,
 }));

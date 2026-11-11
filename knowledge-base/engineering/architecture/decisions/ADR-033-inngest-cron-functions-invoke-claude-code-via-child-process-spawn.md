@@ -362,3 +362,115 @@ per 2–7 h for a `*/15` schedule. Where it is the only trigger, its dropped run
 That is legitimate, because their run is not the only signal of the substrate's total loss:
 `scheduled-inngest-health` covers that from outside it. They watch partial failures (config drift,
 de-planned crons) that leave the substrate able to run them.
+
+## Amendment — 2026-11-10 (#9137): placement-aware execution via the fnId-keyed forwarder
+
+The 2026-09-28 amendment designated "placement-aware execution at the ADR-143 Phase-3 flip" as the
+target and left it to this issue to pick one of the two sanctioned shapes. This amendment records
+the mechanism as merged (CTO rulings T1–T4, 2026-11-10,
+`knowledge-base/project/specs/archive/20261110-134652-feat-one-shot-9137-placement-aware-execution/decision-challenges.md`).
+
+**Exposure that forced it.** web-2 has served LB weight 1 since the 2026-11-08 serve flip (#12167):
+`cloudflare_load_balancer.app` steers `app.soleur.ai` randomly between web-1 and web-2, so step calls
+at `https://app.soleur.ai/api/inngest` already fan out — the exposure the 2026-09-28 amendment
+scheduled for a future flip is live. Roughly half of `host-affine` and `volume-bound` calls were
+executing on web-2, where the sole-copy LUKS volume is absent and `spawnClaudeEval`'s process-local
+single-flight (ADR-243 §2) cannot join.
+
+### Mechanism (Option C, CTO T1)
+
+An app-layer fnId-aware forwarder in front of `serve()` in `app/api/inngest/route.ts` reads the step
+call's `?fnId` query key — the routing key the SDK itself requires — looks it up in
+`EXECUTION_PLACEMENT` (`server/inngest/execution-placement.ts`, the single classification
+authority), and decides per class:
+
+- `portable` executes wherever the call lands — losing web-1 no longer drops portable work.
+- `host-affine`, `volume-bound`, unknown and unclassifiable calls are forwarded **verbatim** — raw
+  body, all signature headers, full query — to the exec host's dedicated private listener
+  (`https://10.0.1.10:8445/api/inngest`) with the `x-soleur-exec-forward` marker set, and the
+  response is streamed back unbuffered.
+
+One app id (`soleur-runtime`), one registered serve URL, zero function-id migration, zero
+Terraform/DNS/LB changes. `EXPECTED_CRON_FUNCTIONS`, Sentry monitor slugs, the watchdog and
+deploy-verify are untouched because no function identity moves.
+
+**Rejected (CTO T1):** (A) per-class app ids — ~33-37 function-id migrations, a second registration
+path and consumer prefix churn, and it still needs a host-pinned serve URL; (B) edge fnId steering
+(Cloudflare LB rules / Worker) — a generated second copy of the pinned set that drifts against the
+manifest, so a new unlisted function silently misplaces.
+
+### Decision table (evaluated per request; GET, PUT and `?probe=` bypass the forwarder)
+
+| Condition | Decision |
+|---|---|
+| Not a step call (GET/PUT/`?probe=`) | `execute` locally — unchanged semantics on any host |
+| Class `portable` | `execute` locally |
+| Pinned class (`host-affine`/`volume-bound`), host IS exec | `execute` locally |
+| Pinned class, host NOT exec | `forward` verbatim to `https://10.0.1.10:8445/api/inngest`, marker set, streamed response |
+| Pinned class, marked `x-soleur-exec-forward`, host NOT exec | `refuse` — loop-guard, never re-forward |
+| `SOLEUR_HOST_PRIVATE_IP` unset/empty | `refuse` — HTTP 503 (retriable, never a `NonRetriable` shape) with the distinct `placement.exec_identity_missing` error |
+| POST with no `fnId` and no `probe`, or fnId unknown after prefix/suffix strip | treated as pinned (fail-closed direction: `forward`/`refuse`, never `execute` on a non-exec host) |
+
+### Exec-host identification (CTO T2, re-ruled)
+
+`ci-deploy.sh` injects `-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND"` into the prod container (the
+canary gets it empty — it serves no step traffic). `PROXY_BIND` is already resolved per host from
+the `10.0.1.x` NIC, so the value and the hardcoded `10.0.1.10` pin constant share one Terraform
+source (`variables.tf` / `network.tf` web-1 `private_ip`, `inngest-host.tf` `sdk_url`) and both
+survive a `web-host-replace`. The pin is a hardcoded constant, drift-guarded — never an env value
+(#5182 forbids env-derived pins) and never `SOLEUR_HOST_ID` (instance id changes on every replace).
+A host that cannot establish exec identity (unset/empty) **refuses** every pinned call; a marked
+call arriving on a non-exec host is **refused**, never re-forwarded — the loop-guard.
+
+### Transport and receiver (CTO T3 + plan review)
+
+The web-host-to-web-host hop runs over **pinned TLS** reusing the session-proxy material:
+`loadProxyTlsClientCa()` (the `PROXY_TLS_CERT` env, minted in `infra/proxy-tls.tf` with SANs over
+every web host's private IP, so the default IP hostname check passes) with
+`rejectUnauthorized: true` — never `false`, never a new verification scheme. Plaintext was rejected:
+forwarded calls carry user payloads (BYOK agent-on-spawn event data), and ADR-294's direction for
+private Inngest links is already TLS. The receiver is a **sibling listener on a dedicated port
+(8445)** using `loadProxyTlsServerOptions()` material bound to the private IP, which invokes the
+app's own `/api/inngest` handler in-process; the :8443 wss server is NOT the receiver — its 10 s
+hello deadline would kill a streamed HTTP step mid-run. A non-exec host forwards only calls that
+carry an `x-inngest-signature` header (missing → refuse as `placement.missing_signature`, 401);
+the HMAC check itself runs only on the exec host's `serve()`.
+
+### Fail-closed semantics
+
+No code path executes a pinned-class, unknown-class or unclassifiable step call on a non-exec host:
+the refusal is an HTTP 503 (retriable — a late-NIC deploy stalls ticks visibly rather than killing
+runs), a marked call on a non-exec host is refused rather than re-forwarded, and a forward failure
+emits `placement.forward_failed` and never falls back to local execution.
+
+### Enforcement — now at request time
+
+The 2026-09-28 Enforcement section declared the `host-affine`/`volume-bound` split "DECLARED and
+reviewed, not guarded, until the placement-aware registry of #9137 consumes it". This amendment is
+that consumer: the split is now **enforced at request time** — `decidePlacement` reads
+`EXECUTION_PLACEMENT` on every step call, and `test/server/inngest/exec-placement-forward.test.ts`
+pins the whole decision table (Guard 1 served-set/classifier parity, Guard 2 fail-closed direction,
+Guard 3 forward fidelity, Guard 4 the `10.0.1.10` pin against `inngest-host.tf` `sdk_url` and the
+web-1 private-IP source). The manifest remains the single classification authority — the forwarder
+imports it, no second class table exists.
+
+### Residuals (CTO dissents, accepted)
+
+- **web-1 remains a SPOF for pinned classes** — already true today via the ADR-119 sole-copy LUKS
+  volume; this amendment makes the coupling visible and guarded (Guard 4), it does not create it.
+- **A NIC-late deploy on web-1 can ship an empty `SOLEUR_HOST_PRIVATE_IP`** → pinned fns refuse
+  (503, retriable) until the next deploy — surfaced as `placement.exec_identity_missing` plus the
+  no-SSH recovery step in `knowledge-base/engineering/operations/runbooks/inngest-server.md`.
+- **An 8445 publish degraded to loopback** (`net.ipv4.ip_nonlocal_bind` ≠ 1, the
+  `RELAY_PUBLISH_BIND` fallback) makes the exec listener unreachable by peers → forwards fail
+  closed (`placement.forward_failed`), a visible pinned-fn stall — accepted; the alternative
+  (exec-side blind spot) is worse.
+
+### Fallback (a) — still deferred; re-evaluation triggers carried verbatim (CTO T4)
+
+From #9137's own re-evaluation criteria, restated so they are not silently dropped: a second SDK
+worker on the Inngest host is deferred unless **a host-state verifier appears that neither GHA
+`schedule:` nor the ADR-248 clock can serve; or a measured incident of web-host loss dropping
+portable work**. Neither is true today: the ADR-248 clock runs on both web hosts and GHA-native
+`schedule:` covers the rest, and this amendment's forwarder is what closes the live fan-out
+exposure.
