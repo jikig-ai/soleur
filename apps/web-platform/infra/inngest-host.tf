@@ -61,7 +61,7 @@ locals {
   # TWO-HOST (#6608/#6459): web-2 (10.0.1.11) RE-ADDED 2026-07-24 as a fresh cattle out-of-band
   # standby (ADR-143) — a different host from the retired fsn1 .11 (#6538). DERIVED from var.web_hosts
   # (#9421 Part 2a), map-key order, so it renders the same string as the literal it replaced and a roster
-  # change follows automatically; web-host-private-ips-parity.test.sh pins every workflow copy to it.
+  # change follows automatically; web-hosts-generic.test.sh pins every workflow copy to it.
   #
   # AC6 / SEQUENCING (ADR-143 3.3 / #6608): this config change is SAFE on the merge-apply — the
   # default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list that does

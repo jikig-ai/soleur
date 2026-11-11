@@ -544,10 +544,9 @@ resource "hcloud_server" "web" {
     #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
     #   - Worst case before the seed fatal: ~150 s NIC wait + ~190 s zot login (3 x 60 s + 2 x 5 s),
     #     or ~150 s + a fast login + 180 s pull when zot authenticates but hangs (a timed-out
-    #     attempt stops the retries). soleur-host-bootstrap.sh's
-    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
-    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
-    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #     attempt stops the retries). soleur-host-bootstrap.sh's SOLEUR_FRESH_BOOT_WINDOW_SECONDS
+    #     (1140 since ADR-326's kernel-settle reboot) is derived there, not here.
+    #     fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
     #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
     #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
     zot_pull_user  = local.zot_pull_user

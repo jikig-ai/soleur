@@ -437,7 +437,6 @@ fi
 
 # 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
 #     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
-HOST_TF_NOCOMMENT=$(sed 's/#.*//' "$HOST_TF")
 # Since #9421 the local is derived from var.web_hosts, so the roster it derives from is what must exclude them.
 if [[ -z "$CANON_WEB_HOSTS" ]] || grep -qE '10\.0\.1\.(20|30)(,|$)' <<<"$CANON_WEB_HOSTS"; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"

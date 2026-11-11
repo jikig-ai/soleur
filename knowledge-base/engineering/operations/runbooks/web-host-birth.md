@@ -198,7 +198,7 @@ files. Cloud-init recomputes that hash at boot and compares:
 
 That `exit 1` runs under `set -e` **before** the `set +e` region, so a mismatch aborts the entire
 `runcmd` at `stage=verify`: no cloudflared, no webhook, no monitors, no egress firewall. `runcmd`
-is once-per-instance, so **no reboot repairs it** — the host is dark until it is replaced. That is
+does not re-run on a later reboot (only the earlier kernel-settle reboot, ADR-326, re-runs it), so **no reboot repairs it** — the host is dark until it is replaced. That is
 why the preflight is mandatory and runs before anything is created.
 
 `hcloud_server.web` carries `lifecycle.ignore_changes = [user_data, ssh_keys, image,

@@ -5099,7 +5099,8 @@ jobs:
       # GHCR is a PRIVATE package; the digest resolve below authenticates with
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
-    # Budget = web_host_create's + the ~16m boot-trail poll ceiling; host is new either way.
+    # Budget = web_host_create's + one destroy minute; the boot-trail poll ceiling is ~20m since ADR-326
+    # (kernel-currency.test.sh computes this job's worst case against this value); host is new either way.
     timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"

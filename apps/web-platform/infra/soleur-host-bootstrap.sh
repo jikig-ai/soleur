@@ -749,7 +749,8 @@ test -x /usr/local/bin/soleur-github-app-key-check
 #     restart, no operator action. Aborting here would destroy the recovery channel to
 #     prevent a condition that resolves itself.
 #
-# And aborting is not a small cost: runcmd is ONE /bin/sh and is once-per-instance, so an
+# And aborting is not a small cost: runcmd is ONE /bin/sh and does not re-run after this point (ADR-326's one
+# kernel-settle reboot happens earlier, before Doppler), so an
 # `exit 1` does not skip a step — it terminates cloudflared install, the webhook binary, the
 # :9000 readiness gate, the disk/resource monitors and the container egress firewall, for the
 # life of that instance (CF-5). A NIC that converges at minute 11 would then be irrelevant.
