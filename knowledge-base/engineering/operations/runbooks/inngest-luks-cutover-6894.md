@@ -354,11 +354,15 @@ happened, and no claim of physical or secure erasure is made.
 ### Read-backs after `destroy` (read-only; re-runnable)
 
 ```
-doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN_READONLY:?absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN}"; curl -sS -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes/106261946'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/106261946'   # expect 404
 ```
 
-Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.volumes` is `[106903269]`). The next
-`host_role=dedicated` probe row still reports `scsi-0HC_Volume_106903269` with `redis_active=active`.
+Expect `404`. `missing-token` (exit 3) means `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform`: minting it is step
+**O5** in `infra-credential-tiers-8209.md`, and the command never falls back to the read/write token. The token goes to
+curl as a config on stdin, never on argv. The line is the runbook-6604 retired-volume GET with only the id changed, and
+the drift suite pins it (row N3b of `plugins/soleur/test/sole-copy-drift-check.test.sh`). The same token form reads
+`GET /v1/servers/169426216` (`.server.volumes` is `[106903269]`). The next `host_role=dedicated` probe row still reports
+`scsi-0HC_Volume_106903269` with `redis_active=active`.
 
 ### Rules that stay in force
 
@@ -405,7 +409,7 @@ Order matters. The merge's own apply delivers the protection, so the read-back i
 3. **Run the read-back** (read-only; the token goes to curl as a config on stdin; the output is one word):
 
 ```
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 4. **Route on the word** (compare with the expected word from step 1):
@@ -425,12 +429,15 @@ The wrapper is single-quoted so the variable expands after Doppler sets it, not 
 injects only the read-only token, so the read/write `HCLOUD_TOKEN` in the same config never enters the process, and the
 command stops rather than falling back to it. `--no-exit-on-missing-only-secrets` makes Doppler run the command when the
 token is absent, so `missing-token` is reachable; without it Doppler exits before the command and no word is printed. This
-asserts presence of the read-only token; its scope is not verified here. The token never reaches argv (a stdin curl config);
-there is no `-v` and no `set -x`. A JSON string `"true"` reads as `read-failed`, not as `protected`. This read is a proxy
-for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was exercised against a stubbed `doppler`
-and `curl` (fake token, no network) for protected, not-protected, HTTP 401, HTTP 404, network failure, non-JSON, a missing
-field, a missing token, an empty token and a failing `doppler` (no word). It was then run once against the real API, on
-2026-10-15, and printed `protected` (exit 0; ADR-282, Addendum 2026-10-15).
+asserts presence of the read-only token; its scope is not verified here. The token never reaches argv (a stdin curl config).
+`--disable --noproxy "*"` come first, as in `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and honours no proxy
+variable; `--max-time 30` bounds the request. There is no `-v` and no `set -x`. A JSON string `"true"` reads as
+`read-failed`, not as `protected`. This read is a proxy for "Hetzner refuses a delete"; the refusal itself is not
+exercised. The current form (`--disable --noproxy "*"` first and `--max-time 30`, #12616) was exercised on 2026-11-11
+against a stubbed `doppler` and `curl`, with a fake token and no network. It covered protected, not-protected, HTTP 401,
+HTTP 404, network failure, non-JSON, a missing field, a missing token, an empty token and a failing `doppler` (no word).
+The one run against the real API, on 2026-10-15 (`protected`, exit 0; ADR-282, Addendum 2026-10-15), was of the earlier
+form without those three flags. The current form has not been run against the real API.
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in

@@ -24,10 +24,11 @@
 # the run green. Rows that need a weaker stub, a weaker comparison or a neutered helper (H1-H7) prove the suite can see
 # them: end_row, invariants, want_steps, want_req and want_out each have a negative control. The invariants run for EVERY
 # case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one, and under the entry of the
-# case they belong to (switch_entry folds before the constants move). H11-H17 are the negative controls of the matrix
-# context, the issue-store id ban, the N1c/N3 document bounds, the text helpers and N4. FLOOR and TABLE_ROWS are the realized
-# counts of the two-entry suite (284 assertions, 149 table rows). Edits to ADR-119, runbook 6604 and workspaces-luks.tf select
-# this suite too (scripts/lib/test-affected-paths.sh), because N1c, N3 and WR1 read them.
+# case they belong to (switch_entry folds before the constants move). H11-H18 are the negative controls of the matrix
+# context, the issue-store id ban, the N1c/N3 document bounds, the text helpers, N4, N1's expect-404 exemption and the N3b
+# runbook-6894/postmerge exact-text pin. FLOOR and TABLE_ROWS are the realized counts of the two-entry suite (286 assertions,
+# 149 table rows). Edits to ADR-119, runbook 6604, workspaces-luks.tf, runbook 6894 and the postmerge skill select this suite
+# too (scripts/lib/test-affected-paths.sh), because N1c, N3, WR1, N1 and N3b read them.
 #
 # EQUIVALENT MUTANTS and known limits (each proven in a sandbox, none a gap in a row):
 #   * exactly 90 minutes of age is deliberately unpinned (V3b brackets 89 and 91): the age is wall-clock.
@@ -52,7 +53,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=284
+FLOOR=286
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
 TABLE_ROWS=149
@@ -2062,9 +2063,22 @@ echo "P: pins"
 _pin=$(jq -r '[.[] | objects | select(.entry == "inngest") | .volume_id] | if length == 1 then .[0] | tostring else "" end' "$TMP/x/rows.json")
 _wpin=$(jq -r '[.[] | objects | select(.entry == "web1") | .volume_id] | if length == 1 then .[0] | tostring else "" end' "$TMP/x/rows.json")
 _adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
-_rb=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$RUNBOOK" | grep -o 'v1/volumes/[0-9]*' | sort -u | tr '\n' ' ')
-if [[ -n "$_pin" && "$_pin" == "$(use_entry inngest; printf '%s' "$VOL_ID")" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL" && [[ "$_rb" == "v1/volumes/$_pin " ]]; then pass "N1 the inngest row's volume_id ($_pin) equals the id in ADR-282, in the postmerge skill's section-5c one-liner and in the runbook's section-5c one-liner"
-else fail "N1 the inngest row's volume_id='$_pin' does not equal the suite's Inngest id / ADR-282 / postmerge skill / runbook one-liner id (runbook: '$_rb')"; fi
+# N1's runbook clause (CTO ruling 3, the N1c shape): the ids every read-only line of runbook 6894 names are exactly {pin}, with
+# one exemption, a GET that expects 404 (the retired plaintext volume), which must not name the pin. The exemption is keyed on
+# the trailing comment. That is safe only because N3b's exact multiset reds any other expect-404 bearer line in this runbook
+# (ruling 7g): neither check may be removed without the other. One RE404 feeds both clauses, so a broken regex reds the set.
+RE404='v1/volumes/[0-9]+'"'"'[[:space:]]+# expect 404$'
+n1_rb() { # n1_rb <runbook-6894> <inngest-pin>: prints one line per disagreement, nothing when all agree
+  local _s _g
+  [[ -f "$1" && -r "$1" ]] || { printf 'runbook 6894 is not a readable file: %s\n' "$1"; return; }
+  _s=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$1" | grep -vE "$RE404" | grep -oE 'v1/volumes/[0-9]+' | sort -u | tr '\n' ' ')
+  [[ -n "$2" && "$_s" == "v1/volumes/$2 " ]] || printf 'runbook 6894 read-only lines (expect-404 GETs aside): want exactly v1/volumes/%s, got [%s]\n' "$2" "$_s"
+  _g=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$1" | grep -E "$RE404" | grep -cF "v1/volumes/$2'")
+  [[ "$_g" == 0 ]] || printf 'runbook 6894: %s read-only GET(s) that expect 404 name the pin %s\n' "$_g" "$2"
+}
+_n1=$(n1_rb "$RUNBOOK" "$_pin")
+if [[ -n "$_pin" && "$_pin" == "$(use_entry inngest; printf '%s' "$VOL_ID")" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL" && [[ -z "$_n1" ]]; then pass "N1 the inngest row's volume_id ($_pin) equals the id in ADR-282, in the postmerge skill's section-5c one-liner and in the runbook's section-5c one-liner, and no expect-404 read-only GET names it"
+else fail "N1 the inngest row's volume_id='$_pin' does not equal the suite's Inngest id / ADR-282 / postmerge skill / runbook one-liner id (runbook: ${_n1:-agrees})"; fi
 # N1b: the workflow carries exactly TWO comment-stripped pin literals (the two orphan sweeps), both equal to the inngest row's
 # volume_id. A literal inside the sole-copy job itself is an id-placement violation (S1). An exact count, not a floor: a deleted
 # copy (a sweep that no longer proves the volume is visible) must be red.
@@ -2177,6 +2191,48 @@ n3 test "$(grep -cx '## Read back the delete-protection flag (read-only token)' 
 n3 rb_cmdline_ok "$RB6604" "$_wpin"
 if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: ADR-282, runbook 5c, its not-protected row, the Delivery route text naming manual-rerun, After a total loss, the soleur:incident skill file, step O5 of infra-credential-tiers-8209.md, every row's ADR file, ADR-119 D1 and its 2026-10-08 addendum, runbook 6604's read-only read-back section, and its read-back and verify blocks equal to the pinned five lines"
 else fail "N3 a filer pointer does not resolve:$_n3"; fi
+# N3b (#12616, CTO ruling 4): every Hetzner-bearer line of runbook 6894 and of the postmerge skill is one of two pinned texts, built
+# by the same line builders N3 binds to runbook 6604: D, the retired-volume GET (rb_line_get404 <retired>), and R, the section-5c
+# read-back (rb_line_readback <pin>). The counts are exact (runbook {D:1, R:1}, skill {R:1}), so a deleted line is red, and the
+# first fenced block under the destroy read-back heading is exactly D, so D and R trading places is red (the multiset is blind
+# to that). Each disagreement line starts with a fixed tag (slot:, destroy-fence:, unclassified p1|p2|p3:, count D|R), which
+# H18 reads. INNGEST_RETIRED_ID is the oracle for the destroy read-back: a suite literal, deliberately NOT read from the runbook,
+# so one runbook edit cannot move the id and its oracle together.
+INNGEST_RETIRED_ID=106261946
+DESTROY_HEAD='### Read-backs after `destroy` (read-only; re-runnable)'
+destroy_section() { # destroy_section <runbook-6894>: the lines after the heading (matched by string equality) up to the next heading
+  awk -v h="$DESTROY_HEAD" 'f && /^##/ { exit } $0 == h { f = 1; next } f' "$1"
+}
+n3b_census() { # n3b_census <file> <D> <R> <want-D> <want-R>: one awk pass over EVERY line of the file
+  # A bearer line is (p1) curl beside hcloud_token or authorization, (p2) hcloud_token beside authorization (an argv header on a
+  # continuation line), or (p3) curl beside api.hetzner.cloud (a bearer staged through a variable on an earlier line); case is
+  # folded. The census reads prose too: a sentence that pairs those words is a bearer line and must be wrapped apart.
+  [[ -f "$1" && -r "$1" ]] || { printf 'count D %s: not a readable file\n' "${1##*/}"; return; }
+  N3B_D="$2" N3B_R="$3" awk -v f="${1##*/}" -v wd="$4" -v wr="$5" '
+    { l = tolower($0); p = ""
+      if (index(l, "curl") && (index(l, "hcloud_token") || index(l, "authorization"))) p = "p1"
+      else if (index(l, "hcloud_token") && index(l, "authorization")) p = "p2"
+      else if (index(l, "curl") && index(l, "api.hetzner.cloud")) p = "p3"
+      if (p == "") next
+      t = $0; sub(/^[ \t]+/, "", t)
+      if (t == ENVIRON["N3B_D"]) nd++
+      else if (t == ENVIRON["N3B_R"]) nr++
+      else printf "unclassified %s: %s:%d: %s\n", p, f, NR, substr(t, 1, 120) }
+    END { if (nd + 0 != wd + 0) printf "count D %s: want %d got %d\n", f, wd, nd + 0
+          if (nr + 0 != wr + 0) printf "count R %s: want %d got %d\n", f, wr, nr + 0 }' "$1"
+}
+n3b() { # n3b <runbook-6894> <skill> <pin> <retired>: prints one tagged line per disagreement, nothing when all agree
+  local _d _r _fb
+  if [[ -z "$3" || -z "$4" || "$3" == "$4" ]]; then printf 'slot: pin=%s retired=%s (empty or equal)\n' "$3" "$4"; return; fi
+  _d=$(rb_line_get404 "$4"); _r=$(rb_line_readback "$3")
+  _fb=$(destroy_section "$1" | fence1)
+  [[ "$_fb" == "$_d" ]] || printf 'destroy-fence: %s: the first fenced block under the destroy read-back heading is not exactly D(%s): [%s]\n' "${1##*/}" "$4" "$(head -c 120 <<<"$_fb")"
+  n3b_census "$1" "$_d" "$_r" 1 1
+  n3b_census "$2" "$_d" "$_r" 0 1
+}
+_n3b=$(n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID")
+if [[ -z "$_n3b" ]]; then pass "N3b every Hetzner-bearer line (curl, a token name, Authorization or api.hetzner.cloud) of runbook 6894 and the postmerge skill is one of the two pinned stdin-header texts: runbook 6894 holds the retired-volume GET of $INNGEST_RETIRED_ID once (as the destroy read-back fence) and the section-5c read-back of $_pin once, the skill that read-back once"
+else fail "N3b runbook 6894 / postmerge bearer lines: $(tr '\n' ';' <<<"$_n3b")"; fi
 # N4 (CTO rulings 20 and 28): the web-1 re-protect forcing function is stated the same way in ADR-119's 2026-11-10 addendum and in
 # the sole-copy job's OWN comment block (the run of comment lines directly above the job header, after the last blank or
 # non-comment line; another job's comment cannot satisfy it): the lift PR's dated re-protect follow-through issue, whose probe is
@@ -2570,6 +2626,100 @@ mut_lit "$WF" "$TMP/n4/job.reevalon.yml" "$_jcs" "$_jce" "that issue is the only
 n4_mut job-re-evaluate-on "$ADR119" "$TMP/n4/job.reevalon.yml"
 if [[ -z "$_h17" ]]; then pass "H17 N4 goes RED on a copy with the phrase removed from the ADR addendum or the job comment, 'the forcing function is Guard B4' in either, the phrase moved out of the addendum or below the job header, the marker removed from either or naming inngest, 'never the Date shape' removed, 'Re-evaluate by' or 're-evaluate on' added, 'Guard B4 is the forcing function', the marker moved into the drift-check comment, a per-row forcing function naming B4, 'Guard B4 is the web-1 forcing function' (also across a dotted path), the past-date exit 0 in either text, and a leg that ran rather than succeeded"
 else fail "H17 N4 self-test: not caught:$_h17"; fi
+# H18: N3b and N1's runbook clause on copies of the real, fixed documents (the real files are never edited; RUNBOOK and SKILL are
+# never repointed). A copy identical to its source is (did-not-land), never caught. A row edited inside one section must differ
+# from its source on exactly one line per section, inside it, or it is (misplaced): --disable and the pinned texts occur on more
+# than one line, so a file-wide edit could land on the wrong one and go red for the wrong reason. A row counts as caught only
+# when n3b prints the tag the Guard Contract names; a must-PASS copy that prints anything is spurious.
+mkdir -p "$TMP/n3b" || fatal "mkdir n3b"
+_h18=""
+_RB6894=inngest-luks-cutover-6894.md
+_ds='^### Read-backs after `destroy` [(]read-only; re-runnable[)]$'; _de='^##'   # the destroy read-back section's bounds
+_5s='^## 5c[.] '; _5e='^## '                                                   # section 5c's bounds (the next level-2 heading)
+_h18_new() { # _h18_new <label>: a fresh copy pair of the real documents under $TMP/n3b/<label>, keeping their basenames
+  mkdir -p "$TMP/n3b/$1" && cp "$RUNBOOK" "$TMP/n3b/$1/$_RB6894" && cp "$SKILL" "$TMP/n3b/$1/SKILL.md" || fatal "n3b copy $1"
+}
+_h18_awk() { # _h18_awk <file> <start-regex> <stop-regex> <A> <B> <program>: edit <file> in place with an awk program that sees
+  # f (inside the section: from the first <start> line up to the next <stop> line) and A/B through the environment, so no
+  # backslash in a pinned text is reinterpreted
+  N3B_A="$4" N3B_B="$5" awk -v s="$2" -v e="$3" 'BEGIN { A = ENVIRON["N3B_A"]; B = ENVIRON["N3B_B"] }
+    function rep(t,   i, o) { o = ""; while ((i = index(t, A)) > 0) { o = o substr(t, 1, i - 1) B; t = substr(t, i + length(A)) } return o t }
+    f && $0 ~ e { f = 0 } $0 ~ s { f = 1 } '"$6" "$1" > "$1.tmp" && mv "$1.tmp" "$1" || fatal "n3b edit $1"
+}
+n3b_sub() { _h18_awk "$1" "$2" "$3" "$4" "$5" '{ print (f ? rep($0) : $0) }'; }   # every literal A becomes B inside the section
+n3b_ins() { _h18_awk "$1" "$2" "$3" "$4" "$5" '{ print } f && !d && index($0, A) == 1 { print B; d = 1 }'; }   # B after the first line starting A
+n3b_drop() { _h18_awk "$1" "$2" "$3" "$4" "" '!(f && index($0, A)) { print }'; }   # every line holding A dropped inside the section
+_h18_placed() { # _h18_placed <label> [<start-regex> <stop-regex>]...: the runbook copy changed exactly one line in each section
+  local l="$1" c="$TMP/n3b/$1/$_RB6894" ch s n=0; shift
+  ch=$(awk 'NR == FNR { a[FNR] = $0; n = FNR; next } { m = FNR; if (!(FNR in a) || a[FNR] != $0) print FNR } END { if (m != n) print "len" }' "$RUNBOOK" "$c")
+  while (( $# >= 2 )); do
+    s=$(awk -v s="$1" -v e="$2" 'f && $0 ~ e { f = 0 } $0 ~ s { f = 1 } f { print NR }' "$c")
+    [[ "$(grep -cxF -f <(printf '%s\n' "$s") <<<"$ch")" == 1 ]] || { _h18+=" $l(misplaced)"; return 1; }
+    n=$((n + 1)); shift 2
+  done
+  [[ "$(grep -c . <<<"$ch")" == "$n" ]] || { _h18+=" $l(misplaced)"; return 1; }
+}
+_h18_landed() { # _h18_landed <label>: 0 when the copy pair differs from the real pair
+  if cmp -s "$TMP/n3b/$1/$_RB6894" "$RUNBOOK" && cmp -s "$TMP/n3b/$1/SKILL.md" "$SKILL"; then _h18+=" $1(did-not-land)"; return 1; fi
+}
+_h18_judge() { # _h18_judge <label> <tag>...: n3b on the copy pair must print a line starting with each tag; "-count" means no count line
+  local l="$1" o t; shift
+  _h18_landed "$l" || return
+  o=$'\n'$(n3b "$TMP/n3b/$l/$_RB6894" "$TMP/n3b/$l/SKILL.md" "$_pin" "$INNGEST_RETIRED_ID")
+  for t in "$@"; do
+    if [[ "$t" == -count ]]; then [[ "$o" != *$'\n''count '* ]] || _h18+=" spurious:$l:$(grep -m1 '^count ' <<<"$o")"
+    elif [[ "$o" != *$'\n'"$t"* ]]; then _h18+=" uncaught:$l"; fi
+  done
+}
+_h18_silent() { # _h18_silent <label>: a must-PASS copy; n3b prints nothing
+  local o; _h18_landed "$1" || return
+  o=$(n3b "$TMP/n3b/$1/$_RB6894" "$TMP/n3b/$1/SKILL.md" "$_pin" "$INNGEST_RETIRED_ID")
+  [[ -z "$o" ]] || _h18+=" spurious:$1:$(head -1 <<<"$o")"
+}
+_h18_n1() { # _h18_n1 <label> <red|pass>: N1's runbook clause on the copy (Guard 2)
+  local o; _h18_landed "$1" || return
+  o=$(n1_rb "$TMP/n3b/$1/$_RB6894" "$_pin")
+  if [[ "$2" == red ]]; then [[ -n "$o" ]] || _h18+=" uncaught:$1"; else [[ -z "$o" ]] || _h18+=" spurious:$1:$(head -1 <<<"$o")"; fi
+}
+_h18_d=$(rb_line_get404 "$INNGEST_RETIRED_ID"); _h18_r=$(rb_line_readback "$_pin")
+_argv='curl --disable --noproxy "*" -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" --max-time 30 '
+# Guard 1 (N3b) rows 1-10.
+_h18_new g1r1; n3b_sub "$TMP/n3b/g1r1/$_RB6894" "$_ds" "$_de" "$RB_HDR" "$_argv"
+_h18_placed g1r1 "$_ds" "$_de" && _h18_judge g1r1 'destroy-fence:'
+_h18_new g1r2; n3b_sub "$TMP/n3b/g1r2/$_RB6894" "$_5s" "$_5e" 'curl --disable --noproxy "*" ' 'curl --noproxy "*" '
+_h18_placed g1r2 "$_5s" "$_5e" && _h18_judge g1r2 "unclassified p1: $_RB6894:"
+_h18_new g1r3; n3b_sub "$TMP/n3b/g1r3/$_RB6894" "$_ds" "$_de" "v1/volumes/$INNGEST_RETIRED_ID'" "v1/volumes/$_pin'"
+_h18_placed g1r3 "$_ds" "$_de" && _h18_judge g1r3 'destroy-fence:' && _h18_n1 g1r3 red   # Guard 2 row 1 (the pin clause)
+_h18_new g1r4; n3b_sub "$TMP/n3b/g1r4/$_RB6894" "$_ds" "$_de" "'   # expect 404" "'"
+_h18_placed g1r4 "$_ds" "$_de" && _h18_judge g1r4 'destroy-fence:' && _h18_n1 g1r4 red   # Guard 2 row 2 (the set clause)
+_h18_new g1r5; n3b_sub "$TMP/n3b/g1r5/SKILL.md" '' '^@@never@@$' '--config - --max-time 30 ' '--config - '
+_h18_judge g1r5 'unclassified p1: SKILL.md:'
+_h18_new g1r6; n3b_ins "$TMP/n3b/g1r6/$_RB6894" "$_ds" "$_de" 'Expect `404`.' 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes'
+_h18_judge g1r6 'unclassified p1:'
+_h18_new g1r7; n3b_drop "$TMP/n3b/g1r7/$_RB6894" "$_ds" "$_de" "$_h18_d"
+_h18_judge g1r7 'destroy-fence:' 'count D'
+_h18_new g1r8; n3b_ins "$TMP/n3b/g1r8/$_RB6894" "$_ds" "$_de" 'Expect `404`.' '-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" \'
+_h18_judge g1r8 'unclassified p2:'
+_h18_new g1r9; n3b_sub "$TMP/n3b/g1r9/$_RB6894" "$_ds" "$_de" "$_h18_d" "$_h18_r"; n3b_sub "$TMP/n3b/g1r9/$_RB6894" "$_5s" "$_5e" "$_h18_r" "$_h18_d"
+_h18_placed g1r9 "$_ds" "$_de" "$_5s" "$_5e" && _h18_judge g1r9 'destroy-fence:' -count
+_h18_new g1r10; n3b_ins "$TMP/n3b/g1r10/$_RB6894" "$_ds" "$_de" 'Expect `404`.' 'T=$HCLOUD_TOKEN_READONLY'
+n3b_ins "$TMP/n3b/g1r10/$_RB6894" "$_ds" "$_de" 'T=$HCLOUD_TOKEN_READONLY' 'curl -sS --oauth2-bearer "$T" https://api.hetzner.cloud/v1/volumes'
+_h18_judge g1r10 'unclassified p3:'
+# Harness rows: H-a a must-PASS non-canonical copy; H-b the slot check fires alone (exactly one line, tagged slot:).
+_h18_new ha; n3b_sub "$TMP/n3b/ha/$_RB6894" "$_ds" "$_de" 'Expect `404`.' 'A `404` is the expected answer.'
+n3b_ins "$TMP/n3b/ha/$_RB6894" "$_ds" "$_de" 'A `404` is' 'Run it with the local curl.'
+_h18_silent ha
+for _sl in "" "$INNGEST_RETIRED_ID"; do
+  _h18o=$(n3b "$RUNBOOK" "$SKILL" "$_sl" "$INNGEST_RETIRED_ID")
+  [[ "$(grep -c . <<<"$_h18o")" == 1 && "$_h18o" == 'slot:'* ]] || _h18+=" uncaught:hb-pin='$_sl'"
+done
+# Guard 2 (N1's runbook clause) rows 3-4; rows 1-2 ride on g1r3 and g1r4 above.
+_h18_new g2r3; n3b_drop "$TMP/n3b/g2r3/$_RB6894" '' '^@@never@@$' '--only-secrets HCLOUD_TOKEN_READONLY'
+_h18_n1 g2r3 red
+_h18_new g2r4; n3b_ins "$TMP/n3b/g2r4/$_RB6894" "$_ds" "$_de" "$_h18_d" "$(rb_line_get404 105149570)"
+_h18_n1 g2r4 pass   # judged by n1_rb only: N3b reds it by design
+if [[ -z "$_h18" ]]; then pass "H18 N3b and N1's runbook clause on copies: N3b goes RED with its named tag on an argv -H destroy line, a 5c line without --disable, the destroy line naming the pin or without its expect-404 comment, a skill copy without --max-time, a second argv bearer in prose, a deleted destroy line, an argv header on a continuation line, D and R swapped (the fence check, not the counts) and a bearer staged through a variable; a reworded copy stays green and an empty or equal slot reports only slot:; N1 goes RED on the pin-naming and comment-less destroy lines and on no read-only line at all, and stays green on a second expect-404 GET of another id"
+else fail "H18 N3b / N1 self-test:$_h18"; fi
 
 cmp -s "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fail "Z0 the library copy drifted during the run"
 echo ""
