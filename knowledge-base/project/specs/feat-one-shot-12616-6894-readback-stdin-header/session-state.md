@@ -32,3 +32,9 @@
 - constraint: Standing operator holds unchanged, never discharged here, tracked on 12272. A6 console check and signature, Hetzner support question, off-project ciphertext copy decision, host-replace window and per-command go, closing the epic.
 - constraint: Operator notes go only on 12272. Leave 12608 untouched.
 - constraint: Rollout needs no operator step, semver patch, normal ship and auto-merge.
+
+## Work Phase
+
+- Commit A 6afc6b5f7f (equivalence refactor, `cmp` identical, 284/284); Commit B ccdf7edf52 (fix + N1/N3b/H18, 286/286);
+  tasks commit 8adeccc48f. Pushed to PR #12645, label `semver:patch`.
+- RED on unfixed documents: 284/286 (N3b, H18). AC2 replay, four CTO mutants, stub run (bash + dash, 20/20) in PR body.
