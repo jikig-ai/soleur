@@ -29,7 +29,7 @@ ADR-322 applies to every file, commit and the PR body.
 - [x] 3.3 `inngest-host.tf`: derived `WEB_HOST_PRIVATE_IPS`; workflows pinned by parity test
 - [x] 3.4 `lb-weight-gate.sh`: drop the literal `web-2`
 - [x] 3.5 Census doc (egress-tokens dir at birth, cron state, per-host heartbeat)
-- [ ] 3.6 `terraform plan` (web-platform root): no change to servers, volumes, attachments, tunnel, LB pool; quote in PR body
+- [x] 3.6 `terraform plan` (web-platform root): no change to servers, volumes, attachments, tunnel, LB pool; quote in PR body
 
 ## Phase 4: Docs + ADR
 
@@ -37,7 +37,7 @@ ADR-322 applies to every file, commit and the PR body.
 - [x] 4.2 Pointer addenda: ADR-263, ADR-220, ADR-100 Decision 1, ADR-143 D2
 - [x] 4.3 Runbooks: `host-kernel-patch-cadence.md`, `web-host-replace.md` (new failure rows, red replace not a serving target, explicit `-f image_tag=`)
 - [x] 4.4 Spec FR2/FR3/TR4 to ruling C; Part 2 scope
-- [ ] 4.5 Re-run trail/window-pinning suites; `plugins/soleur/test/c4-count-parity.test.sh`
+- [x] 4.5 Re-run trail/window-pinning suites; `plugins/soleur/test/c4-count-parity.test.sh`
 - [x] 4.6 File the shared-project 100-event page truncation issue; update #9421 with the 7-PR sequence
 
 ## Phase 5: Ship

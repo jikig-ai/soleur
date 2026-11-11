@@ -101,9 +101,7 @@ eq "structure: no web_tunnel_connector predicate names a key" "$(grep -cE 'web_t
 # ── HARNESS: evaluate the shipped blocks and expressions under terraform console ───────────────
 # terraform is required everywhere: the console rows ARE the property (a skip would leave a floor-only shell).
 command -v terraform >/dev/null 2>&1 || harness "terraform is not installed (the console rows are not optional)"
-CONSOLE=1
-
-if [[ "$CONSOLE" -eq 1 ]]; then
+{
   H="$WORK/h"; mkdir -p "$H"
   {
     block "$VARS" 'variable "web_hosts"' || harness "variable web_hosts block not found"
@@ -123,6 +121,7 @@ if [[ "$CONSOLE" -eq 1 ]]; then
   con 'local.derived_ips';                       eq "console: derived web IP list" "$CON_OUT" '"10.0.1.10,10.0.1.11"'
   DERIVED_IPS="$(printf '%s' "$CON_OUT" | tr -d '"')"
   con 'local.jump_ip';                           eq "console: the jump host is web-1 (unchanged)" "$CON_OUT" '"10.0.1.10"'
+  JUMP_IP="$(printf '%s' "$CON_OUT" | tr -d '"')"
   con 'local.connector';                         eq "console: the tunnel connector is web-2 (unchanged)" "$CON_OUT" '"web-2"'
   con 'local.primary';                           eq "console: the luks-monitor primary is web-1 (unchanged)" "$CON_OUT" '"web-1"'
 
@@ -135,6 +134,14 @@ if [[ "$CONSOLE" -eq 1 ]]; then
   eq "third key: web-3 joins the derived IP list in key order" "$CON_OUT" '"10.0.1.10,10.0.1.11,10.0.1.12"'
   con 'jsonencode(local.web_lb_weights)' -var "web_hosts={${W1},${W2},${W3}}" -var web2_lb_weight=0
   eq "third key: the web-2 drain does not touch web-1 or web-3" "$CON_OUT" '"{\"web-1\":1,\"web-2\":0,\"web-3\":0}"'
+  con 'jsonencode(local.web_lb_ungated)'
+  eq "ungated: today only web-1 serves outside the drain gate" "$CON_OUT" '"[\"web-1\"]"'
+  W3P='"web-3"={location="hel1",private_ip="10.0.1.12",server_type="cpx22",lb_weight=1}'
+  con 'jsonencode(local.web_lb_ungated)' -var "web_hosts={${W1},${W2},${W3P}}"
+  eq "ungated: web-3 declared at weight 1 is a second ungated host (the pool precondition refuses it)" "$CON_OUT" '"[\"web-1\",\"web-3\"]"'
+  # The precondition is what turns that list into a refusal; console cannot evaluate resource lifecycle, so pin it.
+  eq "ungated: the GA pool carries the at-most-one-ungated precondition" \
+    "$(awk '/^resource "cloudflare_load_balancer_pool" "web_1"/,/^}/' "$LB" | grep -cE '^[[:space:]]*condition[[:space:]]*=[[:space:]]*length\(local\.web_lb_ungated\)[[:space:]]*<=[[:space:]]*1[[:space:]]*$')" 1
 
   refuse() { # refuse <name> <web_hosts HCL> <message fragment>
     con 'jsonencode(local.web_lb_weights)' -var "web_hosts=$2"
@@ -152,16 +159,11 @@ if [[ "$CONSOLE" -eq 1 ]]; then
   refuse "refuse: the gateway address (.1)" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.1\",tunnel_connector=true}}" "last octet must be 2-254"
   refuse "refuse: an address outside the subnet" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.2.11\",tunnel_connector=true}}" "10.0.1.0/24 private subnet"
   refuse "refuse: lb_weight other than 0 or 1" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=2,tunnel_connector=true}}" "lb_weight must be 0"
-else
-  DERIVED_IPS=""
-fi
+}
 
 # ── PARITY: every hand-kept WEB_HOST_PRIVATE_IPS copy equals the derived list ──────────────────
-# Workflows cannot read Terraform at run time, so the copies stay literal; this pins them. Without
-# the console (local only) the expected value falls back to the default map's private_ip values.
-if [[ -z "$DERIVED_IPS" ]]; then
-  DERIVED_IPS="$(block "$VARS" 'variable "web_hosts"' | sed -n '/^  default = {/,/^  }/p' | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' | grep -oE '[0-9.]+' | paste -sd, -)"
-fi
+# Workflows cannot read Terraform at run time, so the copies stay literal; this pins them to the console values.
+[[ -n "${DERIVED_IPS:-}" && -n "${JUMP_IP:-}" ]] || harness "the console did not yield the derived IP list and the jump address"
 COPIES="$(cd "$ROOT" && git grep -hE '^[[:space:]]*WEB_HOST_PRIVATE_IPS:[[:space:]]*"' -- '.github/workflows/*.yml' | sed -E 's/^[[:space:]]*WEB_HOST_PRIVATE_IPS:[[:space:]]*"([^"]*)".*/\1/')"
 NCOPIES="$(printf '%s\n' "$COPIES" | grep -c . || true)"
 MIN_COPIES=8
@@ -171,6 +173,15 @@ if [[ "$NCOPIES" -lt "$MIN_COPIES" ]]; then
 fi
 eq "parity: every workflow WEB_HOST_PRIVATE_IPS copy equals the list derived from var.web_hosts ($NCOPIES copies)" \
   "$(printf '%s\n' "$COPIES" | sort -u | paste -sd'|' -)" "$DERIVED_IPS"
+# The singular WEB_HOST_PRIVATE_IP copies are the bridge/dial target behind the ssh. jump: each must be the jump host.
+JCOPIES="$(cd "$ROOT" && git grep -hE '^[[:space:]]*WEB_HOST_PRIVATE_IP:[[:space:]]*"' -- '.github/workflows/*.yml' | sed -E 's/^[[:space:]]*WEB_HOST_PRIVATE_IP:[[:space:]]*"([^"]*)".*/\1/')"
+NJCOPIES="$(printf '%s\n' "$JCOPIES" | grep -c . || true)"
+if [[ "$NJCOPIES" -lt 3 ]]; then
+  printf 'web-hosts-generic: FAIL (found %d WEB_HOST_PRIVATE_IP workflow copies; floor 3 - the jump parity scan may be blind)\n' "$NJCOPIES" >&2
+  exit 1
+fi
+eq "parity: every workflow WEB_HOST_PRIVATE_IP copy is the jump host's address ($NJCOPIES copies)" \
+  "$(printf '%s\n' "$JCOPIES" | sort -u | paste -sd'|' -)" "$JUMP_IP"
 
 # ── RATCHET: web-1 literals outside the knowledge base only shrink ────────────────────────────
 # Ceilings are the counts measured when this suite landed (2026-11-10). A later PR that removes a
@@ -179,11 +190,11 @@ eq "parity: every workflow WEB_HOST_PRIVATE_IPS copy equals the list derived fro
 count_lit() { # count_lit <ERE>
   (cd "$ROOT" && git ls-files -z -- ':!knowledge-base/**' ':!*.md' ":!$SELF_REL" | xargs -0 grep -ohE "$1" 2>/dev/null | wc -l | tr -d ' ')
 }
-IP_CEIL=267
+IP_CEIL=266
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
-KEY_CEIL=411
+KEY_CEIL=410
 N_KEY="$(count_lit '"web-1"')"
 cases=$((cases + 1))
 if [[ "$N_KEY" -le "$KEY_CEIL" && "$N_KEY" -gt 0 ]]; then pass "ratchet: \"web-1\" literal count $N_KEY <= $KEY_CEIL"; else fail "ratchet: \"web-1\" literal count $N_KEY exceeds the ceiling $KEY_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
@@ -204,10 +215,18 @@ ok "census C3: probe heartbeat key names derive from the host key at birth" \
 N_KEYS="$(block "$VARS" 'variable "web_hosts"' | sed -n '/^  default = {/,/^  }/p' | grep -cE '^    "web-[0-9]+"[[:space:]]*=')"
 N_HB="$(grep -cE '^resource "betteruptime_heartbeat" "host_kernel_web_[0-9]+"' "$UPT")"
 eq "census C4: one host-kernel heartbeat per var.web_hosts key ($N_KEYS keys)" "$N_HB" "$N_KEYS"
-ok "census: the doc names all four rows" "$([[ "$(grep -cE '^\| C[1-4] \|' "$CENSUS")" -eq 4 ]]; echo $?)"
+ok "census C3: each probe URL's Doppler secret is minted per var.web_hosts key" \
+  "$([[ "$(awk '/^resource "doppler_secret" "web_(zot_consumer|nic_guard|bash_synthetic)_url"/{r=1} r&&/^  for_each = var\.web_hosts$/{n++; r=0} /^}/{r=0} END{print n+0}' "$DIR/web-probe.tf")" -eq 3 ]]; echo $?)"
+ok "census C5: the session-proxy certificate SANs derive from var.web_hosts" \
+  "$(grep -qE '^  ip_addresses = \[for h in values\(var\.web_hosts\) : h\.private_ip\]$' "$DIR/proxy-tls.tf" && grep -qE '^  dns_names    = concat\(keys\(var\.web_hosts\), \["localhost"\]\)$' "$DIR/proxy-tls.tf"; echo $?)"
+ok "census C6: no Terraform resource derives the relay roster or allowlist (hand-kept Doppler values)" \
+  "$(! grep -qE '"(SOLEUR_HOST_ROSTER|SOLEUR_PROXY_PEER_ALLOWLIST)"' < <(grep -hvE '^[[:space:]]*#' "$DIR"/*.tf); echo $?)"
+eq "census C7: one committed SSH host-key pin per var.web_hosts key ($N_KEYS keys)" \
+  "$(find "$DIR" -maxdepth 1 -name 'web-*-ssh-host-key.pub' | wc -l | tr -d ' ')" "$N_KEYS"
+ok "census: the doc names all seven rows" "$([[ "$(grep -cE '^\| C[1-7] \|' "$CENSUS")" -eq 7 ]]; echo $?)"
 
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────────────────
-MIN_CASES=34
+MIN_CASES=42
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'web-hosts-generic: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

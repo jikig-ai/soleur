@@ -51,6 +51,7 @@ reset_def() {
     [GIT_DATA_LUKS_CUTOVER_AT]="$ELAPSED_CUTOVER"
     [GIT_DATA_LUKS_SOAK_DAYS]='3'
     [WORKSPACES_LUKS_CUTOVER_AT]="$ELAPSED_CUTOVER"
+    [WORKSPACES_LUKS_MARKER_HOST]='web-2'
     [WORKSPACES_LUKS_SOAK_DAYS]='3'
   )
 }
@@ -144,8 +145,15 @@ assert_stdout_contains "third key: standby branch prints SHAPE-ONLY" "SHAPE-ONLY
 reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-2,web-3'; run_with_def
 assert_rejects_with "third key: web-3 in rotation, absent from roster -> refused" "A_web2_not_in_roster"
 # web-3 pooled with a roster + allowlist naming it -> the authorized-flip pass, keyed on web-3 not web-2.
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-3":"10.0.1.12"}'; run_with_def
-assert_zero "third key: web-3 pooled, in roster, addr allowlisted -> authorized"
+# The workspaces LUKS marker is unkeyed and attests only its writer's host (web-2): web-3 cannot inherit it.
+R13='{"web-1":"10.0.1.10","web-3":"10.0.1.12"}'
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+assert_rejects_with "third key: web-3 pooled on web-2's LUKS marker -> refused" "B_workspaces_luks_marker_other_host"
+reset_def; unset 'DEF[WORKSPACES_LUKS_MARKER_HOST]'; run_with_def
+assert_rejects_with "marker host unset (marker present) -> refused, never assumed" "B_workspaces_luks_marker_other_host"
+# Same web-3 config with a marker that attests web-3 -> the authorized-flip pass, keyed on web-3 not web-2.
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+assert_zero "third key: web-3 pooled, in roster, addr allowlisted, marker attests web-3 -> authorized"
 assert_stdout_contains "third key: authorized branch prints the flip marker" "requires_runtime_bind_probe=true"
 # web-3 pooled, roster has it but its address is not allowlisted (web-2's is) -> refused on web-3's address.
 reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; run_with_def
@@ -1199,7 +1207,7 @@ a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unp
 GATE="$GATE_PRISTINE"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=326
+MIN_CASES=330
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

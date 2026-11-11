@@ -78,6 +78,10 @@ locals {
   web_lb_weights = {
     for k, h in var.web_hosts : k => min(h.lb_weight, lookup(local.web_lb_gate, k, h.lb_weight))
   }
+  # Hosts that serve with no gated drain/serve input (web-1 today). The pool's precondition allows at most
+  # one, so a new key declared at lb_weight = 1 is refused at plan time instead of pooling ungated: it must
+  # enter local.web_lb_gate (and the lb-weight-gate chain) first.
+  web_lb_ungated = [for k, h in var.web_hosts : k if h.lb_weight > 0 && !contains(keys(local.web_lb_gate), k)]
 }
 
 resource "cloudflare_load_balancer_pool" "web_1" {
@@ -116,6 +120,13 @@ resource "cloudflare_load_balancer_pool" "web_1" {
 
   latitude  = 0
   longitude = 0
+
+  lifecycle {
+    precondition {
+      condition     = length(local.web_lb_ungated) <= 1
+      error_message = "At most one web host may serve outside the drain gate (local.web_lb_gate); add the new key to the gate before declaring lb_weight = 1."
+    }
+  }
 }
 
 # Page on origin-down: the LB now carries a real health signal (monitor fixed 2026-11-01),

@@ -82,9 +82,10 @@ D=$(sed -n 's/^BOOT_TRAIL_DEADLINE_S=\([0-9][0-9]*\)$/\1/p' "$TRAIL" | head -1)
 G=$(sed -n 's/^CC_GRACE="\${SOLEUR_BOOT_TRAIL_CC_GRACE:-\([0-9][0-9]*\)}"$/\1/p' "$TRAIL" | head -1)
 SL=$(sed -n 's/^  sleep \([0-9][0-9]*\)$/\1/p' "$TRAIL" | head -1)
 CM=$(sed -n 's/.*curl --disable --noproxy .\*. -s --max-time \([0-9][0-9]*\) -G .*/\1/p' "$TRAIL" | head -1)
+RQ=$(sed -n 's/.*curl --disable --noproxy .\*. -s --max-time \([0-9][0-9]*\) -o "\$tmp".*/\1/p' "$TRAIL" | head -1)
 job_timeout() { awk -v j="  $1:" '$0==j{f=1;next} f&&/^  [a-z_]+:$/{exit} f&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$WF"; }
 TC=$(job_timeout web_host_create); TR=$(job_timeout web_host_replace)
-for v in W D G SL CM TC TR; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
+for v in W D G SL CM RQ TC TR; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
 eq "budget: trail deadline = host boot window + 60 s (moved together)" "$D" "$((W + 60))"
 ok "budget: the boot window covers the settle reboot (>= 1140 s)" "$([[ "$W" -ge 1140 ]]; echo $?)"
 grep -qF 'DEADLINE=$(( SECONDS + BOOT_TRAIL_DEADLINE_S ))' "$TRAIL"; ok "budget: the poll deadline is computed from BOOT_TRAIL_DEADLINE_S" $?
@@ -92,7 +93,9 @@ grep -qF 'within ${BOOT_TRAIL_DEADLINE_S}s' "$TRAIL" && ! grep -qE 'within [0-9]
 ok "budget: the timeout ::error:: names the deadline variable, not a stale literal" $?
 grep -qF "SOLEUR_FRESH_BOOT_WINDOW_SECONDS is ${W})" "$TRAIL"; ok "budget: the timeout ::error:: quotes the host's current window ($W s)" $?
 PRE_POLL_S=660
-WORST=$((D + G + SL + CM))
+# Worst case: an iteration that STARTS just before the deadline (sleep + curl) runs past it, the grace
+# loop can do the same, and the timeout branch then makes its two server-side re-reads (origin_query).
+WORST=$((D + 2 * (SL + CM) + G + CM + 2 * RQ))
 ok "budget: create worst case ($((PRE_POLL_S + WORST)) s) fits timeout-minutes $TC" "$([[ $((PRE_POLL_S + WORST)) -le $((TC * 60)) ]]; echo $?)"
 ok "budget: replace worst case ($((PRE_POLL_S + 60 + WORST)) s) fits timeout-minutes $TR" "$([[ $((PRE_POLL_S + 60 + WORST)) -le $((TR * 60)) ]]; echo $?)"
 
@@ -177,7 +180,7 @@ with open(rep, "w") as r:
     r.write("apt_install_repairs_dpkg=%d\n" % (1 if inst and re.search(r"; do .*dpkg --configure -a.*; done", inst[0]) else 0))
     r.write("top_power_state=%d\n" % (1 if "power_state" in doc else 0))
     r.write("top_packages=%d\n" % (1 if "packages" in doc else 0))
-    r.write("marker_root_disk=%d\n" % (1 if "/var/lib/soleur/kernel-settle" in settle and "/run/" not in settle else 0))
+    r.write("marker_root_disk=%d\n" % (1 if re.search(r"\bM=/var/lib/soleur/kernel-settle;", settle) and not re.search(r"\bM=/run/", settle) else 0))
     tr, rm, rb, em = pos(settle, "trap - EXIT"), pos(settle, "rm -f "), pos(settle, "; reboot "), pos(settle, "kernel_reboot info")
     r.write("order_ok=%d\n" % (1 if -1 not in (tr, rm, rb, em) and em < tr < rm < rb else 0))
     r.write("reboots_in_runcmd=%d\n" % sum(len(re.findall(r"(^|[;&|\s])(reboot|shutdown -r|systemctl reboot)(\s|;|$)", strip_comments(i), re.M)) for i in S))
@@ -269,30 +272,34 @@ run_settle() {
   R_SEM=absent; [[ -e "$sem" ]] && R_SEM=present
   R_MARK=absent; [[ -e "$mark" ]] && R_MARK=present
   R_AFTER=0; [[ "$R_OUT" == *__AFTER_SETTLE__* ]] && R_AFTER=1
+  R_WHY="$(cat "$SB/run/soleur-stage-detail" 2>/dev/null || true)"
 }
 # summary line the cases compare against (one string per case keeps every field in one assertion).
-summ() { printf 'rc=%s after=%s emits=[%s] reboot=[%s] sleep600=%s sem=%s marker=%s refused=[%s]' \
-  "$R_RC" "$R_AFTER" "$R_EMITS" "$R_REBOOT" "$R_SLEEP" "$R_SEM" "$R_MARK" "$R_REFUSED"; }
+summ() { printf 'rc=%s after=%s emits=[%s] reboot=[%s] sleep600=%s sem=%s marker=%s refused=[%s] detail=[%s]' \
+  "$R_RC" "$R_AFTER" "$R_EMITS" "$R_REBOOT" "$R_SLEEP" "$R_SEM" "$R_MARK" "$R_REFUSED" "$R_WHY"; }
 
 FATAL_SETTLE="runcmd_start info;kernel_settle fatal"
 case_match()      { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-2-generic run_settle; summ; }
 case_reboot()     { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-1-generic run_settle; summ; }
 case_second()     { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-1-generic KC_MARK_PRESENT=1 run_settle; summ; }
+case_settled()    { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-2-generic KC_MARK_PRESENT=1 run_settle; summ; }
 case_unreadable() { KC_DPKG_RC=1 KC_UNAME=0.0.0-1-generic run_settle; summ; }
 case_empty()      { KC_TARGET='' KC_UNAME=0.0.0-1-generic run_settle; summ; }
 case_nosem()      { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-1-generic KC_SEM_PRESENT=0 run_settle; summ; }
 case_stuck()      { KC_TARGET=0.0.0-2-generic KC_UNAME=0.0.0-1-generic KC_REBOOT=return run_settle; summ; }
 
-W_MATCH="rc=0 after=1 emits=[runcmd_start info] reboot=[] sleep600=0 sem=present marker=absent refused=[]"
-W_REBOOT="rc=137 after=0 emits=[runcmd_start info;kernel_reboot info] reboot=[reboot sem=absent marker=present] sleep600=0 sem=absent marker=present refused=[]"
-W_SECOND="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=present marker=present refused=[]"
-W_UNREAD="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=present marker=absent refused=[]"
-W_NOSEM="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=absent marker=absent refused=[]"
-W_STUCK="rc=1 after=0 emits=[runcmd_start info;kernel_reboot info;kernel_settle fatal] reboot=[reboot sem=absent marker=present] sleep600=1 sem=absent marker=present refused=[]"
+W_MATCH="rc=0 after=1 emits=[runcmd_start info] reboot=[] sleep600=0 sem=present marker=absent refused=[] detail=[]"
+W_SETTLED="rc=0 after=1 emits=[runcmd_start info] reboot=[] sleep600=0 sem=present marker=present refused=[] detail=[]"
+W_REBOOT="rc=137 after=0 emits=[runcmd_start info;kernel_reboot info] reboot=[reboot sem=absent marker=present] sleep600=0 sem=absent marker=present refused=[] detail=[]"
+W_SECOND="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=present marker=present refused=[] detail=[why=second_mismatch]"
+W_UNREAD="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=present marker=absent refused=[] detail=[why=no_target]"
+W_NOSEM="rc=1 after=0 emits=[$FATAL_SETTLE] reboot=[] sleep600=0 sem=absent marker=absent refused=[] detail=[why=no_semaphore]"
+W_STUCK="rc=1 after=0 emits=[runcmd_start info;kernel_reboot info;kernel_settle fatal] reboot=[reboot sem=absent marker=present] sleep600=1 sem=absent marker=present refused=[] detail=[why=reboot_returned]"
 
 eq "behaviour: running kernel = target -> no reboot, runcmd continues, no marker" "$(case_match)" "$W_MATCH"
 eq "behaviour: mismatch, first pass -> marker, kernel_reboot info, semaphore removed BEFORE one reboot" "$(case_reboot)" "$W_REBOOT"
 eq "behaviour: mismatch on the second pass (marker present) -> named fatal, no reboot" "$(case_second)" "$W_SECOND"
+eq "behaviour: second pass on the target kernel (marker present) -> no reboot, runcmd continues" "$(case_settled)" "$W_SETTLED"
 eq "behaviour: unreadable dpkg -> named fatal, no reboot" "$(case_unreadable)" "$W_UNREAD"
 eq "behaviour: meta package with no linux-image dependency -> named fatal, no reboot" "$(case_empty)" "$W_UNREAD"
 eq "behaviour: semaphore absent (cloud-init renamed it) -> named fatal, no reboot, no marker" "$(case_nosem)" "$W_NOSEM"
@@ -310,15 +317,15 @@ mut_row() { # <name> <case-fn> <want> <from> <to>
   cases=$((cases + 1))
   if [[ "$got" != "$want" ]]; then pass "mutation: $name is caught by $fn"; else fail "mutation: $name SURVIVED $fn"; fi
 }
-mut_row "marker ignored (always reboot on mismatch)" case_second "$W_SECOND" '[ ! -e $M ] && ' ''
-mut_row "semaphore-exists guard dropped" case_nosem "$W_NOSEM" ' && [ -f $S ]' ''
-mut_row "empty target treated as a match" case_empty "$W_UNREAD" '[ -n "$K" ] || exit 1' ':'
-mut_row "post-reboot fatal dropped (stuck reboot falls through)" case_stuck "$W_STUCK" 'sleep 600; on_err' 'sleep 600'
-mut_row "semaphore not removed" case_reboot "$W_REBOOT" 'rm -f $S; ' ''
+mut_row "marker ignored (always reboot on mismatch)" case_second "$W_SECOND" "[ ! -e \$M ] || { printf 'why=second_mismatch' > \$D; exit 1; }" ''
+mut_row "semaphore-exists guard dropped" case_nosem "$W_NOSEM" "[ -f \$S ] || { printf 'why=no_semaphore' > \$D; exit 1; }" ''
+mut_row "empty target treated as a match" case_empty "$W_UNREAD" "[ -n \"\$K\" ] || { printf 'why=no_target' > \$D; exit 1; }" ':'
+mut_row "post-reboot fatal dropped (stuck reboot falls through)" case_stuck "$W_STUCK" '> $D; on_err' '> $D'
+mut_row "semaphore not removed" case_reboot "$W_REBOOT" 'rm -f $S || on_err; ' ''
 mut_row "marker not written" case_reboot "$W_REBOOT" ': > $M' ':'
 
 echo
-MIN_CASES=35
+MIN_CASES=36
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'kernel-currency: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

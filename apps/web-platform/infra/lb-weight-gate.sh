@@ -263,6 +263,9 @@ WS_MARKER="${WORKSPACES_LUKS_CUTOVER_AT-}"
 WS_MARKER="${WS_MARKER#"${WS_MARKER%%[![:space:]]*}"}"
 WS_MARKER="${WS_MARKER%"${WS_MARKER##*[![:space:]]}"}"
 [[ -n "$WS_MARKER" ]] || fail "B_workspaces_luks_marker_absent"
+# The marker is UNKEYED: its only writer probes one host, so it attests that host and no other. The seam
+# names that host (WORKSPACES_LUKS_MARKER_HOST); pooling any OTHER key on it is refused, never inherited.
+[[ "${WORKSPACES_LUKS_MARKER_HOST-}" == "$HOST" ]] || fail "B_workspaces_luks_marker_other_host"
 [[ "$WS_MARKER" =~ $ISO_RE ]] || fail "B_workspaces_luks_marker_unparseable"
 ws_epoch=$(date -u -d "$WS_MARKER" +%s 2>/dev/null) || fail "B_workspaces_luks_marker_unparseable"
 [[ "$ws_epoch" =~ ^-?[0-9]+$ ]] || fail "B_workspaces_luks_marker_unparseable"

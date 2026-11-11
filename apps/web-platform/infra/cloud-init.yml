@@ -430,15 +430,16 @@ runcmd:
     n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq linux-image-generic nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; timeout 120 dpkg --configure -a || :; sleep 10; done
   # ADR-326: one reboot onto the new kernel; runcmd re-runs.
   - |
-    STAGE=kernel_settle
+    STAGE=kernel_settle; D=/run/soleur-stage-detail
     K=$(dpkg-query -W -f='$${Depends}' linux-image-generic | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | cut -c13-)
-    [ -n "$K" ] || exit 1
+    [ -n "$K" ] || { printf 'why=no_target' > $D; exit 1; }
     if [ "$K" != "$(uname -r)" ]; then
       M=/var/lib/soleur/kernel-settle; S=/var/lib/cloud/instance/sem/config_scripts_user
-      [ ! -e $M ] && [ -f $S ] || exit 1
+      [ ! -e $M ] || { printf 'why=second_mismatch' > $D; exit 1; }
+      [ -f $S ] || { printf 'why=no_semaphore' > $D; exit 1; }
       mkdir -p /var/lib/soleur; : > $M
       _emit "soleur-cloud-init boot stage" kernel_reboot info
-      trap - EXIT; rm -f $S; reboot || :; sleep 600; on_err
+      trap - EXIT; rm -f $S || on_err; reboot || :; sleep 600; printf 'why=reboot_returned' > $D; on_err
     fi
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).

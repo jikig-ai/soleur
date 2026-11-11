@@ -33,15 +33,18 @@ replaceable. The CTO ruled on this on 2026-11-10, and the ruling is binding:
 - **Retirement.** New hosts take new keys (`web-3`), never a reused `web-1`. Before web-1 is destroyed,
   every dirty worktree is flushed to git-data, and a read-only count of unflushed worktrees must read zero.
 
-The work lands as a seven-PR sequence tracked on #9421. The first PR only makes `var.web_hosts` keyed,
-and changes no running host. The host-bound-state census
+The work lands as a seven-PR sequence tracked on #9421. The first PR makes `var.web_hosts` keyed and
+adds the kernel-settle birth step (ADR-326); it changes no running host. The host-bound-state census
 (`knowledge-base/engineering/operations/web-host-bound-state-census.md`) records what a birth must
 recreate.
 
 ## Consequences
 
 - A new web host is one map entry plus the per-key items the census names (Doppler probe URLs and a
-  kernel heartbeat). No predicate edits are needed.
+  kernel heartbeat), and it is born drained. Serving it is not yet one entry: the drain gate's input
+  (`local.web_lb_gate`), the overlay's `SOLEUR_GATED_HOST` and the unkeyed workspaces LUKS marker each name
+  web-2 alone. The plan refuses a second host serving outside the gate, and `lb-weight-gate.sh` refuses
+  web-2's marker for any other key, so that wiring is a later PR's edit, not a silent gap.
 - The bastion is a single point for the management plane (not for user traffic). Its own replace
   route bounds that risk.
 - Until PR 7, web-1 literals remain. `web-hosts-generic.test.sh` ratchets their count down from the

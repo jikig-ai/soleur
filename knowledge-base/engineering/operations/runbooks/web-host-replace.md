@@ -162,7 +162,7 @@ to authorize a destroy.
 | `SENTRY_DSN` non-empty (ADR-128 R1) | The replacement is a *fresh* host: its pre-extraction boot stages emit through the baked DSN and nothing else. An empty DSN means it boots dark **with the original already destroyed** |
 | amd64 runner assertion | A non-amd64 runner resolves the multi-arch index to a different manifest, voiding the coherence preflight's comparison |
 | Digest pin (`tag → @sha256`) | TOCTOU: a tag that moves between preflight and apply defeats the preflight entirely |
-| Coherence preflight | An image whose baked host-scripts do not match the applied hash aborts cloud-init at `stage=verify`; `runcmd` is once-per-instance, so nothing repairs it. On a replace the previous host is already gone, so this is an outage rather than a no-op |
+| Coherence preflight | An image whose baked host-scripts do not match the applied hash aborts cloud-init at `stage=verify`; `runcmd` does not re-run on a later reboot (only the earlier kernel-settle reboot re-runs it), so nothing repairs it. On a replace the previous host is already gone, so this is an outage rather than a no-op |
 | `web_host_replace_gate` | Any plan that is not exactly one replace of the requested key with both stores preserved and the NIC / volume attachment / firewall re-attached |
 | Stock preflight | **The one that matters most here.** A replace destroys before it creates. The destroy frees the account slot but cannot conjure DC stock, so an out-of-stock create leaves the host gone and unrecreatable (#6393/#6400). On 2026-07-26 the entire cx and cax lines were orderable in 0 of 3 EU DCs (#6966) |
 | Boot-trail read (ADR-128 R2–R5) | A green `terraform apply` that produced a dark host — which is #6969's originating incident exactly |
@@ -222,12 +222,14 @@ boot-trail step polls Sentry for the host's own stage breadcrumbs and:
   host booted clean but *retried* a stage — a real fault that a green run would otherwise
   bury);
 - fails the run with an `::error::` naming the **stage and the cause** on a fatal;
-- fails the run if no terminal event lands inside the poll's 960 s deadline (the host's own
-  declared boot window is 900 s; the reader allows slack), because
-  absence past the boot window is the documented dark signal, not a slow boot.
+- fails the run if no terminal event lands inside the poll's 1200 s deadline (the host's own
+  declared boot window is 1140 s, which includes the one kernel-settle reboot; the reader allows
+  slack), because absence past the boot window is the documented dark signal, not a slow boot.
+  On that timeout it also re-reads the host's newest boot stage server-side, so a `kernel_reboot`
+  lost from the poll's page is still named.
 
-If it reports a dark boot: `runcmd` is once-per-instance, so the host **cannot be repaired by
-a reboot**. Do not put it into service — replace it again once the cause is fixed (except a web-2
+If it reports a dark boot: `runcmd` re-runs only on the one deliberate kernel-settle reboot
+(ADR-326), so the host **cannot be repaired by a reboot**. Do not put it into service — replace it again once the cause is fixed (except a web-2
 `discriminate` fatal, which a replace cannot clear; see below).
 
 Verification extends past the boot trail to the host's FIRST deploy via the standing
@@ -248,11 +250,15 @@ host's readiness window both include that time. These are the new failure rows:
 
 | Signal | Meaning | Next action |
 |---|---|---|
-| fatal `stage=kernel_settle` | The target kernel could not be read (dpkg failed or the target was empty), the semaphore was missing, the reboot returned, or a second mismatch happened after the one reboot | Replace again. Read the stage's Sentry event first: a missing semaphore after a cloud-init upgrade means the guard caught a rename, and the step needs a code fix, not another replace |
+| fatal `stage=kernel_settle` | The event's `detail` names the cause: `why=no_target` (dpkg failed or the target was empty), `why=no_semaphore`, `why=reboot_returned`, or `why=second_mismatch` (still on the old kernel after the one reboot) | `why=no_semaphore` after a cloud-init upgrade means the guard caught a rename: the step needs a code fix, not another replace. Otherwise replace again |
+| timeout; the newest boot stage is `kernel_reboot` and no later `bootcmd_start` | The host rebooted and never came back (a hang on the new kernel, or no network) | Replace again. A repeat points at the kernel or the image, not at this step |
+| timeout; a second `bootcmd_start` after `kernel_reboot`, but no second `runcmd_start` | The host came back, but runcmd did not re-run. Elsewhere "`bootcmd_start` with no `runcmd_start`" means a config-phase death; after a `kernel_reboot` it means the semaphore logic or cloud-init changed | Code fix. Do not replace again until it lands |
 | readiness `reason=kernel` (`kernel=0`) | The host reached readiness but runs a kernel other than the target | Do not serve it. Replace it again; a repeat means the settle step is not running, so read the trail for the `kernel_reboot` stage |
 
-**A red replace is not a serving target.** Whatever the failure, do not raise that host's weight or pool it. The drain gate keeps it
-at weight 0 until a green readiness row exists. Re-dispatch the replace with an explicit `-f image_tag=vX.Y.Z`: after a failed
+**A red replace is not a serving target.** Whatever the failure, do not raise that host's weight or pool it. Nothing drains it for
+you: the readiness verdict is observability, not a gate, and a replace keeps the host's declared weight. For web-2, run
+`arm=ga-pool-update mode=drain` right after a red replace, and do not run `mode=serve` until a post-replace `web2_marker` run is green
+and the host's `fresh_boot_ready` row shows `kernel=1`. Re-dispatch the replace with an explicit `-f image_tag=vX.Y.Z`: after a failed
 replace the default pin source may itself be the host that just failed.
 
 ### web-2 boot failed — how to read it

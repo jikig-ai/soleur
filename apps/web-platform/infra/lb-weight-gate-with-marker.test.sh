@@ -467,14 +467,14 @@ wrapper_allow_vars() { # the NAMEs inside the wrapper's GATE_ENV_ALLOW=( ... ) a
 BASH_ADDED='^(PWD|SHLVL|_|OLDPWD)$'
 scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a drift either way is RED)
   local d w; d="$(gate_read_vars)"; w="$(wrapper_allow_vars "$1")"
-  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 10 ] && [ "$d" = "$w" ]  # +1 SOLEUR_GATED_HOST (#9421)
+  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 11 ] && [ "$d" = "$w" ]  # +1 SOLEUR_GATED_HOST, +1 WORKSPACES_LUKS_MARKER_HOST (#9421)
 }
 scn_derive_sees_every_form() { # PLANTED reads in every expansion form are derived as inputs; the gate's own variables are not
   local real="$GATE" planted="$TMP/gate.planted.sh" got
   { cat "$real"; printf '%s\n' 'x_plain=$PLANT_PLAIN' 'x_brace="${PLANT_BRACE}"' 'x_req="${PLANT_REQ:?missing}"' 'x_dflt="${PLANT_DFLT:-d}"' 'PLANT_OWN=1' 'x_own="$PLANT_OWN"' '# $PLANT_COMMENT'; } > "$planted"
   GATE="$planted"; got="$(gate_read_vars)"; GATE="$real"
   grep -qxF PLANT_PLAIN <<<"$got" && grep -qxF PLANT_BRACE <<<"$got" && grep -qxF PLANT_REQ <<<"$got" && grep -qxF PLANT_DFLT <<<"$got" \
-    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 14 ]
+    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 15 ]
 }
 scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
   # DOPPLER_BIN (and RUNNER_TEMP) are SET and VALID here, with the only working doppler under RUNNER_TEMP: the chain
@@ -497,7 +497,7 @@ scn_allow_passthrough() { # every allowlisted input the caller SET reaches the g
   build_sb "$1" spy; set_marker "$OLD4D"
   local v i=0 -a args 2>/dev/null; local -a ex=()
   for v in $(gate_read_vars); do
-    [ "$v" = "$MARKER" ] && continue
+    case "$v" in "$MARKER"|WORKSPACES_LUKS_MARKER_HOST) continue ;; esac  # both are seam-owned, never caller-passed
     i=$((i + 1)); ex+=("$v=sentinel-$i")
   done
   run_wb "${ex[@]}" GIT_DATA_LUKS_SOAK_DAYS=
@@ -510,6 +510,12 @@ scn_allow_passthrough() { # every allowlisted input the caller SET reaches the g
   # unset stays unset: the gate treats an UNSET SOLEUR_SERVING_ROTATION as fail-closed, distinct from empty
   build_sb "$1" spy; set_marker "$OLD4D"; run_wb -SOLEUR_SERVING_ROTATION
   [ "$RC" -eq 42 ] && ! grep -q '^SOLEUR_SERVING_ROTATION' "$FX/gate.env"
+}
+scn_marker_host_seam_owned() { # the marker's host comes from the seam alone: a caller value is discarded, present -> web-2, absent -> unset
+  build_sb "$1" spy; set_marker "$OLD4D"; run_wb WORKSPACES_LUKS_MARKER_HOST=web-3
+  [ "$RC" -eq 42 ] && grep -qx 'WORKSPACES_LUKS_MARKER_HOST=web-2' "$FX/gate.env" || return 1
+  build_sb "$1" spy; set_marker ABSENT; run_wb WORKSPACES_LUKS_MARKER_HOST=web-2
+  [ "$RC" -eq 42 ] && ! grep -q '^WORKSPACES_LUKS_MARKER_HOST' "$FX/gate.env"
 }
 scn_proxy_bind_not_forwarded() { # SOLEUR_PROXY_BIND (no longer a gate input, CTO ruling #12167) never reaches the gate, and does not steer the real one
   build_sb "$1" spy; set_marker "$OLD4D"; run_wb SOLEUR_PROXY_BIND=10.0.1.10
@@ -565,6 +571,7 @@ assert "the gate's environment is an allowlist: DOPPLER-API-HOST, doppler_token,
 assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 10 names)" scn_allow_parity "$WRAPPER"
 assert "the derivation of the gate's reads sees every expansion form (\$NAME, \${NAME}, \${NAME:?, \${NAME:-) and ignores the gate's own variables and comments" scn_derive_sees_every_form
 assert "every allowlisted gate input the caller set reaches the gate verbatim; set-but-empty stays set, unset stays unset" scn_allow_passthrough "$WRAPPER"
+assert "the marker's host is seam-owned: a caller value is discarded; marker present -> web-2, absent -> unset" scn_marker_host_seam_owned "$WRAPPER"
 assert "SOLEUR_PROXY_BIND is not a gate input: a caller-set value never reaches the gate and an empty one does not refuse the real gate" scn_proxy_bind_not_forwarded "$WRAPPER"
 assert "an UNSET SOLEUR_SERVING_ROTATION stays unset through the wrapper and the real gate fails closed on it" scn_rotation_unset_fails_closed "$WRAPPER"
 assert "a SET-BUT-EMPTY SOLEUR_SERVING_ROTATION reaches the real gate as empty (weight-0 standby still exits 0)" scn_rotation_empty_standby "$WRAPPER"
@@ -805,7 +812,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=123
+CASES_FLOOR=124
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1

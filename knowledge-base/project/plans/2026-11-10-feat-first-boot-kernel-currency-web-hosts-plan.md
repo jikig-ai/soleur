@@ -350,6 +350,10 @@ Alert route: the trail's red run is the route for these stages (CTO ruling); `se
 in Part 1. The shared-project 100-event page truncation predates this change and fails closed as a red timeout; it
 is filed as its own issue at work time.
 
+> **Amended 2026-11-11 (review):** the work did edit `sentry/issue-alerts.tf`: the readiness reason `kernel`
+> (`fresh_boot_not_ready_kernel`) joined the existing boot-fatal alert's stage filter, so merging applies one
+> in-place alert change through `apply-sentry-infra.yml`. The settle step's own fatals stay on the trail route.
+
 ## Infrastructure (IaC)
 
 ### Terraform changes
@@ -358,6 +362,10 @@ Part 1: none to `.tf` files. `cloud-init.yml` is a `templatefile()` source rende
 `hcloud_server.web[*].user_data`; the web servers carry `lifecycle.ignore_changes = [user_data, ssh_keys, image,
 placement_group_id]` (`apps/web-platform/infra/server.tf`), so the per-merge apply does not replace or update any
 running server. Part 2's `.tf` changes are listed with Part 2.
+
+> **Amended 2026-11-11 (review):** Part 1 also touched `sentry/issue-alerts.tf` (the alert filter above).
+> Part 2a edits `.tf` files (`variables.tf`, `cloudflare-lb.tf`, `tunnel.tf`, `inngest-host.tf`, `server.tf`);
+> those expressions evaluate to today's values, and the PR's plan adds no resource change of its own.
 
 ### Apply path
 
@@ -539,7 +547,7 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
 - [x] `lb-weight-gate.sh` no longer names `web-2` literally; its tests cover a third key.
 - [x] Ratchet test for the web-1 private IP literal and `"web-1"` outside an allowlist, ceiling = today's count.
 - [x] Host-bound-state census committed with test rows.
-- [ ] `terraform plan` (web-platform root) shows no change to servers, volumes, attachments, tunnel or LB pool; result quoted in the PR body.
+- [x] `terraform plan` (web-platform root) shows no change to servers, volumes, attachments, tunnel or LB pool; result quoted in the PR body.
 
 ## Acceptance Criteria (Part 1)
 

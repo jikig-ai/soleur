@@ -89,12 +89,16 @@ GATE_ENV_ALLOW=(
   SOLEUR_PROXY_PEER_ALLOWLIST SOLEUR_HOST_ROSTER
   GIT_DATA_STORE_ENABLED GIT_DATA_LUKS_SOAK_DAYS GIT_DATA_LUKS_CUTOVER_AT
   WORKSPACES_LUKS_SOAK_DAYS WORKSPACES_LUKS_CUTOVER_AT
+  WORKSPACES_LUKS_MARKER_HOST
 )
 
 # Constants — parity-pinned to scripts/lib/web2-luks-rows.sh W2L_MARKER_NAME/PROJECT/CONFIG by the test.
 MARKER_NAME="WORKSPACES_LUKS_CUTOVER_AT"
 MARKER_PROJECT="soleur"
 MARKER_CONFIG="prd_workspaces_luks_marker"
+# The var.web_hosts key the marker attests. Its only writer is workspaces-luks-verify.yml's web2_marker job,
+# so the unkeyed marker is web-2's evidence alone; the gate refuses it for any other gated key (#9421).
+MARKER_HOST="web-2"
 
 # Parity-pinned to lb-weight-gate.sh's own ISO_RE by the test.
 ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$'
@@ -103,6 +107,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="${SELF_DIR}/lb-weight-gate.sh"
 
 unset WORKSPACES_LUKS_CUTOVER_AT # seam:unset-caller
+unset WORKSPACES_LUKS_MARKER_HOST # seam:unset-caller-host
 
 src_fail() {
   # $1 = class. Never prints Doppler's own output (it can carry request detail).
@@ -179,6 +184,7 @@ if [[ "$present" -eq 1 ]]; then
     exit 4
   fi
   export WORKSPACES_LUKS_CUTOVER_AT="$value"
+  export WORKSPACES_LUKS_MARKER_HOST="$MARKER_HOST"
 fi
 
 # The gate never calls Doppler: it gets an environment built from scratch (`env -i`), holding the pinned
