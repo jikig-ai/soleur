@@ -30,3 +30,24 @@
 - constraint: Brand-survival threshold stays single-user incident for agent-sandbox changes. Real-git falsifier first, git 2.38 or later, then the fix. State plainly what the control does NOT claim.
 - constraint: Infra Validation red, affected-index-ratchet red and the mutation-battery timeout are known main-red noise, do not fix here. Tenant-integration deadlock or timeouts get one rerun of failed jobs, not a fix.
 - constraint: Run the local gate only when no review panel is running. Run single targeted suites, not the full battery.
+
+## Review dedup ledger (PANEL_SHA 269ae8c2ba, 12 seats, P1=0)
+
+dedup: the raw count was not carried across a context compaction, so it is not stated → 14 unique rows below (keyed by defect class plus root cause). Fix commits: 44f981dcfd, bac4e27d06.
+
+| Defect | Sev | Seats | Disposition |
+|---|---|---|---|
+| no rescue-first push row (N6-MOVE survived) | P2 | user-impact, test-design | fixed 44f981dcfd |
+| no pushInsteadOf row (M-A survived) | P2 | security-sentinel, user-impact | fixed 44f981dcfd |
+| B-path check blind to Error.message | P2 | test-design | fixed 44f981dcfd (also the mocked row) |
+| report ops filtered, not exact | P2 | code-simplicity | fixed 44f981dcfd |
+| PR body "no data at risk" false for a no-op rescue push | P2 | user-impact | fixed in the PR body |
+| helper: verb or argv not refused, no ssh-off, no timeout, error lacks status | P3 | architecture, code-quality, pattern, performance, agent-native | fixed 44f981dcfd |
+| helper header: "LONGER", rates uncited, file:// vs GIT_ALLOW_PROTOCOL=ssh | P3 | architecture, test-design, code-simplicity, performance | fixed 44f981dcfd, bac4e27d06 |
+| fetch rows: no workspace snapshot, hasObject bare catch, inverted control lacks a positive | P3 | data-integrity, test-design | fixed 44f981dcfd |
+| argv not pinned, control catch discards error, ID collision, title truncation | P3 | test-design, code-quality, pattern, agent-native | fixed 44f981dcfd |
+| measurements: fetch-side N6 analogue, commit naming | P3 | git-history | addendum bac4e27d06 |
+| one check spans both pushes; include carriers; store fence | P3 | security-sentinel, coverage consult | stated in the PR body, plan and file header |
+| no pin on the receive-pack splice | (consult) | coverage consult | UG-FAKE, 44f981dcfd |
+| simplicity #2: revert to `env:` | P3 | code-simplicity | rejected: fixture-env-adoption requires the builder call |
+| production call-site comments, per-push re-check | P3 | architecture, security-sentinel | carry-forward, out of scope (CTO R6), unfiled |
