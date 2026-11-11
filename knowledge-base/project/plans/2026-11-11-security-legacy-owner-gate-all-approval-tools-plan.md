@@ -793,22 +793,22 @@ None: the ADR addendum describes the state on merge.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `git grep -n "toolName === GITHUB_PUSH_BRANCH_TOOL" apps/web-platform/server` returns nothing, and the legacy
+- [x] AC1 `git grep -n "toolName === GITHUB_PUSH_BRANCH_TOOL" apps/web-platform/server` returns nothing, and the legacy
   block's predicate is `isApprovalRequiredTool(toolName)` (`grep -c "if (isApprovalRequiredTool(toolName)) {" apps/web-platform/server/permission-callback.ts` prints `1`).
-- [ ] AC2 `git grep -n "Other approval-required tools keep the" apps/web-platform` returns nothing.
-- [ ] AC3 `git grep -n PUSH_ROLE_READ_DEADLINE_MS -- apps` returns nothing; `OWNER_ROLE_READ_DEADLINE_MS = 5_000` exists.
-- [ ] AC4 Both query handles are kept (CTO F1'): `git grep -c "legacy-push-owner-check" apps/web-platform/server/permission-callback.ts`
+- [x] AC2 `git grep -n "Other approval-required tools keep the" apps/web-platform` returns nothing.
+- [x] AC3 `git grep -n PUSH_ROLE_READ_DEADLINE_MS -- apps` returns nothing; `OWNER_ROLE_READ_DEADLINE_MS = 5_000` exists.
+- [x] AC4 Both query handles are kept (CTO F1'): `git grep -c "legacy-push-owner-check" apps/web-platform/server/permission-callback.ts`
   and `git grep -c "platform-gate-push-owner-required" apps/web-platform/server/permission-callback.ts` each print the
   number of call sites (2 each: card issue and answer time, Phase 1.1b; 1 each if the work phase routes both through one
   helper), never 0; `git grep -n "push owner required" apps/web-platform/server` returns nothing (reason reworded).
-- [ ] AC5 `apps/web-platform/test/approval/legacy-push-owner-fallback.test.ts` iterates `APPROVAL_REQUIRED_TOOLS` and
+- [x] AC5 `apps/web-platform/test/approval/legacy-push-owner-fallback.test.ts` iterates `APPROVAL_REQUIRED_TOOLS` and
   `APPROVAL_EXEMPT_TOOLS` by import, and nothing else: with `F=apps/web-platform/test/approval/legacy-push-owner-fallback.test.ts`,
   `grep -cE '\.each\((APPROVAL_REQUIRED_TOOLS|Object\.keys\(APPROVAL_EXEMPT_TOOLS\))\)' "$F"` equals
   `grep -cE '\.each\(' "$F"` and is at least 2; `grep -cE '\bTOOLS\.|mcp__soleur_platform__' "$F"` prints `0`. Its JSON
   report shows every case passed, and that count is the FLOOR. (The old literal-only grep already printed 0 on today's file,
   which names tools by fixture key, so it could not fail.)
-- [ ] AC6 The eight files listed in the probe table pass, with the per-file fixes in Phase 2.3-2.5; `test/helpers/agent-runner-mocks.ts` is unchanged (`git diff --quiet origin/main...HEAD -- apps/web-platform/test/helpers/agent-runner-mocks.ts`, merge-base form so a sibling merge to main cannot flip it).
-- [ ] AC7 RED-before-GREEN, isolated to the predicate: with Phase 1.2-1.5 and the cap re-check applied and only the 1.1
+- [x] AC6 The eight files listed in the probe table pass, with the per-file fixes in Phase 2.3-2.5; `test/helpers/agent-runner-mocks.ts` is unchanged (`git diff --quiet origin/main...HEAD -- apps/web-platform/test/helpers/agent-runner-mocks.ts`, merge-base form so a sibling merge to main cannot flip it).
+- [x] AC7 RED-before-GREEN, isolated to the predicate: with Phase 1.2-1.5 and the cap re-check applied and only the 1.1
   predicate still `toolName === GITHUB_PUSH_BRANCH_TOOL`, the ten per-tool cases fail for the seven non-push tools and pass
   for the push tool. (Before 1.2-1.3 the push cases also fail, on the renamed constant and the reworded reason, so that run
   cannot show the predicate is tested.) Then the cap-race case fails with the re-check removed and passes with it. After
@@ -819,41 +819,41 @@ None: the ADR addendum describes the state on merge.
   `MIN_MUTANTS=366`, `MIN_KILLED=360`, `MIN_CHECKS=784` (or the exact values the
   derivation gives if any other count moved, with the comment showing the arithmetic); CI's web-platform group runs the full
   battery green.
-- [ ] AC8b The existing rows `G1-F1` and `G1-F2` name `"a disabled and a throwing flag read behave identically"`, and
+- [x] AC8b The existing rows `G1-F1` and `G1-F2` name `"a disabled and a throwing flag read behave identically"`, and
   every `kill` substring in the battery is among the control-passed names (the control's own check; proven by the
   `--only` run of AC8, which checks every row's names and runs `G1-F1` and `G1-F2` themselves).
-- [ ] AC9 `git diff --numstat origin/main...HEAD -- knowledge-base/engineering/architecture/decisions/ADR-309-durable-action-bound-approval-requests.md | awk '{print $2}'` prints `0` (zero deleted lines; the old `^-[^-]` grep skipped deleted bullets and blank lines).
-- [ ] AC10 `server/github-tools.ts` contains "Requires the workspace Owner's approval." twice (push and trigger) and no
+- [x] AC9 `git diff --numstat origin/main...HEAD -- knowledge-base/engineering/architecture/decisions/ADR-309-durable-action-bound-approval-requests.md | awk '{print $2}'` prints `0` (zero deleted lines; the old `^-[^-]` grep skipped deleted bullets and blank lines).
+- [x] AC10 `server/github-tools.ts` contains "Requires the workspace Owner's approval." twice (push and trigger) and no
   "founder approval via review gate"; pinned in `github-tools-read-builder.test.ts`. `git grep -n "operator approves" apps/web-platform/server`
   returns nothing (without the leading "the", so it also catches the `email_send` text split across two literals at
   `email-triage-tools.ts:296-297`; measured today: 3 hits, `agent-runner.ts:1656`, `email-triage-tools.ts:297`, `:356`); the leader-prompt sentence at `agent-runner.ts:1656` names the workspace Owner; the
   joined `email_send` and `email_reply` descriptions name the workspace Owner, pinned in
   `test/server/email-triage-tools.test.ts` (CTO F11).
-- [ ] AC11 No change under `docs/legal/`, the Eleventy legal mirrors or `apps/web-platform/infra/sentry/`;
+- [x] AC11 No change under `docs/legal/`, the Eleventy legal mirrors or `apps/web-platform/infra/sentry/`;
   `sha256sum apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` equals `10d283e02d4543d291468750655bbaf4375f807a585cd5138724a362b993a287`;
   `LEGAL_COPY.PROVISIONAL` is still `true`; `lib/web-egress-disclosure.ts` is unchanged.
-- [ ] AC12 `npx tsc --noEmit` passes; markdownlint-cli2 passes on every touched `.md`.
+- [x] AC12 `npx tsc --noEmit` passes; markdownlint-cli2 passes on every touched `.md`.
 - [ ] AC13 PR body contains `Closes #12597` and `Ref #12197`; no feature tweet; neither the PR body nor the ADR addendum
   claims gate (j) of the #12365 ruling is discharged; the PR body has one line on the rollback effect (flag off, fleet-wide
   or per workspace, refuses members for all eight tools). AC9 also holds for the Phase 4.1b pointers.
-- [ ] AC14 (CPO condition) For every approval-required tool the legacy test asserts: a failed role read and a timed-out
+- [x] AC14 (CPO condition) For every approval-required tool the legacy test asserts: a failed role read and a timed-out
   role read each produce exactly one `viewerRoleFailed` report whose context carries `toolName` equal to the tool,
   `workspaceId`, and `tags.stage` `legacy-push-owner-check`; a missing dependency produces exactly one `gateFailed` report with
   `toolName` equal to the tool and `extra.stage` `wiring-absent`. These reach Sentry through `reportApprovalOp` ->
   `warnSilentFallback` (`viewerRoleFailed`, warning level) or `reportSilentFallback` (`gateFailed`, error level), the
   existing sinks pinned by `test/approval/approval-ops-real-sink.test.ts`.
-- [ ] AC15 The push-only comment sweep is complete: ``git grep -n 'except `github_push_branch`' apps/web-platform/server``
+- [x] AC15 The push-only comment sweep is complete: ``git grep -n 'except `github_push_branch`' apps/web-platform/server``
   and `git grep -n "push: Owner only" apps/web-platform/server` both return nothing (Phase 1.5).
-- [ ] AC16 (CTO F10, S3) `grep -c "if (pendingGates >= MAX_PENDING_GATES) {" apps/web-platform/server/permission-callback.ts`
+- [x] AC16 (CTO F10, S3) `grep -c "if (pendingGates >= MAX_PENDING_GATES) {" apps/web-platform/server/permission-callback.ts`
   prints `2`, and the second one sits after the role deny (the member-deny case at the cap logs
   `platform-gate-push-owner-required`, not `platform-gate-too-many-pending`). The legacy test's cap-race case shows exactly one new card and one too-many-pending deny, after asserting that
   both role reads started. Follow-up #12657 is open for the queue-on path.
-- [ ] AC17 (CTO F12) `scripts/dev-probe-approval-gate.ts` declares `const approval: ApprovalGateDeps = {...}` as a typed
+- [x] AC17 (CTO F12) `scripts/dev-probe-approval-gate.ts` declares `const approval: ApprovalGateDeps = {...}` as a typed
   value outside the context cast (`grep -c "const approval: ApprovalGateDeps" apps/web-platform/scripts/dev-probe-approval-gate.ts`
   prints `1`), with `viewerRole` answering `owner` and the flag off, and `npx tsc --noEmit` passes. The probe itself is
   not run here (it needs a model and the network).
-- [ ] AC18 (CTO S1) Every approval-required tool's demotion case (Phase 2.1 case 10) passes; `G1-LO10` is KILLED.
-- [ ] AC19 (CTO O1-O4) The timeout report carries `code: "role_read_timeout"` (case 6); the re-check warn carries
+- [x] AC18 (CTO S1) Every approval-required tool's demotion case (Phase 2.1 case 10) passes; `G1-LO10` is KILLED.
+- [x] AC19 (CTO O1-O4) The timeout report carries `code: "role_read_timeout"` (case 6); the re-check warn carries
   `stage: "after-role-read"`; the abort-during-read warn carries `stage: "owner-role-read"`; the member-deny warn carries
   `conversationId`; `grep -c platform-gate-legacy-card-issued apps/web-platform/server/permission-callback.ts` prints `1`.
 - [ ] AC20 (CTO U1, pre-merge, run by the agent, read-only) Count Better Stack events with

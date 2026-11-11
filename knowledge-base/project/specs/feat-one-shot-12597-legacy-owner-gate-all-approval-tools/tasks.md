@@ -57,12 +57,12 @@ Decisions: `decision-challenges.md` in this directory.
 
 ## 4. Mutation battery
 
-- [ ] 4.1 Add rows `G1-LO1`..`G1-LO10` and `T_LPO`; re-point `G1-F1` / `G1-F2` kill names (Phase 3.1).
-- [ ] 4.2 `--check-anchors` (P1-P11 included); then `--only 'G1-LO1|G1-LO8'` at `blast=0.80` to measure; set each `blast=`
+- [x] 4.1 Add rows `G1-LO1`..`G1-LO10` and `T_LPO`; re-point `G1-F1` / `G1-F2` kill names (Phase 3.1).
+- [x] 4.2 `--check-anchors` (P1-P11 included); then `--only 'G1-LO1|G1-LO8'` at `blast=0.80` to measure; set each `blast=`
   to the measured fraction + 0.05.
-- [ ] 4.3 Set the FLOOR entries (legacy file: its JSON count, expected 98), `MIN_MUTANTS` 366, `MIN_KILLED` 360,
+- [x] 4.3 Set the FLOOR entries (legacy file: its JSON count, expected 98), `MIN_MUTANTS` 366, `MIN_KILLED` 360,
   `MIN_CHECKS` 784 and their comments to exact values (Phase 3.2); re-read every literal after the final commit.
-- [ ] 4.4 `--only 'G1-LO|G1-F[12]-'`: twelve KILLED, each backed by a `FAIL` line naming a kill substring, exit 0. Do not
+- [x] 4.4 `--only 'G1-LO|G1-F[12]-'`: twelve KILLED, each backed by a `FAIL` line naming a kill substring, exit 0. Do not
   run the full battery locally.
 
 ## 5. ADR and records
@@ -78,6 +78,6 @@ Decisions: `decision-challenges.md` in this directory.
 
 - [ ] 6.1 AC1-AC20 of the plan. AC20 is a read-only pre-merge production check (Better Stack count, then a DB member
   count per hit) that the agent runs itself; record only counts.
-- [ ] 6.2 `npx tsc --noEmit` in `apps/web-platform`.
+- [x] 6.2 `npx tsc --noEmit` in `apps/web-platform`.
 - [ ] 6.3 PR body: `Closes #12597`, `Ref #12197`; no gate (j) discharge claim; no feature tweet; one rollback-effect
   line; the AC20 result; the follow-ups #12657, #12660-#12664.
