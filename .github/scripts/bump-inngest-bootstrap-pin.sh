@@ -291,7 +291,7 @@ shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || tr
 # selector below (which must discard stderr to stay AC6-identical) runs.
 walk_err=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null || true)
 [[ -z "$walk_err" ]] \
-  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
+  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | tr -d '[:cntrl:]' | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
 
 # --- resolve: semver-max merged tag + registry digest -------------------------
 # AC6-IDENTICAL PIPELINE — test-bump-inngest-bootstrap-pin.sh's selector
@@ -374,7 +374,7 @@ if [[ "$rc" -ne 0 ]]; then
   # A merged target with no image is the "off main is a point-in-time verdict"
   # case (ADR-232 §7): a tag refused at push time and merged later. Name the
   # remedy, since every later publish lands here until the image exists.
-  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err") — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
+  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err" | tr -d '[:cntrl:]' | cut -c1-300) — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
 fi
 RESOLVED=$(grep -oE '^sha256:[0-9a-f]{64}$' "$WORK/digest" | head -1 || true)
 [[ -n "$RESOLVED" ]] \
@@ -673,11 +673,17 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
         # 2>&1 lands the rejection body in enq_out; flatten + strip control
         # bytes before the line-oriented ::warning:: (annotation-injection
         # guard, PR #3007 class) and bound at 300 chars — same canonical
-        # pipeline as vinngest-digest-freshness.sh › live_resolve() (200→300
-        # bound is deliberate per #12579's ask). A `timeout 60` kill leaves
-        # enq_out empty; the fallback names it rather than printing a bare dash.
+        # pipeline as the `unmeasurable` emit sites in
+        # vinngest-digest-freshness.sh (200→300 bound is deliberate per
+        # #12579's ask). A `timeout 60` kill — or stderr that strips to pure
+        # whitespace — leaves nothing worth printing; the explicit fallback
+        # names it rather than emitting a bare dash. ${PR_URL//[[:space:]]/}
+        # keeps the whole warning line single-line even if the API-supplied
+        # URL ever carries whitespace.
         enq_reason=$(printf '%s' "$enq_out" | tr '\n' ' ' | tr -d '[:cntrl:]' | cut -c1-300)
-        echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — ${enq_reason:-no stderr captured (timeout or empty response)} — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
+        [[ -n ${enq_reason//[[:space:]]/} ]] \
+          || enq_reason='no stderr captured (timeout or empty response)'
+        echo "::warning::enqueuePullRequest for ${PR_URL//[[:space:]]/} was rejected — ${enq_reason} — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
       fi
     else
       echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"

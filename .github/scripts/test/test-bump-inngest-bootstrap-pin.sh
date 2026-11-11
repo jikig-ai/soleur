@@ -81,7 +81,7 @@ FAIL=0
 # are fail-only, ZERO counted (the newshape self-check precedent below), so a
 # skipped row charges exactly its declared cost.
 SKIPPED_ASSERTIONS=0
-MIN_ASSERTIONS=723   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows; 712 on 2026-11-09 with #12508: +16 explicit-enqueue rows — enqueue/enqueuefail fixtures plus no-enqueue pins on the held/degraded/mergefail arms; 723 on 2026-11-11 with #12579: +11 refusal-reason rows — reason echo on enqueuefail, the enqueuefailml flatten/single-line/no-esc fixture, and the enqueuefailempty fallback fixture); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=734   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions; 696 on 2026-10-23 with #10921: the B7/B7a/B7c/I6 construction-invariant checks became fail-only, ZERO counted — −5 precondition assertions — net of +2 skip-machinery selftest rows; 712 on 2026-11-09 with #12508: +16 explicit-enqueue rows — enqueue/enqueuefail fixtures plus no-enqueue pins on the held/degraded/mergefail arms; 734 on 2026-11-11 with #12579: +22 refusal-reason rows — reason echo on enqueuefail, the enqueuefailml flatten/junction/single-line/no-esc/no-bel/one-warning fixture, the enqueuefailempty fallback fixture, the enqueuefailbound 300-cut fixture, the enqueuefailws blank-fallback fixture, and the enqueue success-position pin); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -351,15 +351,21 @@ case "$sub" in
     # the -f query= text into the same line, so rows assert the mutation shape
     # (enqueuePullRequest present, `jump` absent) from MOCK_GH_LOG directly.
     # MOCK_GH_ENQUEUE_FAIL=1 rejects the mutation single-line, exercising
-    # warn-and-continue; =2 rejects with a two-line stderr carrying a raw ESC
-    # byte (annotation-injection probe — ::warning:: is line-oriented); =3
-    # rejects with EMPTY stderr (the timeout/empty-response shape). =2/=3 pin
-    # the reason-echo's flatten/strip + empty-fallback wiring.
+    # warn-and-continue; =2 rejects with a two-line stderr carrying raw ESC
+    # and BEL bytes (annotation-injection probe — ::warning:: is line-oriented);
+    # =3 rejects with EMPTY stderr (the timeout/empty-response shape); =4
+    # rejects with a >300-char line (truncation bound probe); =5 rejects with
+    # whitespace-only stderr (the blank-reason edge). The `*)` arm loudly
+    # fails unknown selectors rather than silently taking the success path.
     if [[ " $* " == *enqueuePullRequest* ]]; then
       case "${MOCK_GH_ENQUEUE_FAIL:-0}" in
         1) echo "gh-stub: enqueuePullRequest rejected" >&2; exit 1 ;;
-        2) printf 'gh-stub: enqueuePullRequest rejected\ngh-stub: \x1b[31mRequired status check "quality-guards" is expected.\n' >&2; exit 1 ;;
+        2) printf 'gh-stub: enqueuePullRequest rejected\ngh-stub: \x1b[31m\x07Required status check "quality-guards" is expected.\n' >&2; exit 1 ;;
         3) exit 1 ;;
+        4) { printf 'gh-stub: '; printf 'A%.0s' {1..400}; printf ' TRUNC-END\n'; } >&2; exit 1 ;;
+        5) printf '\n' >&2; exit 1 ;;
+        0) ;;
+        *) echo "gh-stub: unknown MOCK_GH_ENQUEUE_FAIL=${MOCK_GH_ENQUEUE_FAIL:-<unset>}" >&2; exit 42 ;;
       esac
       printf '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1,"state":"QUEUED"}}}}\n'
       exit 0
@@ -1012,6 +1018,9 @@ _enq_ln=$(grep -n 'enqueuePullRequest' "$MOCK_GH_LOG" | head -1 | cut -d: -f1)
 _enq_line=$(grep 'gh api graphql' "$MOCK_GH_LOG" || true)
 [[ -n "$_enq_line" && "$_enq_line" != *jump* ]] && pass 'g1.enqueue:no-jump' \
   || fail 'g1.enqueue:no-jump' "enqueue call missing or carries jump: ${_enq_line:-<none>}"
+# Success path prints the parsed queue position — pins the jq tolerance the
+# 2>&1 capture relies on if a successful call ever emits stderr noise.
+assert_out_has   'g1.enqueue:position' 'on the merge queue (position 1)'
 
 # An enqueue rejection warns and continues — armed auto-merge remains the
 # fallback, strictly better than the pre-#12508 no-enqueue path; exit stays 0.
@@ -1032,7 +1041,11 @@ assert_gh_called 'g1.enqueuefail:armed'   'gh pr merge .* --auto --squash'
 # The rejection reason now reaches the log: the stub's stderr text exists ONLY
 # on that channel, so a green row proves stderr→enq_out→annotation wiring, not
 # spelling (the warning literal reads "was rejected" — a different string).
-assert_out_has   'g1.enqueuefail:reason'  'gh-stub: enqueuePullRequest rejected'
+# The reason must land INSIDE the warning line — co-occurrence in the run
+# output alone would pass with stderr left unredirected.
+grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'gh-stub: enqueuePullRequest rejected' \
+  && pass 'g1.enqueuefail:reason' \
+  || fail 'g1.enqueuefail:reason' "rejection reason not inside the warning line — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
 
 # MOCK_GH_ENQUEUE_FAIL=2 rejects with a two-line stderr carrying a raw ESC
 # byte. The reason-echo must flatten CR/LF and strip control bytes before the
@@ -1054,12 +1067,25 @@ assert_out_has   'g1.enqueuefailml:reason'  'gh-stub: enqueuePullRequest rejecte
 grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'Required status check "quality-guards" is expected.' \
   && pass 'g1.enqueuefailml:flatten' \
   || fail 'g1.enqueuefailml:flatten' "second stderr line not flattened into the warning — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
+# Junction pin: 'rejected' + ' ' + 'gh-stub:' requires the newline to become a
+# SPACE — deleting the flatten stage lets [:cntrl:] join the words instead.
+grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'rejected gh-stub:' \
+  && pass 'g1.enqueuefailml:junction' \
+  || fail 'g1.enqueuefailml:junction' "newline was deleted, not flattened — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
+# Exactly one warning line carries the reason — a duplicated or split warning
+# must not satisfy the co-occurrence rows above.
+[[ $(grep -c '::warning::enqueuePullRequest' "$LAST_OUT") == 1 ]] \
+  && pass 'g1.enqueuefailml:one-warning' \
+  || fail 'g1.enqueuefailml:one-warning' "expected exactly one ::warning::enqueuePullRequest line — $(grep -c '::warning::enqueuePullRequest' "$LAST_OUT") found"
 ! grep -q '^gh-stub:' "$LAST_OUT" \
   && pass 'g1.enqueuefailml:single-line' \
   || fail 'g1.enqueuefailml:single-line' "raw stub stderr line leaked — $(grep -n '^gh-stub:' "$LAST_OUT" | head -3 | tr '\n' '|')"
 ! grep -qF $'\x1b' "$LAST_OUT" \
   && pass 'g1.enqueuefailml:no-esc' \
   || fail 'g1.enqueuefailml:no-esc' "control byte reached the run output"
+! grep -qF $'\x07' "$LAST_OUT" \
+  && pass 'g1.enqueuefailml:no-bel' \
+  || fail 'g1.enqueuefailml:no-bel' "control byte (BEL) reached the run output"
 
 # MOCK_GH_ENQUEUE_FAIL=3 rejects with EMPTY stderr — the timeout/empty-response
 # shape a `timeout 60` kill also produces; the warning names it, no bare dash.
@@ -1075,6 +1101,43 @@ MOCK_GH_ENQUEUE_FAIL=3 run_bump enqueuefailempty --signed-tag v1.1.38 \
 assert_rc        'g1.enqueuefailempty:exit' 0
 assert_result    'g1.enqueuefailempty:result' opened
 assert_out_has   'g1.enqueuefailempty:fallback' 'no stderr captured'
+
+# MOCK_GH_ENQUEUE_FAIL=4 rejects with a 400+ char stderr — the reason must be
+# truncated to the 300-char bound: the trailing TRUNC-END sentinel must be
+# cut away and exactly 291 A's survive (300 - len('gh-stub: ')).
+new_fixture_repo enqueuefailbound
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+MOCK_GH_ENQUEUE_FAIL=4 run_bump enqueuefailbound --signed-tag v1.1.38 \
+  --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueuefailbound:exit' 0
+assert_result    'g1.enqueuefailbound:result' opened
+! grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'TRUNC-END' \
+  && pass 'g1.enqueuefailbound:cut' \
+  || fail 'g1.enqueuefailbound:cut' "reason past the 300-char bound reached the warning"
+[[ $(grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -oF 'A' | wc -l) == 291 ]] \
+  && pass 'g1.enqueuefailbound:exact' \
+  || fail 'g1.enqueuefailbound:exact' "expected exactly 291 A's (300-char bound) in the warning"
+
+# MOCK_GH_ENQUEUE_FAIL=5 rejects with whitespace-only stderr — a `timeout 60`
+# kill mid-write or a control-only error strips to nothing; the named
+# fallback must fire (a `:-` empty-check alone leaves a blank dash).
+new_fixture_repo enqueuefailws
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+MOCK_GH_ENQUEUE_FAIL=5 run_bump enqueuefailws --signed-tag v1.1.38 \
+  --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc        'g1.enqueuefailws:exit' 0
+assert_result    'g1.enqueuefailws:result' opened
+assert_out_has   'g1.enqueuefailws:fallback' 'no stderr captured'
 
 # ---------------------------------------------------------------------------
 # AC8 — supersede: open bot-authored pin PR for an OLDER target is closed with
