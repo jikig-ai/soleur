@@ -160,6 +160,10 @@ describe("replicateToGitData — the url/remote rewrite guard runs before ANY pu
     expect(ops).not.toContain("git_data_replication_push");
     // the report carries a count, never the rewritten key or its value
     expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain("evil.invalid");
+    // JSON.stringify drops an Error's message, so read it separately
+    for (const c of reportSilentFallback.mock.calls) {
+      if (c[0] instanceof Error) expect(c[0].message).not.toContain("evil.invalid");
+    }
   });
 
   it("ordinary remotes (origin, git-data, upstream) and remote.pushDefault pass, and the push goes to the explicit URL", async () => {
