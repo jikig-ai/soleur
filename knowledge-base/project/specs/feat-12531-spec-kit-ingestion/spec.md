@@ -60,7 +60,7 @@ When the argument is a directory path whose final two segments match `specs/<pre
 
 ### FR2: Required `spec.md`
 
-Intake reads `spec.md`. If that file is missing, unreadable, or not a regular file whose parent is the named directory, intake stops. The path string is not used as the feature description.
+Intake reads `spec.md` only when that basename is a regular file opened without following a symlink. If it is missing, unreadable, not a regular file, or a symlink, including a symlink to another basename in the same directory, intake stops. The path string is not used as the feature description.
 
 ### FR3: Optional side files
 
@@ -68,11 +68,11 @@ Intake reads `spec.md`. If that file is missing, unreadable, or not a regular fi
 
 ### FR4: Projection
 
-User stories and scenarios become functional-requirement candidates. Success criteria become goals. Explicit exclusions become non-goals. Every other heading is listed in an unmapped appendix. Unmapped text is not a requirement and is not built from.
+A user-story heading is an ATX heading whose text contains the case-insensitive tokens `user story` in that order. The standalone `P1`, `P2`, or `P3` token is read from the heading text only. That heading becomes a functional-requirement candidate only when it has a standalone `P1`, no standalone `P2` or `P3`, and its body does not contain `NEEDS CLARIFICATION`. A story with no standalone `P1`, a story whose heading also has a standalone `P2` or `P3`, and any section whose body contains `NEEDS CLARIFICATION` stay in the unmapped appendix. Success criteria become goals. Explicit exclusions become non-goals. Every other heading is listed by name in that appendix, with the line "Not a requirement. Not built from." The appendix does not copy section bodies. Unmapped text is not a requirement and is not built from.
 
 ### FR5: Receipt before the build contract
 
-The receipt lists what moved, what was unmapped, and which files were never read (`research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and any other name). The projected Soleur spec is the build contract only after that receipt exists. A second ingest does not overwrite a Soleur spec that a person has edited.
+The receipt lists what moved, what was unmapped, and which files were never read (`research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and any other name). The projected Soleur spec is the build contract only after that receipt exists. A second ingest does not overwrite an existing Soleur spec, including a zero-byte file. There is no human-edit detector.
 
 ### FR6: No public compatibility claim
 
@@ -86,7 +86,7 @@ The reader is a script under `plugins/soleur/`, called by brainstorm and plan. T
 
 ### TR2: Containment
 
-Resolve the directory from the invoking process cwd before any worktree `cd`, then re-read only that absolute path. Each selected file is a regular file whose resolved parent is the resolved directory. A symlink that leaves the directory fails the whole intake. A file over a fixed byte cap fails the whole intake. Do not use `soleur_approval_realpath`.
+Resolve the directory from the invoking process cwd before any worktree `cd`. Each lexical component is opened without following a symlink, and a symlink component fails the whole intake and is not followed. Each selected file is a regular file opened from that directory file descriptor without following a symlink, and only when its basename is that same name. A symlink to another name in the same directory fails the whole intake and is not read. A file whose size is greater than the fixed byte cap fails the whole intake. A file whose size equals the cap is allowed. Do not use `soleur_approval_realpath`.
 
 ### TR3: Allow-list
 
