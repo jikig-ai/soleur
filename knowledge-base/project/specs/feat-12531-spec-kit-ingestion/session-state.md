@@ -15,17 +15,28 @@ Coverage consult (`receipt-list-unescaped`): verified. `emit` joins `unmapped` a
 
 | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
 |---|---|---|---|
-| A mapped body can repeat `--- projected ---` or `--- side-evidence ---`, and U+0085 or a C0 break in a name or side-evidence line can put a receipt label at column 0. | receipt-frame-not-closed | pattern-recognition-specialist, code-quality-analyst, data-integrity-guardian, security-sentinel | review fix, same commit |
-| Fence toggle closes on any backtick or tilde run. Frontmatter is recognized only when line 0 is `---`. | fence-and-frontmatter-segmenter | pattern-recognition-specialist, security-sentinel | review fix, same commit |
-| ATX capture keeps a trailing ` #` sequence, so `## Success Criteria ##` is not the Goals heading. | atx-closing-hashes | pattern-recognition-specialist | review fix, same commit |
-| `user story` has no token boundary, so `Superuser story` and `User storyboard` become functional requirements. | user-story-token-boundary | pattern-recognition-specialist | review fix, same commit |
-| An exact mapped heading whose stripped body is empty is omitted from both the bucket and the appendix. | empty-mapped-heading-vanishes | data-integrity-guardian | review fix, same commit |
-| `parts_of` refuses `.` as well as `..`, so `./specs/001-demo` and a `/./` component are `not-a-directory`. | dot-component-refused | code-simplicity-reviewer, code-quality-analyst | review fix, same commit |
-| Identical P2/P3 return, unused `emit` dir_fd, and the dead trailing-newline write. | dead-code | code-simplicity-reviewer, code-quality-analyst | review fix, same commit |
-| Invalid UTF-8 is replaced with U+FFFD, so a corrupt byte inside `NEEDS CLARIFICATION` still projects the story. | lossy-utf8 | code-quality-analyst | review fix, same commit |
-| Ordinary-heading fallthrough, receipt slices, HTML-comment greps, and the existing run sentences are not pinned. | tests-dont-pin | test-design-reviewer, agent-native-reviewer, security-sentinel | review fix, same commit |
-| Plan tells the agent to Read `references/spec-kit-intake.md`, which is not a worktree-root path. | plan-read-relative-path | agent-native-reviewer | review fix, same commit |
-| `emit` joins `unmapped` and `never-read` on a comma, so a multi-clause heading is more than one list entry. Verified in the diff. Coverage consult lead. | receipt-list-unescaped | coverage-consult | review fix, same commit |
+| A mapped body can repeat `--- projected ---` or `--- side-evidence ---`, and U+0085 or a C0 break in a name or side-evidence line can put a receipt label at column 0. | receipt-frame-not-closed | pattern-recognition-specialist, code-quality-analyst, data-integrity-guardian, security-sentinel | d4d557fe9c |
+| Fence toggle closes on any backtick or tilde run. Frontmatter is recognized only when line 0 is `---`. | fence-and-frontmatter-segmenter | pattern-recognition-specialist, security-sentinel | d4d557fe9c |
+| ATX capture keeps a trailing ` #` sequence, so `## Success Criteria ##` is not the Goals heading. | atx-closing-hashes | pattern-recognition-specialist | d4d557fe9c |
+| `user story` has no token boundary, so `Superuser story` and `User storyboard` become functional requirements. | user-story-token-boundary | pattern-recognition-specialist | d4d557fe9c |
+| An exact mapped heading whose stripped body is empty is omitted from both the bucket and the appendix. | empty-mapped-heading-vanishes | data-integrity-guardian | d4d557fe9c |
+| `parts_of` refuses `.` as well as `..`, so `./specs/001-demo` and a `/./` component are `not-a-directory`. | dot-component-refused | code-simplicity-reviewer, code-quality-analyst | d4d557fe9c |
+| Identical P2/P3 return, unused `emit` dir_fd, and the dead trailing-newline write. | dead-code | code-simplicity-reviewer, code-quality-analyst | d4d557fe9c |
+| Invalid UTF-8 is replaced with U+FFFD, so a corrupt byte inside `NEEDS CLARIFICATION` still projects the story. | lossy-utf8 | code-quality-analyst | d4d557fe9c |
+| Ordinary-heading fallthrough, receipt slices, HTML-comment greps, and the existing run sentences are not pinned. | tests-dont-pin | test-design-reviewer, agent-native-reviewer, security-sentinel | d4d557fe9c |
+| Plan tells the agent to Read `references/spec-kit-intake.md`, which is not a worktree-root path. | plan-read-relative-path | agent-native-reviewer | d4d557fe9c |
+| `emit` joins `unmapped` and `never-read` on a comma, so a multi-clause heading is more than one list entry. Verified in the diff. Coverage consult lead. | receipt-list-unescaped | coverage-consult | d4d557fe9c |
+
+## Round 2 ledger
+
+Fix-round 1 at `d4d557fe9c` left these open. This commit closes the product rows. Pin-test siblings are stated in the test header and are not further product edits.
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| One pass of `strip_controls` deletes a C0 or DEL inside U+0085, U+2028, or U+2029 and leaves that character. `forged` and `indent` split only on `\n`, so exit stays 0. | strip-controls-reassembly | security-sentinel, pattern-recognition-specialist | review round 2, same commit |
+| An unclosed `---` after a blank or BOM consumes the spec. The first closed pair is skipped only when it is the leading exact line, and a trailing space or tab is not a delimiter. | frontmatter-closed-pair | code-quality-analyst, security-sentinel | review round 2, same commit |
+| Skill needles are unanchored, and a comment inside the span is deleted before the check. Other pin siblings are the one-shot arm, a fenced plan line, and goal text inside Non-Goals. | pin-test-residuals | agent-native-reviewer, test-design-reviewer | stated in the test header, same commit |
+| `specs/./<leaf>` and a trailing `.` still refuse. A heading named `none` collides with `unmapped: none`. | dot-and-empty-unmapped | code-quality-analyst | review round 2, same commit |
 
 ## Skipped
 
@@ -39,4 +50,6 @@ architecture-strategist, git-history-analyzer, performance-oracle, semgrep-sast 
 
 ## Fix contract
 
-One commit. Refuse `intake: unreadable` with no other stdout when a projected line is either marker, or a column-0 `moved:`, `unmapped:`, `never-read:`, or digest line. Strip U+0085 from accepted file bytes. Hostile names refuse C0 other than tab, DEL, U+0085, U+2028, U+2029, and the two markers. Fence: indent 0–3, same character, closer at least as long as the opener. Frontmatter: strip a leading BOM, skip leading blank lines, then the first `---` pair. Strip a trailing ATX hash sequence. User-story match uses token boundaries and does not match `User Stories`. An empty mapped body is listed unmapped. Refuse `..` only. Strict UTF-8. Tests pin the cases above, including comment-stripped greps of the run sentences that already exist. Plan Read path becomes `plugins/soleur/skills/plan/references/spec-kit-intake.md` only if the skill-body budget still fits. Do not edit the one-shot skill. Do not fold child headings.
+Round 1 commit `d4d557fe9c`. Refuse `intake: unreadable` with no other stdout when a projected line is either marker, or a column-0 `moved:`, `unmapped:`, `never-read:`, or digest line. Strip U+0085 from accepted file bytes. Hostile names refuse C0 other than tab, DEL, U+0085, U+2028, U+2029, and the two markers. Fence: indent 0–3, same character, closer at least as long as the opener. Strip a trailing ATX hash sequence. User-story match uses ASCII token boundaries and does not match `User Stories`. An empty mapped body is listed unmapped. Refuse `..` only. Strict UTF-8. Plan Read path is `plugins/soleur/skills/plan/references/spec-kit-intake.md`. Do not edit the one-shot skill. Do not fold child headings.
+
+Round 2, same commit as this ledger update. Repeat the byte strip until a pass removes nothing, then drop any remaining U+0085, U+2028, or U+2029. A delimiter is `---` plus only trailing space or tab. Skip only the first closed pair, wherever it starts. An unclosed opener does not consume later headings. An empty unmapped list emits no line. Drop `.` before the specs/leaf check and still refuse `..`. Skill needles must occur in the raw file and after comment stripping. The run needles keep the imperative words already in the skills. The test header states the remaining pin residuals, including the ASCII user-story boundary.

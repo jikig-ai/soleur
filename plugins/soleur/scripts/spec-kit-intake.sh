@@ -48,7 +48,7 @@ def resolve(cwd, dire):
 def parts_of(path):
     if not path.startswith("/"):
         refuse("not-a-directory")
-    parts = [p for p in path.split("/") if p]
+    parts = [p for p in path.split("/") if p and p != "."]
     if any(p == ".." for p in parts):
         refuse("not-a-directory")
     if len(parts) < 2 or parts[-2] != "specs" or not valid_leaf(parts[-1]):
@@ -141,7 +141,7 @@ def load_file(dir_fd, name):
         os.close(fd)
 
 
-def strip_controls(data):
+def strip_once(data):
     out = bytearray()
     i = 0
     n = len(data)
@@ -161,10 +161,25 @@ def strip_controls(data):
             continue
         out.append(b)
         i += 1
+    return bytes(out)
+
+
+def strip_controls(data):
+    cur = data
+    for _ in range(len(data) + 1):
+        nxt = strip_once(cur)
+        if nxt == cur:
+            break
+        if len(nxt) >= len(cur):
+            refuse("unreadable")
+        cur = nxt
+    else:
+        refuse("unreadable")
     try:
-        return out.decode("utf-8")
+        text = cur.decode("utf-8")
     except UnicodeDecodeError:
         refuse("unreadable")
+    return text.translate({0x85: None, 0x2028: None, 0x2029: None})
 
 
 def heading_text(raw):
@@ -190,24 +205,31 @@ def fence_closer(line, char, length):
     return mark == char and size >= length and rest.strip(" \t") == ""
 
 
+def is_delim(line):
+    return line.startswith("---") and line[3:].strip(" \t") == ""
+
+
 def parse_sections(text):
     if text.startswith("\ufeff"):
         text = text[1:]
     lines = text.split("\n")
-    i = 0
-    while i < len(lines) and lines[i].strip(" \t") == "":
-        i += 1
-    if i < len(lines) and lines[i] == "---":
-        i += 1
-        while i < len(lines) and lines[i] != "---":
-            i += 1
-        if i < len(lines) and lines[i] == "---":
-            i += 1
+    opener = None
+    closer = None
+    for idx, line in enumerate(lines):
+        if not is_delim(line):
+            continue
+        if opener is None:
+            opener = idx
+            continue
+        closer = idx
+        break
+    if opener is not None and closer is not None:
+        lines = lines[:opener] + lines[closer + 1 :]
     sections = []
     title = None
     body = []
     fence = None
-    for line in lines[i:]:
+    for line in lines:
         if fence is not None:
             if fence_closer(line, fence[0], fence[1]):
                 fence = None
@@ -321,7 +343,7 @@ def side_block(name, data, text):
 
 def receipt_lines(key, items):
     if not items:
-        return ["%s: none" % key]
+        return []
     return ["%s: %s" % (key, item) for item in items]
 
 

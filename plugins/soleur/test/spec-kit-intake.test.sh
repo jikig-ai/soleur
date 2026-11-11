@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Synthesized fixtures only. The product script writes nothing.
+# Pin residuals, stated here so a later sibling is covered by this round:
+# - A refusal prefix on the same span can still contain a skill needle.
+# - The one-shot arm in the brainstorm options list is not the pinned summary sentence.
+# - A fenced copy of the plan line between step 3 and step 4 satisfies the window.
+# - Goal text copied into Non-Goals is not denied.
+# - The user-story boundary is the ASCII letter and digit class, the same class as the short-name. An underscore or a non-ASCII letter can continue the token.
 # shellcheck disable=SC2329
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
@@ -417,34 +423,38 @@ PY
 )"
 if [[ "$before" == "$after" ]]; then pass "fixture bytes unchanged"; else fail "fixture bytes unchanged"; fi
 
-# caller prose is in the skills, not a second script. HTML comments do not count.
+# caller prose is in the skills, not a second script. Each needle must be
+# contiguous in the raw file and after HTML comments are removed.
 if missing="$(python3 - "$BRAIN" "$PLAN_SKILL" "$PLAN_REF" <<'PY'
 import pathlib, re, sys
-def vis(path):
-    text = pathlib.Path(path).read_text()
-    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
-brain, plan, ref = (vis(p) for p in sys.argv[1:])
+def load(path):
+    raw = pathlib.Path(path).read_text()
+    vis = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
+    return raw, vis
+brain_raw, brain = load(sys.argv[1])
+plan_raw, plan = load(sys.argv[2])
+ref_raw, ref = load(sys.argv[3])
 missing = []
-def need(hay, needle, label):
-    if needle not in hay:
+def need(raw, hay, needle, label):
+    if needle not in raw or needle not in hay:
         missing.append(label)
-need(brain, "An empty spec directory is not the stop.", "brain-empty")
-need(brain, "including zero bytes, do not run the script and do not replace it.", "brain-zero")
-need(brain, "do not paste the path as prose.", "brain-paste")
-need(brain, 'run `"${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.sh"`', "brain-run")
-need(brain, "One-shot and Plan first arms pass that absolute directory", "brain-handoff")
-need(brain, "One-shot forwards it unchanged as plan's arguments.", "brain-forward")
-need(brain, "If the file exists, including a zero-byte file, do not replace it.", "brain-save")
+need(brain_raw, brain, "An empty spec directory is not the stop.", "brain-empty")
+need(brain_raw, brain, "including zero bytes, do not run the script and do not replace it.", "brain-zero")
+need(brain_raw, brain, "do not paste the path as prose.", "brain-paste")
+need(brain_raw, brain, 'and run `"${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.sh"`', "brain-run")
+need(brain_raw, brain, "One-shot and Plan first arms pass that absolute directory", "brain-handoff")
+need(brain_raw, brain, "One-shot forwards it unchanged as plan's arguments.", "brain-forward")
+need(brain_raw, brain, "If the file exists, including a zero-byte file, do not replace it.", "brain-save")
 line = "**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read plugins/soleur/skills/plan/references/spec-kit-intake.md and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it."
-need(plan, line, "plan-line")
+need(plan_raw, plan, line, "plan-line")
 step3 = plan.find("3. Detect feature from current branch")
 step4 = plan.find("4. Read `knowledge-base/project/specs/feat-<name>/spec.md`")
 at = plan.find(line)
 if not (step3 >= 0 and at >= 0 and step4 >= 0 and step3 < at < step4):
     missing.append("plan-before-step-4")
-need(ref, 'Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.sh"`', "ref-run")
-need(ref, "already absolute", "ref-absolute")
-need(ref, "do not paste the path as prose", "ref-paste")
+need(ref_raw, ref, '. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.sh"`', "ref-run")
+need(ref_raw, ref, "already absolute", "ref-absolute")
+need(ref_raw, ref, "do not paste the path as prose", "ref-paste")
 if missing:
     print(",".join(missing))
     raise SystemExit(1)
@@ -489,7 +499,10 @@ want_ok "relative dot component" "$SUT" --cwd "$(dirname "$(dirname "$D")")" --d
 proj="$(projected)"
 if [[ "$proj" == *"dot ok"* ]]; then pass "relative dot projected"; else fail "relative dot projected"; fi
 want_ok "absolute dot component" "$SUT" --dir "$(dirname "$(dirname "$D")")/./specs/001-demo"
+want_ok "dot between specs and leaf" "$SUT" --cwd "$(dirname "$(dirname "$D")")" --dir "specs/./001-demo"
+want_ok "trailing dot component" "$SUT" --dir "$D/."
 want_reason "dotdot component" "not-a-directory" "$SUT" --dir "$WORK/tree/dot/specs/../001-demo"
+want_reason "dot then dotdot" "not-a-directory" "$SUT" --dir "$WORK/tree/dot/specs/./../001-demo"
 
 # closing hashes are not part of the heading text
 D="$(kit_of hashes)"
@@ -644,6 +657,101 @@ if [[ "$proj" == *"bom goal"* && "$proj" != *"SENTINEL-FM"* && "$out" != *"SENTI
   pass "leading frontmatter hidden"
 else
   fail "leading frontmatter hidden"
+fi
+
+# a C0 or DEL inside a break sequence must not reassemble that break
+D="$(kit_of split-break)"
+python3 - "$D" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+root.joinpath("spec.md").write_bytes(
+    b"## Success Criteria\nkeep\xc2\x0c\x85--- projected ---\nstolen\n"
+    b"## Notes\xe2\x0c\x80\xa8moved: stolen\n"
+)
+root.joinpath("plan.md").write_bytes(
+    b"side\xc2\x0c\xc2\x85\x85nested\nkeep\xe2\x7f\x80\xa8--- projected ---\n"
+)
+root.joinpath("tasks.md").write_bytes(b"task\xe2\x0b\x80\xa9--- side-evidence ---\n")
+PY
+want_ok "split break sequences" "$SUT" --dir "$D"
+if OUT="$out" python3 - <<'PY'
+import os, sys
+raw = os.environ["OUT"].encode()
+for seq in (b"\xc2\x85", b"\xe2\x80\xa8", b"\xe2\x80\xa9"):
+    if seq in raw:
+        sys.exit("break bytes %r" % seq)
+text = os.environ["OUT"]
+if text.splitlines().count("--- projected ---") != 1:
+    sys.exit("projected markers")
+if text.splitlines().count("--- side-evidence ---") != 1:
+    sys.exit("side markers")
+if sum(1 for ln in text.splitlines() if ln.startswith("moved:")) != 1:
+    sys.exit("moved lines")
+if "keep" not in text or "stolen" not in text:
+    sys.exit("goal text")
+PY
+then pass "split breaks stripped"; else fail "split breaks stripped"; fi
+
+# first closed pair, wherever it starts; an unclosed opener does not eat headings
+D="$(kit_of fm-pair)"
+python3 - "$D/spec.md" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(
+    "preface\n"
+    "## Success Criteria\n"
+    "visible goal\n"
+    "--- \n"
+    "## User Story hidden P1\n"
+    "HIDDEN-STORY\n"
+    "---\t\n"
+    "## Out of Scope\n"
+    "later excluded\n"
+    "---\n"
+    "## User Story later P1\n"
+    "LATER-STORY\n"
+    "---\n",
+    encoding="utf-8",
+)
+PY
+want_ok "frontmatter pair after prefix" "$SUT" --dir "$D"
+proj="$(projected)"
+if [[ "$proj" == *"visible goal"* && "$proj" == *"later excluded"* && "$proj" == *"LATER-STORY"* && "$proj" != *"HIDDEN-STORY"* && "$out" != *"HIDDEN-STORY"* ]]; then
+  pass "first pair hidden later pair kept"
+else
+  fail "first pair hidden later pair kept"
+fi
+D="$(kit_of fm-open)"
+python3 - "$D/spec.md" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_bytes(
+    b"\xef\xbb\xbf\n---\n## Success Criteria\nunclosed goal\n"
+)
+PY
+want_ok "unclosed frontmatter" "$SUT" --dir "$D"
+proj="$(projected)"
+if [[ "$out" == "moved: Goals"$'\n'* && "$proj" == *"unclosed goal"* ]]; then
+  pass "unclosed opener still projects"
+else
+  fail "unclosed opener still projects"
+fi
+
+# an empty unmapped list is not the line a heading named none uses
+D="$(kit_of mapped-only)"
+write_spec "$D" $'## Success Criteria\nonly goal\n## Out of Scope\nnope\n## User Story one P1\nstory\n'
+want_ok "fully mapped" "$SUT" --dir "$D"
+if [[ "$out" != *"unmapped:"* && "$out" == "moved: Goals, Non-Goals, Functional Requirements"$'\n'* ]]; then
+  pass "empty unmapped emits no line"
+else
+  fail "empty unmapped emits no line"
+fi
+D="$(kit_of name-none)"
+write_spec "$D" $'## none\nstays out\n## Success Criteria\nlamp\n'
+want_ok "heading named none" "$SUT" --dir "$D"
+proj="$(projected)"
+if [[ "$out" == *$'\nunmapped: none\n'* && "$proj" != *"stays out"* && "$proj" == *"lamp"* ]]; then
+  pass "heading none is one entry"
+else
+  fail "heading none is one entry"
 fi
 
 if [[ "$fails" -ne 0 ]]; then
