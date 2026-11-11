@@ -18,6 +18,47 @@ requires_cpo_signoff: false
 
 # fix(ci): bound the webplat mutation batteries so monitor shards stop hitting the 30-min step timeout
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-11
+**Sections enhanced:** Research Insights (learnings), Research Reconciliation,
+Guard Contract (lint-compliant mutation matrix), Proposed Solution (invocation
+shape), Acceptance Criteria (ambient-run fix), Dependencies & Risks
+(required-check surface).
+**Research agents used:** sequential-fallback — all deepen-plan roles executed
+inline in this session (nested Task spawns unavailable in the Devin subagent
+harness): per-section repo research, learnings scan
+(`knowledge-base/project/learnings/`), plan-review panel (dhh / kieran /
+code-simplicity / cto-devex), gate verifiers §4.4–§4.13.
+**Reviewed-Coverage: sequential-fallback**
+
+### Key Improvements
+
+1. **Learning applied:** `2026-11-07-a-required-shard-on-its-timeout-edge…`
+   — this exact defect already cost PR #12262 ~7h of merge-queue coin flips;
+   the recorded flip trigger ("pin the batteries to one shard or give them
+   their own job") is this plan's arms D/B, and its "third shard would repeat
+   them" warning eliminates the naive K-increase option. Arm A (bare raise)
+   was already executed as #12279 (25→35) and went stale in ~4 days.
+2. **Guard Contract brought to lint compliance:** `**Mutation matrix:**` is
+   now a 4-row table (silent-decline, matrix-drop, second-member,
+   dispatch-red) satisfying `lint-guard-contract.py` ≥3 rows.
+3. **Plan-review consolidation applied:** brittle count-probe replaced with
+   a substring probe; AC-5 re-expressed against a plan-controlled
+   `workflow_dispatch` run; `shard-totality-mutations` job cited as the
+   verbatim copy-shape for exit-code/`elapsed_s` propagation; required-check
+   ruleset sync added as a named risk.
+
+### New Considerations Discovered
+
+- ci.yml hard-codes the leg census in three places beyond the `if:` mirror —
+  the "gated set is eight jobs" comment (~line 151), the oracle-selection jq
+  leg list (~line 252), and the draft-light leg list (~line 275); each names
+  `test-webplat` et al. and must gain `test-webplat-mutations` in lockstep.
+- Arm-A precedent documented: bare timeout raises here have a measured
+  ~4-day half-life; the derivation comment must name the measured max, not
+  just the result.
+
 ## Overview
 
 Every scheduled `main-health-monitor` run since 2026-11-10 fails a `test-webplat`
@@ -109,6 +150,17 @@ dedicated-leg precedent. Whole-battery-per-leg first; `--rows` row-splitting of
   not conflate.
 - `test-all-webplat-gate.test.sh` mutation-matrix discipline: every static
   shape assertion pairs with a mutant that must drive it red.
+- **`2026-11-07` learning — `a-required-shard-on-its-timeout-edge-made-the-merge-queue-a-coin-flip`:**
+  the SAME defect already cost PR #12262 ~7 hours of merge-queue coin flips —
+  `test-webplat` shards cancelled at the (then) 25-min job ceiling with no
+  failing assertion. The remediation was a one-integer raise to 35 min
+  (#12279), and the review falsified the assumed cause: the vitest split is
+  ~5 min; the wall time is the mutation batteries running in full on BOTH
+  shards. Its recorded flip trigger is verbatim: *"pin the batteries to one
+  shard or give them their own job"* — exactly this plan's arms D and B. Its
+  warning that a third shard "would repeat them" eliminates the naive
+  K-increase option. `ci.yml` now carries `timeout-minutes: 35` on the
+  webplat job (line ~1551) — arm A was already tried and bought 4 days.
 
 ### File Paths Examined
 
@@ -123,6 +175,11 @@ dedicated-leg precedent. Whole-battery-per-leg first; `--rows` row-splitting of
 
 ## Research Reconciliation — Spec vs. Codebase
 
+- **Arm A was already executed once and went stale in ~4 days.** ci.yml's
+  webplat job was raised 25→35 min in #12279 (2026-11-07, learning
+  `a-required-shard-on-its-timeout-edge-made-the-merge-queue-a-coin-flip`);
+  the monitor's step ceiling stayed 30 and is now red again. A bare raise is
+  the documented symptom-treating arm, not the fix.
 - **"Shards hop" is two different defects.** Issue text mixes webplat timeout
   kills (this fix) with `test-scripts` assertion failures on `42812155417`
   (different class). Plan scope: webplat timeout only.
@@ -216,7 +273,10 @@ later approaches its ceiling. Not needed at current row counts.
 ### Phase 2 — wiring + guards
 
 - Monitor `report` job: `needs`, `R_` env, failure-leg loop, leg artifacts.
-- ci.yml `test` aggregator + oracle/draft-light `if:` mirrors; flip-trigger
+- ci.yml `test` aggregator join, plus the three hard-coded leg lists that
+  name the webplat leg: the "gated set is eight jobs" comment (~line 151),
+  the oracle-selection jq leg list (~line 252) and `skip_legs` membership
+  (~line 1539 `if:`), and the draft-light leg list (~line 275); flip-trigger
   comment.
 - `plugins/soleur/test/main-health-monitor-workflow.test.sh`: leg census,
   margin assertions, envelope re-derivation.
@@ -374,12 +434,14 @@ files for the same three battery stems in the job matrix. If a fourth battery
 is registered in the webplat arm later, the guard's label set must be updated
 — the guard asserts the label list in both surfaces so drift fails loudly.
 
-**Mutation matrix.** ≥3 rows: (a) delete one `skip_suite` arm → guard red
-(decline would be silent); (b) drop one battery stem from a workflow matrix →
-guard red (coverage gap); (c) must-pass row — gate moved below an
-`exit`-reached line or label typo'd → red. Plus a dispatch-red check: the
-guard itself must fail when pointed at a mutant test-all.sh copy (the
-test-all-webplat-gate.test.sh mutant-copy discipline).
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Delete one battery's `skip_suite` arm in the `want_webplat` block (decline becomes silent absence on CI legs) | RED |
+| 2 | Drop one battery stem from the `strategy.matrix.battery` list in either workflow (coverage gap the monitor can't see) | RED |
+| 3 | Add a SECOND battery registration after a compliant first but emit only one `run_suite`/`skip_suite` pair (a check that stops at the first member is the defect itself) | RED |
+| 4 | Point the guard at a mutant `test-all.sh` copy where the gate sits below an `exit`-reached line (dispatch never reaches it — vacuous green) | RED |
 
 ## Scope Check
 
