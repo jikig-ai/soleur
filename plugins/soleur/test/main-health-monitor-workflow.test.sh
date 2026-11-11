@@ -862,6 +862,22 @@ if _mut_p:
 else:
     ok("(S7) test-webplat-mutations carries the three battery stems via direct invocation")
 
+# ---- (S8) a completed-but-failing mut leg emits a `RED ` verdict (#12626 review) ----
+# The filer's cap_fail gate recognizes only the runner's own verdict tokens
+# (`^RED `, `^UNACCOUNTED `, a `=== N suites:` failed breakdown, or the
+# [FAIL]+short-terminal pairing). The batteries emit NONE of those, so a leg
+# that runs to completion and legitimately fails would title "did not
+# complete" — censored-leg semantics applied to a verdict-bearing capture.
+# The leg must emit `RED <path>` into the teed capture on non-zero exit; a
+# censored leg never reaches the emit, which preserves the complete-vs-timeout
+# split the filer relies on.
+if re.search(r'RED apps/web-platform/test/\$\{\{ matrix\.battery \}\}\.test\.sh', _mut_b):
+    ok("(S8) mut leg emits a `RED ` verdict into the capture on non-zero exit")
+else:
+    bad("(S8) mut leg emits a `RED ` verdict into the capture on non-zero exit",
+        "no `RED ` emit found — a completed-but-failing battery leg files as "
+        "'did not complete' instead of 'tests failing'")
+
 # ---- (S5) exactly one Sentry check-in owner -----------------------------------
 _n_beat = len(re.findall(r'uses:\s*\./\.github/actions/sentry-heartbeat', stripped))
 if _n_beat == 1:

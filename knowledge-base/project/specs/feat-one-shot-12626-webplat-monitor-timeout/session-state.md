@@ -24,7 +24,13 @@ no ci-is-the-gate token written (#N or file target)
 
 ## Work Phase
 - Status: implementation complete (T1–T7 green); commits on branch.
-- Arm B landed: `VITEST_SHARD`-gated `skip_suite` declines in `scripts/test-all.sh` (reason `test-webplat-mutations`), dedicated 3-battery matrix jobs in `ci.yml` (timeout 45m step) and `main-health-monitor.yml` (45m step / 65m job, `mut-*` leg ids), both joining the `test` aggregator + report `needs:`; `EXPECTED_LEGS` 15→18.
+- Arm B landed: `VITEST_SHARD`-gated `skip_suite` declines in `scripts/test-all.sh` (reason `test-webplat-mutations`), dedicated 3-battery matrix jobs in `ci.yml` (job-level 45m, no step ceiling — the CTO-ruled shard-totality shape) and `main-health-monitor.yml` (45m step / 65m job, `mut-*` leg ids), both joining the `test` aggregator + report `needs:`; `EXPECTED_LEGS` 15→18.
 - Lockstep updated: oracle-lane six-leg grammar + diagrams carve-out keeps both web-platform legs; push-dedupe 7-leg proof (`AGG_DIGEST` re-pinned); draft-light five-family census; aggregator-diagnosis `MUTATIONS_RESULT` fixture ($18) + floors 147→152 / 156; terraform-parity needs-line fixture.
 - Validated: `--enumerate-commands` shows SUITE_COMMAND unsharded / SUITE_COMMAND_DECLINED on shards 1-2; all 7 touched guards green (31 + 157 + 152 + 226 + 209 + 5267 + 73 assertions); ruleset pins only `test` (no Terraform/ruleset edit per CTO ruling).
 - Not done here (post-merge items): `workflow_dispatch` leg-report verification on a live monitor run.
+- Named follow-up (review P3-note): `test-webplat-mutations` carries no applicability classifier — `shard-totality-mutations` skips on markdown-only diffs via `ci-shard-totality-classify.sh`; the new job pays ~3×25-30 leg-min on KB-only PRs. A cost follow-up in the #9729 class, not a correctness defect.
+
+## Review Phase
+- `Reviewed-Coverage: sequential-fallback` (Devin harness — no parallel seats). 1 P2 + 3 P3 findings, all resolved in fix-round commit.
+- P2 fixed: monitor mut leg now emits `RED <battery-path>` into the teed capture on non-zero exit — a completed-but-failing leg files as "tests failing" (cap_fail `^RED ` arm); censored legs never reach the emit and keep "did not complete". S8 assertion added to the workflow guard pinning the emit.
+- P3s fixed: session-state ceiling phrasing (job-level, no step ceiling); ci.yml:1516 leg-shape comment (corrected "single legs" claim + the false "each leg invokes test-all.sh" claim).

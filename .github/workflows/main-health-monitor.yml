@@ -347,6 +347,15 @@ jobs:
           # The step's OWN elapsed seconds (#8112). A step the ceiling kills never
           # reaches this line, so an absent figure marks that sample as CENSORED.
           echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
+          # The batteries emit none of the runner's own verdict tokens, so
+          # without this a completed-but-FAILING leg lands in the filer's else
+          # arm titled "did not complete" instead of "tests failing" (#12626
+          # review). Emit the runner's `RED <path>` verdict on non-zero exit;
+          # a censored leg never reaches this line, which preserves the
+          # complete-vs-timeout split the filer relies on.
+          if (( rc != 0 )); then
+            echo "RED apps/web-platform/test/${{ matrix.battery }}.test.sh" | tee -a "$RUNNER_TEMP/leg-report/capture.txt"
+          fi
           exit "$rc"
 
       - name: Stage leg report

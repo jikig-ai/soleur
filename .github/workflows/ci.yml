@@ -1513,16 +1513,18 @@ jobs:
   # typecheck + vitest + bun-test workloads run concurrently. test-scripts
   # and test-scripts-heavy are shard matrices over the same runner (leg
   # assignment is manifest-driven, positional when the table is absent or
-  # stale — see scripts/test-all.sh); the other three are single legs
-  # (test-webplat is itself a 2-way vitest --shard matrix; test-webplat-mutations
-  # is a 3-way battery-name matrix — the three web-platform mutation batteries
-  # that used to run in FULL on every webplat shard, moved here by #12626).
+  # stale — see scripts/test-all.sh); test-bun is a single leg, test-webplat
+  # is a 2-way vitest --shard matrix, and test-webplat-mutations is a 3-way
+  # battery-name matrix — the three web-platform mutation batteries that used
+  # to run in FULL on every webplat shard, moved here by #12626.
   # The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
-  # every merge. Each leg invokes scripts/test-all.sh with the
-  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`/
-  # `scripts-heavy`).
+  # every merge. Every leg except test-webplat-mutations invokes
+  # scripts/test-all.sh with the corresponding TEST_GROUP positional arg
+  # (`webplat`/`bun`/`scripts`/`scripts-heavy`); test-webplat-mutations
+  # invokes each battery script directly — test-all.sh would
+  # skip_suite-decline the registrations the moment any shard env is set.
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
   #
   # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
