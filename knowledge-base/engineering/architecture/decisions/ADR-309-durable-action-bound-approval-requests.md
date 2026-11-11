@@ -546,7 +546,7 @@ seven tools still fall back to a card the requesting member can answer") on the 
   token reaches the in-memory Bash card (or, in autonomous mode, no card); the destroy-ask lane matches only destructive pushes. This
   check does not cover that lane; tracked in #12668.
 - **Pins.** `test/approval/legacy-push-owner-fallback.test.ts` (every case driven from `APPROVAL_REQUIRED_TOOLS` and
-  `APPROVAL_EXEMPT_TOOLS`), the gate-flow dormancy cases in `test/approval/gate-flow.test.ts`, and battery rows `G1-LO1`..`G1-LO13` in
+  `APPROVAL_EXEMPT_TOOLS`), the gate-flow dormancy cases in `test/approval/gate-flow.test.ts`, and battery rows `G1-LO1`..`G1-LO15` in
   `test/approval-guard1-mutation.test.sh`.
 
 ## Diagram

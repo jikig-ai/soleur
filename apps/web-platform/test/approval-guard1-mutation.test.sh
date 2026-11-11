@@ -161,6 +161,8 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------------------------------------------------
 # MUTANT TABLE (python; dumped to JSON). edit = E(anchor, replace, count=<exact occurrences>, nth=<replace only the nth>)
 # M(id, file, edits, test_file, kill=[exact failing test-name substrings], equivalent=<reason>|None, residual=<reason>|None)
+#   kill attribution is EXACT-COUNT by substring: a new test whose title EXTENDS an existing detector (": X" -> ": X after Y")
+#   raises that row's control count and turns its kill MISATTRIBUTED. Re-grep every detector when adding a title (#12597).
 # ---------------------------------------------------------------------------------------------------------------------
 MUTANTS="$SB/mutants.json"
 python3 - "$MUTANTS" <<'PYTBL'
