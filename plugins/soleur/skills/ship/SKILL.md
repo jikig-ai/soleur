@@ -2184,12 +2184,12 @@ Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't qu
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
-    gh pr merge <number> --squash --auto
+    gh pr merge <number> --squash --auto --match-head-commit "$H"
   rc=$?
 else
   # Degrade open, loudly — the lock is advisory (ADR-178 §5).
   echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
-  gh pr merge <number> --squash --auto
+  gh pr merge <number> --squash --auto --match-head-commit "$H"
   rc=$?
 fi
 # rc=99 comes only from `with_lock` — but it means "the lock could not be
