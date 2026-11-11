@@ -40,16 +40,30 @@ raw="$("$QUERY" --since "$WINDOW" --grep placement_decision --limit 5000 2>"$qer
   exit 2
 }
 
-rows="$(printf '%s\n' "$raw" | jq -c --arg id "$APP_ID" '
-  .raw | fromjson | select(.CONTAINER_NAME == $id)
-    | (.message_json // {}) | select(type == "object")
+# The filter is TOTAL (the zot-log-channel-7440 idiom): `fromjson?` at both
+# levels and `objects` guards mean one malformed or non-JSON `.raw` line drops
+# that row instead of aborting the stream mid-window — rows are dt-ASC, so an
+# abort would silently drop the NEWEST evidence and grade a decode failure as
+# exit-1 "still soaking". Predicate decisions in jq, not grep: failed forwards
+# (`.err` present, placement.forward_failed) are excluded — a broken forwarder
+# must not satisfy the forward arm — and host_ip must be a landed string so a
+# null never counts as off-exec. Output is exact FWD/EXE labels only.
+rows="$(printf '%s\n' "$raw" | jq -Rr --arg id "$APP_ID" --arg exec "$EXEC_HOST_IP" '
+  fromjson? | .raw? | fromjson? | objects
+    | select(.CONTAINER_NAME == $id)
+    | (.message_json // {}) | objects
     | select(.event == "placement_decision")
-    | {decision, host_ip}' || true)"
+    | select(has("err") | not)
+    | select(.host_ip? | type == "string")
+    | if .decision == "forward" and .host_ip != $exec then "FWD"
+      elif .decision == "execute" and .host_ip == $exec then "EXE"
+      else empty end')" || {
+  echo "TRANSIENT (window=${WINDOW}): placement_decision row decode failed"
+  exit 2
+}
 
-fwd="$(printf '%s\n' "$rows" | grep '"forward"' \
-  | grep -cv "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"" || true)"
-exe="$(printf '%s\n' "$rows" | grep '"execute"' \
-  | grep -c "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"" || true)"
+fwd="$(printf '%s\n' "$rows" | grep -c '^FWD$' || true)"
+exe="$(printf '%s\n' "$rows" | grep -c '^EXE$' || true)"
 
 if (( fwd > 0 && exe > 0 )); then
   echo "placement_decision split verified (window=${WINDOW}): forward rows off-exec=${fwd}; execute rows on ${EXEC_HOST_IP}=${exe}"

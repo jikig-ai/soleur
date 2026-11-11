@@ -119,7 +119,8 @@ echo "placement-decision-forward-9137 fixture suite"
   row "$APP" "3bdb782cb4ab" "deprecation noise" "$(mj forward "$WEB2_IP" host-affine)"
   row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" host-affine)"
 } > "$WORK/rows.jsonl"
-expect "both arms + unrelated container" 0 "split verified"
+expect "both arms + unrelated container" 0 "off-exec=1"
+expect "execute count pinned" 0 "10.0.1.10=2"
 
 # 2. execute arm only → still soaking.
 {
@@ -172,6 +173,50 @@ expect "message-text-only evidence" 1 "still soaking"
 } > "$WORK/rows.jsonl"
 expect "wrong-container rows" 1 "still soaking"
 
+# 8b. Wrong event name carrying qualifying decision/host_ip — kills a revert
+#     that drops the .event == "placement_decision" select.
+{
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"exec_route_trace","decision":"forward","host_ip":"10.0.1.11"}'
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"exec_route_trace","decision":"execute","host_ip":"10.0.1.10"}'
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" portable)"
+} > "$WORK/rows.jsonl"
+expect "wrong-event decision rows" 1 "still soaking"
+
+# 8c. forward_failed: an err-marked forward decision (a broken forwarder) must
+#     not satisfy the forward arm — kills a revert of the has("err") exclusion.
+{
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"placement_decision","decision":"forward","host_ip":"10.0.1.11","err":{"message":"placement.forward_failed: dial timeout"}}'
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" portable)"
+} > "$WORK/rows.jsonl"
+expect "forward_failed excluded" 1 "still soaking"
+
+# 8d. Malformed wire rows FIRST in the stream must drop only themselves — a
+#     non-total decode aborts the stream and loses the good rows after them.
+{
+  printf 'garbage non-json line\n'
+  printf '{"dt":"2026-11-11 17:14:00.000000","raw":"not json at all {"}\n'
+  printf '{"dt":"2026-11-11 17:14:01.000000","raw":123}\n'
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj forward "$WEB2_IP" host-affine)"
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" portable)"
+} > "$WORK/rows.jsonl"
+expect "malformed rows skipped" 0 "off-exec=1"
+
+# 8e. null/absent host_ip never counts as an off-exec forward.
+{
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"placement_decision","decision":"forward","host_ip":null}'
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"placement_decision","decision":"forward"}'
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" portable)"
+} > "$WORK/rows.jsonl"
+expect "null host_ip never off-exec" 1 "still soaking"
+
+# 8f. Decoy verdict tokens elsewhere in message_json must not count — kills a
+#     full-projection revert that feeds rows to substring greps.
+{
+  row "$APP" "e7b1da5ba07c" "noise" '{"event":"placement_decision","decision":"forward","host_ip":"10.0.1.11","msg":"saw \"execute\" \"host_ip\":\"10.0.1.10\" elsewhere"}'
+  row "$APP" "e7b1da5ba07c" "noise" "$(mj execute "$EXEC_IP" portable)"
+} > "$WORK/rows.jsonl"
+expect "decoy tokens unprojected" 0 "off-exec=1"
+
 # 9. Empty window → still soaking (never vacuous PASS).
 : > "$WORK/rows.jsonl"
 expect "empty row set" 1 "still soaking"
@@ -189,11 +234,21 @@ else
   fail "non-executable query stub — rc=$rc: ${out:0:200}"
 fi
 
-# Anti-vacuity floor: the suite must have run at least one positive assertion
-# (case 1) — a suite that only ever saw exit 1 could be green while the probe
-# rejects every row.
-if (( passes < 1 )); then
-  fail "anti-vacuity: no positive assertion ran"
+# Exec-bit: the sweeper runs the probe directly; a 644 probe fails silently
+# there while `bash "$PROBE"` here stays green (sibling idiom:
+# mq-lever-e-verdict-12269.test.sh).
+if [[ -x "$PROBE" ]]; then
+  pass "probe committed 100755"
+else
+  fail "probe is not executable — sweeper exec fails"
+fi
+
+# Anti-vacuity floor: an exact expected-pass count — deleting an expect arm
+# silently shrinks coverage otherwise (sibling convention:
+# mq-lever-e-verdict-12269.test.sh EXPECTED_PASSES).
+EXPECTED_PASSES=18
+if (( passes != EXPECTED_PASSES )); then
+  fail "anti-vacuity: passes=$passes, expected $EXPECTED_PASSES"
 fi
 
 if (( fails > 0 )); then
