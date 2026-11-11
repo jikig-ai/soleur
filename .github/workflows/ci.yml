@@ -1548,7 +1548,12 @@ jobs:
     # An absent value would read as GitHub's 360-minute default. Flip trigger: if any shard reaches
     # 30 min, pin those batteries to one shard (as the tsc step does with strategy.job-index == 0)
     # or give them their own job; a third shard would repeat them and not help.
-    timeout-minutes: 35
+    # Raised 35 -> 45 (#12646): on a slow hosted runner approval-guard1-mutation alone now takes
+    # ~25 min (371 rows; measured 1092-1219s fast, >1440s slow), so a slow shard needs ~36 min and
+    # three of five attempts were cancelled at 35 with every reached row killed. 45 still bounds a
+    # hang. The flip trigger above has fired; the dedicated-leg fix is #12654 (tracker #12626) and
+    # restores a tighter bound for this job when it lands.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
