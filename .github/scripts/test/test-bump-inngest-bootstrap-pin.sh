@@ -363,7 +363,7 @@ case "$sub" in
         2) printf 'gh-stub: enqueuePullRequest rejected\ngh-stub: \x1b[31m\x07Required status check "quality-guards" is expected.\n' >&2; exit 1 ;;
         3) exit 1 ;;
         4) { printf 'gh-stub: '; printf 'A%.0s' {1..400}; printf ' TRUNC-END\n'; } >&2; exit 1 ;;
-        5) printf '\n' >&2; exit 1 ;;
+        5) printf ' ' >&2; exit 1 ;; # a SPACE survives $() capture; '\n' would strip to empty like arm 3
         0) ;;
         *) echo "gh-stub: unknown MOCK_GH_ENQUEUE_FAIL=${MOCK_GH_ENQUEUE_FAIL:-<unset>}" >&2; exit 42 ;;
       esac
