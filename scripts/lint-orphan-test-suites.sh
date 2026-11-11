@@ -350,7 +350,10 @@ fi
 # real and now visible: the covered set is a UNION, so two surfaces matching one suite
 # make a single-surface de-registration a silent no-op, and any mutation row aimed at it
 # passes green while the suite stops running.
-grep -hEo 'run:[[:space:]]+(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+# An optional `exec` prefix is the same registration: `exec bash <suite>` replaces the step shell with the
+# suite so the runner's TERM reaches the suite's own trap (egress-injector-spike.yml, #12517). Both workflow
+# surfaces accept it; the sed below strips everything up to `bash`, so the derived path is unchanged.
+grep -hEo 'run:[[:space:]]+(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw5all" || true
 LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
@@ -367,7 +370,7 @@ LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
 # have been to excuse it with an exclusion (a false statement about a suite that runs) or to
 # stop believing the report. Disjoint from 3 and 5 by construction: both of those require
 # `run:` on the same line.
-grep -hEo '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+grep -hEo '^[[:space:]]*(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw6" || true
 
