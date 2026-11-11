@@ -6,7 +6,7 @@ module: .github/workflows/main-health-monitor.yml leg capture -> issue filer
 tags: [ci-leg, verdict-token, cap-fail, direct-invocation, censored-leg, leg-report, test-all]
 issues: ["#12626"]
 pr: "#12654"
-synced_to: [wfs, plan-sharp-edges]
+synced_to: [wfs, plan-sharp-edges, ci-workflow-authoring]
 ---
 
 # Learning: a completed-but-failing direct-invocation leg files as "did not complete" unless the leg emits the runner's verdict token

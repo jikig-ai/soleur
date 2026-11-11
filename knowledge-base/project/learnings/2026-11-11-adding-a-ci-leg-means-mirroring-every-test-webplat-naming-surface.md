@@ -6,6 +6,7 @@ module: ci.yml / main-health-monitor.yml leg wiring
 tags: [ci-leg, lockstep-surfaces, aggregator, push-dedupe, draft-light, oracle-lane, ceiling-derivation, expected-legs]
 issues: ["#12626", "#12279", "#12262"]
 pr: "#12654"
+synced_to: [ci-workflow-authoring]
 ---
 
 # Learning: adding a CI leg means mirroring every `test-webplat`-naming surface — the guards make a miss loud, so grep first and mirror all of them
