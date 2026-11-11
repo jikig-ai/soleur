@@ -3,7 +3,8 @@
  * dependency), the legacy runner's in-memory card for EVERY approval-required tool may be answered only by the workspace
  * Owner. A member, a failed or timed-out role read, or a missing dependency is the static deny, with no card, no status
  * write and no offline notification; Stop or the session ending during the role read is the expired-gate deny. An Approve
- * is honoured only if the role, read again after the answer, is still Owner (CTO S1). The pending-card cap holds across
+ * is honoured only if the role, read again after the answer, is still Owner (CTO S1), with the same fail-closed outcomes
+ * (failure, deadline, abort). The pending-card cap holds across
  * the role read (CTO F10). Gated tools outside the approval-required set keep the card for any user, with no role read.
  * Settings' PUSH_DISCLOSURE ("nothing is pushed that way unless the workspace owner approves that push") relies on this.
  *
@@ -330,6 +331,80 @@ describe("legacy fallback: only the Owner may answer the in-memory card for ever
     expect(rejected.message).toMatch(/^User rejected the action/);
     expect(r.viewerRole).toHaveBeenCalledTimes(1);
   });
+
+  // The answer-time re-read (CTO S1) has the same fail-closed outcomes as the first read; `outcome` tells them apart.
+  const ANSWER_FAILED_CONTEXT = (tool: string) =>
+    expect.objectContaining({
+      toolName: tool,
+      workspaceId: WORKSPACE_ID,
+      tags: { stage: "legacy-push-owner-check" },
+      extra: { outcome: "denied-on-answer" },
+    });
+
+  test.each(APPROVAL_REQUIRED_TOOLS)(
+    "%s: the role read fails after Approve: static deny, viewerRoleFailed reported as denied-on-answer",
+    async (tool) => {
+      const h = setup("owner");
+      h.viewerRole.mockResolvedValueOnce("owner").mockRejectedValueOnce(new Error("viewer role read failed"));
+      const res = await h.call(tool, input(tool));
+      expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      expect(h.cards()).toHaveLength(1);
+      expect(h.viewerRole).toHaveBeenCalledTimes(2);
+      expect(reports).toHaveLength(1);
+      expect(reports[0][0]).toBe("viewerRoleFailed");
+      expect(reports[0][2]).toEqual(ANSWER_FAILED_CONTEXT(tool));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "platform-gate-push-owner-required", tool, role: "unavailable", stage: "on-answer" }),
+        expect.any(String),
+      );
+      expect(logPermissionDecision).toHaveBeenCalledWith("canUseTool-platform-gated", tool, "deny", "owner required on answer (unavailable)");
+    },
+  );
+
+  test.each(APPROVAL_REQUIRED_TOOLS)(
+    "%s: a role read after Approve that never settles ends at the deadline: static deny, viewerRoleFailed reported",
+    async (tool) => {
+      vi.useFakeTimers();
+      const h = setup("owner");
+      h.viewerRole.mockResolvedValueOnce("owner").mockImplementationOnce(() => new Promise(() => {}));
+      const pending = h.call(tool, input(tool));
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      await vi.waitFor(() => expect(h.viewerRole).toHaveBeenCalledTimes(2));
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(OWNER_ROLE_READ_DEADLINE_MS + 1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      expect(reports.map((r) => r[0])).toEqual(["viewerRoleFailed"]);
+      expect(reports[0][2]).toEqual(ANSWER_FAILED_CONTEXT(tool));
+      expect(reports[0][1]).toEqual(expect.objectContaining({ code: "role_read_timeout" }));
+    },
+    2_000,
+  );
+
+  test.each(APPROVAL_REQUIRED_TOOLS)(
+    "%s: Stop pressed while the role is read after Approve: denied as aborted at stage owner-role-answer, no report",
+    async (tool) => {
+      const callCtl = new AbortController();
+      const h = setup("owner");
+      h.viewerRole.mockResolvedValueOnce("owner").mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            callCtl.abort();
+            setTimeout(() => resolve("owner"), 0);
+          }),
+      );
+      const res = await h.call(tool, input(tool), callCtl.signal);
+      expect(res.behavior).toBe("deny");
+      expect(res.message).toMatch(/expired before it was answered/);
+      expect(h.cards()).toHaveLength(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted", delivered: true, stage: "owner-role-answer" }),
+        expect.any(String),
+      );
+      expect(reports).toEqual([]);
+    },
+  );
 });
 
 describe("legacy fallback: the pending-card cap holds across the role read (#12597, CTO F10)", () => {

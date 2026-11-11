@@ -188,7 +188,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     enabled = false;
   }
   if (!enabled) {
-    // A session that already ran the approval flow never falls back to the legacy requester-answerable card for the other
+    // A session that already ran the approval flow never falls back to the legacy (Owner-only, #12597) card for the other
     // tools after a mid-session flag-off or flag read error: only the grant-checked tools are protected by the sticky
     // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-309 rollback).
     if (a.approval.grants.enforcing) {

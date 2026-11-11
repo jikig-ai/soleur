@@ -1160,13 +1160,13 @@ async function startAgentSessionInner(
     // RLS policy `Users can read own profile` (auth.uid() = id) filters
     // the row; under tenant JWT this returns the founder's row only.
     // `repo_url` is intentionally NOT selected here — the canonical read
-    // is `getCurrentRepoUrl(userId)` below, which normalizes the value
+    // is `getCurrentRepoUrl(userId, activeWorkspaceId)` below, which normalizes the value
     // via `normalizeRepoUrl` and mirrors DB errors to Sentry. Sibling
     // inline SELECTs were a class of scoping-backdoor bug (see plan
     // 2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md).
     // `github_installation_id` is ALSO intentionally NOT selected — post-
     // ADR-044 it lives on `workspaces` (credential, definer-RPC-only) and
-    // is read via `resolveInstallationId(userId)` for the ACTIVE workspace
+    // is read via `resolveInstallationId(userId, activeWorkspaceId)` for the ACTIVE workspace
     // below, which fixes #4543 for joined members at run time.
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
@@ -1310,16 +1310,14 @@ async function startAgentSessionInner(
     //
     // The installation + repo are resolved LAZILY inside this `.git`-absent gate
     // (NOT hoisted ~300 lines above the canonical `resolveInstallationId` /
-    // `getCurrentRepoUrl` reads later in this function) — they re-resolve the
-    // active workspace claim independently (documented drift caveat at those
-    // canonical reads), so resolving them only on the rare missing-repo
-    // path minimizes exposure. `ensureWorkspaceRepoCloned` is fail-soft (never
+    // `getCurrentRepoUrl` reads later in this function); both are pinned to the
+    // ONE resolved `activeWorkspaceId` (#12597 review). `ensureWorkspaceRepoCloned` is fail-soft (never
     // throws), membership-scoped (`repoUrl`/`installationId` are server-resolved,
     // never request input — ADR-044), and runs host-side outside the sandbox.
     if (!existsSync(path.join(workspacePath, ".git"))) {
       const [storedInstallationId, reprovRepoUrl] = await Promise.all([
-        resolveInstallationId(userId),
-        getCurrentRepoUrl(userId),
+        resolveInstallationId(userId, activeWorkspaceId),
+        getCurrentRepoUrl(userId, activeWorkspaceId),
       ]);
       // Promote to the entitled repo-owner install (same selection the Concierge
       // cold factory + per-dispatch re-provision make) so a cross-account org
@@ -1660,8 +1658,11 @@ disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclos
 elements); the send is refused without them. You cannot send to a suppressed
 recipient, and suppression is permanent (no un-suppress).
 
-Write tools pause for the user to Approve or Reject. If a tool result says the
-action was not performed, tell the user that and do not retry it.`;
+Write tools pause for approval. The approval-required ones (pushing, pull
+requests, workflow runs, sending email, sharing and autonomy changes) can be
+approved only by the workspace Owner; on a shared workspace a member's request is
+refused. If a tool result says the action was not performed, tell the user that
+and do not retry it.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -1671,22 +1672,17 @@ action was not performed, tell the user that and do not retry it.`;
     // installation for the ACTIVE workspace via the membership-scoped definer
     // RPC, not the joiner's own `users` row. For a joined member this resolves
     // the workspace owner's installation; for a solo user it resolves their own.
-    const installationId = await resolveInstallationId(userId);
+    //
+    // Both reads are pinned to the ONE membership-verified `activeWorkspaceId`
+    // resolved at session start — the same id `createApprovalGateDeps` checks the
+    // Owner role against. Re-reading `current_workspace_id` here (the pre-#12597
+    // form) let a mid-startup workspace switch bind the GitHub tools to workspace
+    // B's repo + installation while the Owner gate read the role in workspace A.
+    const installationId = await resolveInstallationId(userId, activeWorkspaceId);
     // Canonical read — normalizes via `normalizeRepoUrl`, mirrors DB errors
     // to Sentry via `reportSilentFallback`. Replaces the prior inline
     // `user.repo_url` cast per "audit every query" learning.
-    //
-    // NOTE: these two reads resolve the active workspace claim independently
-    // (each mints its own tenant client and reads current_workspace_id). A
-    // concurrent set_current_workspace_id switch landing between them could
-    // pair workspace A's installation with workspace B's repo_url — both
-    // workspaces the SAME user belongs to (not cross-tenant). The window is
-    // sub-ms and the switcher reloads the page (restarting this context), so
-    // it is not fixed here; when #5462 gives workspaces distinct repo
-    // connections (making A-install/B-repo pairing reachable), resolve the
-    // workspace ONCE and thread it into both via their existing
-    // `workspaceId` override params so installation + repo share one snapshot.
-    const repoUrl = await getCurrentRepoUrl(userId);
+    const repoUrl = await getCurrentRepoUrl(userId, activeWorkspaceId);
 
     // Fail loud when the active workspace has a repo connected but the
     // installation resolves null — the GitHub App was uninstalled or lost
@@ -2260,7 +2256,8 @@ are the requirements to implement.`;
             notifyOfflineUser,
             // #4672 — the durable approval flow for the slice-1 gated tools. Cheap to build (no database access until a
             // slice-1 tool reaches the gate); the flag seam inside it decides, once per gate, whether the flow runs.
-            // Off (or unreadable) the gated branch is the in-memory review gate (Owner only, #12597).
+            // Off (or unreadable) the gated branch is the in-memory review gate: Owner only for an approval-required tool
+            // (#12597), any session user for an exempt one.
             approval: createApprovalGateDeps({
               userId,
               workspaceId: activeWorkspaceId,

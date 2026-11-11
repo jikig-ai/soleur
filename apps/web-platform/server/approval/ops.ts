@@ -134,7 +134,8 @@ export const APPROVAL_OPS = {
   /**
    * The requester's role could not be read; the card falls back to the read-only member view. Also reported, with tag
    * `stage = legacy-push-owner-check` and `extra.outcome = denied-no-card` (or `denied-on-answer` for the read made after an
-   * Approve), when the legacy card's Owner check fails: the action is refused and no card is shown (#12197 D1). Since #12597
+   * Approve), when the legacy card's Owner check fails: the action is refused, before any card for `denied-no-card` and after
+   * the card was answered for `denied-on-answer` (#12197 D1). Since #12597
    * that check covers every approval-required tool; the tag and the pino decision key keep their push-era names (production
    * query handles) and the report's `toolName` tells the tools apart.
    */

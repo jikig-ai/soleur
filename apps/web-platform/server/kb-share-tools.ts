@@ -123,7 +123,8 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
         "Returns { token, url, documentPath, size }. Links are revocable. " +
         "Use kb_share_list first to check whether an active link already exists — " +
         "the tool is idempotent on unchanged content, but listing surfaces stale or " +
-        "revoked links the user may want to know about.",
+        "revoked links the user may want to know about. " +
+        "Requires the workspace Owner's approval.",
       { documentPath: z.string() },
       async (args) => {
         const toolName = "mcp__soleur_platform__kb_share_create";
