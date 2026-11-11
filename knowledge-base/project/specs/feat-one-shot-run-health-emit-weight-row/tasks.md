@@ -14,7 +14,7 @@ Branch: `feat-one-shot-run-health-emit-weight-row`
 - [ ] 2.1 `grep -P 'run-health-emit\.test\.sh\t1272\tfloor' scripts/suite-durations.tsv` returns one row (alphabetically between `resolve-regenerable-conflicts.test.sh` and `run-in-pid-namespace.test.sh`)
 - [ ] 2.2 `grep -P 'run-health-emit\.test\.sh\t[1-8]$' scripts/suite-shard-legs.tsv` returns one row (leg `2` expected per #12650's identical regen)
 - [ ] 2.3 `bash scripts/test-all-corpus-weight-budget.test.sh` exits 0 and prints `ALL PASS` (pre-fix reproduction: it fails with `registration(s) with no committed weight row: plugins/soleur/scripts/run-health-emit.test.sh`)
-- [ ] 2.4 `git diff --stat` shows ~2 files / ~4 lines (2 rows + 2 `generated-at` headers); `scripts/suite-weight-exemptions.tsv` untouched
+- [ ] 2.4 `git diff --stat` shows 2 files, +4/−2 (2 rows + 2 `generated-at` header re-stamps); `scripts/suite-weight-exemptions.tsv` untouched
 
 ## Phase 3 — Merge-ordering check + commit
 

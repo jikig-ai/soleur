@@ -138,7 +138,7 @@ Expected diff (verified twice — the local dry-run output above and the byte-id
 
 ```bash
 bash scripts/test-all-corpus-weight-budget.test.sh   # exit 0, prints "ALL PASS"
-git diff --stat                                        # exactly 2 files, ~4 lines
+git diff --stat                                        # exactly 2 files, +4/−2 (2 rows + 2 header re-stamps)
 grep -P 'run-health-emit\.test\.sh\t1272\tfloor' scripts/suite-durations.tsv
 grep -P 'run-health-emit\.test\.sh\t[1-8]$' scripts/suite-shard-legs.tsv
 ```
@@ -266,7 +266,8 @@ No cross-domain implications detected — repo-internal CI/test-infrastructure c
 
 ## Context
 
-- Root cause: PR #12565 registered `plugins/soleur/scripts/run-health-emit.test.sh` but did not run the shard-manifest regen; ADR-240 §3's hash-fallback kept the suite *runnable* (it ran in CI on a fallback leg) while the committed-weight gate correctly redded — the guard did its job.
+- Root cause, first half: PR #12565 registered `plugins/soleur/scripts/run-health-emit.test.sh` but did not run the shard-manifest regen; ADR-240 §3's hash-fallback kept the suite *runnable* (it ran in CI on a fallback leg) while the committed-weight gate correctly redded — the detection guard did its job.
+- Root cause, second half (review-seat finding, verified 2026-11-11): the gate redded **on #12565's own PR CI before merge** — `test-scripts (3/8)` and the required `test` aggregate both concluded FAILURE ~21h pre-merge — yet the PR landed directly (merged by `deruelle`, no `merge_group` run) via the ruleset-14145388 bypass actors (`OrganizationAdmin`/`RepositoryRole`, `pull_request` mode). So the incident class is "missing regen **+ merge over a red required check**": the detection layer is enforced, the merge-enforcement layer is not, and the vector stays open for the next unrowed suite. Tracked separately — the enforcement gap is out of scope for this generated-data fix (see the deferred issue named in this PR's review synthesis).
 - Fix priority: main is red, so this is a same-day un-blocking fix (`p1-high`).
 - No exemptions needed: the floor weight 1272ms is far under the 600s `CORPUS_SUITE_CAP_MS`.
 - Plan-review note: this plan ran inside a Task subagent of the one-shot pipeline (no subagent-spawn tool); the prescribed reviewer fan-out could not be spawned in-process — equivalent inline verification (live test run, generator dry-run, sibling-diff comparison, ADR read) substituted and is disclosed under `Reviewed-Coverage: sequential-fallback`.
