@@ -44,22 +44,25 @@ the queue past the evidence head, and their P3 findings had to be fixed forward 
 
 ## Arm check
 
-Ship's arm and CI-fix re-arm and merge-pr's merge gate run this one command; it is the only copy. It takes the
-latest `Review-Evidence:` comment, requires it to say `coverage=full` and `unresolved-P1-P2=0`, requires its `head=`
-to be an ancestor of the PR head, and requires that no non-merge commit sits on the branch's first-parent line
-between the two:
+Ship's arm and CI-fix re-arm and merge-pr's merge gate run this one check; it is the only copy. It takes the
+latest `Review-Evidence:` comment, requires its first line to say `coverage=full` and `unresolved-P1-P2=0` (each
+field exactly once), requires its `head=` to be an ancestor of the PR head, and requires that no non-merge commit
+sits on the branch's first-parent line between the two. The first statement is the check and exits 1 on refusal;
+the second is the arm:
 
 ```bash
-EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(startswith("Review-Evidence: head="))]|last // ""|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)"))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
+EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("; coverage=")]|length==1) and ([scan("; unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
   && H=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid) \
   && git merge-base --is-ancestor "$EV" "$H" \
   && [ -z "$(git rev-list --first-parent --no-merges "$EV..$H")" ] \
-  && gh pr merge PR_NUMBER --squash --auto --match-head-commit "$H"
+  || { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }
+gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 ```
 
-Where a skill wraps the merge in the merge-main lock, run the check without its last line and run the lock block
-only on exit 0, in the same Bash call so the lock block's `--match-head-commit "$H"` sees `H`. On a non-zero
-exit, run `soleur:review`, which posts fresh evidence, then run the check again; never arm around it.
+Where a skill wraps the merge in the merge-main lock, run the first statement and then the lock block in place of
+the second, all in one Bash call: the `exit 1` stops the call before the lock block, and the lock block's
+`${H:?…}` aborts if it runs without the check. On refusal, run `soleur:review`, which posts fresh evidence, then
+run the check again; never arm around it.
 `git rev-list --first-parent --no-merges "$EV..$H"` names the unreviewed commits.
 
 - A main-sync merge (`git merge origin/main`, or GitHub's update-branch) passes: `--first-parent` keeps main's

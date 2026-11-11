@@ -2172,7 +2172,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
   && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
 ```
 
-**Arm only through the arm check** in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) (also the gate text and domain seats): run it without its last line, then the lock block below only on exit 0; else run `soleur:review`, then the check again.
+**Arm only through the arm check** in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) (also gate text, domain seats): run its first statement, then the lock block below, in one Bash call; on refusal, `soleur:review` first.
 
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
@@ -2184,12 +2184,12 @@ Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't qu
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
-    gh pr merge <number> --squash --auto --match-head-commit "$H"
+    gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
   rc=$?
 else
   # Degrade open, loudly — the lock is advisory (ADR-178 §5).
   echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
-  gh pr merge <number> --squash --auto --match-head-commit "$H"
+  gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
   rc=$?
 fi
 # rc=99 comes only from `with_lock` — but it means "the lock could not be
