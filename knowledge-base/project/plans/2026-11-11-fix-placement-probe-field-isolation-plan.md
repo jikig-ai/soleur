@@ -143,7 +143,7 @@ exists to prevent from recurring.
 `scripts/sweep-followthroughs.sh`):** exit 0 → sweeper posts a PASS and closes
 #12587 (and never reopens a closure it justified); exit 1 → keeps soaking;
 exit 2 → TRANSIENT, quiet retry next run. Making exit 0 reachable is the point
-of this fix — and it is safe only because the criterion the unreachable verdict
+of this fix — and it is safe only because the criterion the inert verdict
 was masking is the AC12 split itself, which the live 24h sample already
 satisfies (11 `decision=forward host_ip=10.0.1.11` + 94 `decision=execute
 host_ip=10.0.1.10`, all post-deploy). The directive's
@@ -256,8 +256,17 @@ logs:
   retention: "GitHub Actions default log retention"
 discoverability_test:
   command: "bash scripts/followthroughs/placement-decision-forward-9137.test.sh"
-  expected_output: "All fixtures passed."
+  expected_output: "passed"
 ```
+
+The `command` is suite-shaped by Check 10's over-inclusive `[-.]test\.` proxy —
+argued down here rather than silently ignored: the fixture suite is ~10
+stub-transport assertions with no network or credential use (sub-second, deep
+inside the 15 s cap), and it is the smallest command that prints the signal
+`liveness_signal.what` names for this change — the probe's verdict correctness.
+The suite's terminal line `All fixtures passed.` is emitted only when
+`fails == 0` (sibling convention), so the `passed` literal appears on green and
+never on red.
 
 ## Guard Contract
 
@@ -403,3 +412,64 @@ jq pipeline and exit contract):
 
 Note: no `spec.md` exists for this branch — `lane:` defaulted to `cross-domain`
 (fail-closed).
+
+## Deepen Pass — 2026-11-11
+
+Subagent-constrained run (Devin planning subagent — no Task spawn, per
+`knowledge-base/project/learnings/workflow-patterns/2026-11-01-devin-subagents-cannot-spawn-nested-subagents.md`):
+all mechanical halt gates and verification checks executed inline; the
+multi-agent fan-out (per-section research + review agents) is the parent
+pipeline's to carry. Disposition: `Reviewed-Coverage: sequential-fallback`.
+
+**Halt gates (all evaluated inline):**
+
+| Gate | Result |
+|---|---|
+| 4.5 network-outage | not triggered — the only keyword hit was "unreachable verdict", renamed to "inert verdict" to keep the trigger honest |
+| 4.55 downtime/cutover | not triggered — read-side probe edit, no serving surface touched |
+| 4.6 User-Brand Impact | PASS — threshold `none`, no sensitive-path diff |
+| 4.7 Observability | PASS — 5 fields present; `discoverability_test.command` verb `bash` allowlisted, no `ssh `; suite-shape proxy + `expected_output` literal both resolved (see below) |
+| 4.8 PAT-shape | PASS — zero hits |
+| 4.9 UI wireframe | not triggered — no UI-surface files |
+| 4.10 Encryption Posture | not triggered — no `.tf`/SQL/cloud-init/docker-compose; no new store or connection |
+| 4.11 Guard Contract | PASS — `python3 scripts/lint-guard-contract.py` green (1 entry, 6-row matrix) |
+| 4.12 Scope Check | PASS — exactly 1 unfenced section; all asks mapped; inferred rows carry enforcement-contract justifications |
+| 4.13 Task Design | not triggered — no new autonomous-task surface |
+
+**Corrections applied this pass:**
+
+- `expected_output` `"All fixtures passed."` → `"passed"` — the quoted form
+  tokenizes to one whitespace-bearing token, which the expected-output
+  detection reads as prose; `passed` is whitespace-free, is a substring of the
+  sibling-convention terminal line, and appears only on a green run
+  (tasks.md pins the line to `fails == 0` emission only).
+- "unreachable verdict" → "inert verdict" — removed the only Phase 4.5 keyword
+  hit (false-positive trigger on a non-network plan).
+- Added the suite-shape arguedown note under the Observability block (Check 10
+  `[-.]test\.` proxy flags the command; the ~10-assertion stub-transport suite
+  is sub-second and is the smallest printer of the named signal).
+
+**Live verifications run:**
+
+- `gh issue view 12587` — OPEN, `follow-through` label + staged directive
+  (`script=`, `earliest=2026-11-12T12:43:15Z`, `secrets=BETTERSTACK_QUERY_*`)
+  confirmed verbatim.
+- `gh pr view 12554` — MERGED; `git merge-base --is-ancestor f94e57a8
+  origin/main` confirms the squash commit is on main.
+- `gh issue view` — #9137 CLOSED (parent, closed by the feature merge),
+  #8698 OPEN (object-shaped message_json decoder — related, orthogonal),
+  #10390 OPEN (epic), #6475 CLOSED, PR #11393 MERGED.
+- `apps/web-platform/infra/cloud-init.yml:811` — `docker run -d --name
+  soleur-web-platform --log-driver journald`, no `--log-opt tag`: the
+  SYSLOG_IDENTIFIER rotation premise holds.
+- Pin census: `git grep -n 'placement-decision-forward-9137\|placement_decision'`
+  over `scripts/ .github/ plugins/ test/` — only the probe's own lines match;
+  no external exact-match pin breaks under the jq rewrite.
+- KB citation sweep: every `knowledge-base/*.md` path cited resolves on disk.
+- `scripts/sweep-followthroughs.sh:606` — `earliest` skip confirmed; the
+  close-on-0 semantics for the Reachability paragraph are accurate.
+- jq emission shape: `jq -c '{decision, host_ip}'` produces single-line
+  objects both existing grep arms (`'"forward"'`, `'"execute"'`,
+  `"host_ip":[[:space:]]*"10.0.1.10"` with `[[:space:]]*` matching zero
+  spaces) consume unchanged — arm semantics verified by hand against the
+  compact form.

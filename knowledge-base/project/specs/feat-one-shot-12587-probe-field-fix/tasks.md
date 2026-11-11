@@ -32,8 +32,9 @@ Branch: `feat-one-shot-12587-probe-field-fix` · Issue: #12587 (Ref, never Close
       CONTAINER_NAME) → satisfies neither arm; bare-SYSLOG_IDENTIFIER host row →
       satisfies neither arm; `.message`-mentions-`placement_decision` with no
       qualifying `message_json` → neither arm; stub exits non-zero → 2; stub
-      non-executable → 2; empty set → 1; anti-vacuity floor + `All fixtures passed.`
-      success line.
+      non-executable → 2; empty set → 1; anti-vacuity floor; terminal line
+      `All fixtures passed.` emitted ONLY when `fails == 0` (the Observability
+      `expected_output` literal is `passed` — present on green, absent on red).
 - [ ] 2.2 `chmod +x` the new test file (index mode 100755 —
       `followthrough-exec-bit.test.sh` gates every `scripts/followthroughs/*.sh`).
 - [ ] 2.3 Register the suite: `python3 scripts/regenerate-shard-manifest.py
