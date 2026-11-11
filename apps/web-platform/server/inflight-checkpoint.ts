@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "./host-git";
 import { rm } from "node:fs/promises";
 
 import { reportSilentFallback } from "./observability";
@@ -68,8 +68,8 @@ type PlumbingResult = { ok: boolean; stdout: string; stderr: string };
  * `_cron-safe-commit.ts runGit`: async `promisify(execFile)`, no-throw
  * `{ ok, stdout, stderr }` return, host-config isolation.
  *
- * Identity is supplied via env (config is nulled) so `commit-tree` works in the
- * isolated environment without depending on the clone's user.name/email.
+ * Identity is supplied via env (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`) so `commit-tree` works without depending on the
+ * clone's user.name/email; the global config is the image identity file, not a nulled one.
  */
 async function runPlumbingGit(
   cwd: string,
@@ -83,23 +83,23 @@ async function runPlumbingGit(
   const { execFile } = await import("node:child_process");
   const execFileP = promisify(execFile);
   try {
-    // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox and with
-    // the server's env. `-c core.fsmonitor=false` / `core.hooksPath=/dev/null` / `core.attributesFile=/dev/null`
-    // and `--no-replace-objects` (the shared hardening set) stop a planted fsmonitor or hook command from
-    // running with server secrets; GIT_NO_REPLACE_OBJECTS covers a child git. NOT covered: `filter.*`
-    // drivers, `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
-    const { stdout, stderr } = await execFileP("git", [...GIT_HARDENING_ARGS, ...args], {
+    // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox. It goes through
+    // the shared host-git invocation (hardening arguments + a SCRUBBED environment). NOT covered: `filter.*` drivers,
+    // `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
+    const h = hostGitInvocation(args, {
       cwd,
-      env: {
-        ...process.env,
-        // GLOBAL/SYSTEM/NOSYSTEM nulled + GIT_NO_REPLACE_OBJECTS: the args and env travel as one unit.
-        ...GIT_HARDENING_ENV,
+      allowProtocol: ALLOW_PROTOCOL_NONE,
+      extraEnv: {
         GIT_AUTHOR_NAME: "Soleur Checkpoint",
         GIT_AUTHOR_EMAIL: "checkpoint@soleur.local",
         GIT_COMMITTER_NAME: "Soleur Checkpoint",
         GIT_COMMITTER_EMAIL: "checkpoint@soleur.local",
         ...extraEnv,
       },
+    });
+    const { stdout, stderr } = await execFileP("git", h.args, {
+      cwd,
+      env: h.env,
       maxBuffer: 32 * 1024 * 1024,
     });
     return { ok: true, stdout, stderr };

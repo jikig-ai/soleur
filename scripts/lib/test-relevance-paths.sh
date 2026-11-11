@@ -214,6 +214,26 @@ TEST_ALL_AFFECTED_BATTERY_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
+# scripts/orphan-process-reaper-mutations (test-all.sh, scripts shard) — the /proc-observing
+# mutation battery for the same detector, ~135 s. Folded into --pr-gated via #9340: the edge set
+# it already declared in scripts/lib/test-affected-paths.sh is REUSED here under its original
+# name rather than duplicated (the issue's "reusing that array, not adding a second one") — every
+# gated array must resolve in THIS file's scope because the orphan linter's RELEVANCE_ARRAYS
+# expansion sources no other lib. Its own comment survives as the pointer left in the old spot.
+# Dual-census contract: this array must stay free of a same-named definition in
+# test-affected-paths.sh (sourced second — it would shadow this one), AND it must keep
+# PR_GATE_MACHINERY_PATHS, which is what carries scripts/lib/test-affected-paths.sh into the set
+# the affected-declarations census requires.
+AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
+  "scripts/lib/"                                          # walks $REPO_ROOT/scripts/lib as a tree — corpus operand, see PR_GATE_CORPUS_ALLOWLIST
+  "scripts/lib/test-contention.sh"                        # named operand
+  "scripts/orphan-process-reaper.sh"                      # SUT — the detector whose guards the rows mutate
+  "scripts/orphan-process-reaper.test.sh"                 # the behavioural suite the battery scores against
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/orphan-process-reaper-mutation.test.sh"        # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
 # plugins/soleur/test/c4-from-components.test.sh (test-all.sh, scripts shard) — declined on 96%
 # of recent commits. Source of truth: the suite's own header — PRODUCER=, FIXTURES=, and the
 # sourced test-helpers.sh.

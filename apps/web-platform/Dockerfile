@@ -461,9 +461,9 @@ RUN useradd --no-log-init --uid 1001 -m soleur \
     && mkdir -p /var/lib/soleur/worktrees \
     && chown 1001:1001 /var/lib/soleur/worktrees
 USER soleur
-# Host-side git (session-sync, ensure-workspace-repo, git-data-replication) reads HOME's global identity; the
-# agent's git reads /usr/local/share/soleur/agent.gitconfig instead (#9600). Keep the two identities equal
-# (asserted in test/dockerfile-git-version-floor.test.ts).
+# Both the agent's git and the server's host-side git (server/host-git.ts) read the identity in
+# /usr/local/share/soleur/agent.gitconfig (#9600; host-side git runs with HOME set to a temp dir). This HOME global
+# identity is kept equal to it for any other process in the image (asserted in test/dockerfile-git-version-floor.test.ts).
 RUN git config --global user.name "github-actions[bot]" \
     && git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 

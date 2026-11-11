@@ -350,7 +350,10 @@ fi
 # real and now visible: the covered set is a UNION, so two surfaces matching one suite
 # make a single-surface de-registration a silent no-op, and any mutation row aimed at it
 # passes green while the suite stops running.
-grep -hEo 'run:[[:space:]]+(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+# An optional `exec` prefix is the same registration: `exec bash <suite>` replaces the step shell with the
+# suite so the runner's TERM reaches the suite's own trap (egress-injector-spike.yml, #12517). Both workflow
+# surfaces accept it; the sed below strips everything up to `bash`, so the derived path is unchanged.
+grep -hEo 'run:[[:space:]]+(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw5all" || true
 LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
@@ -367,7 +370,7 @@ LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
 # have been to excuse it with an exclusion (a false statement about a suite that runs) or to
 # stop believing the report. Disjoint from 3 and 5 by construction: both of those require
 # `run:` on the same line.
-grep -hEo '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+grep -hEo '^[[:space:]]*(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw6" || true
 
@@ -647,6 +650,7 @@ else
     "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
     "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"
     "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts/test-all-affected.test.sh|9"
+    "AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS|scripts/orphan-process-reaper-mutation.test.sh|12"
     "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
     "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
     "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|3"
@@ -691,6 +695,7 @@ else
     "CF_TUNNEL_BATTERY_PATHS|.github|cp -a of the whole .github tree into the sandbox; its dependencies are the W7 workflows and the bridge action, declared individually"
     "CF_TUNNEL_BATTERY_PATHS|scripts|cp -a of the whole scripts/ tree into the sandbox; its dependencies are the oracle and its SUT, declared individually"
     "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts|cp -al hardlinks all of scripts/ into the census sandbox; declared by dependency (runner, libs, linter, itself)"
+    "AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS|scripts/lib|walks $REPO_ROOT/scripts/lib as a tree; the operand names the traversal root and the 'scripts/lib/' edge already arms the battery on every diff beneath it"
   )
   # An allowlist entry is a CLAIM that an operand is uncovered on purpose. It must carry a reason, and
   # it must still be needed: an entry no operand uses any more silently licenses the next edit.
@@ -783,6 +788,16 @@ else
       echo "ERROR: relevance predicate array ${arr_name} is not declared in ${REL_LIB} -- test-all.sh references it by name, so the gated suite would abort or decline." >&2
       fails=$((fails + 1))
       continue
+    fi
+
+    # CROSS-FILE SHADOW GUARD (#9340 review): the same array name defined in
+    # scripts/lib/test-affected-paths.sh would silently SHADOW this edge set — both consumers
+    # source REL_LIB first and AFF_LIB second, so the later definition wins for --pr-gated and
+    # --affected alike. A merge or revert that revives the pre-#9340 definition must red, not
+    # quietly restore the narrower edge set.
+    if grep -qE "^${arr_name}=\(" "$REPO_ROOT/scripts/lib/test-affected-paths.sh" 2>/dev/null; then
+      echo "ERROR: ${arr_name} is defined in scripts/lib/test-affected-paths.sh AND ${REL_LIB} -- the affected-lib definition shadows the gated edge set for both consumers. Keep exactly one definition (in ${REL_LIB})." >&2
+      fails=$((fails + 1))
     fi
 
     # `${a[@]+"${a[@]}"}` so an EMPTY array does not trip `set -u` on bash < 4.4.
@@ -918,14 +933,14 @@ else
 
   # FLOOR ON THE CLOSURE CHECK. A derivation that finds no --pr-gated arrays would make Guard 2
   # iterate nothing while this script still printed `orphan test suites: none` — the vacuity the
-  # dispatch floor above exists to catch, one layer up. Five batteries are gated today; the floor is
-  # the count, not a margin below it, and rises in the edit that gates a sixth.
+  # dispatch floor above exists to catch, one layer up. Six batteries are gated today; the floor is
+  # the count, not a margin below it, and rises in the edit that gates a seventh.
   # Two floors on purpose: the LITERAL catches an emptied derivation (a call site lost its flag, or the
   # sed/grep that derives the set went blind); the DERIVED equality catches a gated array nothing
-  # examined. Raise the literal in the same edit that gates a sixth battery.
+  # examined. Raise the literal in the same edit that gates a seventh battery.
   pr_gated_n=$(printf '%s\n' "$pr_gated_set" | tr -s ' ' '\n' | grep -c . || true)
-  if (( g2_checked < 5 || g2_checked != pr_gated_n )); then
-    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 5, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 5 when a sixth battery is gated." >&2
+  if (( g2_checked < 6 || g2_checked != pr_gated_n )); then
+    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 6, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 6 when a seventh battery is gated." >&2
     fails=$((fails + 1))
   fi
   for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do

@@ -187,7 +187,9 @@ ALWAYS_ON_SUITES=(
   "scripts/suite-exit-class-parity"
   # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's
   # --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the
-  # lint-orphan battery (#8864).
+  # lint-orphan battery (#8864). A fifth consumed-edge member, orphan-process-reaper-mutations,
+  # was never here (it was edge:declared) and joined that set via #9340 — find it in
+  # AFFECTED_CONSUMED_EDGES, not in this enumeration.
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
@@ -398,9 +400,12 @@ AFFECTED_CONSUMED_EDGES=(
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
-  # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
-  # halves share one array because they are two --rows ranges of one battery; the four
-  # test-all-affected arms share one array for the same reason (#11562).
+  # ADR-262: the self-test mutation batteries, classified by consumed edge. The first five were
+  # withdrawn from ALWAYS_ON_SUITES; the reaper battery was already edge:declared and joins here
+  # (#9340). The two lint-orphan halves share one array because they are two --rows ranges of one
+  # battery; the four test-all-affected arms share one array for the same reason (#11562). The
+  # reaper battery's array lives in test-relevance-paths.sh with the other gated predicates — the
+  # consumed mapping does not care which file owns the array it names.
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
@@ -408,6 +413,7 @@ AFFECTED_CONSUMED_EDGES=(
   "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/orphan-process-reaper-mutations|AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
@@ -1618,17 +1624,12 @@ AFFECTED_SCRIPTS_SENTRY_ISSUE_DISCOVER_PATHS=(
   "scripts/sentry-issue.sh"
 )
 
-# scripts/orphan-process-reaper-mutations — derived edges could not reach its subject; declared from the
-# repo paths its suite file names.
-AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
-  "scripts/lib/"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/lib/test-contention.sh"
-  "scripts/orphan-process-reaper-mutation.test.sh"
-  "scripts/orphan-process-reaper.sh"
-  "scripts/orphan-process-reaper.test.sh"
-  "scripts/test-all.sh"
-)
+# scripts/orphan-process-reaper-mutations — declared in scripts/lib/test-relevance-paths.sh since
+# #9340 folded the battery into --pr-gated: every gated array must resolve in that file's scope
+# (the orphan linter's RELEVANCE_ARRAYS expansion reads no other lib), so the long-declared edge
+# set moved there under its original name — re-pointed at the shared PR_GATE_MACHINERY_PATHS set
+# rather than duplicated. Do NOT re-declare it here: a same-named array in this file would
+# silently shadow the gated edge set for both consumers (both source this lib last).
 
 # scripts/lint-workflow-local-action-checkout-live — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.

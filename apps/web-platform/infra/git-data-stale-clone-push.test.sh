@@ -286,10 +286,10 @@ expect_eq "T1 parity: the heads refspec is the production one" "refs/heads/*:ref
 expect_eq "T1 parity: the tags refspec is the production one" "refs/tags/*:refs/soleur/worktrees/${OWN}/tags/*" "$PUSH_TAGS"
 expect_eq "T1 parity: the rescue refspec is the flat soleur-store-tip-* production one" \
   "refs/heads/soleur-store-tip-*:refs/soleur/worktrees/${OWN}/heads/soleur-store-tip-*" "$PUSH_RESCUE"
-expect_eq "T1 parity: production step 2 is push --force <remote> heads tags push-options and carries NO --atomic (F20)" \
-  '"push", "--force", "git-data", refspecs.heads, refspecs.tags, ...pushOptions' "$(src_args "$REPL_TS" pushArgs)"
-expect_eq "T1 parity: production step 1 is push --force --atomic <remote> rescue push-options (--atomic kept on step 1)" \
-  '"push", "--force", "--atomic", "git-data", refspecs.rescue, ...pushOptions' "$(src_args "$REPL_TS" rescuePushArgs)"
+expect_eq "T1 parity: production step 2 is push --force <explicit server-derived URL> heads tags push-options and carries NO --atomic (F20)" \
+  '"push", "--force", pushTarget, refspecs.heads, refspecs.tags, ...pushOptions' "$(src_args "$REPL_TS" pushArgs)"
+expect_eq "T1 parity: production step 1 is push --force --atomic <explicit server-derived URL> rescue push-options (--atomic kept on step 1)" \
+  '"push", "--force", "--atomic", pushTarget, refspecs.rescue, ...pushOptions' "$(src_args "$REPL_TS" rescuePushArgs)"
 
 push_rescue() { # <clone> <lease-gen> [--no-atomic]; production step 1 (the --no-atomic arm is a CONTROL); combined output, git's rc
   local d="$1" gen="$2" atomic=(--atomic)
