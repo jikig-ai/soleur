@@ -362,7 +362,9 @@ Expect `404`. `missing-token` (exit 3) means `HCLOUD_TOKEN_READONLY` is absent f
 curl as a config on stdin, never on argv. The line is the runbook-6604 retired-volume GET with only the id changed, and
 the drift suite pins it (row N3b of `plugins/soleur/test/sole-copy-drift-check.test.sh`). The same token form reads
 `GET /v1/servers/169426216` (`.server.volumes` is `[106903269]`). The next `host_role=dedicated` probe row still reports
-`scsi-0HC_Volume_106903269` with `redis_active=active`.
+`scsi-0HC_Volume_106903269` with `redis_active=active`. Any output other than `404` is a failure. A `404` alone cannot tell
+a deleted volume from a token minted in another Hetzner project (as with `volume-gone` in section 5c), so it counts only
+beside that server read returning `[106903269]`, which proves the token reads this project.
 
 ### Rules that stay in force
 
