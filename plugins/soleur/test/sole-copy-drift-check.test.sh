@@ -1301,7 +1301,7 @@ invariants() { # the checks every case owes, whatever it asserts
   if [[ -f "$CASE/result.json" ]]; then
     local _want _got _pv _lv
     _pv=$(sed -n 's/^verdict=//p' "$CASE/out/probe" 2>/dev/null | tail -n 1)
-    if [[ "$(rs probe ran)" == true ]] && ! printf '%s\n' "${BODIES[@]}" | grep -q '^probe='; then
+    if [[ "$(rs probe ran)" == true ]] && ! grep -q '^probe=' < <(printf '%s\n' "${BODIES[@]}"); then
       _want=1; if grep -qF 'probe ended without a verdict' "$CASE/probe.log" 2>/dev/null; then _want=0; fi
       _got=$(grep -c '^sole-copy-check verdict=' "$CASE/probe.log" 2>/dev/null) || _got=0
       [[ "$_got" == "$_want" ]] || CHK+=$'\n    '"the probe printed $_got verdict line(s), want $_want"

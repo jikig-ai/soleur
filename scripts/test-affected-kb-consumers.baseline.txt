@@ -1,6 +1,8 @@
 .claude/hooks/brand-hex-commit-gate.test.sh	knowledge-base/marketing/brand-guide.md
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -149,6 +151,7 @@ plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	knowledge-base/eng
 plugins/soleur/test/roadmap-reconcile.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/ship-followthrough-directive.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	knowledge-base/engineering/operations/post-mortems
+plugins/soleur/test/sole-copy-drift-check.test.sh	knowledge-base/engineering/architecture/decisions
 plugins/soleur/test/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
 plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	knowledge-base/product/design
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base
