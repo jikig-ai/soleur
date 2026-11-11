@@ -34,7 +34,7 @@ After ready (20:18:39Z) four heads were red, each failing one to three jobs (run
 Two further process failures followed:
 
 - **A review seat hung.** A fix-round seat briefed to "verify with the battery" sat about 3 hours inside a mutation run and delivered nothing. A respawn with a read-only brief capped at 25 tool calls reported in under 2 minutes.
-- **The PR entered the merge queue past its evidence head.** It was enqueued at 22:54Z with the four CI-guard fix commits unreviewed. The queue builds one entry at a time (`max_entries_to_build = 1`) and it merged at 04:26Z, about 5.5 h later. Leaving and re-entering would have put it at the back, so evidence for 1af1ec063d was posted while it was queued (00:04Z) and the P3 findings were fixed forward in #12633.
+- **The PR entered the merge queue past its evidence head.** It was enqueued at 22:54Z with the four CI-guard fix commits unreviewed. The queue builds one entry at a time (`max_entries_to_build = 1`) and it merged at 04:26Z, about 5.5 h later. Leaving and re-entering would have put it at the back, so evidence for 1af1ec063d was posted while it was queued (00:04Z) and the P3 findings were fixed forward in #12633. The same gap had already let #12619 merge 7d20e7c1a6, a P1 review-fix commit pushed after its only evidence comment (`head=0127b5dc45`): ship's arm check counted `Review-Evidence:` comments and never compared heads.
 
 ## Solution
 
@@ -56,3 +56,8 @@ Two further process failures followed:
 6. **A `run_in_background` poll was blocked by a hook.** Recovery: used Monitor. **Prevention:** already hook-enforced (`hr-monitor-not-run-in-background-for-polling`).
 7. **`cat` on a seat's output file dumped 800 KB.** Recovery: read the transcript with `jq`. **Prevention:** already in `review/SKILL.md` (read a seat's last assistant text with `jq`, never `Read` or `tail` the JSONL).
 8. **A CTO brief said two devDependencies; there are three.** Recovery: the CTO's ruling corrected it. **Prevention:** already covered by the "brief facts must cite where they were read" paragraph #12518 added to `technical-ruling-delegation.md`.
+9. **(#12633 review) A scripted cut-to-end-of-file removed a reference's trailing "See also" section.** Recovery: the diff showed five deletions where one bullet was expected; restored from the merge base and re-applied. **Prevention:** already in `risk-tier-and-fix-rounds.md` (read the DELETED lines of the lead's own splice).
+10. **(#12633 review) The arm-check text pushed ship SKILL.md 216 bytes over its body ceiling.** Recovery: kept the command in the reference and trimmed the pointers. **Prevention:** already lint-enforced (`scripts/lint-skill-body-budget.py`).
+11. **(#12633 review) The new CodeQL alert read tripped the #8593 unbounded-enumeration gate.** Recovery: `--paginate` with `per_page=100`. **Prevention:** already test-enforced (`components.test.ts`).
+12. **(#12633 review) A follow-up `gh issue create` lacked a milestone and filing exit.** Recovery: re-filed as #12656 with both. **Prevention:** already hook-enforced.
+13. **(#12633 review) This learning's first draft claimed the arm-check fix before it existed.** Recovery: the CTO ruled, and the check was written, dry-run against #12619 and #12518, and wired into ship and merge-pr. **Prevention:** the fix itself; the review skill's "check every claim the diff's prose asserts" paragraph already names the class.
