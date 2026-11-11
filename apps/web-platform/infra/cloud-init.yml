@@ -819,6 +819,7 @@ runcmd:
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
+      -e SOLEUR_HOST_PRIVATE_IP=${private_ip} \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \

@@ -33,7 +33,7 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
 MUT_ROWS_EXPECTED=56 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=69 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+INNER_ASSERTIONS=73 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -227,6 +227,7 @@ ip daddr 10.0.1.40 tcp dport 8288 accept
 ip daddr 10.0.1.40 tcp dport 8443 accept
 ip daddr 10.0.1.20 tcp dport 22 accept
 ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept
+ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8445 accept
 ip daddr @soleur_egress_allow accept
 ip daddr @soleur_egress_allow_cidr accept
 PIN
@@ -240,7 +241,7 @@ PIN
 chain_norm() { chain | sed -E 's/ comment "[^"]*"$//'; }
 chain_accepts() { chain_norm | grep -E '(^| )accept$' | LC_ALL=C sort; }
 chain_early_verdicts() { chain_norm | awk '$0 == "ip daddr 10.0.1.20 tcp dport 22 accept" { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
-expect "git-data: the WHOLE accept set of the rendered chain equals the reviewed pin (11 rules): a sibling accept after the git-data rule is RED" all 'test "$(chain_accepts)" = "$GD_ACCEPT_PIN"' 'test "$(chain_accepts | grep -c .)" -eq 11'
+expect "git-data: the WHOLE accept set of the rendered chain equals the reviewed pin (12 rules): a sibling accept after the git-data rule is RED" all 'test "$(chain_accepts)" = "$GD_ACCEPT_PIN"' 'test "$(chain_accepts | grep -c .)" -eq 12'
 expect "git-data: the only verdict rules (other than accept) ahead of the git-data accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx "ip daddr 10.0.1.20 tcp dport 22 accept")"'
 # #12167 PR-F: the host-to-host session-proxy relay. proxyClientToOwner (session-proxy.ts) dials wss://<peer private ip>:8443 from INSIDE the
 # app container, so the request traverses DOCKER-USER -> SOLEUR-EGRESS and, with no accept, dies in the default drop (the host's own
@@ -255,9 +256,21 @@ relay_roster() { awk '/^variable "web_hosts"/ { v = 1 } v && /^[[:space:]]*defau
 relay_rendered() { chain_norm | sed -nE 's/^ip daddr \{ ([0-9., ]+) \} tcp dport 8443 accept$/\1/p' | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort -V; }
 chain_early_verdicts_relay() { chain_norm | awk -v r="$RELAY_NORM" '$0 == r { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
 expect "relay: exactly one tcp/8443 accept for the web peers, rendered AFTER the dedicated-Inngest and git-data accepts and BEFORE the default-drop log and drop" all 'test -n "$r_relay"' 'test "$(chain | grep -cE -- "$RELAY_RE")" -eq 1' 'test "$r_relay" -gt "$r_gd"' 'test "$r_relay" -lt "$r_log"'
-expect "relay: scoped to the web peers and one port: only the Inngest accept and this rule match dport 8443 (the stub has no gateway), nothing else names 10.0.1.10 / 10.0.1.11, and the rule carries no prefix length or range" all 'test "$(chain | grep -c "dport 8443")" -eq 2' 'test "$(chain | grep -cE "10\.0\.1\.1[01]")" -eq 1' 'test "$(chain | grep -E "10\.0\.1\.1[01]" | sed "s/ comment .*//" | grep -cE "/[0-9]|-")" -eq 0'
+expect "relay: scoped to the web peers and one port: only the Inngest accept and this rule match dport 8443 (the stub has no gateway), only this rule and the exec-forward accept name 10.0.1.10 / 10.0.1.11, and the rule carries no prefix length or range" all 'test "$(chain | grep -c "dport 8443")" -eq 2' 'test "$(chain | grep -cE "10\.0\.1\.1[01]")" -eq 2' 'test "$(chain | grep -E "10\.0\.1\.1[01]" | sed "s/ comment .*//" | grep -cE "/[0-9]|-")" -eq 0'
 expect "relay: STATIC parity: the rendered peer set equals the private_ips of var.web_hosts (variables.tf default), two or more hosts: a host added or renumbered there is RED here" all 'test "$(relay_roster | grep -c .)" -ge 2' 'test "$(relay_roster)" = "$(relay_rendered)"'
 expect "relay: the only verdict rules (other than accept) ahead of the relay accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts_relay)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx -- "$RELAY_NORM")"'
+# #9137: the exec-forward accept — the sibling HTTPS receiver the app forwards pinned Inngest step calls to. Same peer set
+# (the same var.web_hosts parity), ONE dedicated port (8445, never the relay's 8443 and never any-port), rendered AFTER the
+# relay accept and BEFORE the default-drop log and drop, with the same early-verdict pin ahead of it.
+EXEC_RE='^ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8445 accept comment "soleur-egress: web peer exec-forward \(#9137\)"$'
+EXEC_NORM='ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8445 accept'
+r_exec=$(ridx "$EXEC_RE")
+exec_rendered() { chain_norm | sed -nE 's/^ip daddr \{ ([0-9., ]+) \} tcp dport 8445 accept$/\1/p' | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort -V; }
+chain_early_verdicts_exec() { chain_norm | awk -v r="$EXEC_NORM" '$0 == r { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+expect "exec-forward: exactly one tcp/8445 accept for the web peers, rendered AFTER the relay accept and BEFORE the default-drop log and drop" all 'test -n "$r_exec"' 'test "$(chain | grep -cE -- "$EXEC_RE")" -eq 1' 'test "$r_exec" -gt "$r_relay"' 'test "$r_exec" -lt "$r_log"'
+expect "exec-forward: scoped to the web peers and one port: this is the ONLY rule matching dport 8445, and the rule carries no prefix length or port set" all 'test "$(chain | grep -c "dport 8445")" -eq 1' 'test "$(chain | grep -E "dport 8445" | sed "s/ comment .*//" | grep -cE "/[0-9]|dport[[:space:]]+\{")" -eq 0'
+expect "exec-forward: STATIC parity: the rendered peer set equals the private_ips of var.web_hosts (variables.tf default), two or more hosts: a host added or renumbered there is RED here" all 'test "$(relay_roster | grep -c .)" -ge 2' 'test "$(relay_roster)" = "$(exec_rendered)"'
+expect "exec-forward: the only verdict rules (other than accept) ahead of the exec-forward accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts_exec)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx -- "$EXEC_NORM")"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
 expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0

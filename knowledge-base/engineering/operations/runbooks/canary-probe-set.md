@@ -503,6 +503,12 @@ bump that adds a step surfaces in CI rather than as an unclassified line.
 > pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
 > `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
 
+> **Re-read 2026-11-10 (#12514; SDK 0.3.321 / CLI 2.1.321, one shared binary).** The step counts above were re-read from the
+> 0.3.321 binary and are unchanged: the same 21 helper strings (19 `<step>` literals plus the 2 errno-less lines), so the
+> pre-command set stays 18 and `waitpid` the only post-command step. The bridge anchors are unchanged too (`allowAllUnixSockets:` 12,
+> `network.allowAllUnixSockets` 4, `TCP6-LISTEN:${` 1). Source: `knowledge-base/project/specs/archive/20261110-145948-feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md`
+> row 1.8. The `LD_PRELOAD` runtime order was not re-run on 0.3.321.
+
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single

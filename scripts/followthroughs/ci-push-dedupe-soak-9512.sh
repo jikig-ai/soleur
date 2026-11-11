@@ -71,6 +71,7 @@ MIN_DAYS=7
 DEADLINE_DAYS=30
 MAX_RUNS=100         # bounds API use: the sweeper token allows ~1000 requests/hour/repo
 IDLE_RUNS=10         # while nothing is activated only a wrong elision matters: a short sample is enough
+MG_MAX_PAGES=10      # bounds the merge_group voucher listing: <=1000 runs, ~40 days of merges
 # 29.08 job-minutes per run, compared as integers: total_seconds * 100 <= 2908 * 60 * runs
 MEAN_LIMIT_HUNDREDTHS_MIN=2908
 MEAN_LIMIT_TEXT="29.08"
@@ -159,7 +160,7 @@ suite_registered="$(grep -cE '^[[:space:]]*run_suite[[:space:]].*scripts/ci-push
 since_iso="$(date -u -d "@$merged_epoch" +%Y-%m-%dT%H:%M:%SZ)"
 cap="$MAX_RUNS"; (( active )) || cap="$IDLE_RUNS"
 runs_json="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&branch=main&status=completed&per_page=100&created=%3E$since_iso" \
-              --jq "[.workflow_runs[] | {id, head_sha, created_at}] | .[0:$cap]")" || fail_api "ci.yml push runs"
+              --jq "[.workflow_runs[] | {id, head_sha, created_at, created_epoch: (.created_at | fromdateiso8601)}] | .[0:$cap]")" || fail_api "ci.yml push runs"
 [ -n "$runs_json" ] || fail_api "ci.yml push runs (empty body)"
 
 # the merge_group listing: a different read and a different (weaker, separate) client check than the proof's,
@@ -169,33 +170,44 @@ mg_json='[]'
 if [ -n "$oldest" ]; then
   oldest_epoch="$(date -u -d "$oldest" +%s 2>/dev/null)" || fail_api "sample bound $oldest"
   mg_since_iso="$(date -u -d "@$((oldest_epoch - 86400))" +%Y-%m-%dT%H:%M:%SZ)"
-  mg_raw="$(api --paginate "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&per_page=100&created=%3E$mg_since_iso")" \
-    || fail_api "ci.yml merge_group runs"
+  # bounded enumeration (&page=N up to MG_MAX_PAGES, the repo's pr-battery-gate-saving-9323 shape):
+  # the listing stops at the first short page; a page that comes back FULL at the cap means the
+  # voucher set may be truncated, and no verdict is safe on a partial set -> CANNOT ESTABLISH
+  mg_raw=""; mg_full_at_cap=0
+  for ((mg_p = 1; mg_p <= MG_MAX_PAGES; mg_p++)); do
+    mg_page="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&per_page=100&created=%3E$mg_since_iso&page=$mg_p")" \
+      || fail_api "ci.yml merge_group runs (page $mg_p)"
+    mg_n="$(jq -r 'if has("workflow_runs") then (.workflow_runs | length) else "MISSING" end' <<<"$mg_page" 2>/dev/null)"
+    [[ "$mg_n" =~ ^[0-9]+$ ]] || fail_api "ci.yml merge_group runs (page $mg_p, malformed body)"
+    mg_raw="$mg_raw$mg_page"$'\n'
+    (( mg_n < 100 )) && break
+    (( mg_p == MG_MAX_PAGES )) && mg_full_at_cap=1
+  done
+  (( mg_full_at_cap )) && { echo "CANNOT ESTABLISH: the merge_group voucher listing still returns full pages at MG_MAX_PAGES=$MG_MAX_PAGES ($((MG_MAX_PAGES * 100))+ runs): the voucher set may be truncated and a wrong-elision verdict on it would be unsafe"; exit 3; }
   mg_json="$(jq -s '[.[] | .workflow_runs[]? | select(.event == "merge_group" and .status == "completed" and .conclusion == "success") | .head_sha]' <<<"$mg_raw" 2>/dev/null)" \
     || fail_api "ci.yml merge_group runs (parse)"
   [ -n "$mg_json" ] || fail_api "ci.yml merge_group runs (empty)"
 fi
 
-# --- per run: elided? counted seconds ---------------------------------------------------------------------------------
+# --- per run: elided? counted seconds (ONE jq emits all four verdict inputs as a TSV row) ------------------------------
 n=0; elided=0; total_s=0; wrong=0; wrong_list=""; early=0; early_list=""; seen=0; would=0; elided_any=0; pd_bad=0
-while IFS=$'\t' read -r id sha created; do
+elided_pairs=()
+while IFS=$'\t' read -r id sha created_epoch; do
   [ -n "$id" ] || continue
   seen=$((seen + 1))
-  created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" || fail_api "run $id created_at $created"
   jobs_json="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100&filter=latest")" || fail_api "run $id jobs"
-  is_elided="$(jq -r '
-      ([.jobs[]? | select(.name == "push-dedupe" and .conclusion == "success")] | length) as $pd
+  # the four per-run evaluations as ONE jq call: each program is the ORIGINAL expression verbatim inside
+  # parens so the mutation anchors that target a jq subexpression keep landing byte-identical
+  run_row="$(jq -r '[( ([.jobs[]? | select(.name == "push-dedupe" and .conclusion == "success")] | length) as $pd
       | ([.jobs[]? | select(.name | test("^test-scripts( |$)"))] ) as $ts
-      | if $pd > 0 and ($ts | length) > 0 and ($ts | all(.conclusion == "skipped")) then "yes" else "no" end' <<<"$jobs_json" 2>/dev/null)" \
+      | if $pd > 0 and ($ts | length) > 0 and ($ts | all(.conclusion == "skipped")) then "yes" else "no" end ),
+      ([.jobs[]? | select(.name == "push-dedupe" and (.conclusion == "failure" or .conclusion == "timed_out"))] | length),
+      ([.jobs[]? | select(.name == "push-dedupe") | .steps[]? | select(.name == "Proof holds for this SHA" and .conclusion == "success")] | length),
+      ([.jobs[]? | select(.conclusion != "skipped" and ((.runner_id | type) == "number") and .runner_id > 0 and .started_at and .completed_at)
+                  | ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) | select(. >= 0)] | add // 0)] | @tsv' <<<"$jobs_json" 2>/dev/null)" \
     || fail_api "run $id jobs (parse)"
-  pd_failed="$(jq -r '[.jobs[]? | select(.name == "push-dedupe" and (.conclusion == "failure" or .conclusion == "timed_out"))] | length' <<<"$jobs_json" 2>/dev/null)" \
-    || fail_api "run $id push-dedupe (parse)"
+  IFS=$'\t' read -r is_elided pd_failed proof_holds secs <<<"$run_row"
   [[ "$pd_failed" =~ ^[0-9]+$ ]] && [ "$pd_failed" -gt 0 ] && pd_bad=$((pd_bad + 1))
-  proof_holds="$(jq -r '[.jobs[]? | select(.name == "push-dedupe") | .steps[]? | select(.name == "Proof holds for this SHA" and .conclusion == "success")] | length' <<<"$jobs_json" 2>/dev/null)" \
-    || fail_api "run $id steps (parse)"
-  secs="$(jq -r '[.jobs[]? | select(.conclusion != "skipped" and ((.runner_id | type) == "number") and .runner_id > 0 and .started_at and .completed_at)
-                  | ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) | select(. >= 0)] | add // 0' <<<"$jobs_json" 2>/dev/null)" \
-    || fail_api "run $id duration"
   [[ "$secs" =~ ^[0-9]+$ ]] || fail_api "run $id duration (not an integer: $secs)"
   [ "$is_elided" = "yes" ] && elided_any=$((elided_any + 1))
   # before the activation (or with nothing activated): the run only counts as evidence of a wrong elision
@@ -207,10 +219,21 @@ while IFS=$'\t' read -r id sha created; do
   [[ "$proof_holds" =~ ^[0-9]+$ ]] && [ "$proof_holds" -gt 0 ] && would=$((would + 1))
   if [ "$is_elided" = "yes" ]; then
     elided=$((elided + 1))
-    covered="$(jq -r --arg sha "$sha" 'map(select(. == $sha)) | length' <<<"$mg_json" 2>/dev/null)" || fail_api "voucher lookup"
-    if ! [ "${covered:-0}" -gt 0 ] 2>/dev/null; then wrong=$((wrong + 1)); wrong_list="$wrong_list run=$id sha=${sha:0:10}"; fi
+    elided_pairs+=("$id"$'\t'"$sha")
   fi
-done < <(jq -r '.[] | [.id, .head_sha, .created_at] | @tsv' <<<"$runs_json")
+done < <(jq -r '.[] | [.id, .head_sha, .created_epoch] | @tsv' <<<"$runs_json")
+
+# --- the voucher diff: ONE post-loop pass over the collected elided {id, sha} pairs -----------------------------------
+if (( ${#elided_pairs[@]} > 0 )); then
+  unvouched="$(printf '%s\n' "${elided_pairs[@]}" | jq -Rnr --argjson mg "$mg_json" '
+      $mg as $m | inputs | split("\t") | . as $p
+      | select(($m | index($p[1])) == null) | "run=\($p[0]) sha=\($p[1][0:10])"' 2>/dev/null)" \
+    || fail_api "voucher lookup"
+  while IFS= read -r uv; do
+    [ -z "$uv" ] && continue
+    wrong=$((wrong + 1)); wrong_list="$wrong_list $uv"
+  done <<<"$unvouched"
+fi
 
 # --- (a) and the repo checks first, before any NOT YET --------------------------------------------------------------------
 if (( suite_registered == 0 )); then

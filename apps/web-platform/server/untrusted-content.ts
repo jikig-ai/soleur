@@ -753,7 +753,7 @@ export function createUntrustedContentHook(opts: UntrustedContentHookOptions = {
 // rewrite). It is registered under the same predicate as the WebFetch hook (web egress AND the
 // per-session classify flag), so with either off the options object is unchanged.
 //
-// Shape facts (typings of @anthropic-ai/claude-agent-sdk 0.3.311, typings only; no live capture
+// Shape facts (typings of @anthropic-ai/claude-agent-sdk 0.3.311, re-read unchanged at 0.3.321 on 2026-11-10; typings only; no live capture
 // exists): `BashOutput` = { stdout: string; stderr: string; interrupted: boolean;
 // persistedOutputPath?: string; backgroundTaskId?: string; ... } and `BashInput.command: string`;
 // `PostToolUseHookInput.tool_input` / `.tool_response` are typed `unknown`. `persistedOutputPath`

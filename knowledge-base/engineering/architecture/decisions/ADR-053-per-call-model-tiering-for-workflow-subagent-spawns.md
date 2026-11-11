@@ -487,3 +487,10 @@ These are list prices, not spend in effect: whether the `fable` alias resolves t
 unverified and tracked in #12514. Anthropic's claims of up to 30% faster output and about 55% fewer
 safety-classifier blocks are vendor claims, not measured here. What the launch offered and was not adopted is in
 the [ADR-083 addendum](ADR-083-scoped-strong-model-consult-at-decision-gates.md).
+
+> **Superseded 2026-11-10 (#12514), in part:** the "unverified" sentence above. Measured: the bundled `fable`
+> alias resolves to `claude-fable-5-1` on claude-code 2.1.311 / agent-sdk 0.3.311 and to `claude-fable-5-2` on
+> 2.1.321 / 0.3.321, the pair this repository now pins. The measurement's scope (which binary each consumer
+> resolves through, what it does not rule out) is recorded once, in the
+> [ADR-083 2026-11-10 addendum](ADR-083-scoped-strong-model-consult-at-decision-gates.md). The prices above are
+> still list prices; no spend figure is claimed.

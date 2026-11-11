@@ -423,8 +423,8 @@ the issue still wants a durable close, and the sink defect is real.
 - WHATWG URL: `%2e%2e` (and `.%2e` mixes) normalize to `..`; `\` folds to `/`
   for special schemes — both are refused on the raw path before parsing.
 - undici `fetch` strips `Authorization` on cross-origin redirects (fetch spec
-  `http-redirect-fetch`; GHSA-3787-6prv-h9w3 fixed the `Proxy-Authorization`
-  sibling gap).
+  `http-redirect-fetch`; a later undici advisory extended this to the
+  `Proxy-Authorization` sibling gap).
 
 **Related issues/PRs:** #8857 (this), #8853/#8740 (path sanitizer that fixed
 the alert), #8687/#8623 (`opts.signal` surface), #2416/#2421 (April triage +

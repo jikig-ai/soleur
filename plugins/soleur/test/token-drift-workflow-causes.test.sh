@@ -1999,7 +1999,7 @@ _sc_units=$(cut -f2 <<<"$(grep '^unit' <<<"$R_REAL")" | grep -c '^sole-copy-prot
 _r3b=1
 (( _sc_want >= 10 )) || { _r3b=0; echo "    the job has ${_sc_want} units, expected the job-level unit plus at least 9 steps"; }
 (( _sc_units == _sc_want )) || { _r3b=0; echo "    the scan examined ${_sc_units} units of the job, the workflow defines ${_sc_want}"; }
-for _u in "sole-copy-protection-check/(job-level)" "sole-copy-protection-check/Probe the Inngest store volume protection flag at Hetzner" "sole-copy-protection-check/Fail the run on any verdict that is not clean"; do
+for _u in "sole-copy-protection-check/(job-level)" "sole-copy-protection-check/Probe the volume protection flag at Hetzner" "sole-copy-protection-check/Fail the run on any verdict that is not clean"; do
   grep -qxF "$(printf 'unit\t%s' "$_u")" <<<"$R_REAL" || { _r3b=0; echo "    unit '${_u}' was not examined"; }
 done
 if [[ "$_r3b" == "1" ]]; then

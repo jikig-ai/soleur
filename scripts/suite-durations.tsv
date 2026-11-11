@@ -1,10 +1,10 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1261
-# generated-at=2026-11-10T11:20:39Z
+# default-weight-ms=1272
+# generated-at=2026-11-11T09:46:46Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
+# growth-acked=19e6f0674c561633171ee96a31eef6568487dbf8ddfb1197d2e216a415254d4b
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
 .claude/hooks/bare-head-self-heal.test.sh	1222	floor
@@ -299,7 +299,7 @@ plugins/soleur/test/redact-class-parity.test.sh	107	measured
 plugins/soleur/test/regenerate-shard-manifest.test.sh	1344	measured
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	554	measured
 plugins/soleur/test/render-c4-model.test.sh	10657	measured
-plugins/soleur/test/required-checks-canonical-parity.test.sh	184	measured
+plugins/soleur/test/required-checks-canonical-parity.test.sh	16252	measured
 plugins/soleur/test/required-checks-merge-group-coverage.test.sh	11636	measured
 plugins/soleur/test/resolve-debt.test.sh	1224	measured
 plugins/soleur/test/resolve-git-root.test.sh	146	measured
@@ -307,7 +307,6 @@ plugins/soleur/test/resolve-target-decision.test.sh	4113	measured
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	50	measured
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	178	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	2754	measured
-plugins/soleur/test/reusable-release-push-failed-marker.test.sh	1261	floor
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	974	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor
@@ -426,7 +425,7 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
+scripts/followthroughs/ci-push-dedupe-soak-9512	185400	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
@@ -510,6 +509,8 @@ scripts/lint-anthropic-content-position	356	measured
 scripts/lint-anthropic-content-position-live	222	measured
 scripts/lint-art30-reverification-unit	4374	measured
 scripts/lint-credential-path-literals	2180	measured
+scripts/lint-cve-safe-status	7912	measured
+scripts/lint-cve-safe-status-live	2198	measured
 scripts/lint-diagnosis-claims	1660	measured
 scripts/lint-doppler-description-length-live	84	measured
 scripts/lint-doppler-description-length-unit	1906	measured

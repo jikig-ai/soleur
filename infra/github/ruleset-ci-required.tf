@@ -122,7 +122,8 @@ resource "github_repository_ruleset" "ci_required" {
       #   guards-ruleset  (.github/workflows/ci.yml job `guards-ruleset`):
       #     adr-ordinals, rule-body-lint, tc-document-sha-guard,
       #     marketplace-manifest-guard, service-role-allowlist-gate,
-      #     credential-path-guard, lockfile-sync, grok-fidelity
+      #     credential-path-guard, cve-safe-status (#12348), lockfile-sync,
+      #     grok-fidelity
       #   quality-guards  (.github/workflows/pr-quality-guards.yml job
       #     `quality-guards`): enforce, markdown-lint,
       #     guard-script-fixture-tests (context was "Bash fixture tests for

@@ -4371,7 +4371,8 @@ _aff_runner_banner() {
 # #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
-_MIN_ALWAYS_ON_DECLARED=113
+# #12348: +1 always-on (the -live tree scan; the unit suite is edge-selected, E5); re-pinned at 119-5.
+_MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -7206,6 +7207,13 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
   # vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
+  # #12348: the advisory-id/safe-status pairing lint (ADR-322). The unit suite (in-process matrix, CLI rows
+  # against temp repos, mutants graded by their named killer) and the -live scan of every knowledge-base/
+  # index entry. The -live row is always-on and the unit row is edge-selected on its read set
+  # (its edge array is in scripts/lib/test-affected-paths.sh); their shard legs are manifest rows
+  # in scripts/suite-shard-legs.tsv. The -live row runs under `python3 -I` like the CI member step.
+  run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
+  run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   
 fi
 

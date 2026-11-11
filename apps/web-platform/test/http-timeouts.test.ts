@@ -139,7 +139,15 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
       .sort();
     // index.ts: the :80 server (timeouts via http-timeouts.ts). origin-tls.ts: the :443 listener (Node defaults, pinned in
     // origin-tls.test.ts). session-proxy.ts: the private-net proxy, out of scope by design (ADR-321 item 12).
-    expect(creators).toEqual(["server/index.ts", "server/origin-tls.ts", "server/session-proxy.ts"]);
+    // inngest-exec-receiver.ts (#9137): the private-TLS step-call receiver — Node defaults are CORRECT there:
+    // requestTimeout (300 s) bounds only inbound request receipt (a small POST body), never the streamed
+    // step response, which must stream unbounded (ADR-243); a total deadline is exactly the 524 class.
+    expect(creators).toEqual([
+      "server/index.ts",
+      "server/inngest-exec-receiver.ts",
+      "server/origin-tls.ts",
+      "server/session-proxy.ts",
+    ]);
     // A second creator inside a known file is not a new file name: count them where the :80 timeouts are applied.
     expect(stripComments(read("server/index.ts")).match(/\bcreateServer\s*\(/g)).toHaveLength(1);
   });

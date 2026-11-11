@@ -9,6 +9,7 @@ import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
+import { startInngestExecReceiver } from "./inngest-exec-receiver";
 import { loadProxyHelloKeys, logProxyCertExpiryAtStartup } from "./proxy-tls";
 import { denyReporter } from "./proxy-deny-report";
 import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
@@ -204,6 +205,13 @@ app.prepare().then(() => {
       });
     },
   });
+
+  // #9137 (ADR-033 amendment 2026-11-10) — the exec host's private-TLS ingress
+  // for forwarded Inngest step calls: sibling https listener on :8445 sharing
+  // the app's own request handler (the origin-tls transport pattern — marked
+  // POSTs to /api/inngest are re-emitted on `server`). Inert when the relay's
+  // TLS material, private bind, or peer allowlist is absent — never throws.
+  const execReceiver = startInngestExecReceiver({ httpServer: server });
 
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
@@ -481,6 +489,9 @@ app.prepare().then(() => {
     // (null) in dev/single-host. In-flight proxied sessions drain via the wss
     // client-close loop below, same as native ones.
     if (proxyServer) proxyServer.close();
+    // #9137 — stop accepting forwarded step calls from peer hosts. Inert
+    // (null) wherever the receiver never started.
+    if (execReceiver) execReceiver.close();
     // Emit the open deny-window summary events and the relay_hello_window line before the process goes
     // away: a deploy (docker stop) lands exactly while a roll-stagger burst of denies is in flight.
     denyReporter.flush();
