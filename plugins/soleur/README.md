@@ -96,7 +96,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 67 |
+| Agents | 68 |
 | Commands | 4 |
 | Skills | 107 |
 | MCP Servers | 5 |
@@ -138,7 +138,7 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (31)
+### Engineering (32)
 
 | Agent | Description |
 |-------|-------------|
