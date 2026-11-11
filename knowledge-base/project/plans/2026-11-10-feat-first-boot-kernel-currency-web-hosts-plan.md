@@ -494,16 +494,19 @@ apt update adds ~1 min. Flip condition: proof that an item before `apt_install` 
 
 ### Ask Mapping
 
+<!-- lint-infra-ignore start -->
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 | "When Ubuntu ships the noble kernel fix: patch and reboot web hosts through the immutable-redeploy path (`hr-prod-host-config-change-immutable-redeploy`), no in-place SSH." [issue #12008] | Part 1; Operator acts 1–3 | mapped |
 | 2 | "Define a standing kernel patch + reboot cadence per host class" [issue #12008] | — | descoped — justification: shipped in PR #12497 |
 | 3 | "Check public TCP exposure of the non-web hosts." [issue #12008] | — | descoped — justification: shipped in PR #12497 |
-| 4 | "Evaluate Ubuntu 26.04 LTS (Linux 7.0, supported to 2031) as a separate migration" [issue #12008] | — | descoped — justification: split to #12615 (CTO ruling) |
+| 4 | "Evaluate Ubuntu 26.04 LTS ([kernel version elided per ADR-322], supported to 2031) as a separate migration" [issue #12008] | — | descoped — justification: split to #12615 (CTO ruling) |
 | 5 | "Did we patch the docker images as well in addition to hosts?" [brief] | — | descoped — justification: answered in session; containers share the host kernel |
 | 6 | "shall we reboot or treat the hosts as immutable and just destroy them and have new machines instead?" [brief] | Overview; ADR | mapped — hosts are destroyed and re-born; the one reboot is inside the new host's birth |
 | 8 | "Shall we consider a small bastion server/host instead?" [brief] | Part 2 ruling, PR 2–3 | mapped (later PRs) |
 | 7 | "we should take the opportunity to destroy web-1 abd have its replacement be a proper terraform based approach like web-2 so we are con,sistent in how we manage our infrastructure" + "web-2 already takes traffic. So do 2" [brief] | Part 2 | mapped (in research) |
+
+<!-- lint-infra-ignore end -->
 
 ### Plan-Item Provenance
 
