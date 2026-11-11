@@ -392,8 +392,10 @@ AFFECTED_CONSUMED_EDGES=(
   # Same consumed edge as [unit]: the bundle's app-local half (component) is
   # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
   # argv no longer mentions apps/web-platform directly (it execs the wrapper),
-  # so the derivation channel reads only the wrapper's own file.
-  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
+  # so the derivation channel reads only the wrapper's own file. It maps to
+  # AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS (declared below): WEBPLAT_APP_PATHS'
+  # three entries plus the out-of-app files a repo-wide suite reads.
+  "apps/web-platform [repo-wide+component]|AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -466,6 +468,35 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   "apps/web-platform/infra/"
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
+)
+# The web-platform [repo-wide+component] bundle's edges. The first three entries are
+# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim, so the app diff and the
+# relevance-lib diff still select it; scripts/lint-orphan-test-suites.sh enforces that
+# WEBPLAT_APP_PATHS is a prefix of this array. The rest are files OUTSIDE
+# apps/web-platform/ that a repo-wide suite reads, which neither the wrapper argv nor
+# `vitest related` (app-relative inputs only) can reach (#8643):
+# test/server/inngest/claude-cli-pin-knows-models.test.ts › currentModelIds() reads audit-models.sh
+# with readFileSync and imports the shared AUTOFIX_PAIRS parser; test/claude-pin-lockstep.test.ts
+# reads the drift workflow, the pen-cli manifest and lock, and every EXPECTED_CARRIERS file
+# (#12514). Its discover() walk over .github/ and plugins/soleur/skills/ is NOT declared here: a
+# prefix that wide would select the whole bundle on most diffs, and a NEW carrier is caught by
+# the CI run of the bundle instead.
+AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS=(
+  "apps/web-platform/"
+  "apps/web-platform/test/repo-wide-containment.test.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "plugins/soleur/skills/model-launch-review/scripts/audit-models.sh"  # claude-cli-pin-knows-models.test.ts › AUDIT_SH
+  "plugins/soleur/test/lib/autofix-pairs.ts"  # claude-cli-pin-knows-models.test.ts › parseAutofixPairs import
+  ".github/workflows/scheduled-marketplace-drift.yml"  # claude-pin-lockstep.test.ts › DRIFT_WORKFLOW
+  "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json"  # claude-pin-lockstep.test.ts › PEN_CLI_DIR
+  "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json"  # claude-pin-lockstep.test.ts › PEN_CLI_DIR
+  ".github/workflows/claude-code-review.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/fix-constraints-stage-a.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/scheduled-machinery-drain.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/test-pretooluse-hooks.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  "plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml"  # claude-pin-lockstep.test.ts › DIGEST_ASSET
+  "plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template"  # claude-pin-lockstep.test.ts › TEMPLATE
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # DECLARED EDGES for suites whose real dependencies derivation cannot reach:

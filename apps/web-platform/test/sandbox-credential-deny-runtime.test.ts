@@ -126,7 +126,7 @@ describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real
       options: {
         abortController: controller,
         // Haiku 5.5: this drives the REAL Agent SDK query(), whose bundled CLI is the pinned
-        // @anthropic-ai/claude-agent-sdk 0.3.311 (the bundle has known the id since 0.3.293; an
+        // @anthropic-ai/claude-agent-sdk 0.3.321 (the bundle has known the id since 0.3.293; an
         // unknown id silently halves max_tokens). The model is irrelevant to the credential-deny
         // proof itself: the API is a scripted stand-in.
         model: "claude-haiku-5-5",

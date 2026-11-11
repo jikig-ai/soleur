@@ -32,6 +32,7 @@ import path from "node:path";
 
 import * as Sentry from "@sentry/nextjs";
 
+import { AGENT_DEFAULT_MODEL } from "./agent-model-defaults";
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
@@ -149,7 +150,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-5-5" (matches both legacy + cc paths today). */
+  /** Defaults to `AGENT_DEFAULT_MODEL` (server/agent-model-defaults.ts; matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -395,7 +396,7 @@ export function buildAgentQueryOptions(
 
   const opts: any = {
     cwd: resolvedCwd,
-    model: args.model ?? "claude-sonnet-5-5",
+    model: args.model ?? AGENT_DEFAULT_MODEL,
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose
