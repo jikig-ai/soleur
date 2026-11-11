@@ -16,6 +16,24 @@ brand_survival_threshold: none
 
 Spec lacks valid `lane:` (no spec.md exists for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-11 (inline deepen pass — no agent-spawn tool in this planning subagent; gates run mechanically, research/learnings read inline)
+**Sections enhanced:** Proposed Solution (script change + comment docs), Test fixture, ADR addendum anchor, Acceptance Criteria (AC2), Guard Contract (mutation row 3), Implementation Phases, References
+**Gates evaluated:** 4.4 precedent-diff (FIRED — see below); 4.45 verify-the-negative (jq-fallback claim confirmed at script :652); 4.5 network-outage (incidental `timeout` matches — the coreutils wrapper in quoted code, not a connectivity symptom; no L3/L7 surface); 4.55 downtime (no infra/DB/deploy class); 4.6 user-brand (PASS); 4.7 observability (PASS — 5 fields, `grep` probe, literal `expected_output`); 4.8 PAT (no hits); 4.9 UI (none); 4.10 encryption (no store/connection); 4.11 guard-contract lint (PASS, 1 entry, 4 mutation rows); 4.12 scope-check (PASS — 1 section, all rows mapped/justified); 4.13 task-design (no new autonomous task).
+
+### Key improvements
+
+1. **Sanitization swapped to the repo-canonical pipeline** — precedent-diff found `tr '\n' ' '` at `bump-inngest-bootstrap-pin.sh:294`/`:377` and the stronger `tr -d '[:cntrl:]'` at `vinngest-digest-freshness.sh:149`/`:279`. The drafted `${enq_out//[$'\n\r']/ }` + `${enq_reason:0:300}` left `\t` and `\x1b` live in the annotation (empirically verified); the prescribed line is now `enq_reason=$(tr '\n' ' ' <<<"$enq_out" | tr -d '[:cntrl:]' | cut -c1-300)`. Bound stays 300 per the issue's ask (precedent bound is 200 — deliberate divergence, recorded).
+2. **Precondition wording sharpened to the required-check SET** — learning `2026-11-10-merge-queue-admission-is-not-pr-head-green` (PR #12520 queued at position 2 with three FAILURE conclusions on non-required `deploy-script-tests*` contexts) proves admission gates on required contexts only. The comment/ADR text now says failing advisory contexts do NOT block enqueue; only pending/failed REQUIRED contexts refuse.
+3. **ADR-270 anchor corrected** — the `#12508` addendum heading is at line 1180 (next `### Addendum` at 1218); the plan previously cited ~1216 ambiguously. Insertion point pinned: before the line-1218 heading.
+
+### New considerations discovered
+
+- Guard-1 reason assertion keyed to wiring, not spelling: `gh-stub: enqueuePullRequest rejected` exists only in stub stderr, so a green row proves stderr→`enq_out`→annotation plumbing (learning `2026-10-04-…pinned-spelling-not-wiring…`).
+- `cut -c` counts bytes not characters — noted as immaterial (GitHub GraphQL errors are ASCII; the bound is an anti-flood ceiling).
+- All cited PR/issue numbers re-verified live during deepen (#12579 OPEN, #12510 MERGED — `git log` commit `d8ae9b54fe` confirms "explicit enqueue", #12489 MERGED, #12562 CLOSED, #12652 OPEN); all line citations re-verified against the working tree (`2>/dev/null` at :651, `MIN_ASSERTIONS=712` at :84, stub at :355, fixture at :1010–1023, ADR anchor at :1180/:1218).
+
 ## Overview
 
 Post-merge verification of #12510 on fabricated mint `vinngest-v1.1.72` (PR #12562) showed the new explicit `enqueuePullRequest` arm in `.github/scripts/bump-inngest-bootstrap-pin.sh` firing ~5s after PR open and being actively refused by GitHub. The GraphQL error output is piped to `/dev/null` at `bump-inngest-bootstrap-pin.sh:651`, so the run log carries only the generic `::warning::enqueuePullRequest ... was rejected` and the refusal reason is unobservable.
@@ -36,15 +54,14 @@ The issue's second offered mechanism — moving the enqueue to a retry-on-check-
 
 ### Script change (`bump-inngest-bootstrap-pin.sh`, ~lines 650–656)
 
-Replace `2>/dev/null` with `2>&1` on the `enq_out=$(timeout 60 gh api graphql …)` capture, so the rejection body/stderr lands in the same variable. In the `else` arm, flatten CR/LF (annotation-injection guard — `::warning::` is line-oriented; this is the `iss_safe`/`ref_safe` sanitization class from PR #3007's review) and bound to the first 300 characters, then embed in the warning:
+Replace `2>/dev/null` with `2>&1` on the `enq_out=$(timeout 60 gh api graphql …)` capture, so the rejection body/stderr lands in the same variable. In the `else` arm, sanitize with the script's own canonical pipeline (annotation-injection guard — `::warning::` is line-oriented; this is the `iss_safe`/`ref_safe` sanitization class from PR #3007's review) and embed in the warning:
 
 ```bash
 elif enq_out=$(timeout 60 gh api graphql -F pr="$pr_node" \
     -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>&1); then
   echo "enqueued ${PR_URL} on the merge queue (position $(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$enq_out" 2>/dev/null || echo '?'))"
 else
-  enq_reason=${enq_out//[$'\n\r']/ }
-  enq_reason=${enq_reason:0:300}
+  enq_reason=$(tr '\n' ' ' <<<"$enq_out" | tr -d '[:cntrl:]' | cut -c1-300)
   echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — ${enq_reason:-no stderr captured (timeout or empty response)} — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
 fi
 ```
@@ -52,6 +69,8 @@ fi
 Notes on shape:
 
 - `2>&1` (merge into `enq_out`) is safe on the success path because `gh api graphql` writes only the response body to stdout on success; stderr is where its error text lives. The `jq` position-parse already tolerates garbage (`|| echo '?'`), so even an unexpected stderr line on success cannot break the arm.
+- **Sanitization follows the script's own precedent, not a novel shape:** `bump-inngest-bootstrap-pin.sh:294` and `:377` already flatten embedded error text with `tr '\n' ' '`, and `vinngest-digest-freshness.sh:149`/`:279` add `tr -d '[:cntrl:]'` — which also strips ESC/BEL/TAB, a strictly stronger annotation-injection guard than a `\n\r`-only parameter expansion (empirically verified: `${x//[$'\n\r']/ }` leaves `\t` and `\x1b` live). Deepen-pass precedent-diff (§4.4) swapped the initially drafted `${var//[$'\n\r']/ }` + `${var:0:300}` for this pipeline.
+- The bound stays 300 chars (issue's suggested value), a deliberate divergence from the 200-char precedent bound in the cited call sites. `cut -c` counts bytes, not characters — immaterial here: GitHub GraphQL error strings are ASCII, and the bound is an anti-flood ceiling, not a semantic edge.
 - A `timeout 60` kill leaves `enq_out` empty; the `${enq_reason:-…}` fallback names that case explicitly rather than printing a bare dash.
 - The bound (300 chars, issue's suggested value) keeps a pathological error body from flooding the log while preserving the leading refusal sentence, which is where GitHub names the unmet requirement.
 
@@ -60,6 +79,7 @@ Notes on shape:
 Extend the existing `#12508 / ADR-270 addendum 2026-11-09` comment with the confirmed precondition — measured against GitHub's docs and the #12562 observation:
 
 - `enqueuePullRequest` is refused while the PR's branch-protection requirements are unmet; the documented refusal for a pending required check is `Pull request Required status check "<name>" is expected.`
+- Precision (deepen-pass learning `2026-11-10-merge-queue-admission-is-not-pr-head-green`): admission is gated on the REQUIRED-check SET, not on the head rollup being green — PR #12520 sat in the queue at position 2 with three FAILURE conclusions (`deploy-script-tests*`) because those contexts are not required. Failing non-required (advisory) contexts do not block enqueue; a pending or failed REQUIRED context does.
 - On a PR armed ~5s after open, required checks are ~always still pending — a refusal there is expected, warn-and-continue is correct, and the unsuppressed message is what distinguishes it from a real failure class.
 - The arm's value is the case where protection IS met at arm time but armed auto-merge does not self-enqueue — the #12489 counter-instance (armed 13:30Z with every required check SUCCESS, never queued after 5h20m).
 - Re-evaluate if a refusal is ever observed while required checks are green (see tracking issue #12652 for the retry-on-check-complete alternative).
@@ -68,13 +88,13 @@ Extend the existing `#12508 / ADR-270 addendum 2026-11-09` comment with the conf
 
 The `enqueuefail` fixture (lines ~1010–1023) already stubs the rejection (`MOCK_GH_ENQUEUE_FAIL=1` → stub writes `gh-stub: enqueuePullRequest rejected` to stderr and exits 1) and `run_bump` captures combined output into `$LAST_OUT`. Add:
 
-- `assert_out_has 'g1.enqueuefail:reason' 'gh-stub: enqueuePullRequest rejected'` — the stub's stderr must now appear in the run output (it is discarded under `2>/dev/null`, echoed under `2>&1`).
+- `assert_out_has 'g1.enqueuefail:reason' 'gh-stub: enqueuePullRequest rejected'` — the stub's stderr must now appear in the run output (it is discarded under `2>/dev/null`, echoed under `2>&1`). The asserted string `gh-stub: enqueuePullRequest rejected` exists ONLY in the stub's stderr — the warning literal reads `enqueuePullRequest for <url> was rejected`, which contains neither the `gh-stub:` prefix nor the bare tail — so a green row proves the wire (stderr → `enq_out` → annotation), not the spelling of the fixture (learnings `2026-10-04-my-new-dispatcher-tests-pinned-spelling-not-wiring…`: key assertions on input the mock injects).
 - One bound-assertion: make the stub's rejection text multi-line or >300 chars (e.g. extend the stub message or add a `MOCK_GH_ENQUEUE_FAIL=2` variant emitting a two-line message) and assert the warning stays single-line — assert the warning line still begins `::warning::` and that the stub's second line does NOT appear verbatim (CR/LF flatten proof).
 - Bump `MIN_ASSERTIONS` (line 84, currently 712) by the exact count of rows added, per the anti-vacuity comment convention ("raise when adding rows, never lower it silently") — record the new count in the comment's running history.
 
 ### ADR-270 addendum entry
 
-Append a short dated addendum to `knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md` (immediately after the `### Addendum 2026-11-09 (#12508)` section, ~line 1216) recording: the observed refusal on #12562 (armed `autoMergeRequest.enabledAt`, head 0 commits behind, BLOCKED on pending `quality-guards`), the documented protection-met precondition, that the rejection reason is now echoed in the run warning, and that the explicit arm's expected-success surface is already-green heads — with the retry-on-check-complete alternative deferred to tracking issue #12652.
+Append a short dated addendum to `knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md` (the `### Addendum 2026-11-09 (#12508)` section opens at line 1180 and runs to ~1217; insert the new `### Addendum` block before the `### Addendum 2026-11-09: max_entries_to_build` heading at line 1218) recording: the observed refusal on #12562 (armed `autoMergeRequest.enabledAt`, head 0 commits behind, BLOCKED on pending `quality-guards`), the documented protection-met precondition, that the rejection reason is now echoed in the run warning, and that the explicit arm's expected-success surface is already-green heads — with the retry-on-check-complete alternative deferred to tracking issue #12652.
 
 ## Technical Considerations
 
@@ -165,7 +185,7 @@ discoverability_test:
 
 ## Files to Edit
 
-- `.github/scripts/bump-inngest-bootstrap-pin.sh` — enqueue arm (~lines 650–656): `2>/dev/null` → `2>&1`; `else` arm flattens + bounds `enq_reason` into the `::warning::`; comment block (~lines 634–645) gains the confirmed precondition.
+- `.github/scripts/bump-inngest-bootstrap-pin.sh` — enqueue arm (~lines 650–656): `2>/dev/null` → `2>&1`; `else` arm assigns `enq_reason=$(tr '\n' ' ' <<<"$enq_out" | tr -d '[:cntrl:]' | cut -c1-300)` and interpolates it into the `::warning::`; comment block (~lines 634–645) gains the confirmed precondition.
 - `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` — enqueuefail fixture (~lines 1010–1023): add reason-presence + single-line/bound assertions; `MIN_ASSERTIONS` (line 84) raised by the added row count.
 - `knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md` — new dated addendum after the `### Addendum 2026-11-09 (#12508)` section.
 
@@ -203,20 +223,20 @@ The deliverable adds assertion rows to an existing fixture suite — the rows pi
 |---|----------|----------|
 | 1 | Revert `2>&1` → `2>/dev/null` on the enqueue capture | RED — the reason-text assertion finds nothing |
 | 2 | Drop `${enq_reason…}` from the warning echo (restore the pre-fix literal) | RED — reason-text assertion fails |
-| 3 | Stub emits a 2-line stderr → assert the warning carries the text flattened on ONE line (the raw second line absent) | RED if CR/LF flatten is removed (annotation-injection hole) |
+| 3 | Stub emits a 2-line stderr (or a line containing a literal ESC) → assert the warning carries the text flattened on ONE line (the raw second line absent; the ESC stripped) | RED if the `tr '\n' ' '`/`tr -d '[:cntrl:]'` stages are removed (annotation-injection hole) |
 | 4 | Stub exits 1 with EMPTY stderr → warning prints the `no stderr captured` fallback (must-PASS input differing from the canonical stub — catches a warn-line that hard-requires non-empty reason) | PASS only with the fallback |
 
 ## Implementation Phases
 
 1. **RED (fixture first, per `cq-write-failing-tests-before`).** `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` `enqueuefail` block (~lines 1010–1023): add the reason-presence, single-line/bound, and empty-stderr-fallback assertions (Guard 1 matrix rows). Confirm they fail against the current `2>/dev/null` capture.
-2. **GREEN (script).** `.github/scripts/bump-inngest-bootstrap-pin.sh`: flip `2>/dev/null` → `2>&1` at ~line 651; add the `enq_reason` flatten + 300-char bound + fallback interpolation in the `else` arm (~lines 652–656). Re-run the fixture suite green; bump `MIN_ASSERTIONS` (line 84) to the new count and extend its history comment.
+2. **GREEN (script).** `.github/scripts/bump-inngest-bootstrap-pin.sh`: flip `2>/dev/null` → `2>&1` at ~line 651; add `enq_reason=$(tr '\n' ' ' <<<"$enq_out" | tr -d '[:cntrl:]' | cut -c1-300)` + `${enq_reason:-…}` fallback interpolation in the `else` arm (~lines 652–656). Re-run the fixture suite green; bump `MIN_ASSERTIONS` (line 84) to the new count and extend its history comment.
 3. **Document.** Same file's comment block (~lines 634–645): record the confirmed protection-met precondition, the expected-refusal reading on fresh PRs, and the arm's already-green-head value case. Then the ADR-270 addendum entry (see Architecture Decision).
 4. **Ship.** Single PR `Closes #12579`, referencing #12652 for the deferred retry arm (Sequencing above).
 
 ## Acceptance Criteria
 
 - [ ] **AC1** — `grep -n 'enq_out=' .github/scripts/bump-inngest-bootstrap-pin.sh` shows the capture line (and its continuation) carrying `2>&1`, and `sed -n '/enq_out=/,+2p' .github/scripts/bump-inngest-bootstrap-pin.sh | grep -c '2>/dev/null'` returns `0`.
-- [ ] **AC2** — the `else` arm's `::warning::` echo embeds `${enq_reason` bounded at 300 chars with CR/LF flattened: `grep -n 'enq_reason' .github/scripts/bump-inngest-bootstrap-pin.sh` returns ≥3 hits (flatten line, bound line, echo interpolation).
+- [ ] **AC2** — the `else` arm sanitizes with the canonical pipeline and embeds the result: `grep -n "tr -d '\[:cntrl:\]'" .github/scripts/bump-inngest-bootstrap-pin.sh` returns ≥1 hit inside the `else` arm, `grep -n 'enq_reason' .github/scripts/bump-inngest-bootstrap-pin.sh` returns ≥2 hits (assignment + `${enq_reason:-…}` echo interpolation), and `cut -c1-300` appears on the same assignment line.
 - [ ] **AC3** — `SOLEUR_FIXTURE_PACKED=1 bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` exits 0 with the new `g1.enqueuefail:reason` (and bound/fallback rows) counted, and `MIN_ASSERTIONS` equals the new green run's assertion count.
 - [ ] **AC4** — the script's enqueue comment block names the documented precondition: `grep -n 'required status check\|protection' .github/scripts/bump-inngest-bootstrap-pin.sh` returns ≥1 hit inside the comment lines (not only the warning echo).
 - [ ] **AC5** — `grep -n '12562' knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md` returns ≥1 hit in a dated addendum entry.
@@ -268,3 +288,5 @@ None — checked `gh issue list --label code-review --state open` (200 open issu
 - Script: `.github/scripts/bump-inngest-bootstrap-pin.sh:634-656` (arm + enqueue), `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh:84,349-360,1010-1023` (stub + fixture)
 - Docs: GitHub "Managing a merge queue" — PR joins the queue after passing required branch-protection checks; `enqueuePullRequest` refuses unmet protection (`Pull request Required status check "<name>" is expected.`)
 - Runbook precedent: `scripts/merge-queue-jump.sh:130-136` + `knowledge-base/engineering/operations/runbooks/merge-queue-jump.md` (refusal-cause enumeration)
+- Learnings (deepen-pass): `knowledge-base/project/learnings/2026-11-10-merge-queue-admission-is-not-pr-head-green.md` (required-set admission; `gh pr view` lacks `mergeQueueEntry` — use `gh api graphql`), `knowledge-base/project/learnings/2026-10-04-my-new-dispatcher-tests-pinned-spelling-not-wiring-and-a-count-had-an-ungated-twin.md` (assert on mock-injected input)
+- Sanitization precedent: `bump-inngest-bootstrap-pin.sh:294`/`:377` (`tr '\n' ' '`), `.github/scripts/vinngest-digest-freshness.sh:149`/`:279` (`tr '\n' ' ' | tr -d '[:cntrl:]' | cut -c1-200`)
