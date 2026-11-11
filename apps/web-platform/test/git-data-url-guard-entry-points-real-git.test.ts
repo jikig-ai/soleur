@@ -15,7 +15,8 @@
 //   `GIT_ALLOW_PROTOCOL=ssh`, so a `file://` carrier proves the carrier is live under git's URL resolution, not that
 //   production would reach a local file. The guard refuses by key name, so that difference does not change a refusal.
 // - The local stores carry only `receive.advertisePushOptions`, not the production store's hooks (the pre-receive fence).
-// - Include-based carriers (`include.path`, `includeIf`) are covered at the unit level, not at these entry points.
+// - Include-based carriers have no row here: `include.path` has one in host-git-consumers-real-git.test.ts; `includeIf`
+//   has none.
 //
 // child_process is NOT mocked: the guard, `ensureGitDataRemote` and the rescue listing run real git with the production
 // host-git environment. Only the authenticated transport (`gitWithPrivateKeyAuth`) is replaced, by the shared fake that
@@ -303,6 +304,8 @@ describe("fetchFromGitData — url/remote rewrite carriers, real git", () => {
     expect(git(ws, ["rev-parse", "refs/remotes/git-data/main"])).toBe(git(ws, ["rev-parse", "main"]));
     expect(gitDataRefs(ws)).not.toContain("evil");
     expect(hasObject(ws, evil)).toBe(false);
+    // the FETCH_HEAD probe the refusal rows assert false on can see a real fetch
+    expect(fetchHeadExists(ws)).toBe(true);
   });
 
   const carriers = [

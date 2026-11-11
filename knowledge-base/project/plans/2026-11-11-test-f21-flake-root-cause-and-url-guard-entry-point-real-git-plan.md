@@ -435,6 +435,9 @@ assert the file's hash equals the committed one. End with `git status --short` e
   - One guard check covers both pushes, so the check-to-use window spans the whole rescue push.
   - Carriers outside the workspace config (include-based, global or system) have no entry-point row.
   - The test stores do not carry the production store's pre-receive fence.
+  - If the F21 race hit a no-op rescue push in production, main would not be pushed in that replication. Replication is
+    session-end-coupled, so main's update waits for the next session end, and is lost if the workspace is lost first
+    (reasoning, not a measurement).
 
 `requires_cpo_signoff: true` is set. CPO reviewed at plan time (see Domain Review). `soleur:engineering:review:user-impact-reviewer`
 runs at review time.
@@ -666,8 +669,8 @@ None. Queried 95 open `code-review` issues for `apps/web-platform/test/git-data-
 
 ## Addendum — 2026-11-11 (review)
 
-In the new file, the rows R-PUSH-n and R-FETCH-n are now UG-PUSH-n and UG-FETCH-n, because the old IDs collided with
-`git-data-remote-url-wrapper.test.ts`. The sections above keep the old names.
+In the new file, the rows R-PUSH-n and R-FETCH-n are now UG-PUSH-n and UG-FETCH-n, because the old IDs shared
+the R-PUSH-/R-FETCH- prefix with `git-data-remote-url-wrapper.test.ts`. The sections above keep the old names.
 
 The review added these rows:
 

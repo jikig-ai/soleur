@@ -99,9 +99,12 @@ Not claimed: this is the 11-mutant set above, not the earlier 39-mutant battery,
 The sections above are kept as recorded. Three corrections and additions from the review panel:
 
 - **Row IDs renamed.** In the new file, R-PUSH-n is now UG-PUSH-n and R-FETCH-n is now UG-FETCH-n, because the old IDs
-  collided with `git-data-remote-url-wrapper.test.ts`. The AC7 table above uses the old names for the same rows.
+  shared the R-PUSH-/R-FETCH- prefix with `git-data-remote-url-wrapper.test.ts` (R-PUSH-SHALLOW, R-FETCH-OVERLAY). The AC7 table above uses the old names for the same rows.
 - **AC7's mutant run was on commit 2974cad3c9's tree** (20aa1b169f plus the measurements commit).
-- **The N6 window explanation has a fetch-side analogue that was not measured.** GC1 was run on this branch only.
+- **The N6 window explanation has a fetch-side analogue that was not measured.** On #12512's branch the fetch-side
+  guard call arrived in db20b598bf and the first row covering it (the mocked "REFUSES the fetch" row) in 62cece11c7, the
+  same window as N6. So GC1 would likely have survived the earlier battery too. That is a prediction from history, not a
+  measurement: GC1 was run on this branch only. Both commits may be unreachable from any ref after the squash merge.
 
 New rows: each of UG-PUSH-1 and UG-PUSH-2 now runs with and without a local `soleur-store-tip-*` rescue branch.
 UG-PUSH-3 is new: `url.<B>.pushInsteadOf`, whose control lands in B. UG-FAKE pins the fake's push argv. The new file
