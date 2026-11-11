@@ -12,10 +12,10 @@ When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light
 - Run the heavy guards by name from the repo root (in a worktree without `node_modules`, use `bunx`):
 
   ```bash
-  bash plugins/soleur/test/fixture-relative-assert.test.sh
-  bash plugins/soleur/test/fixture-env-adoption.test.sh
+  bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-relative-assert.test.sh"
+  bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-env-adoption.test.sh"
   bash .claude/hooks/grep-q-pipe-guard.test.sh
-  python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" ruff --check
   (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
   ```
 
