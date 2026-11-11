@@ -669,8 +669,8 @@ body.
 private KB document, a workflow run with repository secrets, or an autonomy flip, each approved by someone who is not
 the workspace Owner.
 
-**Brand-survival threshold:** single-user incident. One member-approved email or public share in a team workspace is
-the incident. `requires_cpo_signoff: true`; `soleur:engineering:review:user-impact-reviewer` runs at review.
+- **Brand-survival threshold:** single-user incident. One member-approved email or public share in a team workspace is
+  the incident. `requires_cpo_signoff: true`; `soleur:engineering:review:user-impact-reviewer` runs at review.
 
 ## Guard Contract
 
