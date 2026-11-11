@@ -536,30 +536,30 @@ legitimate non-zero exit must still pass through the wrapper).
 
 ## Acceptance Criteria
 
-- [ ] AC1 Baseline recorded in `measurements.md`: ≥ 20 isolated F21 runs on the unmodified tree with the failure count,
+- [x] AC1 Baseline recorded in `measurements.md`: ≥ 20 isolated F21 runs on the unmodified tree with the failure count,
       rate, load average and the failing assertion (`git-data-replication.test.ts:1294`, second replicate's main push,
       empty stderr). Planning recorded 3/130.
-- [ ] AC2 Mechanism recorded: the K-push stress without the wrapper gives a nonzero count with exit code 141; with the
+- [x] AC2 Mechanism recorded: the K-push stress without the wrapper gives a nonzero count with exit code 141; with the
       wrapper, 0 at the same K and parallelism.
-- [ ] AC3 The fix is a test-carrier change only: `git diff --stat origin/main -- apps/web-platform/server` is empty; no
+- [x] AC3 The fix is a test-carrier change only: `git diff --stat origin/main -- apps/web-platform/server` is empty; no
       assertion in `git-data-replication.test.ts` is removed or loosened; the F21 row's second replicate is still a no-op
       push; no retry, skip or timeout change.
-- [ ] AC4 F20 passes with the wrapper (main lands, rejects `/Command failed: git push/`, one `git_data_replication_push`
+- [x] AC4 F20 passes with the wrapper (main lands, rejects `/Command failed: git push/`, one `git_data_replication_push`
       report, no success marker), ≥ 5 runs.
-- [ ] AC5 Post-fix: ≥ 200 isolated F21 runs with 0 failures and ≥ 20 whole-file runs with 0 failures, each with its load
+- [x] AC5 Post-fix: ≥ 200 isolated F21 runs with 0 failures and ≥ 20 whole-file runs with 0 failures, each with its load
       average; the power statement is in `measurements.md` and the PR body.
-- [ ] AC6 The new file exists, mocks no `child_process`, is listed in `repo-wide-suites.ts`, and has the rows R-PUSH-0..2
+- [x] AC6 The new file exists, mocks no `child_process`, is listed in `repo-wide-suites.ts`, and has the rows R-PUSH-0..2
       and R-FETCH-0..3 with the assertions named in Phase 4; every control-backed row fails its own control message when
-      the carrier does not land.
-- [ ] AC7 Mutant table complete (Phase 5), 3 serial reps per mutant, killing rows named per rep; N6 RED 3/3 with F21
+      the carrier does not land. (Rows renamed UG-PUSH-n / UG-FETCH-n at review; UG-PUSH-3 and UG-FAKE added.)
+- [x] AC7 Mutant table complete (Phase 5), 3 serial reps per mutant, killing rows named per rep; N6 RED 3/3 with F21
       absent from every RED list; R-FETCH-* green under N6; GC1 RED 3/3 with R-PUSH-* green; WS1, WS3, CQ1 each RED 3/3,
       or a new row added and the mutant re-killed (5.1).
-- [ ] AC8 `test/repo-wide-containment.test.ts`, `plugins/soleur/test/fixture-env-adoption.test.sh`, typecheck and ESLint on
+- [x] AC8 `test/repo-wide-containment.test.ts`, `plugins/soleur/test/fixture-env-adoption.test.sh`, typecheck and ESLint on
       the touched files green; `git status --short` empty after the battery.
-- [ ] AC9 PR body: `Ref #9601` only (no closing keyword); states the two production call sites; carries the "Not measured"
+- [x] AC9 PR body: `Ref #9601` only (no closing keyword); states the two production call sites; carries the "Not measured"
       paragraph of CTO R6 verbatim in substance; claims no structural guard, no production measurement, no ADR-309 flip
       item, no epic status, no "39/39"; claims the flake fixed only with the AC5 numbers; lists the unfiled follow-up.
-- [ ] AC10 No forbidden number or file name appears in any diff line, commit, PR body or comment (the egress-audit range
+- [x] AC10 No forbidden number or file name appears in any diff line, commit, PR body or comment (the egress-audit range
       rule and the two named exclusions in the operator's standing constraints): checked with a grep over
       `git log -p origin/main..HEAD` and the PR body before marking ready.
 
@@ -679,3 +679,13 @@ The review added these rows:
 - UG-FAKE: a pin on the push argv's receive-pack splice.
 
 The review also added three mutants: N6-MOVE, M-A and H-SPLICE-DROP. Their results are in the measurements addendum.
+
+**Acceptance check (QA, 2026-11-11).** AC1-AC10 were checked by running their named commands:
+- `git diff --stat origin/main -- apps/web-platform/server` is empty.
+- No `child_process` mock; the file is registered in `repo-wide-suites.ts`.
+- No `expect` removed from `git-data-replication.test.ts`.
+- The measurements and addendum are in `measurements.md`.
+- On the final tree: F21 isolated 30/30 (load 2.9-3.9), and the two suites 84/84 x3. This adds to AC5 and does not
+  replace it.
+- `fixture-env-adoption` 27/27, containment, tsc and ESLint are green.
+- The AC10 grep is clean.
