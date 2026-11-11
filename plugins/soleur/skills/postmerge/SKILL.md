@@ -507,8 +507,10 @@ doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no
 ```
 
 4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
-   a mismatch is a red status. `volume-gone` (HTTP 404) is not a read problem: report it and route to the runbook's "After
-   a total loss". `read-failed` (an HTTP error such as a 401, a network error, a non-JSON body or a missing field) and a
+   a mismatch is a red status. `volume-gone` (HTTP 404) is not a read problem, and not proof of a loss: a token from
+   another Hetzner project also gets 404. Report it, then run the read-only server-name listing under
+   `orphan_sweep_project_identity_unproven` in the 8209 runbook named below: unknown names mean a wrong-project token
+   (re-mint it, step O5); only matching names route to the runbook's "After a total loss". `read-failed` (an HTTP error such as a 401, a network error, a non-JSON body or a missing field) and a
    **missing word** (nothing printed: `doppler` absent or unauthenticated, an error before the command ran) mean the read
    did not happen: report them, never dispatch on their account. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
    `prd_terraform`; minting it is operator step O5 in `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`.
