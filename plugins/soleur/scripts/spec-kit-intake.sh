@@ -215,7 +215,16 @@ def parse_sections(text):
     lines = text.split("\n")
     opener = None
     closer = None
+    fence = None
     for idx, line in enumerate(lines):
+        if fence is not None:
+            if fence_closer(line, fence[0], fence[1]):
+                fence = None
+            continue
+        opened = fence_marks(line)
+        if opened is not None:
+            fence = (opened[0], opened[1])
+            continue
         if not is_delim(line):
             continue
         if opener is None:

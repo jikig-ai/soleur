@@ -6,6 +6,8 @@
 # - A fenced copy of the plan line between step 3 and step 4 satisfies the window.
 # - Goal text copied into Non-Goals is not denied.
 # - The user-story boundary is the ASCII letter and digit class, the same class as the short-name. An underscore or a non-ASCII letter can continue the token.
+# - A comment-only second copy of a needle, plus a comment inside the live span, can satisfy the raw check and the stripped check on different copies.
+# - `heading none is one entry` lists that name. The empty-list pin is `empty unmapped emits no line`.
 # shellcheck disable=SC2329
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
@@ -502,7 +504,7 @@ want_ok "absolute dot component" "$SUT" --dir "$(dirname "$(dirname "$D")")/./sp
 want_ok "dot between specs and leaf" "$SUT" --cwd "$(dirname "$(dirname "$D")")" --dir "specs/./001-demo"
 want_ok "trailing dot component" "$SUT" --dir "$D/."
 want_reason "dotdot component" "not-a-directory" "$SUT" --dir "$WORK/tree/dot/specs/../001-demo"
-want_reason "dot then dotdot" "not-a-directory" "$SUT" --dir "$WORK/tree/dot/specs/./../001-demo"
+want_reason "dot then dotdot" "not-a-directory" "$SUT" --dir "$WORK/tree/dot/specs/./../specs/001-demo"
 
 # closing hashes are not part of the heading text
 D="$(kit_of hashes)"
@@ -733,6 +735,52 @@ if [[ "$out" == "moved: Goals"$'\n'* && "$proj" == *"unclosed goal"* ]]; then
   pass "unclosed opener still projects"
 else
   fail "unclosed opener still projects"
+fi
+
+# a --- inside a fence is not the other half of a frontmatter pair
+D="$(kit_of fm-fence)"
+python3 - "$D/spec.md" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(
+    "---\n"
+    "```\n"
+    "---\n"
+    "## User Story fenced P1\n"
+    "FENCED-STORY\n"
+    "```\n"
+    "## Success Criteria\n"
+    "goal outside\n",
+    encoding="utf-8",
+)
+PY
+want_ok "fenced delimiter is not a closer" "$SUT" --dir "$D"
+proj="$(projected)"
+if [[ "$out" == "moved: Goals"$'\n'* && "$proj" == *"goal outside"* && "$proj" != *"FENCED-STORY"* ]]; then
+  pass "fenced closer ignored"
+else
+  fail "fenced closer ignored"
+fi
+D="$(kit_of fm-fence-opener)"
+python3 - "$D/spec.md" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(
+    "```\n"
+    "---\n"
+    "```\n"
+    "## Success Criteria\n"
+    "goal outside\n"
+    "--- \n"
+    "## Out of Scope\n"
+    "later excluded\n",
+    encoding="utf-8",
+)
+PY
+want_ok "fenced delimiter is not an opener" "$SUT" --dir "$D"
+proj="$(projected)"
+if [[ "$proj" == *"goal outside"* && "$proj" == *"later excluded"* && "$out" == *"moved: Goals, Non-Goals"* ]]; then
+  pass "fenced opener ignored"
+else
+  fail "fenced opener ignored"
 fi
 
 # an empty unmapped list is not the line a heading named none uses
