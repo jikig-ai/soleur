@@ -203,7 +203,7 @@ model {
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
-        description "67 domain agents across 8 departments"
+        description "68 domain agents across 8 departments"
       }
       kb = database "Knowledge Base" {
         technology "Markdown + YAML"
