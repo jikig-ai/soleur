@@ -123,6 +123,7 @@ may have moved during the wait. A per-session in-process side channel, `Executio
   handler, and the gate itself denies the other five approval-required tools with the static "approval unavailable" text instead of falling back to the legacy requester-answerable card, for the rest of that turn (the
   `ExecutionGrants` lifetime). The grants object is created per user message (cc dispatcher excepted, see the Addendum), so the next user message starts with a fresh, non-enforcing grants object and evaluates the flag again. This is accepted. When `grants` is never `enforcing` (the flag was never on in the turn), handler behaviour is byte-identical to before.
   Two accepted consequences of that lifetime, both bounded to the dark/cohort phase. (1) A flag read error on the FIRST gated call of a turn takes the same path as flag off: the legacy card runs (the cc dispatcher excepted: it denies, see the Addendum). "Unreadable means off" is the accepted contract while the flag is dark or limited to the Jikigai canary; the flip checklist asks for a decision on hardening it before the flag goes wider. (2) A legacy card opened before enforcement began in the turn and approved afterwards lets the five tools without a handler grant check run on that legacy approval; the window is the card wait and is accepted.
+  *(Forward pointer, 2026-11-11, #12597, PR #12646; fires on the merge of the pull request that carries it: after #12597, flag off, fleet-wide or for one workspace (a per-workspace override), refuses every member of a multi-member workspace all eight approval-required tools, and adds one `is_workspace_owner` role read of up to 5 s per gated call; the log query `decision=platform-gate-push-owner-required role=member` measures it. An app-only rollback to a pre-merge image is what reopens #12597. See the 2026-11-11 addendum below.)*
   `grants` is a REQUIRED argument of the three builders, so a forgotten wiring is a compile error. Every grant refusal is reported as the warn op `approval-grant-refused` (`extra.reason`, `extra.tool`).
 - **Hotfix boundary untouched.** The grant is written inside the existing `canUseTool` allow path; `allowedTools` and ADR-305 are unchanged.
 
@@ -253,6 +254,8 @@ and the other five approval-required tools are denied by the gate with the stati
 not touched and expire by themselves. **Rotating `SENTRY_USERID_PEPPER` is a rollback hazard of its own**: it invalidates every live approval (pending and approved rows fail closed as `hash_mismatch`; ADR-029 pseudonyms change with it), so
 do it only with the flag off and no live rows.
 
+*(Forward pointer, 2026-11-11, #12597, PR #12646; fires on the merge of the pull request that carries it: after #12597, flag off, fleet-wide or for one workspace (a per-workspace override), refuses every member of a multi-member workspace all eight approval-required tools, and adds one `is_workspace_owner` role read of up to 5 s per gated call; the log query `decision=platform-gate-push-owner-required role=member` measures it. An app-only rollback to a pre-merge image is what reopens #12597. See the 2026-11-11 addendum below.)*
+
 An app-only rollback (redeploy the previous image) is safe: old code never references the new objects, the table stays empty while the flag is off, and the Sentry monitor goes `missed` after its margin.
 
 If a schema down is unavoidable, the order is: (a) deploy the previous image FIRST; (b) take a `pg_dump` snapshot of `public.approval_request` (and the `approval_required` rows of `inbox_item`) BEFORE the DROP, because
@@ -309,6 +312,7 @@ The cc dispatcher (`cc-dispatcher.ts`, the Concierge and web-egress path) previo
 - **Lifetime.** The cc grants object is created once per factory invocation, that is per Query, not per user message. A cc Query spans many turns, so the sticky `enforcing` flag spans all of them: stricter than the legacy
   runner, never looser. Per-turn grants in cc are out of scope until a cc tool builder reads grants. *(Forward pointer, Ref #11636: a cc tool builder now reads grants for `github_push_branch`; see the 2026-11-05 #11636 addendum.)*
 - **Fail closed (deliberate per-runner divergence).** The cc dispatcher sets `approvalFailClosed` on its `canUseTool` deps. With it set, an approval-required tool that the flow gave no verdict for (the dependency is
+  *(Forward pointer, 2026-11-11, #12597, PR #12646; fires on the merge of the pull request that carries it: that residual is closed; see the 2026-11-11 addendum below.)*
   absent, the flag is off, or the flag read failed) is denied with the static unavailable text and is never answered from the in-memory review card. The legacy runner is unchanged and still falls back to that card with
   the flag off. A missing dependency with the switch set is a wiring defect and is reported to Sentry on each denied call (not debounced) under the existing `approval-gate-failed` op with `extra.stage = wiring-absent`; flag off or unreadable is a
   normal dormant state and only logs (a read failure is mirrored by the flag seam, debounced per process by its report TTL; in production the flag client usually falls back to its env mirror rather than throwing). The switch covers only the no-verdict cases: with the flag on and the dependency wired, a required tool that cc later registered would get the full gate flow and a written grant that no cc builder reads, which is why the allowlist throw and the derived sweep stay in place. *(Forward pointer, Ref #11636: for `github_push_branch` a cc builder now reads the grant, through the gated registrar; the allowlist throw and the derived sweep stay in place, and the sweep expects exactly that one name; see the 2026-11-05 #11636 addendum, items 5 and 6.)* *(Addendum 2026-11-10, #12197, PR #12567, CTO ruling D1; fires on the merge of the pull request that carries it: "The legacy runner is unchanged" now holds for every approval-required tool except `github_push_branch`. For that tool, when the flow gives no verdict (flag off or unreadable, or no dependency), `createCanUseTool` reads the session user's role through the existing `approval.viewerRole()` (RPC `is_workspace_owner`) and shows the in-memory card only to the workspace Owner; a member, a failed role read (reported as `approval-viewer-role-failed`, tag `stage = legacy-push-owner-check`) or a missing dependency gets the static unavailable text, with no card, status write or offline notification. Owners keep pushing with the queue off. Passing `approvalFailClosed` on the legacy runner was rejected: with the queue off it would also refuse the other seven tools for solo Owners. The role read is bounded (5 s deadline; an abort during it is a denied, expired gate) and is made when the card is issued, not again when it is answered: an Owner demoted while the card waits can still approve that one push (accepted; the queue-on path re-checks at decision time). This covers a push the agent asks for; the post-session sync push (`syncPush`) is a separate path, #12600. Pinned by `test/approval/legacy-push-owner-fallback.test.ts`. The other seven tools still fall back to a card the requesting member can answer when the queue is off (the residual this bullet accepts; #12597).)*
@@ -480,6 +484,54 @@ None. No NFR register row changes tier.
 ## Addendum — 2026-11-09 (Ref #9601): the legacy push is no longer byte-identical
 
 Items 7 and 9a above say the legacy (non-`hardened`) push keeps a byte-identical argv and environment. That held when written and is superseded: the legacy arm of `gitWithInstallationAuth` now goes through the shared host-side git invocation (`server/host-git.ts`: hardening arguments before the credential-helper reset, a scrubbed environment, `GIT_ALLOW_PROTOCOL=https`, `GIT_WORK_TREE=<cwd>`). The `hardened` arm's argv and environment are unchanged. The legacy arm still reads the workspace `.git`; what that closes and does not close is recorded in the ADR-050 2026-11-09 follow-on addendum. Nothing in the flip items changes.
+
+## Addendum — 2026-11-11 (Ref #12597, epic Ref #12197): the legacy no-verdict card is Owner-only for every approval-required tool
+
+Appended; no earlier text is edited. Ruled by CTO agent, 2026-11-11 (extends the 2026-11-10 #12197 D1 ruling from one tool to the
+whole set; CPO sign-off and the CLO review are in the #12597 decision record). It supersedes the 2026-11-10 inline addendum's residual ("the other
+seven tools still fall back to a card the requesting member can answer") on the merge of PR #12646.
+
+- **What changed.** On the legacy runner, when the approval flow gives no verdict for a tool in `APPROVAL_REQUIRED_TOOLS` (the flag is
+  off or its read fails, or the `approval` dependency is absent), `createCanUseTool` now applies the Owner check that #12197 D1 applied to
+  `github_push_branch` alone to all eight tools (`isApprovalRequiredTool(toolName)`). The in-memory card is shown only to a session user
+  whose bounded role read (`approval.viewerRole()`, RPC `is_workspace_owner`) returned `owner`.
+- **Fail closed.** A member, a failed role read, a timed-out role read or a missing dependency gets the static `APPROVAL_UNAVAILABLE_DENY`
+  text, with no card, no `waiting_for_user` write and no offline notification. A failed or timed-out read is reported as
+  `approval-viewer-role-failed`; the timeout carries `code: "role_read_timeout"`, which tells it from a failed read. A missing dependency
+  is reported as `approval-gate-failed` with `extra.stage = wiring-absent`. Stop, or the session ending, during the role read is the
+  existing expired-gate deny (`platform-gate-aborted`, `stage = owner-role-read`), never the unavailable text, and is not reported.
+- **Bound.** The role read ends at `OWNER_ROLE_READ_DEADLINE_MS` (5 s; renamed from the push-only `PUSH_ROLE_READ_DEADLINE_MS`) or on an
+  abort.
+- **Answer-time re-read.** An Approve on the legacy card is honoured only if a second bounded role read, made after the answer, still
+  returns `owner`; otherwise the call gets the unavailable text (`stage = on-answer` on the member log line, `extra.outcome =
+  denied-on-answer` on a failed read). A Reject performs nothing and skips it. This REPLACES the push-only demotion-while-waiting residual
+  the 2026-11-10 inline addendum accepted ("an Owner demoted while the card waits can still approve that one push"): that residual is
+  closed, not carried over to the other seven tools. Cost: one bounded RPC per approved call.
+- **Pending-card cap.** The role read is an await between the first pending-card check and the card, so the cap is checked again after
+  the role deny (order: role read, abort, role deny, cap re-check, card), with the same too-many-pending deny
+  (`stage = after-role-read` on its log line). Nothing is awaited between that re-check and the counter increment. The same
+  check-then-await gap on the queue-on path predates this change and is tracked in #12657.
+- **Query handles keep their push-era names.** The pino decision key `platform-gate-push-owner-required` and the Sentry tag
+  `stage = legacy-push-owner-check` are unchanged and now cover every approval-required tool; `tool` on the log line and `toolName` on the
+  report name the tool. A new warn, `platform-gate-legacy-card-issued`, is the production trace of each legacy card issued.
+- **Unchanged.** Gated tools listed in `APPROVAL_EXEMPT_TOOLS` keep the in-memory card for any user, with no role read. The cc dispatcher
+  (`approvalFailClosed`) returns before this check. The Owner-only rule covers the eight listed approval-required tools, not repository or
+  GitHub writes in general: the exempt list's reasons were not re-reviewed for this property (#12663).
+- **Triggers.** With the flag ON in production (the 2026-11-09 addendum), the fallback runs when the flag read fails, when the flag is
+  turned off fleet-wide (rollback), when it is turned off for one workspace (the flag is read per workspace, so a per-workspace override is
+  a fourth trigger, and it refuses that workspace's members for as long as it stands), or when the dependency is absent.
+- **Effect on rollback.** Turning the flag off now refuses every member of a multi-member workspace all eight tools and adds one
+  `is_workspace_owner` read of up to 5 s per gated call. Redeploying a pre-merge image is what reopens #12597.
+- **Accepted cost, open.** A solo Owner whose flag read AND role read both fail (most likely one shared database outage) is refused. The
+  "refused until a later conversation" effect comes from the deny copy ("Do not retry in this conversation"), not from the mechanism: the
+  role is read on every call, so a retry would work once the database recovers. The CPO kept `APPROVAL_UNAVAILABLE_DENY` unchanged.
+- **Second residual (open).** The role is read for the workspace the session started in, while `kb_share_create` and
+  `workspace_set_autonomous` re-resolve the active workspace when they run, and the `legacy` grant kind binds no workspace. It gives no
+  capability beyond the UI today (the autonomy RPC checks the Owner on the workspace it resolves; any member can already create a share in
+  their active workspace); tracked in #12661.
+- **Pins.** `test/approval/legacy-push-owner-fallback.test.ts` (every case driven from `APPROVAL_REQUIRED_TOOLS` and
+  `APPROVAL_EXEMPT_TOOLS`), the gate-flow dormancy cases in `test/approval/gate-flow.test.ts`, and battery rows `G1-LO1`..`G1-LO10` in
+  `test/approval-guard1-mutation.test.sh`.
 
 ## Diagram
 

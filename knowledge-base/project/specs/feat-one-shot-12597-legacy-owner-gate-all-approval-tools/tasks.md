@@ -67,12 +67,12 @@ Decisions: `decision-challenges.md` in this directory.
 
 ## 5. ADR and records
 
-- [ ] 5.1 ADR-309: forward pointer on a NEW indented line after the 2026-11-10 inline addendum; new
+- [x] 5.1 ADR-309: forward pointer on a NEW indented line after the 2026-11-10 inline addendum; new
   `## Addendum — 2026-11-11` section before `## Diagram`, including the cap re-check, #12657, the answer-time re-read,
   the #12661 residual and the rollback effect (Phase 4.2); rollback pointers under `## Rollback and post-deploy
   verification` and `## Flag lifecycle` (Phase 4.1b). Additions only (AC9, `--numstat`).
-- [ ] 5.2 Re-run `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- [ ] 5.3 markdownlint-cli2 on every touched `.md`.
+- [x] 5.2 Re-run `bash plugins/soleur/test/c4-count-parity.test.sh`.
+- [x] 5.3 markdownlint-cli2 on every touched `.md`.
 
 ## 6. Verification
 
