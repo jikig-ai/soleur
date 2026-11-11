@@ -317,6 +317,12 @@ coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrato
 > **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
 > addendum 2026-10-12); the anti-pooling fence is unchanged.
 
+**Addendum — 2026-11-10 (#9137):** the placement mechanism the 2026-09-28 addendum required has landed — the
+`?fnId`-keyed exec-placement forwarder (ADR-033 amendment 2026-11-10) routes `portable` step calls to whichever web host
+the LB selects and forwards `host-affine`/`volume-bound` calls verbatim over pinned TLS to the exec host (web-1, the
+ADR-119 volume holder). web-2 has served LB weight 1 since the 2026-11-08 serve flip (#12167), so the flip this
+amendment gated on is live and the "must honour the placement classes" requirement is now satisfied at request time.
+
 ## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
 
 Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy

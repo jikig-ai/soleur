@@ -163,6 +163,7 @@ plugins/soleur/skills/registry-breakglass-mirror/test/mirror-ghcr-to-zot.test.sh
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	3428	measured
 plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1222	floor
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	566	measured
+plugins/soleur/skills/review/test/review-scan-gate.test.sh	1222	floor
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	809	measured
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1251	measured
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	1222	floor
@@ -424,7 +425,7 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
+scripts/followthroughs/ci-push-dedupe-soak-9512	185400	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor

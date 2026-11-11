@@ -1585,3 +1585,71 @@ Appended; nothing above is edited. The 2026-09-28 addendum ("The delete→PR-B w
 ## Addendum — 2026-10-26 (#8211 Option B, ordering of the accepted replace/birth cost)
 
 Appended; nothing above is edited. The 2026-10-14 addendum above places the replace/birth route disablement after the plaintext volume's delete and before a record PR removes `hcloud_volume.git_data` from HCL. Option B (ADR-239 Amendment 2026-10-26) reverses that order: the HCL removal merges first, so the replace, rotate and create routes are disabled from the merge, and the restoring event is the gate-retirement follow-up #11194, not the post-destroy record PR #11195. The accepted cost is otherwise unchanged.
+
+## Addendum — 2026-11-10 (#10432, recurring delete-protection check for the volume)
+
+Appended; nothing above is edited. ADR-282's recurring protection check (its addendum of 2026-10-16) now covers this ADR's
+volume too. The `sole-copy-protection-check` job in `.github/workflows/scheduled-terraform-drift.yml` is a two-row
+`strategy.matrix` (`fail-fast: false`), and its `web1` row checks `hcloud_volume.workspaces_luks` (name
+`soleur-web-platform-data-luks`) against the `delete_protection` declared in `apps/web-platform/infra/workspaces-luks.tf`.
+Both rows run one set of steps, parameterised per entry: the pin, the `.tf` path and resource, and the subject text come
+from the include row, and the Inngest row's behaviour, verdicts, titles and outputs are unchanged by that. The `web1` row
+gets the same verdicts, the same 90-minute grace (read from the last commit of its own `.tf` file), the same read-only
+`HCLOUD_TOKEN_READONLY` read with no fallback, one GET per attempt. Its issues are
+titled under "web-1 workspaces volume": a p1 finding (`lifted-outside-terraform`, `volume-not-found`), which also sends
+the ops email, and a p2 could-not-perform issue (`no-token`, `could-not-read`, or no verdict at all), which sends the email
+only when a filer or the clear step itself fails (accepted window (iii) below). The Inngest row's titles, verdicts and
+outputs are unchanged.
+
+**The pin.** The `web1` row's `volume_id` is Hetzner id `106443278`, read live on 2026-11-10T10:57:41Z (name
+`soleur-web-platform-data-luks`, `protection.delete=true`, attached to server 123931471); ADR-148 carries the same id.
+`plugins/soleur/test/sole-copy-drift-check.test.sh` row N1c pins the row's value equal to the one id this section states
+and to the read-only read-back in runbook `workspaces-luks-cutover-6604.md` ("Read back the delete-protection flag
+(read-only token)").
+
+**Correction of the 2026-07-23 addendum.** That addendum names the volume `106406962` for `hcloud_volume.workspaces_luks`.
+That volume is the orphaned one the same addendum's re-cut was built to replace (a `-replace` of the address), and the
+record says the first provision was re-cut under #6812/#6855 (`knowledge-base/operations/expenses.md`, id corrected
+2026-10-01); the repo cites no destroy record for `106406962` itself. The live volume is the one pinned above. The
+2026-07-23 text stays as the dated record.
+
+**The pin bump.** If `hcloud_volume.workspaces_luks` is ever recreated, its new id moves in the same PR as the `.tf` change,
+at every site `git grep -n` lists for the id stated above (do not trust a remembered count): among them the `web1` row's `volume_id`,
+the id this section states, runbook 6604 (its read-back and its "Verify the retired end state" block), and the suite's
+literals. Historical records keep the id they were written with. N1c reds the suite on a partial bump of the row, this
+section or the read-back; the first scheduled run reads `volume-not-found reason=id-mismatch` (a p1 issue) on a missed
+one. The incident owner owns the bump, as ADR-282 states for the Inngest pin.
+
+**What the check does not defend.** A single diff that changes the `.tf`, the row and this addendum together passes the
+suite: the pins prove consistency, not integrity. The outside anchor is the live Hetzner state, which no diff can edit. A
+mis-minted read-only token is undetectable here (control O5 of `infra-credential-tiers-8209.md`). A detach is not observed:
+`delete_protection` does not stop a detach (the `workspaces-luks.tf` comment says so), and the volume's attached server is
+not pinned, because every sanctioned web-1 replace changes the server id. Outside this job, an unmounted `/mnt/data` fails
+the daily `luks-monitor` probe's `not_mounted` assert (`apps/web-platform/infra/luks-monitor.sh`), which emits through
+`workspaces-luks-emit.sh` and pages by email through the Sentry alert `workspaces-luks-drift`; whether a detach that leaves
+the mount in place fails that probe is not measured (tracked: #12608).
+
+**Accepted windows.** (i) The grace keys on the last commit to the whole `workspaces-luks.tf`, so an unrelated edit to that
+file within 90 minutes of a real lift reads `lift-pending-apply` (green, warned only) and the issue lands one 12-hour cycle
+later. (ii) A reviewed lift reads `unprotected-as-declared` (green). Guard B4 in
+`apps/web-platform/infra/workspaces-luks.test.sh` pins `delete_protection = true`, so it makes the lift reviewed: the lift PR
+must edit that guard. Nothing in B4 forces the volume back to protected. The lift PR must open a
+dated re-protect follow-through issue before it merges (ADR-282 step 1, the same as for the Inngest volume), and that
+issue is the only forcing function. Its probe is event-grep, never the Date shape: a Date-shape `exit 0` would close the
+issue as PASS on its date while the volume is still unprotected, and the sweeper holds no Hetzner token. The probe exits 0
+only on a `scheduled-terraform-drift` run on `main`, created after the issue's `earliest` (the lift's merge), whose
+`sole-copy-protection-check (web1)` job succeeded and emitted `sole-copy-check verdict=matches-declared entry=web1` (that
+verdict means declared and live are both `true` for the pinned volume). Before the date pinned in the probe it exits 2,
+after it 5 (ACTION REQUIRED), and 3 on any read it could not make. Once the issue closes, this job's
+`lifted-outside-terraform` finding covers a later lift again. No check stops a lift PR that merges without the issue, the
+same residual as for the Inngest volume. (iii) A leg that reads no flag (`no-token`, `could-not-read`, or no verdict at
+all) files the p2 could-not-perform issue only: no email follows unless a filer itself fails, so until someone reads that
+issue the flag is unobserved.
+
+**What reports a check that does not run.** This job has no Sentry check-in of its own (#10430, held while #6590 is open).
+A workflow that never runs is caught by the `scheduled-terraform-drift` monitor (the drift-check job's check-in). This job
+being skipped, or one leg never starting while the other is clean, is the accepted residual. A leg whose checkout failed
+still files its p2 issue (the filers name the repository through `GH_REPO`) but sends no email, because the email action is
+local to the checkout.
+
+Nothing about this ADR's decision or D1 changes.

@@ -214,7 +214,7 @@ _EMIT_COMMANDS=0
 #              sharded full battery (the required `test` context), not any
 #              local run. A green affected run is not a full-coverage claim.
 # --full       The whole battery — what CI runs on push, merge_group and dispatch (a
-#              pull_request run declines five self-test mutation batteries whose subject
+#              pull_request run declines six self-test mutation batteries whose subject
 #              the diff does not touch, ADR-262). Refused under SOLEUR_SUBAGENT=1
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
@@ -405,7 +405,7 @@ Usage: bash scripts/test-all.sh [flags] [all|webplat|bun|scripts|infra]
    or: TEST_GROUP=<value> bash scripts/test-all.sh [flags]
 
 Modes (local default is --affected; CI runs the full battery, except that a pull_request run
-declines five self-test mutation batteries whose subject the diff does not touch — ADR-262):
+declines six self-test mutation batteries whose subject the diff does not touch — ADR-262):
   --affected            run the suites this diff can move, plus every always-on
                         repo-global ratchet. Exempt from the full-gate refusals.
                         TEST_GROUP=affected is a deprecated compat alias of this
@@ -3312,6 +3312,10 @@ _diff_touches() {
   # only the range arm consulted, that failure is swallowed: the range looks clean, and the battery
   # declines on a working tree carrying exactly the edits it guards.
   if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
+  # A call site whose edge array resolves to NOTHING is not a decline — an emptied/unset array
+  # would otherwise pass the loop zero times and return 1, skipping the suite on every
+  # pull_request diff. Fail toward run; the linter's non-empty/floor checks own the regression.
+  if (( $# == 0 )); then return 0; fi
   local p
   for p in "$@"; do
     case "$p" in
@@ -3371,7 +3375,8 @@ fi
 #   1. always_on — verdict is a property of the whole tree, never of a diff.
 #   2. consumed — the relevance arrays are the affected edge: the diff
 #      that makes the suite relevant is the diff that selects it.
-#   3. declared — AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh.
+#   3. declared — AFFECTED_<LABEL>_PATHS, conventionally in scripts/lib/test-affected-paths.sh
+#      (an array shared with a --pr-gated suite lives in the relevance lib instead — #9340).
 #   4. derived — argv literals, `-c` payload paths, name-stem conventions, and
 #      the source/import closure of the suite file itself.
 #
@@ -6013,7 +6018,17 @@ if want_scripts; then
   # launch, and a suite whose verdict depended on what else happened to be
   # running is cq-ac-must-not-depend-on-concurrent-sessions reproduced inside
   # the gate.
-  run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
+  # RELEVANCE-GATED (ADR-262, #9340), ~135 s: declines on pull_request runs when
+  # the diff misses its declared edge set — the already-declared
+  # AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS is consumed, never
+  # duplicated by a second array.
+  if _diff_touches --pr-gated "${AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS[@]}"; then
+    run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "scripts/orphan-process-reaper-mutations" "relevance" \
+      "bash scripts/orphan-process-reaper-mutation.test.sh"
+  fi
   # The Incident-PIR hypothetical-paragraph strip's mutation battery (#7801). The
   # strip is a STATEFUL, ORDERED awk program, so a fixture suite alone cannot tell a
   # load-bearing rule from a decorative one — seven of its ten original fixtures pass on `main`.
@@ -7097,7 +7112,7 @@ if want_scripts; then
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/followthroughs/pr-battery-gate-saving-9323" bash scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
-  # ADR-262 Guard 1: the pull_request gate over the five self-test mutation batteries. Explicit run_suite
+  # ADR-262 Guard 1: the pull_request gate over the six self-test mutation batteries. Explicit run_suite
   # (scripts/*.test.sh is covered by no glob here), classified ALWAYS_ON (it is a runner-SUT property
   # suite), and registered at the end of the block for the positional-shard reason stated just above.
   run_suite "scripts/test-all-pr-battery-gate" bash scripts/test-all-pr-battery-gate.test.sh

@@ -4,8 +4,9 @@
  *   - a malformed key and an unknown key are the SAME not-found;
  *   - the text on the card is the registry body, and its hash is the registry hash (what is shown is what is hashed);
  *   - the founder's rows give the state; older rows render as "replaced" cards;
- *   - the surface gate (the approval-queue flag AND the configured founder) is read first (userId, workspaceId null); with it off the
- *     pages return not-found unless the founder has a recorded row for that key, and a pending card or an unreleased key never renders;
+ *   - the surface gate (the configured founder id only; the approval-queue flag is not read, CTO ruling 2026-11-10) runs first; with
+ *     the surface off the pages return not-found unless the founder has a recorded row for that key, and a pending card or an
+ *     unreleased key never renders;
  *   - a registry text with no declared card kind is a not-found (and one Sentry event, after the gate) on the card page, and is left
  *     out of the index (#12344, CTO ruling 2026-11-07: no default kind);
  *   - a failed or malformed read is reported and throws, never an empty page.
@@ -127,7 +128,7 @@ beforeEach(() => {
   h.user.value = { id: USER_ID, email: "dana@example.com" };
   h.rows.value = [];
   h.rowsError.value = null;
-  h.flag.mockReset().mockResolvedValue(true);
+  h.flag.mockReset(); // the surface does not read the flag; only the P1 case below sets it, and only to false
   h.report.mockReset();
   resetSurfaceConfigReport(); // the once-per-process config report must not leak between tests
   h.lookups.length = 0;
@@ -182,22 +183,22 @@ describe("what the card shows", () => {
     expect(screen.getByRole("heading", { name: LEGAL_COPY.replaced.title("2", "3") })).toBeInTheDocument();
   });
 
-  it("flag off: an existing recorded row still renders (read-only, no actions)", async () => {
-    h.flag.mockResolvedValue(false);
+  it("surface off: an existing recorded row still renders (read-only, no actions)", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     h.rows.value = [row({ choice: "decline", reauth_at: null })];
     render(await call("customer-terms"));
     expect(screen.getByText(LEGAL_COPY.declined.badge)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("flag off and no recorded row: not-found, and no pending card or registry text is rendered", async () => {
-    h.flag.mockResolvedValue(false);
+  it("surface off and no recorded row: not-found, and no pending card or registry text is rendered", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     h.rows.value = [];
     await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
   });
 
-  it("flag off with only an OLDER text's row: the older answer renders, the current pending text and its link do not", async () => {
-    h.flag.mockResolvedValue(false);
+  it("surface off with only an OLDER text's row: the older answer renders, the current pending text and its link do not", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     h.rows.value = [row({ text_hash: OLD, version: "2", choice: "decline", reauth_at: null })];
     const { container } = render(await call("customer-terms"));
     expect(screen.getByText(LEGAL_COPY.replaced.badge)).toBeInTheDocument();
@@ -208,7 +209,7 @@ describe("what the card shows", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("founder gate: with the flag ON, a signed-in user who is not the configured founder gets the same not-found, and no event", async () => {
+  it("founder gate: a signed-in user who is not the configured founder gets the same not-found, and no event", async () => {
     h.user.value = { id: "00000000-0000-4000-8000-0000000000bb", email: "other@example.com" };
     await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
     await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
@@ -219,22 +220,24 @@ describe("what the card shows", () => {
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
     await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
     await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
-    // An unset or malformed founder id with the flag ON is a FAULT the operator must hear about (CTO ruling T4): exactly ONE
-    // config report across the three requests above, never a user id or the variable's value, and no kind_undeclared event.
+    // Malformed: exactly one report; unset: none (CTO ruling F1, 2026-11-10: unset is the kill switch). So ONE config report across
+    // the three requests above, never a user id or the variable's value, and no kind_undeclared event.
     expect(h.report.mock.calls.map((c) => c[0])).toEqual(["storeFailed"]);
     expect(h.report.mock.calls[0][2]).toEqual({ tags: { stage: "config" }, extra: { step: "config", variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] } });
   });
 
-  it("reads the flag first, for the signed-in user with no workspace (effectively global)", async () => {
-    h.rows.value = [];
-    render(await call("customer-terms"));
-    expect(h.flag).toHaveBeenCalledWith({ userId: "00000000-0000-4000-8000-000000000007", workspaceId: null });
-  });
-
-  it("flag on: the pending card is open for answers", async () => {
+  it("founder configured: the pending card is open for answers", async () => {
     render(await call("customer-terms"));
     expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
     expect(screen.queryByText(KC.pendingNotAvailable)).toBeNull();
+  });
+
+  it("flag off and the founder configured: the pending card is open (P1, CTO ruling 2026-11-10)", async () => {
+    h.flag.mockResolvedValue(false);
+    render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Yes/ })).toBeInTheDocument();
+    expect(h.report).not.toHaveBeenCalled();
   });
 });
 
@@ -254,9 +257,9 @@ describe("a registry text with no declared card kind (no default)", () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it("flag off: the same not-found and no event (the gate runs first)", async () => {
+  it("surface off: the same not-found and no event (the gate runs first)", async () => {
     h.noKindKey.value = true;
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     await expect(call("no-kind")).rejects.toBeInstanceOf(NotFound);
     expect(h.report).not.toHaveBeenCalled();
   });
@@ -324,31 +327,31 @@ describe("index page", () => {
     expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.state.declined);
   });
 
-  it("flag off and no recorded row: not-found, no key is listed", async () => {
+  it("surface off and no recorded row: not-found, no key is listed", async () => {
     h.rows.value = [];
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
   });
 
-  it("flag off with a recorded row: only the keys the founder has a row for are listed", async () => {
+  it("surface off with a recorded row: only the keys the founder has a row for are listed", async () => {
     h.rows.value = [row({ choice: "accept" })];
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     render(await IndexPage());
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByRole("link")).toHaveTextContent(KC.indexAccepted);
   });
 
-  it("flag off with a row only for an older text: listed, and the current pending text is 'not available yet'", async () => {
+  it("surface off with a row only for an older text: listed, and the current pending text is 'not available yet'", async () => {
     h.rows.value = [row({ text_hash: OLD, version: "2", choice: "decline" })];
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     render(await IndexPage());
     expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.notAvailable);
   });
 
-  it("flag off with a row only for key A: key A is listed and key B (no row) is NOT, even though the registry has it", async () => {
+  it("surface off with a row only for key A: key A is listed and key B (no row) is NOT, even though the registry has it", async () => {
     h.secondKey.value = true;
     h.rows.value = [row({ key: "customer-terms", choice: "accept" })];
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     render(await IndexPage());
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByRole("link", { name: /Customer terms, version 3/ })).toHaveAttribute("href", "/dashboard/approvals/legal/customer-terms");
@@ -356,17 +359,17 @@ describe("index page", () => {
     expect(screen.queryByText(/Other terms/)).toBeNull();
   });
 
-  it("flag off with a row only for key B: key B is listed and key A is not (the filter is per key, not 'any row exists')", async () => {
+  it("surface off with a row only for key B: key B is listed and key A is not (the filter is per key, not 'any row exists')", async () => {
     h.secondKey.value = true;
     h.rows.value = [row({ key: "other-terms", text_hash: "e".repeat(64), version: "9", choice: "decline" })];
-    h.flag.mockResolvedValue(false);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     render(await IndexPage());
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByRole("link", { name: /Other terms, version 9/ })).toBeInTheDocument();
     expect(screen.queryByText(/Customer terms/)).toBeNull();
   });
 
-  it("flag on: both registry keys are listed, with or without rows", async () => {
+  it("founder configured: both registry keys are listed, with or without rows", async () => {
     h.secondKey.value = true;
     h.rows.value = [row({ key: "customer-terms" })];
     render(await IndexPage());
@@ -386,11 +389,6 @@ describe("index page", () => {
     h.rows.value = [row({ choice: "maybe" })];
     await expect(IndexPage()).rejects.toThrow("legal acceptance read failed");
     expect(h.report).toHaveBeenCalledWith("pageReadFailed", null, expect.objectContaining({ extra: { read: "legal_acceptance_index" } }));
-  });
-
-  it("reads the flag first, for the signed-in user with no workspace", async () => {
-    render(await IndexPage());
-    expect(h.flag).toHaveBeenCalledWith({ userId: "00000000-0000-4000-8000-000000000007", workspaceId: null });
   });
 
   it("signed out redirects; a failed read throws", async () => {

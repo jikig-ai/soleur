@@ -189,7 +189,8 @@ const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 // Only EPERM counts; EACCES / EINVAL helper failures stay unclassified (a recorded residual, #10455).
 //
 // The step list is MEASURED, not recalled: the 19 `apply-seccomp: <step>` literals of the helper embedded in the
-// vendored `claude` binary (claude-agent-sdk 0.3.311, the same binary as claude-code 2.1.311), read from its string pool,
+// vendored `claude` binary (claude-agent-sdk 0.3.311, the same binary as claude-code 2.1.311; re-read unchanged on 2026-11-10
+// at 0.3.321 / 2.1.321, again one byte-identical binary, #12514), read from its string pool,
 // plus the runtime order recorded with an LD_PRELOAD interposer on 2026-10-19 (re-recorded 2026-11-04 for the three steps
 // 0.3.311 added). A test (sandbox-startup-classifier.test.ts, Guard 2) re-reads the binary and reds when this list and the
 // binary disagree in either direction. (0.3.284 / 2.1.293 carried 16 steps.)

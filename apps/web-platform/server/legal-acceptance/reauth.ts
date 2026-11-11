@@ -435,8 +435,8 @@ export interface GuardDeps {
 }
 
 /**
- * Everything both routes check before touching a challenge, in this order: flag, key, content type, body, identity.
- * Flag off (or not the founder), a malformed key, an unknown key and a key with no declared card kind are all the same 404 (no oracle for which keys exist).
+ * Everything both routes check before touching a challenge, in this order: surface (founder id), key, content type, body, identity.
+ * Surface off (founder id unset or malformed, or not the founder), a malformed key, an unknown key and a key with no declared card kind are all the same 404 (no oracle for which keys exist).
  */
 export async function guardLegalRequest(req: Request, userId: string, deps: GuardDeps): Promise<Guarded> {
   if (!(await deps.isEnabled(userId))) return { ok: false, status: 404, error: "Not found" };

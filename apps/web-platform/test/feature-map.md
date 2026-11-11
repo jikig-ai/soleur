@@ -101,9 +101,9 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - route: `/dashboard/approvals/legal`
 - entry: direct URL; the list of legal texts the founder has already answered
 - selectors: the list of linked text names with their version and answered state; with no rows the page ends in the not-found view
-- expects: a signed-in founder sees one link per text they have a recorded answer for (with the `approval-queue` flag on and the signed-in user being the configured founder, every released text that has a declared card kind); a signed-out visitor is redirected to `/login?redirectTo=...`
+- expects: a signed-in founder sees one link per text they have a recorded answer for (with the signed-in user being the configured founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`; the `approval-queue` flag is not read), every released text that has a declared card kind); a signed-out visitor is redirected to `/login?redirectTo=...`
 - auth: bot
-- gotchas: reads registry texts from the server texts directory (whichever texts are committed and deployed; a deployed text is answerable at once, but only by the configured founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`) while the flag is on, so a text is merged only after a recorded sign-off and with a declared card kind); with the flag off only texts the founder already answered are listed, and a not-found view when there are none
+- gotchas: reads registry texts from the server texts directory (whichever texts are committed and deployed; a deployed text is answerable at once, but only by the configured founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`), so a text is merged only after a recorded sign-off and with a declared card kind); with the founder id unset or malformed (the surface off) only texts the founder already answered are listed, and a not-found view when there are none
 
 ## `/dashboard/approvals/legal/[key]`
 

@@ -42,8 +42,8 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested module",
   },
   "cfo-on-payment-failed": {
-    placement: "volume-bound",
-    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
+    placement: "portable",
+    reason: "host-free: resolveCurrentWorkspaceId moved to the filesystem-free server/current-workspace-id.ts leaf (#9137); import closure reaches no host-local dependency (needs prd secrets only)",
   },
   "cron-action-required-sla": {
     placement: "portable",
@@ -306,8 +306,8 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     reason: "spawnClaudeEval in an ephemeral clone (process-local single-flight, ADR-243 §2)",
   },
   "github-on-event": {
-    placement: "volume-bound",
-    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
+    placement: "portable",
+    reason: "host-free: resolveCurrentWorkspaceId moved to the filesystem-free server/current-workspace-id.ts leaf (#9137); import closure reaches no host-local dependency (needs prd secrets only)",
   },
   "oneshot-4650-monitor-close": {
     placement: "portable",

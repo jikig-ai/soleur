@@ -6,7 +6,7 @@
 // the agent session.
 // ---------------------------------------------------------------------------
 
-import { execFileSync } from "child_process";
+import { execFileSync, type ExecFileSyncOptions } from "child_process";
 import { readdirSync } from "fs";
 import { join } from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -20,6 +20,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
+import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
@@ -358,7 +359,26 @@ async function runProtectedFallback(
 }
 
 /**
- * Connected-repo git wrapper. Wraps `execFileSync("git", argv, opts)` with
+ * What a failed auto-commit may carry to Sentry: the stage, the exit status and a CLOSED stderr bucket, never the
+ * raw error (its message is the full argv, which names tenant file paths, plus git's stderr). The raw error stays in
+ * the local `log.warn`. `null` = nothing to report (an empty commit is not a failure).
+ */
+function autoCommitFailure(err: unknown, stage: "pull" | "push"): Error | null {
+  if (err instanceof HostGitRefusedError) return new Error(`auto-commit-${stage} refused: ${err.reason}`);
+  const e = err as { status?: number; stdout?: unknown; stderr?: unknown };
+  const text = `${String(e?.stdout ?? "")}\n${String(e?.stderr ?? "")}`;
+  let bucket = "other";
+  if (/nothing (added )?to commit|no changes added to commit/i.test(text)) return null;
+  if (/Author identity unknown|unable to auto-detect email/i.test(text)) bucket = "identity";
+  else if (/index\.lock/i.test(text)) bucket = "index-lock";
+  else if (/not a git repository/i.test(text)) bucket = "not-a-repository";
+  else if (/Permission denied|Operation not permitted/i.test(text)) bucket = "permission";
+  return new Error(`auto-commit-${stage} failed (exit ${typeof e?.status === "number" ? e.status : "unknown"}, ${bucket})`);
+}
+
+/**
+ * Connected-repo git wrapper. Runs `execFileSync("git", ...)` through the shared host-git invocation
+ * (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) with
  * an argv-shape guard that rejects:
  *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`,
  *     `branch`, `tag`, `cherry-pick`, ...) — categorically destructive or
@@ -371,7 +391,8 @@ async function runProtectedFallback(
  */
 function runConnectedRepoGit(
   argv: string[],
-  opts: Parameters<typeof execFileSync>[2],
+  // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
+  opts: Omit<ExecFileSyncOptions, "env"> & { cwd: string },
 ): Buffer {
   if (argv.length === 0) {
     throw new Error("connected-repo git: argv must include a subcommand");
@@ -389,7 +410,10 @@ function runConnectedRepoGit(
       );
     }
   }
-  return execFileSync("git", argv, opts) as Buffer;
+  // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
+  // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
+  const h = hostGitInvocation(argv, { cwd: opts.cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
+  return execFileSync("git", h.args, { ...opts, env: h.env }) as Buffer;
 }
 
 /**
@@ -409,7 +433,8 @@ export function getAllowlistedChanges(workspacePath: string): string[] {
       ["status", "--porcelain=v1", "-z"],
       { cwd: workspacePath, stdio: "pipe" },
     ).toString();
-  } catch {
+  } catch (err) {
+    mirrorGitRefusal(err, "getAllowlistedChanges");
     return [];
   }
 
@@ -488,6 +513,23 @@ async function authProbe(userId: string, op: string): Promise<boolean> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * A refused `.git` (a gitfile, a symlink, `commondir`, a redirecting entry) stops EVERY sync for that workspace at the
+ * first gate below, so it must not look like "no remote" or "nothing changed": mirror it once, with the reason only (no
+ * path, no user id in the message). Returns true when `err` was a refusal.
+ */
+function mirrorGitRefusal(err: unknown, gate: string): boolean {
+  if (!(err instanceof HostGitRefusedError)) return false;
+  log.warn({ reason: err.reason, gate }, "Host git refused the workspace .git; sync skipped");
+  reportSilentFallback(new Error(`session-sync refused: ${err.reason}`), {
+    feature: "session-sync",
+    op: "git-refused",
+    extra: { gate },
+    message: "Host git refused the workspace .git shape",
+  });
+  return true;
+}
+
 function hasRemote(workspacePath: string): boolean {
   try {
     const result = runConnectedRepoGit(["remote", "-v"], {
@@ -495,7 +537,8 @@ function hasRemote(workspacePath: string): boolean {
       stdio: "pipe",
     });
     return result.toString().trim().length > 0;
-  } catch {
+  } catch (err) {
+    mirrorGitRefusal(err, "hasRemote");
     return false;
   }
 }
@@ -508,7 +551,8 @@ function hasLocalCommits(workspacePath: string): boolean {
       { cwd: workspacePath, stdio: "pipe" },
     );
     return parseInt(result.toString().trim(), 10) > 0;
-  } catch {
+  } catch (outer) {
+    if (mirrorGitRefusal(outer, "hasLocalCommits")) return false;
     // No upstream tracking branch — if we have any commits at all, attempt push.
     // This handles the case where auto-commit created local commits but no
     // upstream tracking branch is set (first push after clone).
@@ -849,6 +893,15 @@ export async function syncPull(
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before pull failed");
+      const failure = autoCommitFailure(err, "pull");
+      if (failure) {
+        reportSilentFallback(failure, {
+          feature: "session-sync",
+          op: "auto-commit-pull",
+          extra: { userId },
+          message: "Auto-commit before sync pull failed",
+        });
+      }
     }
 
     // Use merge (not rebase) — shallow clones lack sufficient history for rebase
@@ -921,6 +974,15 @@ export async function syncPush(
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before push failed");
+      const failure = autoCommitFailure(err, "push");
+      if (failure) {
+        reportSilentFallback(failure, {
+          feature: "session-sync",
+          op: "auto-commit-push",
+          extra: { userId },
+          message: "Auto-commit before sync push failed",
+        });
+      }
     }
 
     if (!hasLocalCommits(workspacePath)) {

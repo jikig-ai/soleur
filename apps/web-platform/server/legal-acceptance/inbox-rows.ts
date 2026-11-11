@@ -4,7 +4,8 @@
  * One row per DECLARED legal text, derived at request time from the registry and the founder's own decisions; nothing is stored.
  * Called by GET /api/inbox for the ACTIVE view only.
  *
- *   - Gate first: `isLegalSurfaceEnabled` (the flag AND the configured founder). A non-founder or flag-off user returns `[]`
+ *   - Gate first: `isLegalSurfaceEnabled` (the configured founder id only; the approval-queue flag is not read). A non-founder,
+ *     or anyone while the founder id is unset or malformed, returns `[]`
  *     BEFORE any legal_acceptance read.
  *   - The read goes through the REQUEST's user-context client. Migration 184 grants `authenticated` a founder-only SELECT
  *     (RLS), and the service key has no grant on the table, so a service client is both forbidden here

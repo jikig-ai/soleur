@@ -158,4 +158,6 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/worktree-id-validation.test.ts",
   "test/ws-context-validation.test.ts",
   "test/ws-resume-by-context-path.test.ts",
+  "test/host-git-consumers-real-git.test.ts",
+  "test/host-git.test.ts",
 ];

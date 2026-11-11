@@ -234,3 +234,18 @@ supports. It is not needed for `npm ci` determinism, because the committed lockf
 later lockfile regeneration floating the SDK back up to whatever the range resolves to. Bump it only together with the hosted
 image's SDK pin and after a green `engine-contract-probe.sh`; drop it when the engine's own range requires an SDK at or above
 the version the hosted image ships.
+
+**Addendum 2026-11-10 (#12514): where the `@anthropic-ai/claude-agent-sdk` override lives, and its new value.** A review
+read the 2026-11-05 "fourth `overrides` entry" as a claim about `apps/web-platform/package.json`. Verified 2026-11-10: that
+file has no `@anthropic-ai/claude-agent-sdk` override (its `overrides` hold vite, ws, qs, @babel/core, protobufjs, minimatch and
+scoped postcss/browserslist/glob/zod entries); the SDK there is a direct dependency pinned exactly. The override is in
+`plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json`, whose `overrides` hold four entries: `undici`, `sharp`,
+`minimatch` (`11.0.1`, added by #11823 with no addendum here, which is why the count jumps from "second" to "fourth") and the
+SDK. The SDK override now reads `0.3.321`, moved together with the hosted image's pin. The 2026-11-05 paragraph also asks for a
+green `engine-contract-probe.sh` before such a bump. It was run on 2026-11-10 against the regenerated 0.3.321 lock and, as a
+control, the 0.3.311 lock from `main`. Both runs used throwaway containers and `npm ci --ignore-scripts` (phase-r-evidence.md
+R2). It was **not green**. Both arms returned the same 38 PASS / 16 FAIL / 4 RECORD line set byte for byte. All 16 FAILs are the
+design-tool cases that the pen.dev account's plan usage limit refused ("plan usage limit has been reached"), and they fail
+identically on the control. So 0.3.321 matches the control on everything the quota allowed: install, `pen status` Active, the
+REPL surface and prompt, `save()`, the removed-tool hints. The 16 quota-blocked cases are unmeasured on either version, and the
+condition stays open until a run with quota is green.
