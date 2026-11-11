@@ -533,8 +533,10 @@ seven tools still fall back to a card the requesting member can answer") on the 
   `resolveInstallationId` and `getCurrentRepoUrl` (the GitHub tools' installation and repo), the same id the Owner check reads the role
   in. Before, both re-read `current_workspace_id`, so a workspace switch during session start could bind the GitHub tools to a team
   workspace while the role was read in the member's solo workspace. Pinned by `test/agent-runner-leader-active-workspace-parity.test.ts`.
-- **Email tools.** The email tools act on the session user's own mailbox connection, while the check is the workspace role: with the
-  flag off, a member of a shared workspace is also refused sending from their own mailbox. Accepted under the ruling (all eight tools).
+- **Email tools (fourth residual, open).** `email_send` and `email_suppress` are not workspace actions: they are registered for every
+  user and send from the platform sender keyed on the user, while the check reads the role in the active workspace. A member refused in a
+  team workspace passes in their own solo workspace, so for those two tools the check excludes nobody (`email_reply` is restricted by
+  its row rules). Tracked in #12669.
 - **Third residual (open, cc only).** On the cc runner a Bash `git push`, `gh pr create` or `gh workflow run` with the minted GitHub
   token reaches the in-memory Bash card (or, in autonomous mode, no card); the destroy-ask lane matches only destructive pushes. This
   check does not cover that lane; tracked in #12668.
