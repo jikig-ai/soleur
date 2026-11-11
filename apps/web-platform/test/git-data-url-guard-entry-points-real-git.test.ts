@@ -137,11 +137,16 @@ describe("the fake transport's push argv (the F21 fix)", () => {
   // splice would leave F21 green almost every run. This row pins the argv instead.
   const capture = (args: string[]): string[] => {
     let seen: string[] = [];
-    const exec = ((_f: string, a: string[]) => {
+    let env = {} as NodeJS.ProcessEnv;
+    const exec = ((_f: string, a: string[], o: { env: NodeJS.ProcessEnv }) => {
       seen = a;
+      env = o.env;
       return Buffer.from("");
     }) as unknown as typeof execFileSync;
-    runGitDataLocal(args, { exec, cwd: "/nonexistent", storesRoot: "/s", fixtureRoot: "/r", gitFixtureEnv: () => ({}) as NodeJS.ProcessEnv });
+    // an inherited GIT_ALLOW_PROTOCOL that allows ssh would override protocol.ssh.allow=never
+    const inherited = { GIT_ALLOW_PROTOCOL: "file:https:ssh" } as unknown as NodeJS.ProcessEnv;
+    runGitDataLocal(args, { exec, cwd: "/nonexistent", storesRoot: "/s", fixtureRoot: "/r", gitFixtureEnv: () => inherited });
+    expect(env.GIT_ALLOW_PROTOCOL).toBe("file");
     return seen;
   };
 
@@ -362,7 +367,7 @@ describe("fetchFromGitData — url/remote rewrite carriers, real git", () => {
       expect(gitDataRefs(ws)).toBe("");
       expect(hasObject(ws, evil)).toBe(false);
       expect(state(ws)).toBe(sWs);
-      expect(fetchHeadExists(ws)).toBe(false);
+      expect(fetchHeadExists(ws), "a refused fetch wrote FETCH_HEAD").toBe(false);
       expect(state(storeA)).toBe(sA);
       expect(state(storeB)).toBe(sB);
       expect(String((err as Error).message)).not.toContain(storeB);

@@ -8,7 +8,8 @@
 // git-data URL is). A SHORTER `insteadOf` carrier is masked by this prefix here, although it would take effect in
 // production, where no such prefix exists. A `pushInsteadOf` carrier of any length wins on a push (git applies it
 // first and does not rewrite its result with `insteadOf`). `-c protocol.ssh.allow=never` makes a routing miss fail loudly instead of dialing the
-// real git-data host.
+// real git-data host. The env pins `GIT_ALLOW_PROTOCOL=file`, because an inherited `GIT_ALLOW_PROTOCOL` overrides that
+// setting.
 //
 // This is not the production transport: `gitWithPrivateKeyAuth` sets `GIT_ALLOW_PROTOCOL=ssh`, so a `file://` carrier
 // would not reach a local store there. A B-landing control through this fake therefore proves the carrier is live
@@ -23,7 +24,8 @@
 // stdin after receive-pack exits and closes its own stdout so the client still sees EOF, the way an ssh-like
 // intermediary keeps the pipe open. It MODELS that intermediary; it is not ssh, and the production ssh path was not
 // measured. `exit $s` keeps receive-pack's own status (a rejected ref is reported through the status report either
-// way; the status only matters if receive-pack dies before reporting). Cost: one extra `sh` per push.
+// way; the status only matters if receive-pack dies before reporting). Cost: one extra `sh` and one `cat` per push (a few
+// ms).
 import type { execFileSync as ExecFileSync } from "node:child_process";
 
 export const GIT_DATA_URL_BASE = "ssh://git@10.0.1.20/mnt/git-data/repositories/";
@@ -43,7 +45,10 @@ export interface GitDataLocalOptions {
    * `test/helpers/host-git-carrier-fixture.ts` does, so this helper takes its env from it without importing outside the app.
    */
   gitFixtureEnv: (root: string) => NodeJS.ProcessEnv;
-  /** Per-call bound, so a hung transport fails the row instead of the CI job. Default 60 s (production's push bound). */
+  /**
+   * Per-call bound, so a hung transport fails the row instead of holding the worker (a synchronous exec cannot be
+   * interrupted by vitest's timer). Default 10 s, far above a local push, below production's 60 s network bound.
+   */
   timeoutMs?: number;
 }
 
@@ -68,17 +73,15 @@ export function runGitDataLocal(args: string[], opts: GitDataLocalOptions): Buff
   // Only a push talks to receive-pack. A fetch through the receive-pack wrapper would fail, so never splice it there.
   const argv = verb === "push" ? ["push", `--receive-pack=${DRAINING_RECEIVE_PACK}`, ...args.slice(1)] : args;
   try {
-    return opts.exec(
-      "git",
-      ["-c", "protocol.ssh.allow=never", "-c", `url.file://${opts.storesRoot}/.insteadOf=${GIT_DATA_URL_BASE}`, ...argv],
-      {
-        cwd: opts.cwd,
-        env: gitFixtureEnv(opts.fixtureRoot),
-        stdio: "pipe",
-        timeout: opts.timeoutMs ?? 60_000,
-        killSignal: "SIGKILL",
-      },
-    );
+    // `opts.exec("git", [` stays on ONE line: fixture-env-adoption reads spawn sites line by line.
+    const route = `url.file://${opts.storesRoot}/.insteadOf=${GIT_DATA_URL_BASE}`;
+    return opts.exec("git", ["-c", "protocol.ssh.allow=never", "-c", route, ...argv], {
+      cwd: opts.cwd,
+      env: { ...gitFixtureEnv(opts.fixtureRoot), GIT_ALLOW_PROTOCOL: "file" },
+      stdio: "pipe",
+      timeout: opts.timeoutMs ?? 10_000,
+      killSignal: "SIGKILL",
+    });
   } catch (e) {
     const { stderr: raw, status, signal } = e as { stderr?: unknown; status?: unknown; signal?: unknown };
     const stderr = String(raw ?? "");
