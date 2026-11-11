@@ -104,14 +104,17 @@ side_only() {
 kit_of() {
   local name="$1"
   local d="$WORK/tree/$name"
+  # Own variable so the fixture scanner can follow this emit back to mktemp.
+  local leaf="$d/specs/001-demo"
   assert_fixture_dir "$WORK"
-  mkdir -p "$d/specs/001-demo"
-  printf '%s' "$d/specs/001-demo"
+  mkdir -p "$leaf"
+  printf '%s' "$leaf"
 }
 
 write_spec() {
   local dir="$1"
   local body="$2"
+  assert_fixture_dir "$dir"
   printf '%s\n' "$body" >"$dir/spec.md"
 }
 

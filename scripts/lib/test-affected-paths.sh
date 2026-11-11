@@ -636,6 +636,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHELL_ARGV_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/test/shell-argv-parity.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_SPEC_KIT_INTAKE_TEST_SH_PATHS=(
+  "knowledge-base/project/specs/"  # feature spec read; the plan-step needle is charged as this directory
+  "plugins/soleur/scripts/spec-kit-intake.sh"  # SUT
+  "plugins/soleur/skills/brainstorm/SKILL.md"  # caller pin
+  "plugins/soleur/skills/plan/SKILL.md"  # caller pin
+  "plugins/soleur/skills/plan/references/spec-kit-intake.md"  # intake reference
+  "plugins/soleur/test/spec-kit-intake.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_TECHNICAL_RULING_GATE_TEST_SH_PATHS=(
   "AGENTS.rules.md"  # plugins/soleur/test/technical-ruling-gate.test.sh:36
   "plugins/soleur/test/technical-ruling-gate.test.sh"
