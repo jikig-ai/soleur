@@ -24,6 +24,16 @@ Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply
 - NOT for writing new tests (use `atdd-developer`)
 - NOT for linting, type-checking, or non-test failures
 
+## Run Health Emission (Phase 1 prerequisite, #12573)
+
+This skill MUST emit a sealed run-health artifact so the degraded-run forensics agent (#12574) can correlate prompts to failures from disk. Contract: `plugins/soleur/skills/one-shot/references/run-health-schema.md` (shared).
+
+- Run id: `<branch>-tfl-<utc-timestamp>`; storage: `.soleur/runs/<run-id>/` (gitignored).
+- At Phase 0 (after test command detection), initialize `RUN_DIR` and emit phase `0` status `started` (snapshot the detected command + args).
+- At each iteration's Parse/Cluster/Fix boundaries and at every termination condition, emit the corresponding phase (`iter-N-parse`, `iter-N-fix`, `terminate`) with status.
+- On termination (success or failure), emit phase `exit` with status `completed`/`failed` and record remaining failures via `--error`.
+- Emission is best-effort and never blocks the loop (helper exits 0 on write errors).
+
 ## Phase 0: Detect and Confirm
 
 ### Detect Test Runner
