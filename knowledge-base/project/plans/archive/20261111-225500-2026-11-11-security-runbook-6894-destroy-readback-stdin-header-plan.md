@@ -526,11 +526,13 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
    exposure is the same as in runbook 6604 and is unchanged. The Phase 4 harness checks it: `command -V printf` in both
    shells, and argv-checking stubs on every external command the 5c line runs (ruling 8c).
 4. **curl reading `.curlrc` or a proxy.** Closed by `--disable` first and `--noproxy "*"`.
-5. **A line the census does not see** (a declared limit, narrowed by p3, rulings 8a and 9b). A Hetzner call whose URL
-   is held in a variable and whose token is under another name, so that no line holds `api.hetzner.cloud`, `curl` with a
-   token name or `Authorization`, or a token name with `Authorization`. Every literal-URL form is seen, on one line or
-   split over `\` continuations, with any client (H18 rows g1r11 and g1r12). Any such construct would be new text in a
-   reviewed diff.
+5. **A line the census does not see** (a declared limit, narrowed by p3, rulings 8a, 9b and 11b). The census reads
+   logical lines: `\` continuations are joined (the join stops at a code fence) and the joined line is flagged by its
+   Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name beside `curl` or `Authorization` (p4). The residual
+   is a renamed token AND no literal `api.hetzner.cloud` on the logical line. Every literal-URL form is seen, on one
+   line, split over `\` continuations or with the host itself split inside its quotes, with any client (H18 rows g1r11,
+   g1r12 and g1r16), and so is the token on a continuation line with the URL from a variable (g1r15). Any such construct
+   would be new text in a reviewed diff.
 6. **Other documents.** Runbook 6604 is covered by N3. Other runbooks are out of scope.
 7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
    an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
