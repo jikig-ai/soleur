@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { runGitDataLocal } from "./helpers/git-data-local-transport";
 import { hostGitInvocation } from "../server/host-git";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
@@ -1212,18 +1213,10 @@ describe("replicateToGitData — real git store (F20 per-ref main push, F21 resc
       realExec(a[0] as string, a[1] as string[], { ...(a[2] as object), env: gitFixtureEnv(root) }),
     );
     // the authenticated transport: the production push argv, run by real git against the local store
+    // (the shared fake transport; it explains why pushes go through a draining receive-pack)
     gitPush.mockImplementation(async (...a: unknown[]) => {
       const [args, , , opts] = a as [string[], string, string, { cwd: string }];
-      try {
-        realExec(
-          "git",
-          ["-c", `url.file://${root}/stores/.insteadOf=ssh://git@10.0.1.20/mnt/git-data/repositories/`, ...args],
-          { cwd: opts.cwd, env: gitFixtureEnv(root), stdio: "pipe" },
-        );
-      } catch (e) {
-        const stderr = String((e as { stderr?: unknown }).stderr ?? "");
-        throw Object.assign(new Error(`Command failed: git push\n${stderr}`), { stderr });
-      }
+      runGitDataLocal(args, { exec: realExec, cwd: opts.cwd, storesRoot: path.join(root, "stores"), env: gitFixtureEnv(root) });
       return Buffer.from("");
     });
   });
