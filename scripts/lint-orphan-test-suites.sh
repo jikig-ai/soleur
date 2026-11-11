@@ -1083,6 +1083,26 @@ else
   # shellcheck source=scripts/lib/affected-glob.sh
   source "$GLOB_LIB"
 
+  # WEBPLAT BUNDLE PREFIX (#12514). AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS opens with
+  # WEBPLAT_APP_PATHS copied by hand, so the [repo-wide+component] bundle is selected by every diff
+  # that makes [unit] relevant. A WEBPLAT_APP_PATHS entry added without the copy would leave the
+  # bundle blind to it, so the relevance array must be an element-wise prefix of the bundle array.
+  if ! declare -p WEBPLAT_APP_PATHS >/dev/null 2>&1 || ! declare -p AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS >/dev/null 2>&1; then
+    echo "ERROR: WEBPLAT_APP_PATHS or AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS is not declared -- the bundle-prefix check cannot run." >&2
+    fails=$((fails + 1))
+  elif (( ${#WEBPLAT_APP_PATHS[@]} == 0 || ${#WEBPLAT_APP_PATHS[@]} > ${#AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[@]} )); then
+    echo "ERROR: WEBPLAT_APP_PATHS (${#WEBPLAT_APP_PATHS[@]} entries) cannot be a prefix of AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS (${#AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[@]} entries) -- copy every WEBPLAT_APP_PATHS entry, in order, to the head of the bundle array." >&2
+    fails=$((fails + 1))
+  else
+    for ((wb_i = 0; wb_i < ${#WEBPLAT_APP_PATHS[@]}; wb_i++)); do
+      if [[ "${WEBPLAT_APP_PATHS[wb_i]}" != "${AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[wb_i]}" ]]; then
+        echo "ERROR: AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[${wb_i}] is '${AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[wb_i]}' but WEBPLAT_APP_PATHS[${wb_i}] is '${WEBPLAT_APP_PATHS[wb_i]}' -- the bundle array must open with WEBPLAT_APP_PATHS verbatim, so a diff that makes [unit] relevant also selects [repo-wide+component]." >&2
+        fails=$((fails + 1))
+        break
+      fi
+    done
+  fi
+
   # The live registration stream. Same env-scrubbing as the --print-suite-globs
   # call above and for the same reasons: this runs INSIDE test-all.sh as a
   # registered suite, so an inherited TEST_GROUP/SCRIPTS_SHARD would change what

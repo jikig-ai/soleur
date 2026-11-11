@@ -149,6 +149,9 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-anthropic-content-position-live"
+  # #12348: the advisory-id/safe-status pairing scan reads every knowledge-base/ index entry, archives
+  # included, so any knowledge-base edit can trip it — repo-global by construction.
+  "scripts/lint-cve-safe-status-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-dedupe-shape-live"
@@ -392,8 +395,10 @@ AFFECTED_CONSUMED_EDGES=(
   # Same consumed edge as [unit]: the bundle's app-local half (component) is
   # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
   # argv no longer mentions apps/web-platform directly (it execs the wrapper),
-  # so the derivation channel reads only the wrapper's own file.
-  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
+  # so the derivation channel reads only the wrapper's own file. It maps to
+  # AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS (declared below): WEBPLAT_APP_PATHS'
+  # three entries plus the out-of-app files a repo-wide suite reads.
+  "apps/web-platform [repo-wide+component]|AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -466,6 +471,35 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   "apps/web-platform/infra/"
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
+)
+# The web-platform [repo-wide+component] bundle's edges. The first three entries are
+# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim, so the app diff and the
+# relevance-lib diff still select it; scripts/lint-orphan-test-suites.sh enforces that
+# WEBPLAT_APP_PATHS is a prefix of this array. The rest are files OUTSIDE
+# apps/web-platform/ that a repo-wide suite reads, which neither the wrapper argv nor
+# `vitest related` (app-relative inputs only) can reach (#8643):
+# test/server/inngest/claude-cli-pin-knows-models.test.ts › currentModelIds() reads audit-models.sh
+# with readFileSync and imports the shared AUTOFIX_PAIRS parser; test/claude-pin-lockstep.test.ts
+# reads the drift workflow, the pen-cli manifest and lock, and every EXPECTED_CARRIERS file
+# (#12514). Its discover() walk over .github/ and plugins/soleur/skills/ is NOT declared here: a
+# prefix that wide would select the whole bundle on most diffs, and a NEW carrier is caught by
+# the CI run of the bundle instead.
+AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS=(
+  "apps/web-platform/"
+  "apps/web-platform/test/repo-wide-containment.test.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "plugins/soleur/skills/model-launch-review/scripts/audit-models.sh"  # claude-cli-pin-knows-models.test.ts › AUDIT_SH
+  "plugins/soleur/test/lib/autofix-pairs.ts"  # claude-cli-pin-knows-models.test.ts › parseAutofixPairs import
+  ".github/workflows/scheduled-marketplace-drift.yml"  # claude-pin-lockstep.test.ts › DRIFT_WORKFLOW
+  "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json"  # claude-pin-lockstep.test.ts › PEN_CLI_DIR
+  "plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json"  # claude-pin-lockstep.test.ts › PEN_CLI_DIR
+  ".github/workflows/claude-code-review.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/fix-constraints-stage-a.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/scheduled-machinery-drain.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  ".github/workflows/test-pretooluse-hooks.yml"  # claude-pin-lockstep.test.ts › EXPECTED_CARRIERS
+  "plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml"  # claude-pin-lockstep.test.ts › DIGEST_ASSET
+  "plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template"  # claude-pin-lockstep.test.ts › TEMPLATE
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # DECLARED EDGES for suites whose real dependencies derivation cannot reach:
@@ -972,6 +1006,8 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "scripts/lint-supabase-deprecated-endpoints.sh"
   "scripts/lint-diagnosis-claims.sh"
   "scripts/lint-diagnosis-claims.test.sh"
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lint-workflow-step-env-refs.py"
   "scripts/plugin-root-anchor-debt.sh"
@@ -987,6 +1023,25 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "lefthook.yml"
   ".github/workflows/ci.yml"
   "plugins/soleur/test/lib/git-fixture-env.ts"
+  "scripts/lib/test-affected-paths.sh"
+)
+# #12348 (CTO rulings E5, V4 and X16): the lint-cve-safe-status UNIT suite left ALWAYS_ON_SUITES on
+# a read-set argument, not on a weight or an inotify recording, so it sits outside both the
+# #9763 >10s block and the #9307 audit block below. It runs on synthesized fixtures in temp repos
+# plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's phrase anchors
+# in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict changes only when
+# one of those files changes. This array is a superset of that read set (it also lists the
+# suite's own files and this library), so edge selection runs it whenever its result could
+# change and loses no coverage; it stays edge-selected whatever its CI median (V4). The always-on
+# corpus property is carried by the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member
+# `cve-safe-status`.
+AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
+  "scripts/test-all.sh"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
@@ -2339,9 +2394,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS=(
   ".github/actions/notify-ops-email/action.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   "apps/web-platform/infra/inngest-redis-luks.tf"
+  "apps/web-platform/infra/workspaces-luks.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md"
   "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
   "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
   "plugins/soleur/skills/postmerge/SKILL.md"
   "plugins/soleur/test/lib/gha-expr.py"
   "plugins/soleur/test/sole-copy-drift-check.test.sh"

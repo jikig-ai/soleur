@@ -64,8 +64,8 @@ AUTOFIX_PAIRS=(
   # Haiku 5.5 launch, 2026-10-08. BOTH Haiku 4.5 spellings: the id boundary defined
   # below makes the undated id a different token from the dated one, so one pair alone
   # leaves the other spelling stale forever. Both RHS are the current id, so the
-  # single-hop invariant holds. No closing paren in comments here: the test parser
-  # reads this array up to the first one.
+  # single-hop invariant holds. The shared test parser (plugins/soleur/test/lib/autofix-pairs.ts)
+  # ends this array at the first line that is only a closing paren.
   "claude-haiku-4-5-20251001=claude-haiku-5-5"
   "claude-haiku-4-5=claude-haiku-5-5"
 )
@@ -462,7 +462,9 @@ echo "  - devin subagent-model freshness (item 7, agent-run): compare 'devin mod
 echo "    against Devin slugs Soleur references (no TIER_MAPS.devin row by design)."
 echo "  - thinking-API shape: the REQUEST side sets no thinking params, but the CLI applies each"
 echo "    model row's default_effort: re-decide AUDIT_EFFORT (apps/web-platform/server/inngest/"
-echo "    model-tiers.ts) and update REVIEWED_DEFAULT_EFFORT in claude-cli-pin-knows-models.test.ts (#8603)."
+echo "    model-tiers.ts) and update REVIEWED_DEFAULT_EFFORT in claude-cli-pin-knows-models.test.ts (#8603);"
+echo "    for a new fable alias target, re-review the ADR-083 consult effort and update REVIEWED_ADVISOR_EFFORT"
+echo "    in the same file (its keys must equal the AUTOFIX_PAIRS fable targets, #12514)."
 echo "    The RESPONSE side is NOT inert: a thinking-by-default model puts a thinking block"
 echo "    FIRST, so any reader indexing a fixed content position silently returns empty"
 echo "    and the model's answer is billed and discarded (#8392)."

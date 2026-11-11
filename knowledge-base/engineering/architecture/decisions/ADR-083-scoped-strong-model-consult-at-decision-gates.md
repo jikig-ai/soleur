@@ -90,3 +90,47 @@ this addendum records what the launch article offered and was **not** adopted, s
 
 The `fable` alias is version-agnostic, but whether it resolves to 5.2 on the pinned CLI 2.1.311 is unverified and
 tracked in #12514. Nothing in this addendum claims 5.2 is in effect for the consult gates.
+
+## Addendum — 2026-11-10 (#12514)
+
+> **Superseded 2026-11-10 (#12514), in part:** two statements of the 2026-11-09 addendum above, which is kept as
+> the dated record. (1) Its closing "unverified" sentence. (2) Its `AUDIT_EFFORT` / effort row's "not checked
+> against the pinned CLI's model table".
+
+Ruled by CTO agent, 2026-11-10 (F7, F9). Measured on 2026-11-10 against the unpacked linux-x64 platform
+packages, with a zero-cost invalid-key start-up probe that reads the model the CLI resolves:
+
+| Pinned pair | Bundled `fable` alias resolves to | Bundled row `default_effort` |
+|---|---|---|
+| claude-code 2.1.311 / agent-sdk 0.3.311 | `claude-fable-5-1` | `high` |
+| claude-code 2.1.321 / agent-sdk 0.3.321 (pinned since this addendum) | `claude-fable-5-2` | `medium` |
+
+Each pair ships one byte-identical native binary, so the two packages agree. Who resolves through which binary:
+
+- **Hosted sessions** (the web platform) resolve `fable` through the Agent SDK's own bundled binary; the SDK is
+  not given `pathToClaudeCodeExecutable`, so the pinned CLI package is not on that path.
+- **Local consult gates** (`plan` Step 4.5, `ship` Phase 5.5) resolve through the operator's own Claude Code
+  install, which this repository does not pin.
+
+Not established by the measurement: a server-side alias override in an authenticated session for production or
+tenant accounts (the authenticated probe proves only the CI key's account at the time it ran), and whether a
+`model: fable` Task inherits the parent session's effort. So the table states the bundled row default; it does
+not claim the consult runs at that effort. The effort move from `high` to `medium` is accepted as is; a hosted
+effort override would change effort for every hosted session and is a spend decision, out of scope here.
+
+`apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` now checks both pinned binaries for
+every current model id (the `AUTOFIX_PAIRS` targets in `audit-models.sh`, the tier ids and the hosted SDK
+default) and pins the reviewed `default_effort` rows, so a later silent change in either is a red test.
+
+## Addendum — 2026-11-10 (#12514, review correction: a third hosted path)
+
+The 2026-11-10 addendum above names two resolvers (hosted sessions through the Agent SDK binary, local gates through
+the operator's install). There is a third, and it is hosted. `event-ship-merge`
+(`apps/web-platform/server/inngest/functions/event-ship-merge.ts`) runs `/soleur:ship --headless` through
+`spawnClaudeEval` (`_cron-claude-eval-substrate.ts`), whose `resolveClaudeBin()` picks
+`/app/node_modules/.bin/claude`, the pinned `@anthropic-ai/claude-code` package. Ship Phase 5.5 spawns the `advisor`
+tier, which is `fable` on Claude Code, inside that process. So the pinned CLI package is on a hosted `fable` path too,
+and both pins of the pair decide which Fable a hosted consult runs on; the pair moving in lockstep is what keeps
+them equal. The earlier statement that the CLI package is "not on that path" is right only for interactive hosted
+sessions. A fourth resolver sits outside the pair: the GitHub workflows that use `claude-code-action` v1.0.263 run
+its bundled CLI 2.1.311, so a `fable` spawn there still resolves to Fable 5.1 until that action pin moves.

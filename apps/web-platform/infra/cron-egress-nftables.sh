@@ -271,6 +271,15 @@ add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment 
 # MASQUERADEd to the host's own 10.0.1.x, which the peers' SOLEUR_PROXY_PEER_ALLOWLIST already admits. Not the egress gateway's dport 8443
 # accept (a different daddr) and not the Inngest TLS accept (10.0.1.40) above. (No backticks or dollar signs in this comment: it sits inside an unquoted heredoc.)
 add rule ip filter SOLEUR-EGRESS ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay (#12167)"
+# #9137: the exec-forward listener. The placement-aware Inngest serve forwards a pinned step call that lands on a non-exec web
+# host to https://<exec private ip>:8445 from INSIDE the app container, so the dial traverses DOCKER-USER -> SOLEUR-EGRESS like
+# the relay's wss above; without this accept the default drop below swallows every forward and pinned functions stall. Same
+# anonymous set as the relay rule (the var.web_hosts private_ips — bash literals pinned by cron-egress-nftables.test.sh and
+# cron-egress-firewall.test.sh, so a host added or renumbered leaves them red until this rule follows it), ONE dedicated port:
+# the receiver is a sibling HTTPS listener, NOT the :8443 wss relay (an HTTP step call streaming for minutes must not share the
+# relay's WebSocket hello deadline). Same masquerade admission as above. (No backticks or dollar signs in this comment: it sits
+# inside an unquoted heredoc.)
+add rule ip filter SOLEUR-EGRESS ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8445 accept comment "soleur-egress: web peer exec-forward (#9137)"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
 $GW_ACCEPT_LINE

@@ -4003,6 +4003,114 @@ The opt-in `missed_tick_candidates=true` lines are keyed by function UUID and ar
 tracked on #6940. Before dispatching `op=verify` against a newly cut-over dedicated host, check
 whether #6940 has landed (ADR-146 § Deferred item 5).
 
+## Exec-placement forwarder (#9137, ADR-033 amendment 2026-11-10)
+
+Step calls arrive at `https://app.soleur.ai/api/inngest` and the Cloudflare LB steers them to either
+web host. The forwarder in front of `serve()` reads the call's `?fnId` and the function's
+`EXECUTION_PLACEMENT` class: `portable` executes where it lands; `host-affine`, `volume-bound`,
+unknown and fnId-less POSTs forward verbatim (raw body, signature headers, full query) over pinned
+TLS to the exec listener on web-1 (`10.0.1.10:8445`, the ADR-119 volume holder), and the response
+streams back. These rows live on the WEB hosts' app log (pino → journald → Vector → Better Stack,
+`feature=inngest-exec-placement`), not on the dedicated Inngest host — a `placement.*` symptom is a
+web-platform signal, so do NOT reach for `inngest-host-state.sh` or `restart-inngest-server.yml`
+first. Every step call emits a `placement_decision` row (op `inngest-exec-placement`; fields `fnId`,
+`class`, `decision`, `host_ip`, plus `reason` on refuse rows) on the host that received it;
+`decision=forward` on web-2 and `decision=execute` on web-1 for a pinned fn is HEALTHY, not a fault.
+The refusal wire body is `{ error: "placement.<reason>" }` with a status per reason:
+`placement.exec_identity_missing` is **503, error-level and Sentry-mirrored** (retriable BY DESIGN —
+a refused step stalls the tick visibly, it does not kill the run, so recovery is always "fix the
+cause, let Inngest retry", never "re-fire the cron"); `placement.marked_on_nonexec` is **403,
+error-level and Sentry-mirrored** (the loop-guard — a marked call must never re-forward);
+`placement.missing_signature` is **401, a rate-limited warn only** (an unsigned public caller
+prodding the pinned surface — unsigned calls can never execute, so it is a signal, not a page).
+
+### `placement.exec_identity_missing` — recovery is a re-deploy after the NIC is up
+
+`SOLEUR_HOST_PRIVATE_IP` is injected per host by `ci-deploy.sh` from `PROXY_BIND`, which
+`resolve_proxy_bind()` reads off the host's `10.0.1.x` interface. The Hetzner private NIC is a
+post-boot hot attach: a deploy that runs before the NIC holds its address starts the container with
+an EMPTY `SOLEUR_HOST_PRIVATE_IP`, and that host then refuses every pinned step call with 503 +
+`placement.exec_identity_missing` until the next deploy — it never guesses and never executes a
+pinned fn locally. Recovery is a re-deploy AFTER the NIC is up — PRIMARY action, NO SSH
+(`hr-no-ssh-fallback-in-runbooks`):
+
+1. **Confirm the NIC is up (no SSH).** `web-private-nic-guard.timer` emits a `SOLEUR_PRIVATE_NIC`
+   line per web host to Better Stack; `nic_ok=true` is the healthy line, `nic_ok=false` carries the
+   host's actual v4 addresses in `zot_last_err`:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 6h --grep 'SOLEUR_PRIVATE_NIC' --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+   `nic_ok=false` on web-1 means the private NIC still does not hold `10.0.1.10`. The web guard is
+   detect-and-alarm (`converged_by=detect-only` — it deliberately does NOT converge the NIC), so a
+   persistent `nic_ok=false` is a host-attachment problem owned by the operator/HA path (#6459),
+   not something a re-deploy fixes: re-deploying before `nic_ok=true` only re-installs the empty
+   value.
+2. **Re-deploy the web image (no SSH).** Once the newest `SOLEUR_PRIVATE_NIC` row on the refusing
+   host reads `nic_ok=true`, dispatch `web-platform-release.yml`:
+
+   ```
+   gh workflow run web-platform-release.yml
+   ```
+
+   `resolve_proxy_bind` re-reads the now-present address and the new prod container starts with
+   `SOLEUR_HOST_PRIVATE_IP=10.0.1.10`. The refusal self-heals at the swap: the 503 is retriable, so
+   Inngest retries the refused step calls and they execute on the exec host — no missed-tick
+   re-fire, no cron drain intervention.
+3. **Verify (no SSH).** The `placement_decision` rows for pinned fns on the recovering host read
+   `decision=execute` (they read `decision=refuse` during the window), and `placement.exec_identity_missing`
+   rows stop:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 2h --grep 'placement' --limit 500 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+### `placement.forward_failed` — two named causes
+
+A `placement.forward_failed` row on a non-exec host means the pinned-TLS dial to
+`10.0.1.10:8445` failed — the FORWARD failed, not the function and not the signature (the
+`x-inngest-signature` presence gate runs before any dial; a missing header is refused, never
+forwarded). Diagnose the two named causes in order:
+
+1. **The 8445 publish state degraded to loopback.** web-1 publishes the exec listener as
+   `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445"`: `RELAY_PUBLISH_BIND` is `PROXY_BIND` only when
+   `net.ipv4.ip_nonlocal_bind` reads exactly `1`; anything else — unset, `0`, or an unreadable
+   sysctl — leaves the listener bound to `127.0.0.1`, unreachable by peers, and the deploy that set
+   it logged `relay_publish degraded=nonlocal_bind_unset` (tag `ci-deploy`, Better Stack). Read it:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 7d --grep 'relay_publish degraded' --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+   A fresh row means the host lost the sysctl. The file is `/etc/sysctl.d/99-soleur-nonlocal-bind.conf`,
+   shipped by cloud-init and re-asserted by the `terraform_data.nonlocal_bind_sysctl*` pair in
+   `server.tf`; restore it through the infra path (`apply-web-platform-infra.yml`), then re-deploy
+   web so the publish lands on `10.0.1.10`. Until then the forwarding fails closed — pinned fns
+   stall visibly (503-retried by Inngest), which is the accepted trade: the alternative is an
+   exec-side blind spot.
+2. **The proxy cert is absent or expired on either host.** The forward dials with
+   `loadProxyTlsClientCa()` + `rejectUnauthorized: true` against `PROXY_TLS_CERT` (minted in
+   `infra/proxy-tls.tf`, SANs over every web host's private IP). An absent, unparseable or expired
+   cert fails the handshake: look for `relay_peer_probe ... result=tls` rows (tag `ci-deploy`) from
+   the last deploy, the `proxy_cert_expiry` Sentry op (`feature=control_plane_route`), and the
+   `proxy-tls: server cert loaded` startup row's `daysLeft`/`notAfter` — the Better Stack monitor
+   watches expiry. Remedy is the IaC path: rotate/replace the material through `proxy-tls.tf` and
+   re-deploy BOTH web hosts (the cert must match on dialer and listener). The forwarder NEVER dials
+   with verification disabled — do not work around an expired cert by weakening the pin.
+
+What it is NOT: a `placement.forward_failed` is not an exec-identity problem (that refuses before
+any dial as `placement.exec_identity_missing`) and not an Inngest-host outage — the dedicated
+scheduler at 10.0.1.40 is not on this path. If BOTH causes read clean, the residual is the exec
+host's listener itself (web-1 app container down) — read `.services` via
+[§ Reading host state without SSH](#reading-host-state-without-ssh) on web-1.
+
 ## Concurrency conventions
 
 - **One `terraform apply` at a time.** The R2 backend has `use_lockfile = false` (R2 does not support S3 conditional writes). Concurrent applies race silently. R7 in the plan documents this.

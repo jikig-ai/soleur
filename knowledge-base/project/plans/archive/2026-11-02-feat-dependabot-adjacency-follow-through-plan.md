@@ -27,7 +27,7 @@ lane: cross-domain
 ### New Considerations Discovered
 
 - Adding a `package-lock.json` under `packages/opencode-plugin/` would trip `assert-dependabot-drain.py`'s uncensused-lockfile census — declared-range evaluation chosen instead.
-- `yaml: ^2.8.3` sits exactly at GHSA-48c2-rrv3-qjmp's first-patched version — a boundary case the pin-table's declared-range evaluation must treat as pass (minimum == floor).
+- `yaml: ^2.8.3` sits exactly at the yaml advisory's first-patched version — a boundary case the pin-table's declared-range evaluation must treat as pass (minimum == floor).
 - `technical-ruling-gate.sh --branch` flags surviving `pending - assumed` rows; the rows in `decision-challenges.md` are the sanctioned pre-CTO form (no Agent tool available in this run) and resolve at work/ship time when a fuller agent can spawn the ruling seats.
 
 ## Overview
@@ -130,7 +130,7 @@ protocol.
   (`yaml: ^2.8.3`, published via `npm-publish.yml` OIDC trusted publishing),
   `plugins/soleur/docs/package.json` (no deps), `plugins/soleur/skills/code-to-prd/test/fixture/package.json`
   (test fixture, never installed — no install site references it).
-  yaml advisories: GHSA-48c2-rrv3-qjmp (medium, `>=2.0.0 <2.8.3`, patched
+  yaml advisories: one (medium, `>=2.0.0 <2.8.3`, patched
   `2.8.3`) — `^2.8.3` minimum sits exactly at first-patched → clean at the
   declared-range floor today.
 - Drain guard (`scripts/assert-dependabot-drain.py`, 561 lines): BOUNDARY
@@ -330,8 +330,8 @@ on main after PR-1 merges (the overlap is two disjoint line regions).
 
 3.1 Close #10857 with a comment citing: `npm audit --omit=dev` on
 `origin/main`'s lockfile reports 0 vulnerabilities in every severity bucket;
-`next@16.4.3` (GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr + GHSA-p3m5-59mp-jv5r),
-`@sentry/nextjs@10.77.1` (GHSA-mchm-gjx6-7h55), `vite@7.3.7`, `hono@4.13.14`,
+`next@16.4.3`,
+`@sentry/nextjs@10.77.1`, `vite@7.3.7`, `hono@4.13.14`,
 `@hono/node-server@2.1.5`, `gray-matter@4.0.3`, `minimatch` 11.x consolidation,
 `glob@14.0.2` — and the drain guard's REQUIRED rows as the standing
 re-admission ratchet. The pre-close verification is re-run at execution time;
