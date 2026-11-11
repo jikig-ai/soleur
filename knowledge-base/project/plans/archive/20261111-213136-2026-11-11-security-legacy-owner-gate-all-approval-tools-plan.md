@@ -913,7 +913,7 @@ legal review.
 
 CPO (2026-11-11), signed off with conditions. Keep `APPROVAL_UNAVAILABLE_DENY` as is: do not add "ask the Owner", because
 the in-memory card lives in the member's own session and the Owner has nothing to approve there. The fail-closed cost for
-solo Owners (flag read and role read failing together, most likely one shared database outage) is acceptable at this
+solo Owners (flag read and role read failing together, most likely one shared database failure) is acceptable at this
 threshold: a wrongly allowed email or public share cannot be undone, a refused action can be retried. Condition: a failed
 or timed-out role read and a missing dependency must each reach Sentry with the tool name and reason. They do, through
 `reportApprovalOp` (`server/approval/ops.ts`), which forwards `ctx.toolName` as the `tool` field and calls
