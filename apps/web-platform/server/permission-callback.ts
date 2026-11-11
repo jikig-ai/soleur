@@ -1621,8 +1621,8 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
 
         // cc only (`approvalFailClosed`): the approval flow gave no verdict for a required tool (the dependency is absent,
-        // or the flag is off or unreadable), and on cc that tool must never be answered from the in-memory card below (cc has
-        // no Owner check before it). Static text only, no tool input echoed. A missing dependency is a wiring defect and goes to Sentry
+        // or the flag is off or unreadable), and on cc that tool is never answered from the in-memory card below (the ADR-309
+        // addendum's per-runner decision: cc fails closed rather than falling back). Static text only, no tool input echoed. A missing dependency is a wiring defect and goes to Sentry
         // (existing op, told apart by `stage`); flag off or unreadable is a normal dormant state and a read failure is
         // mirrored by the flag seam (debounced per process by its report TTL), so those two only log.
         if (deps.approvalFailClosed && isApprovalRequiredTool(toolName)) {
@@ -1641,6 +1641,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
               tier,
               decision: "platform-gate-approval-fail-closed",
               enforcing: deps.approval?.grants.enforcing ?? false,
+              conversationId: ctx.conversationId,
               repo: `${ctx.repoOwner}/${ctx.repoName}`,
             },
             "Platform tool gate refused: the approval flow gave no verdict for an approval-required tool",
@@ -1654,7 +1655,8 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // tool only the workspace Owner may answer it: a member, a failed or timed-out role read or a missing dependency is a
         // static deny (no card, no status write, no offline notification), and an Approve is honoured only if the role read
         // again after the answer is still Owner (see after the card). The Settings sentence PUSH_DISCLOSURE relies on this
-        // for the push. Set once the Owner check admits the call, so the answer-time re-read cannot drift from it.
+        // for the push.
+        //
         // One role read serves both Owner checks (before the card, and again after an Approve). It never throws: a failed or
         // timed-out read is "unavailable" and reported (`outcome` tells the two checks apart); an abort is not reported, and
         // each caller checks the signals itself right after.
@@ -1679,6 +1681,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             return "unavailable";
           }
         };
+        // Set once the Owner check admits the call, so the answer-time re-read cannot drift from it.
         let ownerCheckedDeps: ApprovalGateDeps | undefined;
         if (isApprovalRequiredTool(toolName)) {
           let role: "owner" | "member" | "unavailable" = "unavailable";
@@ -1816,6 +1819,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // honoured, with the same deadline and the same fail-closed outcomes (a Reject performs nothing, so it skips this).
         // Keyed on the tool, not on `ownerCheckedDeps` alone, so losing the issue-time assignment fails closed.
         if (isApprovalRequiredTool(toolName)) {
+          if (!ownerCheckedDeps) {
+            // Unreachable today (the check before the card sets it for every approval-required tool): a wiring defect.
+            reportApprovalOp("gateFailed", null, {
+              toolName,
+              conversationId: ctx.conversationId,
+              userId: ctx.userId,
+              extra: { stage: "owner-deps-absent-on-answer" },
+            });
+          }
           const answerRole = ownerCheckedDeps ? await readOwnerRole(ownerCheckedDeps, "denied-on-answer") : "unavailable";
           if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {
             return gateExpiredDeny("platform", toolName, "aborted", PLATFORM_GATE_EXPIRED_MESSAGE, {

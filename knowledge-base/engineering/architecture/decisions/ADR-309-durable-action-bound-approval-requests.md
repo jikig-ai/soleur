@@ -526,13 +526,18 @@ seven tools still fall back to a card the requesting member can answer") on the 
   "refused until a later conversation" effect comes from the deny copy ("Do not retry in this conversation"), not from the mechanism: the
   role is read on every call, so a retry would work once the database recovers. The CPO kept `APPROVAL_UNAVAILABLE_DENY` unchanged.
 - **Second residual (open).** The role is read for the workspace the session started in, while `kb_share_create` and
-  `workspace_set_autonomous` re-resolve the active workspace when they run, and the `legacy` grant kind binds no workspace. It gives no
+  `workspace_set_autonomous` re-resolve the active workspace when they run, and the `legacy` grant kind binds no workspace. *(Narrowed in the same PR, #12646 review: on the legacy card those two tools now refuse a workspace other than the
+  session's; see "One workspace for the check and the action" below. The `legacy` grant kind still binds none.)* It gives no
   capability beyond the UI today (the autonomy RPC checks the Owner on the workspace it resolves; any member can already create a share in
   their active workspace); tracked in #12661.
 - **One workspace for the check and the action.** `startAgentSession` now passes its one membership-verified `activeWorkspaceId` to
   `resolveInstallationId` and `getCurrentRepoUrl` (the GitHub tools' installation and repo), the same id the Owner check reads the role
   in. Before, both re-read `current_workspace_id`, so a workspace switch during session start could bind the GitHub tools to a team
-  workspace while the role was read in the member's solo workspace. Pinned by `test/agent-runner-leader-active-workspace-parity.test.ts`.
+  workspace while the role was read in the member's solo workspace. The two approval-required tools that re-resolve the workspace when
+  they run, `kb_share_create` and `workspace_set_autonomous`, get the same id as `sessionWorkspaceId`: on the legacy card (no grant) a
+  call refuses as `workspace_changed` when the current workspace is another one, and the autonomy write names that workspace. Pinned by
+  `test/agent-runner-leader-active-workspace-parity.test.ts`, `test/kb-share-tools.test.ts` and
+  `test/workspace-settings-tools.test.ts`. The post-session sync (`session-sync.ts`) still re-reads the workspace; it is #12600's path.
 - **Email tools (fourth residual, open).** `email_send` and `email_suppress` are not workspace actions: they are registered for every
   user and send from the platform sender keyed on the user, while the check reads the role in the active workspace. A member refused in a
   team workspace passes in their own solo workspace, so for those two tools the check excludes nobody (`email_reply` is restricted by

@@ -311,5 +311,11 @@ describe("agent-runner leader — active-workspace cwd parity", () => {
     for (const call of calls) {
       expect(call).toMatch(/\(\s*userId\s*,\s*activeWorkspaceId\s*\)$/);
     }
+    // The two approval-required tools that re-resolve the workspace at execution are handed the same id.
+    for (const builder of ["buildKbShareTools", "buildWorkspaceSettingsTools"]) {
+      const sites = src.match(new RegExp(`\\b${builder}\\(\\{[^}]*\\}\\)`, "g")) ?? [];
+      expect(sites, builder).toHaveLength(1);
+      expect(sites[0], builder).toMatch(/sessionWorkspaceId:\s*activeWorkspaceId\b/);
+    }
   });
 });

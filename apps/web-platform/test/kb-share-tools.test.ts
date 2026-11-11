@@ -132,6 +132,24 @@ describe("kb_share_create handler", () => {
   });
 });
 
+describe("kb_share_create — legacy card pinned to the session workspace (#12597)", () => {
+  it("refuses as workspace_changed when the current workspace is not the session's, and writes nothing", async () => {
+    const tools = buildKbShareTools({ ...baseDeps, sessionWorkspaceId: "ws-session" });
+    const res = await findTool(tools, "kb_share_create").handler({ documentPath: "readme.md" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("workspace_changed");
+    expect(mocks.createShare).not.toHaveBeenCalled();
+  });
+
+  it("creates the link in the session workspace when it is still the current one", async () => {
+    mocks.createShare.mockResolvedValue({ ok: true, token: "t", url: "/shared/t", documentPath: "readme.md", size: 1 });
+    const tools = buildKbShareTools({ ...baseDeps, sessionWorkspaceId: "ws-1" });
+    const res = await findTool(tools, "kb_share_create").handler({ documentPath: "readme.md" });
+    expect(res.isError).toBeFalsy();
+    expect(mocks.createShare).toHaveBeenCalledWith(baseDeps.serviceClient, "user-1", "ws-1", baseDeps.kbRoot, "readme.md");
+  });
+});
+
 describe("kb_share_list handler", () => {
   it("wraps success into JSON array text", async () => {
     mocks.listShares.mockResolvedValue({

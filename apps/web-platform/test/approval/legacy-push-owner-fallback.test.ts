@@ -156,6 +156,9 @@ describe("legacy fallback: the populations are the shared lists", () => {
     expect(EXEMPT_TOOLS.length).toBeGreaterThan(0);
     const required = new Set<string>(APPROVAL_REQUIRED_TOOLS);
     expect(EXEMPT_TOOLS.filter((t) => required.has(t))).toEqual([]);
+    // The role read may hold a turn for at most this long (ADR-309 2026-11-11 addendum: "up to 5 s").
+    expect(OWNER_ROLE_READ_DEADLINE_MS).toBeGreaterThan(0);
+    expect(OWNER_ROLE_READ_DEADLINE_MS).toBeLessThanOrEqual(5_000);
   });
 });
 
@@ -400,6 +403,51 @@ describe("legacy fallback: only the Owner may answer the in-memory card for ever
       expect(h.cards()).toHaveLength(1);
       expect(log.warn).toHaveBeenCalledWith(
         expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted", delivered: true, stage: "owner-role-answer" }),
+        expect.any(String),
+      );
+      expect(reports).toEqual([]);
+    },
+  );
+});
+
+describe("legacy fallback: an abort ends a hung role read at once, not at the deadline (#12597)", () => {
+  test.each(APPROVAL_REQUIRED_TOOLS)(
+    "%s: Stop pressed while a role read hangs: the call settles without waiting for the deadline",
+    async (tool) => {
+      vi.useFakeTimers();
+      const callCtl = new AbortController();
+      const h = setup("owner", { viewerRole: () => new Promise(() => {}) });
+      const pending = h.call(tool, input(tool), callCtl.signal);
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      await vi.waitFor(() => expect(h.viewerRole).toHaveBeenCalledTimes(1));
+      callCtl.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith(expect.objectContaining({ behavior: "deny", message: expect.stringMatching(/expired before it was answered/) }));
+      h.expectNoWrites();
+      expect(reports).toEqual([]);
+    },
+    2_000,
+  );
+
+  test.each(APPROVAL_REQUIRED_TOOLS)(
+    "%s: the session ends while the role is read after Approve: denied as aborted at stage owner-role-answer, no report",
+    async (tool) => {
+      const session = { ctl: undefined as AbortController | undefined };
+      const h = setup("owner");
+      h.viewerRole.mockResolvedValueOnce("owner").mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            session.ctl?.abort();
+            setTimeout(() => resolve("owner"), 0);
+          }),
+      );
+      session.ctl = h.controller;
+      const res = await h.call(tool, input(tool));
+      expect(res.behavior).toBe("deny");
+      expect(res.message).toMatch(/expired before it was answered/);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "platform-gate-aborted", reason: "aborted", stage: "owner-role-answer" }),
         expect.any(String),
       );
       expect(reports).toEqual([]);

@@ -437,7 +437,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
     tool(
       "email_suppress",
       "Add a recipient to the operator's permanent email suppression set so no " +
-        "future cold send can reach them (gated). Use this when the operator " +
+        "future cold send can reach them. Requires the workspace Owner's approval. Use this when the operator " +
         "observes a decline, opt-out, or bounce. Suppression is PERMANENT — " +
         "there is no un-suppress tool. The recipient address is hashed before " +
         "storage (never persisted in plaintext). Returns { id }.",

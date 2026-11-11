@@ -1659,10 +1659,10 @@ elements); the send is refused without them. You cannot send to a suppressed
 recipient, and suppression is permanent (no un-suppress).
 
 Write tools pause for approval. The approval-required ones (pushing, pull
-requests, workflow runs, sending email, sharing and autonomy changes) can be
-approved only by the workspace Owner; on a shared workspace a member's request is
-refused. If a tool result says the action was not performed, tell the user that
-and do not retry it.`;
+requests, workflow runs, sending, replying to or suppressing email, sharing and
+autonomy changes) can be approved only by the workspace Owner. If a tool result
+says the action was not performed, tell the user that and do not retry it; if it
+says the request is waiting for the Owner, say so and follow its instructions.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -1849,6 +1849,7 @@ are the requirements to implement.`;
       kbRoot: path.join(workspacePath, "knowledge-base"),
       baseUrl: appUrl ?? "https://app.soleur.ai",
       grants: approvalGrants,
+      sessionWorkspaceId: activeWorkspaceId,
     });
     platformTools.push(...kbShareTools);
     platformToolNames.push(
@@ -1933,7 +1934,11 @@ are the requirements to implement.`;
     // (flipping an approval-bypass requires a review-gate even for the agent).
     // Registered here on the leader surface only — the cc-router exposes no
     // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
-    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId, grants: approvalGrants });
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({
+      userId,
+      grants: approvalGrants,
+      sessionWorkspaceId: activeWorkspaceId,
+    });
     platformTools.push(...workspaceSettingsTools.tools);
     platformToolNames.push(...workspaceSettingsTools.toolNames);
 
