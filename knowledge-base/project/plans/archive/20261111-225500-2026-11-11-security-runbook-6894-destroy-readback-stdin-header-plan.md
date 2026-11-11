@@ -519,20 +519,27 @@ cover different concerns and are acknowledged:
 The ways the Hetzner read-only bearer can reach a process argument list from these two documents:
 
 1. **curl argv** (`-H`, `--header`, `--oauth2-bearer`, `-u`, URL userinfo). Closed by the exact-text census: any byte
-   other than `D`/`R` on a bearer line is red.
+   other than `D`/`R` on a bearer line is red. `D` and `R` themselves are closed by two frozen literals in the suite
+   (ruling 12a): `N3B_FROZEN_D` and `N3B_FROZEN_R` are each the whole pinned line, held in a quoted heredoc with `@ID@`
+   the only placeholder, and the built line must equal its literal byte for byte. The closure comes from that literal,
+   not from the slot, residual, curl-argv and env-dump word lists, which stay as defence in depth on both texts.
 2. **The `doppler run` argv.** The token goes into the environment, never into the argv. The `sh -c` script is
    single-quoted, so the variable expands inside it, not in the caller's shell.
 3. **`printf` inside `sh -c`.** `printf` is a builtin in dash and bash, so no new process receives the token. This
    exposure is the same as in runbook 6604 and is unchanged. The Phase 4 harness checks it: `command -V printf` in both
    shells, and argv-checking stubs on every external command the 5c line runs (ruling 8c).
 4. **curl reading `.curlrc` or a proxy.** Closed by `--disable` first and `--noproxy "*"`.
-5. **A line the census does not see** (a declared limit, narrowed by p3, rulings 8a, 9b and 11b). The census reads
-   logical lines: `\` continuations are joined (the join stops at a code fence) and the joined line is flagged by its
-   Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name beside `curl` or `Authorization` (p4). The residual
-   is a renamed token AND no literal `api.hetzner.cloud` on the logical line. Every literal-URL form is seen, on one
-   line, split over `\` continuations or with the host itself split inside its quotes, with any client (H18 rows g1r11,
-   g1r12 and g1r16), and so is the token on a continuation line with the URL from a variable (g1r15). Any such construct
-   would be new text in a reviewed diff.
+5. **A line the census does not see, and an edited literal** (declared limits, narrowed by p3, rulings 8a, 9b, 11b,
+   12a and 12b). The census reads logical lines: `\` continuations are joined (the join stops at a code fence) and the
+   joined line is flagged by its Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name beside `curl` or
+   `Authorization` (p4). The residual is a renamed token AND no literal `api.hetzner.cloud` on the logical line. Every
+   literal-URL form is seen, on one line, split over `\` continuations, or with the host split inside its quotes across a
+   `\` continuation (g1r16), with any client (H18 rows g1r11 and g1r12), and so is the token on a continuation line with
+   the URL from a variable (g1r15). Known gaps inside that residual: same-line quote concatenation of the host (for
+   example `"https://api.hetzner"".cloud/..."` beside a renamed token, which leaves the census at `seen D=1 R=1`). The
+   remaining gap of the frozen literals: an edit to `N3B_FROZEN_D` or `N3B_FROZEN_R` (made together with the builders and
+   the document copies) is a reviewed change the suite cannot catch; only the defence lists still face it. Any such
+   construct would be new text in a reviewed diff.
 6. **Other documents.** Runbook 6604 is covered by N3. Other runbooks are out of scope.
 7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
    an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
