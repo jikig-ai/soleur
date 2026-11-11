@@ -27,3 +27,5 @@ gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
 ```
 
 Both work **while the run is still in progress**, which `gh run view --log-failed` refuses to do — use that to start diagnosing early. But **an in-progress snapshot is not a verdict**: a run with jobs still `queued` can fail later for an unrelated reason, so re-run the classification once the run reaches `completed` and classify on THAT result before acting. Measured on one live run: 5 jobs completed, 2 in progress, 14 queued — two thirds of the run had not executed, so a "setup failure" read at that moment could be superseded by a real red. Note also that neither command returns log text, so the output test below is only decidable once the failing job completes.
+
+- **An aggregator job that is red over SKIPPED shards is not a test failure.** Before naming a cause, list the run's jobs with `--jq '.jobs[] | "\(.name) \(.conclusion)"'`: shards `skipped` behind a failed upstream job (e.g. `lint-bot-statuses`) turn `Aggregate shard results` red on their own, and the cause is that upstream job. **Why:** #12616/PR #12645 attributed the `test` red to a shard before reading the job list.
