@@ -28,7 +28,13 @@ export interface GitDataLocalOptions {
   cwd: string;
   /** Directory holding `<workspaceId>.git` bare stores. */
   storesRoot: string;
-  env: NodeJS.ProcessEnv;
+  /** The fixture root the env is built for (the discovery ceiling). */
+  fixtureRoot: string;
+  /**
+   * The shared fixture-env builder (`plugins/soleur/test/lib/git-fixture-env`), injected as
+   * `test/helpers/host-git-carrier-fixture.ts` does, so this helper takes its env from it without importing outside the app.
+   */
+  gitFixtureEnv: (root: string) => NodeJS.ProcessEnv;
 }
 
 /**
@@ -36,13 +42,14 @@ export interface GitDataLocalOptions {
  * `Command failed: git <verb>` carrying git's stderr, the shape the production retry classifier and the rows read.
  */
 export function runGitDataLocal(args: string[], opts: GitDataLocalOptions): Buffer {
+  const { gitFixtureEnv } = opts;
   const verb = args[0] ?? "";
   // Only a push talks to receive-pack. A fetch through the receive-pack wrapper would fail, so never splice it there.
   const argv = verb === "push" ? ["push", `--receive-pack=${DRAINING_RECEIVE_PACK}`, ...args.slice(1)] : args;
   try {
     return opts.exec("git", ["-c", `url.file://${opts.storesRoot}/.insteadOf=${GIT_DATA_URL_BASE}`, ...argv], {
       cwd: opts.cwd,
-      env: opts.env,
+      env: gitFixtureEnv(opts.fixtureRoot),
       stdio: "pipe",
     });
   } catch (e) {

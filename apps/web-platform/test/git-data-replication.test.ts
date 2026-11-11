@@ -1216,7 +1216,7 @@ describe("replicateToGitData — real git store (F20 per-ref main push, F21 resc
     // (the shared fake transport; it explains why pushes go through a draining receive-pack)
     gitPush.mockImplementation(async (...a: unknown[]) => {
       const [args, , , opts] = a as [string[], string, string, { cwd: string }];
-      runGitDataLocal(args, { exec: realExec, cwd: opts.cwd, storesRoot: path.join(root, "stores"), env: gitFixtureEnv(root) });
+      runGitDataLocal(args, { exec: realExec, cwd: opts.cwd, storesRoot: path.join(root, "stores"), fixtureRoot: root, gitFixtureEnv });
       return Buffer.from("");
     });
   });
