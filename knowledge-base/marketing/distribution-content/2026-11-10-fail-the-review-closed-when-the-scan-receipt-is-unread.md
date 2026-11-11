@@ -1,9 +1,9 @@
 ---
 title: "A review can no longer pass a change as clean when the security scan never ran"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-11-26
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#12566"
 issue_reference: "#12530"
 ---
