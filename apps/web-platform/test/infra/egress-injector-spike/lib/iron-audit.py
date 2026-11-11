@@ -11,7 +11,9 @@ for line in sys.stdin:
     try:
         j = json.loads(line)
     except ValueError:
-        # iron-proxy's log stream mixes plain-text lines with the JSON audit lines; count them, say so on stderr.
+        # iron-proxy's log stream mixes plain-text lines with the JSON audit lines, and a `tail -c` window cuts its first
+        # line mid-record; count them and say so on stderr. Both arms.sh callers discard stderr (2>/dev/null), so the
+        # count is for a person running this by hand; the scored output on stdout is unchanged.
         skipped += 1
         j = {}
     a = (j.get("audit") if isinstance(j, dict) else None) or {}
