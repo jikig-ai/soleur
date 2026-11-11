@@ -1541,18 +1541,19 @@ jobs:
     # Bounds a HUNG job (#7902). Healthy shards take 16-25 min, and the cancelled ones were still
     # running when the old 25-min ceiling fired (so the true peak is unknown, not 25). The vitest
     # part is only ~5 min; the rest is the mutation batteries that scripts/test-all.sh registers as
-    # plain run_suite calls in the webplat group (approval-guard1-mutation ~12-15 min,
-    # destroy-ask-mutation ~2 min, home-census-mutations), which run in FULL on BOTH shards. That
-    # put the shards on the edge and cancelled roughly half of the merge-queue attempts with no
-    # assertion failing (#12030). 35 min is a real bound on a hang that clears the observed range.
+    # plain run_suite calls in the webplat group (approval-guard1-mutation, destroy-ask-mutation
+    # ~2-3 min, home-census-mutations), which run in FULL on BOTH shards. That put the shards on
+    # the edge and cancelled roughly half of the merge-queue attempts with no assertion failing
+    # (#12030), so the ceiling went 25 -> 35 (#12279) and then 35 -> 45 (#12646, below).
     # An absent value would read as GitHub's 360-minute default. Flip trigger: if any shard reaches
     # 30 min, pin those batteries to one shard (as the tsc step does with strategy.job-index == 0)
     # or give them their own job; a third shard would repeat them and not help.
-    # Raised 35 -> 45 (#12646): on a slow hosted runner approval-guard1-mutation alone now takes
-    # ~25 min (371 rows; measured 1092-1219s fast, >1440s slow), so a slow shard needs ~36 min and
-    # three of five attempts were cancelled at 35 with every reached row killed. 45 still bounds a
-    # hang. The flip trigger above has fired; the dedicated-leg fix is #12654 (tracker #12626) and
-    # restores a tighter bound for this job when it lands.
+    # 35 -> 45 (#12646): with 371 rows, approval-guard1-mutation measured 1092-1219s on a fast
+    # runner and was still running when killed at >1440s on a slow one (a lower bound, not a
+    # measurement), so a slow shard needs more than ~35 min; three of five #12646 shard attempts
+    # were cancelled at 35 with every reached row killed. 45 still bounds a hang. The flip trigger
+    # has fired: the dedicated-leg fix is #12654 (tracker #12626), which should restore a tighter
+    # bound here when it lands. Pinning to one shard would not help (that shard keeps the battery).
     timeout-minutes: 45
     strategy:
       fail-fast: false
