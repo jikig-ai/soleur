@@ -65,6 +65,17 @@
 # apps/*/infra/, and the docs/legal/ disclosed_as anchors). Re-derive that
 # intersection before widening ALLOWED_PATHS; see the ADR-140 addendum of
 # 2026-09-23.
+# That disjointness is the encryption-posture sweep's alone. The `test` sweep
+# also reaches the digest through always-on suites that read knowledge-base/
+# wholesale: scripts/generate-kb-index-live (predates #12348; the bot action
+# does not reproduce it) and, since #12348, scripts/lint-cve-safe-status-live
+# (the no-argument lint run), which scans knowledge-base/ wholesale — but only on diffs the oracle lane
+# (scripts/ci-oracle-lane.sh) does not skip. The always-running full scan is
+# the `guards-ruleset` member `cve-safe-status` (below). The credential-path
+# overlap reaches the digest via `guards-ruleset` (credential-path-guard), not
+# `test`. The bot action earns the lint-cve-safe-status part of BOTH greens by
+# running `lint-cve-safe-status.py --paths` over its staged paths before the
+# push (parity Test 11; the ci.yml step itself is pinned by Test 12).
 test
 dependency-review
 e2e
@@ -160,7 +171,11 @@ skill-security-scan PR gate
 #   guards-ruleset (.github/workflows/ci.yml job `guards-ruleset`)
 #     members: adr-ordinals, rule-body-lint, tc-document-sha-guard,
 #     marketplace-manifest-guard, service-role-allowlist-gate,
-#     credential-path-guard, lockfile-sync, grok-fidelity.
+#     credential-path-guard, cve-safe-status, lockfile-sync, grok-fidelity.
+#       - cve-safe-status (#12348, ADR-322): REACHABLE — full scan of every
+#         tracked knowledge-base/ file, which includes weakness-digest.md. The
+#         action earns this green by running `lint-cve-safe-status.py --paths`
+#         over its staged paths before opening the PR (parity Test 11).
 #       - credential-path-guard: REACHABLE — and this is the member that breaks
 #         the unreachability pattern. Its SCAN_DIRS = (plugins, knowledge-base)
 #         over tracked *.md INCLUDES knowledge-base/project/weakness-digest.md,

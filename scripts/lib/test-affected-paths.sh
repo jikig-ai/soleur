@@ -149,6 +149,9 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-anthropic-content-position-live"
+  # #12348: the advisory-id/safe-status pairing scan reads every knowledge-base/ index entry, archives
+  # included, so any knowledge-base edit can trip it — repo-global by construction.
+  "scripts/lint-cve-safe-status-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-dedupe-shape-live"
@@ -1003,6 +1006,8 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "scripts/lint-supabase-deprecated-endpoints.sh"
   "scripts/lint-diagnosis-claims.sh"
   "scripts/lint-diagnosis-claims.test.sh"
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lint-workflow-step-env-refs.py"
   "scripts/plugin-root-anchor-debt.sh"
@@ -1018,6 +1023,25 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "lefthook.yml"
   ".github/workflows/ci.yml"
   "plugins/soleur/test/lib/git-fixture-env.ts"
+  "scripts/lib/test-affected-paths.sh"
+)
+# #12348 (CTO rulings E5, V4 and X16): the lint-cve-safe-status UNIT suite left ALWAYS_ON_SUITES on
+# a read-set argument, not on a weight or an inotify recording, so it sits outside both the
+# #9763 >10s block and the #9307 audit block below. It runs on synthesized fixtures in temp repos
+# plus four named reads (the test-all.sh rows' argv, and the cve-exposure skill's phrase anchors
+# in SKILL.md, host-state and the kernel-cadence probe suite), so its verdict changes only when
+# one of those files changes. This array is a superset of that read set (it also lists the
+# suite's own files and this library), so edge selection runs it whenever its result could
+# change and loses no coverage; it stays edge-selected whatever its CI median (V4). The always-on
+# corpus property is carried by the -live row (ALWAYS_ON_SUITES) and the guards-ruleset member
+# `cve-safe-status`.
+AFFECTED_SCRIPTS_LINT_CVE_SAFE_STATUS_PATHS=(
+  "scripts/lint-cve-safe-status.py"
+  "scripts/lint-cve-safe-status.test.sh"
+  "scripts/test-all.sh"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
