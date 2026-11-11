@@ -360,11 +360,12 @@ doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no
 Expect `404`. `missing-token` (exit 3) means `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform`: minting it is step
 **O5** in `infra-credential-tiers-8209.md`, and the command never falls back to the read/write token. The token goes to
 curl as a config on stdin, never on argv. The line is the runbook-6604 retired-volume GET with only the id changed, and
-the drift suite pins it (row N3b of `plugins/soleur/test/sole-copy-drift-check.test.sh`). The same token form reads
-`GET /v1/servers/169426216` (`.server.volumes` is `[106903269]`). The next `host_role=dedicated` probe row still reports
+the drift suite pins it (row N3b of `plugins/soleur/test/sole-copy-drift-check.test.sh`). At retirement the host's
+attached volumes read `[106903269]` (the `destroy` row above), and the next `host_role=dedicated` probe row still reported
 `scsi-0HC_Volume_106903269` with `redis_active=active`. Any output other than `404` is a failure. A `404` alone cannot tell
 a deleted volume from a token minted in another Hetzner project (as with `volume-gone` in section 5c), so it counts only
-beside that server read returning `[106903269]`, which proves the token reads this project.
+beside the section 5c read-back of 106903269 (step 3 of "Read-back") printing `protected` or `not-protected`: that read
+answers 200 only to a token that reads this project. If it prints `volume-gone`, route on the section 5c table instead.
 
 ### Rules that stay in force
 
@@ -432,7 +433,7 @@ injects only the read-only token, so the read/write `HCLOUD_TOKEN` in the same c
 command stops rather than falling back to it. `--no-exit-on-missing-only-secrets` makes Doppler run the command when the
 token is absent, so `missing-token` is reachable; without it Doppler exits before the command and no word is printed. This
 asserts presence of the read-only token; its scope is not verified here. The token never reaches argv (a stdin curl config).
-`--disable --noproxy "*"` come first, as in `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and honours no proxy
+`--disable --noproxy "*"` come first, the same two flags as `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and honours no proxy
 variable; `--max-time 30` bounds the request. There is no `-v` and no `set -x`. A JSON string `"true"` reads as
 `read-failed`, not as `protected`. This read is a proxy for "Hetzner refuses a delete"; the refusal itself is not
 exercised. The current form (`--disable --noproxy "*"` first and `--max-time 30`, #12616) was exercised on 2026-11-11
