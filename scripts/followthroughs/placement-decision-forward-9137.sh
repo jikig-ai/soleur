@@ -23,10 +23,15 @@ EXEC_HOST_IP="10.0.1.10"
 qerr=$(mktemp)
 trap 'rm -f "$qerr"' EXIT
 
-# Field-isolate on SYSLOG_IDENTIFIER (load-bearing per the betterstack-emitter
+# Field-isolate on CONTAINER_NAME (load-bearing per the betterstack-emitter
 # rule): `placement_decision` is also an ordinary word in issue/PR bodies that
-# ride the doppler webhook rows to the same source — only the container's own
-# journald identifier proves the row is an app emission.
+# ride the doppler webhook rows to the same source — only a container-emitted
+# row proves an app emission. The app runs `--log-driver journald` with no
+# `--log-opt tag`, so journald SYSLOG_IDENTIFIER is the rotating container
+# short ID (a new value every deploy), while CONTAINER_NAME carries the
+# declared `--name` and is absent on host-journald rows (doppler included).
+# The structured payload is `.message_json` (the vector-parsed pino object);
+# `.message` in these rows is an unrelated deprecation/quotation line.
 APP_ID="soleur-web-platform"
 
 raw="$("$QUERY" --since "$WINDOW" --grep placement_decision --limit 5000 2>"$qerr")" || {
@@ -35,9 +40,11 @@ raw="$("$QUERY" --since "$WINDOW" --grep placement_decision --limit 5000 2>"$qer
   exit 2
 }
 
-rows="$(printf '%s\n' "$raw" | jq -r --arg id "$APP_ID" '
-  .raw | fromjson | select(.SYSLOG_IDENTIFIER == $id) | .message' \
-  | grep 'placement_decision' || true)"
+rows="$(printf '%s\n' "$raw" | jq -c --arg id "$APP_ID" '
+  .raw | fromjson | select(.CONTAINER_NAME == $id)
+    | (.message_json // {}) | select(type == "object")
+    | select(.event == "placement_decision")
+    | {decision, host_ip}' || true)"
 
 fwd="$(printf '%s\n' "$rows" | grep '"forward"' \
   | grep -cv "\"host_ip\":[[:space:]]*\"${EXEC_HOST_IP}\"" || true)"
