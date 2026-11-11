@@ -858,9 +858,13 @@ None: the ADR addendum describes the state on merge.
   `conversationId`; `grep -c platform-gate-legacy-card-issued apps/web-platform/server/permission-callback.ts` prints `1`.
 - [ ] AC20 (CTO U1, pre-merge, run by the agent, read-only) Count Better Stack events with
   `decision=platform-gate-push-owner-required` and `role=member` since #12567 merged (ddc35e5a64). If 0, record "0 (weak
-  evidence: the flag is on in production)" in the PR body. For each hit, map `repo` to its workspace with a read-only
-  production database read and count that workspace's members; record only counts, never names or emails. If any hit is
-  in a single-member workspace, STOP the merge: a real Owner was misread as a member.
+  evidence: the flag is on in production)" in the PR body and do no database read. For each hit, map `repo` to its
+  workspace and count that workspace's members with Supabase REST GETs using the prd service-role key sent through curl
+  `--config -` on stdin (preflight Check 1's pattern): `workspaces?select=id&repo_url=ilike.*<owner>/<repo>`, then
+  `workspace_members?select=role&workspace_id=eq.<id>`. GET only; never `DATABASE_URL` or psql. Record only counts,
+  never names or emails. STOP the merge if any hit is in a single-member workspace (a real Owner was misread as a
+  member), or if a repo maps to 0 or more than 1 workspace or a read fails (unverified). Amended by the CTO agent,
+  2026-11-11 (decision-challenges.md, row "AC20 mechanism").
 
 ### Post-merge (operator)
 
