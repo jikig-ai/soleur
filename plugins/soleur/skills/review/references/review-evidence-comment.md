@@ -51,10 +51,10 @@ sits on the branch's first-parent line between the two. The first statement is t
 the second is the arm:
 
 ```bash
-EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("; coverage=")]|length==1) and ([scan("; unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
+EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("coverage=")]|length==1) and ([scan("unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
   && H=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid) \
   && git merge-base --is-ancestor "$EV" "$H" \
-  && [ -z "$(git rev-list --first-parent --no-merges "$EV..$H")" ] \
+  && R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \
   || { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }
 gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 ```
