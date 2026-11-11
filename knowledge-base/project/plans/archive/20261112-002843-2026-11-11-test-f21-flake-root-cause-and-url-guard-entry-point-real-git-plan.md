@@ -238,7 +238,7 @@ another repository is refused: reported once as git-refused, ...".
   `child_process` mock. Mocks only `@/server/git-auth` (`gitWithPrivateKeyAuth` → `runGitDataLocal`, `sshWithPrivateKeyAuth`
   → resolved no-op), `@/lib/supabase/tenant` (membership rpc → `true`) and `reportSilentFallback` (partial mock of
   `@/server/observability`, keeping `hashUserId` / `warnSilentFallback` real). Fixture-side git uses `gitFixtureEnv(root)`.
-- `knowledge-base/project/specs/feat-one-shot-9601-f21-flake-url-guard-real-git/measurements.md`: the baseline, the
+- `knowledge-base/project/specs/archive/20261112-002843-feat-one-shot-9601-f21-flake-url-guard-real-git/measurements.md`: the baseline, the
   stress, the post-fix counts with load averages, and the mutant table with killing assertions.
 
 ## Implementation Phases

@@ -13,8 +13,8 @@ pr: 12655
 ## Problem
 
 The F21 real-git row in `git-data-replication.test.ts` failed 3 times in 130 runs. Each failure showed
-`Command failed: git push` with empty stderr. That made mutant N6 look like a false kill. Separately, the new url/remote
-rewrite rows passed every existing mutant, yet the review panel found two guard mutations they could not kill.
+`Command failed: git push` with empty stderr. That put mutant kill attribution in doubt: F21 appeared in other mutants' RED lists. Separately, the new url/remote
+rewrite rows killed every existing mutant, yet the review panel found two guard mutations they could not kill.
 
 ## Root cause
 
@@ -42,7 +42,7 @@ guard check precedes both pushes. The rows sampled one member of each axis:
 
 - **Push count.** No row created a rescue branch, so the rows only ever saw one push. A guard moved below the rescue push
   (N6-MOVE) survived and leaked rescue refs into another tenant's store.
-- **Key class.** Only `insteadOf` was planted. A guard narrowed to `insteadOf` (M-A) survived, and `pushInsteadOf` still
+- **Key class.** Of the `url.*` keys, only `insteadOf` was planted. A guard narrowed to `insteadOf` (M-A) survived, and `pushInsteadOf` still
   pushed into B.
 - **Report field.** The "no path of B in the report" check ran `JSON.stringify` over the mock calls, and
   `JSON.stringify(new Error(...))` is `{}`. It could not see `Error.message`.

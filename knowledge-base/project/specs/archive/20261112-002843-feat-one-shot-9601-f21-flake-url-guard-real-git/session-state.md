@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-11-11-test-f21-flake-root-cause-and-url-guard-entry-point-real-git-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261112-002843-2026-11-11-test-f21-flake-root-cause-and-url-guard-entry-point-real-git-plan.md
 - Status: recovered from partial-artifact (planning subagent terminated by an API rate limit before emitting its Session Summary; plan body with ## Acceptance Criteria was on disk).
 - Plan artifact: recovered (selector=branch)
 
