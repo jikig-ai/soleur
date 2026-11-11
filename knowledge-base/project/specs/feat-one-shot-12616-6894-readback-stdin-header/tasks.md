@@ -18,16 +18,19 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12616-6894-readback-stdin-h
   - 1.3.5 a comment naming N3b as the check that covers the comment-keyed exemption;
   - 1.3.6 N1 keeps its other conjuncts and a single pass/fail line.
 - [ ] 1.4 Add `INNGEST_RETIRED_ID=106261946` (an oracle comment) and `n3b`:
-  - 1.4.1 the slot check;
+  - 1.4.1 the slot check, which prints `slot:` and returns at once;
   - 1.4.2 the destroy fence, matched by heading string equality plus `fence1`;
-  - 1.4.3 a whole-file tolower census with predicates p1 and p2, an exact multiset, and unclassified lines reported with
-    their predicate.
+  - 1.4.3 a whole-file tolower census with predicates p1, p2 and p3 (ruling 8a), an exact multiset, and unclassified
+    lines reported with their predicate;
+  - 1.4.4 every message starts with a fixed tag: `slot:`, `destroy-fence:`, `unclassified p1|p2|p3:`, `count`.
 
   Add the N3b row beside N3.
 - [ ] 1.5 Add H18 on copies of the real documents under `$TMP/n3b/`:
-  - 1.5.1 Guard 1 rows 1-9 and H-a, H-b, H-c;
-  - 1.5.2 Guard 2 rows 1-4, judged by `n1_rb` only;
-  - 1.5.3 the `cmp -s` did-not-land check.
+  - 1.5.1 Guard 1 rows 1-10 and H-a, H-b, H-c, each row requiring its named tag (row 9: no `count` line);
+  - 1.5.2 Guard 2 rows 1-4, judged by `n1_rb` only, reusing the Guard 1 row 3 and 4 copies for rows 1 and 2;
+  - 1.5.3 the `cmp -s` did-not-land check;
+  - 1.5.4 rows 1-4 and 9 edit only inside their section, and a changed-lines-in-section check reports `misplaced`;
+  - 1.5.5 failures listed as `uncaught:<label>` and `spurious:<label>:<first line>`.
 - [ ] 1.6 RED run on the unfixed documents, with no commit. N3b must fail, naming the destroy fence and three
   unclassified lines, and H18 fails too. Save both FAIL lines for the PR body.
 
@@ -47,12 +50,13 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12616-6894-readback-stdin-h
 
 - [ ] 3.1 Run the suite to a log and `tail -3` it: all passed, rc 0, N1/N3/N3b/H14/H15/H18 `pass`.
 - [ ] 3.2 `bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh` (H2 byte-identity).
-- [ ] 3.3 Run the remaining gates:
+- [ ] 3.3 Run `git fetch origin main`, then the remaining gates:
   - `bash tests/scripts/test-argv-bearer-sweep.sh`
   - `python3 scripts/lint-skill-body-budget.py --base origin/main`
   - `python3 scripts/lint-infra-no-human-steps.py`
   - markdownlint on the two documents
-- [ ] 3.4 AC4 grep returns nothing. AC7 normalized grep prints `0` for the old claim, and the new wording is present in
+- [ ] 3.4 AC2 replay: run `n3b` on `git show "$(git merge-base HEAD origin/main)":<file>` copies; expect `destroy-fence:`
+  plus three `unclassified` lines. AC4 grep returns nothing. AC7 normalized grep prints `0` for the old claim, and the new wording is present in
   section 5c.
 - [ ] 3.5 For each of the four CTO mutants, run it on the worktree file:
   - 3.5.1 edit the file;
@@ -62,13 +66,17 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12616-6894-readback-stdin-h
   - 3.5.5 confirm `git diff --quiet -- <file>`.
 - [ ] 3.6 Stub re-run of the 5c line in the scratchpad, never committed:
   - 3.6.1 extract the line from the fixed fence;
-  - 3.6.2 run the ten cases;
-  - 3.6.3 the stub curl refuses an unconfined argv, an argv carrying the fake token, or a bad stdin config.
+  - 3.6.2 stubs: `doppler`, `curl` (whole-stdin check kept), and argv-checking pass-throughs for `jq`, `sed`, `tail`;
+    every stub logs to `$FAKE_LOG` (`accepted` / `refused:<reason>`);
+  - 3.6.3 run the ten cases twice, with `sh` as bash and as dash; assert `command -V printf` is a builtin in each;
+  - 3.6.4 per case: one `accepted` curl line on the seven rows that reach curl, an empty log on the other three, no
+    `refused:token-on-argv`; build the tables from the log; note strace is absent.
 
   Do not cite a destroy-line stub run.
 - [ ] 3.7 PR body:
   - `Closes #12616` and `Ref #9927`
   - `## Changelog`
-  - the RED-before lines, the four mutant FAIL lines, and the stub table (no real-API run claimed)
+  - the RED-before lines and the AC2 replay output, the four mutant FAIL lines, and the bash and dash stub tables (no
+    real-API run claimed)
 
   Then add the `semver:patch` label and use normal ship and auto-merge.

@@ -13,6 +13,30 @@ brand_survival_threshold: none
 
 # security: runbook 6894 destroy read-back sends the read-only Hetzner token on stdin
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-11.
+
+**Agents used:** security-sentinel, test-design-reviewer, a verify-the-negative sweep (general-purpose), and the CTO
+agent for four new technical rulings (8a-8d in `decision-challenges.md`). This was a targeted subset, not the full
+review roster, because the plan-review panel (DHH, Kieran, code-simplicity, the CTO) had already run.
+
+**Key improvements:**
+
+1. **Observability section** added, with a discoverability test that prints `0` before the fix and `2` after.
+2. **Precedent diff** against `scripts/lib/bearer-curl.sh` (deepen-plan 4.4).
+3. **The census gains p3** (`curl` plus `api.hetzner.cloud`) and Guard 1 row 10, closing the variable-staged bearer
+   (ruling 8a). On today's files p3 flags the same three lines.
+4. **H18 checks why a row went red, not just that it did.** `n3b` messages carry fixed tags, each row names the tag
+   it needs, mutations are confined to their section and checked to have landed there, and the slot check returns
+   early so H-b is no longer vacuous.
+5. **The Phase 4 stub run can now show a leak.** A per-call log replaces the word-and-exit check, which could not tell
+   a refusal from a 401. The run covers `jq`, `sed` and `tail` as well as curl, under both bash and dash (ruling 8c).
+6. **Declared residuals:** the Doppler fallback file and the environment channel (rulings 8b, 8d), plus a re-checkable
+   AC2 and a `git fetch` before the `origin/main` comparisons.
+7. **Corrections:** the lefthook claim (its pre-commit glob does not select `.sh` suites) and the log-retention
+   wording. The verify-the-negative sweep confirmed all 9 negative claims.
+
 ## Overview
 
 The "Read-backs after `destroy`" command in the Inngest LUKS cutover runbook (6894, section 5b) passes the read-only
@@ -136,8 +160,10 @@ Ref #9927. Operator holds for that epic stay on #12272 and are not discharged he
 
 ### Line census (the population N3b quantifies over)
 
-`grep -n curl <f> | grep -iE 'hcloud_token|authorization'`, together with `grep -n HCLOUD_TOKEN <f> | grep -i authorization`,
-gives exactly:
+`grep -n curl <f> | grep -iE 'hcloud_token|authorization'`, together with `grep -n HCLOUD_TOKEN <f> | grep -i authorization`
+and `grep -n curl <f> | grep -i 'api\.hetzner\.cloud'` (p3, added at deepen-plan), gives exactly the lines below. Each
+of the three predicates fires on each of the three lines, so p3 adds no noise (checked 2026-11-11; the CTO agent re-ran
+it independently):
 
 | File | Lines |
 | --- | --- |
@@ -145,7 +171,8 @@ gives exactly:
 | postmerge SKILL.md | 506 |
 
 No other line in either file matches. The postmerge Sentry block (`:165-172`) splits `curl` (`:170`) and `Authorization`
-(`:172`) across lines, and neither of those lines names `HCLOUD_TOKEN`, so it is outside both predicates.
+(`:172`) across lines, and neither of those lines names `HCLOUD_TOKEN` or `api.hetzner.cloud`, so it is outside all three
+predicates.
 
 ### CLI verification (gate #2566)
 
@@ -236,8 +263,12 @@ The N1 assertion keeps its other conjuncts (the ADR-282 `Hetzner id`, the skill 
 id) and its single pass/fail line. The pass label adds "and no expect-404 read-only GET names it".
 
 **N3b: `n3b <runbook-6894> <skill> <pin> <retired>`.** The function prints one line per disagreement and runs beside N3.
+Every disagreement line starts with a fixed tag, so H18 can tell which check fired (test-design review finding 2):
+`slot:`, `destroy-fence:`, `unclassified p1:` / `unclassified p2:` / `unclassified p3:`, and `count <D|R> <file>: want <n> got <m>`.
 
-0. **Slots.** `[[ -n $pin && -n $retired && $pin != $retired ]]`, otherwise report.
+0. **Slots.** `[[ -n $pin && -n $retired && $pin != $retired ]]`, otherwise print `slot: ...` and **return at once**.
+   Without the early return, an empty or equal pin makes `R(pin)` match no line, so the census reports anyway and the
+   slot check is never what turns the row red (test-design review finding 3).
 1. **Destroy fence.** The first fenced block under the heading
    `` ### Read-backs after `destroy` (read-only; re-runnable) `` is exactly the one line `D(retired)`. The heading is
    matched by awk string equality (`$0 == "..."`), never by a regex: the heading contains backticks, parentheses and
@@ -246,11 +277,14 @@ id) and its single pass/fail line. The pass label adds "and no expect-404 read-o
    every term. A line is a **bearer line** if either holds:
    - (p1) it contains `curl` and also `hcloud_token` or `authorization` — the CTO predicate;
    - (p2) it contains both `hcloud_token` and `authorization` — a strict superset, ruled keep in item 7.1. It catches an
-     argv header on a continuation line.
+     argv header on a continuation line;
+   - (p3) it contains `curl` and `api.hetzner.cloud` — ruled keep in item 8a. It catches a bearer staged through a
+     variable on an earlier line (`T=$HCLOUD_TOKEN_READONLY`, then `curl --oauth2-bearer "$T" https://api.hetzner.cloud/...`),
+     where the curl line names neither the token nor `Authorization`.
 
    Each bearer line, with leading whitespace stripped, must equal `D(retired)` or `R(pin)`. The multiset must be exact:
    runbook `{D:1, R:1}`, skill `{R:1}`. This compares counts, so a deleted line is red. Any other bearer line is reported
-   as **unclassified**, with its file, the predicate that fired (`p1`/`p2`) and its first 120 characters. A comment by
+   as **unclassified**, with its file, the first predicate that fired (`p1`/`p2`/`p3`) and its first 120 characters. A comment by
    the predicate says that it reads prose too.
 
 Check 1 together with the multiset catches D and R trading places, which N1 cannot see (ruling 7c). The 5c and skill
@@ -261,7 +295,17 @@ deliberately not read from the runbook. N3b passes when `n3b` prints nothing.
 
 **H18 (self-test, one aggregated pass/fail, the same shape as H14/H15).** Mutants are copies of the **real, fixed**
 documents under `$TMP/n3b/` (ruling 7b). A copy that is `cmp -s`-identical to its source is reported as
-`(did-not-land)`, never as caught. The rows are listed in the Guard Contract. H18 runs `n3b` and `n1_rb` directly on the
+`(did-not-land)`, never as caught.
+
+- **Scoped edits (test-design review finding 1).** After the fix, `--disable` and the `D`/`R` texts each occur on more
+  than one line of runbook 6894, so a file-wide first-match edit can land on the wrong line and still go red for the
+  wrong reason. Rows 1, 2, 3, 4 and 9 edit only inside their named section (the destroy section, or the section from
+  `^## 5c\.` to the next level-2 heading), and after the edit H18 checks that the changed line is the intended one: `diff` of
+  source and copy shows exactly the intended changed lines (one, or one per section for row 9), each inside its section. Otherwise the row is `(misplaced)`, never caught.
+- **Tag check (test-design review finding 2).** Each row names the tag its mutation must produce (Guard Contract,
+  "Expected"). A row counts as caught only if `n3b`'s output contains that tag. Row 9 must also print no `count` line,
+  which proves the destroy-fence check and not the multiset caught the swap. Failures are listed as `uncaught:<label>`
+  and `spurious:<label>:<first output line>`, as H14 does. The rows are listed in the Guard Contract. H18 runs `n3b` and `n1_rb` directly on the
 copies; it never repoints `RUNBOOK` or `SKILL`.
 
 **Counts.**
@@ -277,7 +321,8 @@ copies; it never repoints `RUNBOOK` or `SKILL`.
 ### Runbook prose (6894)
 
 - **Under the destroy fence.** Replace the paragraph from "Expect `404`." onwards with the following. Keep it to lines
-  that never carry `curl` beside a token name or `Authorization`, and never a token name beside `Authorization`.
+  that never carry `curl` beside a token name, `Authorization` or `api.hetzner.cloud`, and never a token name beside
+  `Authorization`.
   - "Expect `404`."
   - `missing-token` (exit 3) means `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform`. Minting it is step **O5** in
     `infra-credential-tiers-8209.md`. The command never falls back to the read/write token.
@@ -308,7 +353,8 @@ Only the one line at `:506` changes, to `R(106903269)`, byte-identical to the ru
    Commit.
 2. **Add the guards.** Add `n1_rb` (switch N1 to it), `INNGEST_RETIRED_ID`, `n3b`, the N3b row and H18. H18 is built on
    copies of the real documents. FLOOR stays 284 for now.
-3. **RED run on the unfixed documents** (no commit; lefthook runs no suites at pre-commit). Expect:
+3. **RED run on the unfixed documents.** Do not commit it. lefthook's pre-commit affected-test hook (`bun-test`) has the
+   glob `*.{ts,tsx,js,jsx}`, so it does not select this `.sh` suite. Expect:
    - N3b FAILs, naming runbook `:357` (`D` missing from the destroy fence, plus unclassified `p1`) and both 5c lines as
      unclassified;
    - H18 FAILs too, because its mutants need the fixed text and come out `did-not-land` or uncaught.
@@ -341,7 +387,8 @@ Only the one line at `:506` changes, to `R(106903269)`, byte-identical to the ru
 ### Phase 4: stub re-run of the 5c line (ruling 5)
 
 10. **Stub harness** (scratchpad, never committed): a stub `doppler` and a stub `curl` on `PATH`, driven by `FAKE_CASE`,
-    with the real `sh` and `jq`. A working prototype exists at
+    plus argv-checking pass-through stubs for `jq`, `sed` and `tail` (ruling 8c). A working prototype of the `doppler`
+    and `curl` stubs exists at
     `/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/6781a196-45c3-43ad-bc32-fdb6045164ab/scratchpad/stubproto/bin/`.
     Re-create it in the work session's scratchpad.
     - **Stub `doppler`.** Its argv must be exactly
@@ -357,8 +404,26 @@ Only the one line at `:506` changes, to `R(106903269)`, byte-identical to the ru
 
       Otherwise it honours `-o /dev/null` and expands `-w` with `printf '%b'`, never `printf "$w"`. Per case it returns:
       200 with a JSON body (delete true, delete false, a missing field, non-JSON), 401, 404, or a network failure
-      (`000`, exit 7).
-11. **Run the 5c line, extracted from the fixed runbook fence (not retyped), through `bash -c`.** The ten cases, with the
+      (`000`, exit 7). It reads all of stdin (`cfg=$(cat)`) and compares the whole of it, so a second config line such
+      as an injected `proxy =` is refused too; keep that check as it is in the prototype.
+    - **Call log (security review F1).** The word and exit cannot show a leak: a refusal (exit 64) inside
+      `r=$(...) || { echo read-failed; exit 2; }` prints `read-failed`/2, the same result the 401, network, non-JSON and
+      missing-field rows expect. So the stub `curl` appends one line per call to `$FAKE_LOG`, either `accepted` or
+      `refused:<reason>`. The harness truncates the log before each case and checks it after: exactly one `accepted`
+      line, and no `refused` line, for each of the seven cases that reach curl; an empty log for the three that do not.
+    - **Every external command (security review F3, ruling 8c).** Read in full, the 5c line runs `printf`, `curl`,
+      `tail`, `sed` and `jq`. Attack Surface item 3 and property P1 are about every process, not only curl. The stub
+      `jq`, `sed` and `tail` each check their own argv: if it holds the fake token they append
+      `refused:token-on-argv` to `$FAKE_LOG` and exit 64; otherwise they `exec` the real tool (resolved by absolute path
+      before `PATH` is changed). `printf` cannot be stubbed this way because it must be a builtin, so the harness asserts
+      that `command -V printf` reports a builtin in each shell.
+    - **Two shells.** Run all ten cases twice: once with `sh` resolving to the host's `sh` (bash), once with a stub-bin
+      `sh` symlinked to dash (`/home/jean/.local/bin/dash` on the planning host; resolve with `command -v dash`), which
+      matches the Debian and Ubuntu `/bin/sh`. strace and busybox are not installed on the planning host, so execve
+      tracing is not part of the run; the PR body says so. Other `/bin/sh` implementations (for example macOS bash 3.2
+      in POSIX mode) stay untested, as the CTO's dissent on 8c records.
+11. **Run the 5c line, extracted from the fixed runbook fence (not retyped), through `bash -c`, in each of the two shell
+    set-ups.** The ten cases, with the
     word and exit each expects:
 
     | Case | Word | Exit |
@@ -376,8 +441,12 @@ Only the one line at `:506` changes, to `R(106903269)`, byte-identical to the ru
 
     The prototype produced exactly these on 2026-11-11. As a control, it refused today's unconfined `:408` form (exit 64,
     then `read-failed`).
-12. **Record** in the PR body a table of case, word, exit, and "token absent from curl argv: yes". State that no real-API
-    run was made. Do not cite a destroy-line stub run (ruling 7f).
+12. **Record** in the PR body a table of case, word, exit, and the call-log column, built from `$FAKE_LOG` rather than
+    typed: `accepted` for the seven cases that reach curl, and `n/a, curl not run` for missing token, empty token and
+    failing doppler (security review F2), one table per shell. The claim it supports is "the fake token was absent from
+    the argv of every external command the 5c line invokes, under bash and dash"; also record that strace was not
+    available. State that no real-API run was made. Do not cite a destroy-line stub run
+    (ruling 7f).
 
 ### Phase 5: Ship
 
@@ -417,6 +486,13 @@ cover different concerns and are acknowledged:
 - **A token-shape guard before curl, and process substitution instead of the pipe.** See the Cut List. The same residual
   applies to every runbook-6604 read-only line and to the shared `bearer-curl.sh`, so changing it is a cross-runbook
   change and not part of this fix.
+- **`--no-fallback` and the environment channel (`env -u SSLKEYLOGFILE`).** Attack Surface items 7 and 8, rulings 8b and
+  8d. Both are the same cross-runbook hardening as the token-shape guard: each would change every runbook-6604
+  read-only line, N3's shared builders and the 5c line together. They are recorded here, with the token-shape residual,
+  rather than in a GitHub issue: no deferral issue exists for that residual, and per
+  `wg-when-deferring-a-capability-create-a` this Non-Goals list is the documentation until a cross-runbook change has a
+  concrete trigger. The CTO's dissent stands: until that change lands, the read-only token may sit in an encrypted
+  Doppler cache and in inherited environments.
 - **A real-API re-run of the new 5c form.** Ruling 5 claims none. The next `soleur:postmerge` Phase 5.7 run triggered by
   an `inngest-redis-luks.tf` merge exercises the new form in its normal course.
 - **ADR-282 and the legal destruction record.** They cite the read-back by section, and their dated claims stay true.
@@ -444,12 +520,40 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
 2. **The `doppler run` argv.** The token goes into the environment, never into the argv. The `sh -c` script is
    single-quoted, so the variable expands inside it, not in the caller's shell.
 3. **`printf` inside `sh -c`.** `printf` is a builtin in dash and bash, so no new process receives the token. This
-   exposure is the same as in runbook 6604 and is unchanged.
+   exposure is the same as in runbook 6604 and is unchanged. The Phase 4 harness checks it: `command -V printf` in both
+   shells, and argv-checking stubs on every external command the 5c line runs (ruling 8c).
 4. **curl reading `.curlrc` or a proxy.** Closed by `--disable` first and `--noproxy "*"`.
-5. **A line the census does not see** (a declared limit). A bearer assembled through a variable on an earlier line, so
-   that no single line holds `curl` with a token name or a token name with `Authorization`. Any such construct would be
-   new text in a reviewed diff.
+5. **A line the census does not see** (a declared limit, narrowed by p3, ruling 8a). A curl call with both the bearer
+   and the URL staged through variables on earlier lines, so that no single line holds `curl` with a token name,
+   `Authorization` or `api.hetzner.cloud`, and no line holds a token name with `Authorization`. Any such construct would
+   be new text in a reviewed diff.
 6. **Other documents.** Runbook 6604 is covered by N3. Other runbooks are out of scope.
+7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
+   an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
+   (`doppler run --help`, checked 2026-11-11). With `--only-secrets` the snapshot holds only the read-only token, and
+   the file is readable only by the same user. No runbook line and no skill line passes `--no-fallback` today. This is a
+   disk channel, not argv, so it is outside P1; adding the flag here alone would break ruling 2's single form and N3's
+   shared builders.
+8. **The environment channel** (a declared cross-runbook residual, ruling 8d). `doppler run` exports the token to its
+   children (`sh`, `curl`, `jq`, `sed`, `tail`), whose `/proc/<pid>/environ` is readable by the same user or root, who
+   already hold the Doppler session. curl also honours an inherited `SSLKEYLOGFILE`, which `--disable` and `--noproxy`
+   do not cover; `env -u SSLKEYLOGFILE` is the candidate fix. Every runbook-6604 line has the same exposure.
+
+### Precedent diff (deepen-plan 4.4)
+
+The repo has two precedents for "a bearer without argv":
+
+| Aspect | `scripts/lib/bearer-curl.sh` (`bc_curl`, workflows) | Runbook 6604 inline form (operator-run; this plan's `D`/`R`) |
+| --- | --- | --- |
+| Header channel | curl config on stdin (`--config -`) | Same, `printf "header = ..."` piped into `curl ... --config -` |
+| curlrc / proxy | `--disable --noproxy '*'` first | Same, `--disable --noproxy "*"` first |
+| Bound | the caller passes `--max-time` | `--max-time 30` |
+| Token-shape guard | `bc_ok` refuses empty, whitespace-trailing or non-`[A-Za-z0-9._~+/=-]` values (a newline or quote would inject config) | Presence only (`[ -n ... ]` gives `missing-token`) |
+| Argv refusals | refuses verbose, trace, redirect-follow, a second config, the caller's own credential flags | None; the exact-text pin (N3 / N3b) fixes the argv instead |
+
+The plan adopts the 6604 inline form (ruling 2). Its missing token-shape guard is the residual recorded in Non-Goals.
+On these documents that gap is bounded: the token comes from Doppler `prd_terraform`, minted in the console at step
+O5, and is not attacker-written input. The exact-text pin stands in for `bc_curl`'s argv refusals.
 
 ## User-Brand Impact
 
@@ -466,12 +570,44 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
 - `threshold: none, reason: the diff touches operator runbook text, a report-only skill line and a test; no runtime code,
   credential scope or user data path changes.`
 
+## Observability
+
+deepen-plan Phase 4.7 applies here because `## Files to Edit` names a `.test.sh` and a skill body. No runtime surface
+changes; the signal is the drift suite's own verdict in CI.
+
+```yaml
+liveness_signal:
+  what: the sole-copy drift suite's N3b and N1 pass lines (plugins/soleur/test/sole-copy-drift-check.test.sh)
+  cadence: per PR whose diff touches a path in AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS, and on every merge-to-main full run
+  alert_target: a red `test` required check on the PR (merge blocked); a red main-health run after merge
+  configured_in: scripts/lib/test-affected-paths.sh (AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS) and scripts/test-all.sh, run by .github/workflows/ci.yml
+error_reporting:
+  destination: the CI job log and the PR check status (a repo test, so there is no Sentry surface)
+  fail_loud: an "  FAIL: N3b ..." line naming the unclassified line, its file and the predicate (p1, p2 or p3), plus a non-zero suite exit
+failure_modes:
+  - mode: an edit puts the Hetzner bearer on curl argv in runbook 6894 or the postmerge skill
+    detection: the N3b census reports the line as unclassified
+    alert_route: the PR's red test check
+  - mode: the 5c runbook line and its skill copy drift apart
+    detection: the N3b exact multiset (and H2 in apps/web-platform/infra/inngest-luks-sole-copy.test.sh)
+    alert_route: the PR's red test check
+  - mode: N3b or N1 stops judging (a vacuous helper)
+    detection: H18 mutants come back uncaught or did-not-land, and the outer FLOOR and count conservation catch a deleted row
+    alert_route: the PR's red test check
+logs:
+  where: GitHub Actions job logs of the ci.yml test legs
+  retention: the repository's Actions log retention setting
+discoverability_test:
+  command: grep -c -F -e 'curl --disable --noproxy "*" -sS --config - --max-time 30' knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+  expected_output: "2"
+```
+
 ## Guard Contract
 
 ### Guard 1 — N3b: every Hetzner-bearer line in runbook 6894 and the postmerge skill is one of two pinned stdin-header texts
 
 **Property.** Every line of runbook 6894 and `plugins/soleur/skills/postmerge/SKILL.md` that carries a Hetzner bearer
-(predicate p1 or p2) equals, after leading whitespace is stripped, either `D(106261946)` or `R(pin)`. The counts are
+(predicate p1, p2 or p3) equals, after leading whitespace is stripped, either `D(106261946)` or `R(pin)`. The counts are
 exactly runbook `{D:1, R:1}` and skill `{R:1}`, and the runbook's destroy fence holds exactly `D`.
 
 **Assembly.**
@@ -483,26 +619,32 @@ exactly runbook `{D:1, R:1}` and skill `{R:1}`, and the runbook's destroy fence 
 - **The slots** are `_pin` (the workflow's `inngest` row, from `rows.json`) and `INNGEST_RETIRED_ID` (a suite literal).
 - **Members that drift independently:** any new curl line in either file, and the skill copy. The census covers both.
 
-**Mutation matrix** (each on a copy of the fixed document, checked by H18):
+**Mutation matrix** (each on a copy of the fixed document, checked by H18). "Expected" names the tag H18 requires in
+`n3b`'s output:
 
-| # | Mutation | Expected |
+| # | Mutation (section it is confined to) | Expected |
 | --- | --- | --- |
-| 1 | Destroy line: stdin header replaced by argv `-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY"` (the #12616 shape) | RED |
-| 2 | Runbook 5c line: `--disable` dropped | RED |
-| 3 | Destroy line names the pin: `v1/volumes/106261946'` becomes `v1/volumes/106903269'` | RED (also N1) |
-| 4 | A non-404 line names 106261946: the `# expect 404` comment removed from the destroy line | RED (also N1) |
-| 5 | Skill copy only: `--max-time 30` dropped, the runbook copy left compliant | RED |
-| 6 | Second member after a compliant first: a prose line `curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes` added after the compliant destroy fence | RED (unclassified, p1) |
-| 7 | Own dispatch / vacuity: the destroy fence's command line deleted | RED (fence empty; count 0 != 1) |
-| 8 | Argv header on a continuation line, away from `curl`: a prose line `-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" \` | RED (unclassified, p2) |
-| 9 | D and R swapped between the destroy fence and the 5c fence | RED (destroy-fence check; the multiset alone is blind) |
+| 1 | Destroy line: stdin header replaced by argv `-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY"` (the #12616 shape) (destroy section) | RED, `destroy-fence:` |
+| 2 | Runbook 5c line: `--disable` dropped (5c section) | RED, `unclassified p1:` naming the runbook |
+| 3 | Destroy line names the pin: `v1/volumes/106261946'` becomes `v1/volumes/106903269'` (destroy section) | RED, `destroy-fence:` (also N1) |
+| 4 | A non-404 line names 106261946: the `# expect 404` comment removed from the destroy line (destroy section) | RED, `destroy-fence:` (also N1) |
+| 5 | Skill copy only: `--max-time 30` dropped, the runbook copy left compliant | RED, `unclassified p1:` naming the skill |
+| 6 | Second member after a compliant first: a prose line `curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes` added after the compliant destroy fence | RED, `unclassified p1:` |
+| 7 | Own dispatch / vacuity: the destroy fence's command line deleted | RED, `destroy-fence:` and `count D` |
+| 8 | Argv header on a continuation line, away from `curl`: a prose line `-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" \` | RED, `unclassified p2:` |
+| 9 | D and R swapped between the destroy fence and the 5c fence (both sections) | RED, `destroy-fence:` and **no** `count` line (the multiset alone is blind) |
+| 10 | Bearer staged through a variable: a prose line `T=$HCLOUD_TOKEN_READONLY` followed by a prose line `curl -sS --oauth2-bearer "$T" https://api.hetzner.cloud/v1/volumes` (ruling 8a) | RED, `unclassified p3:` (p1 and p2 both miss the curl line) |
+
+For N3b, rows 1, 3 and 4 travel the same path: each leaves the destroy line not equal to `D`. They stay because ruling 4
+names these four mutants, but they count as one N3b behaviour, not three. Rows 3 and 4 earn their place on N1: H18
+reuses the same copy files for Guard 2 rows 1 and 2, rather than building them twice (test-design review finding 4).
 
 **Harness rows:**
 
 | # | Edit | Expected |
 | --- | --- | --- |
 | H-a | Must-PASS non-canonical copy: the "Expect `404`." sentence reworded, plus a new prose line naming `curl` with no token name | PASS (n3b prints nothing) |
-| H-b | Neutered slot: `n3b` called on the real fixed files with an empty pin, and again with pin equal to retired | RED (the slot check) |
+| H-b | Neutered slot: `n3b` called on the real fixed files with an empty pin, and again with pin equal to retired | RED, exactly one output line, tagged `slot:` (the early return proves the slot check fired, not the census) |
 | H-c | Did-not-land: each mutant `cmp -s` against its source; an identical copy is reported `(did-not-land)` | reported, never counted as caught |
 
 **Anchor.**
@@ -557,6 +699,7 @@ exactly runbook `{D:1, R:1}` and skill `{R:1}`, and the runbook's destroy fence 
 | --- | --- | --- |
 | Helper extraction `rb_line_readback` / `rb_line_get404` | "built from the suite's existing RB_WRAP and RB_HDR" | asked |
 | Census predicate p2 (token name and `Authorization`) | — | inferred. Justification: a strict superset of the ruled predicate that catches an argv header on a continuation line (row 8). The census today is unchanged at 3 lines. CTO ruled keep (7.1, 7e) |
+| Census predicate p3 (`curl` and `api.hetzner.cloud`) and Guard 1 row 10 | — | inferred (test-design review). Justification: catches a bearer staged through a variable, previously declared limit 5. The census today is unchanged at 3 lines. CTO ruled keep (8a) |
 | Guard 1 rows 5-9 and harness rows; Guard 2 rows 3-4 | — | inferred. Justification: Phase 2.12 requires a second-member row, a dispatch row and a must-PASS row. Row 9 covers the D/R swap (ruling 7c). Trimmed at plan review (7f) |
 | Destroy-fence check (N3b check 1) | "pins the exact text of both runbook-6894 read-only commands" | asked (CTO 7c kept it) |
 | `INNGEST_RETIRED_ID` literal | "variable parts are the Inngest pin from the workflow row and 106261946" | asked |
@@ -574,11 +717,16 @@ exactly runbook `{D:1, R:1}` and skill `{R:1}`, and the runbook's destroy fence 
 - [ ] **AC1. The suite passes.** `bash plugins/soleur/test/sole-copy-drift-check.test.sh` exits 0 with
   `=== Results: N/N passed, 0 failed ===`, where N equals FLOOR (expected 286). N1, N3, N3b, H14, H15 and H18 are `pass`
   lines.
-- [ ] **AC2. RED came first.** On the unfixed documents (Phase 1 step 3), N3b was a `FAIL` naming the destroy fence and
-  three unclassified lines. That line is quoted in the PR body.
+- [ ] **AC2. RED came first, and stays re-checkable.** On the unfixed documents (Phase 1 step 3), N3b was a `FAIL`
+  naming the destroy fence and three unclassified lines. That line is quoted in the PR body. The same result can be
+  reproduced at any time without the one-off run (test-design review finding 5): with
+  `B=$(git merge-base HEAD origin/main)`, write `git show "$B":<runbook>` and `git show "$B":<skill>` to scratch copies
+  and call `n3b` on them with pin `106903269` and retired `106261946`. It prints a `destroy-fence:` line and three
+  `unclassified` lines (runbook `:357`, runbook `:408`, skill `:506`). The work session runs this and pastes its output
+  under the quoted FAIL line.
 - [ ] **AC3. Every mutant reds its guard.**
-  - H18 passes: every Guard 1 row 1-9 and Guard 2 row 1-3 is caught, none is `did-not-land`, and H-a and Guard 2 row 4
-    are silent.
+  - H18 passes: every Guard 1 row 1-10 and Guard 2 row 1-3 is caught with its expected tag, none is `did-not-land` or
+    `misplaced`, H-b prints only `slot:`, and H-a and Guard 2 row 4 are silent.
   - For each of the four CTO mutants, the Phase 3 worktree run shows an N3b `FAIL`, plus an N1 `FAIL` for mutants 3 and
     4. These lines are in the PR body.
   - `git diff --quiet -- <file>` held after each Phase 3 restore.
@@ -586,17 +734,20 @@ exactly runbook `{D:1, R:1}` and skill `{R:1}`, and the runbook's destroy fence 
   `grep -nE 'curl' knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md plugins/soleur/skills/postmerge/SKILL.md | grep -E -- '(^|[[:space:]"])(-H|--header)' | grep -E 'HCLOUD_TOKEN'`
 - [ ] **AC5. The two 5c copies match.** The runbook 5c fence line and the skill Phase 5.7 fence line are byte-identical,
   and `bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh` passes (H2).
-- [ ] **AC6. The other gates pass.** `bash tests/scripts/test-argv-bearer-sweep.sh` and
-  `python3 scripts/lint-skill-body-budget.py --base origin/main` both pass.
+- [ ] **AC6. The other gates pass.** After `git fetch origin main` (a stale ref changes the base),
+  `bash tests/scripts/test-argv-bearer-sweep.sh` and `python3 scripts/lint-skill-body-budget.py --base origin/main` both
+  pass.
 - [ ] **AC7. The testing paragraph is corrected.** The old claim is gone:
   `tr '\n' ' ' < knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md | tr -s ' ' | grep -c 'It was then run once against the real API'`
   prints `0`. The new wording is present in section 5c: the whitespace-normalized text of the section from
   `## 5c.` to `### Delivery route` contains both `was of the earlier form` and
   `has not been run against the real API`.
 - [ ] **AC8. The PR body is complete.** It carries `Closes #12616`, `Ref #9927`, `## Changelog` and the Phase 4 stub
-  table, with every row marked "token absent from curl argv: yes" and no real-API claim. The PR has the `semver:patch`
+  table. The table's call-log column is built from `$FAKE_LOG`: `accepted` on the seven rows that reach curl and
+  `n/a, curl not run` on the other three, one table each for bash and dash, and no stub logged `refused:token-on-argv`.
+  The body makes no real-API claim and states that strace was not available. The PR has the `semver:patch`
   label.
-- [ ] **AC9. The diff is confined.** `git diff --name-only origin/main...HEAD` lists only the three files plus this
+- [ ] **AC9. The diff is confined.** After `git fetch origin main`, `git diff --name-only origin/main...HEAD` lists only the three files plus this
   branch's plan and spec artifacts.
 - [ ] **AC10. Normal merge.** Merged through `soleur:ship` and auto-merge, with no production step and no operator step.
 
@@ -647,14 +798,16 @@ change to data processing.
 - **(unit)** Given the unfixed documents, when the suite runs, then N3b fails, naming the destroy fence and three
   unclassified lines (AC2).
 - **(unit)** H18 runs `n3b` or `n1_rb` on each copy:
-  - Guard 1 rows 1-9 and Guard 2 rows 1-3 each report;
+  - Guard 1 rows 1-10 and Guard 2 rows 1-3 each report, with the tag the Guard Contract names;
   - H-a and Guard 2 row 4 are silent;
-  - H-b reports;
-  - no copy is `did-not-land`.
+  - H-b reports only `slot:`;
+  - no copy is `did-not-land` or `misplaced`.
 - **(integration)** Given each of the four CTO mutants applied to the worktree, when the whole suite runs, then rc is
   non-zero and N3b's FAIL line names the mutant. After `git checkout`, `git diff --quiet` holds (AC3).
-- **(integration)** Given the stub `doppler` and `curl`, when the 5c line extracted from the fixed fence runs for each of
-  the ten cases, then it prints the expected word and exit, and the stub never sees the fake token on argv (Phase 4).
+- **(integration)** Given the stub `doppler`, `curl`, `jq`, `sed` and `tail`, when the 5c line extracted from the fixed
+  fence runs for each of the ten cases under `sh` as bash and again as dash, then it prints the expected word and exit,
+  `$FAKE_LOG` shows one `accepted` curl call on each of the seven rows that reach curl, and no stub logs
+  `refused:token-on-argv` (Phase 4).
 - **(unit)** Regression for #12616: given a copy whose destroy line uses
   `-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY"`, N3b is red (Guard 1 row 1).
 
@@ -663,7 +816,8 @@ change to data processing.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails
   `deepen-plan` Phase 4.6.
 - **N3b's census reads prose too.** A reworded sentence in either file is flagged as unclassified when it puts `curl`
-  beside a token name or `Authorization`, or a token name beside `Authorization`. Wrap such words onto separate lines.
+  beside a token name, `Authorization` or `api.hetzner.cloud`, or a token name beside `Authorization`. Wrap such words
+  onto separate lines.
   The failure message names the predicate that fired.
 - **postmerge has 147 bytes of headroom before the 38-byte edit.** Do not add a sentence to Phase 5.7; the rationale
   belongs in the runbook.
