@@ -18,7 +18,7 @@ SUT="$REPO_ROOT/plugins/soleur/scripts/spec-kit-intake.sh"
 BRAIN="$REPO_ROOT/plugins/soleur/skills/brainstorm/SKILL.md"
 PLAN_SKILL="$REPO_ROOT/plugins/soleur/skills/plan/SKILL.md"
 PLAN_REF="$REPO_ROOT/plugins/soleur/skills/plan/references/spec-kit-intake.md"
-SPEC="$REPO_ROOT/knowledge-base/project/specs/feat-12531-spec-kit-ingestion/spec.md"
+SPEC="$REPO_ROOT/knowledge-base/project/specs/archive/20261112-002904-feat-12531-spec-kit-ingestion/spec.md"
 
 passes=0
 fails=0

@@ -284,8 +284,8 @@ The script does not write into the caller tree, so there is no first-write exit 
 - [x] The script creates and modifies no file in the fixture directory or the repo.
 - [x] Brainstorm's `## Feature Description` runs the script before the empty-description question and before the clear-requirements shortcut, and Phase 3.6 does not replace an existing `spec.md` (`plugins/soleur/skills/brainstorm/SKILL.md`).
 - [x] Plan's `### 0. Load Knowledge Base Context` runs the script only when the branch spec is absent, and on success saves the projected body as that spec (`plugins/soleur/skills/plan/SKILL.md`).
-- [ ] The PR body `soleur:ship` writes for #12653 ends with the TR4 provenance trailer and does not contain an AGPL or MIT notice, and neither skill description claims Spec Kit compatibility.
-- [ ] `bash plugins/soleur/test/spec-kit-intake.test.sh` exits 0.
+- [x] The PR body `soleur:ship` writes for #12653 ends with the TR4 provenance trailer and does not contain an AGPL or MIT notice, and neither skill description claims Spec Kit compatibility.
+- [x] `bash plugins/soleur/test/spec-kit-intake.test.sh` exits 0.
 
 ## Domain Review
 
