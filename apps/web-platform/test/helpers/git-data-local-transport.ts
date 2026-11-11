@@ -5,8 +5,9 @@
 // Routing: `-c url.file://<storesRoot>/.insteadOf=<git-data URL base>` maps the production ssh URL onto
 // `<storesRoot>/<workspaceId>.git`. git takes the LONGEST matching insteadOf, and the workspace's local config is read
 // before `-c`, so a carrier planted in the workspace config wins when it is at least as long as that base (the full
-// git-data URL is). A SHORTER carrier is masked by this prefix here, although it would take effect in production,
-// where no such prefix exists. `-c protocol.ssh.allow=never` makes a routing miss fail loudly instead of dialing the
+// git-data URL is). A SHORTER `insteadOf` carrier is masked by this prefix here, although it would take effect in
+// production, where no such prefix exists. A `pushInsteadOf` carrier of any length wins on a push (git applies it
+// first and does not rewrite its result with `insteadOf`). `-c protocol.ssh.allow=never` makes a routing miss fail loudly instead of dialing the
 // real git-data host.
 //
 // This is not the production transport: `gitWithPrivateKeyAuth` sets `GIT_ALLOW_PROTOCOL=ssh`, so a `file://` carrier
@@ -56,7 +57,12 @@ export function runGitDataLocal(args: string[], opts: GitDataLocalOptions): Buff
   const verb = args[0] ?? "";
   if (verb !== "push" && verb !== "fetch") throw new Error(`runGitDataLocal: unsupported verb ${JSON.stringify(verb)}`);
   // A later --receive-pack / --exec / --upload-pack would supersede or bypass the wrapper; production never passes one.
-  if (args.some((a) => /^--(receive-pack|exec|upload-pack)(=|$)/.test(a))) {
+  // git accepts unambiguous abbreviations of long options (`--receiv=`), so any prefix of those names is refused.
+  const remoteProgram = (a: string) => {
+    const name = /^--([a-z-]+)(=|$)/.exec(a)?.[1];
+    return name !== undefined && ["receive-pack", "exec", "upload-pack"].some((full) => full.startsWith(name));
+  };
+  if (args.some(remoteProgram)) {
     throw new Error("runGitDataLocal: the argv already names a remote program");
   }
   // Only a push talks to receive-pack. A fetch through the receive-pack wrapper would fail, so never splice it there.

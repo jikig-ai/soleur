@@ -154,6 +154,8 @@ describe("the fake transport's push argv (the F21 fix)", () => {
     expect(() => capture(["ls-remote", gitDataUrl()])).toThrow(/unsupported verb/);
     expect(() => capture(["push", "--receive-pack=git-receive-pack", gitDataUrl()])).toThrow(/remote program/);
     expect(() => capture(["push", "--exec", "x", gitDataUrl()])).toThrow(/remote program/);
+    expect(() => capture(["push", "--receiv=x", gitDataUrl()])).toThrow(/remote program/);
+    expect(capture(["fetch", "--update-shallow", gitDataUrl(), "x:y"])).toContain("--update-shallow");
   });
 });
 
@@ -221,8 +223,15 @@ describe("replicateToGitData — url/remote rewrite carriers, real git (A = own 
         } catch (e) {
           controlErr = e;
         }
-        expect(controlErr, `control: the carrier is not live (${name})`).toBeUndefined();
-        expect(git(storeB, ["rev-parse", storeRef("main")]), "control: the push did not land in B").toBe(git(ws, ["rev-parse", "main"]));
+        expect(controlErr, `control: the push failed (${name})`).toBeUndefined();
+        // --verify -q: a ref absent from B is "" (status 1), so the labelled assertion carries a dead carrier
+        let inB = "";
+        try {
+          inB = git(storeB, ["rev-parse", "--verify", "-q", storeRef("main")]);
+        } catch (e) {
+          if ((e as { status?: number }).status !== 1) throw e;
+        }
+        expect(inB, `control: the carrier is not live, the push did not land in B (${name})`).toBe(git(ws, ["rev-parse", "main"]));
         expect(state(storeA), "control: the push touched A").toBe(a0);
 
         // 2. a leaked push would MOVE B's refs: without a new commit it would be a no-op and "B unchanged" vacuous
