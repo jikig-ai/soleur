@@ -4,6 +4,25 @@
 
 Read this when a draft PR is readied (ship Phase 6.5 CI Status Check, merge-pr 5.1, drain-prs), or when the ship Phase 7 poll loop, `monitor-pr-checks.sh` or `triage-prs.sh` reports a ready run that is `stalled`, `no-run` or `awaiting-approval`, or a red `test` persists on a PR readied more than 120 minutes ago with no STALLED message, or when the verdict is `full-decided`, auto-merge is armed and the PR still never enters the merge queue (the last section; `monitor-pr-checks.sh` prints that read itself on a `CHECKS GREEN BUT BLOCKED` ending, and the ship Phase 7 poll and merge-pr 5.2's mirror of it print it through `required-set-report.sh` on a `[ship.phase7.required_set]` line). The resolver is `plugins/soleur/scripts/ci-head-verdict.sh`; `--help` prints its contract.
 
+## Before `gh pr ready`: the repo-wide guards
+
+When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light, no full battery has run before ready. Some guards walk every tracked file rather than the diff, so a PR that adds a new file family (a new test tree, probe directory or script language) trips them first on the ready run, each costing a CI cycle. Before readying:
+
+- Read every red job on the draft run other than `test`. `lint-bot-statuses` runs on drafts and carries the orphan-suite lint (`scripts/lint-orphan-test-suites.sh`) and the Supabase-endpoint lint (`scripts/lint-supabase-deprecated-endpoints.sh`); its red is easy to miss next to a `test` that is red by design.
+- Run the heavy guards by name from the repo root (in a worktree without `node_modules`, use `bunx`):
+
+  ```bash
+  bash plugins/soleur/test/fixture-relative-assert.test.sh
+  bash plugins/soleur/test/fixture-env-adoption.test.sh
+  bash .claude/hooks/grep-q-pipe-guard.test.sh
+  python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
+  (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
+  ```
+
+- Read CodeQL's open alerts even though it is not a required check: `gh api --paginate 'repos/{owner}/{repo}/code-scanning/alerts?ref=refs/pull/PR_NUMBER/merge&state=open&per_page=100' --jq '.[] | "\(.number) \(.rule.id) \(.most_recent_instance.location.path)"'` (no output: none open).
+
+**Why:** #12518 — eight repo-wide guards fired on a new spike tree, the orphan-suite lint had been red on two draft runs unread, and four red heads followed ready. See `knowledge-base/project/learnings/2026-11-11-a-deferred-battery-and-a-draft-light-ci-left-the-repo-wide-guards-for-the-ready-run.md`.
+
 ## Why
 
 With `CI_DRAFT_LIGHT` on, a draft PR's `test` check is red on purpose (`draft: full battery owed at ready`): the full battery runs on `ready_for_review`. Arming auto-merge before that ready run exists is the silent-forever case, so the order is fixed: read the ready-event count `K`, mark ready, wait for a ci.yml run created after the ready event, and only then arm. The block is one shell command so `K` is read before the ready call and a failed read readies nothing.
@@ -19,7 +38,7 @@ Run it as one Bash call with `timeout: 420000`: the wait budget is 300 s of poll
 
 | Outcome | Meaning | Do |
 |---|---|---|
-| exit 0, `run-created` | a ready run exists | arm: `gh pr merge --squash --auto` |
+| exit 0, `run-created` | a ready run exists | arm through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) |
 | exit 0, `not-applicable` | this repo has no `draft-light` job in its default-branch ci.yml | arm, exactly as before S3 |
 | `ready-count` exits 3 (no number) | nothing was readied; the PR is still a draft | fix the read (rate limit?) and re-run the whole block; never `--undo` |
 | exit 1, `no-ready-event` | the ready event was not visible within the budget | `gh pr view PR_NUMBER --json isDraft`: still a draft, re-run the whole block; readied, run `ci-head-verdict.sh verdict PR_NUMBER` |
@@ -27,7 +46,7 @@ Run it as one Bash call with `timeout: 420000`: the wait budget is 300 s of poll
 | exit 1, `awaiting-approval` | a fork's run needs a maintainer to click "Approve and run" in the Actions tab | approve it, then run `ci-head-verdict.sh verdict PR_NUMBER`; `--undo` and ready again do not clear an approval gate |
 | exit 3, `api-error` | a read failed on the last poll: the ready state is UNKNOWN | run `ci-head-verdict.sh verdict PR_NUMBER`; do not undo anything on a guess |
 
-Never arm on the wait's own non-zero outcome: report "readied but unarmed" with the marker line. After a recovery step, the way back to arming is the verdict, not the wait: `ci-head-verdict.sh verdict PR_NUMBER` answering `pending-full` or `full-decided` means a ready run exists, and only then run `gh pr merge --squash --auto`. `no-run` or `stalled` goes back to the `--undo` row, `awaiting-approval` back to the approval row, and `state=error` (exit 3) with reason `api-error` means retry later; with reason `no-check-suites` CI never saw this head, so retrying never converges and the fix loop has nothing to inspect: recover as for `stalled` (the `--undo` row, user token; no suite exists, so nothing in flight can be cancelled and the Actions-tab check below does not apply). A `no-run` that is only minutes old may belong to another session still inside its own wait: look before undoing.
+Never arm on the wait's own non-zero outcome: report "readied but unarmed" with the marker line. After a recovery step, the way back to arming is the verdict, not the wait: `ci-head-verdict.sh verdict PR_NUMBER` answering `pending-full` or `full-decided` means a ready run exists, and only then arm, through the same arm check. `no-run` or `stalled` goes back to the `--undo` row, `awaiting-approval` back to the approval row, and `state=error` (exit 3) with reason `api-error` means retry later; with reason `no-check-suites` CI never saw this head, so retrying never converges and the fix loop has nothing to inspect: recover as for `stalled` (the `--undo` row, user token; no suite exists, so nothing in flight can be cancelled and the Actions-tab check below does not apply). A `no-run` that is only minutes old may belong to another session still inside its own wait: look before undoing.
 
 ## Reading a ready PR's red `test` (Phase 7 poll, monitor, triage, admin-merge)
 

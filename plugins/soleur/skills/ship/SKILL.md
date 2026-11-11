@@ -2172,7 +2172,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
   && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
 ```
 
-**Arm only with the review evidence**, checked in the arming command: `[ "$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(startswith("Review-Evidence:"))]|length')" -ge 1 ] && gh pr merge PR_NUMBER --squash --auto` (lock-wrapped form where the block below prescribes it). No such comment, a `head=` that is not the PR head, or `coverage` other than `full`: run `soleur:review`, which posts it. Gate text and domain seats: [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md).
+**Arm only through the arm check** in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) (also the gate text and domain seats): run it without its last line, then the lock block below only on exit 0; else run `soleur:review`, then the check again.
 
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
@@ -2604,8 +2604,9 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
       # Phase 6 secret scan first
       git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
       # + `incr ci_wall_s <s>` (Phase-6 recipe; skip unreadable)
-      gh pr merge <number> --squash --auto
       ```
+
+      Re-arm only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): the fix commit needs `soleur:review` first. **Why:** #12619.
 
       Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
 
