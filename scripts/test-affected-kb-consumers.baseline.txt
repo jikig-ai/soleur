@@ -26,6 +26,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/weakness-digest.md
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
 .claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/engineering/architecture/diagrams
