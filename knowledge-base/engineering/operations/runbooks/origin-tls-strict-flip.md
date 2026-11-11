@@ -311,6 +311,32 @@ done
 
 **What changed in the status tables above.** As of the merge of this change, the token `CF_API_TOKEN_ANALYTICS_READ` exists (per the owner; this change did not read Doppler) and `plugins/soleur/scripts/cloudflare-readonly.sh` has the subcommands `analytics-health` and `analytics-edge-errors` (fixed read-only GraphQL queries sent as a POST; see ADR-289 and `standing-delegation.md` section 9), so Step C is runnable through the wrapper after the merge, from a checkout that matches `origin/main`. Until a sanctioned read is recorded, the "Real 502/520 rate" row stays open and every analytics figure above is the owner's, not the wrapper's.
 
+##### Addendum 2026-11-11: first sanctioned wrapper reads (Cloudflare analytics, Ref #12441)
+
+Additions-only: the 2026-11-09 addendum above, including its `not yet read` row, is left as written; this addendum is the record that row pointed to. The owner gave the typed go for these reads on 2026-11-11. Both ran from a detached checkout of `origin/main` at `408ad9c0e1` where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` printed nothing, as `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand> 216`. Each exited 0, printed `cloudflare-readonly: <subcommand> ok` on line 1, wrote nothing to stderr, and its line 2 parsed with `jq -e .`. No wrapper fix PR was needed (0 of the 2 allowed). No cause is claimed for anything below. Every figure is a sampled estimate.
+
+Unverified: Cloudflare analytics-health (F) #12441 returned `ok`, 216 hourly rows, 2026-11-02T17Z to 2026-11-11T16Z (the 216-hour window cannot reach the owner's 2026-10-31T20Z start). Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-11-analytics-health-216h.json`. Medians of the hourly values, 2026-11-07T23Z (the straddling hour) excluded from both sides, using the jq above:
+
+| Period | Hours (rows) | Median hourly p50 | Median hourly p90 |
+|---|---|---|---|
+| Before the flip: 2026-11-02T17Z to 2026-11-07T22Z | 126 | 331 ms | 475 ms |
+| After the flip: 2026-11-08T00Z to 2026-11-11T16Z | 72 | 270 ms | 856 ms |
+
+The owner's figures (p50 332 and 269 ms, p90 477 and 855 ms) are reproduced to within 2 ms, on a shorter before-flip window (126 h against the owner's 171 h). The step in p90 with a flat p50 is the same shape the owner reported and it is still present through the last hour read. This read is not host- or `requestSource`-scoped, and it separates none of the candidates in the table above.
+
+Unverified: Cloudflare analytics-edge-errors (G) #12441 returned `ok`, 61 rows (hour and status), `truncated: false`, 216-hour window, rows spanning 2026-11-02T17Z to 2026-11-08T19Z. Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-11-analytics-edge-errors-216h.json`. The 5xx histogram (sampled counts summed over the rows):
+
+| Period | Rows | 500 | 503 | 520 | 521 | 522 | 524 | 525 / 526 |
+|---|---|---|---|---|---|---|---|---|
+| Window total | 61 | 163 | 5 | 39 | 143 | 8 | 2 | no rows |
+| Before the flip (to 2026-11-07T22Z) | 56 | 163 | 5 | 22 | 120 | 8 | 2 | no rows |
+| Straddling hour 2026-11-07T23Z | 1 | 0 | 0 | 0 | 3 | 0 | 0 | no rows |
+| After the flip (2026-11-08T00Z on) | 4 | 0 | 0 | 17 | 20 | 0 | 0 | no rows |
+
+The status dimension, its range operators, `orderBy datetimeHour_DESC` and the duration quantile names (p50 and p90 are present) were the unverified items in the caveats above; both queries returned `ok`, so they are now exercised live. All 163 of the 500 counts fall on 2026-11-06. The last row is 2026-11-08T19Z; no row was returned for 2026-11-08T20Z to 2026-11-11T16Z, which is recorded as no rows, never as no errors (sampling, and the dataset may under-report edge-generated blank 502/503/504 pages). No 525 or 526 row appears in the window, which is a description of this read and not evidence about certificate validation on the hop. 520 and 521 rows exist on both sides of the flip, so they do not mark it.
+
+Not separated by these reads: candidates 1 to 4 of the table above, and any link between the p90 step and the edge 5xx rows. A controlled flip-back is the owner's production decision and is not proposed here.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
