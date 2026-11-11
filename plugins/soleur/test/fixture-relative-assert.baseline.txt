@@ -173,7 +173,7 @@
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
 1	apps/web-platform/infra/cron-egress-enforce-probe.sh
-11	apps/web-platform/infra/cron-egress-firewall.test.sh
+12	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
 8	apps/web-platform/infra/cron-egress-resolve.sh
 2	apps/web-platform/infra/cutover-inngest-workflow.test.sh
@@ -271,6 +271,10 @@
 2	apps/web-platform/scripts/supabase-local.test.sh
 15	apps/web-platform/test/approval-guard1-mutation.test.sh
 3	apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
+89	apps/web-platform/test/infra/egress-injector-spike/lib/arms.sh
+13	apps/web-platform/test/infra/egress-injector-spike/lib/bringup.sh
+16	apps/web-platform/test/infra/egress-injector-spike/lib/harness.sh
+11	apps/web-platform/test/infra/egress-injector-spike/probes/session-up.sh
 1	.claude/hooks/agent-token-tee.sh
 21	.claude/hooks/agent-token-tee.test.sh
 1	.claude/hooks/brand-hex-commit-gate.test.sh

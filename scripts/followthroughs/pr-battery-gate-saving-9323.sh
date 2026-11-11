@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pr-battery-gate-saving-9323.sh — post-merge soak probe for #9323 (ADR-262).
 #
-# Does the pull_request path-gate on the five self-test mutation batteries actually save runner time,
+# Does the pull_request path-gate on the self-test mutation batteries actually save runner time,
 # without letting a break through? Two conditions, both required for exit 0:
 #   (a) the mean REALIZED saving per qualifying ci.yml pull_request run — the committed
 #       suite-durations{,-heavy}.tsv prices of the `label\t0\tskip=relevance` rows that run's

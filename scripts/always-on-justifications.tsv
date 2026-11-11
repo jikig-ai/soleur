@@ -32,6 +32,7 @@ scripts/review-reminder-liveness	always-on class: repo-global scanners: -live co
 scripts/watch-live-verify-pass	always-on class: repo-global scanners: -live convention
 scripts/cosign-verify-live-8037	live-scanner batteries named for the gates they probe (#8384 landed these)
 scripts/generate-kb-index-live	always-on class: repo-global scanners: -live convention
+scripts/lint-cve-safe-status-live	always-on class: repo-global scanners: -live convention
 scripts/test-all-capacity-signal	Verdicts assert properties of the runner itself or of the whole registration set — both invisible to any file-based selection.
 scripts/test-all-webplat-gate	#8993/#8940's run-path watchdog + durable-log battery — a runner-SUT property suite like its killed-classification sibling.
 scripts/suite-exit-class-parity	always-on class: runner-SUT and registry-property suites

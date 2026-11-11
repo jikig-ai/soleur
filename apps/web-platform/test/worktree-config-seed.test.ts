@@ -1,11 +1,17 @@
 // Unit tests for seedWorktreeConfig — the host-side HEAL that removes the harmful
 // extensions.worktreeConfig a prior version wrote, so in-sandbox git (reading a masked
 // .git/config.worktree) stops fataling and `git worktree add` runs natively (#4826).
-import { describe, test, expect, afterEach } from "vitest";
+import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+// The refusal of a redirecting `.git` is reported (op git-refused), not only logged: observable here.
+const reportSilentFallback = vi.fn();
+vi.mock("../server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/observability")>()),
+  reportSilentFallback: (...args: unknown[]) => reportSilentFallback(...args),
+}));
 import { seedWorktreeConfig } from "../server/worktree-config-seed";
 // #7849: obtain the fixture environment from the shared helper rather than spelling it here. The
 // runtime tripwire stops git being POINTED elsewhere; it does not stop git WALKING UP into an
@@ -34,6 +40,7 @@ function cfg(dir: string, key: string): string | null {
   }
 }
 
+beforeEach(() => reportSilentFallback.mockClear());
 afterEach(() => {
   for (const d of made.splice(0)) {
     try {
@@ -87,5 +94,28 @@ describe("seedWorktreeConfig (heal)", () => {
     made.push(empty);
     expect(() => seedWorktreeConfig(empty)).not.toThrow();
     expect(cfg(empty, "extensions.worktreeConfig")).toBeNull();
+  });
+
+  // Review round: the heal ran `git config` with the full server environment and FOLLOWED a symlinked .git or a commondir into
+  // another repository, then WROTE there (measured). It now goes through the host-git invocation, which refuses those shapes.
+  test.each(["symlinked .git", "commondir"])("a %s naming another repository: the heal does not touch the other repository", (shape) => {
+    const victim = freshRepo();
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: victim, stdio: "pipe", env: gitFixtureEnv(victim) });
+    execFileSync("git", ["config", "core.repositoryformatversion", "1"], { cwd: victim, stdio: "pipe", env: gitFixtureEnv(victim) });
+    const attacker = freshRepo();
+    if (shape === "symlinked .git") {
+      rmSync(join(attacker, ".git"), { recursive: true, force: true });
+      symlinkSync(join(victim, ".git"), join(attacker, ".git"));
+    } else {
+      writeFileSync(join(attacker, ".git", "commondir"), `${join(victim, ".git")}\n`);
+    }
+    expect(() => seedWorktreeConfig(attacker)).not.toThrow();
+    // the victim keeps its own (harmful, but its own) values: the write did not land there
+    expect(cfg(victim, "extensions.worktreeConfig")).toBe("true");
+    expect(cfg(victim, "core.repositoryformatversion")).toBe("1");
+    // and the refusal is reported once, reason only
+    const reports = reportSilentFallback.mock.calls.filter((c) => (c[1] as { op?: string }).op === "git-refused");
+    expect(reports).toHaveLength(1);
+    expect((reports[0][0] as Error).message).toBe("worktree-config-seed refused: git-dir-shape");
   });
 });

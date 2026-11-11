@@ -103,8 +103,10 @@ two-step route, not an out-of-band call:
 1. A PR sets the volume's delete-protection attribute to false (and edits the Guard 1 rows, the parity-test pin and the
    census rows, if any, that it trips); the per-merge apply lands it, so live state equals the HCL again. The PR must also
    remove the cause of any current halt in the same change and must not carry `[skip-web-platform-apply]`, and it opens a
-   dated re-protect follow-through issue before it merges. Its post-merge read-back expects `not-protected`, which is not a
-   failure.
+   dated re-protect follow-through issue before it merges. Its probe is event-grep, never the Date shape: it exits 0 only
+   on a later `scheduled-terraform-drift` run on `main` whose `sole-copy-protection-check (inngest)` leg succeeded and
+   emitted `sole-copy-check verdict=matches-declared entry=inngest`, 2 before the issue's date and 5 (ACTION REQUIRED)
+   after it. Its post-merge read-back expects `not-protected`, which is not a failure.
 2. Then dispatch `inngest-host-replace`: the volume now plans as a no-op, which both dispatch gates accept.
 3. Then a re-protect PR restores the attribute and the guards. The unprotected window (from step 1's apply to step 3's)
    is a stated cost: once step 1 lands, the HCL, the live state and the drift plan agree on `false` and nothing alerts, so
@@ -684,3 +686,7 @@ Ask-to-row map: ask 1 = O1, ask 2 = O2, ask 3 = O3 + O4 + O5, ask 4 = O6, ask 5 
 **Standing exposure of the arm token** (CTO D4, as recorded in plan step 1.4). The standing token is `access = "read/write"` (`doppler_service_token.inngest_arm_write` in `inngest-arm-write-token.tf`). It reads every key in `soleur-inngest/prd`, including `INNGEST_REDIS_LUKS_KEY`, `INNGEST_TLS_KEY` and `INNGEST_SIGNING_KEY`; it is a repo-level secret, so any workflow an actor can push to a branch can resolve it; the `inngest-cutover` reviewer gate covers only jobs that declare the environment. Write is the larger risk: overwriting the LUKS key would leave the sole-copy volume unopenable on the next boot; the history that would let someone recover the old value sits in Doppler (not verified). On `op=rollback` and `op=resume` the export step also writes the token into `$GITHUB_ENV`, so it reaches every later step of the job.
 
 **What this does not change.** No Terraform, workflow or host change. The token is not revoked, scoped or deleted. `apply_target=inngest-host-replace` is not dispatched and nothing here is the in-session go. #9927 and #12158 stay open. The A6 record stays unsigned. No spend is committed and nothing is built for the off-project copy. The 2026-10-28, 2026-11-03, 2026-11-04 and 2026-11-05 addenda stand except where a `Superseded 2026-11-06` marker says otherwise.
+
+## Addendum - 2026-11-10 (#10432, the pin moves to the matrix row)
+
+Appended; nothing above is edited. The probe's `readonly VOLUME_ID_PIN=` literal is replaced by the `inngest` include row's `volume_id` (the `sole-copy-protection-check` job is now a two-row matrix; its `web1` row covers the web-1 workspaces volume, recorded in ADR-119's addendum of the same date); N1b now pins exactly two sweep copies, both equal to that row. The 2026-10-24 addendum's "exactly three" stays as the dated record. The decision, the pin's value and the Inngest row's titles, verdicts and outputs are unchanged.

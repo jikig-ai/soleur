@@ -29,6 +29,7 @@ import { constants as fsConstants, lstatSync, readFileSync, realpathSync } from 
 import path from "node:path";
 import { promisify } from "node:util";
 import type { HookCallback, PostToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
+import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { getPluginPath } from "./plugin-path";
@@ -225,6 +226,7 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
 
       const resolved: string[] = [];
       const skipped: string[] = [];
+      let refusalReported = false; // one Sentry event per hook call, not one per query
       const seen = new Set<string>();
 
       for (const q of queries) {
@@ -243,7 +245,12 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
         // which would discard all accumulated resolved/skipped and return bare {}.
         let matches: string[];
         try {
-          const { stdout } = await execFileAsync("git", ["-C", repoRoot, "ls-files", "--", q], {
+          // `repoRoot` is the UNTRUSTED connected-repo workspace: the shared host-git invocation (hardening arguments,
+          // scrubbed environment, `.git` shape check) keeps a planted `core.fsmonitor` from running here (measured).
+          const h = hostGitInvocation(["ls-files", "--", q], { cwd: repoRoot, allowProtocol: ALLOW_PROTOCOL_NONE });
+          const { stdout } = await execFileAsync("git", h.args, {
+            cwd: repoRoot,
+            env: h.env,
             timeout: GIT_TIMEOUT_MS,
             encoding: "utf-8",
             // Generous cap so a large committed match set is byte-sorted + capped at
@@ -256,7 +263,17 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
           // LC_ALL=C byte-sort parity (git output order is not guaranteed stable
           // across configs; the CLI hook re-sorts with `LC_ALL=C sort`).
           matches.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
-        } catch {
+        } catch (err) {
+          // a refused workspace (`.git` is a gitfile, a symlink or carries `commondir`) is not an ordinary git failure
+          if (err instanceof HostGitRefusedError) {
+            if (!refusalReported) {
+              refusalReported = true;
+              reportSilentFallback(err, { feature: "context-queries-hook", op: "git-refused", extra: { reason: err.reason } });
+            }
+            // distinct from "no match": the file may exist, the workspace's git was just not consulted
+            skipped.push(`${q} (workspace git unavailable)`);
+            continue;
+          }
           skipped.push(`${q} (no committed match)`);
           continue;
         }

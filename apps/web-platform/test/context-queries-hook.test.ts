@@ -78,6 +78,29 @@ describe("createContextQueriesHook", () => {
       expect(ctx).not.toContain("Brand tokens here.");
     });
 
+    // --- Review round: the hook runs `git ls-files` on the UNTRUSTED workspace through the host-git invocation, which
+    // refuses a `.git` that redirects to another repository (a gitfile here). The refusal is mirrored once and is NOT
+    // reported to the model as "no committed match" (the file may exist; git was simply not consulted).
+    it("a gitfile .git naming another repository is refused: reported once as git-refused, skipped as 'workspace git unavailable', nothing resolved", async () => {
+      const refused = mkdtempSync(path.join(tmpdir(), "cq-refused-"));
+      mkdirSync(path.join(refused, "knowledge-base", "marketing"), { recursive: true });
+      writeFileSync(path.join(refused, "knowledge-base", "marketing", "brand-guide.md"), "Brand tokens here.\n");
+      writeFileSync(path.join(refused, ".git"), `gitdir: ${path.join(FIX, ".git")}\n`);
+      vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(FIX));
+      const refusedHook = createContextQueriesHook(refused);
+      const out = (await refusedHook(
+        { hook_event_name: "PostToolUse", tool_name: "Skill", tool_input: { skill: "with-query" }, tool_response: null, tool_use_id: "t" } as never,
+        "t",
+        { signal: new AbortController().signal } as never,
+      )) as { hookSpecificOutput?: { additionalContext?: string } };
+      const ctx = out.hookSpecificOutput?.additionalContext ?? "";
+      expect(ctx).toContain("workspace git unavailable");
+      expect(ctx).not.toContain("no committed match");
+      expect(ctx).not.toContain("brand-guide.md.");
+      const reports = reportSilentFallback.mock.calls.filter((c) => (c[1] as { op?: string }).op === "git-refused");
+      expect(reports).toHaveLength(1);
+    });
+
     // --- Scenario 2: inline [a,b] form parses (no parse-to-empty trap) ---
     it("Scenario 2: inline-array context_queries parses identically to block form", async () => {
       const ctx = await ctxOf({ skill: "inline-query" });

@@ -2,6 +2,7 @@ import type { CredentialScheme } from "@/lib/auth-scheme";
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
+import { AGENT_GIT_GLOBAL_CONFIG } from "./host-git";
 import { SECCOMP_SELECTOR_ENV, seccompArtifactFor, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 
 /**
@@ -74,7 +75,8 @@ export const AGENT_ENV_ALLOWLIST = Object.freeze([
 // The GIT_CONFIG_COUNT/KEY/VALUE spelling is used because it needs no file the agent could rewrite.
 // Nothing in AGENT_ENV_ALLOWLIST or ALLOWED_SERVICE_ENV_VARS may ever carry a GIT_CONFIG_* name
 // (asserted in test/agent-env.test.ts), which is why the spread below needs no later re-assertion.
-export const AGENT_GIT_GLOBAL_CONFIG = "/usr/local/share/soleur/agent.gitconfig";
+// One definition, in the shared host-git leaf; re-exported for existing importers.
+export { AGENT_GIT_GLOBAL_CONFIG };
 export const GIT_CARRIER_ENV_PIN: Readonly<Record<string, string>> = Object.freeze({
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: AGENT_GIT_GLOBAL_CONFIG,

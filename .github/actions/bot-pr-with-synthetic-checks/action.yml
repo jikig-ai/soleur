@@ -225,8 +225,15 @@ runs:
         # `test` is content-scoped too since #6907: it aggregates the
         # encryption-posture sweep, whose surface is the ledger, every *.tf,
         # every file under apps/*/infra/, and the docs/legal/ disclosed_as
-        # anchors the ledger cites. That surface is disjoint from
-        # {weakness-digest.md} today; re-derive it before adding a path here.
+        # anchors the ledger cites. That sweep's surface is disjoint from
+        # {weakness-digest.md} today. The whole `test` surface is NOT: since
+        # #12348 it also holds lint-cve-safe-status, which scans knowledge-base/
+        # wholesale (on diffs the oracle lane does not skip), and the same lint
+        # runs as the always-on `guards-ruleset` member `cve-safe-status`. The
+        # credential-path overlap is via `guards-ruleset`, not `test`. So the
+        # digest is reachable from BOTH contexts and those parts of their greens
+        # are EARNED by real runs in the Phase-4 ceiling below. Re-derive the
+        # intersection before adding a path here.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
         )
@@ -350,6 +357,22 @@ runs:
         fi
         if ! python3 scripts/lint-credential-path-literals.py "${PATHS[@]}"; then
           echo "::error::lint-credential-path-literals found a resolvable credential-file path in the bot diff — refusing to create the PR or post synthetics (#6882 earned green)."
+          exit 1
+        fi
+        # --- #12348 earned green for the `test` part held by lint-cve-safe-status (ADR-322) ---
+        # scripts/lint-cve-safe-status.py scans every knowledge-base/ index entry as the
+        # always-on `guards-ruleset` member `cve-safe-status`, and in the `test` sweep on
+        # diffs the oracle lane does not skip. ALLOWED_PATHS (weakness-digest.md) sits
+        # inside that surface, so both synthetic greens below must be earned here, not
+        # argued. --paths reads the STAGED blob of each entry (git add ran above), which
+        # is exactly what the commit below records. --paths accepts knowledge-base/
+        # paths ONLY (any other path is a usage error, exit 2): before adding a path
+        # outside knowledge-base/ to ALLOWED_PATHS, pass this arm only the KB subset.
+        # python3 presence is checked by the #6882 arm above. `-I` stops python3 reading
+        # PYTHON* variables, user site-packages and the script's own directory. Parity
+        # Test 11 pins this arm, its placement after `git add` and before the push, and its exit.
+        if ! python3 -I scripts/lint-cve-safe-status.py --paths "${PATHS[@]}"; then
+          echo "::error::lint-cve-safe-status did not pass over the bot diff (exit 1: an advisory id beside a listed status word, or a file it refuses to read; exit 2: it could not run — see its output above) — refusing to create the PR or post synthetics (#12348 earned green)."
           exit 1
         fi
         # Refuse off-main runs (#6907 review). The branch below is cut from the

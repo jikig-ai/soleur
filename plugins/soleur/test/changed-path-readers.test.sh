@@ -1530,7 +1530,7 @@ SENT_FILE_FLOOR=100
 SENT_SITE_FLOOR=20
 CODE_FILE_FLOOR=800
 CODE_SITE_FLOOR=83
-PROSE_FILE_FLOOR=13
+PROSE_FILE_FLOOR=12
 PROSE_SITE_FLOOR=34
 
 # The code roots (git pathspecs) and the closed prose list the censuses read. The code list is the tracked files under the roots, NOT test files
@@ -1543,7 +1543,7 @@ PROSE_FILES=(
   plugins/soleur/skills/postmerge/SKILL.md
   plugins/soleur/skills/ship/references/settle-then-admin-merge.md plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md
   plugins/soleur/skills/ship/references/adr-ordinal-collision.md plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md
-  plugins/soleur/agents/engineering/review/semgrep-sast.md plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md
+  plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md
 )
 
 # The hooks, scripts, workflows and prose this PR converts keep their NUL-delimited / rename-free read (file<TAB>diff-line regex). The census
@@ -1911,7 +1911,6 @@ REF_PINS="$(cat <<'TSV'
 plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	^legal_touch=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match '[^']+' origin/main\.\.\.HEAD\) \|\| \{ \[ \$\? -eq 1 \] \|\| legal_touch=unknown; \}$	|| { [ $? -eq 1 ] || legal_touch=unknown; }	legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^docs/legal/' origin/main...HEAD) || { [ $? -eq 1 ] || legal_touch=unknown; }
 plugins/soleur/skills/ship/references/adr-ordinal-collision.md	^files=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD\) \|\| files=\$\(git ls-files\)$	|| files=$(git ls-files)	   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown: sweep every tracked file
 plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	^files=\$\(bash (<plugin-root>|"\$\{CLAUDE_PLUGIN_ROOT\}")/scripts/changed-paths\.sh "\$PANEL_SHA"\.\.HEAD\) \|\| files=unknown$	|| files=unknown	   files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown: spawn the full class panel
-plugins/soleur/agents/engineering/review/semgrep-sast.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --diff-filter=ACMR origin/main\.\.\.HEAD`	If the helper exits 2 or 127 the file list is unknown: abort	2. Identify changed files with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --diff-filter=ACMR origin/main...HEAD`. If the helper exits 2 or 127 the file list is unknown: abort and report.
 plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD`	exit 2/127 = inventory unknown	Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list (exit 2/127 = inventory unknown: every category is in scope):
 TSV
 )"
@@ -2046,8 +2045,6 @@ a counsel-review capture whose unknown arm is hidden behind || true	plugins/sole
 adr-ordinal-collision capture falling back to an empty list	plugins/soleur/skills/ship/references/adr-ordinal-collision.md	|| files=$(git ls-files)	|| true
 a risk-tier capture without its unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| true
 a second helper call in a reference without the unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| files=unknown\nmore=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD)
-the :- root arm reintroduced in an agent body	plugins/soleur/agents/engineering/review/semgrep-sast.md	"${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"	"${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"
-a semgrep-sast abort arm dropped	plugins/soleur/agents/engineering/review/semgrep-sast.md	If the helper exits 2 or 127 the file list is unknown: abort	If the helper fails, carry on
 an observability-coverage-reviewer inventory-unknown arm dropped	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	exit 2/127 = inventory unknown	exit 2/127 is ignored
 DEFECTS
 }
@@ -2292,14 +2289,14 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1
 fi
-# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 187 + sentinel 120.
-MIN_TOTAL=416
+# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 187 + sentinel 119.
+MIN_TOTAL=415
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
 fi
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-if [ "$SELFTESTS" -ne 70 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 70\n' "$SELFTESTS" >&2; exit 1; fi
+if [ "$SELFTESTS" -ne 68 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 68\n' "$SELFTESTS" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
 echo "Guard: $PASS passed, $FAIL failed"

@@ -58,6 +58,10 @@ vi.mock("../server/session-proxy", () => ({
     return null;
   },
 }));
+// #9137 — the exec-step receiver is a TLS listener; inert-by-mock like the relay.
+vi.mock("../server/inngest-exec-receiver", () => ({
+  startInngestExecReceiver: () => null,
+}));
 // #12289 — the hello key is read (and deleted from process.env) at boot, before anything can spawn.
 vi.mock("../server/proxy-tls", () => ({
   logProxyCertExpiryAtStartup: vi.fn(),

@@ -1397,7 +1397,7 @@ TA="$REPO_ROOT/scripts/test-all.sh"
 # suite is an ORPHAN that gates nothing. Both lines must exist.
 for suite_name in orphan-process-reaper orphan-process-reaper-mutation; do
   cases=$((cases + 1))
-  if grep -qE "^  run_suite .scripts/[^ ]*. bash scripts/${suite_name}[.]test[.]sh$" "$TA"; then
+  if grep -qE "^[[:space:]]+run_suite .scripts/[^ ]*. bash scripts/${suite_name}[.]test[.]sh$" "$TA"; then
     pass "AC33 scripts/${suite_name}.test.sh is registered in the runner"
   else
     fail "AC33 scripts/${suite_name}.test.sh is NOT registered — it would gate nothing"

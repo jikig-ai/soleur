@@ -12,9 +12,9 @@ on:
   # required status context (the full set is scripts/required-checks.txt minus
   # the CLA rows (CodeQL is advisory, not required) — e.g. `test`, `e2e`, and the
   # `guards-ruleset` umbrella, whose `name:` IS the required context for the
-  # eight folded member guards: adr-ordinals, rule-body-lint, tc-document-sha-guard,
+  # folded member guards: adr-ordinals, rule-body-lint, tc-document-sha-guard,
   # marketplace-manifest-guard, service-role-allowlist-gate, credential-path-guard,
-  # lockfile-sync, grok-fidelity) must run on
+  # cve-safe-status, lockfile-sync, grok-fidelity) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
   # them or that required context never reports → the queue entry stalls pending
   # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose
@@ -774,8 +774,8 @@ jobs:
       - name: Encryption posture — Layer A repo-sweep (ADR-140)
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
-  # ─── guards-ruleset (#12089): ONE required-context umbrella over the eight
-  # small guard jobs that each used to burn a runner slot — the
+  # ─── guards-ruleset (#12089): ONE required-context umbrella over the small
+  # guard jobs (eight at the fold; cve-safe-status joined in #12348) that each used to burn a runner slot — the
   # `lint-bot-statuses` fold precedent (#8149) applied to the required set. The
   # REQUIRED CONTEXT is this job's `name:` — `guards-ruleset` — pinned in
   # infra/github/ruleset-ci-required.tf +
@@ -818,6 +818,24 @@ jobs:
           # to the shared checkout keeps that posture for the whole umbrella —
           # every member fetch below is anonymous (public repo).
           persist-credentials: false
+
+      # ── member: cve-safe-status (#12348 / ADR-322 — an advisory id paired
+      # with a safe-status claim in knowledge-base/**). FULL SCAN, no args:
+      # the oracle lane skips the `test` sweep on KB-markdown-only PRs, which
+      # are exactly the PRs this lint exists for, so this member is the gate
+      # that always runs. Same checkout rule as credential-path-guard: no
+      # sparse-checkout, no paths filter, never `--paths`/`|| true` (the lint's
+      # file-count floor refuses a narrowed tree scan; it does not apply to
+      # --paths mode, which scans only the paths it is given). It is the FIRST
+      # step after the checkout, so no earlier step can change its PATH, env or
+      # tree; the aggregate reads member outcomes, so step order costs nothing.
+      # `-I` stops python3 reading PYTHON* variables, user site-packages and the
+      # script's own directory. Keep the job free of `container:`/`services:`.
+      # Pinned by plugins/soleur/test/required-checks-canonical-parity.test.sh. ──
+      - id: cve-safe-status
+        if: ${{ !cancelled() }}
+        name: Lint advisory-id safe-status pairings in knowledge-base (full scan)
+        run: python3 -I scripts/lint-cve-safe-status.py
 
       # ── member: adr-ordinals (PR-B #4379 ADR-040 + ADR-041 sentinel) ──
       - id: adr-ordinals
@@ -1075,6 +1093,7 @@ jobs:
           member marketplace-manifest-guard '*' 'marketplace-manifest-guard,marketplace-manifest-guard-selftest,marketplace-manifest-guard-probe' '${{ steps.marketplace-manifest-guard.conclusion }},${{ steps.marketplace-manifest-guard-selftest.conclusion }},${{ steps.marketplace-manifest-guard-probe.conclusion }}' '${{ steps.marketplace-manifest-guard.outcome }},${{ steps.marketplace-manifest-guard-selftest.outcome }},${{ steps.marketplace-manifest-guard-probe.outcome }}' || failed=1
           member service-role-allowlist-gate '*' 'service-role-allowlist-gate,service-role-allowlist-gate-selftest' '${{ steps.service-role-allowlist-gate.conclusion }},${{ steps.service-role-allowlist-gate-selftest.conclusion }}' '${{ steps.service-role-allowlist-gate.outcome }},${{ steps.service-role-allowlist-gate-selftest.outcome }}' || failed=1
           member credential-path-guard '*' 'credential-path-guard' '${{ steps.credential-path-guard.conclusion }}' '${{ steps.credential-path-guard.outcome }}' || failed=1
+          member cve-safe-status '*' 'cve-safe-status' '${{ steps.cve-safe-status.conclusion }}' '${{ steps.cve-safe-status.outcome }}' || failed=1
           member lockfile-sync '*' 'lockfile-sync-setup-node,lockfile-sync-npm-pin,lockfile-sync-regen-webplat,lockfile-sync-regen-root,lockfile-sync-regen-pencil,lockfile-sync-regen-spike,lockfile-sync-regen-pencli,lockfile-sync,lockfile-sync-dual-lockfile,lockfile-sync-install-sites,lockfile-sync-sdk-bump' '${{ steps.lockfile-sync-setup-node.conclusion }},${{ steps.lockfile-sync-npm-pin.conclusion }},${{ steps.lockfile-sync-regen-webplat.conclusion }},${{ steps.lockfile-sync-regen-root.conclusion }},${{ steps.lockfile-sync-regen-pencil.conclusion }},${{ steps.lockfile-sync-regen-spike.conclusion }},${{ steps.lockfile-sync-regen-pencli.conclusion }},${{ steps.lockfile-sync.conclusion }},${{ steps.lockfile-sync-dual-lockfile.conclusion }},${{ steps.lockfile-sync-install-sites.conclusion }},${{ steps.lockfile-sync-sdk-bump.conclusion }}' '${{ steps.lockfile-sync-setup-node.outcome }},${{ steps.lockfile-sync-npm-pin.outcome }},${{ steps.lockfile-sync-regen-webplat.outcome }},${{ steps.lockfile-sync-regen-root.outcome }},${{ steps.lockfile-sync-regen-pencil.outcome }},${{ steps.lockfile-sync-regen-spike.outcome }},${{ steps.lockfile-sync-regen-pencli.outcome }},${{ steps.lockfile-sync.outcome }},${{ steps.lockfile-sync-dual-lockfile.outcome }},${{ steps.lockfile-sync-install-sites.outcome }},${{ steps.lockfile-sync-sdk-bump.outcome }}' || failed=1
           member grok-fidelity '*' 'grok-fidelity-setup-bun,grok-fidelity-install,grok-fidelity,grok-fidelity-verify' '${{ steps.grok-fidelity-setup-bun.conclusion }},${{ steps.grok-fidelity-install.conclusion }},${{ steps.grok-fidelity.conclusion }},${{ steps.grok-fidelity-verify.conclusion }}' '${{ steps.grok-fidelity-setup-bun.outcome }},${{ steps.grok-fidelity-install.outcome }},${{ steps.grok-fidelity.outcome }},${{ steps.grok-fidelity-verify.outcome }}' || failed=1
           if [ "$failed" -ne 0 ]; then
