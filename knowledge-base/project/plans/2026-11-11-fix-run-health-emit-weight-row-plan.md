@@ -16,6 +16,41 @@ brand_survival_threshold: none
 
 > Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch (one-shot pipeline path, no brainstorm ran).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-11
+**Sections enhanced:** 0 content sections needed correction — every premise, citation, and literal was re-verified live and held. The deepen pass added this gate-evidence record.
+**Research agents used:** none spawnable — this ran inside a Task subagent of the one-shot pipeline with no subagent-spawn tool; sequential-fallback inline verification substituted (disclosed as `Reviewed-Coverage: sequential-fallback` in `## Context`).
+
+### Deepen-pass gate results (soleur:deepen-plan Phases 4.6–4.13)
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | PASS — `none` threshold valid; Files-to-Edit (`scripts/*.tsv`) match zero `SENSITIVE_PATH_RE` alternatives, so no scope-out bullet required |
+| 4.7 Observability | PASS — all 5 fields present, non-placeholder; `bash` on preflight Check 10's probe-verb allowlist; no `ssh`; measured 1.24s ≪ 15s sandbox cap; `ALL PASS` is a matchable literal. The suite-shaped-command detection proxy (`[-.]test\.`) matches the probe path — argued down in `## Observability` Probe notes: the probe *is* the signal `liveness_signal.what` names (the gate's own verdict line); no smaller command prints it |
+| 4.8 PAT sweep | PASS — zero matches |
+| 4.9 UI wireframe | SKIP — no UI-surface files |
+| 4.10 Encryption posture | SKIP — no persistent store or new cross-component connection |
+| 4.11 Guard Contract | SKIP — deliverable is generated data satisfying an existing guard, not a new guard |
+| 4.12 Scope Check | PASS — exactly 1 unfenced section; Ask Mapping rows all `mapped`; provenance rows `asked` or `inferred` with justification; `Recommendation:` present; no `status: BLOCKED` |
+| 4.13 Task Design | SKIP — no autonomous task introduced |
+| Network-outage / Downtime-cutover | SKIP — no triggers (no SSH/hot-path/infra-reboot/DDL/deploy work) |
+
+### Live re-verification performed this pass (2026-11-11)
+
+- `gh pr view 12565 --json state,mergedAt` → `MERGED`, `2026-11-11T17:33:39Z` — premise held.
+- `gh pr view 12650 --json state` → `OPEN` — sibling still carries the identical delta; the `### Merge ordering` section stands and its re-sync rule (`gh pr view 12650` at every re-sync) remains load-bearing.
+- `git rev-parse aae21955e6` resolves; `git merge-base --is-ancestor` confirms it on both `HEAD` and `origin/main` — base-commit attribution held.
+- All cited paths exist (ADR-240, both learnings, the #12565 sibling plan, `tasks.md`).
+- Zero AGENTS rule-ID citations in the plan body — no fabricated/retired-ID exposure.
+- String-literal consistency (`ALL PASS`, `1272`, `floor`, `0 moved, 1 new, 0 no longer registered`, `registration(s) with no committed weight row`) checked across Helper sections, ACs, Test Scenarios, and `tasks.md` — one canonical value each.
+- AC greps scope `scripts/*.tsv` only; neither the plan nor `tasks.md` can self-match — no `--exclude` flags needed.
+- `tasks.md` consistent with the plan (generator command, row greps, `ALL PASS`, exemptions untouched) — no correction propagation required.
+
+### New considerations discovered
+
+- None. The deepen pass found no corrective delta; the plan's minimal-by-construction shape (one generator run + one verification) survived every applicable gate.
+
 ## Overview
 
 Main CI is red on post-merge commit `aae21955e6` (PR #12565, "WIP: feat-12532-degraded-run-forensics", merged 2026-11-11T17:33:39Z): the `test-scripts (3/8)` job fails suite `scripts/test-all-corpus-weight-budget` because `plugins/soleur/scripts/run-health-emit.test.sh` — a registered test suite added by #12565 — carries no committed weight row. The gate's contract is `unmeasured != exempt` (its M4 fixture arm): every registered label must have a row in `scripts/suite-durations.tsv` or a bounded exemption in `scripts/suite-weight-exemptions.tsv`.
