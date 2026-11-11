@@ -238,6 +238,7 @@ T_GAU = "test/git-auth-hardened.test.ts"
 T_ISO = "test/git-isolated-push-dir.test.ts"
 T_WH = "test/approval/workspace-head.test.ts"
 T_CSC = "test/server/inngest/cron-safe-commit.test.ts"
+T_LPO = "test/approval/legacy-push-owner-fallback.test.ts"
 STATIC = "static:probe"
 
 # Test-name fragments reused by several rows.
@@ -386,8 +387,8 @@ M("G1-X14-kb-share-ignores-a-changed-workspace", "server/kb-share-tools.ts", E('
 M("G1-X15-autonomous-ignores-a-changed-workspace", "server/workspace-settings-tools.ts", E("if (current !== grant.binding.workspaceId) {", "if (false) {"), T_EXG, ["workspace_set_autonomous approved on W1 but the active workspace is W2: refused with workspace_changed, setBashAutonomous never called"])
 
 # ---- 4. Flag-off fail-closed ------------------------------------------------------------------------------------------------
-M("G1-F1-flag-read-error-turns-flow-on", GF, E("} catch {\n    enabled = false;\n  }", "} catch {\n    enabled = true;\n  }"), T_GF, ["absent, disabled and a throwing flag read behave identically"])
-M("G1-F2-flag-off-still-runs-the-flow", GF, E("if (!enabled) {", "if (false) {"), T_GF, ["absent, disabled and a throwing flag read behave identically"])
+M("G1-F1-flag-read-error-turns-flow-on", GF, E("} catch {\n    enabled = false;\n  }", "} catch {\n    enabled = true;\n  }"), T_GF, ["a disabled and a throwing flag read behave identically"])
+M("G1-F2-flag-off-still-runs-the-flow", GF, E("if (!enabled) {", "if (false) {"), T_GF, ["a disabled and a throwing flag read behave identically"])
 M("G1-F3-flag-module-fails-open", FLAG, E("    return false;\n  }\n}", "    return true;\n  }\n}"), T_FLAG, ["isApprovalQueueEnabled fails closed when the flag read throws"])
 M("G1-F4-flag-wrong-name", FLAG, E('getRuntimeFlag("approval-queue"', 'getRuntimeFlag("approval-queu"'), T_FLAG, ["isApprovalQueueEnabled reads the approval-queue flag with the workspace as the segment identity"])
 M("G1-F5-flag-truthy-is-on", GF, E("enabled = (await a.approval.isEnabled()) === true;", "enabled = (await a.approval.isEnabled()) !== false;"), T_GF, residual="the flag client returns booleans; a non-boolean flag value turning the flow on is unpinned (the throwing and false reads are pinned by F1/F2)")
@@ -398,6 +399,23 @@ M("G1-F6-reattach-reads-flag-without-workspace", REATT, E("isApprovalQueueEnable
 # attribution). Their detector is the small permission-callback-gated-branch.test.ts: exactly ONE of its three tests goes red on either edit.
 M("G1-PC1-gated-branch-never-calls-the-gate", PC, E("if (deps.approval && isApprovalRequiredTool(toolName)) {", "if (false && deps.approval && isApprovalRequiredTool(toolName)) {"), T_PCGB, ["the gated branch of createCanUseTool an approval-required tool with the flag on is handed to the approval gate and returns the gate's verdict"])
 M("G1-PC2-gate-verdict-discarded", PC, E("if (approvalVerdict !== null) return approvalVerdict;", ""), T_PCGB, ["the gated branch of createCanUseTool an approval-required tool with the flag on is handed to the approval gate and returns the gate's verdict"])
+
+# ---- 5b. The legacy runner's Owner check (#12597) -------------------------------------------------------------------------------
+# On the legacy runner, an approval-required tool the approval flow gave no verdict for reaches the in-memory card only for a
+# session user whose bounded role read returned `owner`, and an Approve is honoured only if a second read after the answer is
+# still `owner`. Detector: test/approval/legacy-push-owner-fallback.test.ts (per-tool cases over APPROVAL_REQUIRED_TOOLS, exempt
+# cases over APPROVAL_EXEMPT_TOOLS, one cap-race case). LO1/LO8 skip the role read for seven tools, so all ten per-tool cases
+# fail for them: their blast is measured (see each row).
+M("G1-LO1-owner-check-narrowed-to-push", PC, E("if (isApprovalRequiredTool(toolName)) {\n          let role", "if (toolName === \"mcp__soleur_platform__github_push_branch\") {\n          let role"), T_LPO, ["mcp__soleur_platform__email_send: a member gets the static deny", "mcp__soleur_platform__workspace_set_autonomous: a member gets the static deny"], blast=0.78)  # 71/98 measured (seven tools x 10 cases + the cap race (its email_send skips the read)); = measured fraction + 0.05 margin (one more tool), rounded up
+M("G1-LO2-unavailable-role-passes", PC, E("if (role !== \"owner\") {", "if (role === \"member\") {"), T_LPO, [": the role read fails", ": no approval dependency"])
+M("G1-LO3-member-role-passes", PC, E("if (role !== \"owner\") {", "if (role === \"unavailable\") {"), T_LPO, [": a member gets the static deny"])
+M("G1-LO4-role-read-failure-allows", PC, E("} catch (err) {\n              // An abort is not a failed read", "} catch (err) {\n              role = \"owner\";\n              // An abort is not a failed read"), T_LPO, [": the role read fails"])
+M("G1-LO5-role-read-deadline-removed", PC, E("    const timer = setTimeout(() => {\n      cleanup();\n      reject(Object.assign(new Error(\"viewer role read timed out\"), { code: \"role_read_timeout\" }));\n    }, ms);", "    const timer = undefined as unknown as ReturnType<typeof setTimeout>;"), T_LPO, [": a role read that never settles ends at the deadline"])
+M("G1-LO6-abort-checked-after-the-role-deny", PC, E("          // Stop pressed (or the session ended) while the role was read: no card, no notification, no status write.\n          if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {\n            return gateExpiredDeny(\"platform\", toolName, \"aborted\", PLATFORM_GATE_EXPIRED_MESSAGE, {\n              delivered: false,\n              stage: \"owner-role-read\",\n            });\n          }\n          if (role !== \"owner\") {\n            log.warn(\n              {\n                sec: true,\n                tool: toolName,\n                tier,\n                decision: \"platform-gate-push-owner-required\",\n                role,\n                conversationId: ctx.conversationId,\n                repo: `${ctx.repoOwner}/${ctx.repoName}`,\n              },\n              \"Platform tool gate refused: only the workspace Owner may approve an approval-required action when the approval flow gives no verdict\",\n            );\n            logPermissionDecision(\"canUseTool-platform-gated\", toolName, \"deny\", `owner required (${role})`);\n            return { behavior: \"deny\" as const, message: APPROVAL_UNAVAILABLE_DENY };\n          }\n", "          if (role !== \"owner\") {\n            log.warn(\n              {\n                sec: true,\n                tool: toolName,\n                tier,\n                decision: \"platform-gate-push-owner-required\",\n                role,\n                conversationId: ctx.conversationId,\n                repo: `${ctx.repoOwner}/${ctx.repoName}`,\n              },\n              \"Platform tool gate refused: only the workspace Owner may approve an approval-required action when the approval flow gives no verdict\",\n            );\n            logPermissionDecision(\"canUseTool-platform-gated\", toolName, \"deny\", `owner required (${role})`);\n            return { behavior: \"deny\" as const, message: APPROVAL_UNAVAILABLE_DENY };\n          }\n          // Stop pressed (or the session ended) while the role was read: no card, no notification, no status write.\n          if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {\n            return gateExpiredDeny(\"platform\", toolName, \"aborted\", PLATFORM_GATE_EXPIRED_MESSAGE, {\n              delivered: false,\n              stage: \"owner-role-read\",\n            });\n          }\n"), T_LPO, [": Stop pressed while the role is read", ": the session ends while the role is read"])
+M("G1-LO7-cap-not-rechecked-after-the-role-read", PC, E("            return { behavior: \"deny\" as const, message: APPROVAL_UNAVAILABLE_DENY };\n          }\n          // The role read is an await, so a call that passed the cap check above may find the cap full when it resumes (CTO\n          // F10). Nothing is awaited from here to holdForUser's increment, so this re-check is exact; keep it that way.\n          if (pendingGates >= MAX_PENDING_GATES) {\n            log.warn(\n              {\n                sec: true,\n                tool: toolName,\n                tier,\n                decision: \"platform-gate-too-many-pending\",\n                stage: \"after-role-read\",\n                repo: `${ctx.repoOwner}/${ctx.repoName}`,\n              },\n              \"Platform tool gate refused: too many approvals are already waiting\",\n            );\n            logPermissionDecision(\"canUseTool-platform-gated\", toolName, \"deny\", \"too many pending approvals\");\n            return { behavior: \"deny\" as const, message: PLATFORM_GATE_TOO_MANY_PENDING_MESSAGE };\n          }\n", "            return { behavior: \"deny\" as const, message: APPROVAL_UNAVAILABLE_DENY };\n          }\n"), T_LPO, ["racing for the last pending slot"])
+M("G1-LO8-owner-check-matches-first-tool-only", PC, E("if (isApprovalRequiredTool(toolName)) {\n          let role", "if (toolName === \"mcp__soleur_platform__email_send\") {\n          let role"), T_LPO, ["mcp__soleur_platform__github_push_branch: a member gets the static deny", "mcp__soleur_platform__workspace_set_autonomous: a member gets the static deny"], blast=0.77)  # 70/98 measured (seven tools x 10 cases); = measured fraction + 0.05 margin (one more tool), rounded up
+M("G1-LO9-owner-check-widened-to-every-gated-tool", PC, E("if (isApprovalRequiredTool(toolName)) {\n          let role", "if (true) {\n          let role"), T_LPO, [": a member still gets the card and no role is read"])
+M("G1-LO10-role-not-reread-after-approve", PC, E("        // #12597 (CTO S1): the Owner may have been demoted while the card waited. Read the role again before the Approve is\n        // honoured, with the same deadline and the same fail-closed outcomes (a Reject performs nothing, so it skips this).\n        if (ownerCheckedDeps) {\n          const answerDeps = ownerCheckedDeps;\n          let answerRole: \"owner\" | \"member\" | \"unavailable\" = \"unavailable\";\n          try {\n            answerRole = await readRoleBounded(() => answerDeps.viewerRole(), [options.signal, ctx.controllerSignal]);\n          } catch (err) {\n            // Stop or the session end during this read is handled just below, never reported as a failed read.\n            if (!(options.signal?.aborted === true || ctx.controllerSignal.aborted)) {\n              reportApprovalOp(\"viewerRoleFailed\", err, {\n                toolName,\n                conversationId: ctx.conversationId,\n                workspaceId: answerDeps.workspaceId,\n                userId: ctx.userId,\n                tags: { stage: \"legacy-push-owner-check\" },\n                extra: { outcome: \"denied-on-answer\" },\n              });\n            }\n          }\n          if (options.signal?.aborted === true || ctx.controllerSignal.aborted) {\n            return gateExpiredDeny(\"platform\", toolName, \"aborted\", PLATFORM_GATE_EXPIRED_MESSAGE, {\n              delivered: toolGateDelivered,\n              stage: \"owner-role-answer\",\n            });\n          }\n          if (answerRole !== \"owner\") {\n            log.warn(\n              {\n                sec: true,\n                tool: toolName,\n                tier,\n                decision: \"platform-gate-push-owner-required\",\n                role: answerRole,\n                stage: \"on-answer\",\n                conversationId: ctx.conversationId,\n                repo: `${ctx.repoOwner}/${ctx.repoName}`,\n              },\n              \"Platform tool gate refused: the approver is no longer the workspace Owner, so the Approve is not honoured\",\n            );\n            logPermissionDecision(\"canUseTool-platform-gated\", toolName, \"deny\", `owner required on answer (${answerRole})`);\n            return { behavior: \"deny\" as const, message: APPROVAL_UNAVAILABLE_DENY };\n          }\n        }\n\n", ""), T_LPO, [": the Owner is demoted while the card waits"])
 
 # ---- 6. Service wrappers (consume contract, re-proposal consume: matrix row 11) ------------------------------------------------
 M("G1-11a-approved-row-not-consumed-on-create", SVC, E('if (r.approval.status === "approved") {', 'if (false && r.approval.status === "approved") {'), T_SVC, ["an approved live row is consumed immediately, with no card and no wait"])
@@ -958,8 +976,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 356 rows today (the 9b isolated-push change deleted 2 and added 38: G1-ISO1..ISO25, G1-WH1..WH10, G1-GD29, G1-GD30 and the ISO7b equivalent; review round 1 added 34: G1-ISO26..ISO57, G1-WH11, G1-WH12; review round 2 added 23: G1-ISO58..ISO77, G1-WH13..WH15, with G1-ISO27 and G1-HD8 re-anchored); the floor is the count. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=356
+# 366 rows today (#12597 added 10: G1-LO1..G1-LO10, the legacy runner's Owner check; before it, 356 (the 9b isolated-push change deleted 2 and added 38: G1-ISO1..ISO25, G1-WH1..WH10, G1-GD29, G1-GD30 and the ISO7b equivalent; review round 1 added 34: G1-ISO26..ISO57, G1-WH11, G1-WH12; review round 2 added 23: G1-ISO58..ISO77, G1-WH13..WH15, with G1-ISO27 and G1-HD8 re-anchored); the floor is the count. The verdict classes are pinned too (below, full run only).)
+MIN_MUTANTS=366
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -973,7 +991,8 @@ check "harness row (a-anchor): a mutant whose anchor is missing fails the apply 
 # --- Control: the unedited copy, on every distinct test file, must be GREEN with a literal floor of tests, and every test
 # name a row relies on must be among the PASSED tests (so a typo or a renamed test is a harness failure, not a silent no-op).
 declare -A FLOOR=(
-  ["test/approval/gate-flow.test.ts"]=129  # was 130; #12197 D1 drops the push case of "absent, disabled and a throwing flag read behave identically" (pinned in legacy-push-owner-fallback.test.ts)
+  ["test/approval/gate-flow.test.ts"]=130  # was 129; #12597 runs "a disabled and a throwing flag read behave identically" over all eight tools again (absent is now the unavailable deny)
+  ["test/approval/legacy-push-owner-fallback.test.ts"]=98  # #12597: 1 precondition + 10 per-tool cases x 8 tools + 16 exempt-tool cases + 1 cap race
   ["test/approval/gate-flow-resolver-snapshot.test.ts"]=3
   ["test/approval/canonical.test.ts"]=81
   ["test/approval/waiters.test.ts"]=19
@@ -1132,15 +1151,15 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=4
 EXPECT_RESID=2
-MIN_KILLED=350
+MIN_KILLED=360
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1
 fi
 
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
-# 763 = 405 checks before the mutant loop (19 harness, 35 controls, 350 rows with a named detector, harness row b = 405; the 6 equivalent / residual rows name none) + 356 mutants + 2 after the loop (tracked-status, harness row c).
-MIN_CHECKS=763
+# 784 = 416 checks before the mutant loop (19 harness, 36 controls, 360 rows with a named detector, harness row b = 416; the 6 equivalent / residual rows name none) + 366 mutants + 2 after the loop (tracked-status, harness row c). #12597 added 1 control (legacy-push-owner-fallback.test.ts), 10 named-detector checks and 10 mutants (was 763).
+MIN_CHECKS=784
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1
