@@ -11009,13 +11009,13 @@ describe("G2f registration pin (#9927): Guard 1 stays registered inside the requ
     expect(v.checks).toBe(6);
     const runLine = "        run: bash scripts/test-all.sh scripts";
     expect(ciYaml.includes(runLine)).toBe(true);
-    const needsLine = "needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy,";
+    const needsLine = "needs: [test-webplat, test-webplat-mutations, test-bun, test-scripts, test-scripts-heavy,";
     expect(ciYaml.includes(needsLine)).toBe(true);
     const rows: Array<[string, string, RegExp]> = [
       ["swallow the runner's exit status", ciYaml.replace(runLine, `${runLine} || true`), /steps running exactly/],
       ["continue-on-error on the runner step", ciYaml.replace(runLine, `${runLine}\n        continue-on-error: true`), /continue-on-error/],
       ["step-level if on the runner", ciYaml.replace(runLine, `${runLine}\n        if: \${{ false }}`), /carries an `if:`/],
-      ["drop test-scripts from the aggregator needs", ciYaml.replace(needsLine, "needs: [test-webplat, test-bun, test-scripts-heavy,"), /does not list test-scripts/],
+      ["drop test-scripts from the aggregator needs", ciYaml.replace(needsLine, "needs: [test-webplat, test-webplat-mutations, test-bun, test-scripts-heavy,"), /does not list test-scripts/],
       ["drop test-scripts from the aggregator entries", ciYaml.replace('"test-scripts:$SCRIPTS_RESULT" ', ""), /entries array/],
     ];
     for (const [name, mutated, re] of rows) {

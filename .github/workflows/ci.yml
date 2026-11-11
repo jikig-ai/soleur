@@ -148,8 +148,8 @@ jobs:
   #
   # DARK UNTIL ACTIVATED: with the repository variable CI_PUSH_DEDUPE unset, this job only annotates
   # `would_elide` and every gated job runs. Activation is a separate, authorized step (see the ADR-276 S2 amendment).
-  # The gated set is eight jobs: test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build,
-  # shard-totality-mutations, e2e and the `test` aggregator. A NEW HEAVY JOB MUST JOIN THE GATED SET
+  # The gated set is nine jobs: test-webplat, test-webplat-mutations, test-bun, test-scripts, test-scripts-heavy,
+  # web-platform-build, shard-totality-mutations, e2e and the `test` aggregator. A NEW HEAVY JOB MUST JOIN THE GATED SET
   # (needs: [push-dedupe] plus the same condition); scripts/ci-push-dedupe.test.sh enforces the set in both
   # directions. The `test` aggregator body is deliberately untouched: it is skipped, not taught to tolerate skips.
   #
@@ -240,19 +240,19 @@ jobs:
           # Guard 3 (#12156, ADR-276 amendment): a merge_group `test` green built on ORACLE-ONLY-SKIP tolerated legs is NOT a
           # full battery — eliding the push run here would leave main with no post-merge full-battery run for that SHA, which
           # is the oracle's backstop. Every leg the lane can skip must have concluded `success` in that merge_group run: the
-          # five heavy legs PLUS shard-totality-mutations. A `skipped`, absent, running or malformed entry fails closed.
+          # six heavy legs PLUS shard-totality-mutations. A `skipped`, absent, running or malformed entry fails closed.
           # Matrix children are grouped by their base name (`test-scripts (1/8)` -> `test-scripts`), so the set check is over
-          # the SIX lane-skippable legs and every one of their child jobs. The leg-name set is pinned bi-directionally with
-          # the driver's allowlist and the aggregator's five-name regex by the sentinel: a new skippable leg requires editing
+          # the SEVEN lane-skippable legs and every one of their child jobs. The leg-name set is pinned bi-directionally with
+          # the driver's allowlist and the aggregator's six-name regex by the sentinel: a new skippable leg requires editing
           # all three in the same diff.
           reason=legs_incomplete
           legs_ok=$(printf '%s' "$jobs" | jq -r '
             [.jobs[] | select(type == "object") | select(.name | type == "string")
              | {b: (.name | sub(" \\(.*$"; "")), c: .conclusion}
-             | select(.b as $x | ["test-webplat","test-bun","test-scripts","test-scripts-heavy","web-platform-build","shard-totality-mutations"] | index($x))]
+             | select(.b as $x | ["test-webplat","test-webplat-mutations","test-bun","test-scripts","test-scripts-heavy","web-platform-build","shard-totality-mutations"] | index($x))]
             | group_by(.b)
             | map(all(.[]; .c == "success"))
-            | (length == 6) and all(.[]; .)' 2>/dev/null) || finish
+            | (length == 7) and all(.[]; .)' 2>/dev/null) || finish
           [ "$legs_ok" = "true" ] || finish
           would=true
           emit "would_elide=true"
@@ -271,8 +271,8 @@ jobs:
         run: |
           echo "push-dedupe: the proof holds for this SHA (elide=${ELIDE})"
 
-  # draft-light (ADR-276 S3, #9728, Option R): decide whether a push to a DRAFT pull request may skip the four heavy families
-  # (test-webplat, test-scripts, test-scripts-heavy, shard-totality-mutations). A COST lever, allowed to fail in one direction
+  # draft-light (ADR-276 S3, #9728, Option R): decide whether a push to a DRAFT pull request may skip the five heavy families
+  # (test-webplat, test-webplat-mutations, test-scripts, test-scripts-heavy, shard-totality-mutations). A COST lever, allowed to fail in one direction
   # only: any unknown (variable not exactly `on`, a `ready_for_review` event, a fork or deleted-fork head, any API error, a
   # timeout, a null or non-boolean `draft`) runs the full battery. It emits `light=true` LAST and only when ALL of those hold,
   # and the decision rests on a bounded LIVE read of the pull request: the event payload's draft flag is deliberately NOT an
@@ -369,13 +369,13 @@ jobs:
   # scripts/lib/test-affected-paths.sh, or a doc path. A COST lever, allowed to fail in one direction only: every unknown
   # runs the full battery. The decision lives in scripts/ci-oracle-lane.sh (this YAML stays thin; the driver holds the
   # surface, the exclusion list, the hunk-extent check and the env re-lock read). It emits ONLY literal outputs:
-  # oracle_only, active, skip_legs (a comma list over the five heavy legs, EMPTY unless active), head_sha and base_sha.
+  # oracle_only, active, skip_legs (a comma list over the six heavy legs, EMPTY unless active), head_sha and base_sha.
   #
   # STAGED, NOW ARMED — the staging machinery the retired pr-selection lever (S4, removed 2026-11-09) introduced. While
   # the repository variable CI_ORACLE_LANE is unset or empty the job is SKIPPED (no runner, no checkout, no dark
   # cost). The `if:` only tests "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the
   # exact `on` compare lives in the driver's bash. The compile-time activation lock was removed by #12300
-  # (2026-11-08): with `SWITCH=on` and an oracle-only diff, `active` becomes `true` and the five heavy legs skip.
+  # (2026-11-08): with `SWITCH=on` and an oracle-only diff, `active` becomes `true` and the six heavy legs skip.
   # `ORACLE_LANE_LOCKED=1` remains as the dark-mode revert path — no `env:` mapping wires it today, so wiring it
   # (itself an excluded-path ci.yml edit) re-darkens the lane (`active` stays `false`, `would_skip` telemetry
   # only) without a driver edit.
@@ -383,7 +383,7 @@ jobs:
   # `timeout-minutes` is written alone on its line and there is NO `needs:` on purpose: the release workflow's CI budget
   # awk sums the longest declared `needs:` path, so a 3-minute parallel root does not lengthen it (scripts/ci-push-dedupe.test.sh
   # executes that awk). A skipped, failed or timed-out job leaves EMPTY outputs, which every
-  # consumer reads as the full battery: the five heavy legs negate a term that needs `active == 'true'`,
+  # consumer reads as the full battery: the six heavy legs negate a term that needs `active == 'true'`,
   # shard-totality-mutations keeps `active != 'true'`, and the `test` aggregator tolerates a skip only on
   # ORACLE_ACTIVE == "true". Least-privilege (contents: read), no secrets, every input through env:, and nothing an API
   # or a path returns is ever echoed into an output or an annotation.
@@ -1505,15 +1505,19 @@ jobs:
           load: false
           no-cache: true
 
-  # --- Test matrix: 4 leg jobs + synthetic aggregator ---
+  # --- Test matrix: 5 leg jobs + synthetic aggregator ---
   #
   # The single `test` job was split into parallel leg jobs
-  # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
+  # (test-webplat / test-webplat-mutations / test-bun / test-scripts /
+  # test-scripts-heavy) so install +
   # typecheck + vitest + bun-test workloads run concurrently. test-scripts
   # and test-scripts-heavy are shard matrices over the same runner (leg
   # assignment is manifest-driven, positional when the table is absent or
-  # stale — see scripts/test-all.sh); the other two are single legs
-  # (test-webplat is itself a 2-way vitest --shard matrix). The synthetic `test`
+  # stale — see scripts/test-all.sh); the other three are single legs
+  # (test-webplat is itself a 2-way vitest --shard matrix; test-webplat-mutations
+  # is a 3-way battery-name matrix — the three web-platform mutation batteries
+  # that used to run in FULL on every webplat shard, moved here by #12626).
+  # The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
   # every merge. Each leg invokes scripts/test-all.sh with the
@@ -1523,7 +1527,7 @@ jobs:
   #
   # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
   # `actions/setup-node`, and `actions/cache` SHA pins in lockstep across
-  # test-webplat / test-bun / test-scripts — plus `actions/checkout` and
+  # test-webplat / test-webplat-mutations / test-bun / test-scripts — plus `actions/checkout` and
   # `oven-sh/setup-bun` on test-scripts-heavy (it carries no setup-node or
   # cache). When bumping any action, edit every job block that carries it in
   # the same commit; this YAML has no include or anchor mechanism so the
@@ -1538,16 +1542,17 @@ jobs:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat,')) }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). Healthy shards take 16-25 min, and the cancelled ones were still
-    # running when the old 25-min ceiling fired (so the true peak is unknown, not 25). The vitest
-    # part is only ~5 min; the rest is the mutation batteries that scripts/test-all.sh registers as
-    # plain run_suite calls in the webplat group (approval-guard1-mutation ~12-15 min,
-    # destroy-ask-mutation ~2 min, home-census-mutations), which run in FULL on BOTH shards. That
-    # put the shards on the edge and cancelled roughly half of the merge-queue attempts with no
-    # assertion failing (#12030). 35 min is a real bound on a hang that clears the observed range.
-    # An absent value would read as GitHub's 360-minute default. Flip trigger: if any shard reaches
-    # 30 min, pin those batteries to one shard (as the tsc step does with strategy.job-index == 0)
-    # or give them their own job; a third shard would repeat them and not help.
+    # Bounds a HUNG job (#7902). As of #12626 this leg carries vitest + the light webplat suites
+    # ONLY — the three mutation batteries that used to run in FULL on BOTH shards
+    # (approval-guard1-mutation ~12-15 min, destroy-ask-mutation ~2 min, home-census-mutations)
+    # moved to the dedicated `test-webplat-mutations` job below, and scripts/test-all.sh
+    # skip_suite-declines their registrations whenever VITEST_SHARD is set. With the batteries
+    # gone a healthy shard is back to the ~10-15 min shape it had before their growth; 35 min
+    # stays a real bound on a hang with deliberate slack for runner starvation.
+    # An absent value would read as GitHub's 360-minute default. Flip trigger (executed by
+    # #12626): a shard reaching 30 min was the alarm; the batteries now live on their own
+    # matrix legs rather than pinned to one shard, and a third vitest shard would repeat
+    # none of them.
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -1639,6 +1644,77 @@ jobs:
           LIKEC4_REQUIRED: "1"
           C4_BWRAP_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
+
+  # #12626 — the dedicated home for the three web-platform mutation batteries
+  # (approval-guard1-mutation, destroy-ask-mutation, home-census-mutations).
+  # VITEST_SHARD partitions vitest only, so registering them in the webplat
+  # group ran each battery IN FULL on EVERY vitest shard — the duplicated
+  # serial cost that pushed the legs past their ceilings. The runner now
+  # skip_suite-declines them under VITEST_SHARD and this job carries the
+  # coverage: one matrix leg per battery, invoked directly (the
+  # shard-totality-mutations job shape), NOT through scripts/test-all.sh —
+  # the webplat group's VITEST_SHARD gate would decline every registration
+  # here too, and running the whole group would duplicate the vitest suite
+  # a third time.
+  test-webplat-mutations:
+    needs: [push-dedupe, draft-light, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat-mutations,')) }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        battery: ["approval-guard1-mutation", "destroy-ask-mutation", "home-census-mutations"]
+    # Job-level only, no step ceiling — the shard-totality-mutations shape this job copies.
+    # Derived: the worst battery (approval-guard1-mutation) is ~25 min nominal (its own
+    # WALL_BUDGET_S=3000 advisory bounds at 50) and was censored at ~20.7 min still running
+    # on the starved leg that triggered #12626 — measured_max ~30; roundup5(30 x 1.5) = 45.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        run: npm ci --ignore-scripts
+        working-directory: apps/web-platform
+
+      # The batteries run targeted vitest files through
+      # apps/web-platform/node_modules/.bin/vitest on a COPY of the app tree.
+      # The likec4/bwrap preamble mirrors the webplat legs: the batteries do
+      # not exercise the C4 render path, but the toolchain the vitest global
+      # setup and the plugins/soleur test lib can reach is kept identical so a
+      # preamble difference can never read as a battery defect. LIKEC4_REQUIRED
+      # / C4_BWRAP_REQUIRED stay UNSET — nothing here must fail on their probe.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts
+          likec4 --version
+
+      - name: Install bubblewrap (C4 render sandbox) and socat (SDK sandbox startup check)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap socat
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
+      - name: Run mutation battery
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash "apps/web-platform/test/${{ matrix.battery }}.test.sh"
 
   test-bun:
     needs: [push-dedupe, oracle-selection]
@@ -2101,7 +2177,7 @@ jobs:
   # per-step continue-on-error and its pin env moved with it.
 
   # oracle-index-check (#12156, ADR-276 amendment): the oracle-only lane's validation leg. When the oracle-selection
-  # job classifies a pull_request or merge_group diff as `oracle_only` — every changed path is oracle data — the five
+  # job classifies a pull_request or merge_group diff as `oracle_only` — every changed path is oracle data — the six
   # heavy `test` legs may skip, and THIS leg is what keeps the oracle's own edit gated: it runs the committed
   # oracle-validation manifest (scripts/ci-oracle-lane-suites.txt — the AFFECTED_*_PATHS census authority, the
   # affected-index derive batteries and the oracle-review sentinel) across K=5 matrix legs, each leg
@@ -2254,12 +2330,12 @@ jobs:
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
   # branch-protection ruleset 14145388's `test` required check. It carries
-  # three distinct values: (a) cross-layer truing — converts six leg-job
+  # three distinct values: (a) cross-layer truing — converts eight leg-job
   # `conclusion`s into the single required-context conclusion the ruleset
   # already expects by name; (b) drift-resilience — survives a future
   # ruleset edit that changes the required-context list, as long as the
   # `test` name still gates merge; (c) observability — single PR-status
-  # row to inspect, not six. Removing this job orphans the ruleset's
+  # row to inspect, not eight. Removing this job orphans the ruleset's
   # `test` required check and breaks every PR merge.
   #
   # The name `test` MUST match the required-context name on ruleset
@@ -2280,11 +2356,11 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]
+    needs: [test-webplat, test-webplat-mutations, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]
     if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh,
-    # non-leg need the body never reads; draft-light is an eighth, read once through DRAFT_LIGHT) (measured p50 0.05 min) and runs no suite, so 10 minutes cannot fire
+    # Bounds a HUNG job (#7902). This job only reads seven leg `needs.*.result` strings plus `oracle-index-check` (push-dedupe is a
+    # non-leg need the body never reads; draft-light is read once through DRAFT_LIGHT) (measured p50 0.05 min) and runs no suite, so 10 minutes cannot fire
     # before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -2305,6 +2381,7 @@ jobs:
       - name: Aggregate shard results
         env:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
+          MUTATIONS_RESULT: ${{ needs.test-webplat-mutations.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
           SCRIPTS_HEAVY_RESULT: ${{ needs.test-scripts-heavy.result }}
@@ -2361,16 +2438,16 @@ jobs:
           # once (inner) to read that leg's siblings. Adding a leg is still a
           # one-line edit here, plus needs: + env: — test-scripts-heavy (#8006)
           # and encryption-posture (#6907) are the worked examples.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" "oracle-index-check:$ORACLE_INDEX_RESULT" )
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-webplat-mutations:$MUTATIONS_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" "oracle-index-check:$ORACLE_INDEX_RESULT" )
           # ORACLE-ONLY-SKIP (#12156, ADR-276 amendment): the ONE named reason a `skipped` leg is not a failure. Decided
           # BEFORE the loop so the sibling inference below can count a tolerated skip as concluded. Every condition is
           # exact and none is trimmed: event ∈ {pull_request, merge_group}, `ORACLE_ACTIVE` exactly `true`, the head bound
-          # (`ORACLE_HEAD_OK` exactly `true`), attempt 1, an `ORACLE_SKIP_LEGS` that is a well-formed comma list over the FIVE
-          # lane-skippable legs, and the leg itself named in it by a delimited match. The five-name literal is the allowlist:
+          # (`ORACLE_HEAD_OK` exactly `true`), attempt 1, an `ORACLE_SKIP_LEGS` that is a well-formed comma list over the SIX
+          # lane-skippable legs, and the leg itself named in it by a delimited match. The six-name literal is the allowlist:
           # `encryption-posture`, `e2e` and `oracle-index-check` can never be tolerated whatever the driver emits (a list
           # naming any other leg is invalid as a whole).
           oracle_tolerated=","
-          oracle_re='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
+          oracle_re='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations))*$'
           if [[ ( "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "merge_group" ) && "$ORACLE_ACTIVE" == "true" && "$ORACLE_HEAD_OK" == "true" && "$ATTEMPT" == "1" && "$ORACLE_SKIP_LEGS" =~ $oracle_re ]]; then
             for entry in "${entries[@]}"; do
               if [[ "${entry#*:}" == "skipped" ]]; then
@@ -2393,7 +2470,7 @@ jobs:
             # OFF-EVENT (#12156): oracle-index-check's `if:` gates it to pull_request and merge_group, so on push or
             # workflow_dispatch its result is `skipped` BY DESIGN — there is no lane to validate and no skip to tolerate.
             # That is a structural absence, not a tolerated lane skip: on pull_request/merge_group a skipped
-            # oracle-index-check is NEVER tolerated (the five-name regex cannot name it) and still fails the run.
+            # oracle-index-check is NEVER tolerated (the six-name regex cannot name it) and still fails the run.
             if [[ "$shard" == "oracle-index-check" && "$result" == "skipped" && "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "merge_group" ]]; then
               echo "$shard: OFF-EVENT — the oracle-validation leg is gated to pull_request/merge_group; absent by design on '$EVENT_NAME'" >&2
               continue
@@ -2413,7 +2490,7 @@ jobs:
                 # The comment above claims the classifier is correct whether a
                 # timed-out leg reads `cancelled` or `failure`; this arm is where
                 # that claim has to be honoured.
-                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" || "$shard" == "oracle-index-check" ]]; then
+                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" || "$shard" == "oracle-index-check" || "$shard" == "test-webplat" || "$shard" == "test-webplat-mutations" ]]; then
                   # A matrix rollup: "the job log" is not one log.
                   echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
                 else
@@ -2490,7 +2567,7 @@ jobs:
             otol_list="${otol_list%,}"
             echo "All legs green or skip tolerated (oracle-only: ${otol_list:-none} oracle_skip_legs=${ORACLE_SKIP_LEGS:-none})"
           else
-            echo "All legs green (six battery legs + oracle-index-check)."
+            echo "All legs green (seven battery legs + oracle-index-check)."
           fi
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps

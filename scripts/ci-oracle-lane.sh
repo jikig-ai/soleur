@@ -2,8 +2,8 @@
 # ci-oracle-lane.sh — the `oracle-selection` job's driver (#12156, ADR-276 amendment; activation lock removed — the lane arms when CI_ORACLE_LANE=on).
 #
 # WHAT IT DECIDES. For a pull_request or merge_group run it answers one question: is EVERY changed path inside the
-# oracle surface? When it is, the five heavy `test` legs (test-webplat, test-bun, test-scripts, test-scripts-heavy,
-# web-platform-build) may skip while `shard-totality-mutations` skips on `active` and the `oracle-index-check`
+# oracle surface? When it is, the six heavy `test` legs (test-webplat, test-webplat-mutations, test-bun, test-scripts,
+# test-scripts-heavy, web-platform-build) may skip while `shard-totality-mutations` skips on `active` and the `oracle-index-check`
 # leg runs the oracle-validation manifest — an oracle-data diff changes no executable path, so the full battery
 # proves nothing about it. It is a COST lever that may fail in ONE direction only: every unknown yields the full
 # battery (oracle_only=false, active=false, skip_legs empty). It NEVER fails the step: it always exits 0 (an EXIT
@@ -44,7 +44,7 @@
 #                                     an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent in BOTH the base and head images
 #   active       ^(true|false)$       oracle_only AND the switch is exactly `on` AND no env re-lock —
 #                                     `ORACLE_LANE_LOCKED=1` in env keeps it false (`would_skip` is annotated instead)
-#   skip_legs    a comma list over    {test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
+#   skip_legs    a comma list over    {test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
 #                                     written ONLY when active
 #   head_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^2 of the merge ref; merge_group: MERGE_GROUP_HEAD_SHA
 #   base_sha     ^([0-9a-f]{40})?$    pull_request: merge-base(HEAD^2, live base ref) — the base the diff ran
@@ -89,7 +89,7 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 # The lane's own literals, committed here and pinned by the sentinel: a one-commit weakening must edit this file AND
 # defeat scripts/ci-oracle-lane.test.sh.
 readonly ORACLE_INDEX="scripts/lib/test-affected-paths.sh"
-readonly ORACLE_SKIP_SET="test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
+readonly ORACLE_SKIP_SET="test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
 
 # ---- (1) fail-closed defaults, written FIRST and as ONE block ------------------------------------------------------
 oracle_only=false
@@ -397,7 +397,8 @@ run() {
   oracle_only=true
   would_skip="$ORACLE_SKIP_SET"
   # The diagrams carve-out (the grammar the retired selector driver carried: diagrams paths feed the web-platform surface, so a doc
-  # class that includes one keeps test-webplat running even when the lane otherwise qualifies). Per-run skip reach
+  # class that includes one keeps the web-platform legs — test-webplat AND test-webplat-mutations — running even when the lane
+  # otherwise qualifies). Per-run skip reach
   # is this list plus shard-totality-mutations, which is gated on `active` alone — by design (ci-push-dedupe.test.sh SHARD_TERM).
   [ "$diagrams" = 1 ] && would_skip="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
   return 0
@@ -417,7 +418,7 @@ run
 [ "$oracle_only" = true ] || { head_sha=""; base_sha=""; }
 [[ "$head_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
 [[ "$base_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
-if [ "$active" != true ] || [ "$oracle_only" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$ ]]; then  # GUARD:O-GRAMMAR
+if [ "$active" != true ] || [ "$oracle_only" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$ ]]; then  # GUARD:O-GRAMMAR
   active=false
   skip_legs=""
 fi
