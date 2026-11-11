@@ -1043,7 +1043,7 @@ assert_gh_called 'g1.enqueuefail:armed'   'gh pr merge .* --auto --squash'
 # spelling (the warning literal reads "was rejected" — a different string).
 # The reason must land INSIDE the warning line — co-occurrence in the run
 # output alone would pass with stderr left unredirected.
-grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'gh-stub: enqueuePullRequest rejected' \
+grep -qF 'gh-stub: enqueuePullRequest rejected' < <(grep '::warning::enqueuePullRequest' "$LAST_OUT") \
   && pass 'g1.enqueuefail:reason' \
   || fail 'g1.enqueuefail:reason' "rejection reason not inside the warning line — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
 
@@ -1064,12 +1064,12 @@ assert_rc        'g1.enqueuefailml:exit' 0
 assert_result    'g1.enqueuefailml:result' opened
 assert_out_has   'g1.enqueuefailml:warning' '::warning::'
 assert_out_has   'g1.enqueuefailml:reason'  'gh-stub: enqueuePullRequest rejected'
-grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'Required status check "quality-guards" is expected.' \
+grep -qF 'Required status check "quality-guards" is expected.' < <(grep '::warning::enqueuePullRequest' "$LAST_OUT") \
   && pass 'g1.enqueuefailml:flatten' \
   || fail 'g1.enqueuefailml:flatten' "second stderr line not flattened into the warning — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
 # Junction pin: 'rejected' + ' ' + 'gh-stub:' requires the newline to become a
 # SPACE — deleting the flatten stage lets [:cntrl:] join the words instead.
-grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'rejected gh-stub:' \
+grep -qF 'rejected gh-stub:' < <(grep '::warning::enqueuePullRequest' "$LAST_OUT") \
   && pass 'g1.enqueuefailml:junction' \
   || fail 'g1.enqueuefailml:junction' "newline was deleted, not flattened — $(tail -5 "$LAST_OUT" | tr '\n' '|')"
 # Exactly one warning line carries the reason — a duplicated or split warning
@@ -1116,7 +1116,7 @@ MOCK_GH_ENQUEUE_FAIL=4 run_bump enqueuefailbound --signed-tag v1.1.38 \
   --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc        'g1.enqueuefailbound:exit' 0
 assert_result    'g1.enqueuefailbound:result' opened
-! grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -qF 'TRUNC-END' \
+! grep -qF 'TRUNC-END' < <(grep '::warning::enqueuePullRequest' "$LAST_OUT") \
   && pass 'g1.enqueuefailbound:cut' \
   || fail 'g1.enqueuefailbound:cut' "reason past the 300-char bound reached the warning"
 [[ $(grep '::warning::enqueuePullRequest' "$LAST_OUT" | grep -oF 'A' | wc -l) == 291 ]] \
