@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "plugin": "soleur",
-  "count": 67,
+  "count": 68,
   "agents": [
     {
       "id": "soleur:engineering:cto",
@@ -196,7 +196,14 @@
       "id": "soleur:engineering:review:semgrep-sast",
       "path": "agents/engineering/review/semgrep-sast.md",
       "name": "semgrep-sast",
-      "description": "Use this agent when you need deterministic static analysis security scanning using semgrep. This agent complements soleur:engineering:review:security-sentinel by running rule-based pattern matching to catch known vulnerability signatures, hardcoded secrets, insecure function calls, and CWE patterns that LLM-based review may miss. The caller is expected to have bootstrapped semgrep via plugins/soleur/skills/review/scripts/ensure-semgrep.sh before spawning this agent.",
+      "description": "Use this agent to report the review scan receipt that soleur:engineering:review:security-sentinel reads. The orchestrator already ran the deterministic scan. This seat quotes that receipt and its finding lines. It does not run semgrep or shellcheck.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:session-forensics-analyst",
+      "path": "agents/engineering/review/session-forensics-analyst.md",
+      "name": "session-forensics-analyst",
+      "description": "Use this agent when you need a fresh-context forensic analysis of a session transcript: it reads the raw transcript (and optional run-health ledger) and produces pending-operator-only improvement proposals (workflow/agent/skill changes, error-prevention rules, operator guidance, new-component proposals, learning captures, glossary entries, test additions). It must never auto-apply. Invoke from session-retrospective-compound and similar postmortem flows. Use soleur:engineering:review:code-quality-analyst for general code quality; use this agent for session-transcript forensics.",
       "model": "inherit"
     },
     {

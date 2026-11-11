@@ -158,6 +158,52 @@ function withoutOptOut(env: Record<string, string>, optOutVar: string): Record<s
 
 const DESTRUCTIVE = bash("terraform destroy");
 
+// #12514: from claude-code / agent-sdk 2.1.321 / 0.3.321, a hooks MODULE ("mod") that a plugin
+// declares (`hooks.json` `"modules": [...]`) runs its own `$.tool.call` / `$.mcp.call` with no
+// permission prompt, and in an SDK session that means `canUseTool` is never consulted (measured in
+// a throwaway container: 0.3.321 ran the mod's Bash and Write with `canUseTool` called zero times,
+// while 0.3.311 sent the same calls to `canUseTool`, which denied them; phase-r-evidence.md R2).
+// Hosted sessions bind this plugin through `plugins:[{type:"local"}]`, which loads its mods, so
+// the trusted plugin must declare none. A module here would bypass the deny-by-default
+// permission callback in every tenant's session.
+function declaredHookModules(json: unknown): string[] {
+  const found: string[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (v === null || typeof v !== "object") return;
+    for (const [k, inner] of Object.entries(v as Record<string, unknown>)) {
+      if (k === "modules") found.push(...(Array.isArray(inner) ? inner.map(String) : [String(inner)]));
+      else walk(inner);
+    }
+  };
+  walk(json);
+  return found;
+}
+
+describe("the trusted plugin declares no hooks module, whose tool calls would skip canUseTool (#12514)", () => {
+  it("the detector finds a module declaration at the top level and nested, and nothing in a plain command-hook config", () => {
+    expect(declaredHookModules({ modules: ["./register.js"] })).toEqual(["./register.js"]);
+    expect(declaredHookModules({ hooks: { PreToolUse: [{ modules: ["./x.mjs"] }] } })).toEqual(["./x.mjs"]);
+    expect(declaredHookModules({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "x.sh" }] }] } })).toEqual([]);
+  });
+
+  it("plugins/soleur hooks.json and plugin.json declare no module", () => {
+    const hooks = JSON.parse(readFileSync(HOOKS_JSON, "utf8"));
+    expect(Object.keys(hooks.hooks ?? {}).length, "hooks.json parsed to an empty hook set: the scan below would be vacuous").toBeGreaterThan(0);
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, "plugins/soleur/.claude-plugin/plugin.json"), "utf8"));
+    expect(declaredHookModules(manifest)).toEqual([]);
+    // Every hook config under hooks/ (other harnesses' configs included), hooks.json among them.
+    const hookConfigs = readdirSync(HOOKS_DIR).filter((f) => f.endsWith(".json"));
+    expect(hookConfigs).toContain("hooks.json");
+    for (const f of hookConfigs) {
+      expect(
+        declaredHookModules(JSON.parse(readFileSync(join(HOOKS_DIR, f), "utf8"))),
+        `hooks/${f} declares a hooks module: it runs $.tool.call past canUseTool in every hosted session (#12514)`,
+      ).toEqual([]);
+    }
+  });
+});
+
 describe("plugin PreToolUse hooks are classified for the web runtime", () => {
   beforeAll(() => {
     // Hard failure, never a skip: the behavioural rows below are meaningless without these.

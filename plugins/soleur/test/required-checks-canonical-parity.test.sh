@@ -871,4 +871,712 @@ n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.y
 assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
 echo ""
 
-print_results 95
+# --- Test 11: the lint-cve-safe-status part of the synthetic greens is EARNED (#12348) --
+#
+# scripts/lint-cve-safe-status.py scans every tracked KB index entry as the guards-ruleset
+# member `cve-safe-status`, and ALLOWED_PATHS (weakness-digest.md) sits inside that surface, so
+# the synthetic greens the action posts are sound only if the action runs the lint over its
+# own staged paths first, and stops when the lint fails.
+#
+# t11_exec (CTO rulings E4, V1, V5, X2-X5) parses the action with PyYAML and takes the single
+# composite step whose run body holds `git add --`. It requires one non-comment line in that
+# body naming the lint, no `if:`, `shell: bash`, and an `env:` of `${{ inputs.* }}` and
+# `${{ github.repository }}` only. It runs the body from its first line through the line
+# before the first line after the arm that names a push (`git push ` or `git_remote push ` at
+# line start), plus a sentinel line, under the step's own shell, with the inputs and the
+# modeled runner env set and PATH holding only the stubs below. A stub refuses any argv it
+# does not model, and `command_not_found_handle` refuses a command with no stub; both write a
+# STUB-MISS record, which is RED. Every row runs twice. With the lint stub exiting 1, OK means:
+# nothing refused, rc 1, the sentinel not reached, `git add` once with the fixture PATHS, and
+# the lint once with argv `-I scripts/lint-cve-safe-status.py --paths <those PATHS>`. With it
+# exiting 0 (the positive control), the same with rc 0, the sentinel reached and one commit.
+# So Test 11 grades what the step does between its first line and that push line. A new
+# command in the span fails closed until a stub models it; that is the intended cost.
+#
+# t11_text keeps the older textual anchors (a unique syntactic arm, an `exit [1-9]` before its
+# `fi`, placement after `git add` and before the push and the check-run POST, and a
+# block-opener heuristic between `git add` and the arm) as diagnostics. A mutant is reported
+# when either layer is RED; the rows in T11_EXEC_KILLS must be RED in the execution layer alone.
+#
+# Residuals, stated permanently (CTO ruling Q-end). A finding that is a new spelling inside one
+# of them is "covered by R<n>", not a fix item.
+#   S0    Tests 11 and 12 guard the gates' shape against drift. They do not prove the gates
+#         hold against an edit written to beat them: the workflow, the action, the lint and
+#         this test are all reviewed files.
+#   R11-1 Only the span above is executed. The push, anything after it, and which commit the
+#         check-run POST names are not. An earlier line after the arm that spells a push ends
+#         the span there.
+#   R11-2 Only the modeled runner env is exercised. Any branch on host, filesystem, tool or
+#         environment state the harness does not model (for example a `.git` dir, a tracked
+#         file, `command -v` of a tool, a runner path, HOSTNAME or image variables, or an
+#         unseeded or differently valued RUNNER_*/GITHUB_* name) runs differently on a runner.
+#   R11-3 Stubs intercept by PATH lookup only. A command reached by an absolute path or another
+#         route around PATH is not seen.
+#   R11-4 The text layer is a heuristic diagnostic, not a proof.
+echo "Test 11: action.yml EARNS the lint-cve-safe-status part of the synthetic greens (#12348)"
+t11_text() {
+  local f="$1" arm narm add push post enforce depth
+  arm=$(grep -nE '^[[:space:]]*if ! python3 -I scripts/lint-cve-safe-status\.py --paths "\$\{PATHS\[@\]\}"; then[[:space:]]*$' "$f" | head -1 | cut -d: -f1 || true)
+  narm=$(grep -cE '^[[:space:]]*[^#[:space:]].*scripts/lint-cve-safe-status\.py' "$f" || true)
+  add=$(grep -nE '^[[:space:]]*git add -- "\$\{PATHS\[@\]\}"[[:space:]]*$' "$f" | head -1 | cut -d: -f1 || true)
+  push=$(grep -nE '^[[:space:]]*(git push |git_remote push )' "$f" | head -1 | cut -d: -f1 || true)
+  post=$(grep -nE '^[[:space:]]*(gh|gh_gate) api "repos/\$\{REPO\}/check-runs"' "$f" | head -1 | cut -d: -f1 || true)
+  [[ -n "$arm" ]] || { echo "RED:no-arm"; return 0; }
+  [[ "$narm" == "1" ]] || { echo "RED:arm-not-unique:$narm"; return 0; }
+  [[ -n "$add" && -n "$push" && -n "$post" ]] || { echo "RED:no-side-effect-anchor"; return 0; }
+  (( add < arm )) || { echo "RED:before-add"; return 0; }
+  depth=$(awk -v a="$add" -v b="$arm" '
+    NR > a && NR < b && !/^[[:space:]]*#/ {
+      if ($0 ~ /<</) h = 1
+      if ($0 ~ /^[[:space:]]*(if|for|while|until|case|function)([[:space:]]|$)/ || $0 ~ /\{[[:space:]]*(#.*)?$/) d++
+      if ($0 ~ /^[[:space:]]*(fi|done|esac)([[:space:]]*;?[[:space:]]*$|[[:space:]]+#)/ || $0 ~ /^[[:space:]]*\}/) d--
+    }
+    END { if (h) print "heredoc"; else print d + 0 }
+  ' "$f" || true)
+  [[ "$depth" == "0" ]] || { echo "RED:opener-heuristic:$depth"; return 0; }
+  enforce=$(awk -v s="$arm" '
+    NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+    NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
+  ' "$f" || true)
+  [[ "$enforce" == "yes" ]] || { echo "RED:inert-body"; return 0; }
+  (( arm < push )) || { echo "RED:after-push"; return 0; }
+  (( arm < post )) || { echo "RED:after-post"; return 0; }
+  echo "OK"
+}
+
+# The stubs. PATH inside the region is $T11_BIN alone, so an external command with no stub
+# here is "command not found" (rc 127), which is RED too. Helpers and the real tools some
+# stubs delegate to are baked in as absolute paths; nothing the region runs reaches them.
+T11_DIR="$TMP/t11"; T11_BIN="$T11_DIR/bin"; T11_LIB="$T11_DIR/lib"
+mkdir -p "$T11_BIN" "$T11_LIB" "$T11_DIR/runs"
+T11_BASH=$(type -P bash)
+{
+  printf 'T11_REAL_TR=%q\nT11_REAL_GREP=%q\nT11_REAL_MKTEMP=%q\nT11_REAL_CP=%q\nT11_LIB=%q\n' \
+    "$(type -P tr)" "$(type -P grep)" "$(type -P mktemp)" "$(type -P cp)" "$T11_LIB"
+  cat <<'T11COMMON'
+st="${T11_STATE:?}"
+t11_log() { printf '%s\0' "$NAME" "$@" >> "$st/calls"; printf '\036' >> "$st/calls"; }
+t11_miss() {
+  { printf 'STUB-MISS: %s' "$NAME"; printf ' %q' "$@"; printf '\n'; } >> "$st/miss"
+  echo "t11 stub refused: $NAME $*" >&2
+  exit 64
+}
+t11_added() { [[ -e "$st/added" ]]; }
+t11_dir() { [[ -s "$st/mktemp_dir" ]] || t11_miss "$@"; D=$(<"$st/mktemp_dir"); }
+t11_log "$@"
+T11COMMON
+} > "$T11_LIB/common.sh"
+t11_stub() {  # t11_stub NAME DEST < body
+  { printf '#!%s\nset -u\nNAME=%q\n. %q\n' "$T11_BASH" "$1" "$T11_LIB/common.sh"; cat; } > "$2"
+  chmod +x "$2"
+}
+t11_stub git "$T11_BIN/git" <<'T11STUB'
+case "${1-}" in
+  config)
+    t11_added && t11_miss "$@"
+    [[ $# -eq 3 && ( "$2" == user.name || "$2" == user.email ) ]] || t11_miss "$@"
+    exit 0 ;;
+  add)
+    t11_added && t11_miss "$@"
+    [[ $# -ge 3 && "$2" == "--" ]] || t11_miss "$@"
+    : > "$st/added"; exit 0 ;;
+  diff)
+    t11_added || t11_miss "$@"
+    [[ -e "$st/ls_remote" ]] && t11_miss "$@"
+    [[ "${2-}" == --cached ]] || t11_miss "$@"
+    [[ $# -eq 3 && "$3" == --quiet ]] && exit 1
+    [[ $# -ge 4 && "$3" == --unified=0 && "$4" == -- ]] || t11_miss "$@"
+    exit 0 ;;
+  # After the arm, in this order and once each: the branch probe, the branch cut, the commit.
+  ls-remote)
+    t11_added && [[ ! -e "$st/ls_remote" ]] || t11_miss "$@"
+    [[ $# -eq 5 && "$2" == --exit-code && "$3" == --heads && "$4" == origin \
+      && "$5" == "refs/heads/$(<"$st/branch")" ]] || t11_miss "$@"
+    : > "$st/ls_remote"; exit 2 ;;
+  checkout)
+    [[ -e "$st/ls_remote" && ! -e "$st/checked_out" ]] || t11_miss "$@"
+    [[ $# -eq 3 && "$2" == -b && "$3" == "$(<"$st/branch")" ]] || t11_miss "$@"
+    : > "$st/checked_out"; exit 0 ;;
+  commit)
+    [[ -e "$st/checked_out" && ! -e "$st/committed" ]] || t11_miss "$@"
+    [[ $# -eq 3 && "$2" == -m && "$3" == "$(<"$st/commit_msg")" ]] || t11_miss "$@"
+    : > "$st/committed"; exit 0 ;;
+esac
+t11_miss "$@"
+T11STUB
+t11_stub date "$T11_BIN/date" <<'T11STUB'
+[[ $# -eq 2 && "$1" == -u && "$2" == +%Y-%m-%d ]] || t11_miss "$@"
+printf '%s\n' "$(<"$st/date")"
+T11STUB
+t11_stub base64 "$T11_BIN/base64" <<'T11STUB'
+# Only the extra-header encoding: `printf … | base64 -w0`, stdin consumed, a fixture word out.
+[[ $# -eq 1 && "$1" == -w0 ]] || t11_miss "$@"
+IFS= read -r -d '' t11_in || true
+printf 't11fixtureheader'
+T11STUB
+t11_stub python3 "$T11_BIN/python3" <<'T11STUB'
+case "${1-}" in
+  -I)
+    [[ $# -ge 4 && "$2" == scripts/lint-cve-safe-status.py && "$3" == --paths ]] || t11_miss "$@"
+    exit "$(<"$st/cve_rc")" ;;
+  scripts/lint-credential-path-literals.py)
+    [[ $# -ge 2 ]] || t11_miss "$@"
+    exit 0 ;;
+esac
+t11_miss "$@"
+T11STUB
+t11_stub node "$T11_BIN/node" <<'T11STUB'
+[[ $# -ge 2 && "$1" == apps/web-platform/scripts/lint-fixture-content.mjs ]] && exit 0
+t11_miss "$@"
+T11STUB
+t11_stub mktemp "$T11_BIN/mktemp" <<'T11STUB'
+[[ $# -eq 1 && "$1" == -d && ! -e "$st/mktemp_dir" ]] || t11_miss "$@"
+d=$("$T11_REAL_MKTEMP" -d "$st/tmp.XXXXXX") || exit 1
+printf '%s\n' "$d" > "$st/mktemp_dir"
+printf '%s\n' "$d"
+T11STUB
+t11_stub curl "$T11_BIN/curl" <<'T11STUB'
+t11_dir "$@"
+[[ $# -eq 7 && "$1" == --fail && "$2" == --retry && "$3" == 5 && "$4" == --retry-all-errors \
+  && "$5" == -sSLo && "$6" == "$D/gitleaks.tgz" \
+  && "$7" == https://github.com/gitleaks/gitleaks/releases/download/v*/gitleaks_*_linux_x64.tar.gz ]] || t11_miss "$@"
+printf 't11 fixture tarball\n' > "$D/gitleaks.tgz"
+T11STUB
+t11_stub sha256sum "$T11_BIN/sha256sum" <<'T11STUB'
+t11_dir "$@"
+[[ $# -eq 2 && "$1" == -c && "$2" == - ]] || t11_miss "$@"
+IFS= read -r line || t11_miss "$@"
+[[ "$line" =~ ^[0-9a-f]{64}\ \ (.*)$ && "${BASH_REMATCH[1]}" == "$D/gitleaks.tgz" ]] || t11_miss "$@" "<stdin:$line>"
+T11STUB
+t11_stub tar "$T11_BIN/tar" <<'T11STUB'
+t11_dir "$@"
+[[ $# -eq 5 && "$1" == -xzf && "$2" == "$D/gitleaks.tgz" && "$3" == -C && "$4" == "$D" && "$5" == gitleaks ]] || t11_miss "$@"
+"$T11_REAL_CP" "$T11_LIB/gitleaks" "$D/gitleaks"
+T11STUB
+t11_stub chmod "$T11_BIN/chmod" <<'T11STUB'
+t11_dir "$@"
+[[ $# -eq 2 && "$1" == +x && "$2" == "$D/gitleaks" ]] || t11_miss "$@"
+T11STUB
+t11_stub gitleaks "$T11_LIB/gitleaks" <<'T11STUB'
+t11_added || t11_miss "$@"
+[[ "$*" == "git --pre-commit --staged --redact --no-banner --exit-code 1" ]] || t11_miss "$@"
+T11STUB
+t11_stub tr "$T11_BIN/tr" <<'T11STUB'
+[[ $# -eq 2 && "$1" == "[:upper:]" && "$2" == "[:lower:]" ]] || t11_miss "$@"
+exec "$T11_REAL_TR" "$@"
+T11STUB
+t11_stub grep "$T11_BIN/grep" <<'T11STUB'
+# Only the stdin filters of the waiver-discipline pipeline: one flag, one pattern, no file.
+[[ $# -eq 2 && ( "$1" == -E || "$1" == -v || "$1" == -vE ) ]] || t11_miss "$@"
+exec "$T11_REAL_GREP" "$@"
+T11STUB
+
+t11_exec() {  # t11_exec CVE_RC FILE... : prints one verdict line (OK|RED:<why>) per FILE
+  python3 - "$T11_BIN" "$T11_DIR/runs" "$T11_BASH" "$@" <<'T11PY'
+import os, re, subprocess, sys, tempfile
+import yaml
+stubs, runs, bash, cve_rc = sys.argv[1:5]
+want_rc = int(cve_rc)
+DIGEST = "knowledge-base/project/weakness-digest.md"
+# Twice, so `${PATHS[0]}` cannot pass for `${PATHS[@]}`; the blank line exercises the parser.
+INPUTS = {"add-paths": DIGEST + "\n\n" + DIGEST + "\n", "branch-prefix": "t11/fixture-",
+          "commit-message": "t11 fixture", "pr-title-prefix": "t11 fixture",
+          "pr-body": "t11 fixture body", "change-summary": "t11 fixture",
+          "pr-token": "fixture-pr-token", "gh-token": "fixture-gate-token",
+          "draft": "false", "skip-auto-merge": "false", "labels": ""}
+STAGED = [DIGEST, DIGEST]
+FIXTURE_DATE = "2000-01-01"
+BRANCH = INPUTS["branch-prefix"] + FIXTURE_DATE
+def verdict(src):
+    try:
+        doc = yaml.safe_load(open(src, encoding="utf-8"))
+        steps = doc["runs"]["steps"]
+    except Exception as e:
+        return "yaml:%s" % type(e).__name__
+    hold = [s for s in steps if isinstance(s, dict) and isinstance(s.get("run"), str)
+            and re.search(r"(?m)^\s*git add --", s["run"])]
+    if len(hold) != 1:
+        return "add-step-count:%d" % len(hold)
+    step = hold[0]
+    if "if" in step:
+        return "add-step-has-if"
+    if step.get("shell") != "bash":
+        return "add-step-shell:%s" % step.get("shell")
+    env = {"PATH": stubs, "GITHUB_REF": "refs/heads/main"}
+    for k, v in (step.get("env") or {}).items():
+        m = re.fullmatch(r"\$\{\{ inputs\.([a-z-]+) \}\}", str(v))
+        if m and m.group(1) in INPUTS:
+            env[k] = INPUTS[m.group(1)]
+        elif v == "${{ github.repository }}":
+            env[k] = "t11-owner/t11-repo"
+        else:
+            return "env-unmodeled:%s" % k
+    body = step["run"].split("\n")
+    arm = [i for i, l in enumerate(body) if re.match(r"^\s*[^#\s].*scripts/lint-cve-safe-status\.py", l)]
+    if len(arm) != 1:
+        return "arm-in-add-step:%d" % len(arm)
+    a = arm[0]
+    ind = re.match(r"^(\s*)", body[a]).group(1)
+    fi = next((i for i in range(a + 1, len(body)) if body[i].rstrip() == ind + "fi"), None)
+    if fi is None:
+        return "arm-has-no-fi"
+    # The cut runs through the last line before the first branch push after the arm (today
+    # the `git commit -m "$COMMIT_MESSAGE"` line), so the step's post-arm staging is executed.
+    push = next((i for i in range(fi + 1, len(body)) if re.match(r"^\s*(git push |git_remote push )", body[i])), None)
+    if push is None:
+        return "no-push-after-arm"
+    work = tempfile.mkdtemp(dir=runs)
+    st, cwd = os.path.join(work, "state"), os.path.join(work, "repo")
+    rtmp = os.path.join(work, "runner-temp")
+    for d in (st, rtmp, os.path.join(cwd, "knowledge-base", "project")):
+        os.makedirs(d)
+    open(os.path.join(cwd, DIGEST), "w").write("# t11 fixture digest\n")
+    for name, val in (("cve_rc", cve_rc), ("date", FIXTURE_DATE), ("branch", BRANCH),
+                      ("commit_msg", INPUTS["commit-message"])):
+        open(os.path.join(st, name), "w").write(val)
+    region = os.path.join(st, "region.sh")
+    # A command with no stub is refused like an unmodeled argv: a STUB-MISS naming it, rc 127.
+    cnf = ["command_not_found_handle() { printf 'STUB-MISS: no stub for %s\\n' \"$1\" >> \"$T11_STATE/miss\"; return 127; }"]
+    open(region, "w").write("\n".join(cnf + body[:push] + ['printf "reached\\n" > "$T11_STATE/sentinel"']) + "\n")
+    # The modeled runner env (V1): what every hosted runner sets, so a construct that branches
+    # on one of these runs here as it would in production.
+    env.update({"T11_STATE": st, "HOME": os.path.join(work, "home"), "CI": "true",
+                "GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux", "RUNNER_TEMP": rtmp,
+                "GITHUB_WORKSPACE": cwd, "GITHUB_EVENT_NAME": "schedule",
+                "GITHUB_REPOSITORY": "t11-owner/t11-repo"})
+    try:
+        p = subprocess.run([bash, "--noprofile", "--norc", "-eo", "pipefail", region], cwd=cwd, env=env,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    except subprocess.TimeoutExpired:
+        return "region-timeout"
+    def read(name):
+        try:
+            return open(os.path.join(st, name), encoding="utf-8", errors="replace").read()
+        except FileNotFoundError:
+            return ""
+    miss = read("miss")
+    if miss:
+        return "stub-refused:" + miss.split("\n")[0].replace(" ", "_")[:120]
+    if p.returncode != want_rc:
+        return "rc:%d" % p.returncode
+    if os.path.exists(os.path.join(st, "sentinel")) != (want_rc == 0):
+        return "sentinel-reached" if want_rc else "sentinel-not-reached"
+    calls = [r.split("\0")[:-1] for r in read("calls").split("\x1e") if r]
+    adds = [i for i, r in enumerate(calls) if r[:2] == ["git", "add"]]
+    if len(adds) != 1 or calls[adds[0]][3:] != STAGED:
+        return "staged:%d" % len(adds)
+    cves = [i for i, r in enumerate(calls) if r[:3] == ["python3", "-I", "scripts/lint-cve-safe-status.py"]]
+    if len(cves) != 1:
+        return "lint-calls:%d" % len(cves)
+    if calls[cves[0]][3:] != ["--paths"] + calls[adds[0]][3:]:
+        return "lint-argv"
+    commits = [i for i, r in enumerate(calls) if r[:2] == ["git", "commit"]]
+    if len(commits) != (0 if want_rc else 1):
+        return "commits:%d" % len(commits)
+    return None
+for src in sys.argv[5:]:
+    why = verdict(src)
+    print("OK" if why is None else "RED:" + why)
+T11PY
+}
+# (11a) the live action passes both layers.
+assert_eq "OK" "$(t11_text "$ACTION_YML")" "(11a) text diagnostics: a unique syntactic arm after git add, enforcing, before push and POST"
+assert_eq "OK" "$(t11_exec 1 "$ACTION_YML")" "(11a) executed region: python3 -I ran the lint once over the staged PATHS, its exit 1 stopped the step (rc 1, sentinel unreached)"
+# (11c) positive control: with the lint stub passing, the same region runs to the sentinel.
+assert_eq "OK" "$(t11_exec 0 "$ACTION_YML")" "(11c) positive control: lint stub exits 0, the region reaches the sentinel with rc 0, the same lint argv and one commit"
+# (11b) the mutants, each on a temp copy; a mutant that fails to land (or is not valid YAML) is itself a failure.
+t11_mutate() {  # t11_mutate KIND... : writes $T11_DIR/KIND.yml for each KIND that lands, prints why for each that does not
+  python3 - "$ACTION_YML" "$T11_DIR" "$@" <<'T11PY'
+import os, re, sys
+import yaml
+src, outdir, kinds = sys.argv[1], sys.argv[2], sys.argv[3:]
+text = open(src, encoding="utf-8").read()
+def mutant(kind):
+    lines = text.split("\n")
+    start = [i for i, l in enumerate(lines) if re.match(r'^\s*if ! python3 -I scripts/lint-cve-safe-status\.py ', l)]
+    if len(start) != 1:
+        return "arm anchor found %d times" % len(start)
+    a = start[0]
+    b = next(i for i in range(a + 1, len(lines)) if re.match(r"^\s*fi\s*$", lines[i]))
+    arm = lines[a:b + 1]
+    ind = re.match(r"^(\s*)", lines[a]).group(1)
+    c = a
+    while c > 0 and lines[c - 1].lstrip().startswith("#"):
+        c -= 1
+    adds = [i for i, l in enumerate(lines) if re.match(r'^\s*git add -- "\$\{PATHS\[@\]\}"\s*$', l)]
+    if len(adds) != 1:
+        return "git add anchor found %d times" % len(adds)
+    add = adds[0]
+    ex = next(i for i in range(a, b) if re.match(r"^\s*exit 1\s*$", lines[i]))
+    def wrap(opener, closer):
+        return lines[:a] + [ind + opener] + arm + [ind + closer] + lines[b + 1:]
+    if kind == "comment-only":
+        out = lines[:a] + lines[b + 1:]
+    elif kind == "delete":
+        out = lines[:c] + lines[b + 1:]
+    elif kind == "reorder":
+        rest = lines[:a] + lines[b + 1:]
+        p = next(i for i, l in enumerate(rest) if re.match(r"^\s*(git push |git_remote push )", l))
+        out = rest[:p + 1] + arm + rest[p + 1:]
+    elif kind == "swallow-or-true":
+        out = lines[:a] + [lines[a].replace('"${PATHS[@]}"; then', '"${PATHS[@]}" || true; then')] + lines[a + 1:]
+    elif kind == "swallow-inert-body":
+        out = lines[:a] + [re.sub(r"exit 1", "true", l) for l in arm] + lines[b + 1:]
+    elif kind == "args-single":
+        out = lines[:a] + [lines[a].replace('"${PATHS[@]}"', '"${PATHS[0]}"')] + lines[a + 1:]
+    elif kind == "drop-isolate":
+        out = lines[:a] + [lines[a].replace("python3 -I scripts/", "python3 scripts/")] + lines[a + 1:]
+    elif kind == "args-no-flag":
+        out = lines[:a] + [lines[a].replace(' --paths "${PATHS[@]}"', ' "${PATHS[@]}"')] + lines[a + 1:]
+    elif kind == "before-add":
+        rest = lines[:a] + lines[b + 1:]
+        out = rest[:add] + arm + rest[add:]
+    elif kind == "wrap-if-false":
+        out = wrap("if false; then", "fi")
+    elif kind == "uncalled-function":
+        out = wrap("t11_never_called() {", "}")
+    elif kind in ("and-brace", "function-keyword", "brace-comment", "false-and-brace"):
+        out = wrap({"and-brace": "true && {", "function-keyword": "function t11_never_called {",
+                    "brace-comment": "t11_never_called() { # never invoked",
+                    "false-and-brace": "false && {"}[kind], "}")
+    elif kind == "heredoc":
+        out = wrap(": <<'T11EOF'", "T11EOF")
+    elif kind == "subshell-or-true":
+        out = wrap("(", ") || true")
+    elif kind == "quoted-noop":
+        out = wrap(": '", "'")
+    elif kind == "true-or":
+        out = lines[:a] + [lines[a].replace("if ! python3", "if ! true || ! python3")] + lines[a + 1:]
+    elif kind == "true-or-continuation":
+        out = lines[:ex] + [ind + "  true || \\"] + lines[ex:]
+    elif kind == "paths-rebound":
+        out = lines[:a] + [ind + 'PATHS=("knowledge-base/README.md")'] + lines[a:]
+    elif kind == "shadow-before-arm":
+        out = lines[:a] + [ind + "python3() { :; }"] + lines[a:]
+    elif kind == "shadow-above-add":
+        out = lines[:add] + [ind + "python3() { :; }"] + lines[add:]
+    elif kind == "env-cond-shadow-ci":
+        # V1: a shadow that applies only where CI is set (every runner), placed before the arm.
+        out = lines[:a] + [ind + '[ -n "${CI:-}" ] && python3() { :; }'] + lines[a:]
+    elif kind == "env-cond-shadow-gha":
+        # V1: the same keyed on GITHUB_ACTIONS, as an if-block above `git add`.
+        out = lines[:add] + [ind + 'if [ "${GITHUB_ACTIONS:-}" = true ]; then python3() { :; }; fi'] + lines[add:]
+    elif kind == "re-add-after-arm":
+        # V5: change a staged file after the lint passed it, then stage it again.
+        out = (lines[:b + 1] + [ind + "printf 't11 unscanned\\n' >> \"${PATHS[0]}\"",
+                                ind + 'git add -- "${PATHS[@]}"'] + lines[b + 1:])
+    elif kind == "commit-am":
+        # V5: a commit that stages tracked changes on its own.
+        cm = [i for i, l in enumerate(lines) if l.strip() == 'git commit -m "$COMMIT_MESSAGE"']
+        if len(cm) != 1:
+            return "git commit anchor found %d times" % len(cm)
+        out = list(lines)
+        out[cm[0]] = lines[cm[0]].replace("git commit -m", "git commit -am")
+    elif kind == "reset-between":
+        out = (lines[:a] + [ind + 'git reset -q -- "${PATHS[@]}"'] + arm
+               + [ind + 'git add -- "${PATHS[@]}"'] + lines[b + 1:])
+    elif kind == "own-step-if-false":
+        # Close the run block before the arm, give the arm its own never-run step, resume the rest.
+        k = "    "
+        out = (lines[:c] + [k + "- name: t11 split arm", k + "  if: ${{ false }}", k + "  shell: bash",
+                            k + "  run: |"] + lines[c:b + 1]
+               + [k + "- name: t11 split rest", k + "  shell: bash", k + "  run: |"] + lines[b + 1:])
+    elif kind == "step-if":
+        n = next(i for i, l in enumerate(lines) if l.startswith("    - name: Commit, open bot PR"))
+        out = lines[:n + 1] + ["      if: ${{ github.event_name == 'never' }}"] + lines[n + 1:]
+    elif kind == "step-shell-sh":
+        out = [l.replace("      shell: bash", "      shell: sh", 1) if l == "      shell: bash" else l for l in lines]
+    else:
+        return "unknown mutant"
+    result = "\n".join(out)
+    if result == text:
+        return "did not change the file"
+    try:
+        yaml.safe_load(result)
+    except yaml.YAMLError as e:
+        return "not valid YAML: " + str(e).split(chr(10))[0]
+    open(os.path.join(outdir, kind + ".yml"), "w", encoding="utf-8").write(result)
+    return None
+for kind in kinds:
+    try:
+        why = mutant(kind)
+    except (StopIteration, ValueError) as e:
+        why = "anchor missing: %r" % e
+    if why:
+        print("t11: mutant %s did not land: %s" % (kind, why), file=sys.stderr)
+T11PY
+}
+# Rows whose kill must come from the execution layer alone: the ten measured bypass shapes
+# (test-design NF1 x1-x10, with the python3 shadow placed both before the arm and above
+# `git add`), the two runner-env-conditional shadows (V1), the two post-arm staging shapes
+# (V5), the dropped `-I` (X2), plus every other mutant that changes what the region does. Each
+# landed mutant runs twice, with the lint stub exiting 1 and then 0; its execution verdict is
+# the first RED of the two (exec1/exec0), so a change after the arm is graded by the run that
+# reaches it. swallow-or-true (`if ! python3 … || true; then`) is not in the list: it parses as
+# `(! python3 …) || true`, so the step exits 1 whatever the lint says (a stalled bot, never a
+# fabricated green; exec0 reports it as rc:1).
+# T11_CONTROLS are safe rewrites of the arm, not bypasses: true-or (`if ! true || ! python3 …`)
+# and and-brace (`true && { <arm> }`) still run the lint and stop on its exit 1. Both execution
+# runs must be OK, so the harness is shown not to false-red on safe syntax; the text layer's
+# verdict on them is printed and not graded.
+T11_CONTROLS=" true-or and-brace "
+T11_EXEC_KILLS=" drop-isolate subshell-or-true false-and-brace function-keyword heredoc quoted-noop own-step-if-false true-or-continuation paths-rebound shadow-before-arm shadow-above-add reset-between comment-only delete reorder swallow-inert-body args-single args-no-flag before-add wrap-if-false uncalled-function brace-comment step-if step-shell-sh env-cond-shadow-ci env-cond-shadow-gha re-add-after-arm commit-am "
+T11_KINDS=(comment-only reorder delete swallow-or-true swallow-inert-body args-single args-no-flag drop-isolate before-add
+  wrap-if-false uncalled-function true-or and-brace function-keyword brace-comment heredoc
+  subshell-or-true false-and-brace quoted-noop own-step-if-false true-or-continuation paths-rebound
+  shadow-before-arm shadow-above-add reset-between step-if step-shell-sh
+  env-cond-shadow-ci env-cond-shadow-gha re-add-after-arm commit-am)
+t11_mutate "${T11_KINDS[@]}"
+T11_FILES=()
+for t11_kind in "${T11_KINDS[@]}"; do
+  if [[ -s "$T11_DIR/$t11_kind.yml" ]]; then T11_FILES+=("$T11_DIR/$t11_kind.yml"); else T11_FILES+=(""); fi
+done
+# One interpreter for every landed mutant's execution verdict (the per-row cost is the region run).
+T11_LANDED=(); for f in "${T11_FILES[@]}"; do [[ -n "$f" ]] && T11_LANDED+=("$f"); done
+T11_EXEC_OUT=(); T11_EXEC0_OUT=()
+if (( ${#T11_LANDED[@]} > 0 )); then
+  mapfile -t T11_EXEC_OUT < <(t11_exec 1 "${T11_LANDED[@]}")
+  mapfile -t T11_EXEC0_OUT < <(t11_exec 0 "${T11_LANDED[@]}")
+fi
+t11_j=0
+for t11_i in "${!T11_KINDS[@]}"; do
+  t11_kind="${T11_KINDS[$t11_i]}"
+  if [[ -z "${T11_FILES[$t11_i]}" ]]; then
+    echo "  FAIL: (11b) mutant $t11_kind did not land"
+    FAIL=$((FAIL + 1)); continue
+  fi
+  t11_e1="${T11_EXEC_OUT[$t11_j]:-MISSING}"; t11_e0="${T11_EXEC0_OUT[$t11_j]:-MISSING}"; t11_j=$((t11_j + 1))
+  # Only a RED:<why> line counts as a kill; OK, or a MISSING verdict, never does.
+  if [[ "$t11_e1" == RED:* ]]; then t11_ev="exec1 $t11_e1"; elif [[ "$t11_e0" == RED:* ]]; then t11_ev="exec0 $t11_e0"
+  else t11_ev="not-red(exec1 $t11_e1, exec0 $t11_e0)"; fi
+  t11_tv=$(t11_text "${T11_FILES[$t11_i]}")
+  if [[ "$T11_CONTROLS" == *" $t11_kind "* ]]; then
+    if [[ "$t11_e1" == OK && "$t11_e0" == OK ]]; then
+      echo "  PASS: (11d) control $t11_kind runs OK in both execution runs (text $t11_tv, not graded)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (11d) control $t11_kind is not OK in both execution runs (exec1 $t11_e1, exec0 $t11_e0)"
+      FAIL=$((FAIL + 1))
+    fi
+  elif [[ "$T11_EXEC_KILLS" == *" $t11_kind "* && "$t11_ev" == not-red* ]]; then
+    echo "  FAIL: (11b) mutant $t11_kind survived the execution layer ($t11_ev; text $t11_tv)"
+    FAIL=$((FAIL + 1))
+  elif [[ "$t11_tv" == RED:* || "$t11_ev" != not-red* ]]; then
+    echo "  PASS: (11b) mutant $t11_kind is reported ($t11_ev; text $t11_tv)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: (11b) mutant $t11_kind survived Test 11 ($t11_ev; text $t11_tv)"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
+# --- Test 12: the `guards-ruleset` member `cve-safe-status` is a full, enforcing scan (#12348) --
+#
+# The oracle lane skips the `test` sweep on KB-markdown-only diffs, so this ci.yml member
+# is the gate that always runs (CTO ruling D1). Every check reads a real YAML parse (PyYAML,
+# with a loader that refuses duplicate keys anywhere in the file, because PyYAML would
+# otherwise keep the last one silently): exactly one step with this id in the whole file,
+# inside the guards-ruleset job; its keys are EXACTLY id/if/name/run; its `if` is
+# `${{ !cancelled() }}` and its `run` EQUALS `python3 -I scripts/lint-cve-safe-status.py`. It is
+# the job's second step, and the first is exactly the SHA-pinned checkout (keys uses/with,
+# `actions/checkout@<40-hex sha>`, `with` exactly fetch-depth 0 and persist-credentials false),
+# so no step runs before it that could change its environment (CTO ruling X3). The job has no
+# `container:` and no `services:`. Neither the job nor the workflow sets an `env:` key named
+# LINT_CVE_SAFE_STATUS_*, GIT_*, PATH, BASH_ENV, ENV, PYTHON* or LD_*, or a `defaults.run` the
+# step would inherit. The job text has no sparse-checkout, and its aggregate has exactly one
+# member line reading this step's conclusion and outcome.
+#
+# Residuals (CTO ruling Q-end; S0 above applies here too):
+#   R12-1 The member is pinned as the first step after the SHA-pinned checkout. The runner
+#         image, `runs-on` and the checkout action's own code are trusted, not checked.
+#   R12-2 The env refusal is the named key list above. Other names are not refused, and `-I`
+#         makes the interpreter ignore PYTHON* variables, user site-packages and the script
+#         directory, but not a modified interpreter or stdlib on the image.
+echo "Test 12: ci.yml guards-ruleset runs lint-cve-safe-status as an enforcing full scan (#12348)"
+T12_DIR="$TMP/t12"; mkdir -p "$T12_DIR"
+t12_py() {  # t12_py MODE SRC [KIND DST]: MODE=verdict prints OK|RED:<why>; MODE=mutate writes DST
+  python3 - "$@" <<'T12PY'
+import re, sys
+import yaml
+mode, src = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+lines = text.split("\n")
+RUN = "python3 -I scripts/lint-cve-safe-status.py"
+IF = "${{ !cancelled() }}"
+SEAM = re.compile(r"^(LINT_CVE_SAFE_STATUS_|GIT_|PYTHON|LD_)|^(PATH|BASH_ENV|ENV)$")
+CHECKOUT_USES = re.compile(r"actions/checkout@[0-9a-f]{40}")
+CHECKOUT_WITH = {"fetch-depth": 0, "persist-credentials": False}
+FAST = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # libyaml parser when present; same constructors
+class StrictLoader(FAST):
+    pass
+def strict_mapping(loader, node, deep=False):
+    out = {}
+    for kn, vn in node.value:
+        k = loader.construct_object(kn, deep=deep)
+        if k in out:
+            raise ValueError("duplicate-key:%s@%d" % (k, kn.start_mark.line + 1))
+        out[k] = loader.construct_object(vn, deep=deep)
+    return out
+StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, strict_mapping)
+def job_bounds(ls):
+    s = [i for i, l in enumerate(ls) if re.match(r"^  guards-ruleset:\s*$", l)]
+    if len(s) != 1:
+        return None
+    e = next((i for i in range(s[0] + 1, len(ls)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", ls[i])), len(ls))
+    return s[0], e
+def step_bounds(ls, a, e):
+    ids = [i for i in range(a, e) if re.match(r"^\s*- id: cve-safe-status\s*$", ls[i])]
+    if len(ids) != 1:
+        return None
+    i = ids[0]
+    ind = len(ls[i]) - len(ls[i].lstrip())
+    j = i + 1
+    while j < e and not (ls[j].strip() and (len(ls[j]) - len(ls[j].lstrip())) <= ind):
+        j += 1
+    return i, j
+def verdict():
+    try:
+        doc = yaml.load(text, Loader=StrictLoader)
+    except ValueError as e:
+        return str(e)
+    jobs = doc.get("jobs") or {}
+    if "guards-ruleset" not in jobs:
+        return "no-guards-ruleset-job"
+    hits = [(name, s) for name, j in jobs.items() for s in (j.get("steps") or [])
+            if isinstance(s, dict) and s.get("id") == "cve-safe-status"]
+    if len(hits) != 1:
+        return "step-count:%d" % len(hits)
+    name, step = hits[0]
+    if name != "guards-ruleset":
+        return "step-outside-job"
+    if sorted(step) != ["id", "if", "name", "run"]:
+        return "step-keys:" + ",".join(sorted(step))
+    if step["if"] != IF:
+        return "if-not-uncancelled"
+    if step["run"] != RUN:
+        return "run-argv"
+    job = jobs["guards-ruleset"]
+    for key in ("container", "services"):
+        if key in job:
+            return "job-" + key
+    steps = job.get("steps") or []
+    at = next(k for k, s in enumerate(steps) if isinstance(s, dict) and s.get("id") == "cve-safe-status")
+    if at != 1:
+        return "member-is-step-%d-not-2" % (at + 1)
+    co = steps[0]
+    if not (isinstance(co, dict) and sorted(co) == ["uses", "with"]
+            and CHECKOUT_USES.fullmatch(str(co["uses"])) and co["with"] == CHECKOUT_WITH):
+        return "step-before-member-not-the-pinned-checkout"
+    for where, holder in (("workflow", doc), ("job", job)):
+        seams = [k for k in (holder.get("env") or {}) if SEAM.match(str(k))]
+        if seams:
+            return "%s-env-seam:%s" % (where, ",".join(seams))
+        if "run" in (holder.get("defaults") or {}):
+            return "%s-defaults-run" % where
+    jb = job_bounds(lines)
+    if jb is None:
+        return "no-guards-ruleset-job-text"
+    a, e = jb
+    jt = [l for l in lines[a:e] if not l.lstrip().startswith("#")]
+    if any("sparse-checkout" in l for l in jt):
+        return "sparse-checkout"
+    member = "member cve-safe-status '*' 'cve-safe-status' '${{ steps.cve-safe-status.conclusion }}' '${{ steps.cve-safe-status.outcome }}' || failed=1"
+    if sum(1 for l in jt if l.strip() == member) != 1:
+        return "aggregate-member"
+    return None
+if mode == "verdict":
+    why = verdict()
+    print("OK" if why is None else "RED:" + why)
+    sys.exit(0)
+kind, dst = sys.argv[3], sys.argv[4]
+a, e = job_bounds(lines)
+i, j = step_bounds(lines, a, e)
+step = lines[i:j]
+run_i = next(k for k in range(i, j) if lines[k].strip().startswith("run:"))
+if_i = next(k for k in range(i, j) if lines[k].strip().startswith("if:"))
+ind = lines[if_i].split("if:")[0]
+out = list(lines)
+if kind == "delete-step":
+    out = lines[:i] + lines[j:]
+elif kind == "run-paths":
+    out[run_i] = lines[run_i] + " --paths knowledge-base/README.md"
+elif kind == "run-help":
+    out[run_i] = lines[run_i] + " --help"
+elif kind == "run-or-true":
+    out[run_i] = lines[run_i] + " || true"
+elif kind == "if-pr-only":
+    out[if_i] = lines[if_i].replace(IF, "${{ github.event_name == 'pull_request' }}")
+elif kind in ("continue-on-error", "shell-override", "working-directory", "timeout-minutes", "duplicate-if"):
+    extra = {"continue-on-error": "continue-on-error: true", "shell-override": "shell: true {0}",
+             "working-directory": "working-directory: knowledge-base/project",
+             "timeout-minutes": "timeout-minutes: 0", "duplicate-if": "if: ${{ false }}"}[kind]
+    out = lines[:j] + [ind + extra] + lines[j:]
+elif kind == "decoy-if-env":
+    out = (lines[:if_i] + [ind + "if: ${{ false }}"] + lines[if_i + 1:j]
+           + [ind + "env:", ind + "  T12_DECOY: |", ind + "    " + "if: " + IF] + lines[j:])
+elif kind in ("job-env-seam", "job-env-path", "job-env-pythonpath"):
+    k = next(k for k in range(a, e) if lines[k] == "    env:")
+    extra = {"job-env-seam": 'LINT_CVE_SAFE_STATUS_MIN_FILES: "0"', "job-env-path": "PATH: /tmp/t12-bin:/usr/bin:/bin",
+             "job-env-pythonpath": "PYTHONPATH: scripts/t12-fixture"}[kind]
+    out = lines[:k + 1] + ["      " + extra] + lines[k + 1:]
+elif kind == "job-container":
+    k = next(k for k in range(a, e) if lines[k].startswith("    runs-on:"))
+    out = lines[:k + 1] + ["    container: t12-fixture-image"] + lines[k + 1:]
+elif kind == "drop-isolate":
+    out[run_i] = lines[run_i].replace("python3 -I scripts/", "python3 scripts/")
+elif kind == "workflow-env-seam":
+    k = next(k for k, l in enumerate(lines) if l == "jobs:")
+    out = lines[:k] + ["env:", "  GIT_DIR: /dev/null"] + lines[k:]
+elif kind == "job-defaults-shell":
+    k = next(k for k in range(a, e) if lines[k].startswith("    runs-on:"))
+    out = lines[:k + 1] + ["    defaults:", "      run:", "        shell: true {0}"] + lines[k + 1:]
+elif kind == "prior-step-inserted":
+    # A step between the checkout and the member, here one that puts a directory first on PATH.
+    dash = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+    out = lines[:i] + [dash + "- name: t12 prior step", ind + "run: |",
+                       ind + "  mkdir -p \"$RUNNER_TEMP/t12-bin\"",
+                       ind + "  echo \"$RUNNER_TEMP/t12-bin\" >> \"$GITHUB_PATH\""] + lines[i:]
+elif kind == "delete-member":
+    out = [l for l in lines if not l.strip().startswith("member cve-safe-status ")]
+elif kind == "sparse-checkout":
+    out = lines[:i] + [lines[i].replace("- id: cve-safe-status", "- uses: actions/checkout@v4"), ind + "with: { sparse-checkout: scripts }"] + lines[i:]
+elif kind == "move-out-of-job":
+    # into the LAST job of the file (guards-ruleset is not last: guards-advisory follows it)
+    rest = lines[:i] + lines[j:]
+    while rest and not rest[-1].strip():
+        rest.pop()
+    out = rest + step + [""]
+else:
+    sys.exit("t12: unknown mutant " + kind)
+res = "\n".join(out)
+if res == text:
+    sys.exit("t12: mutant %s did not change the file" % kind)
+try:
+    yaml.load(res, Loader=FAST)  # plain PyYAML: every mutant, the duplicate-key one included, must parse
+except yaml.YAMLError as e:
+    sys.exit("t12: mutant %s is not valid YAML: %s" % (kind, str(e).split(chr(10))[0]))
+open(dst, "w", encoding="utf-8").write(res)
+T12PY
+}
+assert_eq "OK" "$(t12_py verdict "$CI_YML")" "(12a) the live ci.yml guards-ruleset job runs lint-cve-safe-status as an uncancelled, enforcing, no-argument full scan with an aggregate member line"
+for t12_kind in delete-step run-paths run-help run-or-true if-pr-only continue-on-error shell-override delete-member sparse-checkout move-out-of-job \
+    decoy-if-env working-directory timeout-minutes duplicate-if job-env-seam workflow-env-seam job-defaults-shell \
+    prior-step-inserted job-env-path job-env-pythonpath job-container drop-isolate; do
+  if t12_py mutate "$CI_YML" "$t12_kind" "$T12_DIR/$t12_kind.yml"; then
+    t12_v=$(t12_py verdict "$T12_DIR/$t12_kind.yml")
+    if [[ "$t12_v" == RED:* ]]; then
+      echo "  PASS: (12b) mutant $t12_kind is reported ($t12_v)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (12b) mutant $t12_kind survived Test 12 (verdict $t12_v)"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    echo "  FAIL: (12b) mutant $t12_kind did not land"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
+print_results 152

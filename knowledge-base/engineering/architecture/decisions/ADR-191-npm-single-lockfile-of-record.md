@@ -219,12 +219,12 @@ The engine install is also keyed on a stamp of the lockfile's hash, not only on 
 so a lockfile change reaches an install that is already at the pin.
 
 **Addendum 2026-10-27 (#11156): a second `overrides` entry, `sharp`.** The engine's own range is `sharp ^0.34.5`, and
-0.34.5 carries three HIGH advisories (GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w; patched in 0.35.0, 0.35.4
-and 0.35.5), which the `dependency-review` required check rejects (`fail-on-severity: high`). `pen-cli/package.json` now
+0.34.5 carries three HIGH advisories, which the `dependency-review` required check rejects (`fail-on-severity: high`). `pen-cli/package.json` now
 overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside the engine's declared range, so it is covered
 by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
 (`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
 reaches a patched `sharp`; bump it only after a green probe, as for `undici`.
+Wording amended for disclosure hygiene (#12348); decision unchanged.
 
 **Addendum 2026-11-05 (#12102): a fourth `overrides` entry, `@anthropic-ai/claude-agent-sdk`.** The engine's own range is
 `@anthropic-ai/claude-agent-sdk ^0.3.293`. The lock already resolved 0.3.310, which embeds Bun 1.4.4 too (measured on the linux-x64 package: 0.3.309 to 0.3.311 all read 1.4.4, 0.3.293 reads 1.4.3), so this is pair alignment with the hosted image, not an advisory fix; the lockstep guard `apps/web-platform/test/claude-pin-lockstep.test.ts` carries the Bun reading across by version equality. `pen-cli/package.json`
@@ -234,3 +234,18 @@ supports. It is not needed for `npm ci` determinism, because the committed lockf
 later lockfile regeneration floating the SDK back up to whatever the range resolves to. Bump it only together with the hosted
 image's SDK pin and after a green `engine-contract-probe.sh`; drop it when the engine's own range requires an SDK at or above
 the version the hosted image ships.
+
+**Addendum 2026-11-10 (#12514): where the `@anthropic-ai/claude-agent-sdk` override lives, and its new value.** A review
+read the 2026-11-05 "fourth `overrides` entry" as a claim about `apps/web-platform/package.json`. Verified 2026-11-10: that
+file has no `@anthropic-ai/claude-agent-sdk` override (its `overrides` hold vite, ws, qs, @babel/core, protobufjs, minimatch and
+scoped postcss/browserslist/glob/zod entries); the SDK there is a direct dependency pinned exactly. The override is in
+`plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json`, whose `overrides` hold four entries: `undici`, `sharp`,
+`minimatch` (`11.0.1`, added by #11823 with no addendum here, which is why the count jumps from "second" to "fourth") and the
+SDK. The SDK override now reads `0.3.321`, moved together with the hosted image's pin. The 2026-11-05 paragraph also asks for a
+green `engine-contract-probe.sh` before such a bump. It was run on 2026-11-10 against the regenerated 0.3.321 lock and, as a
+control, the 0.3.311 lock from `main`. Both runs used throwaway containers and `npm ci --ignore-scripts` (phase-r-evidence.md
+R2). It was **not green**. Both arms returned the same 38 PASS / 16 FAIL / 4 RECORD line set byte for byte. All 16 FAILs are the
+design-tool cases that the pen.dev account's plan usage limit refused ("plan usage limit has been reached"), and they fail
+identically on the control. So 0.3.321 matches the control on everything the quota allowed: install, `pen status` Active, the
+REPL surface and prompt, `save()`, the removed-tool hints. The 16 quota-blocked cases are unmeasured on either version, and the
+condition stays open until a run with quota is green.

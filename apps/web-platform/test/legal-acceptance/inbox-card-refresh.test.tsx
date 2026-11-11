@@ -29,7 +29,7 @@ const props = {
   validUntil: null,
   state: "pending" as const,
   row: null,
-  flagEnabled: true,
+  surfaceEnabled: true,
   email: "founder@example.com",
   currentVersion: "2026-11-07",
 };

@@ -52,7 +52,9 @@ vi.mock("@/lib/feature-flags/server", () => ({
   ANON_IDENTITY: { userId: "anon", role: "prd", orgId: null },
 }));
 
-vi.mock("@/server/workspace-resolver", () => ({
+// byok-resolver imports from the filesystem-free leaf (#9137); mocking it also
+// satisfies the workspace-resolver re-export, which resolves to the same binding.
+vi.mock("@/server/current-workspace-id", () => ({
   resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 

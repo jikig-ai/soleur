@@ -9,9 +9,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { hostGitInvocation } from "../server/host-git";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const TEST_PIN = makeEd25519Pin();
+
+// Local git now rides the shared host-git invocation: the hardening block precedes the caller's args. The block is taken from
+// the helper itself (not a copied literal list), so a change to it moves the fake and production together.
+const HOST_GIT_BLOCK = hostGitInvocation([], { allowProtocol: "none" }).args;
+const stripBlock = (argv: string[]): string[] => argv.slice(HOST_GIT_BLOCK.length);
 
 const gitPush = vi.fn().mockResolvedValue(Buffer.from(""));
 const sshProvision = vi.fn().mockResolvedValue(Buffer.from(""));
@@ -84,7 +90,7 @@ function fakeLocalGit(opts: {
   failDelete?: boolean;
 }) {
   execFileSyncMock.mockImplementation((...a: unknown[]) => {
-    const args = a[1] as string[];
+    const args = stripBlock(a[1] as string[]);
     if (args[2] === "for-each-ref") {
       if (opts.listingThrows) throw opts.listingThrows;
       const honoured = args[0] === "-C" && args[1] === "/tmp/ws" && args.includes(RESCUE_PATTERN);
@@ -94,8 +100,8 @@ function fakeLocalGit(opts: {
     return Buffer.from("");
   });
 }
-const listingCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "for-each-ref");
-const deleteCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "update-ref");
+const listingCalls = () => execFileSyncMock.mock.calls.filter((c) => stripBlock(c[1] as string[])[2] === "for-each-ref");
+const deleteCalls = () => execFileSyncMock.mock.calls.filter((c) => stripBlock(c[1] as string[])[2] === "update-ref");
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
   it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
@@ -125,6 +131,45 @@ describe("replicateToGitData — gated off (GIT_DATA_STORE_ENABLED unset)", () =
   });
 });
 
+describe("replicateToGitData — the url/remote rewrite guard runs before ANY push (cross-tenant redirect)", () => {
+  beforeEach(() => vi.stubEnv("GIT_DATA_STORE_ENABLED", "true"));
+
+  // The guard asks the effective config for `^(url|remote)\.` through the host-git invocation; the fake answers per scenario.
+  function configAnswers(lines: string): void {
+    execFileSyncMock.mockImplementation((...a: unknown[]) => {
+      const args = stripBlock(a[1] as string[]);
+      if (args[0] === "config" && args.includes("--get-regexp")) {
+        if (lines === "") throw Object.assign(new Error("exit 1"), { status: 1 });
+        return Buffer.from(lines);
+      }
+      return Buffer.from("");
+    });
+  }
+  const run = () => replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 4, userId: USER });
+
+  it.each([
+    ["a url.<base>.insteadOf rewrite", "url.ssh://git@evil.invalid/.insteadof\0"],
+    ["a remote named by the explicit URL carrying a pushurl", `remote.${gitDataRemoteUrl(WS)}.pushurl\0`],
+  ])("%s: refuses, pushes nothing, and reports the refusal under its own op", async (_n, lines) => {
+    configAnswers(lines);
+    await expect(run()).rejects.toThrow(/refused/);
+    expect(gitPush).not.toHaveBeenCalled();
+    const ops = reportSilentFallback.mock.calls.map((c) => (c[1] as { op?: string }).op);
+    expect(ops).toContain("git_data_replication_refused");
+    expect(ops).not.toContain("git_data_replication_push");
+    // the report carries a count, never the rewritten key or its value
+    expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain("evil.invalid");
+  });
+
+  it("ordinary remotes (origin, git-data, upstream) and remote.pushDefault pass, and the push goes to the explicit URL", async () => {
+    // ordinary remotes (a fork workflow) and remote.pushDefault are NOT rewrites: only a URL-shaped remote name can matter
+    configAnswers("remote.origin.url\0remote.git-data.url\0remote.upstream.url\0remote.pushdefault\0");
+    await run();
+    expect(gitPush).toHaveBeenCalled();
+    expect((gitPush.mock.calls[0][0] as string[])).toContain(gitDataRemoteUrl(WS));
+  });
+});
+
 describe("replicateToGitData — gated on", () => {
   beforeEach(() => vi.stubEnv("GIT_DATA_STORE_ENABLED", "true"));
 
@@ -138,13 +183,15 @@ describe("replicateToGitData — gated on", () => {
     expect(gitPush).toHaveBeenCalledTimes(1);
     const pushArgs = gitPush.mock.calls[0][0] as string[];
     expect(pushArgs).toContain("push");
-    expect(pushArgs).toContain("git-data");
+    // the EXPLICIT server-derived URL, never the remote NAME (which resolves through the agent-writable .git/config)
+    expect(pushArgs).toContain(gitDataRemoteUrl(WS));
+    expect(pushArgs).not.toContain("git-data");
     // CTO F20: the main push is PER-REF, not atomic. Under --atomic one stale store head plus a later
     // local ref that refname-conflicts with it (store `heads/fix/x`, local `fix`) rejected every ref of
     // every later push forever; rescue-first already protects the old tip, so atomicity here is
     // redundant. (--atomic lives on the rescue step only: see the two-step rows below.)
     expect(pushArgs).not.toContain("--atomic");
-    expect(pushArgs.indexOf("--force")).toBeLessThan(pushArgs.indexOf("git-data"));
+    expect(pushArgs.indexOf("--force")).toBeLessThan(pushArgs.indexOf(gitDataRemoteUrl(WS)));
     // Fence push-options ride this push — worktree-id is now PER-USER, not "primary".
     expect(pushArgs).toContain("--push-option=lease-gen=7");
     expect(pushArgs).toContain(`--push-option=worktree-id=${WT}`);
@@ -192,7 +239,7 @@ describe("replicateToGitData — gated on", () => {
       expect(gitPush).toHaveBeenCalledTimes(2);
       // step 1 keeps --atomic (F12/F20)
       expect(argsOf(0)).toEqual([
-        "push", "--force", "--atomic", "git-data", RESCUE_SPEC,
+        "push", "--force", "--atomic", gitDataRemoteUrl(WS), RESCUE_SPEC,
         "--push-option=lease-gen=7", `--push-option=worktree-id=${WT}`,
       ]);
       // step 2 is per-ref: NO --atomic (F20)
@@ -211,7 +258,7 @@ describe("replicateToGitData — gated on", () => {
       hasRescueBranch();
       await go();
       const [lookup] = listingCalls();
-      expect(lookup[1]).toEqual(["-C", "/tmp/ws", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"]);
+      expect(stripBlock(lookup[1] as string[])).toEqual(["-C", "/tmp/ws", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"]);
       expect(lookup[2]).toMatchObject({ cwd: "/tmp/ws", timeout: 5000 });
     });
 
@@ -307,7 +354,7 @@ describe("replicateToGitData — gated on", () => {
       fakeLocalGit({ refs: [[SHA_A, RESCUE_A], [SHA_B, RESCUE_B]] });
       await expect(go()).resolves.toEqual({ status: "replicated" });
       const dels = deleteCalls();
-      expect(dels.map((c) => c[1])).toEqual([
+      expect(dels.map((c) => stripBlock(c[1] as string[]))).toEqual([
         ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_A, SHA_A],
         ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_B, SHA_B],
       ]);
@@ -316,14 +363,14 @@ describe("replicateToGitData — gated on", () => {
 
     it("a listing line that is not `<full sha> <rescue ref>` is never passed to update-ref", async () => {
       execFileSyncMock.mockImplementation((...a: unknown[]) => {
-        const args = a[1] as string[];
+        const args = stripBlock(a[1] as string[]);
         if (args[2] === "for-each-ref") {
           return Buffer.from(`${SHA_A} ${RESCUE_A}\nzzzz ${RESCUE_B}\n${SHA_B} refs/heads/main\n`);
         }
         return Buffer.from("");
       });
       await go();
-      expect(deleteCalls().map((c) => (c[1] as string[])[4])).toEqual([RESCUE_A]);
+      expect(deleteCalls().map((c) => stripBlock(c[1] as string[])[4])).toEqual([RESCUE_A]);
     });
 
     it("a failing local delete is best-effort: both refs are still attempted, main is pushed, replication succeeds", async () => {

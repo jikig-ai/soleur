@@ -47,6 +47,8 @@ vendored binary (full record: spec TR7):
 
 > **Pin moved 2026-11-04 (#12026):** the SDK pin is now `0.3.311` (CLI `2.1.311`, one shared binary). The measurements below were taken on 0.3.284 and are a dated record; they were not re-run for this ADR. The rewritten in-sandbox socat bridge (IPv6-first group, readiness watchdog) was re-exercised on 0.3.311 by the NO-EGRESS control arm in `sandbox-wrapped-command-runtime.test.ts` and by `broker-mechanism-spike.test.ts`, both passing under `C4_BWRAP_REQUIRED=1`.
 
+> **Pin moved 2026-11-10 (#12514):** the SDK pin is now `0.3.321` (CLI `2.1.321`, one shared binary). The 0.3.284 measurements below stay a dated record and were not re-run. In a throwaway container on 0.3.321, `sandbox-wrapped-command-runtime.test.ts` (production config, AF_UNIX-deny on and off, the egress arm) passed under `C4_BWRAP_REQUIRED=1`, `broker-mechanism-spike.test.ts` passed 19 / 0 once its version literal moved, and the bridge anchor `TCP6-LISTEN:${` still occurs once in the binary (`knowledge-base/project/specs/archive/20261110-145948-feat-one-shot-12514-claude-code-cli-fable-bump/phase-r-evidence.md`, rows 1.3, 1.4, 1.8).
+
 1. `network.httpProxyPort` is a host-side loopback port the sandbox
    runtime chains to through its own in-netns proxy — the sandboxed
    child's `localhost` is not the container loopback, so a
@@ -169,3 +171,7 @@ This amendment extends Decision 5 and the Consequences above. It rewrites none o
 - **Disclosure.** The toggle copy now says that the command-line `gh` tool is unavailable while the toggle is on, that agents still read issues, pull requests and CI status of public repositories through Soleur, that they cannot create or edit them, and that private repositories cannot be read.
 - **Consequence for the standing residual.** Third-party issue, PR, comment and CI text becomes agent input in a session with open egress. It is framed as untrusted content and field-capped; the egress gateway remains a chokepoint, not a content filter (Consequences above). The DPIA screening addendum of 2026-11-09 records the residual.
 - **Scope.** Writes, workflow logs, read-tool refinements, private repositories and legacy redirect handling are deferred to #12467, #12468, #12470, #12471 and #12472. See the ADR-311 addendum of the same date.
+
+## Addendum — 2026-11-10 (#12517): measurement 4 re-measured on Agent SDK 0.3.311
+
+Measurement 4 above records that `NO_PROXY` is not honored by the SDK's API path. The egress injector spike (PR #12518; results note `knowledge-base/project/specs/archive/20261110-211546-feat-agent-runtime-sandbox-eval/injector-spike-results.md`, finding "The CLI's own traffic goes direct") measured the opposite on Agent SDK 0.3.311 with the exact `buildAgentEnv` output: with `api.anthropic.com` in `NO_PROXY`, the CLI's Messages API, settings and policy-limit calls reached the stub directly from the app container (read from the stub's peer address), never through the proxy. Measurement 4 stands as the record of the SDK it was taken on. For 0.3.311 the exemption is load-bearing, and the `agent-env.ts` comment that repeats measurement 4 is corrected under #11637 (ADR-325, Consequences). This addendum is not current for SDK 0.3.321 (CLI 2.1.321, #12553): that pin move fires the results note's re-measure triggers, which #11637 owns before adoption.

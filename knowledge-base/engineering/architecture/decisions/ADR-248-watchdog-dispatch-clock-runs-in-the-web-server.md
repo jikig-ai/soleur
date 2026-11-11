@@ -174,7 +174,7 @@ this load, so re-measure after merge with the command in `cron-monitors.tf`.
 
 Re-derive this decision if any of these happens:
 
-- Inngest function execution is decoupled from web-1 (#9137). `[corrected 2026-09-28, #7230: pointed at #7230, which closed with the placement rule]`
+- Inngest function execution is decoupled from web-1 (#9137). `[corrected 2026-09-28, #7230: pointed at #7230, which closed with the placement rule]` `[FIRED 2026-11-10, #9137 — see the amendment below]`
 - A Workers substrate and a narrow single-repo `actions: write` GitHub App appear, which removes
   the Worker's key-custody objection.
 - The probe heartbeat stops being the paging surface (for example the Sentry check-in pages and separates
@@ -216,3 +216,19 @@ while two web hosts exist (the `var.web_hosts` reversal trigger above). A web im
 that darkens both clocks leaves only the `schedule:` fallback, which can exceed the heartbeats' 10800 s
 page threshold, so a healthy host can page "luks timer dark". Runbook step 0 for either heartbeat page is
 therefore to check the Sentry monitor `scheduled-deadman-heartbeat-feeder` before touching the timer.
+
+## Amendment (2026-11-10, #9137): reversal trigger 1 FIRED — re-derived, rationale unchanged
+
+The first reversal trigger — "Inngest function execution is decoupled from web-1 (#9137)" — fired with
+the merge of the placement-aware execution mechanism (the fnId-keyed exec-placement forwarder; see the
+`## Amendment — 2026-11-10 (#9137)` section of
+[ADR-033](./ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md)). Step calls
+now fan out to both web hosts at the `app.soleur.ai` LB and are routed by placement class: `portable`
+executes where it lands, `host-affine`/`volume-bound` forwards over pinned TLS to the exec host.
+
+Re-derived, the clock's rationale is **unchanged**: the dispatch clock was never Inngest-executed work —
+it is a per-web-host in-process dispatch (`server/watchdog-dispatch-clock.ts` starts at boot on each
+deployed web host, gated on `SOLEUR_HOST_ID`) that mints `workflow_dispatch` calls for watchers of the
+scheduling substrate. Placement of Inngest functions does not move it: it still runs on both web hosts,
+still fires while Inngest is down, and still satisfies the ADR-033 corollary test for its watched
+subjects. The eligibility rule and the failure-domain table stand as written.

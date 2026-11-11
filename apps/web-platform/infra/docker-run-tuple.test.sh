@@ -517,6 +517,25 @@ kill_row K31n-canary-bind-host-ip        'm_repl canary "-e SOLEUR_PROXY_BIND=" 
 kill_row K31o-canary-no-bind-env         'm_del canary "-e SOLEUR_PROXY_BIND"'            'MISSING_DECLARED: env SOLEUR_PROXY_BIND missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K31p-canary-port-env            'm_ins canary "-e SOLEUR_PROXY_PORT=8443"'       'ENV_NAME: SOLEUR_PROXY_PORT in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K31q-first-boot-relay-publish   'm_ins first-boot "-p 0.0.0.0:8443:8443"'        'UNKNOWN_OPTION: -p 0.0.0.0:8443:8443 in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+# --- #9137 (CTO T2): the exec-forward receiver publishes :8445 exactly like :8443, and exec-host identity travels as
+# --- SOLEUR_HOST_PRIVATE_IP: $PROXY_BIND on prod (the RESOLVED host address — never a literal, never another var),
+# --- literal EMPTY on the canary (it serves no step traffic), ${private_ip} on first-boot (the Terraform-rendered
+# --- var.web_hosts private_ip the boot already waits on). The canary and first-boot publish no 8445.
+kill_row K32a-prod-no-private-ip-env   'm_del prod "-e SOLEUR_HOST_PRIVATE_IP"'           'MISSING_DECLARED: env SOLEUR_HOST_PRIVATE_IP missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K32b-prod-private-ip-literal  'm_repl prod "-e SOLEUR_HOST_PRIVATE_IP=\"\$PROXY_BIND\"" "-e SOLEUR_HOST_PRIVATE_IP=10.0.1.10"' "ENV_NAME: SOLEUR_HOST_PRIVATE_IP value '10.0.1.10' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K32c-prod-private-ip-empty    'm_repl prod "-e SOLEUR_HOST_PRIVATE_IP=\"\$PROXY_BIND\"" "-e SOLEUR_HOST_PRIVATE_IP="' "ENV_NAME: SOLEUR_HOST_PRIVATE_IP value '' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K32d-prod-private-ip-wrong-var 'm_repl prod "-e SOLEUR_HOST_PRIVATE_IP=\"\$PROXY_BIND\"" "-e SOLEUR_HOST_PRIVATE_IP=\"\$RELAY_PUBLISH_BIND\""' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_PRIVATE_IP=$RELAY_PUBLISH_BIND in ci-deploy.sh prod' '!canary' '#1'
+kill_row K32e-canary-private-ip-set    'm_repl canary "-e SOLEUR_HOST_PRIVATE_IP=" "-e SOLEUR_HOST_PRIVATE_IP=0.0.0.0"' "ENV_NAME: SOLEUR_HOST_PRIVATE_IP value '0.0.0.0' in ci-deploy.sh canary" '!prod' '#1'
+kill_row K32f-canary-private-ip-var    'm_repl canary "-e SOLEUR_HOST_PRIVATE_IP=" "-e SOLEUR_HOST_PRIVATE_IP=\"\$PROXY_BIND\""' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_PRIVATE_IP=$PROXY_BIND in ci-deploy.sh canary' '!prod' '#1'
+kill_row K32g-canary-no-private-ip-env 'm_del canary "-e SOLEUR_HOST_PRIVATE_IP"'         'MISSING_DECLARED: env SOLEUR_HOST_PRIVATE_IP missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K32h-prod-no-exec-publish     'm_del prod "8445:8445"'                           'MISSING_DECLARED: port ${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445 missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K32i-prod-exec-publish-all-interfaces 'm_repl prod "-p \"\${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445\"" "-p 0.0.0.0:8445:8445"' 'UNKNOWN_OPTION: -p 0.0.0.0:8445:8445 in ci-deploy.sh prod' 'MISSING_DECLARED: port ${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445 missing from ci-deploy.sh prod' '!canary' '#2'
+kill_row K32j-prod-exec-publish-fallback-open 'm_repl prod "\${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445" "\${RELAY_PUBLISH_BIND:-0.0.0.0}:8445:8445"' 'UNPARSEABLE_OPTION: -p ${RELAY_PUBLISH_BIND:-0.0.0.0}:8445:8445 in ci-deploy.sh prod' '!canary' '!MISSING_DECLARED' '#1'
+kill_row K32k-canary-exec-publish      'm_ins canary "-p \"\${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445\""' 'UNPARSEABLE_OPTION: -p ${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445 in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K32l-first-boot-exec-publish  'm_ins first-boot "-p 0.0.0.0:8445:8445"'          'UNKNOWN_OPTION: -p 0.0.0.0:8445:8445 in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K32m-first-boot-no-private-ip-env 'm_del first-boot "-e SOLEUR_HOST_PRIVATE_IP"' 'MISSING_DECLARED: env SOLEUR_HOST_PRIVATE_IP missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K32n-first-boot-private-ip-literal 'm_repl first-boot "-e SOLEUR_HOST_PRIVATE_IP=\${private_ip}" "-e SOLEUR_HOST_PRIVATE_IP=10.0.1.10"' "ENV_NAME: SOLEUR_HOST_PRIVATE_IP value '10.0.1.10' in cloud-init.yml first-boot" '!ci-deploy.sh' '#1'
+kill_row K32o-first-boot-private-ip-other-var 'm_repl first-boot "-e SOLEUR_HOST_PRIVATE_IP=\${private_ip}" "-e SOLEUR_HOST_PRIVATE_IP=\${other_ip}"' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_PRIVATE_IP=${other_ip} in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 
 # --- must-PASS rows (non-canonical shapes of the SAME posture) ------------------------------------
 pass_row P1-reordered-equals      'm_secopts_last prod; m_repl prod "--restart unless-stopped" "--restart=unless-stopped"; m_repl prod "--log-driver journald" "--log-driver=journald"'
@@ -711,7 +730,10 @@ h1_stub classify check_options '[]' \
   K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited \
   K26a-canary-reaper-env K26b-canary-token-mount \
   K07h-canary-literal-https K07m-canary-no-link-env K07o-prod-no-extra-ca-env K10x-prod-no-ca-volume K07r-canary-reject-unauthorized \
-  K31a-canary-relay-publish-var K31b-canary-relay-publish-all K31c-prod-relay-publish-all-interfaces K31g-prod-bind-host-ip K31h-prod-bind-other-literal K31m-canary-bind-not-empty K31p-canary-port-env K31q-first-boot-relay-publish
+  K31a-canary-relay-publish-var K31b-canary-relay-publish-all K31c-prod-relay-publish-all-interfaces K31g-prod-bind-host-ip K31h-prod-bind-other-literal K31m-canary-bind-not-empty K31p-canary-port-env K31q-first-boot-relay-publish \
+  K32b-prod-private-ip-literal K32c-prod-private-ip-empty K32d-prod-private-ip-wrong-var K32e-canary-private-ip-set K32f-canary-private-ip-var \
+  K32i-prod-exec-publish-all-interfaces K32j-prod-exec-publish-fallback-open K32k-canary-exec-publish K32l-first-boot-exec-publish \
+  K32n-first-boot-private-ip-literal K32o-first-boot-private-ip-other-var
 h1_stub declared check_declared '[]' \
   K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port K24e-prod-no-tls-port \
   K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
@@ -721,7 +743,8 @@ h1_stub declared check_declared '[]' \
   K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap \
   K29a-canary-no-init K29b-canary-no-memory K29c-canary-no-memory-swap K29d-canary-no-env-file \
   K29e-prod-no-restart K29f-prod-no-log-driver K29g-prod-no-add-host \
-  K31d-prod-no-relay-publish K31j-prod-no-bind-env K31k-prod-no-port-env K31o-canary-no-bind-env
+  K31d-prod-no-relay-publish K31j-prod-no-bind-env K31k-prod-no-port-env K31o-canary-no-bind-env \
+  K32a-prod-no-private-ip-env K32g-canary-no-private-ip-env K32h-prod-no-exec-publish K32m-first-boot-no-private-ip-env
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -745,7 +768,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=329
+MIN_ROWS=359
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
