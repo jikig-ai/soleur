@@ -568,7 +568,7 @@ assert "a prefix-colliding name does not satisfy the membership test and no get 
 assert "the gate's own exit code propagates through exec (failure and success)" scn_exec_rc "$WRAPPER"
 assert "no DOPPLER_*, BASH_ENV or ENV reaches the gate; the marker and the orchestrator's env do" scn_doppler_scrub "$WRAPPER"
 assert "the gate's environment is an allowlist: DOPPLER-API-HOST, doppler_token, BASH_FUNC_* and every unrelated variable are dropped" scn_survivors "$WRAPPER"
-assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 10 names)" scn_allow_parity "$WRAPPER"
+assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate)" scn_allow_parity "$WRAPPER"
 assert "the derivation of the gate's reads sees every expansion form (\$NAME, \${NAME}, \${NAME:?, \${NAME:-) and ignores the gate's own variables and comments" scn_derive_sees_every_form
 assert "every allowlisted gate input the caller set reaches the gate verbatim; set-but-empty stays set, unset stays unset" scn_allow_passthrough "$WRAPPER"
 assert "the marker's host is seam-owned: a caller value is discarded; marker present -> web-2, absent -> unset" scn_marker_host_seam_owned "$WRAPPER"
@@ -629,6 +629,8 @@ assert "MARKER_NAME equals W2L_MARKER_NAME in scripts/lib/web2-luks-rows.sh" par
 assert "MARKER_PROJECT equals W2L_MARKER_PROJECT" parity MARKER_PROJECT W2L_MARKER_PROJECT
 assert "MARKER_CONFIG equals W2L_MARKER_CONFIG and is prd_workspaces_luks_marker" parity MARKER_CONFIG W2L_MARKER_CONFIG
 assert "MARKER_CONFIG is the literal prd_workspaces_luks_marker (never prd)" test "$(const_of "$WRAPPER" MARKER_CONFIG)" = prd_workspaces_luks_marker
+host_parity() { [ -n "$(const_of "$WRAPPER" MARKER_HOST)" ] && [ "soleur-$(const_of "$WRAPPER" MARKER_HOST)" = "$(const_of "$ROWS_LIB" W2L_HOST_NAME)" ]; }
+assert "MARKER_HOST is the key of the host the marker's writer probes (soleur-<key> = W2L_HOST_NAME)" host_parity
 iso_parity() { [ -n "$(grep -m1 '^ISO_RE=' "$WRAPPER")" ] && [ "$(grep -m1 '^ISO_RE=' "$WRAPPER")" = "$(grep -m1 '^ISO_RE=' "$GATE")" ]; }
 assert "the wrapper's ISO_RE is byte-identical to the gate's" iso_parity
 pinned_path_ok() {
@@ -812,7 +814,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=124
+CASES_FLOOR=125
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1

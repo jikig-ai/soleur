@@ -93,9 +93,9 @@ grep -qF 'within ${BOOT_TRAIL_DEADLINE_S}s' "$TRAIL" && ! grep -qE 'within [0-9]
 ok "budget: the timeout ::error:: names the deadline variable, not a stale literal" $?
 grep -qF "SOLEUR_FRESH_BOOT_WINDOW_SECONDS is ${W})" "$TRAIL"; ok "budget: the timeout ::error:: quotes the host's current window ($W s)" $?
 PRE_POLL_S=660
-# Worst case: an iteration that STARTS just before the deadline (sleep + curl) runs past it, the grace
-# loop can do the same, and the timeout branch then makes its two server-side re-reads (origin_query).
-WORST=$((D + 2 * (SL + CM) + G + CM + 2 * RQ))
+# Upper bound: the sum of every bounded wait the trail can make, whichever terminal it reaches (the
+# deadline, the grace window, a late iteration on each, and its three server-side origin_query reads).
+WORST=$((D + G + 2 * (SL + CM) + 3 * RQ))
 ok "budget: create worst case ($((PRE_POLL_S + WORST)) s) fits timeout-minutes $TC" "$([[ $((PRE_POLL_S + WORST)) -le $((TC * 60)) ]]; echo $?)"
 ok "budget: replace worst case ($((PRE_POLL_S + 60 + WORST)) s) fits timeout-minutes $TR" "$([[ $((PRE_POLL_S + 60 + WORST)) -le $((TR * 60)) ]]; echo $?)"
 
