@@ -719,8 +719,9 @@ reuses the same copy files for Guard 2 rows 1 and 2, rather than building them t
   lines.
 - [ ] **AC2. RED came first, and stays re-checkable.** On the unfixed documents (Phase 1 step 3), N3b was a `FAIL`
   naming the destroy fence and three unclassified lines. That line is quoted in the PR body. The same result can be
-  reproduced at any time without the one-off run (test-design review finding 5): with
-  `B=$(git merge-base HEAD origin/main)`, write `git show "$B":<runbook>` and `git show "$B":<skill>` to scratch copies
+  reproduced at any time without the one-off run (test-design review finding 5): with the base commit pinned as
+  `B=408ad9c0e1ae60a344f26e48b90357d6a7fdc22e` (recorded in the PR body; a live merge-base resolves to the fixed tree
+  once this branch merges, CTO ruling 8e), write `git show "$B":<runbook>` and `git show "$B":<skill>` to scratch copies
   and call `n3b` on them with pin `106903269` and retired `106261946`. It prints a `destroy-fence:` line and three
   `unclassified` lines (runbook `:357`, runbook `:408`, skill `:506`). The work session runs this and pastes its output
   under the quoted FAIL line.

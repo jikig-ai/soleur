@@ -55,7 +55,7 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12616-6894-readback-stdin-h
   - `python3 scripts/lint-skill-body-budget.py --base origin/main`
   - `python3 scripts/lint-infra-no-human-steps.py`
   - markdownlint on the two documents
-- [ ] 3.4 AC2 replay: run `n3b` on `git show "$(git merge-base HEAD origin/main)":<file>` copies; expect `destroy-fence:`
+- [ ] 3.4 AC2 replay: run `n3b` on `git show 408ad9c0e1ae60a344f26e48b90357d6a7fdc22e:<file>` (pinned base, recorded in the PR body) copies; expect `destroy-fence:`
   plus three `unclassified` lines. AC4 grep returns nothing. AC7 normalized grep prints `0` for the old claim, and the new wording is present in
   section 5c.
 - [ ] 3.5 For each of the four CTO mutants, run it on the worktree file:
