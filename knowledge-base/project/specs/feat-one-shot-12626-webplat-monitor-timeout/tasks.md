@@ -32,10 +32,10 @@ ruling are in `decision-challenges.md` — arm-B assumptions inline.
 - [ ] T5. Add `_suite_budget_ms()` entries for the three batteries in
       `scripts/test-all.sh`; refresh durations TSVs if the capacity machinery
       consumes them for the new legs. (Property list)
-- [ ] T6. Verify required-check surface: enumerate whether branch rulesets pin
-      leg names or the `test` aggregator; sync
-      `required-checks-merge-group-coverage.test.sh`/ruleset if needed.
-      (Dependencies & Risks)
+- [ ] T6. Required-check surface (CTO-refuted risk): ruleset pins only `test`
+      aggregator — no Terraform/ruleset change needed; verify the new job is
+      in `test`'s `needs:` and run `required-checks-merge-group-coverage.test.sh`
+      to confirm. (Dependencies & Risks)
 - [ ] T7. Validation: `--list` enumerate check; `VITEST_SHARD=1/2` decline
       run; `test-all-webplat-gate.test.sh` + monitor guard green; post-merge
       `workflow_dispatch` leg-report verification. (AC-5, Phase 3)

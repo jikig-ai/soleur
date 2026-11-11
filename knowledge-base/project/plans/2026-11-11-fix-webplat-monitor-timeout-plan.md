@@ -244,10 +244,13 @@ run them on a dedicated per-battery monitor/CI job.**
 
 ### Deferred lever
 
-`--rows` row-splitting of `approval-guard1-mutation` (the battery already
-supports `--rows A-B`; `shard-totality-mutations` proves the
-contiguous-tiling + `-<letter>` label contract) — only if a dedicated leg
-later approaches its ceiling. Not needed at current row counts.
+`--rows` row-splitting of `approval-guard1-mutation` — only if a dedicated leg
+later approaches its ceiling. Not needed at current row counts. **Correction
+(CTO ruling, 2026-11-11):** the battery does NOT support `--rows` today — its
+argv is `[--only <ERE>] [--list] [--check-anchors]` — so the follow-up lever is
+"add a `--rows` arm (or an `--only` ERE tiling plus a row-count/DECLARED_TOTAL-style
+pin)", carrying the `shard-totality-mutations` contiguous-tiling + `-<letter>`
+label contract with it.
 
 ## Alternative Approaches Considered
 
@@ -280,9 +283,14 @@ later approaches its ceiling. Not needed at current row counts.
   comment.
 - `plugins/soleur/test/main-health-monitor-workflow.test.sh`: leg census,
   margin assertions, envelope re-derivation.
-- Extend the static guard (or a sibling assertion block) to assert each
-  battery label is gated: `run_suite`/`skip_suite` pair present, gated on
-  `VITEST_SHARD` — paired mutants per assertion.
+- `scripts/test-all-webplat-gate.test.sh` (CTO ruling): `run_suite`/`skip_suite`
+  pair assertions for each gated battery label — paired mutants per assertion.
+- Leg-report compatibility (CTO constraint): a direct
+  `bash apps/web-platform/test/<battery>.test.sh` emits no `=== N suites:`/`^RED `
+  runner markers, so capture-greps yield thin detail — the leg verdict stays
+  honest via `status.env` `outcome=` and the filer on `needs.*.result`. The leg
+  MUST still tee into `leg-report/capture.txt`, emit `status.env` + `elapsed_s`,
+  and propagate the battery exit code explicitly.
 
 ### Phase 3 — validation
 
@@ -299,11 +307,27 @@ later approaches its ceiling. Not needed at current row counts.
 - `scripts/test-all.sh` — `VITEST_SHARD`-unset gate around the three battery
   `run_suite` sites (7387/7391/7395); `_suite_budget_ms()` entries.
 - `.github/workflows/ci.yml` — new `test-webplat-mutations` job; `test`
-  aggregator join; `if:` mirrors; flip-trigger comment.
-- `.github/workflows/main-health-monitor.yml` — new job; `report` wiring;
-  ceiling comments.
-- `plugins/soleur/test/main-health-monitor-workflow.test.sh` — leg census,
-  margin/envelope expectations for the new leg.
+  aggregator join (`needs:`/env/`entries`/`oracle_re` ~2283–2373); `if:` mirrors;
+  flip-trigger comment; Guard-3 jq leg list + `length == 6`→7 and its
+  "SIX lane-skippable legs" comment (~243–255); "eight jobs" gated-set comment
+  (~151–153); draft-light "four heavy families" comment (~275).
+- `.github/workflows/main-health-monitor.yml` — new job; `report` wiring
+  (`needs:`/`R_` env/filer-OR/closer-AND); `EXPECTED_LEGS` 15→18; ceiling comments.
+- `plugins/soleur/test/main-health-monitor-workflow.test.sh` — `LEG_JOBS` tuple
+  (~line 116) extension; leg census, margin/envelope expectations for the new leg.
+- `scripts/test-all-webplat-gate.test.sh` — `run_suite`/`skip_suite` pair
+  assertions for the `VITEST_SHARD` gate (CTO ruling: this file owns the
+  `want_webplat`-block extraction and the `mutate()` harness the Guard Contract's
+  4-row mutation matrix needs).
+- `scripts/ci-push-dedupe.test.sh` — `GATED_PINNED` (~L85), `DL_GATED_PINNED`
+  (~L89), `OR_GATED_PINNED` (~L108): classify the new job in both directions.
+- `scripts/ci-draft-light.test.sh` — `HEAVY_PINNED` (~L80), `OR_GATED_PINNED`
+  (~L97), `LEGS` census (~L161).
+- `scripts/ci-oracle-lane.sh` — `ORACLE_SKIP_SET` (~L92), `GUARD:O-GRAMMAR` regex
+  (~L420); keep the new leg oracle-skippable (batteries don't exercise the
+  C4-render path — `diagrams` carve-out ~L402 stays).
+- `scripts/ci-oracle-lane.test.sh` — `ORACLE_FIVE`/`FIVE_RE` (~L259–261) plus its
+  check sites.
 
 ## Files to Create
 
@@ -520,13 +544,13 @@ is registered in the webplat arm later, the guard's label set must be updated
 - **Risk:** `guard-vacuity-floor` / `fixture-relative-assert.baseline`
   references to battery files → files are not moved/renamed, only their
   registration sites gated; verify both suites green.
-- **Risk:** required-check surface — matrix legs report as
-  `test-webplat-mutations (battery)`; if the branch ruleset pins leg names
-  rather than the `test` aggregator job, the ruleset +
-  `required-checks-merge-group-coverage.test.sh` expectations need a
-  synchronized update → implementation must enumerate the required-check list
-  (`gh api repos/.../rulesets` or the coverage guard's own census) before
-  merging.
+- **Risk (downgraded by CTO ruling, 2026-11-11):** required-check surface —
+  `infra/github/ruleset-ci-required.tf:95` pins only the `test` aggregator
+  context, not leg names, so NO Terraform/ruleset/required-checks.txt change
+  is needed **contingent on the new job joining `test`'s `needs:`** (mandatory
+  per the row-4 ruling — keeps battery failures merge-blocking). Residual:
+  the `required-checks-merge-group-coverage.test.sh` census still runs at
+  implementation to confirm the join lands.
 - **Risk:** a starved dedicated leg still tips the derived ceiling → residual
   risk accepted; `--rows` split is the named follow-up lever; the issue
   remains the tracking surface.
