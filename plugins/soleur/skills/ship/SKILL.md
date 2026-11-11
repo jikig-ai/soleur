@@ -2172,9 +2172,9 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
   && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
 ```
 
-**Arm only with the review evidence**, checked in the arming command: `[ "$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(startswith("Review-Evidence:"))]|length')" -ge 1 ] && gh pr merge PR_NUMBER --squash --auto` (lock-wrapped form where the block below prescribes it). No such comment, a `head=` that is not the PR head, or `coverage` other than `full`: run `soleur:review`, which posts it. Gate text and domain seats: [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md).
+**Arm only through the arm check** in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) (also gate text, domain seats): run its first statement, then the lock block below, in one Bash call; on refusal, `soleur:review` first.
 
-Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
+Arm through the arm check ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
 If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` prints anything or exits 2/127, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
@@ -2184,12 +2184,12 @@ Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't qu
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
-    gh pr merge <number> --squash --auto
+    gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
   rc=$?
 else
   # Degrade open, loudly — the lock is advisory (ADR-178 §5).
   echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
-  gh pr merge <number> --squash --auto
+  gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
   rc=$?
 fi
 # rc=99 comes only from `with_lock` — but it means "the lock could not be
@@ -2604,8 +2604,9 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
       # Phase 6 secret scan first
       git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
       # + `incr ci_wall_s <s>` (Phase-6 recipe; skip unreadable)
-      gh pr merge <number> --squash --auto
       ```
+
+      Re-arm only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): the fix commit needs `soleur:review` first. **Why:** #12619.
 
       Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
 
