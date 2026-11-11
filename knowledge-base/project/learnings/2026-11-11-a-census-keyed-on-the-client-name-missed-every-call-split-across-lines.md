@@ -58,10 +58,12 @@ anything calls it. Drive every row through the entry point the real check uses.
 2. **The builder check's call site was unpinned** (the builder-call-removed mutant stayed at 286/286). Recovery: g1r14
    drives `n3b` with an overridden `RB_HDR`. Prevention: review's "both endpoints can be pinned while the wire between
    them is not" rule already names this. The fix is to apply it while writing the row, not after the battery.
-3. **I attributed the CI `test` aggregate red to a weight-budget shard before reading the job list.** Its shard jobs
-   were `skipped` because `lint-bot-statuses` (`readme-counts`, red on main) had failed. Recovery: corrected the PR
-   comment. Prevention: a bullet in `ship/references/ci-run-diagnosis.md`: list the run's skipped jobs before
-   attributing an aggregator failure.
+3. **I attributed the CI `test` red to a weight-budget shard before reading the job list, then to the wrong upstream
+   job.** The shard jobs were `skipped` because the PR was a draft (they are gated on `draft-light`). The separate
+   `lint-bot-statuses` red (`readme-counts`, red on main) gates nothing, yet the first correction blamed the skips on it.
+   A fix-round review caught that: no job lists `lint-bot-statuses` in `needs:`. Recovery: corrected the PR comment and
+   the diagnosis bullet. Prevention: the bullet in `ship/references/ci-run-diagnosis.md` now says to read each skipped
+   shard's `needs:` before naming a cause.
 4. **A `sed` re-enable step in the mutation harness dropped the run ids,** so the run started with shifted arguments.
    Recovery: stopped it with TaskStop and removed the sandboxes. Prevention: one-off; edit a harness with an anchored
    whole-line replacement and `grep` the result before running it.
