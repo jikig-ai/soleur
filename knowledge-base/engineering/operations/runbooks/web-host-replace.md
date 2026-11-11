@@ -244,6 +244,10 @@ The replace is a targeted apply whose `-target` list never names the load-balanc
 
 ### The kernel-settle reboot at birth (ADR-326, #12008)
 
+Before replacing web-2 while it serves, drain it first (`arm=ga-pool-update mode=drain`): the destroy aborts every live agent
+session on it and discards uncommitted worktrees, and the pool keeps routing to the dead origin for up to about 2 minutes. For the
+first replace after the PR that added this step, dispatch after the release deploy that carries it, or pass `-f image_tag=` explicitly.
+
 Every create and replace boots once onto the kernel it just installed, right after the bounded apt step. Expect one
 `kernel_reboot` info stage in the boot trail, and about 4 minutes more before `cloud_init_complete`. The trail deadline and the
 host's readiness window both include that time. These are the new failure rows:

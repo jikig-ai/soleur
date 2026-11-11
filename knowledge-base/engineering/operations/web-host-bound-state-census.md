@@ -24,6 +24,10 @@ row reds CI instead of leaving this page stale.
 | C6 | Cross-host relay config (`SOLEUR_HOST_ROSTER`, `SOLEUR_PROXY_PEER_ALLOWLIST`) | **No: hand-kept Doppler values.** The session router and the LB gate read them; nothing in Terraform derives them from `var.web_hosts`. | `server/session-router.ts`; `lb-weight-gate.sh` Condition A | The new key and address in both values before it is pooled (the gate refuses otherwise) |
 | C7 | SSH host-key pin per host (`web-<n>-ssh-host-key.pub`) | **No: committed per host.** Each birth makes a new host key, and the CI connection that dials that host pins the committed file. | `server.tf` (`web_*_ssh_host_key` locals) | A capture-and-commit after the key's birth, until the bastion (PR 2–3) removes per-host dialing |
 
+A roster change has one more coupling outside this table: `hcloud_server.inngest` renders the derived web IP list into its
+`user_data`, which it does not ignore, so adding or removing a key also plans a replace of the scheduler host. Sequence that
+replace on purpose in the roster PR.
+
 Rows C3 and C4 are the forcing function for the `web-3` PR (#9421 sequence, PR 5). The suite
 counts the `host_kernel_web_*` heartbeats against the `var.web_hosts` keys, so adding a key without
 its heartbeat reds CI.
