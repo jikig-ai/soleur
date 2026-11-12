@@ -96,7 +96,7 @@ anything calls it. Drive every row through the entry point the real check uses.
 14. **`lint-infra-no-human-steps.py` full-scan exits 1 on findings already on main.** Recovery: used CI's `--changed`
     form. Prevention: one-off for this PR. The full-scan findings are pre-existing and outside this diff.
 
-Errors 15 to 18 happened after this learning was first written (fix rounds, ship and post-merge of PR #12645), and
+Errors 15 to 19 happened after this learning was first written (fix rounds, ship and post-merge of PR #12645), and
 were captured on 2026-11-12.
 
 15. **A review-fix commit (`e6b87fc971`, the night before ready) added a `producer | grep -q` row to
@@ -137,8 +137,18 @@ were captured on 2026-11-12.
 18. **`deploy-arm.sh find --wait` ran as a foreground Bash call and was killed at the 600 s Bash timeout** (the harness
     can also move such a call to the background instead). It polls about once a minute for up to 120 polls, so it can
     wait about two hours. Recovery: re-armed it under the Monitor tool, matching `^ARM=`. Prevention:
-    `postmerge/SKILL.md` Phase 3 (the `deploy-arm.sh find` paragraph) already says Monitor; it now also says why a
-    foreground call cannot work, and that a 30-minute Monitor watch needs a bounded `find --wait 25` and re-arming.
+    `postmerge/SKILL.md` Phase 3 (the `deploy-arm.sh find` paragraph) now says the watch is bounded and re-armed and
+    never a foreground call; the detail (`timeout_ms: 1800000`, `find --wait 25`, which lines re-arm, stop after 5) is
+    in `ship/references/monitor-hygiene.md`, which postmerge already links as its Monitor rules. The postmerge body sits
+    at its 48,000-byte ceiling, which is why the detail moved. A first draft put it all in postmerge and failed
+    `lint-skill-body-budget.py` in the ready run.
+19. **The PR that wrote these preventions failed its own ready run on `guards-ruleset`** (PR #12701, member
+    `rule-body-lint-ratchet`): `lint-skill-body-budget.py` found `postmerge/SKILL.md` 726 bytes over its 48,000-byte
+    ceiling. Main's copy was 9 bytes under, and the new Phase 3 text added about 730. The suites run before ready were
+    the ones that read the changed files, and the pre-ready list did not name this lint. Recovery: moved the
+    bounded-watch detail into `monitor-hygiene.md` and left postmerge 10 bytes smaller than main. Prevention:
+    `lint-skill-body-budget.py` added to the pre-ready guard list in `ready-run-wait.md`; any edit to a lifecycle
+    SKILL.md runs it before push.
 
 ## Tags
 
