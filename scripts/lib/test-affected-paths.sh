@@ -2511,6 +2511,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_IDEMPOTENCY_TEST_SH_PATHS=(
   "scripts/md-to-mrkdwn.test.mjs"
 )
 
+# plugins/soleur/test/reusable-release-push-failed-marker.test.sh — derived edges could not reach its subject (it parses
+# the workflow with PyYAML and executes the marker step's run: body); declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS=(
+  ".github/workflows/reusable-release.yml"
+  "knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md"
+  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
+  "plugins/soleur/test/reusable-release-push-failed-marker.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
@@ -4153,6 +4165,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
+  "scripts/followthroughs/placement-decision-forward-9137.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/private-nic-converged-6415.sh"
   "scripts/followthroughs/registry-luks-live-8386.sh"  # scripts/lib/test-affected-paths.sh:2849
   "scripts/followthroughs/registry-htpasswd-stdin-10119.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS

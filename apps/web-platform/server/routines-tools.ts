@@ -141,7 +141,7 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
         "routine_run",
         "Trigger a routine to run now, off-schedule (debug mode). `fnId` must be " +
           "an EXPECTED_CRON_FUNCTIONS id (event-driven functions are rejected). " +
-          "Gated: requires operator approval via the review gate — that approval " +
+          "Gated: requires the session user's approval via the review gate — that approval " +
           "IS the confirmation for protected (financial/egress/deletion) " +
           "routines. Returns the dispatched event name. Error codes: " +
           "400 unknown_routine.",

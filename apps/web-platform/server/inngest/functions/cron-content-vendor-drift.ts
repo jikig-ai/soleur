@@ -471,13 +471,17 @@ interface HandlerResult {
 /** Host git-config isolation, matching runGit's scrub in
  * `_cron-safe-commit.ts` — merge-file/hash-object are effectively
  * config-insensitive, but the two spawners must not disagree inside one
- * pipeline (#8185 review). */
-const GIT_ISOLATED_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_CONFIG_NOSYSTEM: "1",
-};
+ * pipeline (#8185 review). Built at call time, never a module-load snapshot of
+ * process.env, so keys deleted at boot (the relay hello keys) cannot be captured
+ * (ADR-323 Decision 9). */
+function gitIsolatedEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
 
 function spawnGit(
   args: string[],
@@ -490,7 +494,7 @@ function spawnGit(
   return new Promise((resolve) => {
     const child = spawn("git", args, {
       ...opts,
-      env: { ...GIT_ISOLATED_ENV, ...opts?.env },
+      env: { ...gitIsolatedEnv(), ...opts?.env },
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
@@ -515,7 +519,7 @@ async function spawnGitStdout(
     const child = spawn("git", args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...opts,
-      env: { ...GIT_ISOLATED_ENV, ...opts?.env },
+      env: { ...gitIsolatedEnv(), ...opts?.env },
     });
     let stdout = "";
     let stderr = "";

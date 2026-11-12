@@ -154,6 +154,8 @@ Attestation-writing RPCs MUST verify the caller has `role = 'owner'` on the targ
 
 The schema does not currently define an `'admin'` role; only `'owner'` and `'member'` exist. If a future migration adds intermediate roles, this check expands to enumerate which roles authorize attestation writes — verify against `workspace_members.role` at review time.
 
+**Check scope equals action scope.** For any role or membership check that gates a tool or action, name the workspace the check reads the role in, then enumerate every action site the gated tools reach and confirm each acts in that SAME workspace id (not a fresh `current_workspace_id` read, and not a per-user resource with no workspace at all). A fail-closed check over the wrong scope is a `critical` finding. **Why:** #12597 — the Owner check read `activeWorkspaceId` while the GitHub resolvers, `kb_share_create` and `workspace_set_autonomous` re-resolved the workspace, and `email_send` is per user, so the check excluded nobody (#12669).
+
 ### Known gaps as of 2026-05-22
 
 Until each closes, surface an `info`-severity finding naming the deferral issue on every identity-touching PR.

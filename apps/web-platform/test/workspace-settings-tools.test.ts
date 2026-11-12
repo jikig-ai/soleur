@@ -72,6 +72,31 @@ describe("buildWorkspaceSettingsTools", () => {
     expect(textOf(res)).toEqual({ payload: { autonomous: true }, isError: false });
   });
 
+  it("#12597: on the legacy card, a call refuses as workspace_changed when the current workspace is not the session's", async () => {
+    buildWorkspaceSettingsTools({
+      userId: "user-1",
+      grants: new ExecutionGrants(),
+      sessionWorkspaceId: "ws-session",
+      resolveWorkspaceId: async () => "ws-other",
+    });
+    const res = await captured.workspace_set_autonomous.handler({ value: true });
+    expect(JSON.stringify(res)).toContain("workspace_changed");
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  it("#12597: on the legacy card, the write names the session workspace", async () => {
+    mockSet.mockResolvedValue(true);
+    buildWorkspaceSettingsTools({
+      userId: "user-1",
+      grants: new ExecutionGrants(),
+      sessionWorkspaceId: "ws-session",
+      resolveWorkspaceId: async () => "ws-session",
+    });
+    const res = await captured.workspace_set_autonomous.handler({ value: true });
+    expect(mockSet).toHaveBeenCalledWith("user-1", true, "ws-session");
+    expect(textOf(res)).toEqual({ payload: { autonomous: true }, isError: false });
+  });
+
   it("set tool surfaces an error (owner-deny / fault) as an isError response", async () => {
     mockSet.mockRejectedValue(new Error("not authorized"));
     buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });

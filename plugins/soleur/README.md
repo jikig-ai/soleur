@@ -96,7 +96,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 67 |
+| Agents | 68 |
 | Commands | 4 |
 | Skills | 107 |
 | MCP Servers | 5 |
@@ -138,7 +138,7 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (31)
+### Engineering (32)
 
 | Agent | Description |
 |-------|-------------|
@@ -164,6 +164,7 @@ Agents are organized by domain, then by function.
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits, vulnerability assessments, and multi-org / workspace boundary integrity (R1-R6 checklist) |
 | `semgrep-sast` | Deterministic SAST scanning using semgrep CLI for known vulnerability patterns |
+| `session-forensics-analyst` | Fresh-context forensic read of a session transcript; proposes improvements for the operator, never auto-applies |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
 | `user-impact-reviewer` | Enumerate user-facing failure modes when a plan declares Brand-survival threshold = single-user incident |
 

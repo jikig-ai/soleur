@@ -9625,9 +9625,13 @@ function relayHelloHaltViolations(code: string): string[] {
   if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
   const text = echoes.join("\n");
   if (/luks/i.test(text)) v.push("the hello-key HALT text carries LUKS wording (it is a relay outage, not data loss)");
-  for (const need of ["[skip-web-platform-apply]", "_PREVIOUS", "relay outage", "UNWEDGE"]) {
+  // #8211: the "Intended rotation" line names the built verifier half (the accept-only slot, ADR-323 Decision 9) and the
+  // replace route #12538; it must no longer name the unbuilt `_PREVIOUS` design. "Never a -replace" is the clause that
+  // keeps the new key out of Tier-A-readable state; it was dropped once for bytes, so it is pinned here.
+  for (const need of ["[skip-web-platform-apply]", "accept-only slot (ADR-323 Decision 9)", "#12538", "Never a -replace", "relay outage", "UNWEDGE"]) {
     if (!text.includes(need)) v.push(`the hello-key HALT text lacks '${need}'`);
   }
+  if (text.includes("_PREVIOUS")) v.push("the hello-key HALT text still names the unbuilt _PREVIOUS design");
   return v;
 }
 
@@ -11009,13 +11013,13 @@ describe("G2f registration pin (#9927): Guard 1 stays registered inside the requ
     expect(v.checks).toBe(6);
     const runLine = "        run: bash scripts/test-all.sh scripts";
     expect(ciYaml.includes(runLine)).toBe(true);
-    const needsLine = "needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy,";
+    const needsLine = "needs: [test-webplat, test-webplat-mutations, test-bun, test-scripts, test-scripts-heavy,";
     expect(ciYaml.includes(needsLine)).toBe(true);
     const rows: Array<[string, string, RegExp]> = [
       ["swallow the runner's exit status", ciYaml.replace(runLine, `${runLine} || true`), /steps running exactly/],
       ["continue-on-error on the runner step", ciYaml.replace(runLine, `${runLine}\n        continue-on-error: true`), /continue-on-error/],
       ["step-level if on the runner", ciYaml.replace(runLine, `${runLine}\n        if: \${{ false }}`), /carries an `if:`/],
-      ["drop test-scripts from the aggregator needs", ciYaml.replace(needsLine, "needs: [test-webplat, test-bun, test-scripts-heavy,"), /does not list test-scripts/],
+      ["drop test-scripts from the aggregator needs", ciYaml.replace(needsLine, "needs: [test-webplat, test-webplat-mutations, test-bun, test-scripts-heavy,"), /does not list test-scripts/],
       ["drop test-scripts from the aggregator entries", ciYaml.replace('"test-scripts:$SCRIPTS_RESULT" ', ""), /entries array/],
     ];
     for (const [name, mutated, re] of rows) {

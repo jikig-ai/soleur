@@ -64,6 +64,8 @@ import { query as sdkQuery, tool, createSdkMcpServer } from "@anthropic-ai/claud
 import { buildAgentQueryOptions } from "../server/agent-runner-query-options";
 import { resolveWorkspaceMode } from "../server/workspace-mode";
 import { createCanUseTool, type CanUseToolContext } from "../server/permission-callback";
+import type { ApprovalGateDeps } from "../server/approval/gate-types";
+import { ExecutionGrants } from "../server/approval/grants";
 import { buildAllowedTools, getToolTier } from "../server/tool-tiers";
 
 if (/^prd/.test(process.env.DOPPLER_CONFIG ?? "")) {
@@ -268,6 +270,22 @@ async function runCase(c: Case): Promise<CaseResult> {
   );
   const server = createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: stubTools });
 
+  // #12597 (CTO F12): the legacy card of every approval-required tool needs the workspace Owner when the approval flow gives
+  // no verdict, so the probe is an Owner with the flag off: every case reaches the in-memory card (and the Reject approver
+  // below) instead of the missing-dependency deny. Typed outside the context cast so tsc checks it.
+  const mustNotRun = (): never => {
+    throw new Error("probe: flag off, must not run");
+  };
+  const approval: ApprovalGateDeps = {
+    isEnabled: async () => false,
+    workspaceId: "probe-ws",
+    grants: new ExecutionGrants(),
+    viewerRole: async () => "owner",
+    resolveServerDerived: async () => mustNotRun(),
+    submit: async () => mustNotRun(),
+    readStatus: async () => mustNotRun(),
+    consume: async () => mustNotRun(),
+  };
   const ctx = {
     userId: "probe-user",
     conversationId: `probe-${c.name}`,
@@ -285,6 +303,7 @@ async function runCase(c: Case): Promise<CaseResult> {
       sendToClient: () => true,
       notifyOfflineUser: async () => true,
       updateConversationStatus: async () => undefined,
+      approval,
     },
   } as unknown as CanUseToolContext;
   const inner = createCanUseTool(ctx);

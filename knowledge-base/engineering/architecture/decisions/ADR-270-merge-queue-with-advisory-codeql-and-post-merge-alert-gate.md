@@ -1215,6 +1215,42 @@ and still needs no explicit enqueue of its own; whether #12489's stall was a
 general regression or specific to App-authored arming is unmeasured. The
 dated bodies above are left as written.
 
+### Addendum 2026-11-11 (#12579): the explicit-enqueue arm's precondition and observed refusal
+
+Post-merge verification of #12510 on the fabricated mint `vinngest-v1.1.72`
+(PR #12562) produced the first live observation of the 2026-11-09 explicit
+enqueue: the mutation fired ~5s after PR open and was actively refused by
+GitHub while the required check `quality-guards` was still pending — with
+`autoMergeRequest.enabledAt` already set and the head 0 commits behind `main`,
+so neither "not armed" nor "behind head" was the cause. The refusal reason was
+unobservable because the script piped the GraphQL stderr to `/dev/null`; the
+run carried only the generic `::warning::…was rejected` annotation (#12579).
+
+The confirmed precondition: `enqueuePullRequest` refuses while the PR's
+branch-protection requirements are unmet — the documented refusal for a
+pending required check is `Pull request Required status check "<name>" is
+expected.` Admission gates on the required-check SET, not on the head rollup
+being green: #12520 sat in the queue at position 2 with three FAILURE
+conclusions on non-required `deploy-script-tests*` contexts (learning
+`knowledge-base/project/learnings/2026-11-10-merge-queue-admission-is-not-pr-head-green.md`).
+Consequence: on a PR armed ~5s after open, required checks are ~always still
+pending, so a refusal there is expected noise — the warn-and-continue arm is
+correct, and armed auto-merge is the designed path once checks go green. The
+arm's expected-success surface is the already-green head where armed
+auto-merge does not self-enqueue — the #12489 counter-instance it was built
+for.
+
+Shipped with this addendum: the rejection reason is captured (`2>&1`),
+flattened, control-stripped and bounded to 300 chars inside the `::warning::`
+annotation, and the script's comment block records this precondition — so an
+unexpected refusal class is now distinguishable in the run log per-run.
+
+Deferred: moving the enqueue to a retry-on-check-complete step is tracked at
+#12652, with re-evaluation criteria — (a) a refusal observed while required
+checks are green, or (b) another authored pin-bump PR sitting armed + green +
+not-queued (the #12489 shape), which would prove armed auto-merge's
+self-enqueue still has a gap the explicit arm is placed too early to cover.
+
 ### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
 The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.
