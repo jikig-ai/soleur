@@ -291,7 +291,7 @@ shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || tr
 # selector below (which must discard stderr to stay AC6-identical) runs.
 walk_err=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null || true)
 [[ -z "$walk_err" ]] \
-  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
+  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | tr -d '[:cntrl:]' | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
 
 # --- resolve: semver-max merged tag + registry digest -------------------------
 # AC6-IDENTICAL PIPELINE — test-bump-inngest-bootstrap-pin.sh's selector
@@ -374,7 +374,7 @@ if [[ "$rc" -ne 0 ]]; then
   # A merged target with no image is the "off main is a point-in-time verdict"
   # case (ADR-232 §7): a tag refused at push time and merged later. Name the
   # remedy, since every later publish lands here until the image exists.
-  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err") — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
+  die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err" | tr -d '[:cntrl:]' | cut -c1-300) — if vinngest-${TARGET} never published an image (its build refused or died before pushing), republish vinngest-${TARGET} (workflow_dispatch); it is merged into main, so never delete it"
 fi
 RESOLVED=$(grep -oE '^sha256:[0-9a-f]{64}$' "$WORK/digest" | head -1 || true)
 [[ -n "$RESOLVED" ]] \
@@ -643,15 +643,47 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
       # rebuilds every in-flight entry. Every failure here warns and continues:
       # armed auto-merge remains the fallback, strictly better than the
       # pre-#12508 no-enqueue path.
+      #
+      # Enqueue precondition (#12579 / ADR-270 addendum 2026-11-11): GitHub
+      # refuses enqueuePullRequest while the PR's branch-protection
+      # requirements are unmet — the documented refusal for a pending REQUIRED
+      # check is `Pull request Required status check "<name>" is expected.`
+      # Admission gates on the required-check SET, not the head rollup: failing
+      # non-required (advisory) contexts do NOT block enqueue; a pending or
+      # failed REQUIRED context does (measured: #12520 queued at position 2
+      # with three FAILURE conclusions on non-required deploy-script-tests*
+      # contexts). This arm fires ~5s after PR open, when required checks are
+      # ~always still pending — so a refusal on a fresh PR is EXPECTED noise
+      # (observed on #12562: armed autoMergeRequest.enabledAt, head 0 commits
+      # behind, BLOCKED on pending quality-guards), not a defect. The arm's
+      # value is the case where protection IS met at arm time but armed
+      # auto-merge does not self-enqueue — the #12489 counter-instance. The
+      # refusal reason is echoed in the warning below so an unexpected refusal
+      # is distinguishable from this expected one; re-evaluate the arm's
+      # placement if a refusal is ever observed while required checks are
+      # green (retry-on-check-complete is tracked at #12652).
       pr_node=$(timeout 60 gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
         | jq -r '.id // ""' 2>/dev/null || true)
       if [[ -z "$pr_node" ]]; then
         echo "::warning::could not resolve PR ${PR_NUM}'s GraphQL node id — explicit merge-queue enqueue skipped; armed auto-merge remains"
       elif enq_out=$(timeout 60 gh api graphql -F pr="$pr_node" \
-          -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>/dev/null); then
+          -f query='mutation($pr:ID!){enqueuePullRequest(input:{pullRequestId:$pr}){mergeQueueEntry{position state}}}' 2>&1); then
         echo "enqueued ${PR_URL} on the merge queue (position $(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$enq_out" 2>/dev/null || echo '?'))"
       else
-        echo "::warning::enqueuePullRequest for ${PR_URL} was rejected — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
+        # 2>&1 lands the rejection body in enq_out; flatten + strip control
+        # bytes before the line-oriented ::warning:: (annotation-injection
+        # guard, PR #3007 class) and bound at 300 chars — same canonical
+        # pipeline as the `unmeasurable` emit sites in
+        # vinngest-digest-freshness.sh (200→300 bound is deliberate per
+        # #12579's ask). A `timeout 60` kill — or stderr that strips to pure
+        # whitespace — leaves nothing worth printing; the explicit fallback
+        # names it rather than emitting a bare dash. ${PR_URL//[[:space:]]/}
+        # keeps the whole warning line single-line even if the API-supplied
+        # URL ever carries whitespace.
+        enq_reason=$(printf '%s' "$enq_out" | tr '\n' ' ' | tr -d '[:cntrl:]' | cut -c1-300)
+        [[ -n ${enq_reason//[[:space:]]/} ]] \
+          || enq_reason='no stderr captured (timeout or empty response)'
+        echo "::warning::enqueuePullRequest for ${PR_URL//[[:space:]]/} was rejected — ${enq_reason} — armed auto-merge remains; the PR joins the queue itself only once its head is up to date with main"
       fi
     else
       echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"

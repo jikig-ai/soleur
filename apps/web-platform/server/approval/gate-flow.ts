@@ -15,7 +15,8 @@
  *   approved: consume(id, hash, conversation) -> execution grant -> allow(snapshot).
  *
  * Returns `null` ONLY when the flag is off (or unreadable): the caller then runs the in-memory review gate exactly as
- * it did before this module existed (except `github_push_branch`, whose card only the workspace Owner may answer, #12197 D1).
+ * it did before this module existed, except that for every approval-required tool only the workspace Owner may answer that
+ * card (#12597, extends #12197 D1).
  */
 
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
@@ -187,7 +188,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     enabled = false;
   }
   if (!enabled) {
-    // A session that already ran the approval flow never falls back to the legacy requester-answerable card for the other
+    // A session that already ran the approval flow never falls back to the legacy (Owner-only, #12597) card for the other
     // tools after a mid-session flag-off or flag read error: only the grant-checked tools are protected by the sticky
     // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-309 rollback).
     if (a.approval.grants.enforcing) {
