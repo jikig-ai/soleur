@@ -585,8 +585,9 @@ closing a filing on GitHub does not lower `NET` (and a mandated filing loses its
 exemption once it is not OPEN). Write the exit when you file, not at ship
 (PR #12645): for an override-class filing, the override marker and its
 justification line in the PR body; for a mandated filing, `Mandated-By:
-<rule-id>` in the issue body, a `Tracks|Refs #N` line in the PR body, and the
-issue left OPEN.
+<rule-id>` on its own line of the issue body (the rule tagged
+`[mandates-filing]` in `AGENTS.rules.md`), a `Tracks|Refs #N` line in the PR
+body, and the issue left OPEN.
 
 **Mechanical pre-CONCUR auto-flip:**
 
