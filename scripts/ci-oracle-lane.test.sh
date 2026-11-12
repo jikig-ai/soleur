@@ -48,7 +48,7 @@
 #
 # THE ACTIVATION LOCK (removed): `readonly ORACLE_LANE_LOCKED=1` used to keep active=false forever —
 # the activation PR (#12156 follow-up) deleted it, so the driver ARMS on an oracle-only diff with
-# SWITCH=on: active=true and skip_legs carries the five heavy legs. The env-read at O-LOCK-READ
+# SWITCH=on: active=true and skip_legs carries the six heavy legs. The env-read at O-LOCK-READ
 # remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks — no ci.yml env wires it
 # today, so reaching it is an excluded-path code edit; covered here because O-LOCK-READ is live machinery);
 # row_lock covers it. The lock-neutralized copy (the recipe the retired selector suite used) is now
@@ -69,7 +69,7 @@
 #   O1-MG-SHA         the merge_group sha pair is 40-hex (was listed as "O-MG-SHAPE")
 #   O1-MG-RESOLVE     the merge_group shas resolve to commits (the other half of "O-MG-SHAPE")
 #   O-ATTEMPT         run attempt 1 only
-#   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops test-webplat from the skip list
+#   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops the web-platform legs from the skip list
 #   O-MAX-FILES       the ≤500 changed-file cap
 #   O-STATUS          M/A/D status letters only
 #   O-MODES           modes ⊆ {000000,100644,100755} on both sides
@@ -91,8 +91,8 @@
 #
 # NOTICE CONTRACT (observability): every pull_request/merge_group classification emits exactly one
 # `::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE ` line carrying at least `oracle_only=`,
-# `active=`, `locked=` and `would_skip=` fields; would_skip names the five heavy legs
-# (test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build) on an oracle-only
+# `active=`, `locked=` and `would_skip=` fields; would_skip names the six heavy legs
+# (test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build) on an oracle-only
 # diff and `none` otherwise. No fixture path token, repo name, raw switch value or sha ever reaches
 # stdout, stderr, the summary or the output file (the two audit shas are the gh.out exception).
 #
@@ -256,9 +256,9 @@ BASELINE="scripts/ci-pr-"'affected-audit.baseline.tsv'   # assembled, never lite
 TAP="scripts/lib/test-affected-paths.sh"
 KB_A="knowledge-base/project/learnings/zzleak-a.md"
 KB_B="knowledge-base/project/specs/zzleak-pipe/zzleak-y.md"
-ORACLE_FIVE="test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
+ORACLE_SIX="test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
 ORACLE_FOUR="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
-FIVE_RE='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
+SIX_RE='^(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
 DEFAULTS=$'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha='
 
 # The load-bearing exclusion list, one path per member (Guard 1 row 2).
@@ -438,7 +438,7 @@ unset _t
 # data files retired with S4 — the surface is extent-edits + docs only).
 fx_case mustpass6; fx_op mustpass6 M "$ACCEPT"; fx_op mustpass6 M "$KB_B"; fx_tap mustpass6 new_array; fx_done mustpass6
 # DIAGRAMS carve-out (the grammar the retired selector driver carried): a diagrams .md inside an otherwise-oracle diff keeps
-# oracle_only=true but drops test-webplat from would_skip/skip_legs.
+# oracle_only=true but drops the web-platform legs (test-webplat and test-webplat-mutations) from would_skip/skip_legs.
 fx_case diag; fx_op diag M "$ACCEPT"; fx_op diag A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_done diag
 fx_case diagx; fx_op diagx A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_op diagx M "apps/web-platform/zzleak-code.ts"; fx_done diagx
 # a mode flip on an oracle path stays oracle (both modes allowed)
@@ -692,8 +692,8 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   check_match "run$RUN_N($name) head_sha grammar" "$O_HEAD" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) base_sha grammar" "$O_BASE" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) skip_legs grammar" "$O_SKIP" '^([a-z-]+(,[a-z-]+)*)?$'
-  check_true "run$RUN_N($name) skip_legs names only the five heavy legs" \
-    "$( [ -z "$O_SKIP" ] || [[ "$O_SKIP" =~ $FIVE_RE ]]; echo $?)"
+  check_true "run$RUN_N($name) skip_legs names only the six heavy legs" \
+    "$( [ -z "$O_SKIP" ] || [[ "$O_SKIP" =~ $SIX_RE ]]; echo $?)"
   if [ "$O_ACTIVE" = true ]; then
     check_true "run$RUN_N($name) active=true carries a non-empty skip list" "$([ -n "$O_SKIP" ]; echo $?)"
   else
@@ -722,8 +722,8 @@ expect_lane() {  # $1=label: oracle_only=true, armed post-activation, audit shas
   local lbl="$1"
   check_eq "$lbl: oracle_only" "$O_OO" "true"
   check_eq "$lbl: active (unlocked)" "$O_ACTIVE" "true"
-  check_eq "$lbl: skip_legs is the five heavy legs (unlocked)" "$O_SKIP" "$ORACLE_FIVE"
-  check_eq "$lbl: would_skip telemetry is the five heavy legs" "$N_WOULD" "$ORACLE_FIVE"
+  check_eq "$lbl: skip_legs is the six heavy legs (unlocked)" "$O_SKIP" "$ORACLE_SIX"
+  check_eq "$lbl: would_skip telemetry is the six heavy legs" "$N_WOULD" "$ORACLE_SIX"
   check_eq "$lbl: notice locked" "$N_LOCKED" "false"
   check_match "$lbl: head_sha bound" "$O_HEAD" '^[0-9a-f]{40}$'
   check_match "$lbl: base_sha bound" "$O_BASE" '^[0-9a-f]{40}$'
@@ -754,7 +754,7 @@ row_oracle_surface() {  # the must-PASS set: surface members and in-extent hunks
     expect_full "O-SURFACE baseline-path fixture '$f'"
     check_eq "O-SURFACE '$f': reason" "$N_REASON" "outside_surface"
   done
-  # the diagrams carve-out: oracle_only stays true, would_skip drops test-webplat (four-name list)
+  # the diagrams carve-out: oracle_only stays true, would_skip drops the web-platform legs (four-name list)
   drive diag "$d"
   check_eq "O-DIAGRAMS accept+diagrams.md: oracle_only" "$O_OO" "true"
   check_eq "O-DIAGRAMS would_skip is the four-name subset" "$N_WOULD" "$ORACLE_FOUR"
@@ -1022,7 +1022,7 @@ row_switch() {  # the switch is compared EXACTLY (the lock-neutralized copy is n
   local d="$1" v
   drive accept "$d" "SWITCH=on"
   check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: active" "$O_ACTIVE" "true"
-  check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+  check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: skip_legs" "$O_SKIP" "$ORACLE_SIX"
   check_eq "O-SWITCH SWITCH=on, unlocked: notice locked=false" "$N_LOCKED" "false"
   # the diagrams carve-out reaches skip_legs too (unlocked): four-name subset
   drive diag "$d" "SWITCH=on"
@@ -1048,21 +1048,21 @@ row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the e
   local d="$1" v
   drive accept "$d" "SWITCH=on"
   check_eq "O-ARM unlocked + SWITCH=on: active" "$O_ACTIVE" "true"
-  check_eq "O-ARM unlocked + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+  check_eq "O-ARM unlocked + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_SIX"
   check_eq "O-ARM unlocked + SWITCH=on: notice locked" "$N_LOCKED" "false"
-  check_eq "O-ARM the would-skip telemetry still names the five legs" "$N_WOULD" "$ORACLE_FIVE"
+  check_eq "O-ARM the would-skip telemetry still names the six legs" "$N_WOULD" "$ORACLE_SIX"
   drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=1"
   check_eq "O-LOCK env re-lock + SWITCH=on: active" "$O_ACTIVE" "false"
   check_eq "O-LOCK env re-lock + SWITCH=on: skip_legs" "$O_SKIP" ""
   check_eq "O-LOCK env re-lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
-  check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_FIVE"
+  check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_SIX"
   # Non-`1` values must NOT lock: the O-LOCK-READ compare is exact-`1`. `on` is the highest-value member
   # (the plausible "same as the switch" fat-finger); `0` and `true` cover the numeric/string truthy spellings;
   # `10` pins against a `=~ ^1`-family prefix loosening (locks on `10`, `1 `, `1x`).
   for v in 0 true on 10; do
     drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=$v"
     check_eq "O-LOCK env=$v (non-1) + SWITCH=on: active" "$O_ACTIVE" "true"
-    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_SIX"
     check_eq "O-LOCK env=$v (non-1) + SWITCH=on: notice locked" "$N_LOCKED" "false"
   done
   drive accept "$d" "UNSET:SWITCH"

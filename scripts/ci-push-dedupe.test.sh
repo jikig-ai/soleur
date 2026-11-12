@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Guard 1 for #9512 (ADR-276 S2): the `push-dedupe` proof in .github/workflows/ci.yml.
 #
-# WHAT THE GATE IS. On a push to `main`, job `push-dedupe` decides whether the eight heavy `ci.yml` jobs
+# WHAT THE GATE IS. On a push to `main`, job `push-dedupe` decides whether the nine heavy `ci.yml` jobs
 # may be skipped because an identical-SHA `merge_group` run of the same workflow already passed. It is a
 # COST optimisation that is allowed to fail in one direction only: every unknown runs the full battery.
 # The deploy arm still sees a `success` push run because `push-dedupe` and the ungated cheap guards run.
@@ -10,7 +10,7 @@
 # WHAT THIS SUITE PROVES. Not that the YAML mentions the right words, but that the proof step body,
 # EXTRACTED from ci.yml and EXECUTED under the shell Actions uses (`bash --noprofile --norc -eo pipefail`)
 # against a gh shim, yields the right verdict for each input class, and that the wrapper (job `if`,
-# permissions, outputs, step flags, env), the eight gated conditions and the unchanged `test` aggregator
+# permissions, outputs, step flags, env), the nine gated conditions and the unchanged `test` aggregator
 # are what the design says.
 #
 #   * a battery of rows over event, ref, attempt, SHA, variable shape, run listing shape, job listing
@@ -82,11 +82,11 @@ passes=$_p0; fails=$_f0; FAILURES=()
 # ── Pinned expectations (the design's reading of the wrapper) ────────────────
 # The condition tail every gated job carries, written ONCE here: chk.py, the parity rows and the mutants all derive from it.
 ELIDE_TAIL="(github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
-GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scripts-heavy test-webplat web-platform-build"
-# ADR-276 S3 (#9728): four of those eight additionally carry `needs: [push-dedupe, draft-light]` and this clause appended to the
+GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scripts-heavy test-webplat test-webplat-mutations web-platform-build"
+# ADR-276 S3 (#9728): five of those nine additionally carry `needs: [push-dedupe, draft-light]` and this clause appended to the
 # condition (the other four, incl. e2e and the `test` aggregator, must NOT: scripts/ci-draft-light.test.sh pins the S3 side in full).
 LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
-DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
+DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat test-webplat-mutations"
 # ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling on #9729): the pr-selection lever job, its
 # PR-skip `if:` term, its driver script and its aggregator tolerance are all deleted. PR_GATED_PINNED is the EMPTY
 # set ON PURPOSE — the same pins now assert the post-removal grammar: no job may carry a `pr-selection` needs edge,
@@ -97,7 +97,7 @@ DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-w
 PR_GATED_PINNED=""
 PR_TERM_PRE=""   # dead prefix kept exported so chk.py's environment read stays uniform; the grammar it named is forbidden now
 PRSEL_IF=""      # same: the retired job-level condition
-# ADR-276 oracle-only lane (#12156): the five heavy legs additionally carry `oracle-selection` in `needs:` and a
+# ADR-276 oracle-only lane (#12156): the six heavy legs additionally carry `oracle-selection` in `needs:` and a
 # skip conjunct appended AFTER every earlier term — the same four-term `!(…)` shape the S4 legs carry (event
 # disjunct, active, head_sha nonempty, head bound to either event's sha via
 # `github.event.pull_request.head.sha || github.event.merge_group.head_sha`). `shard-totality-mutations`
@@ -105,14 +105,14 @@ PRSEL_IF=""      # same: the retired job-level condition
 # `needs:`. Written ONCE here; chk.py's canon, the truth table and the census derive from it. CONTRACT NOTE: the
 # conjunct text below is the plan's documented shape; if the implementation spells it differently this pin is where
 # the reconciliation happens.
-OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
+OR_GATED_PINNED="test-webplat test-webplat-mutations test-bun test-scripts test-scripts-heavy web-platform-build"
 OR_T_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
 OR_T_AC="needs.oracle-selection.outputs.active == 'true' && "
 OR_T_HN="needs.oracle-selection.outputs.head_sha != '' && "
 OR_T_HE="needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && "
 OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
-# shard-totality-mutations carries the SAME four-term conjunct as the five lane legs MINUS the skip_legs
+# shard-totality-mutations carries the SAME four-term conjunct as the six lane legs MINUS the skip_legs
 # membership (it skips on active alone — the advisory leg is lane-unsafe whatever the leg list says):
 # `!(event && active == 'true' && head_sha != '' && head_sha == (pr.sha || mg.sha))`.
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
@@ -133,7 +133,7 @@ ORASEL_IF="\${{ $ORASEL_EV && $ORASEL_VAR }}"
 # the pr-selection env triple, the PR-AFFECTED-SKIP tolerance arm and the tolerated-list plumbing, leaving the
 # ORACLE-ONLY-SKIP arm as the one named skip tolerance. The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
 # ci.yml does not move it but ANY edit to this job's steps, env or timeout does.
-AGG_DIGEST="c6b0d2a8b48a96f10baf81f133a575faf073fec1d68455829121be1ab112746a"
+AGG_DIGEST="93f49349f20406834b25faa4b7b723255be70a1305f99e249b1d5945a37b102b"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
 UNGATED_PINNED="critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection"
@@ -415,7 +415,7 @@ if mode == "gated":
         if n not in GATED and set(needs(j)) & set(GATED): tags.append("G-DEPENDENT:" + n)
         # post-removal, pr-selection may be needed by NO job: any edge waits on a retired job's outputs
         if n != "pr-selection" and n not in PRGATED and n != "test" and "pr-selection" in needs(j): tags.append("G-PRNEEDS-EXTRA:" + n)
-        # oracle-selection may be needed ONLY by the five lane-gated legs, shard-totality-mutations, `test` and
+        # oracle-selection may be needed ONLY by the six lane-gated legs, shard-totality-mutations, `test` and
         # oracle-index-check: any other reader of its outputs reads a dark-launch verdict as if it gated.
         if n not in ORGATED and n not in SHARDG and n not in ("test", "oracle-index-check") and "oracle-selection" in needs(j): tags.append("G-ORNEEDS-EXTRA:" + n)
         if n != "push-dedupe" and "push-dedupe" in json.dumps((j or {}).get("outputs", {})): tags.append("G-REEXPORT:" + n)
@@ -449,7 +449,7 @@ if mode == "ocensus":
     tags = []
     for n in list(ORGATED) + ["shard-totality-mutations"]:
         if found.get("%s.if" % n, 0) != want["%s.if" % n]: tags.append("O-REF:%s.if:%d" % (n, found.get("%s.if" % n, 0)))
-    # `.if` whitelist: only the six pinned job-level conjuncts (counted above), oracle-index-check's job-level
+    # `.if` whitelist: only the seven pinned job-level conjuncts (counted above), oracle-index-check's job-level
     # `if:` and oracle-index-check's own step ifs (the checkout gate `oracle_only == 'true'`) may read the
     # outputs. ANY other `.if` — a step if inside a lane leg, the aggregator, or an ungated job — is a finding:
     # it could skip work while the job still concludes `success`.
@@ -501,7 +501,7 @@ if mode == "truth":
         acts = ("", "false", "true") if n in PRGATED else ("",)
         sks = ("", n, "test-webplat,test-bun,test-scripts-heavy", "test-scripts", "test-scripts-heavy,x") if n in PRGATED else ("",)
         hss = (("a" * 40, "a" * 40), ("a" * 40, "b" * 40), ("", ""), ("", "a" * 40)) if n in PRGATED else (("", ""),)
-        # oracle dims: active x skip_legs x head-bound for the five lane legs; the shard leg evals on
+        # oracle dims: active x skip_legs x head-bound for the six lane legs; the shard leg evals on
         # the same conjunct minus the contains() membership (skips on event + active + bound head).
         oacs = ("", "true") if n in ORGATED or n in SHARDG else ("",)
         osks = ("", n, "x," + n, "test-scripts") if n in ORGATED else ("",)
@@ -633,9 +633,9 @@ fx_jobs() {
   printf '%s\n' "${args[@]}" | jq -Rn '[inputs] as $a | {total_count: (($a|length)/2), jobs: [range(0; ($a|length); 2) | {name: $a[.], conclusion: (if $a[.+1]=="null" then null else $a[.+1] end)}]}' > "$FXD/jobs-$id.json"
 }
 # The canonical jobs list: every leg the oracle lane can skip must conclude `success` for the proof
-# to hold (#12156, Guard 3) — the five heavy legs plus shard-totality-mutations — alongside `test`.
-SIX_LEGS=(test-webplat test-bun test-scripts test-scripts-heavy web-platform-build shard-totality-mutations)
-GOOD_JOBS=(test-webplat:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success test:success e2e:success)
+# to hold (#12156, Guard 3) — the six heavy legs plus shard-totality-mutations — alongside `test`.
+SEVEN_LEGS=(test-webplat test-webplat-mutations test-bun test-scripts test-scripts-heavy web-platform-build shard-totality-mutations)
+GOOD_JOBS=(test-webplat:success test-webplat-mutations:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success test:success e2e:success)
 QB="gh-readonly-queue/main/pr-1-$SHA_A"
 fx_canonical() {
   fx_new "$1"
@@ -776,7 +776,7 @@ battery() {
   jq -s '{workflow_runs: (. | reverse)}' "$d/runs.ndjson" > "$d/runs.json"
   set_env_defaults; row R15-two-runs-reverse-order true true ok
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
-  fx_jobs "$MG_ID" lint-bot-statuses:skipped e2e:success test:success test-webplat:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success advisory:skipped; fx_flush
+  fx_jobs "$MG_ID" lint-bot-statuses:skipped e2e:success test:success test-webplat:success test-webplat-mutations:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success advisory:skipped; fx_flush
   set_env_defaults; row R15-job-order-extra-advisory true true ok
   fx_canonical "$d"; set_env_defaults; E[SWITCH]=on; row R15-switch-on-canonical-again true true ok
   # R16 the proof is evaluated for the dark phase: variable unset, canonical, would be elided
@@ -784,14 +784,14 @@ battery() {
   # R17 a run id that is not digits never reaches a URL (it would add path segments to the jobs read)
   fx_new "$d"; jq -nc --arg sha "$SHA_A" --arg br "$QB" --arg repo "$REPO_SLUG" '{id:"111/../../../../repos/x",event:"merge_group",status:"completed",conclusion:"success",head_sha:$sha,head_branch:$br,path:".github/workflows/ci.yml",head_repository:{full_name:$repo}}' >> "$d/runs.ndjson"
   fx_flush; set_env_defaults; row R17-nonnumeric-run-id false false proof_error
-  # R18 the oracle-lane six-leg proof (#12156, Guard 3): an oracle-reduced merge_group green must NOT elide the
-  # push run — every leg the lane can skip (the five heavy legs + shard-totality-mutations) must conclude
+  # R18 the oracle-lane seven-leg proof (#12156, Guard 3): an oracle-reduced merge_group green must NOT elide the
+  # push run — every leg the lane can skip (the six heavy legs + shard-totality-mutations) must conclude
   # `success`. A `skipped`, absent or malformed leg entry fails closed. The implementation's reason token for
   # "a required leg did not conclude success" is `legs_incomplete` (distinct from `no_test_job`, which stays
   # reserved for the `test` job itself not concluding success).
-  six_ok() {  # $1=fxdir $2=omit-leg|"" $3=override name:conclusion|""
+  seven_ok() {  # $1=fxdir $2=omit-leg|"" $3=override name:conclusion|""
     local fx="$1" omit="$2" over="${3:-}" j=()
-    for _l in "${SIX_LEGS[@]}"; do
+    for _l in "${SEVEN_LEGS[@]}"; do
       [ "$_l" = "$omit" ] && continue
       if [ -n "$over" ] && [ "${over%%:*}" = "$_l" ]; then j+=("$over"); else j+=("$_l:success"); fi
     done
@@ -800,40 +800,40 @@ battery() {
     fx_jobs "$MG_ID" "${j[@]}"; fx_flush
   }
   local _l
-  for _l in "${SIX_LEGS[@]}"; do
-    six_ok "$d" "" "$_l:skipped"; set_env_defaults; row "R18-leg-skipped-$_l" false false legs_incomplete
-    six_ok "$d" "$_l"; set_env_defaults; row "R18-leg-absent-$_l" false false legs_incomplete
+  for _l in "${SEVEN_LEGS[@]}"; do
+    seven_ok "$d" "" "$_l:skipped"; set_env_defaults; row "R18-leg-skipped-$_l" false false legs_incomplete
+    seven_ok "$d" "$_l"; set_env_defaults; row "R18-leg-absent-$_l" false false legs_incomplete
   done
   # malformed/absent conclusions on a required leg: failure, null, cancelled, and a case variant
   for _v in failure null cancelled Success; do
-    six_ok "$d" "" "test-webplat:$_v"; set_env_defaults; row "R18-leg-conclusion-$_v" false false legs_incomplete
+    seven_ok "$d" "" "test-webplat:$_v"; set_env_defaults; row "R18-leg-conclusion-$_v" false false legs_incomplete
   done
   # matrix member rows name the leg with a ` (N/M)` suffix: they satisfy the leg only when ALL succeed;
   # a skipped matrix member fails closed; a `test-scripts-heavy` matrix row can never satisfy `test-scripts`.
-  six_ok "$d" "test-scripts"; set_env_defaults
+  seven_ok "$d" "test-scripts"; set_env_defaults
   jq '.jobs += [{"name":"test-scripts (1/4)","conclusion":"success"},{"name":"test-scripts (2/4)","conclusion":"success"},{"name":"test-scripts (3/4)","conclusion":"success"},{"name":"test-scripts (4/4)","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
   row R18-matrix-members-all-success true true ok
-  six_ok "$d" "test-scripts"; set_env_defaults
+  seven_ok "$d" "test-scripts"; set_env_defaults
   jq '.jobs += [{"name":"test-scripts (1/2)","conclusion":"success"},{"name":"test-scripts (2/2)","conclusion":"skipped"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
   row R18-matrix-member-skipped false false legs_incomplete
-  six_ok "$d" "test-scripts"; set_env_defaults
+  seven_ok "$d" "test-scripts"; set_env_defaults
   jq '.jobs += [{"name":"test-scripts-heavy (1/2)","conclusion":"success"},{"name":"test-scripts-heavy (2/2)","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
   row R18-prefix-trap-heavy-not-scripts false false legs_incomplete
   # a name that merely SHARES a prefix is not the leg
-  six_ok "$d" "test-webplat"; set_env_defaults
+  seven_ok "$d" "test-webplat"; set_env_defaults
   jq '.jobs += [{"name":"test-webplatx","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
   row R18-prefix-trap-webplatx false false legs_incomplete
   # e2e is NOT in the required set (the lane never skips it, so the proof does not demand it); unknown
   # extra legs do not matter either way
-  six_ok "$d" "" "e2e:skipped"; set_env_defaults; row R18-e2e-not-required true true ok
-  six_ok "$d" ""; set_env_defaults
+  seven_ok "$d" "" "e2e:skipped"; set_env_defaults; row R18-e2e-not-required true true ok
+  seven_ok "$d" ""; set_env_defaults
   jq '.jobs += [{"name":"future-leg","conclusion":"skipped"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
   row R18-unknown-extra-leg true true ok
-  # Guard 3 row 4 (must-PASS non-canonical): all six legs + test success in a different job order
+  # Guard 3 row 4 (must-PASS non-canonical): all seven legs + test success in a different job order
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
-  fx_jobs "$MG_ID" shard-totality-mutations:success test:success web-platform-build:success e2e:success test-scripts-heavy:success test-scripts:success test-bun:success test-webplat:success
+  fx_jobs "$MG_ID" shard-totality-mutations:success test:success web-platform-build:success e2e:success test-scripts-heavy:success test-scripts:success test-bun:success test-webplat-mutations:success test-webplat:success
   fx_flush; set_env_defaults; row R18-all-success-reordered true true ok
-  unset -f six_ok
+  unset -f seven_ok
   # R19 the pagination guard: a jobs API page-1 total_count over 100 truncates the page — the proof cannot see
   # every leg, so it fails closed (page_truncated), never elides. Boundary: 100 elides, 101 does not.
   fx_canonical "$d"; set_env_defaults; row R19-page-boundary-100 true true ok
@@ -899,26 +899,26 @@ live_check "ORACLE-SELECTION OUTPUT CENSUS" ocensus
 live_check "ORACLE-SELECTION JOB" orasel
 live_check AGGREGATOR agg
 
-# Guard 3 bi-directional leg-name pin (#12156): the proof's required set is EXACTLY the six skippable
-# legs (the five heavy legs + shard-totality-mutations) plus `test`. A NEW skippable leg must edit the
+# Guard 3 bi-directional leg-name pin (#12156): the proof's required set is EXACTLY the seven skippable
+# legs (the six heavy legs + shard-totality-mutations) plus `test`. A NEW skippable leg must edit the
 # driver allowlist, the aggregator regex AND this proof in the same diff — the sentinel pins all three.
-for _l in "${SIX_LEGS[@]}"; do
-  if grep -qF -- "\"$_l\"" "$SANDBOX/pristine-body.sh"; then pass; else fail "SIX-LEG PIN: the proof body never names '$_l' — the leg the oracle lane can skip is absent from the elide proof"; fi
+for _l in "${SEVEN_LEGS[@]}"; do
+  if grep -qF -- "\"$_l\"" "$SANDBOX/pristine-body.sh"; then pass; else fail "SEVEN-LEG PIN: the proof body never names '$_l' — the leg the oracle lane can skip is absent from the elide proof"; fi
 done
 unset _l
 # Guard 3 leg-conclusion blindness: the proof's CODE reads job conclusions only — it must never name an oracle
 # term (lane outputs live on `oracle-selection`, not in the sibling results it sums). Comments are stripped
 # first: the Guard-3 comment block legitimately names the lane it backstops; a CODE-level hit is a real flag.
 if grep -qiE 'oracle' < <(grep -v '^[[:space:]]*#' "$SANDBOX/pristine-body.sh"); then
-  fail "SIX-LEG BLINDNESS: the elide proof body references an oracle term in executable code — the proof must read leg conclusions only, never lane outputs"
+  fail "SEVEN-LEG BLINDNESS: the elide proof body references an oracle term in executable code — the proof must read leg conclusions only, never lane outputs"
 else
   pass
 fi
-# the five-name allowlist the aggregator tolerates (ORACLE-ONLY-SKIP) must equal SIX_LEGS minus
+# the six-name allowlist the aggregator tolerates (ORACLE-ONLY-SKIP) must equal SEVEN_LEGS minus
 # shard-totality-mutations — assert each name appears in the extracted aggregator body.
 chk aggbody "$WF" "$SANDBOX/live" 2>/dev/null
-for _l in test-webplat test-bun test-scripts test-scripts-heavy web-platform-build; do
-  if [ -s "$SANDBOX/live/agg.sh" ] && grep -qF -- "$_l" "$SANDBOX/live/agg.sh"; then pass; else fail "FIVE-LEG PARITY: the aggregator never names '$_l' — the ORACLE-ONLY-SKIP allowlist and the proof's required set drifted apart"; fi
+for _l in test-webplat test-webplat-mutations test-bun test-scripts test-scripts-heavy web-platform-build; do
+  if [ -s "$SANDBOX/live/agg.sh" ] && grep -qF -- "$_l" "$SANDBOX/live/agg.sh"; then pass; else fail "SIX-LEG PARITY: the aggregator never names '$_l' — the ORACLE-ONLY-SKIP allowlist and the proof's required set drifted apart"; fi
 done
 unset _l
 
@@ -1033,7 +1033,7 @@ mutate_body m-default-after-gh 'emit "elide=false"' ':' R12
 mutate_body m-mgid-unchecked '[[ "$id" =~ ^[0-9]+$ ]] || finish' 'true' R17
 # Guard 3 mutants: dropping each required leg name from the proof must turn an R18 (or the canonical)
 # row red — the replaced name is a job that never exists, so the canonical fixture fails the proof.
-for _l in "${SIX_LEGS[@]}"; do
+for _l in "${SEVEN_LEGS[@]}"; do
   mutate_body "m-leg-dropped-${_l}" "\"$_l\"" "\"zz-not-a-job\"" R18
 done
 unset _l
