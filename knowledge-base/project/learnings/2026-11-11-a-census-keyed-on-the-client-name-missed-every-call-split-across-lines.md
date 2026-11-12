@@ -99,24 +99,36 @@ anything calls it. Drive every row through the entry point the real check uses.
 Errors 15 to 18 happened after this learning was first written (fix rounds, ship and post-merge of PR #12645), and
 were captured on 2026-11-12.
 
-15. **A fix-round agent's new test row used `printf … | f | grep -q`, and the shape reached CI,** where
-    `.claude/hooks/grep-q-pipe-guard.test.sh` failed it. The guard is listed in `ship/references/ready-run-wait.md`
-    for the pre-ready pass only, so a commit made after ready got no local run. Recovery: rewrote the row to capture
-    the output and test the string. Prevention: after editing any `*.test.sh` or hook, run
-    `bash .claude/hooks/grep-q-pipe-guard.test.sh` locally before pushing (bullet added to `ready-run-wait.md`).
-16. **Closing a just-filed follow-up did not clear the net-issue-flow gate.** `net-issue-flow.sh` lists issues with
-    `--state all`, so a filed issue counts whether it is open or closed. Recovery: added the
-    `<!-- gate-override: net-issue-flow -->` marker with a one-line justification per filed issue. Prevention: decide
-    the override and write its justification line when you file, not at ship time (sentence added to `review/SKILL.md`
-    §5).
+15. **A review-fix commit (`e6b87fc971`, the night before ready) added a `producer | grep -q` row to
+    `sole-copy-drift-check.test.sh`, and the ready run's CI (run 43171768988) was the first thing to fail on it** in
+    `.claude/hooks/grep-q-pipe-guard.test.sh`. That guard is in the pre-ready list of `ship/references/ready-run-wait.md`,
+    and an `--affected` run selects it for any changed plugin shell file, so either would have caught the row; neither
+    did on that head before ready. Recovery: `4e474c89e0` rewrote the row as `grep -q . < <(…)` (process substitution,
+    the form the guard itself suggests). Prevention: run the pre-ready list on the head you ready, after the last
+    review-fix commit (bullet added to `ready-run-wait.md`). The guard sweeps every extension in its `SWEEP_EXTS`, not
+    only test files. Related: `2026-11-11-a-deferred-battery-and-a-draft-light-ci-left-the-repo-wide-guards-for-the-ready-run.md`
+    and `2026-10-01-a-grep-q-in-a-pipefail-chain-made-the-trigger-miss-its-own-bug-class.md`.
+16. **Closing a just-filed follow-up on GitHub did not clear the net-issue-flow gate.** `net-issue-flow.sh` lists
+    issues with `--state all`, so a filed issue counts whether it is open or closed. `CLOSING` is read only from
+    `Closes #N` keywords in the PR body, and the mandated-filing exemption needs the issue OPEN, so closing a filing
+    can raise `NET`. Recovery: added the `<!-- gate-override: net-issue-flow -->` marker with a one-line justification
+    per filed issue. Prevention: when a filing qualifies for one of the gate's two exits, write the override and its
+    justification line when you file, not at ship time (sentence added to `review/SKILL.md` §5). A review finding
+    qualifies for neither; fix it inline.
 17. **`ship-kb-archive-gate.sh` denied `gh pr merge <N> --match-head-commit <sha>`** with "extra operands alongside
-    --match-head-commit". Recovery: re-issued as `gh pr merge --match-head-commit <sha>` (no PR number). Prevention: with
-    `--match-head-commit`, give no PR number. The skills (`ship/SKILL.md`, `merge-pr/SKILL.md`,
-    `settle-then-admin-merge.md`) still prescribe the numbered form, and `pre-merge-rebase.sh` keys on the number, so the
-    reconciliation is filed as #12697 rather than edited here.
+    --match-head-commit". Recovery: re-issued as `gh pr merge --match-head-commit <sha>` (no PR number), from the PR's
+    own branch checkout. Prevention: none in the skills yet; #12697 tracks the fix. Dropping the number is a recovery,
+    not a rule. `pre-merge-rebase.sh` needs a bare number right after `gh pr merge`. Without it the hook cannot name the
+    PR: it reads review evidence from the session's own checkout, can sync and push the session's branch, and skips its
+    merge-queue checks (`main` has a merge queue). `gh` also cannot infer the PR from the detached worktree that
+    `settle-then-admin-merge.md` uses. Until #12697 lands, use the unnumbered form only from the PR's own branch
+    checkout, with no `cd` inside the command and the branch already current with `main`. An earlier session took the
+    other exit, a bare `gh pr merge <N>` without the sha pin
+    (`2026-10-31-the-rehearsal-flipped-with-its-own-safety-control-off-and-its-success-signal-never-reached-the-sink.md`).
 18. **`deploy-arm.sh find --wait` ran as a foreground Bash call and was killed at the 600 s Bash timeout** (it polls
-    about once a minute for up to 120 polls). Recovery: re-armed it under the Monitor tool, matching `^ARM=`.
-    Prevention: `postmerge/SKILL.md` Phase 3.7 already says Monitor; it now also says why a foreground call cannot work.
+    about once a minute for up to 120 polls, so it can wait about two hours). Recovery: re-armed it under the Monitor
+    tool, matching `^ARM=`. Prevention: `postmerge/SKILL.md` Phase 3 (the `deploy-arm.sh find` paragraph) already says
+    Monitor; it now also says why a foreground call cannot work.
 
 ## Tags
 
