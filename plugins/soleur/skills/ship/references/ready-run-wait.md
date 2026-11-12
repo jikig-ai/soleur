@@ -19,6 +19,7 @@ When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light
   (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
   ```
 
+- After ready, a fix-round commit gets no pass of its own before CI. Re-run `bash .claude/hooks/grep-q-pipe-guard.test.sh` after editing any `*.test.sh` or hook, before pushing. **Why:** PR #12645 — a fix-round row of the form `printf … | f | grep -q` reached CI and failed this guard.
 - Read CodeQL's open alerts even though it is not a required check: `gh api --paginate 'repos/{owner}/{repo}/code-scanning/alerts?ref=refs/pull/PR_NUMBER/merge&state=open&per_page=100' --jq '.[] | "\(.number) \(.rule.id) \(.most_recent_instance.location.path)"'` (no output: none open).
 
 **Why:** #12518 — eight repo-wide guards fired on a new spike tree, the orphan-suite lint had been red on two draft runs unread, and four red heads followed ready. See `knowledge-base/project/learnings/2026-11-11-a-deferred-battery-and-a-draft-light-ci-left-the-repo-wide-guards-for-the-ready-run.md`.

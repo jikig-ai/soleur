@@ -113,7 +113,7 @@ curl -sf --max-time 10 "<production-url>/health" | jq .
 
 Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. For this repo, `build_sha` is judged by `deploy-arm.sh` below.
 
-**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` — it polls about once a minute for up to 120 polls and prints one line; watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`; **Grok:** AwaitShell), never Bash `run_in_background`. Only once that line has arrived with rc ≠ 4, run `served`:
+**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` — it polls about once a minute for up to 120 polls and prints one line; watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`; **Grok:** AwaitShell), never Bash `run_in_background`, and never a foreground Bash call (the wait outlives the Bash tool's 600 s cap and is killed mid-wait, PR #12645). Only once that line has arrived with rc ≠ 4, run `served`:
 
 ```bash
 bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-merge-sha>

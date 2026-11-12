@@ -579,6 +579,9 @@ arithmetic is `NET = FILED - EXEMPT - CLOSING`, and "opens more issues than it
 closes" is the *default* failure, not an invariant. Review findings are covered
 by neither exit: the disposition for those is fix-inline (below), and reaching
 for an override instead is the behaviour both gates exist to stop.
+The gate counts a filed issue in any state (`--state all`), so closing it later
+does not lower `NET`: write the override and its justification line when you
+file (PR #12645).
 
 **Mechanical pre-CONCUR auto-flip:**
 
