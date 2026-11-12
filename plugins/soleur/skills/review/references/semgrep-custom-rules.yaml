@@ -73,6 +73,48 @@ rules:
       mirrors: "CodeQL: js/file-system-race"
       soleur-origin: "PR #2463"
 
+  # Mirrors CodeQL js/file-system-race for the SYNC, named-import, module-scope shape the two rules above miss
+  # (they need the `fs.` namespace, the async API, or an enclosing `function`).
+  # Origin: PR #12536 — `try { st = lstatSync(p) } catch { continue }` then `readFileSync(p)` inside a top-level
+  # `for` loop in a test file; CodeQL flagged it high in CI, local semgrep (custom + p/javascript + p/typescript)
+  # reported 0. Measured when added: 1 finding on the pre-fix file, 0 on the fixed one, 0 across apps/web-platform,
+  # plugins/soleur, scripts and .github (1185 files). `existsSync`/`accessSync` and `createReadStream` were left
+  # out on purpose: including them added 13 hits CodeQL does not raise on main.
+  - id: soleur.js-file-system-race-sync-check-then-read
+    patterns:
+      - pattern: $READ($PATH, ...)
+      - pattern-either:
+          - pattern-inside: |
+              try { ... $X = $CHECK($PATH, ...); ... } catch ($E) { ... }
+              ...
+          - pattern-inside: |
+              try { ... $X = $CHECK($PATH, ...); ... } catch { ... }
+              ...
+          - pattern-inside: |
+              <... $CHECK($PATH, ...) ...>;
+              ...
+          - pattern-inside: |
+              if (<... $CHECK($PATH, ...) ...>) { ... }
+          - pattern-inside: |
+              if (<... $CHECK($PATH, ...) ...>) $S;
+      - metavariable-regex:
+          metavariable: $CHECK
+          regex: ^(fs\.)?l?statSync$
+      - metavariable-regex:
+          metavariable: $READ
+          regex: ^(fs\.)?(readFileSync|openSync)$
+    message: |
+      Possible TOCTOU race: $CHECK($PATH) then $READ($PATH) on the same path (CodeQL js/file-system-race).
+      The file can be swapped between the check and the read. Open once with
+      openSync(path, O_RDONLY | O_NOFOLLOW), then fstatSync and readFileSync on that descriptor.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: "CWE-367: Time-of-check to Time-of-use"
+      mirrors: "CodeQL: js/file-system-race"
+      soleur-origin: "PR #12536"
+
   # Mirrors CodeQL js/incomplete-url-substring-sanitization.
   # Origin: PR #4573 — a test assertion `html.includes("https://soleur.ai")`
   # tripped CodeQL in CI (local semgrep auto/p-packs did not catch it). Checking

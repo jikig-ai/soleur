@@ -140,14 +140,17 @@ echo "  instrument self-test: pass() and fail() both move"
 # $6 is the 4th leg (web-platform-build, #8136), $7 the 5th (test-scripts-heavy, #8006)
 # and $8 the 6th (encryption-posture, #6907). All three default to success so the
 # three-shard rows keep stating their FULL triple while the build, heavy and posture
-# rows below name their own values explicitly.
-run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] [$8=posture] [$9=draft-light output] [$10-$12 RETIRED env spellings, fed nowhere now] [$13=ATTEMPT] [$14=ORACLE_INDEX_RESULT] [$15=ORACLE_SKIP_LEGS] [$16=ORACLE_ACTIVE] [$17=ORACLE_HEAD_OK] ; sets OUT/RC
+# rows below name their own values explicitly. $18 is the 7th (test-webplat-mutations,
+# #12626), defaulted the same way and appended at the tail so every pre-existing call
+# site keeps its positional meaning.
+run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] [$8=posture] [$9=draft-light output] [$10-$12 RETIRED env spellings, fed nowhere now] [$13=ATTEMPT] [$14=ORACLE_INDEX_RESULT] [$15=ORACLE_SKIP_LEGS] [$16=ORACLE_ACTIVE] [$17=ORACLE_HEAD_OK] [$18=MUTATIONS_RESULT, the 7th leg (#12626); appended LAST so the existing positional grammar is untouched] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
       BUILD_RESULT="${6:-success}" SCRIPTS_HEAVY_RESULT="${7:-success}" POSTURE_RESULT="${8:-success}" \
       DRAFT_LIGHT="${9:-}" \
       ATTEMPT="${13-1}" \
       ORACLE_INDEX_RESULT="${14:-success}" ORACLE_SKIP_LEGS="${15:-}" ORACLE_ACTIVE="${16:-}" ORACLE_HEAD_OK="${17:-}" \
+      MUTATIONS_RESULT="${18:-success}" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
@@ -175,7 +178,7 @@ expect_line() {  # $1=label $2=body $3..$5=results $6=event $7=needle $8=want_rc
 # and each row's verdict is arbitrary. This runs FIRST and aborts on failure.
 _c0=$fails
 expect_line "CONTROL all-green" "$BODY" success success success push \
-  "All legs green (six battery legs + oracle-index-check)." 0
+  "All legs green (seven battery legs + oracle-index-check)." 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing. The unmutated\n' >&2
   printf 'aggregator body does not emit its own success line, so every mutation\n' >&2
@@ -265,6 +268,25 @@ if [ "$RC" -eq 1 ] && grep -qF -- "encryption-posture: SKIPPED" "$OUT"; then pas
   fail "R1l a skipped encryption-posture reads as success — the gate #6907 arms would be a no-op whenever the job does not run (rc=$RC)"
 fi
 
+# R1m/R1n/R1o — the 7th leg (test-webplat-mutations, #12626): the three web-platform
+# mutation batteries moved to their own matrix job so the sharded webplat legs stop
+# paying the ~25-minute approval-guard1 table twice. It is an ordinary aggregator leg:
+# red ALONE fails `test` and names itself, skipped ALONE is not success, and as a
+# 3-way battery-name matrix its failure arm uses the matrix wording (a K=3 rollup
+# has no single "job log").
+run_body "$BODY" success success success push success success success "" "" "" "" 1 success "" "" "" failure
+if [ "$RC" -eq 1 ] && grep -qF -- "test-webplat-mutations: FAILED" "$OUT"; then pass; else
+  fail "R1m a red test-webplat-mutations with every other leg green must fail the aggregator and name the leg (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+run_body "$BODY" success success success push success success success "" "" "" "" 1 success "" "" "" skipped
+if [ "$RC" -eq 1 ] && grep -qF -- "test-webplat-mutations: SKIPPED" "$OUT"; then pass; else
+  fail "R1n a skipped test-webplat-mutations reads as success — the same fail-open R1g pins on the build leg (rc=$RC)"
+fi
+run_body "$BODY" success success success push success success success "" "" "" "" 1 success "" "" "" failure
+if grep -qF -- "test-webplat-mutations: FAILED" "$OUT" && grep -qF -- "matrix" "$OUT"; then pass; else
+  fail "R1o the test-webplat-mutations failure message does not say 'matrix' — the failure arm must special-case this matrix job too (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+
 # Two legs cancelled on a pull_request run: the run was superseded.
 expect_line "R2 cancelled+sibling-cancelled on pull_request" "$BODY" \
   cancelled cancelled success pull_request "SUPERSEDED" 1
@@ -332,7 +354,7 @@ done
 # CONTROL; repeated here across the other event name so the event gate cannot
 # be implemented as "always fail on pull_request".
 expect_line "Hb must-PASS all-green on pull_request" "$BODY" success success success pull_request \
-  "All legs green (six battery legs + oracle-index-check)." 0
+  "All legs green (seven battery legs + oracle-index-check)." 0
 
 # ── MUTATION BATTERY ─────────────────────────────────────────────────────────
 # Each row mutates a COPY of the extracted body, asserts the mutation LANDED
@@ -473,7 +495,7 @@ elif op == "stdout":
     s = s.replace(arm, arm.replace(">&2", "", 1), 1)
 elif op == "after-final":
     s = s.replace(arm, "", 1)
-    k = s.rfind('echo "All legs green (six battery')
+    k = s.rfind('echo "All legs green (seven battery')
     s = s[:k] + arm + s[k:]
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
@@ -526,7 +548,7 @@ if [ "$_armpos" = ok ]; then pass; else fail "D8 the draft arm must sit after th
 # left is ORACLE-ONLY-SKIP (Guard 2). These rows re-assert the post-removal grammar; a re-introduced arm is a
 # mutation, not a green.
 S=skipped; OK=success
-SIX_LINE="All legs green (six battery legs + oracle-index-check)."
+SEVEN_LINE="All legs green (seven battery legs + oracle-index-check)."
 TOL_MSG="PR-AFFECTED-SKIP"
 OREM_TXT='the oracle-lane skip decision is cached from attempt 1; use "Re-run all jobs" (or push) to get a full run'
 REM_TXT="$OREM_TXT"
@@ -535,8 +557,8 @@ for _ev in pull_request merge_group push workflow_dispatch; do
   if [ "$RC" -eq 1 ] && grep -qF -- "test-webplat: SKIPPED — the leg did not run" "$OUT" && ! grep -qF -- "$TOL_MSG" "$OUT"; then pass
   else fail "R1-1 $_ev a skipped leg is never tolerated post-removal (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"; fi
   run_body "$BODY" $OK $OK $OK "$_ev" $OK $OK $OK "" "test-bun" "true" "true" 1
-  if [ "$RC" -eq 0 ] && grep -qxF -- "$SIX_LINE" "$OUT" && ! grep -qF -- "pr-affected" "$OUT"; then pass
-  else fail "R1-2 $_ev an all-green run is the exact six-leg line, no tolerated clause (rc=$RC)"; fi
+  if [ "$RC" -eq 0 ] && grep -qxF -- "$SEVEN_LINE" "$OUT" && ! grep -qF -- "pr-affected" "$OUT"; then pass
+  else fail "R1-2 $_ev an all-green run is the exact seven-leg line, no tolerated clause (rc=$RC)"; fi
 done
 unset _ev
 # stale skip-decision inputs fed on a re-run can arm nothing: the remedy reads ORACLE_SKIP_LEGS only
@@ -554,42 +576,42 @@ else fail "R1-5 a skipped leg on a light draft is red with the draft diagnosis (
 # ── Guard 2 (#12156, ADR-276 oracle-only lane): the ORACLE-ONLY-SKIP tolerance ─────────────────────
 # PROPERTY: a `skipped` leg turns the aggregator green ONLY on a pull_request OR merge_group run
 # with ORACLE_ACTIVE exactly `true`, the head bound (ORACLE_HEAD_OK == `true`), attempt 1, a
-# well-formed ORACLE_SKIP_LEGS over the FIVE lane legs (test-webplat, test-bun, test-scripts,
-# test-scripts-heavy, web-platform-build), and the leg named in it by a delimited match. Every other
+# well-formed ORACLE_SKIP_LEGS over the SIX lane legs (test-webplat, test-webplat-mutations, test-bun,
+# test-scripts, test-scripts-heavy, web-platform-build), and the leg named in it by a delimited match. Every other
 # skip reds it; encryption-posture, e2e, shard-totality-mutations and oracle-index-check can never
 # be tolerated — oracle-index-check is the lane's own validation leg, always-required success.
 # CONTRACT NOTE: the oracle env names pinned here are ORACLE_SKIP_LEGS / ORACLE_ACTIVE /
 # ORACLE_HEAD_OK / ORACLE_INDEX_RESULT (the plan's named terms); ATTEMPT is shared with the PR arm.
 OTOL_MSG="ORACLE-ONLY-SKIP"
-ALL5="test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
-otol() {  # $1=label $2=body $3=event $4=oracle_skip_legs $5=oracle_active $6=oracle_head_ok $7=attempt $8=index $9=webplat ${10}=bun ${11}=scripts ${12}=heavy ${13}=build ${14}=posture ${15}=want_rc ${16}=needle ${17}=forbid
-  local label="$1" body="$2" ev="$3" osk="$4" oac="$5" oho="$6" at="$7" ix="$8" w="$9" s10="${10}" s11="${11}" h="${12}" bd="${13}" po="${14}" wrc="${15}" need="${16:-}" forbid="${17:-}"
-  run_body "$body" "$w" "$s10" "$s11" "$ev" "$bd" "$h" "$po" "" "" "" "" "$at" "$ix" "$osk" "$oac" "$oho"
+ALL6="test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
+otol() {  # $1=label $2=body $3=event $4=oracle_skip_legs $5=oracle_active $6=oracle_head_ok $7=attempt $8=index $9=webplat ${10}=bun ${11}=scripts ${12}=heavy ${13}=build ${14}=posture ${15}=want_rc ${16}=needle ${17}=forbid ${18}=mutations (the test-webplat-mutations leg result, default success)
+  local label="$1" body="$2" ev="$3" osk="$4" oac="$5" oho="$6" at="$7" ix="$8" w="$9" s10="${10}" s11="${11}" h="${12}" bd="${13}" po="${14}" wrc="${15}" need="${16:-}" forbid="${17:-}" mut="${18:-success}"
+  run_body "$body" "$w" "$s10" "$s11" "$ev" "$bd" "$h" "$po" "" "" "" "" "$at" "$ix" "$osk" "$oac" "$oho" "$mut"
   local ok=1
   [ "$RC" -eq "$wrc" ] || ok=0
   if [ -n "$need" ]; then grep -qF -- "$need" "$OUT" || ok=0; fi
   if [ -n "$forbid" ]; then if grep -qF -- "$forbid" "$OUT"; then ok=0; fi; fi
   if [ "$ok" -eq 1 ]; then pass; return 0; fi
-  fail "$label — event=$ev oracle_skip_legs='$osk' active='$oac' head_ok='$oho' attempt='$at' index='$ix' legs=($w,$s10,$s11,$h,$bd,$po): want rc=$wrc need='$need' forbid='$forbid'; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+  fail "$label — event=$ev oracle_skip_legs='$osk' active='$oac' head_ok='$oho' attempt='$at' index='$ix' legs=($w,$s10,$s11,$h,$bd,$po,$mut): want rc=$wrc need='$need' forbid='$forbid'; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
   return 1
 }
 # must-PASS (Guard 2 row 7): one listed skip on an active, head-bound, attempt-1 run — both lane events
 otol "O2-0 must-PASS: one listed skip on pull_request" "$BODY" pull_request test-bun true true 1 $OK $OK $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" "test-bun: SKIPPED"
 otol "O2-0b must-PASS: two-leg skip on merge_group" "$BODY" merge_group "test-webplat,test-bun" true true 1 $OK $S $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" "test-webplat: SKIPPED"
-otol "O2-0c must-PASS: all five listed and skipped on merge_group" "$BODY" merge_group "$ALL5" true true 1 $OK $S $S $S $S $S $OK 0 "$OTOL_MSG" "SKIPPED —"
+otol "O2-0c must-PASS: all six listed and skipped on merge_group" "$BODY" merge_group "$ALL6" true true 1 $OK $S $S $S $S $S $OK 0 "$OTOL_MSG" "SKIPPED —" "$S"
 otol "O2-0d must-PASS: a leg listed but ran" "$BODY" merge_group test-bun true true 1 $OK $OK $OK $OK $OK $OK $OK 0 "" "$OTOL_MSG"
 # Guard 2 row 1: a skipped leg with ORACLE inputs EMPTY (the oracle-selection job was skipped/var unset)
 for _ev in pull_request merge_group; do
   otol "O2-1 $_ev leg skipped, oracle outputs empty" "$BODY" "$_ev" "" "" "" 1 $OK $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "$OTOL_MSG"
 done
-# Guard 2 row 2: a leg outside the five-name allowlist is never tolerated — encryption-posture, e2e's
+# Guard 2 row 2: a leg outside the six-name allowlist is never tolerated — encryption-posture, e2e's
 # siblings, shard-totality-mutations AND oracle-index-check, listed or not.
 otol "O2-2 encryption-posture skipped and listed" "$BODY" merge_group "encryption-posture" true true 1 $OK $OK $OK $OK $OK $OK $S 1 "encryption-posture: SKIPPED" "$OTOL_MSG"
 otol "O2-2b shard-totality-mutations named in the list" "$BODY" merge_group "test-bun,shard-totality-mutations" true true 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
 otol "O2-2c oracle-index-check named in the list" "$BODY" merge_group "test-bun,oracle-index-check" true true 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
 # Guard 2 row 6 (harness): oracle-index-check skipped while the heavy legs are tolerated — RED.
-otol "O2-6 oracle-index-check skipped under a valid five-leg list" "$BODY" merge_group "$ALL5" true true 1 $S $S $S $S $S $S $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG"
-otol "O2-6b oracle-index-check skipped, heavy legs green" "$BODY" pull_request "$ALL5" true true 1 $S $OK $OK $OK $OK $OK $OK 1 "oracle-index-check: SKIPPED" "$OTOL_MSG"
+otol "O2-6 oracle-index-check skipped under a valid six-leg list" "$BODY" merge_group "$ALL6" true true 1 $S $S $S $S $S $S $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG" "$S"
+otol "O2-6b oracle-index-check skipped, heavy legs green" "$BODY" pull_request "$ALL6" true true 1 $S $OK $OK $OK $OK $OK $OK 1 "oracle-index-check: SKIPPED" "$OTOL_MSG"
 # Guard 2 row 3: the head must be bound — every non-`true` spelling of ORACLE_HEAD_OK
 for _ho in "" false False TRUE 1 " true"; do
   otol "O2-3 listed skip with ORACLE_HEAD_OK='$_ho'" "$BODY" merge_group test-bun true "$_ho" 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
@@ -620,6 +642,10 @@ for _r in failure cancelled; do
 done
 # an unlisted leg skipped beside a compliant listed skip: the unlisted one reds
 otol "O2-11 second leg skipped and unlisted after a compliant first" "$BODY" merge_group test-bun true true 1 $OK $S $S $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "test-webplat: $OTOL_MSG"
+# the NEW leg is IN the allowlist (named+skipped tolerates green) — and stays honest beside a compliant
+# skip when it is NOT named (unlisted skipped legs red, whatever their position in entries[])
+otol "O2-2d test-webplat-mutations named and skipped is tolerated" "$BODY" merge_group test-webplat-mutations true true 1 $OK $OK $OK $OK $OK $OK $OK 0 "test-webplat-mutations: $OTOL_MSG" "test-webplat-mutations: SKIPPED —" "$S"
+otol "O2-11b test-webplat-mutations skipped but unlisted is red" "$BODY" merge_group test-bun true true 1 $OK $OK $S $OK $OK $OK $OK 1 "test-webplat-mutations: SKIPPED — the leg did not run" "test-webplat-mutations: $OTOL_MSG" "$S"
 # oracle tolerance does not fire on pull_request without the oracle inputs, and no second arm survives to leak into
 otol "O2-12 a pull_request skip with empty oracle inputs is never tolerated" "$BODY" pull_request "" "" "" 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
 # the ORACLE re-run remedy (P2-5, mirror of the PR G1-17 family): on attempt > 1 a leg the cached ORACLE_SKIP_LEGS
@@ -636,7 +662,7 @@ fi
 
 # O2-H1 (Guard 2 harness): mutate the oracle arm under test and require RED. Anchors key on literals
 # the contract fixes (ORACLE_ACTIVE/ORACLE_HEAD_OK/ORACLE_SKIP_LEGS env names, the ORACLE-ONLY-SKIP
-# token, the five-name allowlist); a did-not-land is a coordination signal, not a pass.
+# token, the six-name allowlist); a did-not-land is a coordination signal, not a pass.
 cat > "$SANDBOX/omut.py" <<'PYM'
 import sys
 src, dst, op = sys.argv[1:4]
@@ -658,11 +684,11 @@ elif op == "active-loose":
 elif op == "event-any":
     sub('"$EVENT_NAME" == "merge_group"', '"$EVENT_NAME" == "merge_group" || "$EVENT_NAME" == "push"')
 elif op == "index-tolerable":
-    sub("test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build",
-        "test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|oracle-index-check")
+    sub("test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations",
+        "test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations|oracle-index-check")
 elif op == "posture-tolerable":
-    sub("test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build",
-        "test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|encryption-posture")
+    sub("test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations",
+        "test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|test-webplat-mutations|encryption-posture")
 elif op == "substring":
     # the ORACLE loop's delimited match (the `entry` var is shared; the `oracle_tolerated=` target disambiguates)
     sub('*",${entry%%:*},"*) oracle_tolerated=', '*"${entry%%:*}"*) oracle_tolerated=')
@@ -692,7 +718,7 @@ mutate_otol() {  # $1=label $2=op ; probes the Guard-2 rows over the mutant — 
     otol "o3" "$m" merge_group test-bun true false 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
     otol "o4" "$m" merge_group test-bun true "" 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
     otol "o5" "$m" merge_group test-bun true true 2 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
-    otol "o6" "$m" merge_group "$ALL5" true true 1 $S $S $S $S $S $S $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG"
+    otol "o6" "$m" merge_group "$ALL6" true true 1 $S $S $S $S $S $S $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG" "$S"
     otol "o7" "$m" merge_group "encryption-posture" true true 1 $OK $OK $OK $OK $OK $OK $S 1 "encryption-posture: SKIPPED" "$OTOL_MSG"
     otol "o8" "$m" merge_group "test-scripts" true true 1 $OK $OK $OK $OK $S $OK $OK 1 "test-scripts-heavy: SKIPPED" "$OTOL_MSG"
     otol "o9" "$m" pull_request "test-webplat,test-bun" true true 1 $OK $S $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" ""
@@ -788,7 +814,7 @@ for st in job.get("steps") or []:
 if step is None:
     print("NOSTEP"); raise SystemExit
 env = step.get("env") or {}
-want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "SCRIPTS_HEAVY_RESULT": "test-scripts-heavy", "BUILD_RESULT": "web-platform-build", "POSTURE_RESULT": "encryption-posture"}
+want = {"WEBPLAT_RESULT": "test-webplat", "MUTATIONS_RESULT": "test-webplat-mutations", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "SCRIPTS_HEAVY_RESULT": "test-scripts-heavy", "BUILD_RESULT": "web-platform-build", "POSTURE_RESULT": "encryption-posture"}
 bad = []
 for var, shard in want.items():
     v = str(env.get(var, ""))
@@ -824,8 +850,8 @@ n = [n] if isinstance(n, str) else list(n)
 print(len([x for x in n if x not in ("push-dedupe", "draft-light", "oracle-selection")]))
 PYN
 )
-if [ "$_nshards" -eq 7 ]; then pass; else
-  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 7 (four test-* shards + web-platform-build #8136 + encryption-posture #6907 + oracle-index-check #12156) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+if [ "$_nshards" -eq 8 ]; then pass; else
+  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 8 (five test-* legs + web-platform-build #8136 + encryption-posture #6907 + oracle-index-check #12156) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
 fi
 # W5 — the one non-leg need is push-dedupe, exactly once, and the aggregator's env: never reads it. If the
 # body ever read its output the stage-S2 claim "the aggregator is byte-identical" would be false.
@@ -835,7 +861,7 @@ d = yaml.safe_load(open(sys.argv[1]))
 job = d["jobs"]["test"]
 n = job.get("needs") or []
 n = [n] if isinstance(n, str) else list(n)
-legs = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
+legs = {"test-webplat", "test-webplat-mutations", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
 extra = [x for x in n if x not in legs]
 env = {}
 for st in job.get("steps") or []:
@@ -1020,17 +1046,17 @@ fi
 # below counts ONLY rows that ran against the real body plus one row per mutant verdict; an earlier revision let ~150 probe passes
 # leak in and the floor it pinned (298) was inflated by them. Itemised so the next author can re-derive it after adding a row:
 #    1 instrument self-test + 1 control
-# + 17 classification: R1, R1b, R1c, R1d, R1e, R1f, R1g, R1h, R1i, R1j, R1k, R1l, R2, R3, R3b, R4, R5
+# + 20 classification: R1, R1b, R1c, R1d, R1e, R1f, R1g, R1h, R1i, R1j, R1k, R1l, R1m, R1n, R1o, R2, R3, R3b, R4, R5
 # +  2 event gate (24b absent-SUPERSEDED, 24b says-something) + 1 second member (25) + 3 swallow (24, one per non-success value)
 # +  1 must-PASS (Hb)
 # +  5 mutation battery (22, 23, 24, 25 as mutants; Ha, the swallowing-mutant harness row)
 # +  3 event/value cardinality (E1 merge_group, E1 workflow_dispatch, E3 out-of-enum)                                  = 34
 # + 27 the draft arm (ADR-276 S3, #9728): D1, D1b, D2 (3); D3 and D4 over 3 events (6); D5 over 9 values plus D5b (10); D6, D6b (2);
 #      the 5 arm mutants D7, D7b-D7e (5); D8 structure (1)                                                            = 61
-# + 39 post-removal Guard-1/2 executed rows: 11 R1 (R1-1/R1-2 over 4 events = 8, R1-3..R1-5 = 3), the O2 oracle
+# + 41 post-removal Guard-1/2 executed rows: 11 R1 (R1-1/R1-2 over 4 events = 8, R1-3..R1-5 = 3), the O2 oracle
 #      family, and 2 retirement mutants R-H1a,b (re-introduced tolerance/remedy over the post-removal probes) = 140
 # +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 184
-MIN_ROWS=147
+MIN_ROWS=152
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2

@@ -43,6 +43,12 @@ interface BuildWorkspaceSettingsToolsOpts {
    * only in the workspace the Owner approved it for.
    */
   grants: ExecutionGrants;
+  /**
+   * #12597 — the workspace the legacy card's Owner check read the role in (the session's `activeWorkspaceId`). With no
+   * grant (the legacy in-memory card path), a call refuses as `workspace_changed` when the current workspace is another
+   * one, so an Owner-approved call never lands in a workspace the role was not read in.
+   */
+  sessionWorkspaceId?: string;
   /** Test seam: the user's CURRENT workspace id at execution time. */
   resolveWorkspaceId?: (userId: string) => Promise<string>;
 }
@@ -63,7 +69,7 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
 export function buildWorkspaceSettingsTools(
   opts: BuildWorkspaceSettingsToolsOpts,
 ) {
-  const { userId, grants } = opts;
+  const { userId, grants, sessionWorkspaceId } = opts;
   const resolveWorkspaceId =
     opts.resolveWorkspaceId ??
     (async (uid: string) => resolveCurrentWorkspaceId(uid, await getFreshTenantClient(uid)));
@@ -123,11 +129,19 @@ export function buildWorkspaceSettingsTools(
                 reportGrantRefused(toolName, "workspace_changed");
                 return grantRefusalResponse("workspace_changed");
               }
+            } else if (sessionWorkspaceId !== undefined) {
+              // Legacy card (no grant): run only in the workspace the Owner check read the role in, and name it.
+              if ((await resolveWorkspaceId(userId)) !== sessionWorkspaceId) {
+                reportGrantRefused(toolName, "workspace_changed");
+                return grantRefusalResponse("workspace_changed");
+              }
             }
             const autonomous =
               grant.kind === "granted"
                 ? await setBashAutonomous(userId, input.value, grant.binding.workspaceId)
-                : await setBashAutonomous(userId, input.value);
+                : sessionWorkspaceId !== undefined
+                  ? await setBashAutonomous(userId, input.value, sessionWorkspaceId)
+                  : await setBashAutonomous(userId, input.value);
             return textResponse({ autonomous });
           } catch (err) {
             return textResponse(

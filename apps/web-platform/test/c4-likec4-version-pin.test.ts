@@ -250,15 +250,16 @@ const VITEST_RUN = /^RUN npm install -g vitest@\d+\.\d+\.\d+ --before=\d{4}-\d{2
 const PACKAGE_MANAGER = /\b(?:npm|npx|pnpm|yarn|bunx?|corepack)(?![a-z])/i;
 // The ADR-276 S2 (#9512) condition every gated ci.yml job carries; scripts/ci-push-dedupe.test.sh pins the same string against ci.yml.
 const PUSH_DEDUPE_IF = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}";
-// ADR-276 S3 (#9728): the four heavy jobs (test-webplat and test-scripts carry the likec4 install) append the draft-light clause to
-// that condition; scripts/ci-draft-light.test.sh pins the same string against ci.yml. web-platform-build does NOT take it.
+// ADR-276 S3 (#9728): the five heavy jobs (test-webplat, test-webplat-mutations and test-scripts carry the likec4 install) append
+// the draft-light clause to that condition; scripts/ci-draft-light.test.sh pins the same string against ci.yml.
+// web-platform-build does NOT take it.
 const DRAFT_LIGHT_IF = PUSH_DEDUPE_IF.replace(" }}", " && needs.draft-light.outputs.light != 'true' }}");
 // ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling): the PR-affected skip term and its lever are
 // gone. test-webplat's `if:` is the draft-light condition plus the oracle-lane conjunct below. The retired term's
 // spelling is kept ONLY as a refusal fixture below — scripts/ci-push-dedupe.test.sh's zero-reference census pins
 // that no `needs.pr-selection` read can reappear anywhere in ci.yml.
 const RETIRED_PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) }}");
-// ADR-276 oracle-only lane (#12156, amendment): the five lane-gated legs append ONE more `!(…)` conjunct after every
+// ADR-276 oracle-only lane (#12156, amendment): the six lane-gated legs append ONE more `!(…)` conjunct after every
 // earlier term — event disjunct covering pull_request AND merge_group, `active == 'true'`, head_sha non-empty, head
 // bound to either event's sha, and membership in `oracle-selection`'s `skip_legs` list — and add `oracle-selection`
 // to `needs:`. The term is inert while `CI_ORACLE_LANE` is unset and while `ORACLE_LANE_LOCKED=1` is set in the
@@ -270,6 +271,7 @@ const ORACLE_LANE_TERM = (leg: string): string =>
   ` && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',${leg},'))`;
 const ORACLE_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-webplat")} }}`);
 const ORACLE_SCRIPTS_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-scripts")} }}`);
+const ORACLE_MUT_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-webplat-mutations")} }}`);
 const ORACLE_BUILD_IF = PUSH_DEDUPE_IF.replace(" }}", `${ORACLE_LANE_TERM("web-platform-build")} }}`);
 const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];
 
@@ -386,10 +388,13 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
 // The install steps themselves: exactly one in each job that has a PATH or npx-cache consumer of likec4, and
 // none conditional or non-blocking. Parsed per job, so moving an install between jobs changes the answer
 // (a file-wide count would not), and an `if: false` step is not mistaken for an install.
-const CI_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
+// test-webplat-mutations is on the list not because it renders or freshness-checks
+// C4 but because #12626 deliberately mirrors the webplat legs' likec4/bwrap preamble —
+// a preamble difference must never read as a battery defect.
+const CI_LIKEC4_JOBS = ["test-scripts", "test-webplat", "test-webplat-mutations"];
 // Post-#9410 the monitor is sharded into ci.yml's leg topology; its likec4
-// hosts are the same two legs that render or freshness-check C4.
-const MONITOR_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
+// hosts are the same three legs (the two C4 consumers plus the mutations leg).
+const MONITOR_LIKEC4_JOBS = ["test-scripts", "test-webplat", "test-webplat-mutations"];
 function checkLikec4InstallJobs(src: string, name: string, expected: string[]): string[] {
   type S = { run?: unknown; if?: unknown; "continue-on-error"?: unknown };
   let doc: { jobs?: Record<string, { steps?: S[]; if?: unknown; "continue-on-error"?: unknown }> };
@@ -406,15 +411,17 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
       found.push(jobId);
       // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
       // Exceptions, exact strings only: the ADR-276 S2 (#9512) condition and its S3 draft-light append (any job),
-      // and the ADR-276 oracle-lane conjunct (#12156) on the two legs it is spelled for — ORACLE_WEBPLAT_IF on
-      // test-webplat, ORACLE_SCRIPTS_IF on test-scripts. An oracle-shaped condition on any other job is still
-      // refused; the retired S4 PR-affected term is refused like any other conditional.
+      // and the ADR-276 oracle-lane conjunct (#12156) on the three likec4-hosting legs it is spelled for —
+      // ORACLE_WEBPLAT_IF on test-webplat, ORACLE_SCRIPTS_IF on test-scripts, ORACLE_MUT_IF on
+      // test-webplat-mutations. An oracle-shaped condition on any other job is still refused; the retired
+      // S4 PR-affected term is refused like any other conditional.
       if (
         ("if" in job &&
           job.if !== PUSH_DEDUPE_IF &&
           job.if !== DRAFT_LIGHT_IF &&
           !(jobId === "test-webplat" && job.if === ORACLE_WEBPLAT_IF) &&
-          !(jobId === "test-scripts" && job.if === ORACLE_SCRIPTS_IF)) ||
+          !(jobId === "test-scripts" && job.if === ORACLE_SCRIPTS_IF) &&
+          !(jobId === "test-webplat-mutations" && job.if === ORACLE_MUT_IF)) ||
         "continue-on-error" in job
       )
         violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
@@ -1059,17 +1066,18 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
   const install = (extra = ""): string =>
     `      - name: Install likec4\n${extra ? `        ${extra}\n` : ""}        run: |\n          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
   const other = "      - run: echo hi\n";
-  const ci = (o: { webplat?: string; scripts?: string; heavy?: string } = {}): string =>
-    ["jobs:", job("test-webplat", o.webplat ?? install()), job("test-scripts", o.scripts ?? install()), job("test-scripts-heavy", o.heavy ?? other)].join("\n");
+  const ci = (o: { webplat?: string; mut?: string; scripts?: string; heavy?: string } = {}): string =>
+    ["jobs:", job("test-webplat", o.webplat ?? install()), job("test-webplat-mutations", o.mut ?? install()), job("test-scripts", o.scripts ?? install()), job("test-scripts-heavy", o.heavy ?? other)].join("\n");
 
-  it("control: one unconditional install in each of the two jobs is clean", () => {
+  it("control: one unconditional install in each of the three jobs is clean", () => {
     expect(checkCiLikec4Jobs(ci())).toEqual([]);
   });
 
   it("an install re-added to the heavy job, or removed from a light one, or moved, is refused", () => {
-    expect(checkCiLikec4Jobs(ci({ heavy: install() })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat\]/);
-    expect(checkCiLikec4Jobs(ci({ scripts: other })).join("\n")).toMatch(/found \[test-webplat\]/);
-    expect(checkCiLikec4Jobs(ci({ scripts: other, heavy: install() })).join("\n")).toMatch(/found \[test-scripts-heavy,test-webplat\]/);
+    expect(checkCiLikec4Jobs(ci({ heavy: install() })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat,test-webplat-mutations\]/);
+    expect(checkCiLikec4Jobs(ci({ scripts: other })).join("\n")).toMatch(/found \[test-webplat,test-webplat-mutations\]/);
+    expect(checkCiLikec4Jobs(ci({ scripts: other, heavy: install() })).join("\n")).toMatch(/found \[test-scripts-heavy,test-webplat,test-webplat-mutations\]/);
+    expect(checkCiLikec4Jobs(ci({ mut: other })).join("\n")).toMatch(/found \[test-scripts,test-webplat\]/);
   });
 
   it("an install step made conditional or non-blocking is not an install", () => {
@@ -1097,11 +1105,15 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
 
   it("the exact oracle-lane conjunct is sanctioned on its own leg only; a near-miss or another job is refused (ADR-276 #12156)", () => {
     const onWebplat = (cond: string): string => ci().replace("  test-webplat:\n", `  test-webplat:\n    if: ${cond}\n`);
+    const onMut = (cond: string): string => ci().replace("  test-webplat-mutations:\n", `  test-webplat-mutations:\n    if: ${cond}\n`);
     const onScripts = (cond: string): string => ci().replace("  test-scripts:\n", `  test-scripts:\n    if: ${cond}\n`);
     expect(checkCiLikec4Jobs(onWebplat(ORACLE_WEBPLAT_IF)).join("\n")).toBe("");
     expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(onMut(ORACLE_MUT_IF)).join("\n")).toBe("");
     expect(checkCiLikec4Jobs(onWebplat(ORACLE_SCRIPTS_IF)).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onScripts(ORACLE_WEBPLAT_IF)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onMut(ORACLE_WEBPLAT_IF)).join("\n")).toMatch(/job test-webplat-mutations carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onWebplat(ORACLE_MUT_IF)).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onWebplat(ORACLE_WEBPLAT_IF.replace(",test-webplat,", ",test-bun,"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF.replace("active == 'true'", "active != 'false'"))).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF.replace("!cancelled()", "success()"))).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
@@ -1117,8 +1129,8 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
 
   it("a continuation-split install in the wrong job is still an install; the monitor is checked the same way", () => {
     const split = "      - name: i\n        run: |\n          npm install -g likec4@1.50.0 \\\n            --before=2026-09-28 --ignore-scripts\n";
-    expect(checkCiLikec4Jobs(ci({ heavy: split })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat\]/);
-    const mon = (extra = ""): string => `jobs:\n  test-scripts:\n    steps:\n      - name: i\n${extra ? `        ${extra}\n` : ""}        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n  test-webplat:\n    steps:\n      - run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
+    expect(checkCiLikec4Jobs(ci({ heavy: split })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat,test-webplat-mutations\]/);
+    const mon = (extra = ""): string => `jobs:\n  test-scripts:\n    steps:\n      - name: i\n${extra ? `        ${extra}\n` : ""}        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n  test-webplat:\n    steps:\n      - run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n  test-webplat-mutations:\n    steps:\n      - run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
     expect(checkLikec4InstallJobs(mon(), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS)).toEqual([]);
     expect(checkLikec4InstallJobs(mon("if: false"), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/main-health-monitor\.yml: the likec4 install step in test-scripts must not be conditional/);
     expect(checkLikec4InstallJobs("jobs:\n  test-scripts:\n    steps: []\n", "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/found \[\]/);

@@ -3134,7 +3134,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // credentials (Doppler prd_terraform) its relay_hello_window / peer-deny discoverability probe needs. PLACEMENT: a child of the
   // `discoverability_test:` sub-block. TRUTH: the probe is a Better Stack log query with no unauthenticated read surface. NO SUBSTITUTE:
   // a deployed host's log row is reachable only through that query. Genuine.
-  const BASELINE_DECLARED_PROBES = 96;
+  // 96 -> 97 on 2026-11-10 (#8211, PR #12536 relay hello key slot): measured by this test before the bump (Received 97, the new
+  // entry is `2026-11-09-feat-relay-hello-key-rotation-ghcr-push-diagnostics-plan.md`). PLACEMENT: a child of its
+  // `discoverability_test:` sub-block, value on one line. TRUTH: the probe (`bash scripts/betterstack-query.sh --since 30d --grep
+  // relay_hello_key_fp`) is a Better Stack log query that needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler prd_terraform).
+  // NO SUBSTITUTE: a host container's warn line is reachable only through that query, which has no unauthenticated reader. Genuine.
+  const BASELINE_DECLARED_PROBES = 97;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
