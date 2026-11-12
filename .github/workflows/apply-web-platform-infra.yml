@@ -1888,7 +1888,11 @@ jobs:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # 40, not 20: the post-apply liveness gate polls up to 20min for the new host's first
+    # SOLEUR_INNGEST_SERVER_PROBE row (#12708) — the born-dark failure class (#12695) is exactly
+    # an apply that succeeded while the host never emitted, and the gate's window is what turns
+    # that class into a run failure instead of a silent dark host.
+    timeout-minutes: 40
     # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
     # restart-inngest-server.yml serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
     concurrency:
@@ -2167,6 +2171,75 @@ jobs:
             exit 1
           fi
           echo "Redis AOF volume preserved (0 delete actions in the applied plan)."
+
+      - name: Resolve the new host's server id
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          IID="$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform show -json \
+            | jq -r '[.values.root_module.resources[]? | select(.address == "hcloud_server.inngest")] | .[0].values.id // empty')"
+          case "$IID" in
+            ''|*[!0-9]*)
+              echo "::error::could not resolve the new inngest server id from terraform state (got '${IID}'). The apply reported success but the state read did not — treat the host as UNVERIFIED and read the BOOT_STAGE channel before anything else."
+              exit 1 ;;
+          esac
+          printf 'INNGEST_NEW_IID=%s\n' "$IID" >> "$GITHUB_ENV"
+          echo "new host iid=$IID"
+
+      # POST-REPLACE LIVENESS GATE (#12708, #12695). Apply success means Hetzner created the
+      # server and cloud-init returned — it says nothing about whether the provision unit
+      # reached bootstrap. The Nov-11 host FATAL'd the credential isolation check on every
+      # attempt for ~17h while run 43115757996 read as a success. The proof that the whole
+      # chain ran (provision -> zot pull -> bootstrap -> vector -> probe timer) is the first
+      # SOLEUR_INNGEST_SERVER_PROBE row carrying THIS host's instance_id; the --instance-id
+      # pin keeps the destroyed host's rows inside the window from masking the replacement's
+      # silence. Exit classes: 0 = a row for this iid landed; 4 = query healthy, window empty
+      # (the host is not shipping — the gate's failure signal); 6 = the READ failed (a Better
+      # Stack/Doppler fault — never a host verdict, so it retries within the window rather
+      # than failing on an instrument blip; a window that ends on rc=6 reports INSTRUMENT,
+      # not dark). 20min bounded poll: bootstrap on a healthy replace lands its first probe
+      # row inside ~5min.
+      - name: Post-replace liveness gate — first probe row on the new iid (#12708)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          deadline=$(( SECONDS + 1200 ))
+          last_rc=9
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            doppler run -p soleur -c prd_terraform -- \
+              scripts/inngest-host-state.sh --since 30m --instance-id "$INNGEST_NEW_IID" --no-errors
+            last_rc=$?
+            if [ "$last_rc" -eq 0 ]; then
+              echo "liveness gate PASSED: a SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID has landed — the new host is emitting."
+              exit 0
+            fi
+            if [ "$last_rc" -eq 6 ]; then
+              echo "liveness gate: the read path failed (rc=6, instrument fault, not a host verdict) — retrying in 60s."
+            else
+              echo "liveness gate: no probe row for iid=$INNGEST_NEW_IID yet (rc=$last_rc) — retrying in 60s."
+            fi
+            sleep 60
+          done
+          {
+            echo "## inngest-host-replace liveness gate FAILED (#12708)"
+            echo ""
+            echo "No \`SOLEUR_INNGEST_SERVER_PROBE\` row for iid=\`$INNGEST_NEW_IID\` within 20min of apply"
+            echo "(last read rc=\`$last_rc\`; 4 = host not shipping, 6 = the read path itself failed)."
+            echo ""
+            echo "The apply succeeded but the host is not emitting. Read the BOOT_STAGE channel for the"
+            echo "first failing stage — \`isolation-check-FAILED\` now names the offending secret in its"
+            echo "detail (#12707):"
+            echo ""
+            echo '```'
+            echo "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_INNGEST_BOOT_STAGE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::liveness gate: no SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID within 20min of apply (last rc=$last_rc). The host is provisioned but not emitting — read SOLEUR_INNGEST_BOOT_STAGE rows for the failing stage before re-dispatching."
+          exit 1
 
       - name: Dispatch summary
         if: always()

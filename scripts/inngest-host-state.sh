@@ -86,14 +86,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUERY="${INNGEST_STATE_QUERY:-$SCRIPT_DIR/betterstack-query.sh}"
 SINCE="${INNGEST_STATE_SINCE:-90m}"
 WANT_ERRORS=1
+INSTANCE_ID=""
 
 usage() {
   cat >&2 <<'EOF'
-usage: inngest-host-state.sh [--since 90m] [--no-errors]
+usage: inngest-host-state.sh [--since 90m] [--instance-id <iid>] [--no-errors]
 
-  --since      lookback window (default 90m; the probe timer is hourly, so a
-               shorter window can render a healthy host silent).
-  --no-errors  print only the probe state, skip the recent unit-error scan.
+  --since        lookback window (default 90m; the probe timer is hourly, so a
+                 shorter window can render a healthy host silent).
+  --instance-id  pin rows to one host identity: the digits of the probe's
+                 instance_id field (hetzner-<digits> or bare digits both match;
+                 the hetzner- prefix is ignored). Needed after a host replace
+                 when the window may still hold the OLD host's rows — without
+                 it, a destroyed host's rows can mask the replacement's silence.
+  --no-errors    print only the probe state, skip the recent unit-error scan.
 
 Wrap in `doppler run -p soleur -c prd_terraform --` so creds are injected.
 EOF
@@ -102,11 +108,25 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --since) SINCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --instance-id) INSTANCE_ID="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --no-errors) WANT_ERRORS=0; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+# A malformed pin is a usage error, never a verdict about the host: `--instance-id abc`
+# filtering every row exits 4 and reports the host silent — the same confident-wrong shape as
+# the --since typo arm below. Digits (terraform's hcloud_server id) or the hetzner-<digits>
+# form the metadata endpoint returns are the only two spellings admitted.
+if [[ -n "$INSTANCE_ID" ]]; then
+  INSTANCE_ID="${INSTANCE_ID#hetzner-}"
+  if [[ ! "$INSTANCE_ID" =~ ^[0-9]+$ ]]; then
+    echo "inngest-host-state.sh: --instance-id must be digits or hetzner-<digits> — got '${INSTANCE_ID}'." >&2
+    echo "  Nothing was queried. This is a usage error, not a statement about the host." >&2
+    exit 2
+  fi
+fi
 
 # VALIDATE THE WINDOW BEFORE SPENDING A QUERY ON IT. `--since 90` (unit omitted) and
 # `--since ""` both reach ClickHouse as a malformed literal; the query then fails, and before
@@ -177,7 +197,7 @@ if [[ "$probe_rc" -ne 0 ]]; then
 fi
 
 state_out="$(printf '%s\n' "$probe_rows" \
-  | INNGEST_PROBE_EMITTER="$INNGEST_PROBE_EMITTER" INNGEST_PROBE_MARKER="$INNGEST_PROBE_MARKER" python3 -c '
+  | INNGEST_PROBE_EMITTER="$INNGEST_PROBE_EMITTER" INNGEST_PROBE_MARKER="$INNGEST_PROBE_MARKER" INNGEST_STATE_INSTANCE_ID="$INSTANCE_ID" python3 -c '
 import sys, json, re, os
 
 rows = []
@@ -237,6 +257,14 @@ for line in sys.stdin:
     f = {}
     for _k, _v in re.findall(r"(\w+)=([^\s]+)", m):
         f.setdefault(_k, _v)
+    # THE THIRD PIN (#12708): --instance-id. A host replace leaves the OLD rows of the destroyed
+    # server inside any lookback window, so an unfiltered newest-wins read can summarise a
+    # destroyed host and mask a replacement that is not shipping. The probe writes the Hetzner
+    # metadata form (hetzner-<digits>); the caller may pass either spelling — the bash side
+    # normalised its argument to bare digits, so strip the same prefix here before comparing.
+    _pin = os.environ.get("INNGEST_STATE_INSTANCE_ID", "")
+    if _pin and re.sub(r"^hetzner-", "", f.get("instance_id", "")) != _pin:
+        continue
     rows.append((o.get("dt", "")[:19], f))
 
 # Exit 7 (surfaced as the exit-6 read-failure class by the caller): the query answered, but
@@ -383,7 +411,7 @@ if [[ "$state_rc" -eq 0 && -z "$state_out" ]]; then
 fi
 
 if [[ "$state_rc" -eq 4 ]]; then
-  echo "inngest-host-state.sh: the query RAN and returned no dedicated-host probe rows in the last ${SINCE}." >&2
+  echo "inngest-host-state.sh: the query RAN and returned no dedicated-host probe rows in the last ${SINCE}${INSTANCE_ID:+ matching instance_id=${INSTANCE_ID}}." >&2
   echo "  SILENCE IS NOT HEALTH — it means the host is not shipping to Better Stack" >&2
   echo "  (vector down, host down, or never booted). That is a finding, not a clean read." >&2
   echo "  (The read path itself is healthy: had it failed, this would be exit 6, not exit 4.)" >&2

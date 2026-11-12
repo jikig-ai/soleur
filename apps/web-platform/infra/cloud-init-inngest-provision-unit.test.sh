@@ -952,6 +952,13 @@ guard_all() {
   run_sc T3; common T3 1
   _ta "$( has T3 '^phone isolation-check-FAILED attempt=2 iid=i-fixture' && [ "$(cnt T3 "$PULL_RE")" = 0 ] && echo 0 || echo 1)" "TA T3: isolation-check-FAILED (with iid), zero pulls (pulls=$(cnt T3 "$PULL_RE"))"
   _ta "$( [ "$(grep -cE '^phone isolation-check-passed attempt=1 iid=i-fixture' "$gw/T3a.log")" = 1 ] && echo 0 || echo 1)" "TA T3: the prior attempt did pass isolation (the carry-over probe is live)"
+  # #12707: the FATAL names the offender. The fixture set is the five admitted names +
+  # SUPABASE_SERVICE_ROLE_KEY, so the detail carries foreign=SUPABASE_SERVICE_ROLE_KEY with
+  # n_total=6.n_inngest=5 — on the stage row, on the exit-trap row via last_stage, and on the
+  # Sentry emit via the same last_stage interpolation.
+  _ta "$( has T3 '^phone isolation-check-FAILED attempt=2 iid=i-fixture\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5$' && echo 0 || echo 1)" "TA T3: the stage row names the foreign secret and the set counts (#12707)"
+  _ta "$( has T3 '^phone provision-attempt-exit-1 attempt=2 why=isolation-check-FAILED\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5 iid=i-fixture' && echo 0 || echo 1)" "TA T3: the exit-trap row carries the same detail via last_stage"
+  _ta "$( has T3 '^emit provision_attempt_failed warning rc=1\.attempt=2\.why=isolation-check-FAILED\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5\.iid=i-fixture' && echo 0 || echo 1)" "TA T3: the Sentry emit carries the same detail via last_stage"
 
   # T4 — bootstrap fails; the flip timer was active before the quiesce, so it is started again.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/boot_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"; run_sc T4; common T4 1
@@ -1078,7 +1085,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=173
+C0_EXPECTED=176
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1146,11 +1153,11 @@ def move_block(start, end, after_anchor, after_after=0):
     ls = lines(); a, b = block(start, end); blk = ls[a:b + 1]; del ls[a:b + 1]; put(ls)
     ls = lines(); i = one(after_anchor, after_after); ls[i + 1:i + 1] = blk; put(ls)
 def save(): open(p, "w").write(s)
-ISO_OPEN = "if doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27"
+ISO_OPEN = "if d=$(doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27"
 BOOT_CALL = "bash \"$EXTRACT_DIR/inngest-bootstrap.sh\" > /var/log/inngest-bootstrap.log 2>&1 &"
 Q_OPEN = "systemctl stop inngest-cutover-flip.timer >/dev/null 2>&1 || true"
 Q_CLOSE = "/usr/local/bin/inngest-boot-phone-home.sh provision-fsm-busy \"units=[$_busy] waited_s=$_q attempt=$attempt iid=$IID\" || true"
-ISO_FAILED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED \"attempt=$attempt iid=$IID\" || true"
+ISO_FAILED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED \"attempt=$attempt iid=$IID$d\" || true"
 ISO_PASSED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed \"attempt=$attempt iid=$IID\" || true"
 '
 
@@ -1358,10 +1365,10 @@ e = c + 1
 while e < len(ls) and (ls[e].startswith("      ") or ls[e].strip() == ""): e += 1
 ls[c + 1:e] = ["      #!/bin/sh", "      exit 0"]; put(ls); save()'
 row G8-r4 RED "G8: the script keeps no verdict state" '
-rep_line(ISO_OPEN, "if [ -f \"$STATE/iso.ok\" ] || doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27")
+rep_line(ISO_OPEN, "if [ -f \"$STATE/iso.ok\" ] || d=$(doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27")
 ins_after(ISO_PASSED, [": > \"$STATE/iso.ok\""]); save()'
 row G8-r5 PASS - '
-raw_rep("LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)", "LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|NEW_ADMITTED_NAME|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)"); save()'
+raw_rep("TRACE_RETENTION_(DAYS|BATCH|MAX_BATCHES|SIZE_BUDGET_BYTES)|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)", "TRACE_RETENTION_(DAYS|BATCH|MAX_BATCHES|SIZE_BUDGET_BYTES)|NEW_ADMITTED_NAME|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)"); save()'
 
 # ---- review batch (PR #9159): widened detectors, each proven by a row --------------------------
 row G1-r9 RED "G1: no runcmd or bootcmd item pulls an image" '
@@ -1418,7 +1425,7 @@ w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_aft
 row G6-r14 RED "G6: the timer triggers the provision service" '
 ins_after("OnBootSec=90s", ["Unit=soleur-something-else.service"]); save()'
 row G6-r15 RED "G6: nothing in the script turns xtrace/verbose on" '
-a = one(ISO_OPEN); ins_after("set -euo pipefail", ["set -x"], after=a); save()'
+a = one(ISO_OPEN); ins_after(ISO_OPEN, ["set -x"], after=a); save()'
 row G6-r16 RED "G6: the restart delay backs off" '
 del_line("RestartSteps=4"); save()'
 row G8-r6 PASS - '

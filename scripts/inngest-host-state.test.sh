@@ -547,6 +547,45 @@ else
   fail "an inherited emitter/marker survived an empty lib — rc=$rc out='$out'"
 fi
 
+# #12708: --instance-id pins the read to ONE host identity. The load-bearing case is the
+# replace window: the OLD host's rows and the NEW host's rows coexist, and an unfiltered read
+# can summarise the destroyed host while the replacement emits nothing.
+echo "T24: --instance-id selects only the pinned host's rows"
+make_query
+{ row "2026-11-12 13:00:00" soleur-inngest "$DEDICATED_MSG"
+  row "2026-11-12 14:00:00" soleur-inngest "${DEDICATED_MSG//hetzner-166317708/hetzner-175859399}"; } > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors --instance-id 175859399)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q '175859399' <<<"$out" && ! grep -q '166317708' <<<"$out"; then
+  pass "--instance-id 175859399 -> exit 0, summarises the new host only"
+else
+  fail "the pin admitted the old host's rows or lost the new host's — rc=$rc out='$out'"
+fi
+echo "T24b: the hetzner- prefixed spelling pins identically"
+res="$(run_sut --no-errors --instance-id hetzner-175859399)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q '175859399' <<<"$out"; then
+  pass "--instance-id hetzner-175859399 -> exit 0, same row"
+else
+  fail "the hetzner- spelling did not pin — rc=$rc out='$out'"
+fi
+echo "T25: --instance-id for an iid with no rows -> exit 4, never summarises the other host"
+res="$(run_sut --no-errors --instance-id 999999999)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 4 && -z "$out" ]]; then
+  pass "no rows for the pinned iid -> exit 4 and EMPTY stdout"
+else
+  fail "an unmatched --instance-id still produced a verdict — rc=$rc out='$out'"
+fi
+echo "T25b: a malformed --instance-id is a usage error (2), not a host finding"
+res="$(run_sut --no-errors --instance-id abc)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"
+if [[ "$rc" -eq 2 ]]; then
+  pass "--instance-id abc -> exit 2, nothing queried"
+else
+  fail "a malformed --instance-id must not reach the interpreter or produce a verdict — rc=$rc"
+fi
+
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
@@ -555,7 +594,9 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # 29 = T1..T20 (T3/T3b, T8/T8b, T12/T13, T18 x4 fields) = 25, plus #8846's T21 (forged
 # doppler row), T21b (marker + space anchor), T22 (lib unloadable -> 6), T22b (names the path).
 # 30 with #8873's T23 (inherited emitter/marker + a lib defining nothing -> 6).
-_min_cases=30
+# 34 with #12708's T24 (pin selects), T24b (hetzner- spelling), T25 (unmatched pin -> 4),
+# T25b (malformed pin -> 2).
+_min_cases=34
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2
