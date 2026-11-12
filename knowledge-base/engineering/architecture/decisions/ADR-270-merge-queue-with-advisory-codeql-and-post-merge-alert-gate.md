@@ -1251,6 +1251,22 @@ checks are green, or (b) another authored pin-bump PR sitting armed + green +
 not-queued (the #12489 shape), which would prove armed auto-merge's
 self-enqueue still has a gap the explicit arm is placed too early to cover.
 
+Resolved 2026-11-12: #12652 closed not-planned after the fabricated mint
+`vinngest-v1.1.73` post-merge verification (PR #12700, build run
+43310087556, bump job 131504429142). Neither criterion materialized. The live
+`::warning::` surfaced the refusal reason — a third textual shape, the
+GraphQL UNPROCESSABLE form `Pull request 11 of 11 required status checks
+have not succeeded: 4 expected. 2 of 2 required status checks are queued.`
+(same pending-required-check class; checks were not green at call time). And
+armed auto-merge self-enqueued the PR at first-green — `isInMergeQueue`
+false→true and `mergeStateStatus` BEHIND→CLEAN in one ≤91s poll window —
+even though the head had gone BEHIND mid-checks when #12536 merged under it,
+the exact precondition under which #12489 sat armed 5h20m. Armed auto-merge
+covers the green-at-call-time case including the BEHIND variant; the explicit
+arm stays as residual cover for green + met-protection + no self-enqueue, and
+the `::warning::` line is the monitoring surface that would surface a
+green-time refusal for re-evaluation.
+
 ### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
 The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.

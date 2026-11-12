@@ -648,6 +648,10 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
       # refuses enqueuePullRequest while the PR's branch-protection
       # requirements are unmet — the documented refusal for a pending REQUIRED
       # check is `Pull request Required status check "<name>" is expected.`
+      # (second shape measured live on #12700's bump job, run 43310087556: the
+      # GraphQL UNPROCESSABLE form `Pull request N of N required status checks
+      # have not succeeded: X expected. Y of Y required status checks are
+      # queued.` — same pending-required-check class, not a new failure).
       # Admission gates on the required-check SET, not the head rollup: failing
       # non-required (advisory) contexts do NOT block enqueue; a pending or
       # failed REQUIRED context does (measured: #12520 queued at position 2
@@ -661,7 +665,9 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
       # refusal reason is echoed in the warning below so an unexpected refusal
       # is distinguishable from this expected one; re-evaluate the arm's
       # placement if a refusal is ever observed while required checks are
-      # green (retry-on-check-complete is tracked at #12652).
+      # green (retry-on-check-complete was evaluated and declined at #12652:
+      # armed auto-merge self-enqueued #12700 at first-green even after the
+      # head went BEHIND mid-checks — the #12489 precondition did not recur).
       pr_node=$(timeout 60 gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
         | jq -r '.id // ""' 2>/dev/null || true)
       if [[ -z "$pr_node" ]]; then
