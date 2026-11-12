@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329,SC2015,SC2016  # row functions are dispatched indirectly; A && B || C is the assertion idiom; literals are single-quoted on purpose
+# shellcheck disable=SC2329,SC2015,SC2016,SC1003  # row functions are dispatched indirectly; A && B || C is the assertion idiom; literals are single-quoted on purpose; a trailing backslash inside single quotes is a literal continuation marker
 # Guard 1 of #12656 (plan: knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-roadmap-plan.md,
 # `## Guard Contract`). Every skill site that arms or re-arms auto-merge, and sync-pr-behind's dequeue message, binds
 # each arm to the head the Review-Evidence arm check set: `--match-head-commit "${H:?...}"`. Only the canonical
@@ -292,7 +292,7 @@ EXEMPT_ARM='gh pr merge <N> --squash --auto --match-head-commit "${EXEMPT_HEAD:?
 RM_ARM='bash "$SS_LIB" with_lock merge-main 600 -- \'
 SS_LINE='SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"'
 DQ_ARM='gh pr merge "$N" --squash --auto --match-head-commit "${H:?run the arm check in this call}"'
-SHIP_ANCHOR='## Arm check'
+SHIP_ANCHOR='## Headless Mode Detection'
 
 m1()   { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto'; }
 m2()   { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$RM_ARM" "$RM_ARM"$'\n'"gh pr merge <number> --squash --auto && \\"; }

@@ -1486,7 +1486,7 @@ run_scenario_both "18b-dequeue-seen-on-next-behind-tick" "$SCEN18B" \
   "\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
 kind=dequeued rc=13 — PR #4387 was in the merge queue and is no longer \(OPEN, disarmed, seen in the queue earlier, no removal event read\)
 gh run list --event merge_group --limit 100
-gh pr merge 4387 --squash --auto
+review-evidence-comment\.md#arm-check
 \[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\.
 \[scenario exit rc=0\]" \
   "auto-sync [0-9/]+ pushed|\[3/90\]|ship\.phase7\.(hatch_check|behind_exhausted)|Merge poll timed out|MOCK: git merge --abort|UNEXPECTED gh call"

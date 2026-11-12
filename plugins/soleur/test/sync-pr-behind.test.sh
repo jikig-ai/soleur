@@ -955,7 +955,7 @@ else fail "dequeue tick 1: rc=$DQ_RC marker=$([[ -f "$DQ/work/.git/pr-queue-seen
 dq_run "$DQ" dequeued
 if [[ "$DQ_RC" -eq 13 ]] && grep -q '^\[pr-behind-sync\] kind=dequeued rc=13 — ' "$DQ/out" \
    && grep -q 'gh run list --event merge_group --limit 100' "$DQ/out" && grep -q "gh-readonly-queue/main/pr-$QUEUE_PR-" "$DQ/out" \
-   && grep -q "gh pr merge $QUEUE_PR --squash --auto" "$DQ/out" && dq_unmoved && [[ ! -e "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]]; then
+   && grep -q 'review-evidence-comment.md#arm-check' "$DQ/out" && dq_unmoved && [[ ! -e "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]]; then
   pass "dequeue tick 2: queued → out of the queue + disarmed → kind=dequeued rc=13 with the recovery, nothing pushed, marker cleared"
 else fail "dequeue tick 2: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out" | cut -c1-300)"; fi
 # tick 3: the marker is consumed — a re-run does not report the same dequeue again, it syncs (no stuck loop)

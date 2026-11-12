@@ -332,7 +332,7 @@ queue_read_settled() {
 }
 
 # queue_wait_eval — THE ONE copy of the armed-BEHIND predicate (2026-10-09, PR 9839; shared with --step and --queue-wait,
-# #9869). Between `gh pr merge --auto` and the enqueue a PR is OPEN, BEHIND, armed and NOT in the queue, so queue_gate (which
+# #9869). Between the auto-merge arm and the enqueue a PR is OPEN, BEHIND, armed and NOT in the queue, so queue_gate (which
 # only sees an entry) lets it through, and a sync there pushes a commit that restarts every required check for nothing: on a
 # merge-queue repo the queue makes the PR current itself. Fires when the PR is OPEN, GitHub says BEHIND or UNKNOWN (UNKNOWN is
 # recompute lag; DIRTY never: a conflicting or kb-index-class PR still resolves) AND auto-merge is armed AND the PR's own base
@@ -567,7 +567,7 @@ queue_gate() {
         [[ -z "$marker" ]] || rm -f "$marker"
         reason="removal reason: ${rm#removal=}"
         [[ "$rm" != removal=none && "$rm" != removal=- ]] || reason="seen in the queue earlier, no removal event read"
-        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,headSha,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed — under grouped merging (max_entries_to_merge=3) a member PR's group ref names the DEEPEST member, so if no run matches pr-$PR- list recent merge_group runs and correlate by headSha/createdAt; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
+        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,headSha,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed — under grouped merging (max_entries_to_merge=3) a member PR's group ref names the DEEPEST member, so if no run matches pr-$PR- list recent merge_group runs and correlate by headSha/createdAt; (2) fix on the branch, git merge origin/main, push; (3) re-arm once, only when autoMergeRequest is null, through the arm check (plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check; procedure step 3); a refusal is reported, never armed around. A second dequeue: stop and report it."
         exit 13
       fi
       return 0 ;;

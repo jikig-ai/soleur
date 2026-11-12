@@ -316,18 +316,18 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `soleur:ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
+3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run its first statement with `PR_NUMBER=<number>`, then the block below, in one Bash call. The check's `exit 1` stops the call before the lock, and both arms abort on `${H:?…}` if the check did not run in the same call. On a refusal from the arm check, run `soleur:review`, then the call again; never arm around it. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so a non-zero `rc` other than 99 means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
    SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
    if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
      bash "$SS_LIB" with_lock merge-main 600 -- \
-       gh pr merge <number> --squash --auto
+       gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
      rc=$?
    else
      # Degrade open, loudly — the lock is advisory (ADR-178 §5).
      echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
-     gh pr merge <number> --squash --auto
+     gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
      rc=$?
    fi
    # Both arms above capture rc, so something must READ it. Without this branch
