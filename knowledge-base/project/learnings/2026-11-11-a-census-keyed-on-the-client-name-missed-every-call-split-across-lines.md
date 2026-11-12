@@ -148,7 +148,11 @@ written; error 19 happened in the ready run of PR #12701, which added them. All 
     the ones that read the changed files, and the pre-ready list did not name this lint. Recovery: moved the
     bounded-watch detail into `monitor-hygiene.md` and left postmerge 10 bytes smaller than main. Prevention:
     `lint-skill-body-budget.py` added to the pre-ready guard list in `ready-run-wait.md`; after any edit to a lifecycle
-    SKILL.md, run it before `gh pr ready`, on the head you ready.
+    SKILL.md, run it before `gh pr ready`, on the head you ready. The re-run then failed `test-webplat` on
+    `apps/web-platform/test/plugin-root-anchoring.test.ts`, which flagged the new `python3
+    scripts/lint-skill-body-budget.py` line as a CWD-relative anchor; the suites I picked came from a grep of
+    `plugins/soleur/test` and `tests/` only. Recovery: anchored it at `$(git rev-parse --show-toplevel)`. Prevention:
+    when picking the suites that read a changed file, grep `apps/web-platform/test` too.
 
 ## Tags
 
