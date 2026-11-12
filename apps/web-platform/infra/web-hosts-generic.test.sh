@@ -138,9 +138,16 @@ eq "ungated: today only web-1 serves outside the drain gate" "$CON_OUT" '"[\"web
 W3P='"web-3"={location="hel1",private_ip="10.0.1.12",server_type="cpx22",lb_weight=1}'
 con 'jsonencode(local.web_lb_ungated)' -var "web_hosts={${W1},${W2},${W3P}}"
 eq "ungated: web-3 declared at weight 1 is a second ungated host (the pool precondition refuses it)" "$CON_OUT" '"[\"web-1\",\"web-3\"]"'
-# The precondition is what turns that list into a refusal; console cannot evaluate resource lifecycle, so pin it.
-eq "ungated: the GA pool carries the at-most-one-ungated precondition" \
-  "$(awk '/^resource "cloudflare_load_balancer_pool" "web_1"/,/^}/' "$LB" | grep -cE '^[[:space:]]*condition[[:space:]]*=[[:space:]]*length\(local\.web_lb_ungated\)[[:space:]]*<=[[:space:]]*1[[:space:]]*$')" 1
+con 'local.web_lb_ungated_ok'
+eq "ungated: today's config passes the ungated-host condition" "$CON_OUT" 'true'
+con 'local.web_lb_ungated_ok' -var "web_hosts={${W1},${W2},${W3P}}"
+eq "ungated: a second ungated host fails the condition" "$CON_OUT" 'false'
+W1D='"web-1"={location="hel1",private_ip="10.0.1.10",lb_weight=0,luks_monitor_profile="primary",jump=true}'
+con 'local.web_lb_ungated_ok' -var "web_hosts={${W1D},${W2},${W3P}}"
+eq "ungated: a swap (primary drained, standby web-3 at weight 1) fails the condition" "$CON_OUT" 'false'
+# The precondition is what turns that condition into a refusal; console cannot evaluate resource lifecycle, so pin it.
+eq "ungated: the GA pool's precondition is the ungated-host condition" \
+  "$(awk '/^resource "cloudflare_load_balancer_pool" "web_1"/,/^}/' "$LB" | grep -cE '^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.web_lb_ungated_ok[[:space:]]*$')" 1
 
 refuse() { # refuse <name> <web_hosts HCL> <message fragment>
   con 'jsonencode(local.web_lb_weights)' -var "web_hosts=$2"

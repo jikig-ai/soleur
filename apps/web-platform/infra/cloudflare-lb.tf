@@ -82,6 +82,9 @@ locals {
   # one, so a new key declared at lb_weight = 1 is refused at plan time instead of pooling ungated: it must
   # enter local.web_lb_gate (and the lb-weight-gate chain) first.
   web_lb_ungated = [for k, h in var.web_hosts : k if h.lb_weight > 0 && !contains(keys(local.web_lb_gate), k)]
+  # The count alone would pass a swap (the primary declared at 0, a new standby key at 1), so the one
+  # ungated host must also be the luks-monitor primary, which the web_hosts validation holds to one key.
+  web_lb_ungated_ok = length(local.web_lb_ungated) <= 1 && alltrue([for k in local.web_lb_ungated : var.web_hosts[k].luks_monitor_profile == "primary"])
 }
 
 resource "cloudflare_load_balancer_pool" "web_1" {
@@ -123,8 +126,8 @@ resource "cloudflare_load_balancer_pool" "web_1" {
 
   lifecycle {
     precondition {
-      condition     = length(local.web_lb_ungated) <= 1
-      error_message = "At most one web host may serve outside the drain gate (local.web_lb_gate); add the new key to the gate before declaring lb_weight = 1."
+      condition     = local.web_lb_ungated_ok
+      error_message = "At most one web host may serve outside the drain gate (local.web_lb_gate), and it must be the luks-monitor primary; add the new key to the gate before declaring lb_weight = 1."
     }
   }
 }
