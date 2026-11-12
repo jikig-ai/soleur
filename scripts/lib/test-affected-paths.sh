@@ -138,10 +138,10 @@ ALWAYS_ON_SUITES=(
   # construction (git ls-files + per-file comment-stripped invocation discovery).
   "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
-  # #9826 slice 2a: the public-claim guard greps every public-copy surface (docs, legal, README, site data,
-  # public app pages) for image-scan claims, so any edit to those surfaces can trip it — repo-global by
-  # construction, and a cheap grep, so always-on rather than a hand-listed edge set.
-  "scripts/image-cve-public-claim-guard"
+  # scripts/image-cve-public-claim-guard is NOT here: the #11556 5-run re-price put its
+  # measured median over the fast-tier cap. (#11556) demoted to edge-selection — see the
+  # withdrawn-to-edge-selection index below.
+  #
   # #9826 slice 2a: the verdict consumer sweep reads every tracked script, workflow and composite action (a poller of the
   # verdict marker can live anywhere), so it is repo-global; it is its own small suite so the ~75 s verdict suite stays edge-selected.
   "scripts/image-cve-verdict-consumers"
@@ -366,6 +366,7 @@ ALWAYS_ON_SUITES=(
   #   scripts/lint-encryption-posture                        -> AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS
   #   plugins/soleur/test/gitleaks-merge-commit.test.sh      -> AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS
   #   scripts/lint-gh-argv-arg-live                          -> AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS
+  #   scripts/image-cve-public-claim-guard                   -> AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS
   #
   # #11648 withdrew all eight: fresh 5-run merge_group medians (receipts/medians-11648.txt
   # under knowledge-base/project/specs/feat-one-shot-11648-fast-tier-demotion/) put each
@@ -378,6 +379,12 @@ ALWAYS_ON_SUITES=(
   # declared as dir-anchored glob:<dir>/**.<ext> rows, so it still selects on
   # most code-bearing diffs; that high selection rate is the truthful
   # classification, not a leak-back.
+  #
+  # #11556 added a ninth: image-cve-public-claim-guard, whose committed floor
+  # (1,223 ms) under-priced the SURFACES walk — the 5-run merge_group medians
+  # from the Lever-A re-price put it at 11,494 ms measured. Its edge set is the
+  # guard's own SURFACES list, declared verbatim in
+  # AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS.
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -5002,6 +5009,41 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "glob:*.sh"
   ".github/workflows/"
   "scripts/lint-gh-argv-arg.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/image-cve-public-claim-guard (#11556 demotion, re-priced median 11,494 ms) —
+# #9826's repo-global tripwire left ALWAYS_ON_SUITES when the Lever-A 5-run re-price
+# moved its row off the 1,223 ms floor. The honest read set IS the suite's own
+# SURFACES list (scripts/image-cve-public-claim-guard.test.sh SURFACES=(), ~line 206):
+# every public-copy surface the guard walks, verbatim. Directory rows use the
+# trailing-slash dir-entry shape (the components/settings/*-toggle.tsx glob and the
+# two named files under plugins/soleur/docs are subsumed by their parent dirs).
+AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS=(
+  "plugins/soleur/docs/"
+  "docs/legal/"
+  "README.md"
+  "apps/web-platform/app/page.tsx"
+  "apps/web-platform/app/layout.tsx"
+  "apps/web-platform/app/manifest.ts"
+  "apps/web-platform/app/error.tsx"
+  "apps/web-platform/app/global-error.tsx"
+  "apps/web-platform/app/shared/"
+  "apps/web-platform/public/offline.html"
+  "apps/web-platform/app/(auth)/"
+  "apps/web-platform/app/(public)/"
+  "apps/web-platform/app/(dashboard)/"
+  "apps/web-platform/components/"
+  "apps/web-platform/lib/legal/disclosures.ts"
+  "apps/web-platform/lib/messages/"
+  "plugins/soleur/skills/"
+  "plugins/soleur/agents/"
+  "plugins/soleur/README.md"
+  "plugins/soleur/.claude-plugin/plugin.json"
+  "plugins/soleur/.claude-plugin/agents.manifest.json"
+  ".claude-plugin/marketplace.json"
+  "knowledge-base/marketing/"
+  "scripts/image-cve-public-claim-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
