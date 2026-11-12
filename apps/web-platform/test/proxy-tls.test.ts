@@ -8,20 +8,33 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { REDACT_PATHS, SENSITIVE_LOWER } from "@/server/sensitive-keys";
+
+// Named Sentry-mirror spies (#8211 accept-only slot): the loader's degraded states are asserted by op.
+const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
+}));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
+  infoSilentFallback: vi.fn(),
+}));
 
 import {
   loadProxyTlsServerOptions,
   loadProxyTlsClientCa,
   getProxyCertNotAfter,
   __resetProxyHelloKeyForTests,
-  loadProxyHelloKey,
+  loadProxyHelloKeys,
 } from "@/server/proxy-tls";
 
 // Synthesized self-signed P-256 cert, CN=soleur-web-proxy, notAfter Jun 2036.
@@ -167,13 +180,13 @@ describe("PROXY_TLS_KEY is a sensitive key; the public cert is not", () => {
   });
 });
 
-describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lowercase hex, read once, then deleted from the env", () => {
+describe("loadProxyHelloKeys().current (#12289): a 32-byte Buffer only for exactly 64 lowercase hex, read once, then deleted from the env", () => {
   const VALID = "0123456789abcdef".repeat(4);
   beforeEach(() => __resetProxyHelloKeyForTests());
 
   test("valid key: a 32-byte Buffer holding the decoded bytes", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
-    const key = loadProxyHelloKey();
+    const key = loadProxyHelloKeys().current;
     expect(key).toBeInstanceOf(Buffer);
     expect(key).toHaveLength(32);
     expect(key?.toString("hex")).toBe(VALID);
@@ -182,12 +195,12 @@ describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lower
   test("a different random valid key per run is accepted", () => {
     const k = Array.from({ length: 64 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", k);
-    expect(loadProxyHelloKey()?.toString("hex")).toBe(k);
+    expect(loadProxyHelloKeys().current?.toString("hex")).toBe(k);
   });
 
   test("unset and empty read as null", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
-    expect(loadProxyHelloKey()).toBeNull();
+    expect(loadProxyHelloKeys().current).toBeNull();
   });
 
   test.each([
@@ -200,29 +213,259 @@ describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lower
     ["0x prefix", "0x" + VALID.slice(2)],
   ])("%s reads as null", (_n, v) => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", v);
-    expect(loadProxyHelloKey()).toBeNull();
+    expect(loadProxyHelloKeys().current).toBeNull();
   });
 
   test("the first read DELETES the variable from process.env (children spawned later cannot inherit it)", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
     expect(process.env.PROXY_HELLO_HMAC_KEY).toBe(VALID);
-    loadProxyHelloKey();
+    loadProxyHelloKeys();
     expect("PROXY_HELLO_HMAC_KEY" in process.env).toBe(false);
   });
 
   test("an invalid value is deleted too, and the verdict is cached", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "not-a-key");
-    expect(loadProxyHelloKey()).toBeNull();
+    expect(loadProxyHelloKeys().current).toBeNull();
     expect("PROXY_HELLO_HMAC_KEY" in process.env).toBe(false);
   });
 
   test("cached: a later env change is not re-read; the reset seam reloads", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
-    const first = loadProxyHelloKey();
+    const first = loadProxyHelloKeys().current;
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "f".repeat(64));
-    expect(loadProxyHelloKey()?.toString("hex")).toBe(first?.toString("hex"));
+    expect(loadProxyHelloKeys().current?.toString("hex")).toBe(first?.toString("hex"));
     __resetProxyHelloKeyForTests();
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "f".repeat(64));
-    expect(loadProxyHelloKey()?.toString("hex")).toBe("f".repeat(64));
+    expect(loadProxyHelloKeys().current?.toString("hex")).toBe("f".repeat(64));
+  });
+});
+
+// #8211, ADR-323 Decision 9 (2026-11-10 amendment) — the accept-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO. Verify-only, never signed
+// with, absent by default. Each loader state is asserted with its exact Sentry events (named spies), and every event
+// payload is scanned for the fixture keys' hex and base64 forms. Keys are synthesized per run.
+describe("loadProxyHelloKeys: the accept-only slot (#8211)", () => {
+  const CURRENT_HEX = randomBytes(32).toString("hex");
+  const ALSO_HEX = randomBytes(32).toString("hex");
+  const SLOT = "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO";
+  const MALFORMED_MESSAGE = "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set but malformed — ignored";
+  const ops = () => [
+    ...mockReportSilentFallback.mock.calls.map((c) => ({ level: "error", err: c[0], op: c[1]?.op as string, opts: c[1] })),
+    ...mockWarnSilentFallback.mock.calls.map((c) => ({ level: "warn", err: c[0], op: c[1]?.op as string, opts: c[1] })),
+  ];
+  const assertNoKeyMaterial = () => {
+    const blob = JSON.stringify([mockReportSilentFallback.mock.calls, mockWarnSilentFallback.mock.calls]);
+    for (const hex of [CURRENT_HEX, ALSO_HEX]) {
+      expect(blob).not.toContain(hex);
+      expect(blob).not.toContain(hex.slice(0, 8));
+      expect(blob).not.toContain(Buffer.from(hex, "hex").toString("base64"));
+    }
+  };
+
+  beforeEach(() => {
+    __resetProxyHelloKeyForTests();
+    mockReportSilentFallback.mockClear();
+    mockWarnSilentFallback.mockClear();
+  });
+
+  test("fixture distinctness: the current and accept-also fixture keys differ (else every two-key row is vacuous)", () => {
+    expect(CURRENT_HEX).not.toBe(ALSO_HEX);
+  });
+
+  test("slot unset (the default): acceptAlso is null and 0 events", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(keys.acceptAlso).toBeNull();
+    expect(ops()).toEqual([]);
+  });
+
+  test("slot empty: acceptAlso is null and 0 events", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, "");
+    expect(loadProxyHelloKeys().acceptAlso).toBeNull();
+    expect(ops()).toEqual([]);
+  });
+
+  test.each([
+    ["63 chars", () => ALSO_HEX.slice(1)],
+    ["65 chars", () => ALSO_HEX + "a"],
+    ["uppercase", () => ALSO_HEX.toUpperCase()],
+    ["trailing newline", () => ALSO_HEX + "\n"],
+    ["non-hex char", () => ALSO_HEX.slice(0, 63) + "g"],
+  ])("slot malformed (%s): acceptAlso is null, exactly 1 accept-also-ignored error event with exactly the constant payload", (_n, value) => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, value());
+    const keys = loadProxyHelloKeys();
+    expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(keys.acceptAlso).toBeNull();
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["error", "loadProxyHelloKeys.accept-also-ignored"]]);
+    const [only] = ops();
+    expect(only.err).toBeNull();
+    // Exact: any extra key (a length, a prefix, an `extra` object) fails.
+    expect(only.opts).toEqual({ feature: "control_plane_route", op: "loadProxyHelloKeys.accept-also-ignored", message: MALFORMED_MESSAGE });
+    assertNoKeyMaterial();
+  });
+
+  test("the malformed-slot message is CONSTANT: two malformed inputs of different lengths, with and without a current key, give one identical message", () => {
+    const messages: string[] = [];
+    for (const [current, slot] of [
+      [CURRENT_HEX, "zz"],
+      [CURRENT_HEX, ALSO_HEX.slice(1)],
+      ["", "zz"],
+      ["", ALSO_HEX + "a"],
+    ] as const) {
+      __resetProxyHelloKeyForTests();
+      mockReportSilentFallback.mockClear();
+      mockWarnSilentFallback.mockClear();
+      vi.stubEnv("PROXY_HELLO_HMAC_KEY", current);
+      vi.stubEnv(SLOT, slot);
+      loadProxyHelloKeys();
+      expect(ops().map((o) => o.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored"]);
+      messages.push(String(ops()[0].opts?.message));
+    }
+    expect(new Set(messages)).toEqual(new Set([MALFORMED_MESSAGE]));
+    expect(MALFORMED_MESSAGE).not.toMatch(/\d/);
+    // True with no current key too: it claims nothing about which key the relay accepts.
+    expect(MALFORMED_MESSAGE).not.toMatch(/current/i);
+  });
+
+  test("slot equal to current: KEPT, exactly 1 warn-level accept-also-equals-current event", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, CURRENT_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(keys.acceptAlso?.toString("hex")).toBe(CURRENT_HEX);
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "loadProxyHelloKeys.accept-also-equals-current"]]);
+    expect(ops()[0].err).toBeNull();
+    expect(ops()[0].opts).toMatchObject({ feature: "control_plane_route" });
+    assertNoKeyMaterial();
+  });
+
+  test("slot well-formed and distinct: kept, exactly 1 warn-level accept-also-active event with no value or fingerprint", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, ALSO_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(keys.acceptAlso?.toString("hex")).toBe(ALSO_HEX);
+    expect(ops().map((o) => [o.level, o.op])).toEqual([["warn", "loadProxyHelloKeys.accept-also-active"]]);
+    expect(ops()[0].err).toBeNull();
+    expect(ops()[0].opts?.extra).toBeUndefined();
+    assertNoKeyMaterial();
+  });
+
+  test("slot well-formed, current absent: the loader emits nothing (the listener's no-hello-key event is the signal)", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    vi.stubEnv(SLOT, ALSO_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(keys.current).toBeNull();
+    expect(ops()).toEqual([]);
+  });
+
+  test("slot malformed, current absent: exactly 1 accept-also-ignored event from the loader", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    vi.stubEnv(SLOT, "not-a-key");
+    const keys = loadProxyHelloKeys();
+    expect(keys.current).toBeNull();
+    expect(keys.acceptAlso).toBeNull();
+    expect(ops().map((o) => o.op)).toEqual(["loadProxyHelloKeys.accept-also-ignored"]);
+  });
+
+  test("each op has its own constant message text (Sentry groups by message), naming no value", () => {
+    const messages: string[] = [];
+    for (const v of ["bad", CURRENT_HEX, ALSO_HEX]) {
+      __resetProxyHelloKeyForTests();
+      mockReportSilentFallback.mockClear();
+      mockWarnSilentFallback.mockClear();
+      vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+      vi.stubEnv(SLOT, v);
+      loadProxyHelloKeys();
+      messages.push(String(ops()[0].opts?.message));
+    }
+    expect(new Set(messages).size).toBe(3);
+    for (const m of messages) {
+      expect(m.length).toBeGreaterThan(0);
+      expect(m).not.toMatch(/[0-9a-f]{8}/);
+    }
+  });
+
+  test.each([
+    ["malformed", () => "not-a-key", "loadProxyHelloKeys.accept-also-ignored"],
+    ["equal to current", () => CURRENT_HEX, "loadProxyHelloKeys.accept-also-equals-current"],
+    ["distinct", () => ALSO_HEX, "loadProxyHelloKeys.accept-also-active"],
+  ])("call twice (%s): the event fires exactly once (cached loader), and the slot is not re-read", (_n, value, op) => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, value());
+    const first = loadProxyHelloKeys();
+    vi.stubEnv(SLOT, randomBytes(32).toString("hex"));
+    const second = loadProxyHelloKeys();
+    expect(second).toBe(first);
+    expect(ops().map((o) => o.op)).toEqual([op]);
+  });
+
+  test.each([
+    ["well-formed", () => ALSO_HEX],
+    ["malformed", () => "not-a-key"],
+    ["empty", () => ""],
+  ])("the first read DELETES both names from process.env, whatever the slot holds (%s)", (_n, value) => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, value());
+    expect(SLOT in process.env).toBe(true);
+    loadProxyHelloKeys();
+    expect("PROXY_HELLO_HMAC_KEY" in process.env).toBe(false);
+    expect(SLOT in process.env).toBe(false);
+  });
+
+  test("the key set is frozen and redacting: JSON.stringify, util.inspect (customInspect on or off; showHidden with the hook), spread, Object.assign, Object.entries and structuredClone never carry a key byte, while property reads still work", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", CURRENT_HEX);
+    vi.stubEnv(SLOT, ALSO_HEX);
+    const keys = loadProxyHelloKeys();
+    expect(Object.isFrozen(keys)).toBe(true);
+    // The two slots are own, non-enumerable properties: reads work, copies carry nothing.
+    expect(Object.keys(keys)).toEqual([]);
+    expect(Object.getOwnPropertyNames(keys).sort()).toEqual(["acceptAlso", "current", "toJSON"]);
+    expect(keys.current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(keys.acceptAlso?.toString("hex")).toBe(ALSO_HEX);
+    const { current, acceptAlso } = keys; // destructuring reads still work
+    expect(current?.toString("hex")).toBe(CURRENT_HEX);
+    expect(acceptAlso?.toString("hex")).toBe(ALSO_HEX);
+    const outputs = [
+      JSON.stringify(keys),
+      JSON.stringify({ nested: keys }),
+      inspect(keys),
+      inspect({ nested: keys }, { depth: 5 }),
+      inspect(keys, { customInspect: false }),
+      inspect({ nested: keys }, { customInspect: false, depth: 5 }),
+      // showHidden lists non-enumerable properties, so only the inspect.custom hook keeps these redacted. (showHidden
+      // together with customInspect: false does print the bytes: no in-process code can prevent that combination.)
+      inspect(keys, { showHidden: true }),
+      inspect(keys, { showHidden: true, customInspect: true }),
+      inspect({ nested: keys }, { showHidden: true, depth: 5 }),
+      JSON.stringify({ ...keys }),
+      inspect({ ...keys }),
+      JSON.stringify(Object.assign({}, keys)),
+      inspect(Object.assign({}, keys)),
+      JSON.stringify(Object.entries(keys)),
+      inspect(Object.entries(keys)),
+      JSON.stringify(Object.values(keys)),
+      inspect(structuredClone(keys)),
+      JSON.stringify(structuredClone(keys)),
+      `${String(keys)} ${JSON.stringify([keys])}`,
+    ];
+    for (const hex of [CURRENT_HEX, ALSO_HEX]) {
+      const bytes = Buffer.from(hex, "hex");
+      const spaced = hex.match(/../g)!.join(" ");
+      for (const out of outputs) {
+        expect(out).not.toContain(hex);
+        expect(out).not.toContain(spaced.slice(0, 23)); // util.inspect's `<Buffer 01 23 ...>` form
+        expect(out).not.toContain(Array.from(bytes).slice(0, 8).join(",")); // JSON's `{"data":[1,35,...]}` form
+        expect(out.replace(/\s+/g, "")).not.toContain(Array.from(bytes).slice(0, 8).join(",")); // showHidden's one-byte-per-line form
+        expect(out).not.toContain(bytes.toString("base64"));
+      }
+    }
+    expect(JSON.stringify(keys)).toBe('"[proxy-hello-keys]"');
+    expect(inspect(keys)).toBe("[proxy-hello-keys]");
+    expect(inspect(keys, { showHidden: true })).toBe("[proxy-hello-keys]");
+    expect(JSON.stringify({ ...keys })).toBe("{}");
+    expect(Object.entries(keys)).toEqual([]);
+    expect(Object.keys(structuredClone(keys))).toEqual([]);
   });
 });

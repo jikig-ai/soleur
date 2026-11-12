@@ -11,7 +11,8 @@
 // Wire format on the private-net leg (JSON control frame, then a raw bidirectional
 // byte pipe):
 //   proxying host → owner : {type:"proxy_hello", userId, workspaceId, ts, nonce, mac} — HMAC-signed
-//                           under PROXY_HELLO_HMAC_KEY (proxy-hello.ts; #12289, ADR-323)
+//                           under PROXY_HELLO_HMAC_KEY (proxy-hello.ts; #12289, ADR-323); the owner also accepts
+//                           the verify-only slot (ADR-323 Decision 9)
 //   owner → proxying host : {type:"proxy_ready"}  (after size/shape/MAC/skew/replay AND AP-2 membership)
 //                         | close(ROUTING_UNAVAILABLE, "relay refused") (any verifier refusal; one uniform reason,
 //                           then terminate() after REFUSE_LINGER_MS). The hello deadline and the pre-hello byte guard
@@ -33,8 +34,8 @@ import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
-import { loadProxyHelloKey, loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
-import { createReplayCache, isCanonicalUuid, signProxyHello, verifyProxyHello } from "./proxy-hello";
+import { loadProxyHelloKeys, loadProxyTlsClientCa, loadProxyTlsServerOptions, type ProxyHelloKeys } from "./proxy-tls";
+import { createReplayCache, helloKeyFingerprint, isCanonicalUuid, signProxyHello, verifyProxyHello, type HelloVerifyKeys } from "./proxy-hello";
 import { verifyProxiedSessionMembership } from "./session-router";
 import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
 import { denyReporter } from "./proxy-deny-report";
@@ -45,6 +46,12 @@ const log = createChildLogger("session-proxy");
  *  prod pins it to the literal 8443 in ci-deploy.sh. The proxying host dials
  *  `wss://<ownerAddress>:<port>`. */
 export const DEFAULT_PROXY_PORT = 8443;
+
+/** The listener needs a CURRENT hello key; the verify-only slot alone never starts it (ADR-323 Decision 9). A copy of
+ *  the loaded set (spread, Object.assign) has no slots, so its `current` is undefined and it has no key either. */
+export function hasCurrentHelloKey(keys: ProxyHelloKeys): keys is HelloVerifyKeys {
+  return Buffer.isBuffer(keys.current);
+}
 
 /**
  * Strict parse of `SOLEUR_PROXY_PORT` (#12290), evaluated at call time (never a module-load constant that
@@ -124,8 +131,8 @@ export async function proxyClientToOwner(params: {
   // canonical UUIDs, there is nothing the owner could accept: close the client and never dial (like the CA
   // case). 4014 is a TRANSIENT code to the client (lib/ws-client.ts retries with capped backoff and no
   // limit, no terminal state), so each refused session loops until the cause is fixed. Reported through
-  // the bounded reporter, no key detail in the event.
-  const helloKey = loadProxyHelloKey();
+  // the bounded reporter, no key detail in the event. It signs with `current` only (ADR-323 Decision 9).
+  const helloKey = loadProxyHelloKeys().current;
   if (!helloKey) {
     denyReporter.record("no_key");
     safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
@@ -348,8 +355,8 @@ export function createProxyServer(params: {
   // canary does NOT catch this (it runs with an empty SOLEUR_PROXY_BIND, so it stops at `no_bind` first,
   // and ci-deploy.sh never gates on proxy_state): the signals are this event and the `relay_listener_down`
   // alert about 5 minutes later. The event text is a constant: no value, length or state.
-  const helloKey = loadProxyHelloKey();
-  if (!helloKey) {
+  const helloKeys = loadProxyHelloKeys();
+  if (!hasCurrentHelloKey(helloKeys)) {
     recordProxyNotStarted("error");
     reportSilentFallback(null, {
       feature: "control_plane_route",
@@ -358,6 +365,15 @@ export function createProxyServer(params: {
     });
     return null;
   }
+  // #8211 — the key state this process loaded, once per listener start (warn, so it reaches Better Stack). Values
+  // are domain-separated HMAC prefixes (helloKeyFingerprint), never key bytes. It proves the key state, NOT a serving
+  // relay: the bad-port, tls-setup and listen-error exits below can still stop the listener.
+  const currentFp = helloKeyFingerprint(helloKeys.current);
+  const acceptAlsoFp = helloKeys.acceptAlso === null ? "none" : helloKeyFingerprint(helloKeys.acceptAlso);
+  log.warn(
+    { current_fp: currentFp, accept_also_fp: acceptAlsoFp },
+    `relay_hello_key_fp current=${currentFp} accept_also=${acceptAlsoFp}`,
+  );
   const replayCache = createReplayCache();
 
   // #12290: a bad port stops only the relay. Checked after the key guard so every earlier state keeps its
@@ -507,7 +523,7 @@ export function createProxyServer(params: {
       req.socket.off("data", onPreHelloData);
       clearDeadline(deadlineKey);
       try {
-        const verdict = verifyProxyHello(data, Boolean(isBinary), helloKey, replayCache);
+        const verdict = verifyProxyHello(data, Boolean(isBinary), helloKeys, replayCache);
         if (!verdict.ok) {
           denyReporter.record(verdict.reason, { peer });
           refuse(ws);

@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1272
-# generated-at=2026-11-11T17:55:09Z
+# generated-at=2026-11-12T20:03:04Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=19e6f0674c561633171ee96a31eef6568487dbf8ddfb1197d2e216a415254d4b
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -309,6 +309,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	4113	measured
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	50	measured
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	178	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	2754	measured
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	1272	floor
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	974	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor
