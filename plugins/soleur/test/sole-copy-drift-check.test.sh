@@ -2213,8 +2213,8 @@ n3b_census() { # n3b_census <file> <D> <R> <want-D> <want-R>: one awk pass over 
   # beside authorization. Two Hetzner-specific arms read the JOINED line: (p3) api.hetzner.cloud (any client, the host split or
   # not), (p4) hcloud_token beside curl or authorization (a token on a continuation line, the URL from a variable). The
   # generic arm (curl beside authorization) is never applied to a joined line: postmerge's Sentry curl carries Authorization on
-  # a continuation line, by design, and is not a Hetzner call. Case is folded. Left uncovered (plan limit 5): a renamed token
-  # AND no literal api.hetzner.cloud on the logical line. The census reads prose too: reword a sentence that pairs those
+  # a continuation line, by design, and is not a Hetzner call. Case is folded. Left uncovered (plan limit 5): a logical line with
+  # no literal api.hetzner.cloud and no curl or authorization beside the token name (a renamed token, or another client). The census reads prose too: reword a sentence that pairs those
   # words; never re-wrap it, which is how a command hides too. END prints one `seen` line, so a call that never ran cannot pass
   # as one that found nothing.
   [[ -f "$1" && -r "$1" ]] || { printf 'unreadable %s: not a readable file\n' "${1##*/}"; return; }

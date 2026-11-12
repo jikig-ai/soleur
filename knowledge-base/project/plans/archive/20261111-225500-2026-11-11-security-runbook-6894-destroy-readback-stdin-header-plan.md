@@ -532,7 +532,9 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
 5. **A line the census does not see, and an edited literal** (declared limits, narrowed by p3, rulings 8a, 9b, 11b,
    12a and 12b). The census reads logical lines: `\` continuations are joined (the join stops at a code fence) and the
    joined line is flagged by its Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name beside `curl` or
-   `Authorization` (p4). The residual is a renamed token AND no literal `api.hetzner.cloud` on the logical line. Every
+   `Authorization` (p4). The residual is a logical line with no literal `api.hetzner.cloud` and no `curl` or
+   `Authorization` beside the token name: a renamed token, or the token name passed to another client (for example
+   `xh -A bearer -a "$HCLOUD_TOKEN_READONLY" "$U"`, which leaves the suite at 286/286; found in the final review pass, tracked in #12683). Every
    literal-URL form is seen, on one line, split over `\` continuations, or with the host split inside its quotes across a
    `\` continuation (g1r16), with any client (H18 rows g1r11 and g1r12), and so is the token on a continuation line with
    the URL from a variable (g1r15). Known gaps inside that residual: same-line quote concatenation of the host (for
@@ -540,7 +542,10 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
    remaining gap of the frozen literals: an edit to `N3B_FROZEN_D` or `N3B_FROZEN_R` (made together with the builders and
    the document copies) is a reviewed change the suite cannot catch; only the defence lists still face it. Any such
    construct would be new text in a reviewed diff.
-6. **Other documents.** Runbook 6604 is covered by N3. Other runbooks are out of scope.
+6. **Other documents.** Runbook 6604's lines are pinned by N3 to the suite's own builders, but only D and R are frozen as
+   literals and the defence lists run only on them: a second URL appended to a 6604 verify line in both the suite and the
+   runbook (for example after `servers/123931471`) stays green while `--config -` sends the bearer to both hosts. Tracked
+   in #12683. Other runbooks are out of scope.
 7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
    an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
    (`doppler run --help`, checked 2026-11-11). With `--only-secrets` the snapshot holds only the read-only token, and
