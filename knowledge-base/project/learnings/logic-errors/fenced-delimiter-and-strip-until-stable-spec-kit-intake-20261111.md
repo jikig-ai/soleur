@@ -75,7 +75,7 @@ tags: [spec-kit-intake, frontmatter, fence, control-strip, containment]
 - **Recovery:** Waited out the panel. Did not start a replacement round.
 - **Prevention:** Disposition findings from the written report after exit 0, not from the in-progress error counter.
 
-**The coverage consult `01a1cc66-6da7-79a2-b07d-9e5aae02c34a` exited 0 with Errors: 0.** Listed so this inventory matches the handoff. It was not a fault.
+**The coverage consult exited 0 with Errors: 0.** Listed so this inventory matches the handoff. It was not a fault.
 
 - **Recovery:** None needed. The consult class was verified in `emit`.
 - **Prevention:** Do not record a zero-error consult as a failure. Keep it in the inventory when the handoff names it, and say the count was zero.
@@ -90,7 +90,7 @@ tags: [spec-kit-intake, frontmatter, fence, control-strip, containment]
 - **Recovery:** The new P2 (a `---` inside an open fence matched `is_delim`) was fixed in `fef4e488` after the seat returned. A mid-run status check showed the worktree still clean.
 - **Prevention:** If a review seat calls an editor, confirm `git status --porcelain` before writing the follow-up, and attribute the fix to the commit that contains the guard.
 
-**The verifier `01a1ccb6-8ff4-7262-8c7f-e3ed906f8708` exited 0.** About 833 seconds, 29 tool calls. No new tool-error count was reported in its final status.
+**The verifier exited 0.** About 833 seconds, 29 tool calls. No new tool-error count was reported in its final status.
 
 - **Recovery:** None. Strip class closed. Frontmatter pair class, including a fenced `---`, closed. No new parser defect.
 - **Prevention:** One verifier after two targeted rounds. Do not open a third seat round when that verifier exits 0.
