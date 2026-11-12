@@ -504,8 +504,9 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 - **Why non-ackable.** The counter is read before and outside the `destroy_count` sum, exactly like the LUKS HALT:
   a replace also trips `resource_deletes`, and `[ack-destroy]` cannot tell it from an unrelated delete in the same merge.
 - **UNWEDGE.** `[skip-web-platform-apply]` on the merge commit is the only bypass. It skips the apply and performs
-  nothing. The HALT's remediation names the `_PREVIOUS` pattern (a `PROXY_HELLO_HMAC_KEY_PREVIOUS` the verifier also
-  accepts during a roll): rotation has no route today, so an intended rotation means stop and escalate.
+  nothing. The HALT's "Intended rotation" remediation says escalate, not here: an intended rotation has no per-merge
+  route, so stop and escalate on #12538. The rotation route and its rationale are ADR-323 Decision 9 (as amended
+  2026-11-10).
 - **Retiring the relay.** Turning `host_proxy_tls_enabled` off plans a destroy of this pair, so that route is **closed on
   the per-merge path** by this HALT (ADR-118 states it). Retiring the relay needs a separately reviewed route, and
   `PROXY_HELLO_HMAC_KEY` must leave `apps/web-platform/scripts/verify-required-secrets.sh` (the release-time presence
