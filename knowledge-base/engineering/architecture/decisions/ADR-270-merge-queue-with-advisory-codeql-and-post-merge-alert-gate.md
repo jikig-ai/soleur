@@ -1265,7 +1265,11 @@ the exact precondition under which #12489 sat armed 5h20m. Armed auto-merge
 covers the green-at-call-time case including the BEHIND variant; the explicit
 arm stays as residual cover for green + met-protection + no self-enqueue, and
 the `::warning::` line is the monitoring surface that would surface a
-green-time refusal for re-evaluation.
+green-time refusal for re-evaluation. Residual measured on this very PR: a
+merge-queue EJECTION disarms auto-merge outright (`autoMergeRequest` removed)
+— #12700 was ejected by a merge-group flake at 23:05Z and sat
+green+CLEAN+disarmed until a manual re-arm re-enqueued it; that stall class
+is tracked at #12724.
 
 ### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
