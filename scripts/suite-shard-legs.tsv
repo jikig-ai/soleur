@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-11T22:00:46Z
+# generated-at=2026-11-12T21:55:32Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -436,6 +436,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	3
 scripts/followthroughs/inngest-hostmetrics-trim-11602	7
 scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
+scripts/followthroughs/main-health-monitor-mutations-12626	2
 scripts/followthroughs/mq-lever-e-verdict-12269	2
 scripts/followthroughs/parked-green-synthesis-11362	4
 scripts/followthroughs/placement-decision-forward-9137	2

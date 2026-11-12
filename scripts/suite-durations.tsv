@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1272
-# generated-at=2026-11-11T17:55:09Z
+# generated-at=2026-11-12T21:55:32Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=19e6f0674c561633171ee96a31eef6568487dbf8ddfb1197d2e216a415254d4b
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -434,6 +434,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
+scripts/followthroughs/main-health-monitor-mutations-12626	1272	floor
 scripts/followthroughs/mq-lever-e-verdict-12269	1251	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/placement-decision-forward-9137	1272	floor
