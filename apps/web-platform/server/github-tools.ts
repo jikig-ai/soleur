@@ -491,7 +491,8 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     "create_pull_request",
     "Create a pull request on the user's connected GitHub repository. " +
       "The repository is determined server-side from the user's connected repo. " +
-      "The head branch must already exist on the remote (push first via git).",
+      "The head branch must already exist on the remote (push first via git). " +
+      "Requires the workspace Owner's approval.",
     {
       head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
       base: z.string().default("main").describe("Target branch to merge into"),
@@ -541,7 +542,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
   const triggerWf = tool(
     "github_trigger_workflow",
     "Trigger a workflow_dispatch event on the connected repository. " +
-      "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+      "Requires the workspace Owner's approval. Rate limited to 10 triggers per session. " +
       "Use github_read_ci_status first to find workflow IDs.",
     {
       workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),

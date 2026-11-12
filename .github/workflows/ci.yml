@@ -1550,7 +1550,10 @@ jobs:
     # moved to the dedicated `test-webplat-mutations` job below, and scripts/test-all.sh
     # skip_suite-declines their registrations whenever VITEST_SHARD is set. With the batteries
     # gone a healthy shard is back to the ~10-15 min shape it had before their growth; 35 min
-    # stays a real bound on a hang with deliberate slack for runner starvation.
+    # stays a real bound on a hang with deliberate slack for runner starvation. (Interim
+    # history: the ceiling went 25 -> 35 at #12279 and 35 -> 45 at #12646 while the
+    # batteries still ran duplicated inside the shards; #12646's own comment names this
+    # diff as the tighter-bound restore.)
     # An absent value would read as GitHub's 360-minute default. Flip trigger (executed by
     # #12626): a shard reaching 30 min was the alarm; the batteries now live on their own
     # matrix legs rather than pinned to one shard, and a third vitest shard would repeat

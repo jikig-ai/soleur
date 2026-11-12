@@ -27,7 +27,10 @@ export const APPROVAL_REQUIRED_TOOLS = [
 
 export type ApprovalToolName = (typeof APPROVAL_REQUIRED_TOOLS)[number];
 
-/** The push tool. When the approval flow gives no verdict, only the workspace Owner may answer its in-memory card (#12197). */
+/**
+ * The push tool's name, used by the cc push builder and the github tools. The Owner-only rule for the in-memory card when the
+ * approval flow gives no verdict is not push-specific: it covers every approval-required tool (#12597).
+ */
 export const GITHUB_PUSH_BRANCH_TOOL = `${P}github_push_branch` satisfies ApprovalToolName;
 
 const REQUIRED = new Set<string>(APPROVAL_REQUIRED_TOOLS);

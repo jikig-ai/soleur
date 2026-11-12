@@ -7218,6 +7218,13 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
   # vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
+  # #12587: exit-code + contamination harness for the placement_decision split soak probe.
+  # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit
+  # code decides whether the sweeper closes #12587, so the two reverted-field arms the suite
+  # mutation-proves — SYSLOG_IDENTIFIER isolation (the rotating container short ID under
+  # untagged docker journald) and .message extraction (quotation/deprecation text, never the
+  # pino payload) — must redden CI rather than reopen a never-firing verdict.
+  run_suite "scripts/followthroughs/placement-decision-forward-9137" bash scripts/followthroughs/placement-decision-forward-9137.test.sh
   # #12348: the advisory-id/safe-status pairing lint (ADR-322). The unit suite (in-process matrix, CLI rows
   # against temp repos, mutants graded by their named killer) and the -live scan of every knowledge-base/
   # index entry. The -live row is always-on and the unit row is edge-selected on its read set

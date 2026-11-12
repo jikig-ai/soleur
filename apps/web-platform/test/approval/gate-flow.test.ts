@@ -303,11 +303,14 @@ describe("dormant when the approval dependency is absent or the flag is off", ()
     };
   };
 
-  // The push tool is left out: with no verdict its legacy card needs the Owner, so "absent" (no role to read) is a deny while
-  // "off" and "throwing" (an Owner) show the card. That divergence is pinned in legacy-push-owner-fallback.test.ts (#12197 D1).
-  test.each(TOOL_NAMES.filter((t) => t !== TOOLS.pushBranch))("%s: absent, disabled and a throwing flag read behave identically", async (tool) => {
+  // With no verdict, the legacy card of every approval-required tool needs the Owner (#12597): "off" and "throwing" (the
+  // harness's viewer is the Owner) show today's card and match each other, while "absent" (no role to read) is the
+  // unavailable deny. The member, failed-read and abort outcomes are pinned in legacy-push-owner-fallback.test.ts.
+  test.each(TOOL_NAMES)("%s: a disabled and a throwing flag read behave identically (an Owner gets today's card); absent is the unavailable deny", async (tool) => {
     const absent = makeHarness({ withApproval: false });
-    const base = await transcript(absent, tool);
+    const absentRes = await absent.call(tool, sampleInput(tool));
+    expect(absentRes).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    expect(absent.frames).toEqual([]);
     vi.clearAllMocks();
     const off = makeHarness({ enabled: false });
     const offT = await transcript(off, tool);
@@ -315,11 +318,13 @@ describe("dormant when the approval dependency is absent or the flag is off", ()
     const boom = makeHarness({ enabled: () => Promise.reject(new Error("flagsmith down")) });
     const boomT = await transcript(boom, tool);
 
-    // The review card is what a user sees today.
-    expect(base.frames).toEqual(["review_gate"]);
-    expect(base.gateCalls.length).toBe(1);
-    expect(offT).toEqual(base);
-    expect(boomT).toEqual(base);
+    // The review card is what a user sees today, on EACH harness (under a flow-on mutant both run the flow and their
+    // transcripts still match, so only these per-harness assertions see it).
+    expect(offT.frames).toEqual(["review_gate"]);
+    expect(offT.gateCalls.length).toBe(1);
+    expect(boomT.frames).toEqual(["review_gate"]);
+    expect(boomT.gateCalls.length).toBe(1);
+    expect(boomT).toEqual(offT);
     // Nothing of the approval path ran.
     for (const h of [off, boom]) {
       expect(h.approval.submit).not.toHaveBeenCalled();
