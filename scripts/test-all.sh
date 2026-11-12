@@ -7231,14 +7231,15 @@ if want_scripts; then
   # (its edge array is in scripts/lib/test-affected-paths.sh); their shard legs are manifest rows
   # in scripts/suite-shard-legs.tsv. The -live row runs under `python3 -I` like the CI member step.
   run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
-  run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   # #12626: exit-code harness for the scheduled main-health-monitor mutation-leg confirmation probe
   # (>=2 post-merge soleur-ai[bot] workflow_dispatch runs, each carrying all three
   # test-webplat-mutations legs green). Registered EXPLICITLY
-  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS); appended LAST in the block so no
-  # earlier registration's positional-shard ordinal moves. Its exit code decides whether the
-  # sweeper closes the #12626 follow-through tracker, so a vacuous PASS must redden CI.
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Seated at the block tail: the G2-anchor
+  # grammar admits no anchor after a `python3 -I` argv, so the -live line below must stay last.
+  # Its exit code decides whether the sweeper closes the #12626 follow-through tracker, so a
+  # vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/main-health-monitor-mutations-12626" bash scripts/followthroughs/main-health-monitor-mutations-12626.test.sh
+  run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   
 fi
 
