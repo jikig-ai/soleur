@@ -16,7 +16,7 @@ When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light
   bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-env-adoption.test.sh"
   bash .claude/hooks/grep-q-pipe-guard.test.sh
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" ruff --check
-  python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"
+  git fetch --no-tags --quiet origin main && python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"
   (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
   ```
 

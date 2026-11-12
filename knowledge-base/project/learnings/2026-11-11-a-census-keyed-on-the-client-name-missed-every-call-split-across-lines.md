@@ -96,8 +96,8 @@ anything calls it. Drive every row through the entry point the real check uses.
 14. **`lint-infra-no-human-steps.py` full-scan exits 1 on findings already on main.** Recovery: used CI's `--changed`
     form. Prevention: one-off for this PR. The full-scan findings are pre-existing and outside this diff.
 
-Errors 15 to 19 happened after this learning was first written (fix rounds, ship and post-merge of PR #12645), and
-were captured on 2026-11-12.
+Errors 15 to 18 happened during the fix rounds, ship and post-merge of PR #12645, after this learning was first
+written; error 19 happened in the ready run of PR #12701, which added them. All were captured on 2026-11-12.
 
 15. **A review-fix commit (`e6b87fc971`, the night before ready) added a `producer | grep -q` row to
     `sole-copy-drift-check.test.sh`, and the ready run's CI (run 43171768988) was the first thing to fail on it** in
@@ -147,8 +147,8 @@ were captured on 2026-11-12.
     ceiling. Main's copy was 9 bytes under, and the new Phase 3 text added about 730. The suites run before ready were
     the ones that read the changed files, and the pre-ready list did not name this lint. Recovery: moved the
     bounded-watch detail into `monitor-hygiene.md` and left postmerge 10 bytes smaller than main. Prevention:
-    `lint-skill-body-budget.py` added to the pre-ready guard list in `ready-run-wait.md`; any edit to a lifecycle
-    SKILL.md runs it before push.
+    `lint-skill-body-budget.py` added to the pre-ready guard list in `ready-run-wait.md`; after any edit to a lifecycle
+    SKILL.md, run it before `gh pr ready`, on the head you ready.
 
 ## Tags
 
