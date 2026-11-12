@@ -450,7 +450,7 @@ need(brain_raw, brain, 'and run `"${CLAUDE_PLUGIN_ROOT}/scripts/spec-kit-intake.
 need(brain_raw, brain, "One-shot and Plan first arms pass that absolute directory", "brain-handoff")
 need(brain_raw, brain, "One-shot forwards it unchanged as plan's arguments.", "brain-forward")
 need(brain_raw, brain, "If the file exists, including a zero-byte file, do not replace it.", "brain-save")
-line = "**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read plugins/soleur/skills/plan/references/spec-kit-intake.md and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it."
+line = "**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/spec-kit-intake.md` and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it."
 need(plan_raw, plan, line, "plan-line")
 step3 = plan.find("3. Detect feature from current branch")
 step4 = plan.find("4. Read `knowledge-base/project/specs/feat-<name>/spec.md`")

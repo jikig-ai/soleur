@@ -62,7 +62,7 @@ fi
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `soleur:brainstorm`).
 3. Detect feature from current branch (`feat-<name>` pattern)
-**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read plugins/soleur/skills/plan/references/spec-kit-intake.md and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it.
+**Spec-kit intake, before step 4.** If the branch spec.md is absent and the argument is an existing specs/<prefix>-<short-name>/ directory, Read `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/spec-kit-intake.md` and follow it. If that spec file exists, including zero bytes, do not run the script and do not replace it.
 4. Read `knowledge-base/project/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
 
