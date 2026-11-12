@@ -136,9 +136,21 @@ vi.mock("../server/vision-helpers", () => ({
   tryCreateVision: vi.fn().mockResolvedValue(undefined),
   buildVisionEnhancementPrompt: vi.fn().mockResolvedValue(""),
 }));
+// #12597 review (P1): pass-through spies on the two GitHub-binding resolvers, so a
+// test can read the workspace id each call was threaded.
+vi.mock("../server/resolve-installation-id", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/resolve-installation-id")>();
+  return { ...actual, resolveInstallationId: vi.fn(actual.resolveInstallationId) };
+});
+vi.mock("../server/current-repo-url", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/current-repo-url")>();
+  return { ...actual, getCurrentRepoUrl: vi.fn(actual.getCurrentRepoUrl) };
+});
 
 import { startAgentSession } from "../server/agent-runner";
 import { syncPull } from "../server/session-sync";
+import { resolveInstallationId } from "../server/resolve-installation-id";
+import { getCurrentRepoUrl } from "../server/current-repo-url";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
 
 const MEMBER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -262,5 +274,48 @@ describe("agent-runner leader — active-workspace cwd parity", () => {
       expect.anything(),
       ACTIVE_WS_ID,
     );
+  });
+
+  test("#12597: the GitHub-binding resolvers are pinned to the ONE active workspace id", async () => {
+    // The Owner gate (createApprovalGateDeps) reads the role in `activeWorkspaceId`.
+    // The installation + repo the GitHub tools act on must come from that same
+    // id — never from a fresh `current_workspace_id` read, which a mid-startup
+    // workspace switch can move to a different workspace the member belongs to.
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+
+    await startAgentSession(MEMBER_ID, "conv-1", "cpo");
+
+    const installCalls = vi.mocked(resolveInstallationId).mock.calls;
+    const repoCalls = vi.mocked(getCurrentRepoUrl).mock.calls;
+    // Both the canonical reads and the missing-`.git` re-clone path ran.
+    expect(installCalls.length).toBeGreaterThanOrEqual(2);
+    expect(repoCalls.length).toBeGreaterThanOrEqual(2);
+    for (const call of [...installCalls, ...repoCalls]) {
+      expect(call).toEqual([MEMBER_ID, ACTIVE_WS_ID]);
+    }
+  });
+
+  test("#12597: agent-runner.ts has no resolver call that omits the workspace id", async () => {
+    // `fs` is mocked above; read the source through the real module.
+    const realFs = await vi.importActual<typeof import("fs")>("fs");
+    const src = String(
+      realFs.readFileSync(new URL("../server/agent-runner.ts", import.meta.url), "utf8"),
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//"))
+      .join("\n");
+    const calls = src.match(/\b(?:resolveInstallationId|getCurrentRepoUrl)\s*\([^)]*\)/g) ?? [];
+    expect(calls.length).toBe(4);
+    for (const call of calls) {
+      expect(call).toMatch(/\(\s*userId\s*,\s*activeWorkspaceId\s*\)$/);
+    }
+    // The two approval-required tools that re-resolve the workspace at execution are handed the same id.
+    for (const builder of ["buildKbShareTools", "buildWorkspaceSettingsTools"]) {
+      const sites = src.match(new RegExp(`\\b${builder}\\(\\{[^}]*\\}\\)`, "g")) ?? [];
+      expect(sites, builder).toHaveLength(1);
+      expect(sites[0], builder).toMatch(/sessionWorkspaceId:\s*activeWorkspaceId\b/);
+    }
   });
 });

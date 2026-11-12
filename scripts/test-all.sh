@@ -1612,6 +1612,17 @@ _suite_budget_ms() {
     # roughly two thirds of the way in, so it is a lower bound on the duration
     # and useless as a budget.
     tests/scripts/registry-gate-mutation-battery) printf '2500000\n' ;;
+    # #12626 — the three webplat mutation batteries, mirrored from each battery's own
+    # WARN-only WALL_BUDGET_S (a budget is a stated fact, never a verdict — the same
+    # contract as the batteries' own warn arms). Under VITEST_SHARD these decline via
+    # skip_suite and the entries are inert; unset (local full run) they restore the
+    # capacity-signal visibility the webplat legs used to carry.
+    apps/web-platform/test/approval-guard1-mutation) printf '3000000\n' ;;  # WALL_BUDGET_S=3000
+    apps/web-platform/test/destroy-ask-mutation) printf '900000\n' ;;       # WALL_BUDGET_S=900
+    # home-census-mutations declares no WALL_BUDGET_S of its own; the always-on arm is
+    # the baseline/vacuity/landing/instrument control (the 23-mutant table is reviewer-only
+    # behind HOME_CENSUS_MUTATIONS=1). 15 min is a generous bound for that arm.
+    apps/web-platform/test/home-census-mutations) printf '900000\n' ;;
     *) return 0 ;;
   esac
 }
@@ -7207,6 +7218,13 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
   # vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
+  # #12587: exit-code + contamination harness for the placement_decision split soak probe.
+  # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit
+  # code decides whether the sweeper closes #12587, so the two reverted-field arms the suite
+  # mutation-proves — SYSLOG_IDENTIFIER isolation (the rotating container short ID under
+  # untagged docker journald) and .message extraction (quotation/deprecation text, never the
+  # pino payload) — must redden CI rather than reopen a never-firing verdict.
+  run_suite "scripts/followthroughs/placement-decision-forward-9137" bash scripts/followthroughs/placement-decision-forward-9137.test.sh
   # #12348: the advisory-id/safe-status pairing lint (ADR-322). The unit suite (in-process matrix, CLI rows
   # against temp repos, mutants graded by their named killer) and the -live scan of every knowledge-base/
   # index entry. The -live row is always-on and the unit row is edge-selected on its read set
@@ -7380,19 +7398,40 @@ if want_webplat; then
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
   # #10455: the notify-only home-census reminder probe. EXPLICIT because scripts/followthroughs/ matches no SUITE_GLOBS entry.
   run_suite "scripts/followthroughs/home-census-run-10455" bash scripts/followthroughs/home-census-run-10455.test.sh
+  # #12626 — the three webplat mutation batteries move OFF the vitest-shard legs. VITEST_SHARD partitions vitest
+  # only, so an unconditional registration ran each battery IN FULL on EVERY shard — the duplicated serial cost
+  # that pushed the monitor and CI legs past their step ceilings (#12626). On a VITEST_SHARD leg each registration
+  # declines through skip_suite — a decline is a verdict (ADR-181), counted in the denominator — with a reason
+  # naming the dedicated `test-webplat-mutations` legs that carry the coverage (one matrix leg per battery in
+  # ci.yml and main-health-monitor.yml). VITEST_SHARD unset (a local run) still registers and runs all three.
   # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
   # shard does not install. Its own control run reds the suite when the unedited copy is not green.
-  run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
+  if [[ -n "${VITEST_SHARD:-}" ]]; then
+    skip_suite "apps/web-platform/test/destroy-ask-mutation" "test-webplat-mutations" \
+      "bash apps/web-platform/test/destroy-ask-mutation.test.sh"
+  else
+    run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
+  fi
   # #4672 / ADR-309: the approval consume gate's Guard 1 mutation battery (anchor-asserted mutants of the SQL consume
   # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
-  run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  if [[ -n "${VITEST_SHARD:-}" ]]; then
+    skip_suite "apps/web-platform/test/approval-guard1-mutation" "test-webplat-mutations" \
+      "bash apps/web-platform/test/approval-guard1-mutation.test.sh"
+  else
+    run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  fi
   # #10455: the home-census Guard 1/4 mutation battery (23 anchor-asserted mutants on a COPY of the app tree; the full
   # run is reviewer-only behind HOME_CENSUS_MUTATIONS=1, the always-on part is the baseline, vacuity, landing and
   # instrument control). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
-  run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
+  if [[ -n "${VITEST_SHARD:-}" ]]; then
+    skip_suite "apps/web-platform/test/home-census-mutations" "test-webplat-mutations" \
+      "bash apps/web-platform/test/home-census-mutations.test.sh"
+  else
+    run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
+  fi
 
   # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
   # in THIS arm for the same reason as destroy-ask-mutation — it drives the

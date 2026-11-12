@@ -160,6 +160,11 @@ async function bootLegacySession(): Promise<Booted> {
     apiKeyRows: [DEFAULT_API_KEY_ROW, plausibleRow],
     mockRpc,
   });
+  // The legacy no-verdict card is Owner-only (#12597); the shared rpc mock answers null for this RPC.
+  const base = mockRpc.getMockImplementation()!;
+  mockRpc.mockImplementation((fnName: string, ...rest: unknown[]) =>
+    fnName === "is_workspace_owner" ? Promise.resolve({ data: true, error: null }) : base(fnName, ...rest),
+  );
   createQueryMock(mockQuery);
   await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
   const options = mockQuery.mock.calls[0][0].options;

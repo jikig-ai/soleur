@@ -4156,6 +4156,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
+  "scripts/followthroughs/placement-decision-forward-9137.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/private-nic-converged-6415.sh"
   "scripts/followthroughs/registry-luks-live-8386.sh"  # scripts/lib/test-affected-paths.sh:2849
   "scripts/followthroughs/registry-htpasswd-stdin-10119.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS

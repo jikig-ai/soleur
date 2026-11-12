@@ -62,6 +62,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/git-data-reporter-line-parity.test.ts",
   "test/git-data-remote-url-wrapper.test.ts",
   "test/git-data-replication.test.ts",
+  "test/git-data-url-guard-entry-points-real-git.test.ts",
   "test/git-isolated-push-dir.test.ts",
   "test/git-lock-marker-telemetry.test.ts",
   "test/github-app-manifest-parity.test.ts",

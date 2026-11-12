@@ -503,16 +503,17 @@ merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (n
    (read-only, token on stdin, one word). Run exactly:
 
 ```bash
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
-   a mismatch is a red status. `volume-gone` (HTTP 404) is not a read problem, and not proof of a loss: a token from
+   a mismatch is red. `volume-gone` (HTTP 404) is not a read problem, nor proof of a loss: a token from
    another Hetzner project also gets 404. Report it, then run the read-only server-name listing under
    `orphan_sweep_project_identity_unproven` in the 8209 runbook named below: unknown names mean a wrong-project token
-   (re-mint it, step O5); only matching names route to the runbook's "After a total loss". `read-failed` (an HTTP error such as a 401, a network error, a non-JSON body or a missing field) and a
-   **missing word** (nothing printed: `doppler` absent or unauthenticated, an error before the command ran) mean the read
-   did not happen: report them, never dispatch on their account. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
+   (re-mint it, step O5); only matching names route to the runbook's "After a total loss". `read-failed` (a 401 or other HTTP error, network error, non-JSON or missing field) and a
+   **missing word** (nothing printed: `doppler` absent or unauthenticated, an early error) mean the read
+   did not happen: report them, never dispatch on them. Proxy-only egress also reads `read-failed` (it bypasses
+   proxies): report no direct egress; never retry, drop `--noproxy`/`--disable` or add a proxy. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
    `prd_terraform`; minting it is operator step O5 in `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`.
    Report `missing-token` and file an issue (the idiom of Phase 5.5, with the same label and the repo milestone):
 
