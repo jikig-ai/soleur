@@ -152,7 +152,9 @@ written; error 19 happened in the ready run of PR #12701, which added them. All 
     `apps/web-platform/test/plugin-root-anchoring.test.ts`, which flagged the new `python3
     scripts/lint-skill-body-budget.py` line as a CWD-relative anchor; the suites I picked came from a grep of
     `plugins/soleur/test` and `tests/` only. Recovery: anchored it at `$(git rev-parse --show-toplevel)`. Prevention:
-    when picking the suites that read a changed file, grep `apps/web-platform/test` too.
+    `plugin-root-anchoring.test.ts` reads the whole skills tree through `git ls-files`, so no grep for a changed file's
+    name finds it; it joins the pre-ready guard list in `ready-run-wait.md`, run after any edit under
+    `plugins/soleur/skills/`.
 
 ## Tags
 

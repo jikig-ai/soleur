@@ -14,10 +14,10 @@ When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light
   ```bash
   bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-relative-assert.test.sh"
   bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-env-adoption.test.sh"
-  bash .claude/hooks/grep-q-pipe-guard.test.sh
+  bash "$(git rev-parse --show-toplevel)/.claude/hooks/grep-q-pipe-guard.test.sh"
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" ruff --check
   git fetch --no-tags --quiet origin main && python3 "$(git rev-parse --show-toplevel)/scripts/lint-skill-body-budget.py" --base "$(git merge-base origin/main HEAD)"
-  (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
+  (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts test/plugin-root-anchoring.test.ts)
   ```
 
 - Run the guards above on the head you ready, after the last review-fix commit, even when the battery ran and passed on an earlier head. A pass taken earlier says nothing about a row added since; `grep-q-pipe-guard.test.sh` sweeps every extension in its `SWEEP_EXTS`, not only test files. **Why:** PR #12645 — a review-fix commit the night before ready added a `producer | grep -q` row, and the ready run's CI was the first thing to fail on it (learning `knowledge-base/project/learnings/2026-11-11-a-census-keyed-on-the-client-name-missed-every-call-split-across-lines.md`, error 15).
