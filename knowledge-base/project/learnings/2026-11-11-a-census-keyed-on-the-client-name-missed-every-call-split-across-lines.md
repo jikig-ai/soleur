@@ -4,7 +4,7 @@ date: 2026-11-11
 category: test-failures
 module: plugins/soleur/test/sole-copy-drift-check.test.sh
 tags: [census-guard, argv-bearer, mutation-testing, unpinned-wire, review]
-issues: [12616, 10274]
+issues: [12616, 10274, 12697]
 pr: 12645
 ---
 
@@ -95,6 +95,28 @@ anything calls it. Drive every row through the entry point the real check uses.
     Recovery: each was fixed in its phase. Prevention: one-off or already covered.
 14. **`lint-infra-no-human-steps.py` full-scan exits 1 on findings already on main.** Recovery: used CI's `--changed`
     form. Prevention: one-off for this PR. The full-scan findings are pre-existing and outside this diff.
+
+Errors 15 to 18 happened after this learning was first written (fix rounds, ship and post-merge of PR #12645), and
+were captured on 2026-11-12.
+
+15. **A fix-round agent's new test row used `printf … | f | grep -q`, and the shape reached CI,** where
+    `.claude/hooks/grep-q-pipe-guard.test.sh` failed it. The guard is listed in `ship/references/ready-run-wait.md`
+    for the pre-ready pass only, so a commit made after ready got no local run. Recovery: rewrote the row to capture
+    the output and test the string. Prevention: after editing any `*.test.sh` or hook, run
+    `bash .claude/hooks/grep-q-pipe-guard.test.sh` locally before pushing (bullet added to `ready-run-wait.md`).
+16. **Closing a just-filed follow-up did not clear the net-issue-flow gate.** `net-issue-flow.sh` lists issues with
+    `--state all`, so a filed issue counts whether it is open or closed. Recovery: added the
+    `<!-- gate-override: net-issue-flow -->` marker with a one-line justification per filed issue. Prevention: decide
+    the override and write its justification line when you file, not at ship time (sentence added to `review/SKILL.md`
+    §5).
+17. **`ship-kb-archive-gate.sh` denied `gh pr merge <N> --match-head-commit <sha>`** with "extra operands alongside
+    --match-head-commit". Recovery: re-issued as `gh pr merge --match-head-commit <sha>` (no PR number). Prevention: with
+    `--match-head-commit`, give no PR number. The skills (`ship/SKILL.md`, `merge-pr/SKILL.md`,
+    `settle-then-admin-merge.md`) still prescribe the numbered form, and `pre-merge-rebase.sh` keys on the number, so the
+    reconciliation is filed as #12697 rather than edited here.
+18. **`deploy-arm.sh find --wait` ran as a foreground Bash call and was killed at the 600 s Bash timeout** (it polls
+    about once a minute for up to 120 polls). Recovery: re-armed it under the Monitor tool, matching `^ARM=`.
+    Prevention: `postmerge/SKILL.md` Phase 3.7 already says Monitor; it now also says why a foreground call cannot work.
 
 ## Tags
 
