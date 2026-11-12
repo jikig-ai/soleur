@@ -449,7 +449,7 @@ c3_scan_file() {
 # gate can only lower a weight. c3_dynamic_ok pins that shape; C.3-dyn below mutation-proves it.
 c3_dynamic_ok() { # c3_dynamic_ok <cloudflare-lb.tf> -> 0 iff the dynamic origins + min-gate shape holds
   local f="$1" nc
-  nc="$(grep -vE '^[[:space:]]*#' "$f")"
+  nc="$(grep -vE '^[[:space:]]*#' "$f" || true)"  # all-comment file: empty, and the checks below refuse
   [[ "$(grep -cE '^[[:space:]]*dynamic[[:space:]]+"origins"[[:space:]]*\{' <<<"$nc")" -eq 1 ]] || return 1
   [[ "$(grep -cE '^[[:space:]]*origins[[:space:]]*\{' <<<"$nc")" -eq 0 ]] || return 1
   grep -qE '^[[:space:]]*for_each[[:space:]]*=[[:space:]]*var\.web_hosts[[:space:]]*$' <<<"$nc" || return 1

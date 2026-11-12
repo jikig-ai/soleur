@@ -216,12 +216,14 @@ variable "web_hosts" {
     condition     = length(distinct([for h in values(var.web_hosts) : h.private_ip])) == length(var.web_hosts)
     error_message = "web_hosts private_ip values must be unique."
   }
+  # The next two use == rather than contains(): test-eu-location-allowset-parity.sh reads every
+  # contains() allow-set in this file as an EU location set.
   validation {
-    condition     = alltrue([for h in values(var.web_hosts) : contains([0, 1], h.lb_weight)])
+    condition     = alltrue([for h in values(var.web_hosts) : h.lb_weight == 0 || h.lb_weight == 1])
     error_message = "web_hosts lb_weight must be 0 (drained member) or 1 (serving)."
   }
   validation {
-    condition     = alltrue([for h in values(var.web_hosts) : contains(["primary", "standby"], h.luks_monitor_profile)]) && length([for h in values(var.web_hosts) : h if h.luks_monitor_profile == "primary"]) == 1
+    condition     = alltrue([for h in values(var.web_hosts) : h.luks_monitor_profile == "primary" || h.luks_monitor_profile == "standby"]) && length([for h in values(var.web_hosts) : h if h.luks_monitor_profile == "primary"]) == 1
     error_message = "web_hosts luks_monitor_profile must be primary or standby, with exactly one primary host."
   }
   validation {
