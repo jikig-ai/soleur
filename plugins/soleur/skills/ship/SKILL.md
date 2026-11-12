@@ -1326,10 +1326,9 @@ esac
   regression in it can satisfy conjuncts 1 and 2 while owing a PIR. Conjunct 3 is the only thing
   standing there, and it is a self-attestation.
 
-  A fourth conjunct, *"the gate must not signal on the PR's own added `knowledge-base/` artifacts"*,
+  A fourth conjunct (the gate must not signal on the PR's own added `knowledge-base/` artifacts)
   was REJECTED on measurement: a plan ABOUT an incident gate is dense with outage vocabulary, so it
-  voids the exemption for essentially every PR in this class and gets bypassed rather than met
-  (the plan and `tasks.md` both signal; `session-state.md` does not).
+  voids the exemption for nearly every PR in this class and gets bypassed.
 
   Conjunct 3 remains because 1 and 2 are necessary and not sufficient, and a false declaration is
   then a deliberate, recorded act. Note the honest limit: unlike `[ack-destroy]`, which is pinned
