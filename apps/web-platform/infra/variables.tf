@@ -97,9 +97,10 @@ variable "web_hosts" {
   # `key == "web-N"` predicate, so a new host is one map entry. lb_weight is the host's declared GA
   # pool weight (a gated drain can only lower it, cloudflare-lb.tf); exactly one host carries each of
   # luks_monitor_profile = "primary", jump (the ssh. ingress target) and tunnel_connector (ADR-114 I1).
-  # luks_monitor_profile is DECLARATIVE today: nothing reads it yet (cloud-init.yml writes
-  # LUKS_MONITOR_PROFILE=standby for every birth, and web-1, the primary, is never re-born). The PR that
-  # first births a primary wires it into the render; until then it records the role, validated once.
+  # luks_monitor_profile is not yet wired into a host: cloud-init.yml writes LUKS_MONITOR_PROFILE=standby
+  # for every birth, and web-1, the primary, is never re-born. The PR that first births a primary wires it
+  # into the render. Today one thing reads it: the GA pool's ungated-host precondition (cloudflare-lb.tf),
+  # which lets only the primary serve outside the drain gate.
   type = map(object({
     location             = string
     private_ip           = string

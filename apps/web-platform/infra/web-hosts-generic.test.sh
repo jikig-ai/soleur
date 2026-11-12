@@ -145,6 +145,18 @@ eq "ungated: a second ungated host fails the condition" "$CON_OUT" 'false'
 W1D='"web-1"={location="hel1",private_ip="10.0.1.10",lb_weight=0,luks_monitor_profile="primary",jump=true}'
 con 'local.web_lb_ungated_ok' -var "web_hosts={${W1D},${W2},${W3P}}"
 eq "ungated: a swap (primary drained, standby web-3 at weight 1) fails the condition" "$CON_OUT" 'false'
+# The rows above all put every singleton role on web-1, so these separate "is the primary" from "is web-1",
+# "is the jump host" and "is the first key" (review: an alias predicate survived the three rows above).
+W1J0='"web-1"={location="hel1",private_ip="10.0.1.10",lb_weight=0,jump=true}'
+W1J1='"web-1"={location="hel1",private_ip="10.0.1.10",lb_weight=1,jump=true}'
+W3R1='"web-3"={location="hel1",private_ip="10.0.1.12",server_type="cpx22",lb_weight=1,luks_monitor_profile="primary"}'
+W3R0='"web-3"={location="hel1",private_ip="10.0.1.12",server_type="cpx22",lb_weight=0,luks_monitor_profile="primary"}'
+con 'local.web_lb_ungated_ok' -var "web_hosts={${W1D},${W2}}"
+eq "ungated: no host outside the gate (primary drained, web-2 gated) passes the condition" "$CON_OUT" 'true'
+con 'local.web_lb_ungated_ok' -var "web_hosts={${W1J0},${W2},${W3R1}}"
+eq "ungated: the primary role moved to web-3, serving ungated, passes (a deliberate role move, CTO ruling)" "$CON_OUT" 'true'
+con 'local.web_lb_ungated_ok' -var "web_hosts={${W1J1},${W2},${W3R0}}"
+eq "ungated: the jump host serving ungated while web-3 is the primary fails the condition" "$CON_OUT" 'false'
 # The precondition is what turns that condition into a refusal; console cannot evaluate resource lifecycle, so pin it.
 eq "ungated: the GA pool's precondition is the ungated-host condition" \
   "$(awk '/^resource "cloudflare_load_balancer_pool" "web_1"/,/^}/' "$LB" | grep -cE '^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.web_lb_ungated_ok[[:space:]]*$')" 1
@@ -200,7 +212,7 @@ IP_CEIL=318  # re-baselined at the origin/main merge (f6c475f15b): +9 from main'
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
-KEY_CEIL=415  # re-baselined at the same merge: +5 from main (host-private-ip.ts, exec-placement-forward test)
+KEY_CEIL=415  # re-baselined at 4aadbe8109: +5 from main (host-private-ip.ts, exec-placement-forward test); unchanged at f6c475f15b
 N_KEY="$(count_lit '"web-1"')"
 cases=$((cases + 1))
 if [[ "$N_KEY" -le "$KEY_CEIL" && "$N_KEY" -gt 0 ]]; then pass "ratchet: \"web-1\" literal count $N_KEY <= $KEY_CEIL"; else fail "ratchet: \"web-1\" literal count $N_KEY exceeds the ceiling $KEY_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
