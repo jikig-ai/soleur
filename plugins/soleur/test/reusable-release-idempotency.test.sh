@@ -559,17 +559,20 @@ for pair in \
   "VERSION=\${{ steps.version.outputs.next }}" \
   "SLACK_RELEASES_WEBHOOK_URL=\${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}" \
   "COMPONENT_DISPLAY=\${{ inputs.component_display }}" \
-  "RUN_URL=\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}"; do
+  "RUN_URL=\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}" \
+  "RERUN_SCOPE=\${{ inputs.docker_image != '' && github.event_name == 'push' && 'this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA' || 'this run' }}" \
+  "IMAGE_CLASS=\${{ steps.docker_build.outcome == 'failure' && (steps.push_failed_marker.outputs.class || 'unmeasured') || '' }}" \
+  "IMAGE_ATTEMPT=\${{ steps.docker_build.outcome == 'failure' && (steps.push_failed_marker.outputs.attempt || 'unmeasured') || '' }}"; do
   key="${pair%%=*}"
   assert_eq "BLOCKED notifier env.$key wiring" \
     "$(wf_step_field "$STEP_BLOCKED" "env.$key" || echo "<rc=$?>")" "${pair#*=}"
 done
-assert_eq "BLOCKED notifier env key set is exactly the seven wired keys" \
+assert_eq "BLOCKED notifier env key set is exactly the ten wired keys" \
   "$(wf_env_keys "$STEP_BLOCKED" || echo "<rc=$?>")" \
-  "COMPONENT_DISPLAY,MIRROR_REASON,RUN_URL,SLACK_RELEASES_WEBHOOK_URL,TAG,TOKEN_VERDICT,VERSION"
+  "COMPONENT_DISPLAY,IMAGE_ATTEMPT,IMAGE_CLASS,MIRROR_REASON,RERUN_SCOPE,RUN_URL,SLACK_RELEASES_WEBHOOK_URL,TAG,TOKEN_VERDICT,VERSION"
 assert_eq "BLOCKED notifier: every steps.<id> it reads is defined by a step" \
   "$(wf_ref_check "$STEP_BLOCKED" || echo "<rc=$?>")" \
-  "refs=check_changed,create_release,idempotency,token_preflight,version,zot_mirror;unresolved="
+  "refs=check_changed,create_release,docker_build,idempotency,push_failed_marker,token_preflight,version,zot_mirror;unresolved="
 # T7b runs the block under `bash`; a `shell:` override would change what Actions runs.
 assert_eq "BLOCKED notifier carries no shell: override" \
   "$(wf_step_field "$STEP_BLOCKED" shell || echo "<rc=$?>")" "<rc=4>"
@@ -624,6 +627,8 @@ STUB
   chmod +x "$GH_STUB_DIR/curl"
 
   # run_blocked <webhook> <mirror_reason> <token_verdict> [curl_fail] [curl_code]
+  # Env knobs (function-prefix assignments): BLK_SCOPE (RERUN_SCOPE, default the 'this run' arm),
+  # BLK_CLASS / BLK_ATTEMPT (IMAGE_CLASS / IMAGE_ATTEMPT, default empty: the image step did not fail).
   # (stdout of the block lands in $TMP/out-b; curl argv in $TMP/argv-b)
   run_blocked() {
     : > "$TMP/curl-trace-b"; : > "$TMP/argv-b"; : > "$TMP/out-b"
@@ -638,6 +643,9 @@ STUB
       VERSION="9.8.7" \
       COMPONENT_DISPLAY="Web Platform" \
       RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/42" \
+      RERUN_SCOPE="${BLK_SCOPE-this run}" \
+      IMAGE_CLASS="${BLK_CLASS-}" \
+      IMAGE_ATTEMPT="${BLK_ATTEMPT-}" \
       CURL_TRACE="$TMP/curl-trace-b" \
       PATH="$GH_STUB_DIR:$PATH" \
         bash -eo pipefail "$BLOCKED_BLOCK" > "$TMP/out-b" 2>&1 )
@@ -763,6 +771,47 @@ STUB
   else
     fail "BLOCKED: HTTP 500 must warn 'HTTP 500' (stdout: $(head -c 200 "$TMP/out-b"))"
   fi
+
+  # (h) #8211 F6: the rendered re-run sentence, whole, for BOTH RERUN_SCOPE arms. Fragment pins let a swap of the
+  # scope and run-URL arguments survive ("on https://...; Run: this run").
+  SCOPE_PUSH='this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA'
+  for scope in "this run" "$SCOPE_PUSH"; do
+    BLK_SCOPE="$scope" run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256"
+    text_s=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+    want_s="To retry with the same version, use \"Re-run failed jobs\" on $scope. A fresh \"Run workflow\" dispatch recomputes the version."$'\n\n'"Run: https://github.com/jikig-ai/soleur/actions/runs/42"
+    if [[ "$text_s" == *"$want_s" ]]; then
+      pass "BLOCKED: the message ends with the re-run sentence for scope '${scope:0:40}' and then the run URL"
+    else
+      fail "BLOCKED: re-run sentence for scope '${scope:0:40}' (got tail: ${text_s: -260})"
+    fi
+  done
+
+  # (i) #8211: the image-step line appears only when the image step failed, with class then attempt, escaped.
+  BLK_CLASS="push_denied" BLK_ATTEMPT="2" run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256"
+  text_i=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  want_i='Image step failed (class `push_denied`, attempt `2`); see the runbook web-platform-release-image-push-failed.md.'
+  assert_eq "BLOCKED: image step failed -> exactly one class/attempt line, class first" \
+    "$(grep -cxF "$want_i" <<<"$text_i")" "1"
+  BLK_CLASS="a<b>&" BLK_ATTEMPT="<x>" run_blocked "https://hooks.example.invalid/stub" "" ""
+  text_j=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  if [[ "$text_j" == *'class `a&lt;b&gt;&amp;`, attempt `&lt;x&gt;`'* && "$text_j" != *"<b>"* ]]; then
+    pass "BLOCKED: the image class and attempt are entity-escaped"
+  else
+    fail "BLOCKED: the image class and attempt must be entity-escaped (got: ${text_j:0:300})"
+  fi
+  BLK_CLASS="unmeasured" BLK_ATTEMPT="" run_blocked "https://hooks.example.invalid/stub" "" ""
+  text_k=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  if [[ "$text_k" == *'class `unmeasured`, attempt `unmeasured`'* ]]; then
+    pass "BLOCKED: an empty attempt renders unmeasured"
+  else
+    fail "BLOCKED: an empty attempt must render unmeasured (got: ${text_k:0:300})"
+  fi
+  run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256"
+  text_l=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  case "$text_l" in
+    *"Image step failed"*) fail "BLOCKED: no image-step line when the image step did not fail" ;;
+    *) pass "BLOCKED: no image-step line when the image step did not fail" ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -1066,7 +1115,7 @@ fi
 # exit, never through the fail() it backstops. Ratchet MIN_ASSERTIONS in the same commit as
 # any added assertion; slack in a floor is attack budget.
 ASSERTED=$((PASS + FAIL))
-MIN_ASSERTIONS=121
+MIN_ASSERTIONS=130
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2
