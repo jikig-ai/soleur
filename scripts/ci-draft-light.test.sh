@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Guard 1 for #9728 (ADR-276 S3): the `draft-light` gate and the red draft aggregator in .github/workflows/ci.yml.
 #
-# WHAT THE GATE IS. On a `pull_request` run, job `draft-light` decides whether the four measured heavy jobs
-# (test-webplat, test-scripts, test-scripts-heavy, shard-totality-mutations) may be skipped because the PR is a
+# WHAT THE GATE IS. On a `pull_request` run, job `draft-light` decides whether the five measured heavy jobs
+# (test-webplat, test-webplat-mutations, test-scripts, test-scripts-heavy, shard-totality-mutations) may be skipped because the PR is a
 # DRAFT. It is a COST lever allowed to fail in one direction only: every unknown runs the full battery. When it
 # does skip them the `test` aggregator concludes RED by design (Option R, ADR-276 Decision 4), so a light draft can
 # never be merged on the strength of a light run; the `ready_for_review` run is never light, and runs the full set.
@@ -15,7 +15,7 @@
 #     LIVE read of the pull request returns the JSON boolean draft == true (the event payload's draft flag is not an
 #     input);
 #   * the wrapper (job `if`, permissions, outputs, flags, env, timeouts, no `uses`/secrets/checkout), the trigger
-#     `types:`, the four gated conditions (EVALUATED over an event x output x need-result truth table), the gated-set
+#     `types:`, the five gated conditions (EVALUATED over an event x output x need-result truth table), the gated-set
 #     parity in BOTH directions (derived from the parsed YAML) and the untouched light set are what the design says;
 #   * the `test` aggregator body, EXECUTED over result triples, exits 1 with `draft: full battery owed at ready` for a
 #     light draft EVEN IF the loop is made to tolerate skipped legs, and is unaffected on merge_group, push and
@@ -73,11 +73,11 @@ fi
 passes=$_p0; fails=$_f0; FAILURES=()
 
 # ── Pinned expectations (the design's reading of the wrapper) ────────────────
-# The S2 condition every gated job already carries, and the S3 clause appended to the four heavy ones.
+# The S2 condition every gated job already carries, and the S3 clause appended to the five heavy ones.
 ELIDE_TAIL="(github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
 LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
-# The four heavy families S3 gates. A NEW HEAVY JOB MUST JOIN THIS SET (needs [push-dedupe, draft-light] plus the clause).
-HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
+# The five heavy families S3 gates. A NEW HEAVY JOB MUST JOIN THIS SET (needs [push-dedupe, draft-light] plus the clause).
+HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat test-webplat-mutations"
 # Jobs that carry S2's push-dedupe pair but deliberately NO draft-light term: they run on drafts (the light set).
 # e2e is a required context and must keep reporting on drafts (#8450); test-bun is 1.81 min/run (below the 3 min bar);
 # web-platform-build and the aggregator `test` are checked on their own below.
@@ -89,12 +89,12 @@ S2_ONLY_PINNED="e2e test-bun web-platform-build"
 PR_GATED_PINNED=""
 PR_TERM_PRE=""   # dead prefix kept exported so chk.py's environment read stays uniform
 pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
-# oracle-only lane (#12156): five legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
+# oracle-only lane (#12156): six legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
 # `needs:` and the skip conjunct appended AFTER every earlier term — the same four-term shape as the S4 PR term
 # (event disjunct, active, head_sha nonempty, head bound to either event's sha); `shard-totality-mutations` carries
 # the same four-term conjunct MINUS the skip_legs membership — it skips on event+active+bound-head alone
 # (active, not oracle_only: an `ORACLE_LANE_LOCKED=1` env re-lock leaves `oracle_only` true while `active` stays false).
-OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
+OR_GATED_PINNED="test-webplat test-webplat-mutations test-bun test-scripts test-scripts-heavy web-platform-build"
 SHARD_GATED="shard-totality-mutations"
 OR_T_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
 OR_T_AC="needs.oracle-selection.outputs.active == 'true' && "
@@ -158,7 +158,7 @@ def want_needs(n, dl):
     return sorted(out)
 CANON_TEST = "${{ always() && " + TAIL + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "PR_NUMBER", "ACTION", "HEAD_REPO", "SWITCH"}
-LEGS = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
+LEGS = {"test-webplat", "test-webplat-mutations", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
 
 def load():
     try:
@@ -652,7 +652,7 @@ chk aggbody "$WF" "$SANDBOX/live" 2>/dev/null
 cp "$SANDBOX/live/agg.sh" "$SANDBOX/pristine-agg.sh" 2>/dev/null
 declare -A A
 set_agg_defaults() {
-  A=([WEBPLAT_RESULT]=success [BUN_RESULT]=success [SCRIPTS_RESULT]=success [SCRIPTS_HEAVY_RESULT]=success [BUILD_RESULT]=success
+  A=([WEBPLAT_RESULT]=success [MUTATIONS_RESULT]=success [BUN_RESULT]=success [SCRIPTS_RESULT]=success [SCRIPTS_HEAVY_RESULT]=success [BUILD_RESULT]=success
      [POSTURE_RESULT]=success [EVENT_NAME]=pull_request [DRAFT_LIGHT]="")
 }
 AGG_N=0; AGG_LINES=""
@@ -661,7 +661,7 @@ arow() {
   local id="${1//[^[:alnum:]_.-]/_}" wrc="$2" wmsg="$3" wok="$4" rc why="" k so se envs=()
   AGG_N=$((AGG_N + 1))
   so="$SANDBOX/agg.out"; se="$SANDBOX/agg.err"
-  # oracle-index-check is entries[7] of the live aggregator: its `if:` gates it to pull_request/merge_group, so the
+  # oracle-index-check is entries[8] of the live aggregator: its `if:` gates it to pull_request/merge_group, so the
   # realistic result is `success` on those events and `skipped` (the OFF-EVENT arm, not a failure) everywhere else.
   # Rows may pin A[ORACLE_INDEX_RESULT] to exercise the leg itself; the default models the wiring.
   if [ -z "${A[ORACLE_INDEX_RESULT]+x}" ]; then
@@ -674,17 +674,17 @@ arow() {
   [ "$rc" -eq "$wrc" ] || why="$why rc=$rc(want $wrc)"
   if grep -qF -- "$DRAFT_MSG" "$se"; then [ "$wmsg" = 1 ] || why="$why msg-printed"; else [ "$wmsg" = 0 ] || why="$why msg-missing"; fi
   grep -qF -- "$DRAFT_MSG" "$so" && why="$why msg-on-stdout"
-  if [ "$wok" = 1 ]; then grep -qF -- "All legs green (six battery" "$so" || why="$why no-success-line"; else
+  if [ "$wok" = 1 ]; then grep -qF -- "All legs green (seven battery" "$so" || why="$why no-success-line"; else
     [ -s "$so" ] && why="$why stdout-not-empty"; fi
   if [ -z "$why" ]; then AGG_LINES="$AGG_LINES"$'\n'"AROW $id ok"; else AGG_LINES="$AGG_LINES"$'\n'"AROW $id bad:$why"; fi
 }
 agg_battery() { # <body>
   ABODY="$1"; AGG_N=0; AGG_LINES=""; BAT_CRASH=0
-  # a light draft: the four heavy legs skipped (the shard-totality leg is not an aggregator leg), the light legs green
-  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
+  # a light draft: the five heavy legs skipped (the shard-totality leg is not an aggregator leg), the light legs green
+  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
   arow D1-light-draft-skipped-legs 1 1 0
   # same, with the env order and an extra unrelated leg name (a non-canonical input that must reach the same verdict)
-  set_agg_defaults; A[UNRELATED_RESULT]=success; A[DRAFT_LIGHT]=true; A[SCRIPTS_HEAVY_RESULT]=skipped; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped
+  set_agg_defaults; A[UNRELATED_RESULT]=success; A[DRAFT_LIGHT]=true; A[SCRIPTS_HEAVY_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped
   arow D2-light-draft-reordered-extra-leg 1 1 0
   # the arm is unconditional on the legs: a light draft is red even if every leg reads success
   set_agg_defaults; A[DRAFT_LIGHT]=true
@@ -730,11 +730,11 @@ else fail "AGGREGATOR COUNT: arow() ran $AGG_CTRL_N rows but $((_aok + _abad)) v
 sed 's/^\([[:space:]]*\)fail=1/\1: fail=1/' "$SANDBOX/pristine-agg.sh" > "$SANDBOX/mut/agg-tolerant.sh"
 if cmp -s "$SANDBOX/mut/agg-tolerant.sh" "$SANDBOX/pristine-agg.sh"; then fail "TOLERANT: the loop-tolerating mutation did not land"; else
   ABODY="$SANDBOX/mut/agg-tolerant.sh"
-  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
+  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
   AGG_LINES=""; arow T1-tolerant-loop-light-draft 1 1 0
   case "$AGG_LINES" in *" ok") pass ;; *) fail "TOLERANT: a light draft must exit 1 even when the loop tolerates skipped legs:$AGG_LINES" ;; esac
   # sanity: the tolerant loop really tolerates (off pull_request it exits 0 on a skipped leg), so the row above is not vacuous
-  ( env -i PATH=/usr/bin:/bin WEBPLAT_RESULT=success BUN_RESULT=success SCRIPTS_RESULT=skipped SCRIPTS_HEAVY_RESULT=success BUILD_RESULT=success POSTURE_RESULT=success EVENT_NAME=merge_group DRAFT_LIGHT=true ORACLE_INDEX_RESULT=success bash --noprofile --norc -eo pipefail "$SANDBOX/mut/agg-tolerant.sh" >/dev/null 2>&1 ); _trc=$?
+  ( env -i PATH=/usr/bin:/bin WEBPLAT_RESULT=success MUTATIONS_RESULT=success BUN_RESULT=success SCRIPTS_RESULT=skipped SCRIPTS_HEAVY_RESULT=success BUILD_RESULT=success POSTURE_RESULT=success EVENT_NAME=merge_group DRAFT_LIGHT=true ORACLE_INDEX_RESULT=success bash --noprofile --norc -eo pipefail "$SANDBOX/mut/agg-tolerant.sh" >/dev/null 2>&1 ); _trc=$?
   if [ "$_trc" -eq 0 ]; then pass; else fail "TOLERANT: the tolerant-loop control did not exit 0 off pull_request (rc=$_trc), so the row above proves nothing"; fi
 fi
 
