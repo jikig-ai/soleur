@@ -2901,7 +2901,7 @@ _h18ic=$(
   _h18=""; _h18_bld ic3 'D:frozen R:frozen' both RB_WRAP "${RB_WRAP/sh -c/sh -xc}"; [[ "$_h18" == ' uncaught:ic3(none)' ]] || echo bld-both-red
   _h18=""; _h18_bld ic4 '' both RB_HDR "$RB_HDR"; [[ -z "$_h18" ]] || echo bld-both-green
   _h18=""; _h18_fs ic5 '{ print }'; [[ "$_h18" == ' ic5(did-not-land)' ]] || echo fs-landed-red
-  _h18=""; printf 'x\n' | _h18_red | grep -q . && echo red-reduces-noise
+  _h18=""; grep -q . < <(printf 'x\n' | _h18_red) && echo red-reduces-noise
   _h18_new ic0; _h18=""; _h18_landed ic0; [[ "$_h18" == ' ic0(did-not-land)' ]] || echo landed-red
   _h18=""; _h18_landed g1r1; [[ -z "$_h18" ]] || echo landed-green
   _h18=""; _h18_placed g1r6 "$_5s" "$_5e"; [[ "$_h18" == ' g1r6(misplaced)' ]] || echo placed-red
