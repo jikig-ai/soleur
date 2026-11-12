@@ -12,6 +12,40 @@ lane: cross-domain
 
 # ci: epic #11556 remaining AC chain — scheduled-run confirmation, applicability-classifier follow-up, Lever-A re-rank, p90 re-measurement
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-12 (same session as authoring)
+**Reviewed-Coverage:** sequential-fallback — this plan ran inside the Devin subagent harness, which has no nested-Task/spawn capability; every deepen-plan mechanical gate below ran inline against live repo state, and **no independent review/research agents were spawned**. The parent orchestrator may run a review panel separately; nothing in this section claims an independent review ran.
+**Sections enhanced:** 0 rewrites — the deepen pass verified rather than revised; every load-bearing anchor and citation resolved live (below).
+
+### Gate results (all run inline this pass)
+
+- §4.4 precedent-diff — both pattern-bound deliverables carry named precedents: probe shape → `scripts/followthroughs/ci-push-dedupe-soak-9512{,.test}.sh`; classifier design → the `shard-totality-mutations` in-job detect step verified at `ci.yml:2137–2168` (base-sourced script, `id: detect`, enum-failed warning fallback, invalid-verdict `exit 1` fail-closed). No new scheduled job → Inngest-vs-GHA-cron check N/A.
+- §4.45 verify-the-negative — confirmed live: `ci-push-dedupe.test.sh:85,89,108` (`GATED_PINNED`/`DL_GATED_PINNED`/`OR_GATED_PINNED`), `:637` (`SEVEN_LEGS`), and `ci-draft-light.test.sh:80,97,161` all carry `test-webplat-mutations` — the "no job-level `if:`/`needs:` change" constraint is pinned by real suites; the `test` aggregator reads each job's `result` (`ci.yml:2446` `entries=`), so an in-job skip reporting `success` needs no aggregator change (shard-totality precedent).
+- §4.5 network-outage — trigger keyword `timeout` matched (job-ceiling figures + the #12651 flake tracker's title); inapplicable — no SSH/L3/L7 connectivity hypothesis is under diagnosis anywhere in the plan. Telemetry emitted; all four layers N/A.
+- §4.55 downtime — no downtime-inducing operation (no host/migration/deploy-surface change).
+- §4.6 user-brand impact — PASS (`none` + scope-out; no sensitive-path Files-to-Edit).
+- §4.7 observability — PASS (all 5 fields non-placeholder; `discoverability_test.command` uses allowlisted verb `grep`, no shell-active chars, literal expected output `"1"`, no SSH, <15 s, no `credentials_required` field — correctly omitted).
+- §4.8 PAT — PASS, zero regex hits (`secrets=GH_TOKEN` is an env name, not a PAT-shaped variable).
+- §4.9 UI-wireframe — PASS, no UI surface.
+- §4.10 encryption posture — PASS, no new store/connection.
+- §4.11 guard contract — `scripts/lint-guard-contract.py` green (1 guard, `**Mutation matrix.**` marker, 8 rows ≥ 3); assembly is structural (chokepoint = directive + `run_suite` registration).
+- §4.12 scope check — exactly 1 unfenced `## Scope Check`; Ask Mapping/Provenance/Split all present, zero `unmapped`, both `inferred` rows justified; no `status: BLOCKED`.
+- §4.13 task design — does not fire: no new workflow/Inngest function/CHECK_REGISTRY/pg_cron/host-scheduler/daemon surface; the probe is data consumed by the existing `scheduled-followthrough-sweeper.yml`.
+
+### Live verification (this pass)
+
+- 17 cited issues re-checked via `gh issue view`: states and titles all match their cited roles (#12455/#12618/#12626/#9729/#9512/#7307/#12089 CLOSED; #11556/#11563/#12269/#12647/#12651 and overlap issues #7942/#11312/#10462/#10463/#10464/#8435/#8890 OPEN).
+- Merge attribution: `git merge-base --is-ancestor 34634d7431… origin/main` → yes (prior slice is on main).
+- All ~25 named artifacts exist; every line anchor spot-checked: `ci.yml:1664` (job anchor), `:2137–2168` (detect step), `:2446–2456` (aggregator `entries=` + oracle regex), `test-all.sh:7171` (sibling `run_suite`), `suite-durations.tsv:429` (`185400`), `suite-shard-legs.tsv:431` (leg 5), `cron-main-health-monitor.ts:117` (`0 */6 * * *`), `scheduled-followthrough-sweeper.yml:120` (`GH_TOKEN` env), `main-health-monitor.yml:791` (`EXPECTED_LEGS` 18 legs incl. all three `mut-*`).
+- Labels verified exist: `follow-through`, `type/chore`, `domain/engineering`, `meta/machinery`, `priority/p3-low`.
+- `markdownlint-cli2` clean on plan + `tasks.md` + `decision-challenges.md` (0 issues).
+- `technical-ruling-gate.sh --branch` → 4 unruled `technical` rows remain (`pending - assumed`) per the #12446 harness pattern — the parent carries one batched `soleur:engineering:cto` spawn before work/ship. Two rows carry binding 2026-11-11 CTO rulings verbatim (`--rows` fold-in; `none` threshold); invalid `mechanical` class corrected to `taste` during this pass.
+
+### New considerations discovered
+
+- None material — the deepen pass confirmed every load-bearing premise against live state. The only defects found were in the *process artifacts* (decision-challenges class labels), already fixed in this pass.
+
 ## Overview
 
 Continuation of epic #11556 (cut PR required-check time to 20 min or less). The previous slice (merged squash `34634d7431`, PR #12654, closed #12626, merged 2026-11-12T19:46:34Z) moved three web-platform mutation batteries onto a dedicated `test-webplat-mutations` 3-leg matrix job in `ci.yml` and `main-health-monitor.yml`, added a `VITEST_SHARD`-set `skip_suite` decline in `scripts/test-all.sh`, and un-censored the ~25-minute `mut-approval-guard1` leg. This plan closes the remaining acceptance chain: confirm the fix holds on the scheduled `soleur-ai[bot]`-dispatched main-health-monitor cadence (not just the manual post-merge dispatch), file the deferred applicability-classifier follow-up issue for the new job, re-derive the Lever-A shard outlier ranking on fresh merge_group artifacts, and re-measure the epic's required-check p90 targets now that the mutation batteries no longer ride the webplat legs.
