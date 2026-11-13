@@ -24,3 +24,18 @@ Rulings made 2026-11-13 before planning. Agent rulings, not the owner's signatur
 | C4 edge timing (planning, new fork) | technical | Ruled by CTO agent, 2026-11-13: leave model.c4 unchanged; the `inngest -> api` edge and model.likec4.json change in the follow-up PR that converts ledger row 6 - the live host still polls 10.0.1.10 and a diagram edge describes live state. |
 | Plan review: cut the rollback simulation (Phase 6.3) | taste | Kept by the planner: sharp-edges catalogue entry "a rollback recipe nobody has executed" requires running it once, and CPO condition 2 widened what the forward PR must carry; reviewer (code-simplicity) suggested writing the recipe from Files to Edit instead. Owner may cut it at review. |
 | Plan review: reduce the Phase 1.1 tombstone rows to one | taste | Kept by the planner: the variable-absence, ORIGIN-TLS-description and probe-header rows each kill a different re-introduction (a re-added variable, a re-added rule under a new name, a re-added probe header); reviewer (code-simplicity) suggested one combined grep. Owner may merge them at review. |
+| Per-host evidence bar when the LB pool page is unreadable (work phase) | operator (legal-risk) | Ruled by CLO agent, 2026-11-13: (C) the published wording may be claimed at merge as written; condition (1) is AMENDED (not marked satisfied) to "the PR records host-attributed evidence for web-1 and web-2 separately, dated within 24 h before merge, plus a strict-mode measurement" - the Better Stack `required: true` rows are host-attributed and strict fails closed with no plaintext fallback; LB pool health and the web-2 resets are availability questions. The lb-pool-health reader (#12745) does not block the merge. |
+| Follow-ups filed (work phase) | technical | Ruled by CTO agent, 2026-11-13: file the residuals as separate issues - #12742 (leg-2 delivery after the owner's replace, ledger row 6), #12743 (port 80, AOP, inert Doppler switches), #12744 (handshake-burst alert, filed before #10479 closes), #12745 (lb-pool-health reader, CLO ruling); each is a separate owner act, a second destroy, or an unalerted signal that must outlive #10479 and #10538 closing (CTO items 3 and 4, port-80 ruling). |
+
+## Pre-merge evidence readings (F3)
+
+Read-only, 2026-11-13 (UTC). Counts and statuses only.
+
+- 06:50Z `cloudflare-readonly.sh ssl-mode`: zone `strict` (modified_on 2026-02-16T14:59:26Z).
+- 06:50Z `config-entrypoint`: version 7, last_updated 2026-11-07T23:43:43Z (the flip write; no ruleset write since), 5 rules: ref dcb85b75 `flexible` ("Flexible SSL for web platform"), email-obfuscation, apex `full`, ORIGIN-TLS CANARY `strict` enabled, ORIGIN-TLS STRICT `strict` enabled; last match for app.soleur.ai is `strict`.
+- 06:50Z `pagerules-ssl`: 0 active rules, 0 SSL rules.
+- 07:30-07:50Z Better Stack, 7 d: `origin-tls: listening` rows with `required: true` - soleur-web-platform (web-1) 81 rows, last 2026-11-12T22:18:41Z; soleur-web-2 82 rows, last 2026-11-12T22:20:02Z; both daysLeft 5469 (same certificate). Oldest evidence lapses 2026-11-13T22:18Z: re-take before a later merge.
+- 07:50Z Better Stack, 24 h: `failed the TLS handshake` rows - web-1 0; web-2 66 (ECONNRESET bursts 01:24Z-04:08Z, suppressed counts up to 259 per row; no alert covers it, #12744).
+- 07:50Z 20/20 `origin-tls-probe.sh --require-tls`: HTTP 200, origin transport TLSv1.3, TLS-ON-ORIGIN-HOP (reaches web-1 only, by LB weight).
+- 07:50Z `analytics-edge-errors 24`: 114 status-500 (origin-generated) and zero 520/521/525/526/502; covers only traffic that reached an origin (web-2 at weight 0 gets almost none).
+- Not measured: no edge-side probe of web-2; LB pool health unread (Playwright reached the Cloudflare login page 07:51Z, no sanctioned reader) - #12745.
