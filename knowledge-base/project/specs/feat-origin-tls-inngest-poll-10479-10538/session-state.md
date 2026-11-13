@@ -27,3 +27,8 @@ soleur:plan, soleur:deepen-plan, learnings-researcher, repo-research-analyst, ct
 - constraint: Never edit or push PR #12733 or worktree chore-enqueue-evidence; build on #12733's ledger renewal, rebase cleanly whichever merges first.
 - constraint: prepush-secret-scan.sh verdict=CLEAN before every push.
 - ci-is-the-gate: do NOT run test-all.sh, run-registered-suites.sh or the full/affected battery locally. Single test files only.
+
+## Work Phase
+- Status: complete (all workstreams committed; origin/main with #12733 merged in, ledger row 7 conflict resolved to the conversion)
+- Affected gate: `gate-or-skip.sh` reported `battery-owed: OWED` for the infra surface and started `test-all.sh --affected`; killed by PID per the operator's no-local-battery constraint. Carried by the PR's CI `infra-validation` / `deploy-script-tests` runs, which must be green before ready.
+- Follow-ups: #12742 (leg-2 delivery), #12743 (port 80 / AOP), #12744 (handshake-burst alert), #12745 (lb-pool-health reader).
