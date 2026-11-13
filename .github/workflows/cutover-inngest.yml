@@ -188,11 +188,11 @@ jobs:
         # op-set parity anchor the census and the G2 pins count).
         run: |
           if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
-            echo "::error::verdict=write_token_stale — DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty: the inngest-cutover environment secret did not resolve (approve the environment's required-reviewer gate; if it is genuinely unset, run the relay script knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing BEFORE any write."
+            echo "::error::verdict=write_token_stale — DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty: the inngest-cutover environment secret did not resolve (approve the environment's required-reviewer gate; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing BEFORE any write."
             exit 1
           fi
           if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
-            echo "::error::verdict=write_token_stale — the inngest-cutover environment secret no longer authenticates against soleur-inngest/prd (a -replace of doppler_service_token.inngest_cutover_write mints a new key and strands this secret). Re-run the relay script knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh, then re-dispatch. Refusing BEFORE any write."
+            echo "::error::verdict=write_token_stale — the inngest-cutover environment secret no longer authenticates against soleur-inngest/prd (a -replace of doppler_service_token.inngest_cutover_write mints a new key and strands this secret). Re-run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh, then re-dispatch. Refusing BEFORE any write."
             exit 1
           fi
           echo "::notice::write-token check OK — the inngest-cutover environment secret authenticates on soleur-inngest/prd."

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-12T20:03:04Z
+# generated-at=2026-11-13T16:54:57Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -699,7 +699,6 @@ tests/scripts/git-data-wipe-wedge	1
 tests/scripts/hcloud-token-readonly-no-fallback-scan	1
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
-tests/scripts/relay-inngest-write-token-12158	5
 tests/scripts/inngest-host-dark-gate	8
 tests/scripts/inngest-host-replace-gate	1
 tests/scripts/inngest-host-shape-gate	3
@@ -723,6 +722,7 @@ tests/scripts/registry-pull-path-health	4
 tests/scripts/registry-region-migrate-gate	3
 tests/scripts/registry-replace-preflight	5
 tests/scripts/registry-restore-from-ghcr	3
+tests/scripts/relay-inngest-write-token-12158	5
 tests/scripts/rule-id-regex-parity	3
 tests/scripts/rule-metrics-aggregate	8
 tests/scripts/scratch-residue	1

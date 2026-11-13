@@ -4395,7 +4395,7 @@ assert "#9927 D2-2 neither rollback) nor resume) authenticates with the arm toke
 assert "#9927 D2-2 no terraform resource publishes the new key as a GitHub secret (static grep, D1c)" \
   "! grep -rhE 'secret_name[[:space:]]*=[[:space:]]*\"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\"' apps/web-platform/infra/*.tf apps/*/infra/*.tf 2>/dev/null"
 assert "#9927 D2-2 the new token is declared read/write by-reference with a name distinct from inngest-cutover-arm" \
-  "awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf | grep -q 'name    = \"inngest-cutover-write\"' && awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf | grep -q 'access  = \"read/write\"'"
+  "grep -q 'name    = \"inngest-cutover-write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf) && grep -q 'access  = \"read/write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf)"
 assert "#9927 D2-2 non-vacuity: a widened write-token ternary is no longer equal to the literal set (judged RED)" \
   "[[ \"\$(printf '%s' \"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE: \\\${{ (inputs.op == 'rollback' || inputs.op==\\\"backup\\\" || inputs.op == 'resume') && 1 }}\" | _g2_ops)\" != '$_G2_TOKEN_OPS' ]]"
 

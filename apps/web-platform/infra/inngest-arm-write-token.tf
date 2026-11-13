@@ -169,7 +169,7 @@ resource "github_actions_secret" "doppler_token_inngest_arm" {
 # this key is never published as a github_actions_secret (the TF App still cannot write
 # environment secrets — the 403 recorded above stands), so it surfaces ONLY as the sensitive
 # output below, and the staged relay script
-# knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh
+# knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh
 # copies it over stdin into the `inngest-cutover` GitHub ENVIRONMENT secret
 # DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE — a main-only, required-reviewer-gated environment. The
 # rollback and resume ops consume that environment secret (cutover-inngest.yml), narrowing

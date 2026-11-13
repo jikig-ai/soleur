@@ -2598,7 +2598,7 @@ case "$OP" in
 
     # ---- Half (A): the no-SSH reverse flip write (#6369). Behind the environment gate.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
-      echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the reverse flip write — never a fallback to the arm token."; exit 1
+      echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the reverse flip write — never a fallback to the arm token."; exit 1
     fi
     # G1' decides ONLY whether to WRITE the reverse flip — it must NOT gate Half (B). Half (B),
     # the web re-enable, is the pre-#6369 UNCONDITIONAL reverse of 2.2 quiesce and the documented
@@ -2843,7 +2843,7 @@ case "$OP" in
     #     recuts /mnt/data, inngest-volume-recut was retired by #8285). The latch is what stops a
     #     second FLUSHALL, so that is correct; recovery from `aborted` is not a dispatch of this op.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
-      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the post-flush re-entry write — never a fallback to the arm token."; exit 1
+      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the post-flush re-entry write — never a fallback to the arm token."; exit 1
     fi
     RS_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
     # SCOPED TO `done`, and that scoping IS the safety argument. `done` is the only value that
