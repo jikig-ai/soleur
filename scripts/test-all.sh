@@ -6658,6 +6658,9 @@ if want_scripts; then
   # #7966: the rotation script had never completed a run (TARGETS exported after the check that
   # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
   run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
+  # The Sentry token rotation chain (ro + iac profiles) runs by hand against a live credential;
+  # end-to-end against stub gh/curl/doppler/agent-browser. Explicit, scripts/*.test.sh is not globbed.
+  run_suite "scripts/rotate-sentry-actions-ro-token" bash scripts/rotate-sentry-actions-ro-token.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
