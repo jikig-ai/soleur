@@ -508,7 +508,7 @@
      "justification": "NOT an accepted risk: the CLO ruled 2026-10-27 (comment on #10479) that this hop is fixed and offered no accepted-risk path; this block exists because the schema requires one for a connection without certificate verification. Fix: an Origin CA certificate on the web hosts, strict mode for app.soleur.ai, a recorded handshake probe; owner-only go for each production write (the Cloudflare rule change and any origin deploy). Target 2026-11-12, hard stop 2026-11-19 (after which the published 'not claimed' wording stays; no extension or acceptance record is ruled). Renewing expires_on beyond 2026-11-19 is an extension: it needs a record that begins SIGNED BY OWNER (human, not an agent), not an agent edit of this field. The published wording (privacy-policy.md Section 11 and data-protection-disclosure.md Section 8.1(c), #10479) claims TLS for browser-to-Cloudflare only and disclaims this hop, so disclosed_as stays not-publicly-claimed.",
      "tracking_issue": "#10479",
      "reevaluate_when": "the origin serves TLS with a Cloudflare-verifiable certificate, the app.soleur.ai rule is strict and a handshake probe is recorded; or app.soleur.ai is routed through the Cloudflare Tunnel; or 2026-11-12, whichever is first",
-     "expires_on": "2026-11-12"
+     "expires_on": "2026-11-19"
     }
    }
   },
