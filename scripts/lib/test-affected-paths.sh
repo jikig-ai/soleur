@@ -3264,6 +3264,18 @@ AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
 
+# plugins/soleur/test/arm-check-sites.test.sh — corpus walk is SCOPED to
+# plugins/soleur/skills/ (A2b single-copy and A6 tombstone greps), plus the three scripts
+# whose re-arm or not-armed messages A5 reads (#12656).
+AFFECTED_PLUGINS_SOLEUR_TEST_ARM_CHECK_SITES_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/monitor-pr-checks.sh"
+  "plugins/soleur/scripts/sync-pr-behind.sh"
+  "scripts/merge-queue-jump.sh"
+  "plugins/soleur/skills/"
+  "plugins/soleur/test/arm-check-sites.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/admin-merge-ready-wiring.test.sh — corpus walk is SCOPED
 # to plugins/soleur/ (any file there gaining `gh pr merge --admin` must carry
 # the ready-gate), plus its SUT script and the skills that must reference it.

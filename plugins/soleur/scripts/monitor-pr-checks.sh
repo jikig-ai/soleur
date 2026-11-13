@@ -625,7 +625,7 @@ while :; do
     # the fix that does not need revisiting per-state.
     if [[ "$queued" != "1" && "$automerge" == "false" && "$state" == "OPEN" \
           && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
-      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s). Before any --admin merge, admin-merge-ready.sh <PR> <sha> must exit 0 — this line reads only checks that exist.\n' "$PR" "$mergestate"; exit 0
+      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s). Arm it only through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check; an --admin merge only through plugins/soleur/skills/ship/references/settle-then-admin-merge.md (arm check, then admin-merge-ready.sh <PR> <sha> exit 0) — this line reads only checks that exist.\n' "$PR" "$mergestate"; exit 0
     fi
   fi
 
