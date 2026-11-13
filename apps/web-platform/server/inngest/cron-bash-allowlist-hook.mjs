@@ -416,6 +416,10 @@ const SECRET_PATH_PATTERNS = [
 const WRITE_PROTECTED_PATTERNS = [
   /(^|\/)\.claude(\/|$)/,
   /cron-bash-allowlist-hook/,
+  // #11076 (CTO D1) — the PostToolUse gh-output framing hook. Once registered, the CLI runs it
+  // under node after every Bash call with the spawn env, so a rewrite would be code execution
+  // outside the Bash allowlist. Any new file that hook imports at runtime must join this list.
+  /cron-gh-output-framing-hook/,
   /(^|\/)settings\.json$/,
   /(^|\/)\.git(\/|$)/,
   /\.env(\.[\w-]+)?$/,
@@ -485,6 +489,13 @@ function dangerousMetacharReason(command) {
 // `/\s*(?:&&|\|\||;)\s*/` re-scanned the whole whitespace run from every start
 // position and took seconds on a command padded with spaces (a 30k-space command
 // cost 3.8 s, 100k about 25 s); `String.trim` is linear.
+//
+// Consumers: `decide()` here, and `cron-gh-output-framing-hook.mjs`, which imports this
+// function and `tokenize` at runtime (#11076). The posture is inverted there: a null token
+// list or a throw means "no annotation", not deny, so a change that makes either one throw
+// or return null on a new shape keeps containment safe and silently turns framing off for
+// that shape. Guarded by the AC2 rows and the differential in
+// `test/server/inngest/cron-gh-output-framing-hook.test.ts`.
 export function splitSegments(command) {
   return command
     .split(/&&|\|\||;/)
@@ -501,6 +512,8 @@ export function splitSegments(command) {
 // never a label token), and only space and tab separate words (bash does not
 // split on \f, \v or U+00A0; JS `\s` does). Returns null on an unbalanced
 // quote (→ caller denies).
+//
+// Consumers: `decide()` here and `cron-gh-output-framing-hook.mjs` (see `splitSegments`).
 export function tokenize(segment) {
   const tokens = [];
   let cur = "";

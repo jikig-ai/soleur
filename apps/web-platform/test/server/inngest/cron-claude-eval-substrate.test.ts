@@ -10,9 +10,9 @@
 // because it `vi.mock`s node:child_process, which hoists file-wide and would
 // clobber the real-spawn calls below).
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
@@ -70,6 +70,8 @@ import {
   makeThrewSpawnResult,
   parseClaudeResultLine,
   resolveEvalCaptureStatus,
+  resolveNodeBin,
+  runFramingHookSelfTest,
   runHookSelfTest,
   setupEphemeralWorkspace,
   spawnClaudeEval,
@@ -78,6 +80,7 @@ import {
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
+import { UNTRUSTED_PREAMBLES } from "@/server/untrusted-content";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
 // prod), so a git clone of the ~100 MB soleur tree ENOSPC'd. The fix routes the
@@ -170,6 +173,98 @@ describe("cron eval overlay — hook-primary containment (#5018/#5000/#5004)", (
     // git config / remote must NOT be allowlisted (token-leak surface)
     expect(allow).not.toContain("git config");
     expect(allow).not.toContain("git remote");
+  });
+});
+
+// #11076 — the gh-output framing hook is opt-in and dark. AC3: the default output is
+// byte-identical to the pre-change builder (a hard-coded golden, not a spread of
+// DEFAULT_CLAUDE_SETTINGS, so the two sides cannot move together). AC4: no production
+// caller opts in.
+describe("buildCronEvalSettings framing option (AC3 golden, #11076)", () => {
+  const CWD = "/tmp/ephemeral/repo";
+  const NODE = resolveNodeBin();
+  const GOLDEN = {
+    permissions: { allow: [], defaultMode: "default" },
+    sandbox: { enabled: false },
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "*",
+          hooks: [
+            {
+              type: "command",
+              command: `${NODE} ${CWD}/apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs ${CWD}/.claude/cron-allow.txt`,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const DEFAULT_CASES: Array<[string, () => Record<string, unknown>]> = [
+    ["no options", () => buildCronEvalSettings(CWD)],
+    ["{}", () => buildCronEvalSettings(CWD, {})],
+    ["false", () => buildCronEvalSettings(CWD, { frameGhOutput: false })],
+    ["undefined", () => buildCronEvalSettings(CWD, { frameGhOutput: undefined })],
+    ["1 (strict === true)", () => buildCronEvalSettings(CWD, { frameGhOutput: 1 as never })],
+    ['"true" (strict === true)', () => buildCronEvalSettings(CWD, { frameGhOutput: "true" as never })],
+  ];
+
+  it.each(DEFAULT_CASES)("%s: serialises to the golden and has only a PreToolUse hook key", (_name, build) => {
+    const out = build();
+    expect(JSON.stringify(out, null, 2)).toBe(JSON.stringify(GOLDEN, null, 2));
+    expect(Object.keys(out.hooks as object)).toEqual(["PreToolUse"]);
+  });
+
+  it("true: PreToolUse unchanged, plus exactly one Bash PostToolUse entry with an absolute node", () => {
+    const out = buildCronEvalSettings(CWD, { frameGhOutput: true }) as {
+      hooks: { PreToolUse: unknown; PostToolUse: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(Object.keys(out.hooks)).toEqual(["PreToolUse", "PostToolUse"]);
+    expect(out.hooks.PreToolUse).toStrictEqual(GOLDEN.hooks.PreToolUse);
+    expect(out.hooks.PostToolUse).toStrictEqual([
+      {
+        matcher: "Bash",
+        hooks: [
+          { type: "command", command: `${NODE} ${CWD}/apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs` },
+        ],
+      },
+    ]);
+    // `resolveNodeBin` returns an absolute path whenever one exists; its documented last
+    // resort is the bare "node".
+    const nodeToken = out.hooks.PostToolUse[0].hooks[0].command.split(" ")[0];
+    expect(isAbsolute(nodeToken) || nodeToken === "node").toBe(true);
+    expect(isAbsolute(NODE)).toBe(true);
+  });
+});
+
+describe("the framing option stays dark (AC4, #11076)", () => {
+  const APP = process.cwd(); // apps/web-platform
+  const SKIP = new Set(["node_modules", "test", ".next", "dist", "coverage"]);
+  function walk(dir: string, out: string[]): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (/\.(ts|tsx|mjs)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(p);
+    }
+    return out;
+  }
+  const files = walk(APP, []);
+
+  it("scans a real population of non-test app source files", () => {
+    expect(files.length).toBeGreaterThan(100);
+  });
+
+  it("frameGhOutput is spelled only in the substrate, and nowhere as `frameGhOutput: true`", () => {
+    const spelling: string[] = [];
+    const enabling: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(f, "utf-8");
+      if (text.includes("frameGhOutput")) spelling.push(relative(APP, f));
+      if (/frameGhOutput\s*:\s*true/.test(text)) enabling.push(relative(APP, f));
+    }
+    expect(spelling).toEqual(["server/inngest/functions/_cron-claude-eval-substrate.ts"]);
+    expect(enabling).toEqual([]);
   });
 });
 
@@ -461,6 +556,8 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
   const HOOK_REL = "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
   // vitest cwd is apps/web-platform; the real hook lives at server/inngest/.
   const REAL_HOOK = join(process.cwd(), "server/inngest/cron-bash-allowlist-hook.mjs");
+  const FRAMING_REL = "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
+  const REAL_FRAMING = join(process.cwd(), "server/inngest/cron-gh-output-framing-hook.mjs");
   const tmpDirs: string[] = [];
 
   afterEach(() => {
@@ -474,6 +571,10 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
     hookSource?: string;
     settings?: Record<string, unknown>;
     allow?: string[];
+    /** #11076 — the framing hook source; defaults to the real file, `null` omits it. */
+    framingSource?: string | null;
+    /** #11076 — build the default settings with the framing option on. */
+    frameGhOutput?: boolean;
   } = {}): string {
     const spawnCwd = mkdtempSync(join(tmpdir(), "soleur-selftest-"));
     tmpDirs.push(spawnCwd);
@@ -483,6 +584,9 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
       opts.hookSource ?? readFileSync(REAL_HOOK, "utf-8"),
       "utf-8",
     );
+    if (opts.framingSource !== null) {
+      writeFileSync(join(spawnCwd, FRAMING_REL), opts.framingSource ?? readFileSync(REAL_FRAMING, "utf-8"), "utf-8");
+    }
     mkdirSync(join(spawnCwd, ".claude"), { recursive: true });
     const allow = opts.allow ?? [];
     writeFileSync(
@@ -492,7 +596,7 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
     );
     writeFileSync(
       join(spawnCwd, ".claude/settings.json"),
-      JSON.stringify(opts.settings ?? buildCronEvalSettings(spawnCwd), null, 2) + "\n",
+      JSON.stringify(opts.settings ?? buildCronEvalSettings(spawnCwd, { frameGhOutput: opts.frameGhOutput }), null, 2) + "\n",
       "utf-8",
     );
     return spawnCwd;
@@ -904,6 +1008,19 @@ process.exit(0);
       });
       expect(readFileSync(join(spawnCwd, ".claude/cron-allow.txt"), "utf-8")).toContain("no-file-tools");
     });
+
+    // #11076 (CTO D2) — pins the file the CLI actually reads: the production path writes
+    // settings.json with no PostToolUse key, so the framing hook is registered nowhere.
+    it("the production setup path writes a settings.json with no PostToolUse key (framing hook dark)", async () => {
+      installGitShim(readFileSync(join(process.cwd(), "server/inngest/cron-bash-allowlist-hook.mjs"), "utf-8"));
+      const { spawnCwd } = await setupEphemeralWorkspace({
+        installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+        cronName: "cron-roadmap-review",
+      });
+      const written = JSON.parse(readFileSync(join(spawnCwd, ".claude/settings.json"), "utf-8"));
+      expect(Object.keys(written.hooks)).toEqual(["PreToolUse"]);
+      expect(Object.hasOwn(written.hooks, "PostToolUse")).toBe(false);
+    });
   });
 
   // P2-4 — an allowlisted verb with a HOSTILE trailing argument is the real residual
@@ -1001,6 +1118,97 @@ process.exit(0);
     expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(/Task/);
   });
 });
+
+  // #11076 — the gh-output framing self-test (Guard 3). Every case uses the REAL containment
+  // hook: a stubbed containment file would run inside the framing hook's dynamic import.
+  describe("runFramingHookSelfTest (#11076)", () => {
+    const NODE = resolveNodeBin();
+    const FRAMED_JSON = JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
+    });
+    const framingStub = (body: string): string =>
+      ['import { readFileSync } from "node:fs";', 'const input = JSON.parse(readFileSync(0, "utf-8"));', body, "process.exit(0);"].join("\n");
+    const isGh = 'String(input.tool_input?.command ?? "").startsWith("gh ")';
+    const settingsOf = (spawnCwd: string) => JSON.parse(readFileSync(join(spawnCwd, ".claude/settings.json"), "utf-8"));
+    const selfTest = (spawnCwd: string, settings = settingsOf(spawnCwd)) =>
+      runFramingHookSelfTest({ spawnCwd, cronName: "cron-x", nodeBin: NODE, settings });
+
+    it("no PostToolUse key: returns without running the framing file", () => {
+      const sentinelDir = mkdtempSync(join(tmpdir(), "soleur-framing-sentinel-"));
+      tmpDirs.push(sentinelDir);
+      const sentinel = join(sentinelDir, "ran");
+      const spawnCwd = makeSpawnCwd({
+        framingSource: `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(sentinel)}, "x");\nprocess.stdout.write("garbage");\n`,
+      });
+      expect(() => selfTest(spawnCwd)).not.toThrow();
+      expect(existsSync(sentinel)).toBe(false);
+    });
+
+    it("registered + the real framing hook: passes", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true });
+      expect(() => selfTest(spawnCwd)).not.toThrow();
+    });
+
+    it("end to end through runHookSelfTest, real framing hook: passes", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true });
+      expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).not.toThrow();
+    });
+
+    it("end to end through runHookSelfTest, a silent framing stub: throws the gh-read probe message", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: framingStub("") });
+      expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(
+        /gh-output framing hook self-test FAILED: gh-read probe/,
+      );
+    });
+
+    it("a stub that adds decision:block beside a correct hookSpecificOutput: throws (exact key set)", () => {
+      const out = JSON.stringify({ decision: "block", reason: "x", ...JSON.parse(FRAMED_JSON) });
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(out)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+    });
+
+    it("a stub that emits nothing for gh: throws", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: framingStub("") });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+    });
+
+    it("a stub that also frames ls: throws the ls probe message", () => {
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`process.stdout.write(${JSON.stringify(FRAMED_JSON)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: ls probe/);
+    });
+
+    it("registered but the framing hook file is absent: throws", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: null });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+    });
+
+    it("bad registration shapes each throw registration mismatch", () => {
+      const spawnCwd = makeSpawnCwd({ frameGhOutput: true });
+      const valid = settingsOf(spawnCwd).hooks.PostToolUse[0];
+      const otherFile = JSON.parse(JSON.stringify(valid));
+      otherFile.hooks[0].command = `${NODE} ${join(spawnCwd, "apps/web-platform/server/inngest/other-hook.mjs")}`;
+      const rows: Array<[string, unknown]> = [
+        ["two entries", [valid, valid]],
+        ["a second hook inside the entry", [{ ...valid, hooks: [...valid.hooks, valid.hooks[0]] }]],
+        ['matcher "*"', [{ ...valid, matcher: "*" }]],
+        ["a command naming another file", [otherFile]],
+        ["an empty list", []],
+        ["null", null],
+      ];
+      for (const [name, PostToolUse] of rows) {
+        const settings = { ...settingsOf(spawnCwd), hooks: { ...settingsOf(spawnCwd).hooks, PostToolUse } };
+        expect(() => selfTest(spawnCwd, settings), name).toThrow(
+          /gh-output framing hook self-test FAILED: registration mismatch/,
+        );
+      }
+    });
+  });
 });
 
 describe("spawnSimple — stderr capture (clone-128 diagnosability)", () => {

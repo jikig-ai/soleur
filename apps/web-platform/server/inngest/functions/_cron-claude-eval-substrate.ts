@@ -8,6 +8,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
@@ -686,6 +687,9 @@ export const DEFAULT_CLAUDE_SETTINGS = {
 const HOOK_REL_PATH =
   "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
 const ALLOWLIST_REL_PATH = ".claude/cron-allow.txt";
+// #11076 — the opt-in PostToolUse(Bash) gh-output framing hook (ADR-287 addendum 2026-11-12).
+const FRAMING_HOOK_REL_PATH =
+  "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
 
 // Resolve `node` by ABSOLUTE path for the hook command. Relying on PATH lookup
 // risks a PATH-drift fail-open (a cron whose buildSpawnEnv trims PATH → node not
@@ -700,23 +704,110 @@ export function resolveNodeBin(): string {
   return "node";
 }
 
+// #11076 — the single PostToolUse entry for the gh-output framing hook. The builder and
+// runFramingHookSelfTest both use it, so the registered command and the probed binary
+// match by construction.
+export function framingHookEntry(
+  spawnCwd: string,
+  nodeBin: string = resolveNodeBin(),
+): { matcher: string; hooks: Array<{ type: string; command: string }> } {
+  return {
+    matcher: "Bash",
+    hooks: [{ type: "command", command: `${nodeBin} ${join(spawnCwd, FRAMING_HOOK_REL_PATH)}` }],
+  };
+}
+
 // Build the per-spawn settings overlay: the inert base + the deny-by-default
 // hook under a `*` catch-all matcher (so NO tool class is unhooked — an unhooked
 // class fails open per probe). The hook command is `<node> <hook> <allowlist>`,
 // all absolute, so it is independent of the hook's runtime CWD.
+//
+// #11076 — `frameGhOutput === true` (strict) adds the PostToolUse(Bash) framing hook,
+// which annotates gh read output as untrusted. Default off, and no caller passes it, so
+// the default output is byte-identical to the builder before this option existed. The key
+// is added conditionally: `PostToolUse: undefined` would serialise the same but leave an
+// own key on the object.
 export function buildCronEvalSettings(
   spawnCwd: string,
+  opts: { frameGhOutput?: boolean } = {},
 ): Record<string, unknown> {
   const command = `${resolveNodeBin()} ${join(spawnCwd, HOOK_REL_PATH)} ${join(
     spawnCwd,
     ALLOWLIST_REL_PATH,
   )}`;
+  const hooks: Record<string, unknown> = {
+    PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+  };
+  if (opts.frameGhOutput === true) hooks.PostToolUse = [framingHookEntry(spawnCwd)];
   return {
     ...DEFAULT_CLAUDE_SETTINGS,
-    hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
-    },
+    hooks,
   };
+}
+
+// #11076 — spawn-time self-test of a REGISTERED gh-output framing hook. Keyed on the
+// file: with no PostToolUse key (every cron today) it returns at once, reading nothing and
+// running nothing. With the key it (i) deep-equals the registration against the one
+// expected entry, (ii) runs a gh-read probe that must print exactly the framed object, and
+// (iii) runs an `ls` probe that must print nothing. The probes are deterministic (fixed
+// payloads, no network), so any failure is a defect in the registered hook and throws,
+// which aborts the cron like every containment probe. It cannot see the file being
+// changed during the run; containment write-protects the file for that.
+export function runFramingHookSelfTest(args: {
+  spawnCwd: string;
+  cronName: string;
+  nodeBin: string;
+  settings: { hooks?: Record<string, unknown> } | undefined;
+}): void {
+  const { spawnCwd, cronName, nodeBin, settings } = args;
+  const hooks = settings?.hooks ?? {};
+  if (!Object.hasOwn(hooks, "PostToolUse")) return;
+  const fail = (what: string): never => {
+    throw new Error(`[${cronName}] gh-output framing hook self-test FAILED: ${what}. Aborting cron.`);
+  };
+  const expected = [framingHookEntry(spawnCwd, nodeBin)];
+  if (!isDeepStrictEqual(hooks.PostToolUse, expected)) {
+    fail(
+      `registration mismatch; expected ${JSON.stringify(expected)} got ${JSON.stringify(hooks.PostToolUse)}`,
+    );
+  }
+  const framingAbs = join(spawnCwd, FRAMING_HOOK_REL_PATH);
+  // Its own wrapper: the containment `run` helper is hard-wired to that binary and its
+  // allowlist argument. Same semantics: a non-zero exit, a timeout or a missing binary fails.
+  const exec = (command: string): { ok: true; stdout: string } | { ok: false; error: string } => {
+    try {
+      const stdout = execFileSync(nodeBin, [framingAbs], {
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          tool_response: { stdout: "x", stderr: "" },
+        }),
+        encoding: "utf-8",
+        timeout: 10_000,
+      });
+      return { ok: true, stdout };
+    } catch (err) {
+      return { ok: false, error: `self-test-exec-error: ${(err as Error).message}` };
+    }
+  };
+  const ghRead = exec("gh issue view 1");
+  let ghOk = false;
+  if (ghRead.ok) {
+    try {
+      ghOk = isDeepStrictEqual(JSON.parse(ghRead.stdout), {
+        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
+      });
+    } catch {
+      ghOk = false;
+    }
+  }
+  if (!ghOk) {
+    fail(`gh-read probe returned ${(ghRead.ok ? ghRead.stdout : ghRead.error).slice(0, 200)}`);
+  }
+  const ls = exec("ls");
+  if (!ls.ok) fail(`ls probe returned ${ls.error.slice(0, 200)}`);
+  if (ls.ok && ls.stdout.trim() !== "") fail("ls probe framed a non-gh command");
 }
 
 // Spawn-time hook self-test (D2 — mitigates the probe D-new-1 fail-open: a
@@ -934,18 +1025,22 @@ export function runHookSelfTest(args: {
     );
   }
   let matcherOk = false;
+  // Hoisted out of the try (#11076) so the framing self-test below reads the same parse.
+  let settings:
+    | {
+        hooks?: {
+          PreToolUse?: Array<{
+            matcher?: string;
+            hooks?: Array<{ command?: string }>;
+          }>;
+        } & Record<string, unknown>;
+      }
+    | undefined;
   try {
-    const settings = JSON.parse(
+    settings = JSON.parse(
       readFileSync(join(spawnCwd, ".claude", "settings.json"), "utf-8"),
-    ) as {
-      hooks?: {
-        PreToolUse?: Array<{
-          matcher?: string;
-          hooks?: Array<{ command?: string }>;
-        }>;
-      };
-    };
-    matcherOk = (settings.hooks?.PreToolUse ?? []).some(
+    ) as typeof settings;
+    matcherOk = (settings?.hooks?.PreToolUse ?? []).some(
       (entry) =>
         entry.matcher === "*" &&
         (entry.hooks ?? []).some((h) =>
@@ -1025,6 +1120,9 @@ export function runHookSelfTest(args: {
       );
     }
   }
+
+  // #11076 — only does work when settings.json registers a PostToolUse key.
+  runFramingHookSelfTest({ spawnCwd, cronName, nodeBin, settings });
 }
 
 export async function setupEphemeralWorkspace(args: {

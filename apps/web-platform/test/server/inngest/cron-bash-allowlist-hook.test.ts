@@ -299,6 +299,28 @@ describe("Write/Edit — self-protection (D-new-2)", () => {
       "allow",
     );
   });
+
+  // #11076 (CTO D1) — once registered, the CLI runs the framing hook under node after every
+  // Bash call with the spawn env, so a rewrite of it is code execution outside the allowlist.
+  describe("the gh-output framing hook file is write-protected", () => {
+    const REL = "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
+    const ABS = `/workspaces/cron-x/repo/${REL}`;
+    const rows = ["Write", "Edit", "MultiEdit"].flatMap((tool) => [
+      { tool, path: REL },
+      { tool, path: ABS },
+    ]);
+    it.each(rows)("$tool of $path is denied with the protected-path reason", ({ tool, path }) => {
+      const out = decide({ tool_name: tool, tool_input: { file_path: path } }, ALLOW).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(out.permissionDecision).toBe("deny");
+      expect(out.permissionDecisionReason).toMatch(/^cron-containment: protected-path write: /);
+    });
+    it("Read of the framing hook file is still allowed", () => {
+      expect(verdict({ tool_name: "Read", tool_input: { file_path: ABS } })).toBe("allow");
+    });
+  });
 });
 
 describe("catch-all — unrecognized tool classes deny (P0-A / P0-4)", () => {

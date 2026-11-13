@@ -271,3 +271,66 @@ WebFetch scorer off also removes this note.
    counter-framing clause (output text that retracts the note); consolidating the tokenizer with the shell lexer in the destroy-ask classifier
    (the purpose-built tokenizer was kept to avoid coupling an annotate-only hook to that classifier); an optional `subagent` boolean on the log
    line; and widening registration per item 3.
+
+## Addendum 2026-11-12 (Ref #9601, #11076): cron gh output framing, dark
+
+1. **What.** A standalone `PostToolUse(Bash)` command hook for cron `claude --print` spawns,
+   `apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs`. It is registered only by
+   `buildCronEvalSettings(spawnCwd, { frameGhOutput: true })`, and no caller passes that, so it is dark: inactive in every
+   cron. It adds an annotation only and never emits `updatedToolOutput` (decision 7 holds). It sits beside the 2026-10-25
+   system-prompt append and does not replace it.
+2. **How it differs from the hosted twin, and why.** Detection reuses the containment hook's `splitSegments` and `tokenize`,
+   the parse that admitted the command, and matches `gh <noun> <verb>` on the first three tokens. It has no fallback scan,
+   because containment denies the shapes that scan exists for. It has no `-R`/`--repo` skip, no `ls` alias and no
+   path-qualified `gh`, because containment admits only literal `gh <noun> <verb>` prefixes; a test fails if a cron allowlist
+   gains a gh line outside that shape or outside a closed canonical verb set. It has no shape gate and emits no telemetry. A
+   parity test pins the verb table and preamble to this file's hosted copies. On the differential test corpus, the cron hook
+   annotates a superset of what the hosted hook annotates. The known extra cases (a `#`-commented tail, and a command over the
+   hosted 8192-character cap) over-annotate. That is accepted, with the same under-action residual as item 5. The failure
+   posture is inverted relative to containment: a null token list or a throw from the shared parser means "no annotation".
+3. **Self-test.** When `settings.json` registers a `PostToolUse` key, the spawn-time self-test deep-equals it against the one
+   expected entry. It then runs a gh-read probe, which must print exactly the annotation object, and an `ls` probe, which must
+   print nothing. Any failure throws and aborts the cron. When the key is absent, nothing new runs. The self-test catches a
+   broken or mis-registered hook at spawn time only; it cannot see the file change during the run. For that reason the
+   containment hook now write-protects the framing hook file (`WRITE_PROTECTED_PATTERNS`). Recorded dissent: if environmental
+   probe failures (node resolution, timeouts) occur after enablement, they may be downgraded to `reportSilentFallback`.
+4. **Gaps** (listed so no coverage is implied):
+   - Failed commands. It is not documented or probed whether a Bash command with a non-zero exit fires `PostToolUse` or
+     `PostToolUseFailure`, and `PostToolUseFailure` is not registered. Examples are `gh pr checks` while checks fail, and a
+     compound command whose last segment fails (`gh issue view 1; false`). Their gh output may arrive with no annotation.
+   - Oversized output. If the pinned CLI saves a large Bash result to a file and the agent reads it back with Read, that text
+     arrives with no annotation; the annotation sits only next to the pointer. Separately, a very large `tool_response` on
+     stdin (`gh run view --log`, `--paginate`) could make the hook fail to parse and emit nothing, so annotation can drop out
+     exactly where output is largest. That failure is silent and harmless to containment.
+   - GitHub text read through `bash plugins/soleur/skills/community/scripts/community-router.sh github …`, which is not a `gh`
+     command at the Bash layer.
+   - Nouns outside the table (`label list`, `gist`, `workflow`).
+   - `-R`/`--repo` between noun and verb, the `ls` alias and path-qualified `gh` (unreachable today).
+   - `git log` and `git show` text.
+   - Subagents. Settings hooks are documented to fire for subagent tool calls, but that was not probed under `--print`.
+   - KB and attachment reads, leader PDF text, and the plugin-side CLI.
+   - `api: []` annotates every allowlisted `gh api` call, write-method calls included. That over-annotates and is accepted as
+     in item 2.
+5. **Residuals.** The effect on model behaviour in headless `--print` is unmeasured. The added value over the 2026-10-25
+   system-prompt append is positional only: the same text, placed next to each result. Delivery was verified at CLI 2.1.321 on
+   2026-11-13: a stub hook's nonce came back in the `result`, and a control without the hook returned `NONE`
+   (`knowledge-base/project/specs/feat-one-shot-11076-cron-gh-output-framing/probe-delivery.md`). That probe ran with
+   `--setting-sources project` to keep the developer's own hooks out, which production does not pass. The annotation could
+   make a legitimate task under-act, and it repeats after every matching call. No public claim follows.
+6. **Enablement steps.** None are in this change. They run in this order, each authorized by the operator:
+   1. Add a per-cron list `CRON_FRAME_GH_OUTPUT`, shaped like `CRON_NO_FILE_TOOLS`, and pass it through the same directives
+      return to the builder call. Decide again whether to also pass it explicitly to the self-test (CTO C1 dissent).
+   2. Replace the dark pins (the AC4 token scan, and the "no PostToolUse key in the written settings.json" row) with a
+      behavioural test: the listed crons get the entry and the others do not. These pins are meant to go RED on the first
+      enablement edit.
+   3. Re-rule the brand-survival threshold (the F8 flip condition).
+   4. Choose the telemetry signal from two candidates: parse the `--include-hook-events` stream inside the substrate, or rely on
+      the self-test alone. The signal must be a closed field set with no paths, filenames or matched text (CLO).
+   5. Re-run the delivery probe at the CLI version pinned then. Run an under-action comparison for the first cron enabled, and
+      state its owner and pass bar before the run.
+   6. Deploy before registering, and keep deploys green. The hook runs from the clone of `main`, while registration and the
+      self-test's expected preamble come from the deployed image. A preamble edit must therefore ship through a deploy before, or
+      together with, the hook edit. Otherwise every registered cron throws on the mismatch, which is the intended fail-safe
+      signal (CTO D3). A failing web-platform deploy blocks enablement.
+   7. Confirm the framing hook file is still in `WRITE_PROTECTED_PATTERNS`, along with any new file it imports (CTO D1).
+7. **Status.** This ADR stays `adopting`. Decision 6 ("Crons never opt in") still concerns the WebFetch scorer only.
