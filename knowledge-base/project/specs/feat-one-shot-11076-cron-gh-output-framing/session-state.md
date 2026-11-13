@@ -24,6 +24,12 @@
 
 - soleur:plan, soleur:deepen-plan, plan-review panel, soleur:engineering:cto (C1-C5, D1-D4), claude-code-guide, security-sentinel, test-design-reviewer.
 
+## Work Phase (2026-11-13)
+
+- Delivery probe at CLI 2.1.321: nonce returned, control `NONE` (`probe-delivery.md`). CTO dissent did not trigger.
+- Implemented per plan; 7 Phase 5 suites green (721 tests), app tsc and ESLint 0, c4 parity green, AC10 prints UNTRUSTED.
+- 20 hand-run Guard rows: 19 RED and 1 must-PASS, each as expected; default settings output byte-identical to origin/main f55750d8f1.
+
 ## Operator Constraints
 
 - constraint: at most one PR, no production writes, no feature-flag creation or flips, no prd migrations, no Doppler or Terraform prod changes, no prd workflow dispatches
