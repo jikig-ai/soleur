@@ -28,3 +28,11 @@ None
 - constraint: Do not touch or flip the approval-queue feature flag.
 - constraint: No edits under docs and no legal documents. 12714s wording lives in app UI only.
 - constraint: Never ask me a technical question.
+
+## Plan Extension (2026-11-13)
+
+- Plan extended for 12718 and 12714 (commit 102530f628); CTO X1-X5, R13b, W1-W6; CPO V1-V5, C1-C8. 12719 not joined (X4).
+- deepen-plan halted at Phase 4.9 (no committed .pen; pen.dev plan limit). W7 operator ruled: upgrade, keep one PR.
+- Post-planning re-probe: no open PR on the 42 planned files, no linked or body-ref open PR, no sibling worktree. Overlap preflight exit 0.
+- technical-ruling-gate --branch: exit 0. cto_spawns=1 (batched, planning subagent).
+- Order: work Phases 0-7 (12600) now; wireframe + deepen-plan on 12718/12714 sections + Phases 8-11 after the design tool works.
