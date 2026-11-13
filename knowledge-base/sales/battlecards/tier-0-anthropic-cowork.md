@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-12
+last_updated: 2026-11-01
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CRO
@@ -12,15 +12,25 @@ convergence_risk: Critical
 
 # Battlecard: Anthropic Cowork Plugins
 
+> **[2026-11-01 Cascade sync, index alignment only, no new web facts]** This card was last substantively updated 2026-03-12. It is now aligned to the current CI index Tier 0 row (data as of the 2026-06-08 scan):
+> 1. The **Feb 24, 2026 enterprise expansion** shipped 13 MCP connectors: Google Workspace, DocuSign, Apollo, Clay, Outreach, SimilarWeb, MSCI, LegalZoom, FactSet, WordPress, Harvey. It also shipped industry plugins for HR, investment banking, equity research, design, engineering, operations, private equity and wealth management, plus **private plugin marketplaces** and an Excel↔PowerPoint cross-app context preview (Mac/Windows).
+> 2. The index reads **7+ of Soleur's 8 domains as facing first-party competition inside Cowork**. **Engineering workflow is the one remaining gap**: Cowork has an engineering plugin but no full dev-lifecycle orchestration claim. Cowork is still stateless per plugin, with no compounding cross-domain KB and no workflow lifecycle.
+> 3. The adjacent **Claude Code official marketplace** grew from 101 to **186 plugins** (June 7, 2026). The index rates it High convergence risk: plugin-layer saturation is accelerating.
+> 4. The index found **no new Cowork release in the June window beyond Feb 24**: risk "stable, not escalating."
+>
+> The **Microsoft Copilot Cowork** items below (March 2026) and the S&P Global / LSEG / Common Room / Slack connector names come from the 2026-03-12 intake and are **not in the current index**; verify before citing. **Tier 0 facts were not re-verified on 2026-11-01** (scan web tools blocked) and are about 5 months old.
+>
+> **Soleur-side caution:** the repo `LICENSE` is **Business Source License 1.1** (Soleur v3.1.0 and later; each version converts to Apache-2.0 four years after publication). Lines below that call Soleur "open source, Apache-2.0" are out of date. Say "source-available, every agent and skill inspectable" until CRO/CLO reconcile the wording.
+
 ## Quick Facts
 
 | Field | Value |
 |-------|-------|
-| **Product** | Cowork -- Anthropic's AI work product (web/desktop), with 10 department-specific plugin categories. **NEW (March 9, 2026):** Cowork technology now powers Microsoft Copilot Cowork in M365. |
-| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo), Enterprise (custom). Microsoft Copilot Cowork: part of M365 E7 Frontier Suite (pricing TBD). |
-| **Domain Coverage** | HR, Design, Engineering, Operations, Financial Analysis, Investment Banking, Equity Research, Private Equity, Wealth Management, Brand Voice. 15+ enterprise connectors. |
-| **Distribution** | Bundled with every Claude subscription. Private marketplace for Enterprise. **NEW:** Dual distribution via Anthropic direct + Microsoft 365 (400M+ users). |
-| **Key Feature** | Plugin Create for custom agents. Enterprise connectors (Google Workspace, DocuSign, Apollo, Clay, FactSet, LegalZoom, Harvey, S&P Global, LSEG, Common Room, Slack). Microsoft Copilot Cowork: background task execution across Outlook, Teams, Excel. |
+| **Product** | Cowork -- Anthropic's AI work product (web/desktop) with department/industry plugins. **(March 9, 2026 intake; not in current index):** Cowork technology powers Microsoft Copilot Cowork in M365. |
+| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo), Enterprise (custom). Microsoft Copilot Cowork: part of M365 E7 Frontier Suite (pricing TBD; March intake). |
+| **Domain Coverage** | **Feb 24, 2026 expansion (per CI index):** industry plugins for HR, investment banking, equity research, design, engineering, operations, private equity, wealth management. The index reads 7+ of Soleur's 8 domains as facing first-party competition. Engineering *workflow* (full dev lifecycle) is the remaining gap. |
+| **Distribution** | Bundled with every Claude subscription. **Private plugin marketplaces** (Feb 24 expansion). Dual distribution via Anthropic direct + Microsoft 365 (March intake; not in current index). |
+| **Key Feature** | Plugin Create for custom agents. **13 MCP connectors (Feb 24):** Google Workspace, DocuSign, Apollo, Clay, Outreach, SimilarWeb, MSCI, LegalZoom, FactSet, WordPress, Harvey. Excel↔PowerPoint cross-app context preview. Microsoft Copilot Cowork: background task execution across Outlook, Teams, Excel (March intake). |
 | **Knowledge Persistence** | None. Stateless per session. No compounding memory across conversations. |
 | **Architecture** | Individual plugins execute isolated tasks. No cross-plugin orchestration or shared context. Microsoft Copilot Cowork adds multi-step plan execution but still no persistent cross-domain memory. |
 
@@ -80,11 +90,12 @@ Review monthly. If any of these triggers fire, escalate to marketing strategy re
 | Anthropic adds persistent memory to Cowork | No signal | Update battlecard. Publish comparison article. Shift positioning to workflow orchestration + open source. |
 | Anthropic uses "Company-as-a-Service" framing | No signal | Accelerate CaaS category content. Establish Soleur as the originator of the term. |
 | Cowork plugins gain cross-plugin orchestration | No signal | Update battlecard. Evaluate whether Soleur's orchestration depth still differentiates. |
-| Anthropic launches private plugin marketplace widely | Available for Enterprise tier | Monitor adoption. If Cowork marketplace threatens plugin distribution, evaluate riding Cowork distribution. |
+| Anthropic launches private plugin marketplace widely | Private plugin marketplaces shipped in the Feb 24 expansion (per CI index). The official Claude Code marketplace reached 186 plugins (June 7, 2026). | Monitor adoption. If Cowork marketplace threatens plugin distribution, evaluate riding Cowork distribution. |
+| Cowork ships full dev-lifecycle (engineering workflow) orchestration | Not shipped. The index calls engineering workflow "the last Anthropic-plugin gap" and advises planning *for* Anthropic closing it. | Critical escalation. Lead on the git-tracked compounding KB and the review + compound lifecycle stages. Re-run the positioning review. |
 | Claude Code native features absorb Soleur engineering agents | Partial -- auto-memory, Plan subagent, MCP deduplication | Track feature parity. Differentiate on non-engineering domains and cross-domain coherence. |
 | Microsoft Copilot Cowork expands beyond M365 workflow tasks | Research Preview (Mar 2026). Broader rollout late March. Enterprise-targeted. | Monitor scope expansion. If Copilot Cowork adds engineering or solo-founder features, the dual distribution surface (Anthropic + Microsoft) becomes a direct threat. |
 | Copilot Cowork adds persistent memory | No signal. Session-scoped task execution. | Would represent Anthropic enabling memory through a partner surface before their own. Major escalation. |
 
 ---
 
-_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-11-01 (downstream-sync cascade: Feb 24 expansion, domain read, marketplace aligned to index; no new web facts). Previously 2026-03-12. Source: competitive-intelligence.md (2026-11-01 index; Tier 0 data as of 2026-06-08)._
