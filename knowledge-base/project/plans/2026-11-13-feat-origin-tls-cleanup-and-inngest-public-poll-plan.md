@@ -18,6 +18,35 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-13 (proportionate pass: the machine is saturated, so two focused agents rather than a fan-out)
+**Sections enhanced:** 6 (Research Insights premise, Implementation Phases 1 and 3, Downtime & Cutover (new),
+Infrastructure, Files to Edit)
+**Agents used:** a verify-the-negative sweep (general-purpose, standard tier) and
+`soleur:engineering:research:framework-docs-researcher` (Inngest `--sdk-url` poll semantics). Plan review before
+deepen: `soleur:engineering:review:architecture-strategist`, `soleur:engineering:review:code-simplicity-reviewer`,
+`soleur:product:cpo` (sign-off), reduced from the five-seat single-user-incident panel for machine load.
+
+### Key Improvements
+
+1. Gate 4.55 fired: a `## Downtime & Cutover` section now states that the merge-time PUT has no `flexible` window
+   (zero-downtime by construction) and that the Inngest host replace is a bounded, owner-gated window outside this PR.
+2. Every negative claim the plan leans on was re-verified against code: no push workflow other than the main apply
+   can apply the ruleset or the Inngest host (`scheduled-terraform-drift.yml` only plans; `registry-host-replace-dispatch.yml`
+   wakes on `variables.tf` but its render gate decides); the bootstrap-image mint reads only `inngest.tf`, `vector.tf`
+   and the build recipe; no middleware or Cloudflare rule treats `/api/inngest` differently by method, user agent or
+   bot score (dashboard-only managed WAF settings are not visible from the repo).
+3. The alert SQL's numeric `uptime_s` extract is flagged as novel in this file (precedent exists only for `match` and
+   `extract`), so its live count is the proof it parses; the push-probe target list grows from six to seven.
+
+### New Considerations Discovered
+
+- Historical comments naming "Flexible SSL for web platform" in `tests/scripts/lib/preapply-entrypoint-gate.sh` and
+  `apply-web-platform-infra.yml` describe the 2026-07-20 adoption incident, not the current rule, and stay unchanged;
+  ADR-130 and ADR-136 likewise.
+- PR #12733 re-read during deepen: still OPEN (mergeStateStatus CLEAN), so Phase 4 still waits on it.
+
 ## Overview
 
 One PR closes two security issues.
@@ -60,7 +89,7 @@ plan does not reopen any ruling.
 ## Research Insights
 
 **Premise Validation.** Checked 2026-11-13: #10479 OPEN, #10538 OPEN (labels `action-required`, `deferred-scope-out`),
-#9139 CLOSED, draft PR #12737 OPEN (BLOCKED: draft), PR #12733 OPEN (another session's ledger renewal: it touches only
+#9139 CLOSED, draft PR #12737 OPEN (BLOCKED: draft), PR #12733 OPEN (re-read 2026-11-13 during deepen: OPEN, mergeStateStatus CLEAN, not merged; another session's ledger renewal: it touches only
 `scripts/encryption-posture-ledger.json` rows 6 and 7 and adds
 `knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md`; it sets row 6 `expires_on`
 2026-11-20 and row 7 `expires_on` 2026-11-19). `collision-precheck.sh` for both issues: `SOLEUR_COLLISION exit=10
@@ -365,7 +394,10 @@ machine is saturated). Scratch goes under `/var/tmp`.
    with the same field tests on `detail`. Copy the SHAPE of `inngest_luks_wrong_volume_sql`, not its body: leave out
    `local.inngest_luks_wrong_volume_alias` (it reads `hcloud_volume.inngest_redis_luks.id`, which would give every
    merge apply a second path to the sole-copy LUKS volume, ADR-282, the G2e rows of `terraform-target-parity.test.ts`)
-   and leave out its `detail = ''` branch (a not-serving or fieldless row belongs to the heartbeat, per ruling F1). Alert: `alert_type = "threshold"`, `operator = "higher_than"`, `value = 0`,
+   and leave out its `detail = ''` branch (a not-serving or fieldless row belongs to the heartbeat, per ruling F1). Precedent (deepen 4.4): negated `match(...)` and `extract(...)` already appear in
+   `registry_clientip_not_rfc1918_sql`; a numeric extract such as `toUInt64OrZero(extract(msg, 'uptime_s=([0-9]+) '))`
+   has NO precedent in this file (only `toInt64(...)` casts exist), so it is novel and its live count (step 1) is the
+   proof it parses. Alert: `alert_type = "threshold"`, `operator = "higher_than"`, `value = 0`,
    `check_period = 300`, `query_period = 900`, `confirmation_period = 0`, `recovery_period = 7200`,
    `on_missing_data = "treat_as_zero"`, `paused = false`, email and push on, call and sms off, the
    `escalation_target` ternary of the siblings, `metadata.runbook` = the new runbook anchor, and an `incident_cause`
@@ -387,7 +419,8 @@ machine is saturated). Scratch goes under `/var/tmp`.
    from this list (sharp edge: an allow-list extension is asserted by guards outside the named filter):
    `git grep -ln 'logtail_exploration' -- apps/web-platform/test/infra apps/web-platform/infra/*.test.sh plugins/soleur scripts tests`
    (about 20 files under `apps/web-platform` today, plus `plugins/soleur/scripts/inngest-alerts-push-probe.ts`, whose
-   `TARGETS` list names "all SIX Inngest-serving alert resources" and must gain this `push = true` alert, with
+   `TARGETS` list is six hardcoded `[type, name]` pairs ("all SIX" in its header; the test refers to "index 4 of 6")
+   and must gain this `push = true` alert as the seventh, with the header wording updated, plus
    `plugins/soleur/test/inngest-alerts-push-probe.test.ts`). Also run `plugins/soleur/test/terraform-target-parity.test.ts`. Update any census or count that moves. The last alert addition (#8611, `inngest_step_524`) had to
    edit `betterstack-send-failed-alert-mutation.test.sh` and `registry-store-not-luks-alert.test.sh`; expect the
    same two, plus `logs-alert-query-period-ceiling.test.sh` and `betterstack-alert-structure.test.sh` to run green.
@@ -685,6 +718,28 @@ right before queueing) and the "exactly 2 nested deletes" check.
 Better Stack free tier: no `betteruptime_policy` (the alert uses the siblings' `escalation_target` ternary); new logs
 alerts above `query_period` 900 are refused (the alert uses 900); the free-tier alert-count cap is unmeasured (ADR-218):
 if the create is refused, the apply goes red after the ruleset change, which Phase 9 step 2 reads.
+
+## Downtime & Cutover
+
+Deepen-plan Phase 4.55 fires: `inngest-host.tf` changes `hcloud_server.inngest` `user_data` (no
+`ignore_changes = [user_data]`), so the host's next apply is a `-/+` replace.
+
+1. **Offline-inducing operations and surfaces.**
+   - (a) The ruleset PUT at merge: `app.soleur.ai`, every user.
+   - (b) The later `inngest-host-replace`: the Inngest scheduler (crons and event-driven runs), not in this PR.
+2. **Zero-downtime path, defaulted to.**
+   - (a) is zero-downtime by construction. The live list already serves `strict` through the STRICT rule, and the
+     one whole-list PUT moves the adopted rule to `strict` in the same write that deletes the temporary rules, so no
+     request is ever evaluated in `flexible` (CTO ruling "no flexible window"). The per-request mode is the same before
+     and after the write. Verification: Phase 9 steps 2 to 3. Rollback: the forward PR (Phase 6.3).
+   - (b) has no zero-downtime path today. ADR-100 makes the Inngest server a singleton control plane (two
+     schedulers would double-fire every cron), and the replace runbook's measured clean path is a bounded window:
+     about 2.5 minutes of apply and 79 s from server creation to `bootstrap-done` on 2026-09-27, plus the gated
+     `cutover-inngest.yml op=resume` (`inngest-server.md` §"Clean path"). Residual downtime is accepted only as that
+     bounded window, in the owner's go, at the owner's chosen time, tracked in FU-1. This PR does not trigger it: there
+     is no push-apply target for the host (AC9).
+3. **Not a downtime path.** Merging does not restart the web hosts beyond the normal `web-platform-release.yml`
+   release, which already ran many times under `strict` with `ORIGIN_TLS_REQUIRED=1` (runbook restart table).
 
 ## Observability
 
