@@ -421,13 +421,15 @@ grep -qF 'ip saddr { ${web_host_private_ips} } accept' "$CLOUD_INIT" \
 #     renamed/absent live local (a vacuous PASS). The CANON derivation assumes the only quoted
 #     `private_ip = "10.0.1.X"` assignments in variables.tf are var.web_hosts entries (true today;
 #     mirrors cutover-inngest-workflow.test.sh).
+# #9421 Part 2a: the local is no longer a literal; it is DERIVED from var.web_hosts, so it equals the
+# roster by construction. Pin the derivation itself (web-hosts-generic.test.sh evaluates it under
+# terraform console and pins every workflow copy to the value).
 ALLOWLIST_SET=$(sed 's/#.*//' "$HOST_TF" \
-  | grep -oE 'web_host_private_ips[[:space:]]*=[[:space:]]*"[0-9.,]+"' \
-  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
+  | grep -cE '^[[:space:]]*web_host_private_ips[[:space:]]*=[[:space:]]*join\(",", \[for k in sort\(keys\(var\.web_hosts\)\) : var\.web_hosts\[k\]\.private_ip\]\)[[:space:]]*$' || true)
 CANON_WEB_HOSTS=$(sed 's/#.*//' "$VARIABLES_TF" \
   | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' \
   | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
-if [[ -n "$ALLOWLIST_SET" && -n "$CANON_WEB_HOSTS" && "$ALLOWLIST_SET" == "$CANON_WEB_HOSTS" ]]; then
+if [[ "$ALLOWLIST_SET" == "1" && -n "$CANON_WEB_HOSTS" ]]; then
   pass
 else
   fail "web_host_private_ips ('$ALLOWLIST_SET') must equal var.web_hosts private_ip set ('$CANON_WEB_HOSTS') — roster drift (#6608)"
@@ -435,8 +437,8 @@ fi
 
 # 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
 #     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
-HOST_TF_NOCOMMENT=$(sed 's/#.*//' "$HOST_TF")
-if printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -cE 'web_host_private_ips[[:space:]]*=' >/dev/null && printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -E 'web_host_private_ips[[:space:]]*=' | grep -cE '10\.0\.1\.(20|30)' >/dev/null; then
+# Since #9421 the local is derived from var.web_hosts, so the roster it derives from is what must exclude them.
+if [[ -z "$CANON_WEB_HOSTS" ]] || grep -qE '10\.0\.1\.(20|30)(,|$)' <<<"$CANON_WEB_HOSTS"; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"
 else
   pass

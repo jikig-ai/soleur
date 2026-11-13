@@ -3755,8 +3755,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # on any dir-less corpus member no declared edge covers.
 # Declared edge (#11631): luks-monitor-install.test.sh is a PROMOTED_FILES member, so this suite builds and runs mutants of
 # it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
+# Same for web-hosts-generic.test.sh (#9421, promoted): it reads the web-host bound-state census.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
+  "knowledge-base/engineering/operations/web-host-bound-state-census.md"
   "apps/"
   ".claude/"
   ".github/"

@@ -175,8 +175,9 @@ for want in "${REQUIRE_WEB1_ORIGIN[@]}"; do
   while IFS='|' read -r host svc; do
     [[ "$host" == "$want."* ]] || continue
     matched=$((matched + 1))
-    if [[ "$svc" != *'var.web_hosts["web-1"].private_ip'* ]]; then
-      fail "$want.: service ($svc) does not derive its origin from var.web_hosts[\"web-1\"].private_ip — never hardcode 10.0.1.10"
+    # #9421 Part 2a: ssh. targets the keyed jump host (exactly one, variables.tf), still derived from var.web_hosts.
+    if [[ "$svc" != *'var.web_hosts["web-1"].private_ip'* && ! ( "$want" == ssh && "$svc" == *'one([for h in values(var.web_hosts) : h.private_ip if h.jump])'* ) ]]; then
+      fail "$want.: service ($svc) does not derive its origin from var.web_hosts (the keyed jump host for ssh.) — never hardcode a web address"
       bad=$((bad + 1))
     fi
   done <<< "$rules"

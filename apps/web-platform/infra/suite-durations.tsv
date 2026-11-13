@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
 # default-weight-ms=4000
-# generated-at=2026-11-05T14:23:52Z
+# generated-at=2026-11-10T20:52:15Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -120,6 +120,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	1000	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	3500	measured
 apps/web-platform/infra/inngest.test.sh	9500	measured
 apps/web-platform/infra/journald-config.test.sh	1000	measured
+apps/web-platform/infra/kernel-currency.test.sh	4000	floor
 apps/web-platform/infra/key-rotate-workflow.test.sh	420000	estimate
 apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	9000	measured
 apps/web-platform/infra/lb-weight-gate.test.sh	2000	measured
@@ -174,6 +175,7 @@ apps/web-platform/infra/web-git-data-probe.test.sh	1000	measured
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	319000	measured
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	3000	measured
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	2000	measured
+apps/web-platform/infra/web-hosts-generic.test.sh	4000	floor
 apps/web-platform/infra/web-platform-release-peer-gate.test.sh	1000	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	18000	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	17000	measured

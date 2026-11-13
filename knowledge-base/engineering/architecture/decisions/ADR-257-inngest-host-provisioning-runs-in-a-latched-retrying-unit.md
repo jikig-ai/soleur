@@ -259,3 +259,10 @@ until one succeeds.
 ## Addendum — 2026-10-26 (#11080) — the quiesce no longer names the LUKS cutover FSM
 
 Appended; the only edit above is the inline pointer at the end of Decision item 6. Decision item 6 describes a quiesce of two FSMs: the flip timer and service, and the LUKS cutover timer and service with its `frozen-active` hold. The image stopped baking the LUKS cutover trio at `vinngest-v1.1.61` (#10966), and #11080 removed the trio from the user_data template's staged list, quiesce loop, busy check and service-status list. On a host born from that template the quiesce stops the flip timer only, waits (bounded at 300 s) for the flip service or a flip between steps (`"flag":"flipping"`), and restarts the flip timer on a failed attempt if it was active. The `provision-fsm-busy` stage, the 300 s bound and the exit-handler restore are unchanged. A host born earlier keeps its old rendered script until it is replaced.
+
+## Addendum — 2026-11-10 (#12008) — one recorded exception to "runcmd runs once per instance"
+
+Web host birth re-runs runcmd once, by removing cloud-init's `scripts_user` semaphore before a single reboot onto the
+installed kernel. The guard is fail-closed and the step comes before any non-idempotent item. See
+[ADR-326](ADR-326-web-hosts-boot-once-onto-the-installed-kernel-at-birth.md). Nothing in this record's Inngest
+provisioning unit changes.
