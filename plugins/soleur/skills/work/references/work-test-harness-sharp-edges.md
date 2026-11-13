@@ -101,3 +101,5 @@ Lint a `/var/tmp` copy with the pinned binary and `-c .markdownlint.json`, and
 confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
 `knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
 session error 5.
+
+- **A signal trap runs inside the redirections of the command it interrupted** — a handler that reports to fd 2 while a `cmd >/dev/null 2>&1` is in flight writes into /dev/null. Take a private dup at startup (`exec 9>&2`) and report on it; close it for children that may daemonize (`9>&-`). **Why:** #12736 — the rotation script's partial-store report was silently lost on SIGTERM until a stub-driven signal row caught it. See `knowledge-base/project/learnings/2026-11-13-a-log-marker-gate-matched-the-echoed-workflow-source-and-a-trap-inherited-the-writes-redirect.md`.

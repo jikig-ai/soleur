@@ -23,6 +23,17 @@ Loaded by [postmerge SKILL.md](../SKILL.md) Phase 3.6 when the PR body or linked
 > least-privilege credential for it is `SENTRY_ISSUE_RO_TOKEN`
 > (`event:read`, `org:read`, Doppler `soleur/prd`), and [scripts/sentry-issue.sh](../../../../../scripts/sentry-issue.sh)
 > already implements the RO → RW ladder for this same URL.
+>
+> **Measured 2026-11-13 — which token reads issues.** HTTP codes only (bodies
+> discarded) on `GET https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=is:unresolved`,
+> every token from Doppler `soleur/prd`: `SENTRY_ISSUE_RO_TOKEN` 200,
+> `SENTRY_ISSUE_RW_TOKEN` 200, `SENTRY_IAC_AUTH_TOKEN` 200, `SENTRY_AUTH_TOKEN` 403,
+> `SENTRY_API_TOKEN` 403; on `/monitors/` all five returned 200. So `SENTRY_AUTH_TOKEN`
+> is the Phase 3.5 monitors-only token. This phase's GET stays on the RO → RW ladder
+> below and is `SKIPPED` without them (the clarification above still holds: never widen it
+> to an admin-scoped token). For a MANUAL org-level issue search outside this phase, use
+> `SENTRY_ISSUE_RO_TOKEN` first; `SENTRY_IAC_AUTH_TOKEN` (admin-scoped, ADR-031) is the
+> last-resort read only, never a write.
 
 ```bash
 # ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body
@@ -32,7 +43,7 @@ Loaded by [postmerge SKILL.md](../SKILL.md) Phase 3.6 when the PR body or linked
 ISSUE_ID="<sentry-issue-id-from-pr-body>"
 DEPLOY_TS=$(git show -s --format=%cI "<merge-commit-sha-from-phase-1>" 2>/dev/null || true)
 # Same resolution as Phase 3.5 — this block runs on its own.
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
+SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai-eu")
 API_HOST="${SENTRY_ORG}.sentry.io"
 # GET: least-privilege RO token, RW as a GET-only fallback (scripts/sentry-issue.sh's
 # ladder). The prd SENTRY_AUTH_TOKEN 403s on /issues/<id>/ (#7797) — never use it here.
