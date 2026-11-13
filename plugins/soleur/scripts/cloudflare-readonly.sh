@@ -102,21 +102,18 @@
 #                       with a non-null ssl) and per rule ref, enabled, ssl and two host booleans. The host booleans are
 #                       LITERAL SUBSTRING figures only and are not a verdict input: a wildcard such as
 #                       ends_with(http.host, ".soleur.ai") or an expression of true defeats them. Records ok ONLY when
-#                       the baseline (both ORIGIN-TLS switches off) enabled_ssl_rules is 2 AND one of those rules has ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible
-#                       (the other is the `ssl = "full"` rule on soleur.ai and www) AND rule_count is 5; anything else is
-#                       recorded not ok with the figures. rule_count is 5 because the ruleset carries the three baseline rules plus the
-#                       two ALWAYS-PRESENT ORIGIN-TLS rules (ADR-321: the canary and the strict flip; present but disabled
-#                       while their Doppler switches ENABLE_ORIGIN_TLS_CANARY_RULE / ENABLE_ORIGIN_TLS_STRICT are off, so the
-#                       count never changes when a switch flips). enabled_ssl_rules is 2 PLUS one for each of those switches that is
-#                       on: 2 with both off, 3 with the canary on, 4 with both on; read it against the switches' Doppler state.
-#                       The wrapper CANNOT verify that
+#                       enabled_ssl_rules is 2 AND one of those rules has ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=strict (the
+#                       other is the `ssl = "full"` rule on soleur.ai and www) AND rule_count is 3; anything else is
+#                       recorded not ok with the figures. The wrapper CANNOT verify that
 #                       the rule's expression is host-scoped (it never prints the expression), so Records ok does not depend
 #                       on the host booleans; the owner compares the live expression with
-#                       apps/web-platform/infra/seo-config-rules.tf before any flip go. The 5, the 2 and the ref are DATED
-#                       SNAPSHOTS (re-derived 2026-11-07: rule_count 3 -> 5 when the two ORIGIN-TLS rules became static blocks;
+#                       apps/web-platform/infra/seo-config-rules.tf (the adopted rule is `(http.host eq "app.soleur.ai")`).
+#                       The 3, the 2, the ref and the ssl value are DATED SNAPSHOTS (2026-11-13, the ADR-321 item 13
+#                       cleanup, #10479: rule_count 5 -> 3 when the two ORIGIN-TLS rules and their switches were deleted, the
+#                       adopted rule flexible -> strict; 2026-11-07: rule_count 3 -> 5 when those rules became static blocks;
 #                       2026-11-05: enabled_ssl_rules 1 -> 2, the `ssl = "full"` rule was missed on 2026-11-04): they are
-#                       re-derived from that file at read time,
-#                       and the wrapper test fails when the counts here drift from it.
+#                       re-derived from that file at read time, and the wrapper test fails when the counts or the adopted
+#                       rule's ssl value here drift from it (a reviewed rollback to flexible edits this header only).
 #   C pagerules-ssl     figures active_rule_count, ssl_rule_count and per rule the matches_app_host substring figure. Records
 #                       ok ONLY when ssl_rule_count is 0. Any SSL page rule is recorded not ok with the figures and flagged
 #                       for CTO review even when matches_app_host is false (a wildcard pattern defeats that boolean).

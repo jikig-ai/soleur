@@ -102,23 +102,21 @@ start_srv 301 TLSv1.3 || exit 1
 run;                    expect_rc "P7 301 is NOT-200" 1 "result=NOT-200"
 stop_srv
 
-# --- canary mode (ADR-321 ORIGIN-TLS CANARY rule) ---
-# The header name is pinned against the Terraform rule, so the probe and the rule cannot drift apart.
+# --- retired canary mode (ADR-321 item 13, #10479) ---
+# The ORIGIN-TLS canary rule and its `x-origin-tls-probe` header were deleted by the cleanup that made the adopted rule
+# strict. `--canary` is now an unknown argument: a usage error (rc 64) that sends NO request, so a stale runbook step
+# cannot read a verdict off a rule that no longer exists. A live server is up so a request, if sent, would be logged.
 TF_RULES="$SCRIPT_DIR/seo-config-rules.tf"
 TF_RULES_CODE="$(grep -v '^[[:space:]]*#' "$TF_RULES" || true)"
-if grep -qF 'http.request.headers[\"x-origin-tls-probe\"]' <<<"$TF_RULES_CODE"; then pass "C0 the rule matches the header the probe sends (x-origin-tls-probe)"; else fail "C0 header name in seo-config-rules.tf does not match the probe"; fi
+if grep -qF 'x-origin-tls-probe' <<<"$TF_RULES_CODE"; then fail "C0 seo-config-rules.tf still matches the retired x-origin-tls-probe header"; else pass "C0 no rule in seo-config-rules.tf matches the retired x-origin-tls-probe header"; fi
 start_srv 200 TLSv1.3 || exit 1
 run;                    expect_rc "C1 default mode, TLS header" 0 "result=TLS-ON-ORIGIN-HOP"
-[ "$(grep -c 'x-origin-tls-probe=1' "$HDRLOG")" -eq 0 ] && pass "C1b default mode does NOT send the canary header" || fail "C1b default mode sent the canary header: $(cat "$HDRLOG")"
-: > "$HDRLOG"
-run --canary;           expect_rc "C2 --canary, TLS header (rule applied, certificate accepted)" 0 "mode=canary result=TLS-ON-ORIGIN-HOP"
-grep -qx 'x-origin-tls-probe=1' "$HDRLOG" && pass "C2b --canary sends x-origin-tls-probe: 1" || fail "C2b canary header missing: $(cat "$HDRLOG")"
-stop_srv
-start_srv 200 "" || exit 1
-run --canary;           expect_rc "C3 --canary, no TLS header (rule did NOT apply: must not pass, implies --require-tls)" 3 "mode=canary result=NO-TLS-ON-ORIGIN-HOP"
-stop_srv
-start_srv 526 "" || exit 1
-run --canary;           expect_rc "C4 --canary, 526 (rule applied, Cloudflare refused the certificate)" 1 "mode=canary result=NOT-200"
+[ "$(grep -c 'x-origin-tls-probe=1' "$HDRLOG")" -eq 0 ] && pass "C1b default mode does NOT send the retired canary header" || fail "C1b default mode sent the canary header: $(cat "$HDRLOG")"
+: > "$REQLOG"; : > "$HDRLOG"
+run --canary
+[ "$RC" -eq 64 ] && pass "C2 --canary is retired -> rc 64 (usage error)" || fail "C2 --canary expected rc 64, got $RC ($OUT)"
+[ ! -s "$REQLOG" ] && pass "C2b --canary sends no request" || fail "C2b --canary sent a request: $(cat "$REQLOG")"
+case "$OUT" in *"origin-tls-probe: http="*|*"result="*) fail "C2c --canary printed a verdict line: $OUT" ;; *) pass "C2c --canary prints no verdict line" ;; esac
 stop_srv
 
 # P8: nothing listening -> UNREACHABLE, its own exit code, never a verdict, with curl's exit code.
@@ -137,7 +135,7 @@ OUT="$(ORIGIN_TLS_PROBE_URL="ftp://example.invalid/health" bash "$PROBE" 2>&1)";
 echo
 echo "=== origin-tls-probe: $PASSES passed, $FAILS failed, $ASSERTED asserted ==="
 
-MIN_ASSERTIONS=37
+MIN_ASSERTIONS=33
 if [ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]; then
   echo "ANTI-VACUITY: only $ASSERTED assertions ran, floor is $MIN_ASSERTIONS." >&2
   echo "Assertions were removed or the dispatch was disarmed." >&2

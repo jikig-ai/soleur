@@ -17,6 +17,12 @@
 # (server.tf naming expression) — a web-1 rename/replace fails this root's plan
 # (fail-closed, intended).
 #
+# EDGE TLS FOR THIS HOST (since #10479, ADR-321 item 13, 2026-11-13): the zone's adopted config rule
+# (seo-config-rules.tf) now covers app.soleur.ai ONLY, the zone default is `strict`, and the Cloudflare
+# Origin CA certificate names app.soleur.ai only. A re-run of a staging arm would therefore get HTTP 526
+# on lb-staging.soleur.ai. Reviving the staging arms needs a host-scoped rule or a certificate that names
+# the host, in its own reviewed PR.
+#
 # Dispatched ONLY by .github/workflows/cf-lb-overlay.yml (workflow_dispatch arms).
 # Its own state key; it joins the parent's workflow-level
 # `terraform-apply-web-platform-host` concurrency group because R2 has no state lock.

@@ -397,33 +397,6 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
-# ADR-321 / #10479: the origin-TLS CANARY RULE switch (seo-config-rules.tf). The rule is ALWAYS present in the ruleset; this
-# variable only sets its `enabled` flag, so turning the canary off is an in-place update with the rule count constant (a
-# removed rule would trip the destroy guard, which cannot be acked on a workflow_dispatch). Default FALSE: disabled. It is
-# enabled only while a Doppler prd_terraform secret ENABLE_ORIGIN_TLS_CANARY_RULE=true is present when an apply runs
-# (`doppler run --name-transformer tf-var` turns it into TF_VAR_enable_origin_tls_canary_rule). Only a lowercase
-# `true`/`false` converts to bool: any other value aborts the whole root's plan. The default is the safe state, so an
-# unprovisioned secret does not fail the merge-triggered apply (the no-default-variable hazard above).
-variable "enable_origin_tls_canary_rule" {
-  description = "Enable the header-scoped strict-SSL canary rule for /health on app.soleur.ai (ADR-321). The rule is always present and disabled unless the owner sets ENABLE_ORIGIN_TLS_CANARY_RULE=true (lowercase) in Doppler prd_terraform."
-  type        = bool
-  default     = false
-}
-
-# ADR-321 / #10479: the host-wide STRICT FLIP switch (seo-config-rules.tf). The rule is ALWAYS present (disabled by default)
-# and this variable only sets its `enabled` flag, so merging the code adds one inert rule and changes no edge behaviour, and
-# the rollback is an in-place update the destroy guard accepts on a dispatch (a removed rule is refused unless a PUSH commit
-# message carries [ack-destroy]). It is enabled only while a Doppler prd_terraform secret ENABLE_ORIGIN_TLS_STRICT=true is
-# present when an apply runs (TF_VAR_enable_origin_tls_strict via `--name-transformer tf-var`). The ORDER is the whole point:
-# ORIGIN_TLS_REQUIRED=1 must be in Doppler prd and BOTH hosts restarted on it before this is set, because after it a bad
-# certificate-material deploy that slips past the canary is a 525/526 for every user. See runbooks/origin-tls-strict-flip.md.
-# Only a lowercase `true`/`false` is valid; anything else aborts the whole root's plan.
-variable "enable_origin_tls_strict" {
-  description = "Enable the host-wide strict-SSL rule for app.soleur.ai (the ADR-321 flip). The rule is always present and disabled unless the owner sets ENABLE_ORIGIN_TLS_STRICT=true (lowercase) in Doppler prd_terraform, after ORIGIN_TLS_REQUIRED=1 is live on both hosts."
-  type        = bool
-  default     = false
-}
-
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string

@@ -227,14 +227,16 @@ printf 'extracted %d rules block(s) from cloudflare_ruleset.seo_config_settings\
 # The mitigation rule: the one whose action_parameters set ssl, scoped to apex+www.
 # Anchored on the ssl key ONLY. Selecting on the hosts too would make the two host
 # assertions below unfalsifiable — they could not run unless the hosts were already
-# present. The app.soleur.ai rule also sets ssl, so prefer a rule naming the apex when
+# present. The adopted app.soleur.ai rule also sets ssl, so prefer a rule naming the apex when
 # one exists and fall back to the first ssl rule, which is what makes a mis-scoped
 # mitigation visible rather than silently unselected.
-MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ && $5 !~ /http\.host eq/ { print; exit }' "$RULES")
-# Fallback excludes the adopted app rule AND the two app-host ORIGIN-TLS rules (ADR-321; exact `http.host eq` forms), so deleting
-# the mitigation block cannot be masked by one of them being picked up in its place.
+# Both selectors exclude the adopted app rule by its EXACT expression (strict on
+# `(http.host eq "app.soleur.ai")` since the ADR-321 item 13 cleanup, #10479, which also removed the
+# two ORIGIN-TLS rules), so deleting the mitigation block cannot be masked by the adopted rule being
+# picked up in its place, and a mis-scoped mitigation spelled `http.host eq` is still selected.
+MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { print; exit }' "$RULES")
 [[ -n "$MITIGATION" ]] || MITIGATION=$(awk -F'\t' '
-  $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" && $5 !~ /http\.host eq/ { print; exit }
+  $4 != "ssl=-" && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { print; exit }
 ' "$RULES")
 
 if [[ "$STAGE" == "pre-cutover" ]]; then
@@ -269,18 +271,16 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
     # second `ssl` rule for apex/www declared below this one silently overwrites it.
     # Asserting cardinality rather than position catches it from either side, and does
     # not depend on the reader remembering which direction applies to which rule type.
-    # The other ssl rules are the adopted app rule and the two ORIGIN-TLS rules (ADR-321 canary and strict flip), each
-    # excluded here by its EXACT expression (not by a host-literal predicate), so editing any of them turns this red.
-    # Their own scope, setting and order are pinned in apps/web-platform/test/seo-config-rules.test.ts.
+    # The only other ssl rule is the adopted app rule (strict since the ADR-321 item 13 cleanup, #10479), excluded
+    # here by its EXACT expression (not by a host-literal predicate), so editing it turns this red. Its scope and
+    # setting are pinned in apps/web-platform/test/seo-config-rules.test.ts (Guard 1).
     # Counts by the PRESENCE of an ssl key, not by what the expression spells. An
     # expression need not name a host to match it — `(http.host ne "app.soleur.ai")`
     # and `(true)` both match the apex — so any host-literal predicate is bypassable
     # by a rule that is still perfectly able to overwrite this one.
     ssl_rules=$(awk -F'\t' '
       $4 != "ssl=-" \
-        && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" \
-        && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" \
-        && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\" and http.request.uri.path eq \\\"/health\\\" and any(http.request.headers[\\\"x-origin-tls-probe\\\"][*] eq \\\"1\\\"))\"" { n++ } END { print n + 0 }
+        && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { n++ } END { print n + 0 }
     ' "$RULES")
     rc=1; [[ "$ssl_rules" == "1" ]] && rc=0
     verdict "$rc" "exactly one rule in this ruleset sets ssl outside the app.soleur.ai scope (a second one overwrites this via last-match-wins, whatever its expression spells; found: ${ssl_rules})"
