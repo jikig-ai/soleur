@@ -497,7 +497,10 @@ describe("restored cron-bug-fixer prompt commands vs the hook (#5199 final)", ()
     expect(v("git status --porcelain")).toBe("allow");
     expect(v("git add -- src/foo.ts test/foo.test.ts")).toBe("allow");
     expect(v('git commit -m "[bot-fix] Fix #4321"')).toBe("allow");
-    expect(v("git checkout -b bot-fix/4321-foo origin/main")).toBe("allow");
+    // #11076 K1': checkout admits no start point. The SKILL branches with `git worktree add -b`
+    // (below) and has said "Do NOT use `git checkout -b`" since #831; plain `-b <branch>` passes.
+    expect(v("git checkout -b bot-fix/4321-foo origin/main")).toBe("deny");
+    expect(v("git checkout -b bot-fix/4321-foo")).toBe("allow");
     expect(v("git worktree add .worktrees/bot-fix-4321-foo -b bot-fix/4321-foo origin/main")).toBe("allow");
     expect(v("git branch -D bot-fix-4321-foo")).toBe("allow");
     expect(v("git push -u origin bot-fix/4321-foo")).toBe("allow");
@@ -1210,6 +1213,24 @@ process.exit(0);
       expect(() => selfTest(spawnCwd)).toThrow(
         /gh-output framing hook self-test FAILED: gh-read probe preamble-mismatch \(length 30 vs \d+, first difference at 7\)/,
       );
+    });
+
+    it("a stub missing additionalContext: throws key-set-mismatch", () => {
+      const wrong = JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse" } });
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(wrong)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe key-set-mismatch/);
+    });
+
+    it("a stub with a non-string additionalContext: throws preamble-not-string", () => {
+      const wrong = JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: 7 } });
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(wrong)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe preamble-not-string \(number\)/);
     });
 
     it('a stub with hookEventName "PreToolUse": throws event-mismatch', () => {

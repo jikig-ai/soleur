@@ -680,7 +680,7 @@ postponed to its own issue, because nothing is decided here beyond the dark hook
 
 ```yaml
 liveness_signal:
-  what: "runFramingHookSelfTest (registration deep-equal, gh-read probe, ls probe) on every cron spawn whose settings.json registers a PostToolUse key; a failure throws out of setupEphemeralWorkspace inside step.run("setup-workspace") (Inngest retries the step; layer 1 breadcrumbs per attempt). The cron's setup catch redacts the message and calls reportSilentFallback with op "setup-ephemeral-workspace", which is a pino logger.error (layer 2 breadcrumb mirror; shipped to Better Stack by the Vector journald shipper, layer 3) plus Sentry.captureException tagged by the Inngest sentry-correlation middleware (layer 1), then posts the Sentry cron heartbeat with ok:false and returns {ok:false}. There is no Inngest function error and no run report (corrected at review, observability F1). No spawn registers the hook in this change, so the signal is inactive by design and fires nowhere until enablement."
+  what: "runFramingHookSelfTest (registration deep-equal, gh-read probe, ls probe) on every cron spawn whose settings.json registers a PostToolUse key; a failure throws out of setupEphemeralWorkspace inside step.run('setup-workspace') (Inngest retries the step; layer 1 breadcrumbs per attempt). The cron's setup catch redacts the message and calls reportSilentFallback with op setup-ephemeral-workspace, which is a pino logger.error (layer 2 breadcrumb mirror; shipped to Better Stack by the Vector journald shipper, layer 3) plus Sentry.captureException tagged by the Inngest sentry-correlation middleware (layer 1), then posts the Sentry cron heartbeat with ok:false and returns {ok:false}. There is no Inngest function error and no run report (corrected at review, observability F1). No spawn registers the hook in this change, so the signal is inactive by design and fires nowhere until enablement."
   cadence: "per cron spawn that registers the hook (zero today); every other spawn returns early"
   alert_target: "the existing Sentry issue routing and the cron's Sentry heartbeat monitor (ok:false); no new alert is provisioned"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (runFramingHookSelfTest, called from runHookSelfTest)"
@@ -694,7 +694,7 @@ failure_modes:
   - mode: "CLI drops PostToolUse additionalContext under --print"
     detection: "Phase 0 nonce probe at the pinned CLI (probe-delivery.md); not observable at runtime because the hook emits no telemetry"
     alert_route: "none at runtime (accepted; the ADR records delivery as verified or unverified per the probe, and enablement re-runs the probe)"
-  - mode: "a cron allowlist gains a gh line that is not literal gh <noun> <verb> or gh api <path>/, so a shape isGhReadTokens does not parse can reach PostToolUse"
+  - mode: "a cron allowlist gains a gh line that is not literal gh <noun> <verb> or gh api <path>/, so a shape the framing hook does not parse can reach PostToolUse"
     detection: "pre-merge: the allowlist-shape guard in cron-gh-output-framing-hook.test.ts fails on the edit that adds it"
     alert_route: "CI failure on that PR (the F1 dissent trigger)"
   - mode: "gh read the hook does not recognise (PostToolUseFailure, community-router.sh github, nouns outside the table)"

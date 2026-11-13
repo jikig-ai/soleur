@@ -546,7 +546,7 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git status", // SKILL Phase 5 — git status --porcelain
     "git add", // SKILL Phase 5 — git add -- <literal-path> (blanket forms hook-denied)
     "git commit", // SKILL Phase 5 — git commit -m …
-    "git checkout", // SKILL Phase 3 — worktree-add fallback path
+    "git checkout", // branch creation only: gitVerbReason admits `git checkout [-q] -b <branch>` (#11076 K1')
     "git worktree", // SKILL Phase 3/6 — git worktree add … / remove …
     "git branch", // SKILL Phase 6 — git branch -D … (cleanup)
     "git push", // SKILL Phase 5 — git push -u origin … (origin-only via gitVerbReason)
@@ -707,7 +707,7 @@ export function resolveNodeBin(): string {
 // #11076 — the single PostToolUse entry for the gh-output framing hook. The builder and
 // runFramingHookSelfTest both use it, so the registered command and the probed binary
 // match by construction.
-export function framingHookEntry(
+function framingHookEntry(
   spawnCwd: string,
   nodeBin: string = resolveNodeBin(),
 ): { matcher: string; hooks: Array<{ type: string; command: string }> } {
@@ -752,8 +752,9 @@ export function buildCronEvalSettings(
 // (iii) runs an `ls` probe that must print nothing. The probes are deterministic (fixed
 // payloads, no network), so any failure is a defect in the registered hook and throws,
 // which aborts the cron like every containment probe. It cannot see the file being
-// changed during the run. Containment denies Write, Edit and MultiEdit to the file; a
-// Bash route that rewrites it is a named gap in ADR-287, not a protected property.
+// changed during the run. Containment denies Write, Edit and MultiEdit to the file and admits
+// only branch forms of checkout/switch; ADR-287 (addendum 2026-11-12, item 3) says what that
+// does not cover.
 export function runFramingHookSelfTest(args: {
   spawnCwd: string;
   cronName: string;
@@ -769,7 +770,7 @@ export function runFramingHookSelfTest(args: {
   const expected = [framingHookEntry(spawnCwd, nodeBin)];
   if (!isDeepStrictEqual(hooks.PostToolUse, expected)) {
     fail(
-      `registration mismatch; expected ${JSON.stringify(expected)} got ${JSON.stringify(hooks.PostToolUse)}`,
+      `registration mismatch; expected ${JSON.stringify(expected).slice(0, 400)} got ${String(JSON.stringify(hooks.PostToolUse)).slice(0, 400)}`,
     );
   }
   const framingAbs = join(spawnCwd, FRAMING_HOOK_REL_PATH);
@@ -792,7 +793,7 @@ export function runFramingHookSelfTest(args: {
     }
   };
   const ghStdout = exec("gh-read", "gh issue view 1");
-  const ghExpected = {
+  const framed = {
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
   };
   if (ghStdout.trim() === "") fail("gh-read probe empty-stdout");
@@ -802,17 +803,20 @@ export function runFramingHookSelfTest(args: {
   } catch {
     fail(`gh-read probe non-json (stdout length ${ghStdout.length})`);
   }
-  if (!isDeepStrictEqual(ghGot, ghExpected)) {
+  if (!isDeepStrictEqual(ghGot, framed)) {
     // Name the failure kind and where it diverges; never echo the whole payload.
     const out = (ghGot as { hookSpecificOutput?: Record<string, unknown> })?.hookSpecificOutput;
-    const keys = out && typeof out === "object" ? Object.keys(out).sort().join(",") : "none";
+    const keys = out && typeof out === "object" ? Object.keys(out).sort().join(",").slice(0, 80) : "none";
     if (keys !== "additionalContext,hookEventName" || Object.keys(ghGot as object).join(",") !== "hookSpecificOutput") {
       fail(`gh-read probe key-set-mismatch (hookSpecificOutput keys: ${keys})`);
     }
     if (out!.hookEventName !== "PostToolUse") {
       fail(`gh-read probe event-mismatch (hookEventName ${JSON.stringify(String(out!.hookEventName).slice(0, 40))})`);
     }
-    const got = String(out!.additionalContext);
+    if (typeof out!.additionalContext !== "string") {
+      fail(`gh-read probe preamble-not-string (${typeof out!.additionalContext})`);
+    }
+    const got = out!.additionalContext as string;
     const want = UNTRUSTED_PREAMBLES.github;
     let at = 0;
     while (at < got.length && at < want.length && got[at] === want[at]) at++;

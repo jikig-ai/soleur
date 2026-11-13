@@ -286,14 +286,15 @@ WebFetch scorer off also removes this note.
    hook is plain dependency-free ESM run by node from the clone, which cannot import the TypeScript module. Detection reuses the containment hook's `splitSegments`, `tokenize` and
    `normalizeSegmentWhitespace`, the parse that admitted the command. Containment matches the whitespace-normalised join of
    the tokens, so this hook matches `gh <noun> <verb>` on the first three words of that same normalised text, not on raw token
-   positions (review K2: `gh "" pr view`, `gh issue "view 1"` and a no-break space inside a token are admitted and framed). It
+   positions (review K2: `gh "" pr view`, `gh issue "view 1"` and a no-break space inside a token are admitted and framed).
+   That holds for prefix-allowlist crons. A no-file-tools cron matches its literal lines on raw tokens
+   (`tokensMatchLiteral`), so there the hook can annotate a little more than containment admits, which over-annotates. It
    has no fallback scan, because containment denies the shapes that scan exists for. It has no `-R`/`--repo` skip, no `ls`
    alias and no path-qualified `gh`, because those fail containment's normalised prefix match against literal
    `gh <noun> <verb>` lines; a test fails if a cron allowlist gains a gh line outside that shape, outside a closed canonical
    verb set, or on a noun outside the table that is not named in item 4. Unlike the hosted hook, it does not skip leading
    words such as env assignments or wrappers; containment denies those shapes. A command over containment's
-   `MAX_BASH_COMMAND_CHARS` emits nothing, since containment denied it. It has no shape gate and emits no telemetry. A
-   parity test pins the verb table and preamble to this file's hosted copies. On the differential test corpus, the cron hook
+   `MAX_BASH_COMMAND_CHARS` emits nothing, since containment denied it. It has no shape gate and emits no telemetry. On the differential test corpus, the cron hook
    annotates a superset of what the hosted hook annotates. The known extra cases (a `#`-commented tail, and a command over the
    hosted 8192-character cap) over-annotate. That is accepted, with the same under-action residual as item 5. The failure
    posture is inverted relative to containment: a null token list or a throw from the shared parser means "no annotation".
@@ -301,10 +302,12 @@ WebFetch scorer off also removes this note.
    expected entry. It then runs a gh-read probe, which must print exactly the annotation object, and an `ls` probe, which must
    print nothing. Any failure throws and aborts the cron. When the key is absent, nothing new runs. The self-test catches a
    broken or mis-registered hook at spawn time only; it cannot see the file change during the run. Containment denies Write,
-   Edit and MultiEdit to the framing hook file (`WRITE_PROTECTED_PATTERNS`), and, from this change, denies `git checkout`,
-   `git switch` and `git restore` shapes that delete or revert tracked hook or `.claude/` files (`--orphan`, forced
-   checkouts, `--` and whole-tree or protected pathspecs). That is a deny-only tightening of a live control (CTO K1); it is
-   not a claim that no Bash route can rewrite the file. The structural fix, running the hooks from a copy outside the clone,
+   Edit and MultiEdit to the framing hook file (`WRITE_PROTECTED_PATTERNS`), and, from this change, admits `git checkout`
+   and `git switch` only in three forms (`git checkout [-q] -b <branch>`, `git switch [-q] -c <branch>`,
+   `git switch [-q] <branch>`, with one branch-name-shaped token and no start point) and denies `git restore` outright;
+   every other flag, abbreviated or not, `--`, pathspec and extra positional is denied. That is an allow-list narrowing of
+   a live control (CTO K1, re-ruled as K1'); it is not a claim that no Bash route can rewrite the file. It governs the
+   model's Bash calls only; git run by the server itself is not routed through containment. The structural fix, running the hooks from a copy outside the clone,
    is #12753. The self-test reads only `.claude/settings.json` on the
    `setupEphemeralWorkspace` path. A CI test fails if `plugins/soleur/hooks/hooks.json`, which `--plugin-dir` loads into every
    cron, gains a `PostToolUse` key. The self-test runs the hook with `execFileSync`, not through the shell the CLI uses for

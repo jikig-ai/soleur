@@ -17,7 +17,9 @@
 //   `normalizeSegmentWhitespace`, the parse that admitted the command: containment matches the
 //   whitespace-normalised join of the tokens, so this hook matches on the same text, not on raw
 //   token positions (review K2). The failure posture is inverted: for containment a null token
-//   list or a throw means deny; here it means "no annotation".
+//   list or a throw means deny; here it means "no annotation". Unlike the hosted `ghSegment`, it
+//   skips no leading words (env assignments, `time`, wrappers) and splits only where containment
+//   does; containment denies the other shapes (ADR-287 addendum 2026-11-12, item 2).
 // - Plain ESM with no dependencies and no `new URL(..., import.meta.url)` (see the #8074 note in the
 //   containment hook). The sibling is imported dynamically, so a missing or broken sibling still
 //   exits 0 with no output.
@@ -51,7 +53,8 @@ function isGhRead(words) {
 }
 
 // Raw stdin plus the injected parser -> the hook output object, or null. Never throws.
-// A command over containment's `MAX_BASH_COMMAND_CHARS` was denied, so it never ran.
+// A command over containment's `MAX_BASH_COMMAND_CHARS` was denied, so it never ran. The check is
+// written `!(len <= MAX)` so a parser without the constant (undefined) also emits nothing.
 export function frameDecision(raw, { splitSegments, tokenize, normalizeSegmentWhitespace, MAX_BASH_COMMAND_CHARS }) {
   try {
     const input = JSON.parse(raw);

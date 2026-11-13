@@ -577,6 +577,14 @@ function argumentInjectionReason(tokens) {
   return null;
 }
 
+// #11076 K1' — one branch-name token: leading alphanumeric, then [A-Za-z0-9._/-]; no `..`,
+// `//` or `@{`; not ending in `/`, `.` or `.lock`. Never read as a path by the admitted forms.
+function isBranchName(t) {
+  if (typeof t !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(t)) return false;
+  if (t.includes("..") || t.includes("//") || t.includes("@{")) return false;
+  return !(t.endsWith("/") || t.endsWith(".") || t.endsWith(".lock"));
+}
+
 // git sub-commands that surface the tokenized remote URL or redirect the authed
 // remote — denied regardless of the allowlist (SECURITY PANEL P0-B).
 function gitVerbReason(tokens) {
@@ -638,31 +646,25 @@ function gitVerbReason(tokens) {
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
     }
   }
-  // #11076 review (CTO K1) — deny-only tightening. In the depth-1 clone the hooks run from
-  // tracked files, so a branch or path switch that deletes or reverts them (`--orphan`, a forced
-  // checkout, a pathspec restore of `.`, `.claude/` or a hook file) removes containment, and a
-  // missing hook fails open. Branch creation and switching by name stay allowed.
+  // #11076 review (CTO K1') — an allow-list, not a deny-list. In the depth-1 clone the hooks
+  // run from tracked files, and checkout/switch/restore can delete or revert them (`--orphan`,
+  // `--no-overlay <tree> <dir>`, globs, parent folders, abbreviated long options such as
+  // `--orph`), after which a missing hook fails open. A deny-list cannot keep up with git's
+  // option parsing, so only three branch forms are admitted, none of which reads a path:
+  // `git checkout [-q] -b <branch>`, `git switch [-q] -c <branch>`, `git switch [-q] <branch>`.
+  // A bare `git checkout <name>` is a path restore when no branch has that name, so changing
+  // branch goes through `switch`. `git restore` is denied in every form.
   if (sub === "checkout" || sub === "switch" || sub === "restore") {
-    const why = (t, what) => `git ${sub} ${what} '${t}' denied (can remove or revert the run's hook files)`;
-    for (let i = 2; i < tokens.length; i++) {
-      const t = tokens[i];
-      if (t === "--") return why(t, "pathspec separator");
-      if (t.startsWith("--")) {
-        if (t === "--orphan" || t.startsWith("--orphan=")) return why(t, "flag");
-        if (t === "--force" || t === "--discard-changes") return why(t, "flag");
-        if (t === "--pathspec-from-file" || t.startsWith("--pathspec-from-file=")) return why(t, "flag");
-        continue;
-      }
-      if (t.startsWith("-") && t.length > 1) {
-        if (t.slice(1).includes("f")) return why(t, "flag");
-        continue;
-      }
-      const path = t.replace(/^\.\//, "");
-      if (t === "." || t === "./" || path.startsWith(":") || t.includes("*") || t.startsWith("/"))
-        return why(t, "pathspec");
-      // The same paths Write/Edit/MultiEdit may not touch: `.claude/`, both hooks, settings.
-      if (WRITE_PROTECTED_PATTERNS.some((re) => re.test(path))) return why(t, "pathspec");
-    }
+    const use =
+      "create a branch with `git checkout -b <branch>` or `git switch -c <branch>`; change branch with `git switch <branch>`";
+    if (sub === "restore") return `git restore denied (can revert the run's hook files) — ${use}`;
+    const args = tokens.slice(2);
+    while (args[0] === "-q" || args[0] === "--quiet") args.shift();
+    const create = sub === "checkout" ? "-b" : "-c";
+    const branch = args[0] === create ? args[1] : sub === "switch" ? args[0] : undefined;
+    const expected = args[0] === create ? 2 : 1;
+    if (args.length !== expected || !isBranchName(branch))
+      return `git ${sub} form denied (only branch creation or a branch switch is admitted; other forms can remove or revert the run's hook files) — ${use}`;
   }
   // `commit -a`/`--all` stages every tracked modification/deletion without
   // any `git add` at all — the same blanket vector through a side door.

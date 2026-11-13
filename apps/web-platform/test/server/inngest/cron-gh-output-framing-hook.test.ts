@@ -144,6 +144,7 @@ const IN_PROCESS_ROWS: InProcessRow[] = [
   { name: "frame, K2: an empty token before the noun", raw: payload('gh "" pr view 1'), frames: true },
   { name: "frame, K2: noun and verb inside one quoted token", raw: payload('gh issue "view 1"'), frames: true },
   { name: "frame, K2: a no-break space inside a token", raw: payload("gh issue\u00a0view 1"), frames: true },
+  { name: "frame, K2: a leading empty token", raw: payload('"" gh issue view 1'), frames: true },
   { name: "nothing: gh issue comment", raw: payload("gh issue comment 1 --body x"), frames: false },
   { name: "nothing: git log", raw: payload("git log -1"), frames: false },
   { name: "nothing: noun outside the table (gh label list)", raw: payload("gh label list"), frames: false },
@@ -195,8 +196,8 @@ describe("AC2 — frameDecision in-process with the real containment parser", ()
 
 describe("AC2 — row census", () => {
   it("both groups together hold the literal declared row count", () => {
-    expect(BINARY_ROWS.length + IN_PROCESS_ROWS.length).toBe(37);
-    expect(new Set([...BINARY_ROWS, ...IN_PROCESS_ROWS].map((r) => r.name)).size).toBe(37);
+    expect(BINARY_ROWS.length + IN_PROCESS_ROWS.length).toBe(38);
+    expect(new Set([...BINARY_ROWS, ...IN_PROCESS_ROWS].map((r) => r.name)).size).toBe(38);
   });
 });
 
@@ -321,6 +322,7 @@ describe("one-way differential against the hosted ghReadVerbOf on admitted comma
 describe("allowlist-shape guard: every cron gh line has a shape the framing hook parses (CTO C2, C2')", () => {
   const CANONICAL = new Set([...Object.values(GH_READ_VERBS).flat(), "create", "edit", "comment", "close"]);
   const UNFRAMED_NOUNS_NAMED_IN_ADR = new Set(["label"]);
+  const WRITE_VERBS = new Set(["create", "edit", "comment", "close"]);
   it("every gh line in every cron is `gh api <path>/` or literal `gh <noun> <verb>` with a canonical verb", () => {
     let checked = 0;
     for (const [cron, lines] of Object.entries(CRON_BASH_ALLOWLISTS)) {
@@ -331,10 +333,15 @@ describe("allowlist-shape guard: every cron gh line has a shape the framing hook
         const m = /^gh ([a-z-]+) ([a-z-]+)$/.exec(line);
         expect(m, `${cron}: ${line}`).not.toBeNull();
         expect(CANONICAL.has(m![2]), `${cron}: ${line} (verb outside the canonical set)`).toBe(true);
-        // A noun outside the table is an unframed read; each one must be a named ADR-287 gap.
+        // A noun outside the table is an unframed read; each one must be a named ADR-287 gap. On a
+        // table noun the verb must be one of that noun's reads or a write verb, so `gh repo list`
+        // (a read the table does not frame) cannot be allowlisted silently.
+        const [, noun, verb] = m!;
+        if (UNFRAMED_NOUNS_NAMED_IN_ADR.has(noun)) continue;
+        expect(Object.hasOwn(GH_READ_VERBS, noun), `${cron}: ${line} (noun outside GH_READ_VERBS and not a named ADR-287 gap)`).toBe(true);
         expect(
-          Object.hasOwn(GH_READ_VERBS, m![1]) || UNFRAMED_NOUNS_NAMED_IN_ADR.has(m![1]),
-          `${cron}: ${line} (noun outside GH_READ_VERBS and not a named ADR-287 gap)`,
+          (GH_READ_VERBS as Record<string, readonly string[]>)[noun].includes(verb) || WRITE_VERBS.has(verb),
+          `${cron}: ${line} (verb is neither a framed read nor a write for this noun)`,
         ).toBe(true);
       }
     }
