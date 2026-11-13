@@ -601,14 +601,15 @@ DARK6=("${DARK5[@]}" INNGEST_CONFIG_DIGEST)
 [[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI INNGEST_BETTERSTACK_LOGS_TOKEN)" == FATAL ]] && pass || fail "INNGEST_BETTERSTACK_LOGS_TOKEN must FATAL — BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL member, not nested (#6197)"
 # DOPPLER_* builtins are stripped before counting.
 [[ "$(isolation_decision "${DARK6[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
-# (#12695 / #12707) THE FIRST MEASURED INSTANCE OF THIS CLASS, admitted: the trace-retention
+# (#12695 / #12707) the SIXTH instance of this class — the first measured with per-attempt
+# counted telemetry, admitted: the trace-retention
 # unit's ExecStart is `doppler run --config prd -- inngest-trace-retention.sh`, so the four
 # env_int tuning knobs ARE names this host's runtime consumes. MAX_BATCHES written into
 # soleur-inngest/prd FATAL'd every provision attempt of the Nov-11 host for ~17h — each of the
 # four must pass alone (no riding on a sibling's admission), including on the minimal dark set.
 [[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_DAYS)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_DAYS must PASS — env-injected into inngest-trace-retention.service"
 [[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_BATCH)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_BATCH must PASS — env-injected into inngest-trace-retention.service"
-[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_MAX_BATCHES)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_MAX_BATCHES must PASS — the measured #12695 offender"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_MAX_BATCHES)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_MAX_BATCHES must PASS — the #12695 offender (inferred from add/remove timing; .foreign= names the next one)"
 [[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_SIZE_BUDGET_BYTES)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_SIZE_BUDGET_BYTES must PASS — env-injected into inngest-trace-retention.service"
 # Nesting and anchoring hold for the new member: a bare TRACE_RETENTION_* name (no INNGEST_
 # prefix) is foreign, a suffix lookalike is foreign, and the override seams the script reads
@@ -621,8 +622,8 @@ DARK6=("${DARK5[@]}" INNGEST_CONFIG_DIGEST)
 # 9c. Pin the COMPARISON OPERATOR. The replay above re-derives the predicate, so it cannot see
 #     an inversion in the file itself: flipping NR!=i to NR==i makes an isolated host FATAL and
 #     a LEAKY one boot clean, with every behavioral case above still green.
-grep -qF 'NR!=i' "$ISO_SRC" \
-  && pass || fail "the isolation self-check must compare with != (an == inversion admits an over-scoped credential and rejects an isolated one)"
+grep -qF 'exit(NR!=i||i<6)' "$ISO_SRC" \
+  && pass || fail "the isolation self-check must exit on NR!=i||i<6 — a ||->&& mutation admits an all-admitted under-floor set (and an EMPTY read) while every member-level pin stays green"
 
 # 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
 #     claim. `curl -fsS --max-time 10 ""` exits 2 ("blank argument where content is

@@ -596,7 +596,8 @@ root config), a read-scoped token, `INNGEST_DIAGNOSTIC_BOOT=true`, loopback `sdk
 | `provision-attempt-start attempt=N` (Better Stack) | Attempt N began. N counts every attempt since the host was born (the counter is on the root disk). |
 | `provision-env-MISSING keys=…` (Better Stack) | The env file exists but lacks a required key. The attempt ends before any Doppler call. |
 | `provision-nic-ABSENT ip=…` (Better Stack) | The private NIC was still absent after the NIC wait; the attempt ended and retries. |
-| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. Since #12707 its detail names the offender: `iid=…​.foreign=<name>` repeated once per foreign secret, then `.n_total=<n>.n_inngest=<m>` (no `.foreign=` field on an under-floor read). The same suffix rides `provision-attempt-exit-*` and `provision_attempt_failed` via `why=isolation-check-FAILED.foreign=…`, so the Sentry page names the secret too (names only, never values). |
+| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. Since #12707 its detail names the offender: `iid=…​.foreign=<name>` repeated once per foreign secret, then `.n_total=<n>.n_inngest=<m>` (no `.foreign=` field on an under-floor read; `.n_total=0` means the
+`doppler secrets` read itself returned nothing — an auth/API fault, not an empty set). The same suffix rides `provision-attempt-exit-*` and `provision_attempt_failed` via `why=isolation-check-FAILED.foreign=…`, so the Sentry page names the secret too (names only, never values). |
 | `zot-creds-EMPTY` / `zot-login-FAILED` (Better Stack) | No baked zot credential, or the zot login was refused. The pull that follows misses. |
 | `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
 | `provision-fsm-busy` (Better Stack) | A flip step was still running, or a flip was between steps, after the 300 s quiesce bound; the attempt ended and retries. (A host born before #11080 also holds here on `frozen-active` and a running LUKS cutover.) |
@@ -1922,7 +1923,12 @@ destroyed host's rows stay inside any lookback window and would otherwise mask t
 the born-dark class of #12695, read at ~20 minutes instead of ~17 hours. Read the `SOLEUR_INNGEST_BOOT_STAGE` rows for
 the new `iid` for the first failing stage (`isolation-check-FAILED` names the offending secret in its `foreign=` detail,
 #12707), then follow the failure-stage guidance in [§ Stages](#stages). A last-read `rc=6` in the step output is an
-instrument fault (Better Stack/Doppler read path), not a host verdict. The job timeout rose 20 → 40 minutes to hold the
+instrument fault (Better Stack/Doppler read path), not a host verdict — and if the window ends with NO verdict read at
+all (every read rc=6/124), the step summary says so explicitly rather than claiming the host dark. One strictness to
+know before reading a red gate as dead: a host whose metadata read failed emits its probe rows with
+`instance_id=unknown`, which can never satisfy the pin — the gate reports dark on what may be a live, unidentified
+host. That direction is deliberate (an unidentified row is not a per-host liveness claim), and the BOOT_STAGE rows
+still distinguish the two cases. The job timeout rose 20 → 40 minutes to hold the
 window; the gate itself is what changed, not the dispatch.
 
 ### Reading `tls-health` without SSH

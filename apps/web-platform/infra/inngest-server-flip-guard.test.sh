@@ -203,7 +203,7 @@ assert_rc "the neutralisation is scoped to the diagnostic arm (a normal boot kee
 #      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
 echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
 CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
+ISO_RE=$(grep -oE "awk -v re='[^']*'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
 assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
   "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
 assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
@@ -257,7 +257,7 @@ fi
 #      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
 echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
 CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
+ISO_RE=$(grep -oE "awk -v re='[^']*'" "$CLOUD_INIT_INNGEST" | sed -n '1p' || true)
 assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
   "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
 assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
