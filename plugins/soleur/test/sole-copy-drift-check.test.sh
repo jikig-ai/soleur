@@ -2143,15 +2143,25 @@ rb_line_readback() { # rb_line_readback <volume-id>: the one-word protection rea
 rb_line_get404() { # rb_line_get404 <volume-id>: the retired-volume GET that expects 404
   printf '%s\n' "$RB_WRAP$RB_HDR"'-o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/'"$1""'"'   # expect 404'
 }
+N3B_V3_URL='"https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data"'   # V3's one URL word, quotes included (rb_line_v3, n3b_lists)
+rb_line_v2() { # rb_line_v2 <web1-pin>: verify line V2, the web1 server's attached volumes (the server id is fixed; the pin is the expect)
+  printf '%s\n' "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'"'"'   # expect ['"$1"']'
+}
+rb_line_v3() { # rb_line_v3: verify line V3, the plaintext volume looked up by name (it names no id; any argument is ignored)
+  printf '%s\n' "$RB_WRAP$RB_HDR$N3B_V3_URL"' | jq -c "[.volumes[].id]"'"'"'   # expect []'
+}
+rb_line_v4() { # rb_line_v4 <web1-pin>: verify line V4, the web1 volume's delete-protection flag
+  printf '%s\n' "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$1"' | jq ".volume.protection.delete"'"'"'   # expect true after the SSH-stage apply'
+}
 rb_expected() { # rb_expected <web1-pin>: the two blocks as rb_blocks prints them
-  local p="$1" q="'"
+  local p="$1"
   printf '%s\n' '@@read-back@@' \
     "$(rb_line_readback "$p")" \
     '@@verify@@' \
     "$(rb_line_get404 105149570)" \
-    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'"$q"'   # expect ['"$p"']' \
-    "$RB_WRAP$RB_HDR"'"https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'"$q"'   # expect []' \
-    "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$p"' | jq ".volume.protection.delete"'"$q"'   # expect true after the SSH-stage apply'
+    "$(rb_line_v2 "$p")" \
+    "$(rb_line_v3 "$p")" \
+    "$(rb_line_v4 "$p")"
 }
 fence1() { # fence1: stdin's first fenced block, each line with the opening fence's indentation removed (a line without it is marked)
   awk 'f == 0 && /^[ ]*```/ { match($0, /^[ ]*/); ind = substr($0, 1, RLENGTH); f = 1; next }
