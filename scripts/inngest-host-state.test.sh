@@ -550,9 +550,9 @@ fi
 # #12708: --instance-id pins the read to ONE host identity. The load-bearing case is the
 # replace window: the OLD host's rows and the NEW host's rows coexist, and an unfiltered read
 # can summarise the destroyed host while the replacement emits nothing. The destroyed host's
-# row is the NEWEST here on purpose: with the pin's continue deleted, rows[-1] is still the
-# new host and both grep arms stay green on the mutant — the fixture direction is what makes
-# this row discriminate.
+# row is the NEWEST here on purpose: if the fixture kept the new host newest, deleting the
+# pin's continue would leave rows[-1] on the new host and both grep arms would stay green on
+# the mutant — the fixture direction is what makes this row discriminate.
 echo "T24: --instance-id selects only the pinned host's rows"
 make_query
 { row "2026-11-12 13:00:00" soleur-inngest "${DEDICATED_MSG//hetzner-166317708/hetzner-175859399}"
