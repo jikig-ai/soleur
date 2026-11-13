@@ -304,7 +304,8 @@ WebFetch scorer off also removes this note.
    Edit and MultiEdit to the framing hook file (`WRITE_PROTECTED_PATTERNS`), and, from this change, denies `git checkout`,
    `git switch` and `git restore` shapes that delete or revert tracked hook or `.claude/` files (`--orphan`, forced
    checkouts, `--` and whole-tree or protected pathspecs). That is a deny-only tightening of a live control (CTO K1); it is
-   not a claim that no Bash route can rewrite the file. The self-test reads only `.claude/settings.json` on the
+   not a claim that no Bash route can rewrite the file. The structural fix, running the hooks from a copy outside the clone,
+   is #12753. The self-test reads only `.claude/settings.json` on the
    `setupEphemeralWorkspace` path. A CI test fails if `plugins/soleur/hooks/hooks.json`, which `--plugin-dir` loads into every
    cron, gains a `PostToolUse` key. The self-test runs the hook with `execFileSync`, not through the shell the CLI uses for
    the registered command string; the containment entry has the same shape, and the spawn paths are generated. It also
@@ -331,7 +332,7 @@ WebFetch scorer off also removes this note.
    - A gh read run with `run_in_background`, whose output is later read back with Read from the task output file: the
      launch is annotated, the read-back is not.
    - Host `~/.claude/settings.json` and managed settings, which production does not exclude with `--setting-sources`. They
-     can register hooks the self-test never reads (CTO K4).
+     can register hooks the self-test never reads (CTO K4, #12754).
    - `-R`/`--repo` between noun and verb, the `ls` alias and path-qualified `gh` (unreachable today).
    - `git log` and `git show` text.
    - Subagents. Settings hooks are documented to fire for subagent tool calls, but that was not probed under `--print`.
@@ -360,7 +361,7 @@ WebFetch scorer off also removes this note.
       together with, the hook edit. Otherwise every registered cron throws on the mismatch, which is the intended fail-safe
       signal (CTO D3). A failing web-platform deploy blocks enablement.
    7. Confirm the framing hook file is still in `WRITE_PROTECTED_PATTERNS`, along with any new file it imports (CTO D1).
-   8. Close the two prerequisite issues filed from review: stage-tagged `setup-ephemeral-workspace` failures across the six
-      substrate callers (CTO K3; today a framing self-test throw is told apart only by its message prefix), and host and
-      managed settings as `PostToolUse` sources (CTO K4).
+   8. Close #12754: host and managed settings as `PostToolUse` sources (CTO K4), and stage-tagged
+      `setup-ephemeral-workspace` failures in the cron setup catch blocks (CTO K3; today a framing self-test throw is told
+      apart only by its message prefix).
 7. **Status.** This ADR stays `adopting`. Decision 6 ("Crons never opt in") still concerns the WebFetch scorer only.
