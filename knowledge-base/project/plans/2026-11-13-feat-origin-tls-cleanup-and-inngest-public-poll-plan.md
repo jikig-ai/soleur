@@ -21,7 +21,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-13 (proportionate pass: the machine is saturated, so two focused agents rather than a fan-out)
-**Sections enhanced:** 6 (Research Insights premise, Implementation Phases 1 and 3, Downtime & Cutover (new),
+**Sections enhanced:** 8 (Research Reconciliation, Phase 6.5, Phase 7 FU-1, Research Insights premise, Implementation Phases 1 and 3, Downtime & Cutover (new),
 Infrastructure, Files to Edit)
 **Agents used:** a verify-the-negative sweep (general-purpose, standard tier) and
 `soleur:engineering:research:framework-docs-researcher` (Inngest `--sdk-url` poll semantics). Plan review before
@@ -39,6 +39,13 @@ deepen: `soleur:engineering:review:architecture-strategist`, `soleur:engineering
    bot score (dashboard-only managed WAF settings are not visible from the repo).
 3. The alert SQL's numeric `uptime_s` extract is flagged as novel in this file (precedent exists only for `match` and
    `extract`), so its live count is the proof it parses; the push-probe target list grows from six to seven.
+4. Inngest v1.45.1 source (pinned CLI, commit `9059f14a`) changes what "leg 2 closed" means: the poll is a signed
+   `PUT <url>` (body `{"url": ...}`, `X-Inngest-Signature`), sent by `pollSDKs` to EVERY stored `app.Url`, not only
+   the `--sdk-url` seed; apps are keyed by app name (`UpsertAppByName`), so the new URL updates the app rather than
+   adding one; the HTTP client verifies certificates against system roots with no skip flag; a 10 s client timeout
+   and up-to-60 redirects. Inferred, not verified: the old `http://10.0.1.10:3000/api/inngest` placeholder row
+   survives in Postgres across the replace and keeps being pinged in plain HTTP. FU-1 therefore gains a measured exit
+   condition (below), and the row-6 conversion cannot rest on the replace alone.
 
 ### New Considerations Discovered
 
@@ -84,6 +91,7 @@ plan does not reopen any ruling.
 | Ledger row 7 `enforced_at` | Still says "container publishes 80:3000 and 3000:3000; no 443 listener" and cites the rule described "Flexible SSL for web platform". | Rewritten with the row conversion (origin-tls.ts listener, 443 publish, new rule description). |
 | `#9139` as the hop-1 tracker | `#9139` is CLOSED (it re-scoped the step-call leg). Hop 1 (Inngest server to the Cloudflare edge, certificate check) is still unmeasured. | The ledger cites `#9139` for the leg and the new follow-up FU-1 for the hop-1 measurement the CLO requires before the live act. |
 | "domains.md SSL Mode" and "Last Updated" | Also stale: `knowledge-base/engineering/architecture/nfr-register.md` row "Cloudflare edge -> web-host origin" (Not Implemented, "target 2026-11-12"). | Added to Files to Edit. |
+| "the same path the step calls already take" (remedy (c)) | Verified against the pinned CLI v1.45.1 source: the poll is a signed `PUT` to every stored app URL with Go's default certificate verification; Cloudflare Browser Integrity Check could in principle challenge a non-browser user agent, but the step calls from the same client already pass through the same host, and `bot-management.tf` allows automated traffic (`sbfm_definitely_automated = "allow"`). | Kept; a stale private app row is the new residual (FU-1 item 7b). |
 | C4 | `model.c4` edge `inngest -> api` says the `--sdk-url` (`http://10.0.1.10:3000/api/inngest`) is the registration poll; editing `model.c4` forces a `model.likec4.json` regeneration. | CTO ruling (F4): unchanged here (the live host still polls the private URL); edited in the row-6 conversion PR (FU-1). |
 
 ## Research Insights
@@ -534,8 +542,8 @@ machine is saturated). Scratch goes under `/var/tmp`.
 5. `knowledge-base/engineering/operations/runbooks/inngest-server.md`: the new "Registry-empty alert (#10538)" section
    (Phase 3); a "Public sdk_url poll (#10538 remedy (c))" section for the owner's replace: preconditions in order
    (cleanup apply measured and #10479 closed, FU-1's sync-evidence field merged, hop 1 measured), the read-only
-   post-replace checks (`registry_fns` and the new field, the explicit `PUT` re-registration, the private-IP
-   rejections in `resolve-origin.ts` stop), and the CLO owner-record requirement if the act lands after 2026-11-20; fix
+   post-replace checks (`registry_fns` and the new field, the explicit `PUT` re-registration, the stored app `url`
+   rows, the private-IP rejections in `resolve-origin.ts` stopping, since v1.45.1 polls every stored app URL), and the CLO owner-record requirement if the act lands after 2026-11-20; fix
    the table rows that say the poll is "dated disposition to 2026-12-10, tracked as #10538".
 6. Run `bash scripts/lint-legal-scope-block-placement.sh` only if Phase 5 or 6 touched a scope block; otherwise skip.
 
@@ -552,7 +560,14 @@ Each body carries a line `Mandated-By: wg-when-deferring-a-capability-create-a`,
   `model.likec4.json`; (6) the Privacy Policy / DPD "between our web servers and our job scheduler" sentence revisited
   with the CLO once leg 2 is TLS - the published wording, the DPA template and the Article 30 register keep that
   carve-out until the hop-1 and leg-2 measurements are recorded (CPO condition 3); (7) if the act lands after 2026-11-20, the owner-typed record of CLO ruling §4
-  (beginning "SIGNED BY OWNER (human, not an agent)"); (8) refresh the stale carrier comment in
+  (beginning "SIGNED BY OWNER (human, not an agent)"); (7b) leg 2 counts as closed only when the private-URL poll
+  is MEASURED to have stopped: Inngest v1.45.1 `pollSDKs` pings every stored `app.Url`, so a stale
+  `http://10.0.1.10:3000/api/inngest` app row persisted in Postgres would keep the plaintext `PUT` alive after the
+  replace. Read-only checks first (the stored `url` of each app row through the host-local GQL the probe already uses,
+  and a Better Stack `SELECT count()` of the `resolve-origin` rejection rows for that origin falling to 0); if the row
+  persists, its removal is a planned step with its own ruling, before row 6 converts. Also watch the #7228 double-fire
+  probe after the replace: the sync checksum includes the URL, so the first sync is not deduplicated; (8) refresh the
+  stale carrier comment in
   `inngest-bootstrap.sh` when that file next changes. Related: epic #10390. Ledger row 6 `tracking_issue` points here.
 - **FU-3** "security: close port 80 on the web hosts now that Cloudflare to origin is strict (follow-up of #10479)"
   (a second destroy and a deploy of the `-p 0.0.0.0:80:3000` publishes; also evaluate Authenticated Origin Pulls).

@@ -96,7 +96,8 @@ writes.
 ## 8. Follow-up issues (before ship)
 
 - [ ] 8.1 FU-1 (sync-evidence probe field before the replace, owner replace, hop 1, row 6 + C4, legal carve-out kept,
-      CLO owner record after 2026-11-20, stale carrier comment) with `--body-file`, milestone "Post-MVP / Later",
+      CLO owner record after 2026-11-20, stale carrier comment, and the measured exit condition that the private-URL
+      poll stopped: v1.45.1 pings every stored app URL, so a stale `10.0.1.10:3000` app row would keep it alive) with `--body-file`, milestone "Post-MVP / Later",
       `Mandated-By: wg-when-deferring-a-capability-create-a`; point ledger row 6 `tracking_issue` at it.
 - [ ] 8.2 FU-3 (port 80, Authenticated Origin Pulls, inert Doppler secrets) with the same conventions.
 - [ ] 8.3 Conditional FU-4 only if the Playwright reading in 9.1 is unverified.
