@@ -20,3 +20,15 @@ None blocking. `gh issue list --label code-review` handled with bounded reads; `
 ## Operator Constraints
 
 - cto_spawns=1 (batched, 15 items)
+
+## Session append — fix round + FULL gate (context checkpoint)
+
+- Fix-round commit `2ccee2b29a` + P3 hardening `83d19a89a6` pushed.
+- Fix-round seats: code-quality-analyst + test-design-reviewer both VERIFIED green.
+  Remaining P3s applied inline (unread-notice scoped to audit path via `_SHA_VALIDATED`;
+  self-check retains notice as audit-blocking; `if` hardening on dedupe return).
+- Verification on fix tree: probe suite 164/164; shard-mutations 42/42; lint-orphan
+  rows 36-40 24/24 (seat-run); shellcheck deltas all pre-existing/conventional.
+- FULL gate (runner-changed fallback) relaunched after sibling full-run drained —
+  running in bg 088c38. Previous `runner-refused` is NOT a pass.
+- Pending: gate verdict → review exit metadata → qa → compound → ship/merge → postmerge.
