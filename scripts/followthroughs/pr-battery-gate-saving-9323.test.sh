@@ -76,8 +76,8 @@ FAKE
 chmod +x "$TMP/bin/gh"
 
 # build_fx <dir> <n-runs> <minutes-per-run> [bot-count] [machinery-count] [escape-pr] [tsv-mode] [arts-per-run]
-# tsv-mode: full = every gated skip_suite label (realized ~51 suite-min, PASS), lite = one cheap label
-# (realized ~0.24, FAIL under the bar), none = an empty artifact listing (evidence_absent → NOT YET).
+# tsv-mode: full = every gated skip_suite label (realized ~61 suite-min, PASS), lite = one cheap label
+# (realized ~0.19, FAIL under the bar), none = an empty artifact listing (evidence_absent → NOT YET).
 # arts-per-run: how many suite-timings-(scripts|scripts-heavy)-N artifacts each run carries (a real run has ~11).
 build_fx() {
   local fx="$1" n="$2" mins="$3" bots="${4:-0}" mach="${5:-0}" esc="${6:-}" tsv_mode="${7:-full}" arts_n="${8:-1}"
@@ -139,9 +139,9 @@ expect() {
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
-build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~51.5 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
+build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~61.1 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
 if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the jobs read is red-run-only"; else pass "a green push run issues no jobs read (the need_min listing bound holds)"; fi
-build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
+build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.19 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
 build_fx "$TMP/s4" 5 40;            expect "NOT YET: 5 qualifying runs (< 20)" 2 "NOT YET" "$TMP/s4"
 build_fx "$TMP/s5" 25 40; printf '{"merged_at":null}\n' > "$TMP/s5/pr-9324.json"
@@ -152,8 +152,8 @@ build_fx "$TMP/s7" 25 40 0 10;      expect "machinery-touching PRs are excluded 
 build_fx "$TMP/s8" 25 40 10;        expect "bot PRs are excluded (25 - 10 = 15 < 20)" 2 "NOT YET: 15" "$TMP/s8"
 build_fx "$TMP/s9" 25 40;           expect "an unset GH_TOKEN is CANNOT ESTABLISH, never a pass" 3 "GH_TOKEN is not set" "$TMP/s9" GH_TOKEN=
 # --- boundaries and the qualification rules a reviewer found unpinned -----------------------------------
-build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~51 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
-build_fx "$TMP/b2" 20 56.1 0 0 "" lite; expect "realized saving under the bar FAILs honestly (0.24 suite-min, never a baseline pass)" 1 "FAIL: mean realized saving" "$TMP/b2"
+build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~61 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
+build_fx "$TMP/b2" 20 56.1 0 0 "" lite; expect "realized saving under the bar FAILs honestly (0.19 suite-min, never a baseline pass)" 1 "FAIL: mean realized saving" "$TMP/b2"
 build_fx "$TMP/b3" 19 40;           expect "boundary: 19 qualifying runs is NOT YET" 2 "NOT YET: 19" "$TMP/b3"
 build_fx "$TMP/b4" 25 2; sed -i 's/"conclusion":"success"/"conclusion":"failure"/g' "$TMP/b4/runs.json"
                                     expect "red runs are excluded: 25 cheap FAILED runs must not read as a saving" 2 "NOT YET: 0" "$TMP/b4"
@@ -357,20 +357,20 @@ build_fx "$TMP/e1" 25 40 0 0 "" none; expect "missing suite-timings artifact evi
 build_fx "$TMP/m11" 25 40 0 0 "" full 11
                                     expect "11 suite-timings artifacts per run (the real shape, 12 reads/run): 21 fully evidenced under the 260 cap — the old 60 cap starved this to ~5" 0 "qualifying_runs=25 evidenced_runs=21" "$TMP/m11"
 out="$(env FX="$TMP/m11" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 0 && "$out" == *"realized_saving_min=51.5"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
-  pass "11-artifact fixture: cross-artifact dedupe holds (51.5 suite-min, not ~540) and the unpriced gated label is named on the status line"
+if [[ "$rc" == 0 && "$out" == *"realized_saving_min=61.1"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
+  pass "11-artifact fixture: cross-artifact dedupe holds (61.1 suite-min, not ~670) and the unpriced gated label is named on the status line"
 else fail "multi-artifact dedupe/unpriced: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/dx" 25 40 0 0 "" full 2
 mkdir -p "$TMP/dx/zd1" "$TMP/dx/zd2"
 # one gated label priced twice in a run — once inside a single artifact and once across two artifacts: dedupe must
-# count it once either way (b+b+c / c+d unions to b+c+d = 27.2 suite-min; without dedupe it reads 35.8 or 44.2)
+# count it once either way (b+b+c / c+d unions to b+c+d = 32.1 suite-min; without dedupe it reads 42.9 or 52.6)
 printf 'scripts/test-all-affected-b\t0\tskip=relevance\nscripts/test-all-affected-b\t0\tskip=relevance\nscripts/test-all-affected-c\t0\tskip=relevance\n' > "$TMP/dx/zd1/suite-timings.tsv"
 printf 'scripts/test-all-affected-c\t0\tskip=relevance\nscripts/test-all-affected-d\t0\tskip=relevance\n' > "$TMP/dx/zd2/suite-timings.tsv"
 for i in $(seq 1 25); do
   ( cd "$TMP/dx/zd1" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 1)).zip" suite-timings.tsv )
   ( cd "$TMP/dx/zd2" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 2)).zip" suite-timings.tsv )
 done
-expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=27.2" "$TMP/dx"
+expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=32.1" "$TMP/dx"
 build_fx "$TMP/t1" 25 40; rm -f "$TMP/t1/arts-1.json"
                                     expect "a failed artifact LISTING is CANNOT ESTABLISH, never folded into evidence_absent" 3 "CANNOT ESTABLISH" "$TMP/t1"
 build_fx "$TMP/n1" 25 40; for i in $(seq 1 25); do printf '{"artifacts":[{"id":%s,"name":"suite-timings-ts"}]}' "$((5000 + i))" > "$TMP/n1/arts-$i.json"; done

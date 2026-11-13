@@ -4383,6 +4383,8 @@ _aff_runner_banner() {
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
 # #12348: +1 always-on (the -live tree scan; the unit suite is edge-selected, E5); re-pinned at 119-5.
+# #11556: -1 always-on (image-cve-public-claim-guard withdrawn to edge-selection when the Lever-A
+# 5-run re-price put its measured median over the 10s fast-tier cap); count 118, floor stays 114.
 _MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
@@ -7231,6 +7233,14 @@ if want_scripts; then
   # (its edge array is in scripts/lib/test-affected-paths.sh); their shard legs are manifest rows
   # in scripts/suite-shard-legs.tsv. The -live row runs under `python3 -I` like the CI member step.
   run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
+  # #12626: exit-code harness for the scheduled main-health-monitor mutation-leg confirmation probe
+  # (>=2 post-merge soleur-ai[bot] workflow_dispatch runs, each carrying all three
+  # test-webplat-mutations legs green). Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Seated at the block tail: the G2-anchor
+  # grammar admits no anchor after a `python3 -I` argv, so the -live line below must stay last.
+  # Its exit code decides whether the sweeper closes the #12626 follow-through tracker, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/main-health-monitor-mutations-12626" bash scripts/followthroughs/main-health-monitor-mutations-12626.test.sh
   run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   
 fi
