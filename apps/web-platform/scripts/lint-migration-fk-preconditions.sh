@@ -99,8 +99,21 @@ fi
 declare -a files=()
 if [[ "$1" == "--from-pr-diff" ]]; then
   # Refresh origin/main best-effort (mirrors the fetch in run-migrations.sh's
-  # unmerged-apply gate).
-  git -C "$REPO_ROOT" fetch --no-tags --quiet origin main 2>/dev/null || true
+  # unmerged-apply gate). EXPLICIT refspec: in a clone whose `origin` carries only
+  # a narrow fetch refspec (single-branch or merge-ref-only), a bare `fetch origin
+  # main` fills FETCH_HEAD and leaves `refs/remotes/origin/main` absent (measured:
+  # diff rc 128). The diff below now exits 2 on failure instead of reading as
+  # "no migration changes", so the ref is named explicitly. (A stock
+  # actions/checkout keeps the all-heads refspec, where this is merely harmless.)
+  git -C "$REPO_ROOT" fetch --no-tags --quiet origin '+refs/heads/main:refs/remotes/origin/main' 2>/dev/null || true
+  # Captured BEFORE the loop so a git failure is exit 2, never "no migration changes" (the old
+  # `2>/dev/null || true` read a failed diff as an empty one). -z keeps a name git would C-quote
+  # (non-ASCII, tab) exact; --no-renames turns a rename into D+A so the NEW path is linted
+  # (--diff-filter=AM alone drops an R row); the pipefail scope makes a git failure the capture's status.
+  changed="$(set -o pipefail; git -C "$REPO_ROOT" diff -z --no-renames --ignore-submodules=none origin/main...HEAD --name-only --diff-filter=AM -- 'apps/web-platform/supabase/migrations/*.sql' | tr '\0' '\n')" || {
+    echo "::error::lint-migration-fk-preconditions: git diff origin/main...HEAD failed; cannot tell what the PR changed" >&2
+    exit 2
+  }
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     # Skip down-sibling files — they're manual rollback; lint applies to
@@ -111,7 +124,7 @@ if [[ "$1" == "--from-pr-diff" ]]; then
     # git diff returns repo-relative paths; absolutize against repo root
     # so subsequent `[[ -f ]]` works regardless of caller CWD.
     files+=("$REPO_ROOT/$f")
-  done < <(git -C "$REPO_ROOT" diff origin/main...HEAD --name-only --diff-filter=AM -- 'apps/web-platform/supabase/migrations/*.sql' 2>/dev/null || true)
+  done <<<"$changed"
   if [[ ${#files[@]} -eq 0 ]]; then
     echo "lint-migration-fk-preconditions: no migration changes in PR diff; nothing to check."
     exit 0

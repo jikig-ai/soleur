@@ -364,6 +364,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	7
 scripts/alarm-issue-filing-guard	1
+scripts/allowlist-diff	3
 scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6

@@ -264,6 +264,7 @@ ALWAYS_ON_SUITES=(
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
+  "scripts/allowlist-diff"
   "scripts/assert-dependabot-drain-unit"
   "scripts/expenses-verify-by-check"
   "scripts/ship-incident-pir-gate-mutations"
@@ -1305,6 +1306,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CHANGED_PATH_READERS_TEST_SH_PATHS=(
   "plugins/soleur/skills/preflight/SKILL.md"  # the sentinel pins each skill's spelling of the helper call
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/references/settle-then-admin-merge.md"  # the steps section EXECUTES its classifier block
+  "plugins/soleur/skills/one-shot/SKILL.md"
+  "plugins/soleur/skills/work/SKILL.md"  # PROSE_FILES: the census reads each of these for a plain changed-path reader
+  "plugins/soleur/skills/qa/SKILL.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md"
+  "plugins/soleur/skills/ship/references/adr-ordinal-collision.md"
+  "plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md"
+  "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md"
+  "scripts/hooks/pre-push"  # extension-less, so the code census cannot see it: held by a PINNED_Z row
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )

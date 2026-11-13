@@ -284,7 +284,14 @@ jobs:
             echo "::warning::watermark ${BEFORE_SHA} is '${cmp_status:-unreadable}' relative to ${AFTER_SHA}, not an ancestor, so this range cannot prove what the host is missing. Delivering rather than skipping. The preflight still gates."
             exit 0
           fi
-          changed="$(printf '%s' "$cmp_json" | jq -r '.files[]?.filename' 2>/dev/null)"
+          # A 200 whose `files` is null or absent would read below as "0 files" -> deliver=false: refuse.
+          if ! printf '%s' "$cmp_json" | jq -e '(.files | type) == "array"' >/dev/null 2>&1; then
+            echo "::error::the compare API answer carries no files array (status=${cmp_status}, base=${BEFORE_SHA}). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire via workflow_dispatch once verified."
+            exit 1
+          fi
+          # A rename lists the NEW path as `filename` and the old one as `previous_filename`: a render
+          # input renamed AWAY is touched yet never appears as a `filename`, so both names count.
+          changed="$(printf '%s' "$cmp_json" | jq -r '.files[]? | .filename, (.previous_filename // empty)' 2>/dev/null)"
           # (#7582) THE QUESTION IS WHETHER THE RENDERED user_data CHANGED, NOT WHETHER THE TEMPLATE DID.
           # The host boots base64gzip(replace(templatefile(cloud-init-registry.yml, {...}), strip, ""))
           # and that map also reads zot-registry.tf (zot_image, doppler_sha256, users, IP, ingest URL)

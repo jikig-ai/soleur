@@ -4383,7 +4383,8 @@ _aff_runner_banner() {
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
 # #12348: +1 always-on (the -live tree scan; the unit suite is edge-selected, E5); re-pinned at 119-5.
-_MIN_ALWAYS_ON_DECLARED=114
+# #12494: +1 always-on (scripts/allowlist-diff, the .gitleaks.toml pathspec read; repo-global like its rename-guard sibling); with #12348 below the count is 120, so the floor is re-pinned at 120-5.
+_MIN_ALWAYS_ON_DECLARED=115
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5922,6 +5923,8 @@ if want_scripts; then
   # rename-guard: allowlist->allowlist renames (the archive-kb shape) are exempt;
   # outside->allowlist still fails. TS-1..TS-6 + MB-1..MB-2.
   run_suite "scripts/rename-guard" bash scripts/rename-guard.test.sh
+  # allowlist-diff: the .gitleaks.toml pathspec read must fail closed (exit 2) on a git failure (D7 remainder, #12494).
+  run_suite "scripts/allowlist-diff" bash scripts/allowlist-diff.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered

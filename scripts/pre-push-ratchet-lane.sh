@@ -254,7 +254,7 @@ fi
 # Nothing to gate: the branch carries no diff vs origin/main — same early exit
 # as scripts/hooks/pre-push. Measured post-fetch so a stale remote-tracking ref
 # cannot green a branch that only LOOKED empty.
-if [[ -n "$BASE" ]] && git -C "$REPO_ROOT" diff --quiet "$BASE" HEAD; then
+if [[ -n "$BASE" ]] && git -C "$REPO_ROOT" diff --quiet --ignore-submodules=none "$BASE" HEAD; then
   say "merge=skipped:no-diff base=$BASE"
   verdict_out "PASS members=0 red=0 seconds=$(( $(date +%s) - T0 )) merge=skipped:no-diff"
   exit 0
@@ -356,10 +356,14 @@ MAIN_CHANGES="$PARENT/main-changes.txt" # what arrived on main since the fork
 assert_fixture_dir "$BRANCH_ALL"
 assert_fixture_dir "$MAIN_CHANGES"
 if [[ -n "$BASE" ]]; then
-  git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD > "$BRANCH_ALL" \
-    || abort - "branch-diff-failed"
-  git -C "$REPO_ROOT" diff --name-only "$BASE" origin/main > "$MAIN_CHANGES" \
-    || abort - "main-diff-failed"
+  # NUL-delimited, rename-free, submodule-honest (the converted-reader form):
+  # a renamed-away path stays visible by its OLD name, a non-ASCII/tab name
+  # reaches the suite loop as raw bytes, and a hidden gitlink is listed. The
+  # pipeline status (set -o pipefail) reaches the abort arm.
+  git -C "$REPO_ROOT" diff -z --no-renames --ignore-submodules=none --name-only "$BASE" HEAD \
+    | tr '\0' '\n' > "$BRANCH_ALL" || abort - "branch-diff-failed"
+  git -C "$REPO_ROOT" diff -z --no-renames --ignore-submodules=none --name-only "$BASE" origin/main \
+    | tr '\0' '\n' > "$MAIN_CHANGES" || abort - "main-diff-failed"
 else
   : > "$BRANCH_ALL"; : > "$MAIN_CHANGES"
 fi
@@ -415,11 +419,11 @@ conditional_reason() {
   done < "$BRANCH_ALL"
   # (c) a new scripts/*.baseline.txt in the merge delta (either side). A diff
   # failure cannot certify "no new baseline" — fail TOWARD coverage and fire.
-  if ! git -C "$REPO_ROOT" diff --name-status "$BASE" origin/main \
+  if ! git -C "$REPO_ROOT" diff --no-renames --name-status "$BASE" origin/main \
       -- 'scripts/*.baseline.txt' > "$PARENT/main-baselines.txt"; then
     printf 'baseline-diff-error:main'; return 0
   fi
-  if ! git -C "$REPO_ROOT" diff --name-status "$BASE" HEAD \
+  if ! git -C "$REPO_ROOT" diff --no-renames --name-status "$BASE" HEAD \
       -- 'scripts/*.baseline.txt' > "$PARENT/branch-baselines.txt"; then
     printf 'baseline-diff-error:branch'; return 0
   fi

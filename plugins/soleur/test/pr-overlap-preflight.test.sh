@@ -235,6 +235,8 @@ bulk_files_json() { # bulk_files_json <count> -> JSON array of {path:...}
 #   REPO_ONE one changed file (a.sh)
 #   REPO_T  one changed file, with the short subject "fix: typo"
 #   REPO_R  a rename (old.sh -> new.sh)
+#   REPO_N  two odd-named files: a non-ASCII name and a name carrying a tab
+#   REPO_U  an unborn HEAD: origin/main resolves but the file list cannot be read
 #   REPO_S  nothing saved yet on the branch
 #   REPO_B  no origin/main at all
 # ---------------------------------------------------------------------------------------------
@@ -256,7 +258,9 @@ REPO_T="$TMP/repo-t"
 REPO_R="$TMP/repo-r"
 REPO_S="$TMP/repo-s"
 REPO_B="$TMP/repo-b"
-mkdir -p "$REPO" "$REPO_ONE" "$REPO_T" "$REPO_R" "$REPO_S" "$REPO_B"
+REPO_N="$TMP/repo-n"
+REPO_U="$TMP/repo-u"
+mkdir -p "$REPO" "$REPO_ONE" "$REPO_T" "$REPO_R" "$REPO_S" "$REPO_B" "$REPO_N" "$REPO_U"
 
 repo_base "$REPO" feat-widget-cache
 git -C "$REPO" commit -q --allow-empty -m "chore: initialize feat-widget-cache"
@@ -280,6 +284,15 @@ git -C "$REPO_T" commit -q -m "fix: typo"
 repo_base "$REPO_R" feat-rename
 git -C "$REPO_R" mv old.sh new.sh
 git -C "$REPO_R" commit -q -m "feat: rename the old helper to new"
+
+repo_base "$REPO_N" feat-odd-names
+printf 'echo odd\n' > "$REPO_N/caf$(printf '\303\251').sh"
+printf 'echo tab\n' > "$REPO_N/tab$(printf '\t')name.sh"
+git -C "$REPO_N" add -A
+git -C "$REPO_N" commit -q -m "feat: add the odd-named helpers"
+
+repo_base "$REPO_U" feat-unborn
+git -C "$REPO_U" symbolic-ref HEAD refs/heads/unborn-branch
 
 repo_base "$REPO_S" feat-new-thing
 
@@ -855,6 +868,41 @@ row_norenames() {
   chk_has "$OUTF" "old.sh" "rename: the old path is named"
   finish_row rename 400
 }
+row_ownnames() {
+  # Our own file list is read NUL-separated: git C-quotes a non-ASCII or tab name in the newline form,
+  # so the quoted spelling never equals the name GitHub reports and the overlap was missed.
+  local nm
+  nm="caf$(printf '\303\251').sh"
+  new_scn ownnames_utf8
+  mk_list "$(pr_json 410 "feat: also touch the odd helper" MEMBER feat-odd "$nm:1:1")"
+  hist 410
+  PF_CWD="$REPO_N"
+  run_pf --mode merge --pr 100
+  PF_CWD="$REPO"
+  chk_eq 13 "$RC" "non-ASCII own file: a change editing the same file is an overlap (exit 13)"
+  chk_has "$OUTF" "$nm" "non-ASCII own file: the name is printed as spelled, not C-quoted"
+  finish_row ownnames_utf8 410
+  nm="tab$(printf '\t')name.sh"
+  new_scn ownnames_tab
+  mk_list "$(pr_json 411 "feat: also touch the tab helper" MEMBER feat-tab "$nm:1:1")"
+  hist 411
+  PF_CWD="$REPO_N"
+  run_pf --mode merge --pr 100
+  PF_CWD="$REPO"
+  chk_eq 13 "$RC" "tab-named own file: a change editing the same file is an overlap (exit 13)"
+  finish_row ownnames_tab 411
+}
+row_owngitfail() {
+  # The file list cannot be read (unborn HEAD): never "nothing changed", always exit 2.
+  new_scn owngitfail
+  fx list-clear.json list.json
+  PF_CWD="$REPO_U"
+  run_pf --mode merge --pr 100
+  PF_CWD="$REPO"
+  chk_eq 2 "$RC" "unreadable file list: exits 2, never clear"
+  chk_has "$OUTF" "I could not read which files this change touches" "unreadable file list: says it could not read the files"
+  finish_row owngitfail
+}
 row_lcap() {
   new_scn lcap
   jq -n -c '[range(500;700) | {number: ., title: ("docs: item \(.) of many"), url: ("https://github.com/example-org/example-repo/pull/\(.)"), isDraft: false, headRefName: ("docs-item-\(.)"), headRepositoryOwner: {login: "example-org"}, isCrossRepository: false, authorAssociation: "MEMBER", files: [{path: ("u/f\(.).md"), additions: 1, deletions: 0}]}]' > "$SCN/list.json"
@@ -999,7 +1047,7 @@ row_short_threshold() {
   finish_row s12
 }
 
-ALL_ROWS="clear shared vehicle dup dup_single assoc title listfail paginate diffcap diff_unreadable self view_default start start_nothing_saved hostile usage nobase noise norenames lcap deadline deadline_clip deadline_env notimeout generic_prefix short_threshold untitle"
+ALL_ROWS="clear shared vehicle dup dup_single assoc title listfail paginate diffcap diff_unreadable self view_default start start_nothing_saved hostile usage nobase noise norenames ownnames owngitfail lcap deadline deadline_clip deadline_env notimeout generic_prefix short_threshold untitle"
 
 run_rows() { # run_rows "<row names>"
   local r t0
@@ -1115,7 +1163,7 @@ for gone in SCAN_LIMIT SAMEFILE_ON SHARED_ONLY_EXIT MSG_EDIT SUBJECT_READ_CAP SU
   assert_eq "0" "$(grep -cF -- "$gone" "$CODE" || true)" "removed: $gone"
 done
 assert_eq "0" "$(grep -cF -- '--issue' "$SCRIPT" || true)" "the --issue option is gone from the script, header included"
-assert_eq "1" "$(grep -cF -- '--no-renames --name-only' "$CODE" || true)" "our file list is read without rename detection"
+assert_eq "1" "$(grep -cF -- 'diff -z --no-renames --ignore-submodules=none --name-only' "$CODE" || true)" "our file list is read NUL-separated, without rename detection or submodule hiding"
 if command -v shellcheck >/dev/null 2>&1; then
   set +e; shellcheck -S warning "$SCRIPT" >"$TMP/shellcheck.out" 2>&1; rc=$?; set -e
   assert_eq "0" "$rc" "shellcheck -S warning is clean on the script"
@@ -1256,7 +1304,7 @@ mut_expect_red notimeoutguard ': ' "notimeout" "M17c no clock check before a cal
 mut_expect_red envcheck 'deadline_ok() { return 0; }' "deadline_env" "M17d any override is accepted -> the override-validation row red"
 mut_expect_red dltoken ': ' "deadline" "M17e the machine line does not say the check stopped early -> the deadline row red"
 mut_expect_red untitle 'def shown: "\"" + (.title | disp) + "\"";' "untitle assoc" "M21 a stranger's title is printed -> the link-only rows red"
-mut_expect_red norenames 'OWN_FILES="$(git diff --name-only origin/main...HEAD 2>/dev/null)"' "norenames" "M18 rename detection hides the old path -> the rename row red"
+mut_expect_red norenames 'OWN_FILES="$(set -o pipefail; git diff -z --ignore-submodules=none --name-only origin/main...HEAD 2>/dev/null | tr '"'"'\0'"'"' '"'"'\n'"'"')"' "norenames" "M18 rename detection hides the old path -> the rename row red"
 mut_expect_red nobasenote 'NOBASE=0' "start_nothing_saved" "M19 no note when the starting point is missing -> the start row red"
 
 # A red run must show WHICH scenario failed: the captured streams live under $TMP.

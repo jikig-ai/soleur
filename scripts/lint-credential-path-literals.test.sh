@@ -230,6 +230,71 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# --changed reads git's path lists NUL-separated: a non-ASCII-named doc (committed on the
+# branch, and a second one still untracked) is C-quoted in the newline form, the quoted name
+# no longer ends in ".md", and the doc was silently skipped. Both must be SCANNED.
+# ---------------------------------------------------------------------------
+n_status=0
+(
+  set -e
+  for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+  REPO="$TMPDIR_TEST/gitnonascii"
+  mkdir -p "$REPO"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  mkdir -p knowledge-base/project/plans
+  echo "# base" > knowledge-base/project/plans/base.md
+  git add -A && git commit -q -m base
+  git checkout -q -b feature
+  printf '# new\n\ntoken at `%s`\n' "$DOPPLER_HOME_PATH" \
+    > "knowledge-base/project/plans/caf$(printf '\303\251')-committed.md"
+  git add -A && git commit -q -m feat
+  printf '# new\n\ntoken at `%s`\n' "$DOPPLER_HOME_PATH" \
+    > "knowledge-base/project/plans/caf$(printf '\303\251')-untracked.md"
+  rc=0
+  out="$(python3 "$SUT" --changed --base main 2>&1)" || rc=$?
+  # errexit is off inside a subshell on the left of `||`, so each check exits explicitly.
+  [[ "$rc" == "1" ]] || exit 1
+  [[ "$out" == *"-committed.md"* ]] || exit 1
+  [[ "$out" == *"-untracked.md"* ]] || exit 1
+) || n_status=$?
+if [[ "$n_status" == "0" ]]; then
+  pass "C3 --changed scans non-ASCII-named docs (committed and untracked)"
+else
+  fail "C3 --changed scans non-ASCII-named docs (committed and untracked)" "sub-shell status=$n_status"
+fi
+
+# --changed: a git that fails on the changed-set read is exit 2, never an empty set. A `git` shim
+# in front of PATH fails the named subcommand and passes everything else to the real git.
+REAL_GIT="$(command -v git)"
+for sub in diff ls-files; do
+  f_status=0
+  (
+    set -e
+    for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+    REPO="$TMPDIR_TEST/gitfail-$sub"
+    mkdir -p "$REPO/shim"
+    printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "%s" ] && exit 128; done\nexec "%s" "$@"\n' "$sub" "$REAL_GIT" > "$REPO/shim/git"
+    chmod +x "$REPO/shim/git"
+    cd "$REPO"
+    git init -q -b main .
+    git config user.email t@t && git config user.name t
+    mkdir -p knowledge-base/project/plans
+    echo "# base" > knowledge-base/project/plans/base.md
+    git add -A && git commit -q -m base
+    rc=0
+    PATH="$REPO/shim:$PATH" python3 "$SUT" --changed --base main >/dev/null 2>&1 || rc=$?
+    [[ "$rc" == "2" ]]
+  ) || f_status=$?
+  if [[ "$f_status" == "0" ]]; then
+    pass "C4 --changed with a failing git $sub exits 2 (fail-closed)"
+  else
+    fail "C4 --changed with a failing git $sub exits 2 (fail-closed)" "sub-shell status=$f_status"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # archive/ carve-out — a violation under **/archive/** is skipped in full-scan.
 # ---------------------------------------------------------------------------
 a_status=0
@@ -659,7 +724,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=41
+MIN_CASES=44
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

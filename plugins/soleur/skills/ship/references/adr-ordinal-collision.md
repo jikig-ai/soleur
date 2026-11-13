@@ -2,6 +2,8 @@
 
 Moved verbatim out of `ship/SKILL.md` Phase 5.5 to stay under the SKILL.md body ceiling (ADR-229); SKILL.md keeps the trigger and a load directive.
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. The ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. A collision cannot reach `main` through the queued auto-merge (the `--admin` hatch in Phase 7 bypasses the whole `required_status_checks` rule, which is why its step 2 exists): `guards-ruleset` is the required status check (its `adr-ordinals` member step runs the gate — renamed #12089) and `main` is strict-up-to-date, so a sibling's ADR arriving through a Phase 7 sync reds the PR's `adr-ordinals` member and the poll loop's required-check-failure exit stops there (Phase 7, "ADR-ordinal collision after a sync", cites the SSOT). This gate is defense-in-depth: catching the collision at PR-ready costs one commit, while catching it in Phase 7 costs a sync plus a full CI cycle (the ~35-minute figure the settle paragraph measures), and a renumber done inside the poll loop is the one most likely to leave the plan/tasks sweep undone.
 
 **Detection.** Run the canonical sentinel named on the Trigger line in `ship/SKILL.md` (fetch `origin/main` first, run from the branch root).
@@ -30,7 +32,12 @@ Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is
 
    **That `knowledge-base/`-scoped sweep is necessary but NOT sufficient — an ADR ordinal
    can be cited from CODE.** Sweep the branch's whole diff, then classify each hit:
-   `for f in $(git diff --name-only origin/main...HEAD); do [[ -f $f ]] && grep -Hn 'ADR-<old>' "$f"; done`.
+
+   ```bash
+   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown (exit 2/127): sweep every tracked file, never an empty list
+   while IFS= read -r f; do [[ -f $f ]] && grep -Hn -- 'ADR-<old>' "$f"; done <<< "$files"
+   ```
+
    Hits in a hook, a script or a test are the dangerous ones — an ADR reference inside a
    runtime **deny reason string** ships to the agent (or the operator) pointing at whatever
    unrelated ADR now holds that ordinal. Check the CLAUSE LABEL too: a provisional ADR

@@ -362,6 +362,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	413	measured
 scripts/actions-queue-health	2503	measured
 scripts/actions-queue-tail-8450	1990	measured
 scripts/alarm-issue-filing-guard	2320	measured
+scripts/allowlist-diff	1239	floor
 scripts/always-on-ledger	1222	floor
 scripts/anthropic-admin-key-6297	1883	measured
 scripts/anthropic-double-bill-8611	92	measured

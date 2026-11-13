@@ -2570,6 +2570,51 @@ t_dj4_deleted_file_overlap() {
     "decision=$(_prf_decision) ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
 }
 
+# --- T-DJ5: a hidden gitlink on both sides is an overlap (REAL git) -------------
+# Under a .gitmodules `ignore = all`, a plain `git diff --name-only` omits a
+# gitlink change, so a branch and a main that both moved the same submodule
+# pointer (plus unrelated plain files) would read DISJOINT and skip the sync.
+# The disjoint reads carry --ignore-submodules=none; this case runs REAL git
+# (the T-DJ stubs match text only). Mutation: drop the flag from either
+# disjoint read and the "delta disjoint" skip returns -> this case RED.
+t_dj5_gitlink_overlap() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  # main carries a gitlink `sub` (placeholder pointer) hidden by ignore=all.
+  git -C "$tmp/root" worktree add -q --detach "$tmp/seed" main
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = ./nowhere\n\tignore = all\n' > "$tmp/seed/.gitmodules"
+  git -C "$tmp/seed" add .gitmodules
+  git -C "$tmp/seed" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
+  git -C "$tmp/seed" commit -q -m "seed gitlink"
+  git -C "$tmp/seed" push -q origin HEAD:main
+  git -C "$tmp/root" branch -f main "$(git -C "$tmp/seed" rev-parse HEAD)"
+  git -C "$tmp/root" worktree remove --force "$tmp/seed"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  echo "pr side" > "$wt/feat-file.txt"
+  git -C "$wt" add feat-file.txt
+  git -C "$wt" update-index --cacheinfo 160000,2222222222222222222222222222222222222222,sub
+  git -C "$wt" commit -q -m "feat: work and bump sub"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  # main moves the SAME pointer to the SAME value (a clean merge) plus its own file.
+  git -C "$tmp/root" worktree add -q --detach "$tmp/adv" main
+  echo "main moved" > "$tmp/adv/main-only.txt"
+  git -C "$tmp/adv" add main-only.txt
+  git -C "$tmp/adv" update-index --cacheinfo 160000,2222222222222222222222222222222222222222,sub
+  git -C "$tmp/adv" commit -q -m "main: advance and bump sub"
+  git -C "$tmp/adv" push -q origin HEAD:main
+  git -C "$tmp/root" worktree remove --force "$tmp/adv"
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local ok=1
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  [[ "$PRF_REASON" != *"delta disjoint"* ]] || ok=0
+  _verdict "T-DJ5 a hidden gitlink changed on both sides is an overlap, never 'delta disjoint'" "$ok" \
+    "decision=$(_prf_decision) ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+}
+
 # --- T-R1: a same-repo -R/--repo/GH_* pointer resolves the PR head (#9401) -----
 # Session anchored on feat-a's checkout, NOT the PR's: only a resolved head can
 # reach the P-state skip; unresolved reads feat-a's empty range and denies.
@@ -2851,6 +2896,7 @@ for _case in \
   t_dj2_overlap_syncs \
   t_dj3_diff_failopen \
   t_dj4_deleted_file_overlap \
+  t_dj5_gitlink_overlap \
   t_r1_same_repo_resolves \
   t_r2_foreign_still_legacy \
   t_r3_same_repo_unreviewed_denies \
@@ -2875,7 +2921,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=80
+EXPECTED_CASES=81
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

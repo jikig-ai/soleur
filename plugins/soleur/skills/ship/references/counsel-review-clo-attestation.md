@@ -2,13 +2,14 @@
 
 Moved verbatim out of `ship/SKILL.md` Phase 5.5 to stay under the SKILL.md body ceiling (ADR-229); SKILL.md keeps the trigger and a load directive.
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 **The reviewing authority for legal-doc attestation is the `soleur:legal:clo` agent, NOT the human operator.** The Soleur user is a non-lawyer founder; deferring legal sign-off to them bottlenecks indefinitely and mis-allocates expertise (the `soleur:legal:clo` agent orchestrates `soleur:legal:legal-compliance-auditor` + `soleur:legal:legal-document-generator` and can cross-check prose against statute and against the implementing migration in one cycle). This is symmetric to how `soleur:plan` routes CPO sign-off to the CPO agent. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md` (the operator has corrected human-routed legal sign-off ≥3×).
 
 **Trigger:** the PR diff touches a legal-doc directory AND the change is legal-attestation-bearing:
 
 ```bash
-legal_touch=$(git diff main...HEAD --name-only \
-  | grep -E '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)' | head -n 1)
+legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)' origin/main...HEAD) || { [ $? -eq 1 ] || legal_touch=unknown; }
 # Scope the marker grep to legal-doc dirs ONLY — otherwise it self-fires on
 # this gate's own prose in ship/SKILL.md or on spec/tasks.md that quotes the
 # literal descriptively (false positive).
@@ -21,6 +22,7 @@ if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
   sui_threshold=$(grep -E '^brand_survival_threshold:\s*single-user incident' "$sui_plan" || true)
 fi
 # Gate fires when legal docs changed AND (single-user-incident OR a DRAFT marker is present)
+# legal_touch=unknown (helper exit 2/127: diff unverifiable) counts as touched, so the gate fires; it never skips.
 ```
 
 **If triggered (`legal_touch` non-empty AND (`sui_threshold` OR `draft_marker` non-empty)):**

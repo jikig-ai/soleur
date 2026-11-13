@@ -207,6 +207,17 @@ gcompare() {
   [[ "$(jq -r '.files[].filename' <<<"$j" | grep -cE 'cloud-init-registry|zot-registry|variables\.tf' || true)" -eq 0 ]] || { echo "  FATAL: compare fixture names a render input" >&2; exit 2; }
   printf '%s' "$j"
 }
+# A compare whose ONLY entry is a rename AWAY from $1 (previous_filename = $1, filename = a doc): the
+# shape in which a render input is touched yet never appears as a `.filename`. Asserts its own
+# preconditions: the filename must NOT be a render input (the scan above reads `.filename` only,
+# so a rename row naming an input as previous_filename is the only way to exercise this path).
+gcompare_rn() {
+  local j
+  j="$(jq -nc --arg p "$1" '{status:"ahead", total_commits:1, files:[{filename:"docs/relocated-note.md", previous_filename:$p, status:"renamed"}]}')"
+  [[ "$(jq '.files|length' <<<"$j")" -eq 1 && "$(jq -r '.files[0].previous_filename' <<<"$j")" == "$1" ]] || { echo "  FATAL: rename fixture precondition" >&2; exit 2; }
+  [[ "$(jq -r '.files[].filename' <<<"$j" | grep -cE 'cloud-init-registry|zot-registry|variables\.tf' || true)" -eq 0 ]] || { echo "  FATAL: rename fixture names a render input as its filename" >&2; exit 2; }
+  printf '%s' "$j"
+}
 run_gate() {  # extra env assignments... ; uses $GCOMPARE
   : > "$TMP/gout"; : > "$TMP/ggh.log"; : > "$TMP/gstub.err"
   ( cd "$GSB" && env PATH="$TMP/gbin:$GATE_NO_TF_PATH" GH_LOG="$TMP/ggh.log" STUB_ERR="$TMP/gstub.err" \
@@ -301,6 +312,27 @@ gmutate "$GBF/$CFG_REL" "s.replace('#cloud-config\\n', '#cloud-config\\n# ration
 GCOMPARE="$(gcompare 300)"; run_gate
 [[ "$RC" -ne 0 && "$(gout deliver)" != "false" && -z "$(gout unproven)" ]] && grep -qi 'unmeasurable' "$TMP/glog" && pass "K9: a differing template blob enters the render arm (fails closed with no terraform), not the cap arm" || fail "K9: rc=$RC deliver=$(gout deliver) unproven=$(gout unproven) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
 
+# R0-R4: the compare API reports a rename as {filename: <new>, previous_filename: <old>}. A render input
+# renamed AWAY never appears as a `.filename`, so reading `.filename` alone concluded "registration-only
+# push" and the host kept a user_data whose input was gone. The previous_filename must count as touched.
+reset_gate_trees; GCOMPARE="$(gcompare_rn docs/unrelated-note.md)"; run_gate
+[[ "$RC" -eq 0 && "$(gout deliver)" == "false" ]] && grep -qF 'Nothing since the watermark' "$TMP/glog" && pass "R0: a rename of an UNRELATED file is still 'registration-only' (control: the rename shape alone changes nothing)" || fail "R0: rc=$RC deliver=$(gout deliver)"
+reset_gate_trees; GCOMPARE="$(gcompare_rn "$CFG_REL")"; run_gate
+[[ "$RC" -ne 0 && "$(gout deliver)" != "false" && -z "$(gout unproven)" ]] && ! grep -qF 'Nothing since the watermark' "$TMP/glog" && grep -qi 'unmeasurable' "$TMP/glog" && pass "R1: cloud-init-registry.yml renamed AWAY -> the render arm is reached, never deliver=false" || fail "R1: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+reset_gate_trees; GCOMPARE="$(gcompare_rn "$TF_REL")"; run_gate
+[[ "$RC" -ne 0 && "$(gout deliver)" != "false" && -z "$(gout unproven)" ]] && ! grep -qF 'Nothing since the watermark' "$TMP/glog" && grep -qi 'unmeasurable' "$TMP/glog" && pass "R2: zot-registry.tf renamed AWAY -> the render arm is reached, never deliver=false" || fail "R2: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+# variables.tf is compared BY VALUE: make registry_server_type differ at the watermark so the by-value arm
+# (not the registration-only arm) is what decides, and deliver=true proves the rename was read as a touch.
+reset_gate_trees
+gmutate "$GBF/$VARS_REL" "re.sub(r'(variable \"registry_server_type\" \\{.*?\n  default = )\"cpx22\"', r'\\1\"cx23\"', s, count=1, flags=re.S)"
+GCOMPARE="$(gcompare_rn "$VARS_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(gout deliver)" == "true" && "$(gout render_changed)" == "true" && "$(gout why)" == *"registry_server_type"* ]] && pass "R3: variables.tf renamed AWAY (server type differs) -> deliver=true, render_changed, why names it" || fail "R3: rc=$RC deliver=$(gout deliver) render_changed=$(gout render_changed) why=$(gout why)"
+# A 200 whose `files` is absent or null used to read as "0 files" -> deliver=false. It is unreadable: refuse.
+reset_gate_trees; GCOMPARE='{"status":"ahead","total_commits":1}'; run_gate
+[[ "$RC" -eq 1 && -z "$(gout deliver)" ]] && grep -q '::error::.*files' "$TMP/glog" && pass "R4: compare answer with no files array -> ::error:: and rc 1, no deliver line (not 'registration-only')" || fail "R4: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+reset_gate_trees; GCOMPARE='{"status":"ahead","total_commits":1,"files":null}'; run_gate
+[[ "$RC" -eq 1 && -z "$(gout deliver)" ]] && grep -q '::error::.*files' "$TMP/glog" && pass "R4b: compare answer with files:null -> ::error:: and rc 1, no deliver line" || fail "R4b: rc=$RC deliver=$(gout deliver) $(tail -2 "$TMP/glog" | tr '\n' ' ')"
+
 # V16: the verdict for an unproven cap hit is its OWN kind, never gate-failed, and never claims the
 # host is stale ("NOT live") or current ("unchanged since").
 run_verdict JOB_STATUS=failure GATE_OUTCOME=failure GATE_UNPROVEN=cap PREFLIGHT_OUTCOME=skipped DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped TARGETS= PRS= COMMITS=
@@ -320,8 +352,8 @@ fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # A literal bound adjacent to the test, reported by a direct printf + exit 1 (never through the
 # helpers it backstops), so scripts/guard-vacuity-floor.test.sh can construct its mutant.
-if [[ "$PASS" -lt 58 ]]; then
-  printf '  FATAL: anti-vacuity: only %s passes; the floor is 58 (fix the dispatch, do not lower it).\n' "$PASS" >&2
+if [[ "$PASS" -lt 64 ]]; then
+  printf '  FATAL: anti-vacuity: only %s passes; the floor is 64 (fix the dispatch, do not lower it).\n' "$PASS" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="
