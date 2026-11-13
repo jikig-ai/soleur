@@ -18,6 +18,47 @@ Ref #11076 (under epic #9601). Draft PR #12705 already exists; this plan opens n
 `Ref #9601` only, never a closing keyword. Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed); no `spec.md`
 exists for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-12, after plan review (DHH, Kieran, code-simplicity, CTO-devex; CTO rulings C1-C5).
+**Sections enhanced:** 11. These are Research Insights (new "Hook semantics" block, corrected CLI facts and allowlist counts),
+Phase 0, Phase 1, Phase 2, Phase 3, Phase 4 (ADR items 2-6), User-Brand Impact, Observability, the Guard Contract (Guard 7
+added), the Scope Check and the Acceptance Criteria.
+**Agents used:** `claude-code-guide` (official hooks, headless and CLI docs); a grep-and-run verification pass (14 negative
+and factual claims checked against the code, plus a self-audit for leftovers); `soleur:engineering:review:security-sentinel`;
+`soleur:engineering:review:test-design-reviewer` (7.5/10, Pyramid PASS); and `soleur:engineering:cto` for the D1-D4 rulings.
+Gates 4.6-4.13 all pass: User-Brand Impact, Observability (Check 10 verb gate `rc=0`), PAT sweep (no hits),
+`lint-guard-contract.py` (7 entries) and the Scope Check. The UI, encryption, task-design, network and downtime gates do not
+fire.
+
+### Key Improvements
+
+1. **The framing hook file is now write-protected in containment (CTO D1, from security-sentinel P1).** Without this, a
+   registered hook that the agent could rewrite would give code execution after every Bash call, with `GH_TOKEN` in the
+   environment, outside the allowlist. The spawn-time self-test cannot see that tampering.
+2. **Code facts now drive the tests.** The deepen pass ran `decide()`, `tokenize` and `splitSegments` on the real hook:
+   - The chain row was moved to an admitted chain; `git status && …` is denied under the union allowlist.
+   - The write row with `--label meta/machinery` is admitted.
+   - The allowlist-shape guard now also requires a closed verb set; the shape regex alone would accept `gh pr ls`.
+   - The real `settings` scope and the `run` helper are named in Phase 2.
+3. **The tests are lighter and harder to fool (CTO D2 and D4, test-design review).**
+   - Logic rows run in-process; binary spawns are kept for the brief's shapes and the import failures.
+   - A behavioural "written settings.json has no `PostToolUse`" row replaces the literal occurrence count.
+   - Every throw case asserts its message.
+   - A must-pass end-to-end case was added, and the differential gets per-row admission floors.
+
+### New Considerations Discovered
+
+- Official docs say a non-zero Bash exit's event (`PostToolUse` or `PostToolUseFailure`) is undocumented. This is now a named
+  gap, along with compound commands whose last segment fails and oversized output read back from a file.
+- Clone/image skew means a preamble edit must deploy before the hook edit, or every registered cron throws. CTO D3 keeps that
+  throw as the fail-safe signal, and ADR enablement step 6 records it.
+- Wording no longer claims more than the evidence:
+  - "harmless" becomes "accepted, same under-action residual";
+  - "never delays" is dropped;
+  - "superset" is limited to the test corpus;
+  - P5 is "spawn time only".
+
 ## Overview
 
 This plan adds a standalone Node hook that the cron Claude eval substrate can register after Bash tool calls. When the Bash
@@ -25,17 +66,20 @@ command was a read-style `gh` command, the hook appends the existing GitHub untr
 the model. It never changes the tool output. Registration is opt-in through a new option on the settings builder, and no caller
 turns it on in this change. ADR-287 is amended to record the cron surface, its dark status, and what is still unmeasured.
 
-Four deliverables, all from the CTO ruling of 2026-11-12 (decision-challenges rows S1-S3, F1-F8, F4', F5', and the plan-review rows C1-C5):
+Five deliverables, all from CTO rulings of 2026-11-12 (decision-challenges rows S1-S3, F1-F8, F4', F5', plan-review rows
+C1-C5, and deepen rows D1-D4):
 
 1. `apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs` — PostToolUse(Bash) command hook. Ported verb table, the
    GitHub preamble as a constant, detection on the tokens of the sibling containment hook's own parser. Annotate only. Always
    exits 0. Emits nothing on any parse problem.
 2. `buildCronEvalSettings(spawnCwd, { frameGhOutput?: boolean })` — adds one `PostToolUse` Bash entry only when
    `frameGhOutput === true`. The default output is byte-identical to today's.
-3. `runHookSelfTest` — when the parsed `settings.json` has a `hooks.PostToolUse` key, it deep-equals that value against the one
-   expected entry, probes the framing binary, and throws on any failure. When the key is absent (every spawn today), nothing
-   new runs. No new argument (CTO C1, restoring F4).
-4. ADR-287 addendum dated 2026-11-12 — the cron surface, its dark status, its coverage limits, and the residual that the hook's
+3. `runHookSelfTest` → `runFramingHookSelfTest` — when the parsed `settings.json` has a `hooks.PostToolUse` key, it
+   deep-equals that value against the one expected entry, probes the framing binary, and throws on any failure. When the key
+   is absent (every spawn today), nothing new runs. No new argument (CTO C1, restoring F4).
+4. Containment write-protection — one `WRITE_PROTECTED_PATTERNS` entry so no cron agent can rewrite the framing hook file
+   (CTO D1). It strictly tightens containment.
+5. ADR-287 addendum dated 2026-11-12 — the cron surface, its dark status, its coverage limits, and the residual that the hook's
    effect in headless `claude --print` is unmeasured.
 
 ## Research Reconciliation — Brief vs. Codebase
@@ -71,7 +115,7 @@ Four deliverables, all from the CTO ruling of 2026-11-12 (decision-challenges ro
 
   | Cited fact | File | Still true in the opted-in population? |
   |---|---|---|
-  | Cron agents run `gh` reads through Bash | `CRON_BASH_ALLOWLISTS` in `_cron-claude-eval-substrate.ts`: `gh issue view` is in 5 cron allowlists, `gh issue list` in 5, `gh pr list` in 1, `gh api repos/jikig-ai/soleur/` in 1 | Yes. The option does not change allowlists. |
+  | Cron agents run `gh` reads through Bash | `CRON_BASH_ALLOWLISTS` in `_cron-claude-eval-substrate.ts`: `gh issue view` is in 6 cron allowlists, `gh issue list` in 13, `gh pr list` in 1, `gh api repos/jikig-ai/soleur/` in 1 (counted by script at deepen time). The reachable read verbs are therefore only `issue view`, `issue list`, `pr list` and `gh api`; `gh pr view`, `pr diff`, `run view` and `search` are denied as not allowlisted | Yes. The option does not change allowlists. |
   | `gh` authenticates in the spawn | `buildSpawnEnv(installationToken)` carries `GH_TOKEN`. The run-report probe (d) exists because the spawn env carries it. | Yes. No predicate removes it. |
   | `gh` is installed | `apps/web-platform/Dockerfile`, the `GitHub CLI` install block | Yes. |
   | PostToolUse sees only admitted commands | `decide()` in `cron-bash-allowlist-hook.mjs` denies multiline, unbalanced quotes, substitution, `$VAR`, redirection, pipes and background `&` before the tool runs | Yes. That is why the fallback scan is cut. |
@@ -83,12 +127,14 @@ Four deliverables, all from the CTO ruling of 2026-11-12 (decision-challenges ro
 
 - **P1.** After a cron agent runs a read-style `gh` command through Bash in a spawn whose settings opt in, the model receives the
   GitHub untrusted preamble as additional context next to that output.
-- **P2.** The hook never changes, blocks or delays the tool output. Every failure leaves the turn as it is today.
+- **P2.** The hook never changes or blocks the tool output (it adds one short node start-up per matching Bash call, since
+  PostToolUse hooks run synchronously). Every failure leaves the turn as it is today.
 - **P3.** When the option is absent or not exactly `true`, the written `settings.json` is byte-identical to today's, so every
   production cron is unchanged.
 - **P4.** The cron verb table and preamble cannot drift silently from the hosted source of truth.
 - **P5.** When the framing hook is registered, a missing or broken hook is detected at spawn time on the host, and the cron
-  aborts.
+  aborts. Spawn time only: in-run tampering is prevented by write-protection (P7), not detected.
+- **P7.** No agent tool call in a cron spawn can write the framing hook file (CTO D1).
 - **P6.** ADR-287 records the cron surface, its dark status, its named gaps, and that the effect in headless `--print` is
   unmeasured.
 
@@ -158,7 +204,34 @@ Four deliverables, all from the CTO ruling of 2026-11-12 (decision-challenges ro
 stream (only works with --output-format=stream-json)"), `--setting-sources <sources>` ("Comma-separated list of setting sources to
 load (user, project, local)"), `--settings <file-or-json>`, `--strict-mcp-config`. `--bare` skips settings hooks, so the probe must
 not use it. The prod pin is `@anthropic-ai/claude-code@2.1.321` (`apps/web-platform/package.json`, `apps/web-platform/Dockerfile`).
-Whether 2.1.321 has `--include-hook-events` is checked in Phase 0. The nonce is the deciding evidence either way (CTO F5).
+Phase 0 uses `--output-format json` only. `--include-hook-events` and stream-json are not part of Phase 0 (CTO C3) and are
+listed here only as an enablement telemetry candidate (ADR enablement step 4). The nonce is the deciding evidence (CTO F5).
+
+### Hook semantics (official docs, fetched 2026-11-12 from code.claude.com/docs/en/hooks, /headless, /cli-reference)
+
+Paraphrased from a model-mediated fetch; re-check exact wording in a browser before quoting it in the ADR.
+
+- `additionalContext` is "String added to Claude's context alongside the tool result". Claude Code wraps it in a system
+  reminder at the point where the hook fired. A value over 10,000 characters is written to a file and replaced by a path plus
+  a 2,000-character preview. The GitHub preamble is about 370 characters, so it is inlined. Text framed as out-of-band system
+  commands can trigger the model's injection defenses; the preamble is phrased as a factual statement, which fits.
+- Exit 0 with plain text or nothing is success; exit 0 stderr is never shown to Claude. Any non-zero exit other than 2 is a
+  non-blocking error, and the action goes ahead. Exit 2 on PostToolUse shows stderr to Claude. A malformed or schema-invalid
+  JSON output is a non-blocking error. The hook therefore always exits 0 and writes only the fixed JSON or nothing.
+- PostToolUse "runs immediately after a tool completes successfully"; `PostToolUseFailure` "runs when a tool that started
+  executing fails". Whether a Bash command with a non-zero exit counts as a failure is NOT DOCUMENTED. The ADR keeps it as an
+  unverified named gap, not a stated mechanism.
+- The payload carries `hook_event_name`, `tool_name`, `tool_input` and `tool_response`, and per-tool schemas are not documented
+  beyond examples. That is why Phase 0 run 1 captures the real keys (CTO C3).
+- A matcher of only letters, digits, `_`, `-`, spaces, `,` and `|` is an exact string, so `"Bash"` matches only Bash
+  (`Bash.*` would be an unanchored regex).
+- Without `--bare`, a `-p` session runs the hooks in the project's `.claude/settings.json`. No print-mode caveat about
+  `additionalContext` is documented, which is why delivery is still probed (Phase 0). `--setting-sources` effects on CLI hooks
+  are not documented; the SDK docs say to include the source that holds the hooks, and the probe passes `project`.
+- The default command-hook timeout is 600 s, with an optional per-hook `timeout`. The builder does not set one, and the hook
+  finishes in milliseconds.
+- Hooks from settings files "also run inside subagents", and tool events in a subagent carry `agent_id`/`agent_type`. The ADR's
+  "Task subagent coverage" gap becomes "documented to fire; not probed under `--print`".
 
 ## Implementation Phases
 
@@ -256,6 +329,15 @@ Back-pointer comments (no code change), so whoever edits a shared piece finds it
   framing off for that shape. The guards are the differential test and the AC2 rows in `cron-gh-output-framing-hook.test.ts`.
 - The framing hook's header states the same posture difference.
 
+Containment code change (CTO D1, the one behavioural edit to the containment hook, and strictly tighter):
+
+- Add `/cron-gh-output-framing-hook/` to `WRITE_PROTECTED_PATTERNS` in `cron-bash-allowlist-hook.mjs`, unanchored like the
+  sibling's own `/cron-bash-allowlist-hook/` entry. Why: once registered, the CLI runs this file under node after every Bash
+  call with the spawn env (which carries `GH_TOKEN`). An agent that could rewrite it would get code execution outside the
+  Bash allowlist, and the spawn-time self-test runs before the agent starts, so it cannot see in-run tampering
+  (security-sentinel P1). The only file the framing hook imports, the containment hook, is already protected. A comment on the
+  list says any new file the framing hook imports must join it.
+
 ### Phase 2 — Registration (`apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`)
 
 - Add `const FRAMING_HOOK_REL_PATH = "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";` next to `HOOK_REL_PATH`.
@@ -270,20 +352,30 @@ Back-pointer comments (no code change), so whoever edits a shared piece finds it
 - `setupEphemeralWorkspace` is not edited. It keeps calling `buildCronEvalSettings(spawnCwd)` and `runHookSelfTest({...})`.
 - Add an exported `runFramingHookSelfTest({ spawnCwd, cronName, nodeBin, settings })` as its own function (Kieran P2: the
   existing `runHookSelfTest` is already about 300 lines). `runHookSelfTest` calls it once with the `settings` object it already
-  parsed, after the existing containment probes. Its existing `matcherOk` logic and messages stay unchanged. No new argument is
+  parsed, after the existing containment probes. Today `settings` is a `const` scoped inside the `matcherOk` `try` block and
+  typed with only `PreToolUse`; hoist it to a `let settings: { hooks?: Record<string, unknown> } | undefined` declared before
+  the `try` (still one parse), widen its type, and keep the `matcherOk` logic and its messages byte-identical. No new argument is
   added to `runHookSelfTest` (CTO C1, restoring F4: the trigger is what the file says).
-  - **`settings.hooks?.PostToolUse` absent (every cron today):** return immediately. No file is read, no process runs.
+  - **Trigger:** `Object.hasOwn(settings?.hooks ?? {}, "PostToolUse")` (security P2: optional chaining alone would send
+    `PostToolUse: null` down the early return instead of failing as a mismatch).
+  - **Key absent (every cron today):** return immediately. No file is read, no process runs.
   - **Present:** `isDeepStrictEqual(settings.hooks.PostToolUse, [framingHookEntry(spawnCwd, nodeBin)])` from `node:util`.
     Otherwise throw `[<cron>] gh-output framing hook self-test FAILED: registration mismatch; expected <json> got <json>`
     (`settings.json` holds no secrets, so printing both is safe). This one check enforces exactly one entry, matcher `Bash`,
     exactly one command hook, and the byte-equal command, so the probed binary is the registered one (CTO C5).
-  - **Probe (ii), gh read.** `execFileSync(nodeBin, [framingAbs], { input, encoding: "utf-8", timeout: 10_000 })`, through the
-    same `run`-style wrapper, where a non-zero exit or a missing binary is a failure, with
+  - **Probe (ii), gh read.** `execFileSync(nodeBin, [framingAbs], { input, encoding: "utf-8", timeout: 10_000 })`, through a
+    small framing-specific exec wrapper. The existing `run` helper is hard-wired to the containment binary and its allowlist
+    argument and returns a `"self-test-exec-error:"` string instead of throwing, so the framing path gets its own wrapper with
+    the same semantics: a non-zero exit, a timeout or a missing binary is a failure. Payload:
     `{ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "gh issue view 1" }, tool_response: { stdout: "x", stderr: "" } }`.
     `isDeepStrictEqual(JSON.parse(stdout), { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github } })`
     must hold. That is an exact key set at both levels, so a stub that adds `decision: "block"` beside a correct
-    `hookSpecificOutput` fails (Kieran P1). A JSON parse error or a mismatch throws.
-  - **Probe (iii), `ls`.** The same call with `command: "ls"` must produce empty stdout (after trim). Otherwise throw.
+    `hookSpecificOutput` fails (Kieran P1). A JSON parse error or a mismatch throws
+    `[<cron>] gh-output framing hook self-test FAILED: gh-read probe returned <first 200 chars of stdout or the exec error>`.
+  - **Probe (iii), `ls`.** The same call with `command: "ls"` must produce stdout that is empty after `trim()`. Otherwise throw
+    `[<cron>] gh-output framing hook self-test FAILED: ls probe framed a non-gh command`. Every framing message starts with the
+    same `gh-output framing hook self-test FAILED:` prefix, and each names which check failed (registration mismatch, gh-read
+    probe, ls probe), which is what the Observability failure mode cites.
 - Throw, not mirror-and-proceed (CTO F4, F4' throw half). The probes are deterministic: fixed payloads, no network. So a
   failure is a real defect in a registered hook, such as a broken sibling import, the wrong stdout, or a `decision: "block"`
   that would feed a reason into the model loop on every gh read. Dissent recorded: if after enablement probes fail for
@@ -310,25 +402,39 @@ CTO F7):
   `expect(mjs.GITHUB_UNTRUSTED_PREAMBLE).toBe(UNTRUSTED_PREAMBLES.github)`. Behavioural census, in-process (no child process per
   entry): for every entry of the TS `GH_FRAME_VERBS`, `frameDecision` with the real imported parser frames `gh <entry> 1`. The
   binary path is covered by the AC2 rows. The census count equals `GH_FRAME_VERBS.length`, which is greater than 0.
-- **AC2 binary rows.** Each row spawns `process.execPath` on the real file with an explicit minimal `env` (no `NODE_OPTIONS`,
-  no `GH_TOKEN`). It asserts exit 0 and stdout either deep-equal to the exact framed JSON (exact key sets at both levels) or
-  exactly `""`. Rows are named and run through `it.each`. The census asserts the literal count of declared rows, written in the
-  test as a number, not a floor recorded from a first green run (Kieran P2: that floor is circular).
-  - Frame: `gh issue view 1`; `gh issue view 1 --repo jikig-ai/soleur --json title,body`; `gh pr view 12`;
-    `gh pr view 12 --comments`; `gh api repos/jikig-ai/soleur/issues/1/comments`;
-    `gh api repos/jikig-ai/soleur/pulls/1/comments --paginate`; `gh issue list --label bug`; `gh run view 123 --log`;
-    `git status && gh issue view 1` (second segment); `gh issue view 'one'`; `gh issue view 1#x` (`#` starts a comment only at
-    a word start in `tokenize`, so `1#x` is one token); `gh search issues foo`.
-  - Nothing: `gh issue create --title t --body b`; `gh issue comment 1 --body x`; `ls`; `git log -1`; `gh label list` (noun
-    outside the table, a named gap); `echo gh issue view 1`; `tool_name: "Read"` with a `file_path`; `hook_event_name: "PreToolUse"`
-    with a gh read; `tool_input.command` a number; `tool_input` missing; malformed JSON `{not json`; empty stdin; JSON `null`.
-  - Nothing, named unreachable gaps (CTO C2; pinned so a later widening is a visible test change): `gh issue ls`;
-    `gh issue -R jikig-ai/soleur view 1`; `gh pr --repo=jikig-ai/soleur checks 1`; `/usr/bin/gh pr diff 3`. Containment never
-    admits these shapes, so they never reach PostToolUse.
-  - Sibling missing: the hook copied alone into a temp dir, then run on a gh read row, gives exit 0 and empty stdout. This is
-    the only guard for the framing hook's import failure (CTO C4).
+- **AC2 rows, in two groups (CTO D4).** Every row is named. One census asserts the literal declared count of BOTH groups
+  together, written in the test as a number (Kieran P2: a floor recorded from a first green run is circular), so moving a row
+  between groups cannot drop it silently.
+  - **Binary group.** Each row spawns `process.execPath` on the real file with an explicit minimal `env` (no `NODE_OPTIONS`,
+    no `GH_TOKEN`). It asserts exit 0 and `stderr === ""`. A frame row asserts `JSON.parse(stdout)` deep-equals the exact
+    framed object (exact key sets at both levels). A silent row asserts `stdout.trim() === ""`, the same rule as self-test
+    probe (iii) (test-design P2: one rule for both places). Rows:
+    - frame: `gh issue view 1`; `gh pr view 12`; `gh api repos/jikig-ai/soleur/issues/1/comments` (the brief's AC2 shapes);
+    - nothing: `gh issue create --title t --body b`; `ls`; `tool_name: "Read"` with a `file_path`; malformed JSON
+      `{not json`; empty stdin;
+    - sibling missing: the hook copied alone into a temp dir, run on a gh read, gives exit 0 and empty stdout. This is the
+      guard for the framing hook's import failure (CTO C4);
+    - sibling throws at top level: a temp dir holding the hook plus a stub `cron-bash-allowlist-hook.mjs` whose module body
+      is `throw new Error("x")`, run on a gh read, gives exit 0 and empty stdout. A sibling that calls `process.exit` during
+      import cannot be caught. That is the `stubHook` hazard, not a contract row; the real sibling's `main()` guard prevents it.
+  - **In-process group** (`frameDecision` with the real imported parser, through `it.each`):
+    - frame: `gh issue view 1 --repo jikig-ai/soleur --json title,body`; `gh pr view 12 --comments`;
+      `gh api repos/jikig-ai/soleur/pulls/1/comments --paginate`; `gh issue list --label bug`; `gh run view 123 --log`;
+      `git status && gh issue view 1` (second segment); `gh issue view 'one'`; `gh issue view 1#x` (`#` starts a comment only
+      at a word start in `tokenize`, so `1#x` is one token); `gh search issues foo`;
+    - nothing: `gh issue comment 1 --body x`; `git log -1`; `gh label list` (noun outside the table, a named gap);
+      `echo gh issue view 1`; `hook_event_name: "PreToolUse"` with a gh read; `tool_input.command` a number; `tool_input`
+      missing; JSON `null`;
+    - nothing, prototype keys (security P2; `hasOwn` must hold): `gh toString x`; `gh constructor view`; `gh __proto__ view`;
+    - nothing, named unreachable gaps (CTO C2; pinned so a later widening is a visible test diff): `gh issue ls`;
+      `gh issue -R jikig-ai/soleur view 1`; `gh pr --repo=jikig-ai/soleur checks 1`; `/usr/bin/gh pr diff 3`.
+  - **Import has no side effects (CTO D4 condition).** Importing the framing `.mjs` in-process reads no stdin and writes no
+    stdout: spy `process.stdout.write` around a dynamic import and assert zero calls, and the test does not hang on stdin.
+    `main()` is guarded by `(process.argv[1] || "").endsWith("cron-gh-output-framing-hook.mjs")`, the containment hook's own
+    pattern.
 - **Adversarial size (in-process, sharp edge: heuristic over attacker text).** One `frameDecision` call on a command of
-  `MAX_BASH_COMMAND_CHARS` (131072) characters made of spaces, `;` runs, `&&` runs and balanced quotes, with a gh read at the
+  `MAX_BASH_COMMAND_CHARS` (131072, imported from `cron-bash-allowlist-hook.mjs`, not from the substrate) characters made of
+  spaces, `;` runs, `&&` runs and balanced quotes, with a gh read at the
   end, frames. A second call of the same length whose unbalanced quote sits INSIDE the final gh segment (for example padding
   then `gh issue view 'x`) emits nothing, because that segment's token list is `null`. A quote in an EARLIER segment would
   still frame the later gh segment (Kieran P2), and that shape is not part of any contract because containment denies it.
@@ -337,7 +443,9 @@ CTO F7):
   `cron-bash-allowlist-hook.test.ts` (the `MAX_BASH_COMMAND_CHARS` timing rows). Containment's `decide()` also runs the same
   parse on the same command first, under the same length cap.
 - **Differential (CTO F1, C2), one-way.** The corpus is every gh line from the union of `CRON_BASH_ALLOWLISTS` (imported, not
-  copied) with a trailing argument, plus chained segments, quoted arguments, the admitted write row
+  copied) with a trailing argument, plus quoted arguments, an admitted chain whose FIRST segment is a non-read
+  (`gh issue comment 1 --body x && gh issue view 1`; `git status && …` is denied under the union, so it cannot be the chain
+  row), the admitted write row
   `gh issue create --title t --body b --label meta/machinery`, and shapes containment denies (multiline, pipe, `$(…)`). Each row
   first goes through containment `decide()` with that union as its allowlist; no test-only widening. For every ADMITTED row:
   `ghReadVerbOf(cmd).kind === "verb"` implies `frameDecision(...) !== null`, and a row on which the cron hook frames while the
@@ -348,13 +456,23 @@ CTO F7):
     word). Bash runs only the first `gh issue comment`.
   - `"gh issue view 1" + 9000 spaces` — containment admits it (cap 131072), hosted returns `oversize` (cap 8192), the cron hook
     frames.
-  Floors: the admitted count and the denied count are each greater than 0, and the admitted write row is admitted (if the
-  filing-justification check denies it at work time, the work phase picks the admitted write form and records it). No
+  Floors (test-design P1: the implication must not be vacuously true): the admitted count and the denied count are each
+  greater than 0; at least one admitted row has `ghReadVerbOf(cmd).kind === "verb"`; every row built from an allowlist line,
+  the chain row and the write row is individually asserted ADMITTED (the deepen pass ran `decide()` on the write row with the
+  13-line gh union and it is allowed; without the label it is denied, "filing names no user-visible consequence"); and each
+  named known-extra row is asserted admitted AND framed only on the cron side, so the exemption list cannot go stale. No
   hard-coded corpus size. The test file's header comment says how to triage a failure: "RED after an allowlist or `decide()`
   change means a new gh shape reached the boundary; compare with `ghReadVerbOf` before editing either side" (CTO-devex).
-- **Allowlist-shape guard (CTO C2).** Every gh line across `CRON_BASH_ALLOWLISTS` matches `^gh [a-z-]+ [a-z-]+$` or
-  `^gh api [^ ]+/$`. A line of any other form fails the test, which is the trigger for the F1 dissent (containment admitting
-  more shapes) and for widening `isGhReadTokens`. Floor: at least one gh line is checked.
+- **Allowlist-shape guard (CTO C2).** Every gh line across every key of `CRON_BASH_ALLOWLISTS` matches `^gh api [^ ]+/$`, or
+  matches `^gh ([a-z-]+) ([a-z-]+)$` with the verb in a closed canonical set: the union of `GH_READ_VERBS` values plus the
+  named non-read verbs `create`, `edit`, `comment`, `close`. The shape regex alone would accept an alias verb such as
+  `gh pr ls` (deepen verify pass), so the closed verb set is what rejects it. A line of any other form fails the test, which
+  is the trigger for the F1 dissent (containment admitting more shapes) and for widening `isGhReadTokens`. Floor: at least
+  one gh line is checked. The deepen pass ran this over today's allowlists: zero non-matching lines.
+- **Framing hook is write-protected (CTO D1).** Rows added to `cron-bash-allowlist-hook.test.ts` beside the existing
+  protected-path rows: `decide()` denies `Write`, `Edit` and every other file-mutating tool its protected-path `case` already
+  gates, on `apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs` and on the same path under an absolute clone
+  directory, with the `protected-path write:` reason. A must-PASS row: `Read` of that path is still allowed.
 - **Exports pin.** `splitSegments` and `tokenize` are functions exported by `cron-bash-allowlist-hook.mjs` (CTO risk 1). The
   `describe` title names the consumer: `cron-bash-allowlist-hook exports consumed by cron-gh-output-framing-hook.mjs`
   (CTO-devex).
@@ -375,18 +493,24 @@ Additions to `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.t
 - **AC4 dark.** A token scan over every `.ts`/`.tsx`/`.mjs` file under `apps/web-platform` outside `test/` and `node_modules`
   (the builder is exported, so the root is the app, not only `server/`; floor: more than 100 files). Three assertions:
   (i) `frameGhOutput` appears in no file other than `_cron-claude-eval-substrate.ts`; (ii) no file in scope matches
-  `frameGhOutput\s*:\s*true`; (iii) the number of `frameGhOutput` occurrences in the substrate equals a literal count written
-  in the test at work time (CTO-devex: any added call site changes it). The test comment says (iii) changes by design at
-  enablement. There is no argument-count regex over TypeScript. The PR body also carries `git grep -n frameGhOutput`.
+  `frameGhOutput\s*:\s*true`. Plus (iii), a behavioural row (CTO D2, replacing a literal occurrence count that would change
+  in the same diff as the code it counts): run `setupEphemeralWorkspace` through the existing git-shim harness in the
+  substrate test and assert the written `.claude/settings.json` has no `PostToolUse` key. That pins the file the CLI
+  actually reads. There is no argument-count regex over TypeScript. The PR body also carries `git grep -n frameGhOutput`.
 - **Self-test (CTO C1, C4, C5, F7).** Test `runFramingHookSelfTest` directly on `settings` objects, plus one end-to-end case
   through `runHookSelfTest`. Extend `makeSpawnCwd` to copy the real framing hook too, with a `framingSource` override and an
   option to omit it. Framing cases always use the REAL containment hook: `stubHook` reads stdin and calls `process.exit` at
   module top level, so a stubbed containment file would run inside the framing hook's dynamic import (Kieran P2). Cases:
+  Every throw case matches `/gh-output framing hook self-test FAILED/` plus the check name, never a bare "throws", so a
+  containment-probe failure in the same call cannot satisfy it (test-design P1).
   - `settings` with no `PostToolUse` key and a framing hook file that writes a sentinel and prints garbage: no throw and no
-    sentinel (the early return is real; no `chmod`, so it holds for any user ID).
+    sentinel. The sentinel path is inside that test's own temp dir (the early return is real; no `chmod`, so it holds for
+    any user ID).
   - `settings` from `buildCronEvalSettings(spawnCwd, { frameGhOutput: true })` plus the real hook: no throw (must pass).
-  - End to end: `runHookSelfTest` on a spawn dir whose `settings.json` was written with `{ frameGhOutput: true }` and whose
-    framing stub emits nothing: throws, which shows `runHookSelfTest` reaches the framing check.
+  - End to end, must pass: `runHookSelfTest` on a spawn dir whose `settings.json` was written with `{ frameGhOutput: true }`
+    and the real framing hook: no throw. Without it, wiring that always throws would still satisfy the next case.
+  - End to end, must fail: the same spawn dir with a framing stub that emits nothing: throws with the gh-read probe message,
+    which shows `runHookSelfTest` reaches the framing check.
   - Registered plus a stub that emits `{"decision":"block","reason":"x","hookSpecificOutput":{<correct>}}` for gh: throws
     (exact key set).
   - Registered plus a stub that emits nothing for gh: throws.
@@ -407,20 +531,33 @@ Append `## Addendum 2026-11-12 (Ref #9601, #11076): cron gh output framing, dark
 2. **How it differs from the hosted twin, and why.** Detection reuses the containment hook's parse, the same tokens that admitted
    the command, and matches `gh <noun> <verb>` on the first three tokens. There is no fallback scan, because containment denies
    the shapes it covered. There is no `-R`/`--repo` skip, `ls` alias or path-qualified `gh`, because containment admits only
-   literal `gh <noun> <verb>` prefixes; a test fails if a cron allowlist gains another gh shape. There is no shape gate and no
-   telemetry. The table and preamble are pinned by a parity test. The cron hook frames a superset of the hosted decision on
-   admitted commands; the known extra cases (a `#`-commented tail, a command over the hosted 8192-character cap) over-frame,
-   which is harmless.
+   literal `gh <noun> <verb>` prefixes; a test fails if a cron allowlist gains a gh line outside that shape or outside a
+   closed canonical verb set. There is no shape gate and no telemetry. The table and preamble are pinned by a parity test. On
+   the differential test corpus, the cron hook frames a superset of the hosted decision; the known extra cases (a
+   `#`-commented tail, a command over the hosted 8192-character cap) over-frame. That is accepted, with the same under-action
+   residual as item 5.
 3. **Self-test.** When `settings.json` registers a `PostToolUse` key, the spawn-time self-test deep-equals it against the one
    expected entry and runs a gh-read probe (exact output) and an `ls` probe (no output). Any failure throws, which aborts the
-   cron. When the key is absent, nothing new runs. Recorded dissent: environmental probe failures (node resolution, timeouts)
-   may later be downgraded to `reportSilentFallback`.
-4. **Not covered** (named so no coverage is implied): commands that exit non-zero go to `PostToolUseFailure`, which is not
-   registered (example: `gh pr checks` while checks fail); GitHub text read through `bash plugins/soleur/skills/community/scripts/community-router.sh github …`,
-   which is not a `gh` command at the Bash layer; nouns outside the table (`label list`, `gist`, `workflow`); `-R`/`--repo`
-   between noun and verb, the `ls` alias and path-qualified `gh` (unreachable today); `git log` and `git show` text; Task
-   subagent coverage (unverified); KB and attachment reads; leader PDF text; the plugin-side CLI. `api: []` frames every
-   allowlisted `gh api` call, including write-method calls. That over-frames, which is harmless.
+   cron. When the key is absent, nothing new runs. It detects a broken or mis-registered hook at spawn time only; it cannot
+   see the file being changed during the run. That is why the containment hook now write-protects the framing hook file
+   (`WRITE_PROTECTED_PATTERNS`). Recorded dissent: environmental probe failures (node resolution, timeouts) may later be
+   downgraded to `reportSilentFallback`.
+4. **Not covered** (named so no coverage is implied):
+   - Failed commands: whether a Bash command with a non-zero exit fires `PostToolUse` or `PostToolUseFailure` is not
+     documented and not probed. `PostToolUseFailure` is not registered. Examples: `gh pr checks` while checks fail, and a
+     compound command whose last segment fails (`gh issue view 1; false`), whose gh output may then arrive unannotated.
+   - Oversized output: if the pinned CLI saves a large Bash result to a file and the agent reads it back with Read, that text
+     arrives with no note, and the note sits only next to the pointer. Separately, a very large `tool_response` on stdin
+     (`gh run view --log`, `--paginate`) could make the hook fail to parse and emit nothing, so annotation can drop out
+     exactly where output is largest. The failure is silent and safe for containment.
+   - GitHub text read through `bash plugins/soleur/skills/community/scripts/community-router.sh github …`, which is not a `gh`
+     command at the Bash layer.
+   - Nouns outside the table (`label list`, `gist`, `workflow`).
+   - `-R`/`--repo` between noun and verb, the `ls` alias and path-qualified `gh` (unreachable today).
+   - `git log` and `git show` text.
+   - Subagents: settings hooks are documented to fire for subagent tool calls, but this was not probed under `--print`.
+   - KB and attachment reads, leader PDF text, and the plugin-side CLI.
+   - `api: []` frames every allowlisted `gh api` call, including write-method calls. That over-frames; accepted as in item 2.
 5. **Residuals.** The effect on model behaviour in headless `--print` is unmeasured. The marginal value over the 2026-10-25
    system-prompt append is positional only: the same text, placed next to each result. The Phase 0 probe ran with
    `--setting-sources project` to exclude the developer's own hooks, which production does not pass. Delivery is whatever Phase 0 recorded:
@@ -429,15 +566,19 @@ Append `## Addendum 2026-11-12 (Ref #9601, #11076): cron gh output framing, dark
 6. **Enablement steps** (none in this change; in order, operator-authorized):
    1. Add a per-cron list `CRON_FRAME_GH_OUTPUT`, shaped like `CRON_NO_FILE_TOOLS`, and thread it through the same directives
       return to the builder call. Re-decide whether to also pass it explicitly to the self-test (CTO C1 dissent).
-   2. Replace the dark pins (the AC4 token scan and its occurrence count) with a behavioural test that the listed crons get
-      the entry and the others do not. These pins are meant to go RED on the first enablement edit.
+   2. Replace the dark pins (the AC4 token scan and the "no PostToolUse key in the written settings.json" row) with a
+      behavioural test that the listed crons get the entry and the others do not. These pins are meant to go RED on the
+      first enablement edit.
    3. Re-rule the brand-survival threshold (the F8 flip condition).
    4. Choose the telemetry signal from two candidates: parse the `--include-hook-events` stream inside the substrate, or rely on
       the self-test alone. The signal must be a closed field set with no paths, filenames or matched text (CLO).
    5. Re-run the delivery probe at the then-pinned CLI, and run an under-action comparison for the first cron enabled, with its
       owner and pass bar stated before the run.
-   6. Deploy the option before any cron registers it: the hook runs from the clone of `main` while registration runs from the
-      deployed image.
+   6. Deploy before registering, and keep deploys green. The hook runs from the clone of `main`, while registration and the
+      self-test's expected preamble come from the deployed image. A preamble edit must therefore ship through a deploy
+      before, or together with, the hook edit. Otherwise every registered cron throws on the mismatch, which is the intended
+      fail-safe signal (CTO D3). A failing web-platform deploy blocks enablement.
+   7. Confirm the framing hook file is still in `WRITE_PROTECTED_PATTERNS`, along with any new file it imports (CTO D1).
 7. **Status.** ADR-287 stays `adopting`. Decision 6 ("Crons never opt in") still concerns the WebFetch scorer only.
 
 C4: no `.c4` edit (see `### C4 views`).
@@ -462,8 +603,10 @@ C4: no `.c4` edit (see `### C4 views`).
   `runHookSelfTest`.
 - `apps/web-platform/server/untrusted-content.ts` — one comment line each on `GH_READ_VERBS` and `UNTRUSTED_PREAMBLES.github`
   pointing at the cron copy and its parity test. No code change.
-- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` — a comment-only `Consumers` note above `splitSegments` and
-  `tokenize` (Phase 1). No code change; containment behaviour is untouched.
+- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` — a `Consumers` comment above `splitSegments` and
+  `tokenize`, and one added `WRITE_PROTECTED_PATTERNS` entry, `/cron-gh-output-framing-hook/`, with its comment (Phase 1,
+  CTO D1). This strictly tightens containment; no existing decision changes.
+- `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts` — protected-path rows for the framing hook file.
 - `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` — AC3 golden, AC4 dark scan, framing self-test
   cases, and the `makeSpawnCwd` extension.
 - `knowledge-base/engineering/architecture/decisions/ADR-287-untrusted-content-annotate-not-block-heuristic-first.md` —
@@ -519,9 +662,10 @@ postponed to its own issue, because nothing is decided here beyond the dark hook
   every scheduled cron self-report FAILED on its next run (missed digests, triage and follow-through filings on the platform's
   own repo) until a revert. The existing default-settings "passes" self-test cases and the new "no key + sentinel stub" case
   pin that path.
-- **If this leaks, the user's data / workflow / money is exposed via:** no new vector. The hook reads model-controlled stdin
-  (ADR-156) and writes a constant string or nothing. It reads no file, no env and no network. The containment hook gets a
-  comment-only edit; its code is only imported.
+- **If this leaks, the user's data / workflow / money is exposed via:** nothing while dark. The hook reads model-controlled
+  stdin (ADR-156) and writes a constant string or nothing. It reads no file, no env and no network. The one vector a
+  registered hook would add, an agent rewriting the hook file to run code after every Bash call with `GH_TOKEN` in the
+  environment, is closed in this PR by write-protecting the file in containment (CTO D1). That edit only adds a deny.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** the cron substrate operates on the platform's own `jikig-ai/soleur` repo, not a
   customer workspace. The change is dark and the default settings are byte-identical, so no single user can be harmed by it.
@@ -611,9 +755,11 @@ addendum text, which names the verb table, and review. Residual: consistency, no
 ### Guard 2 — default settings stay byte-identical and no production caller opts in
 
 **Property.** Unless `frameGhOutput` is exactly `true`, `buildCronEvalSettings` produces byte-for-byte today's `settings.json`
-with no own `PostToolUse` key, and no production source under `apps/web-platform` passes the option at all.
+with no own `PostToolUse` key, no production source under `apps/web-platform` passes the option at all, and the
+`settings.json` the production path writes has no `PostToolUse` key.
 
-**Assembly.** The single return of `buildCronEvalSettings`. The one production call site in `setupEphemeralWorkspace`. Every
+**Assembly.** The single return of `buildCronEvalSettings`. The one production call site in `setupEphemeralWorkspace` and the
+file it writes (asserted behaviourally through the git-shim harness, CTO D2). Every
 `.ts`/`.tsx`/`.mjs` file under `apps/web-platform` outside `test/` and `node_modules` (the builder is exported, so any future
 call site in any app file is in scope).
 
@@ -627,7 +773,7 @@ call site in any app file is in scope).
 | 4 | Emit the `hooks` key before `permissions` in the default object | RED (golden string comparison) |
 | 5 | **hand-run** Own dispatch: the AC4 scan's file glob matches nothing (wrong root) | RED (file-count floor > 100) |
 | 6 | **hand-run** Second member: a new app file calls `buildCronEvalSettings(cwd, { frameGhOutput: true })` after the compliant substrate call | RED (token outside the substrate, and `frameGhOutput: true` match) |
-| 7 | **hand-run** Change `setupEphemeralWorkspace` to pass `{ frameGhOutput: flag }` | RED (substrate occurrence count changes) |
+| 7 | **hand-run** Change `setupEphemeralWorkspace` to pass `{ frameGhOutput: true }` through a local `const flag = true` (the token scan alone stays green) | RED (written `settings.json` has a `PostToolUse` key) |
 
 **Harness rows.** (H1) The golden is computed by calling `buildCronEvalSettings` or spreads `DEFAULT_CLAUDE_SETTINGS` (a
 tautology). The test instead builds the golden from a hard-coded literal that contains `"PreToolUse"` and not `"PostToolUse"`,
@@ -636,8 +782,8 @@ and asserts both facts, so a swapped-in function output with a stray key goes RE
 
 **Anchor.** The golden reproduces the pre-change builder. The independent anchor is `git show origin/main:apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`
 (the `buildCronEvalSettings` body and `DEFAULT_CLAUDE_SETTINGS`). The work phase compares the golden against that body's
-output once, by hand, and records it in the PR body. The occurrence count in (iii) is a stored value one diff can edit with
-the code; its anchor is review of that diff, and the enablement steps in the ADR say it changes by design.
+output once, by hand, and records it in the PR body. Behavioural row (iii) reads the file the CLI would read, so it needs no
+stored value. The enablement steps in the ADR say it changes by design.
 
 ### Guard 3 — spawn-time self-test of a registered framing hook
 
@@ -678,20 +824,24 @@ the same residual as the containment probes. The AC3 `true` row pins the entry a
 **Property.** The binary exits 0 on every input and writes either exactly the framed JSON (no other key at either level) or
 nothing, and it frames exactly when a segment's dequoted tokens start `gh <noun>` with the verb in that noun's list.
 
-**Assembly.** `main()` (the stdin read, the dynamic sibling import, the single stdout write, `process.exit(0)`), `frameDecision`
-(event and tool guards, the segment loop) and `isGhReadTokens` (command word, noun, verb, `api` noun-only rule).
+**Assembly.** `main()` (the stdin read, the dynamic sibling import, the single stdout write, `process.exit(0)`, and the
+file-name guard that keeps import side-effect free), exercised by the binary group; `frameDecision` (event and tool guards,
+the segment loop) and `isGhReadTokens` (command word, `hasOwn` noun, verb, `api` noun-only rule), exercised by both groups.
+One census covers both groups.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | **hand-run** Own dispatch: the `main()` guard compares against the wrong file name, so main never runs | RED (every frame row gets empty stdout) |
-| 2 | **hand-run** Second member: only the first segment is checked | RED (row `git status && gh issue view 1`) |
+| 1 | **hand-run** Own dispatch: the `main()` guard compares against the wrong file name, so main never runs | RED (every binary frame row gets empty stdout) |
+| 2 | **hand-run** Second member: only the first segment is checked | RED (in-process row `git status && gh issue view 1`) |
 | 3 | Exit 1 on malformed JSON | RED (rows malformed, empty) |
 | 4 | Add `updatedToolOutput` to the output | RED (exact key set) |
 | 5 | Accept `hook_event_name` other than PostToolUse | RED (row PreToolUse) |
 | 6 | **hand-run** Static `import` of the sibling (missing sibling makes the process exit non-zero) | RED (sibling-missing row) |
 | 7 | Match `tokens.includes("gh")` instead of `tokens[0] === "gh"` | RED (row `echo gh issue view 1`) |
+| 8 | Use `GH_READ_VERBS[tokens[1]]` without `hasOwn` | RED (rows `gh toString x`, `gh constructor view`) |
+| 9 | Drop the `main()` file-name guard (main runs on import) | RED (import-has-no-side-effects row) |
 
 **Harness rows.** (H1) A row is dropped from the table. The census asserts the literal declared row count: RED. (H2)
 Must-PASS that is not canonical: `gh issue view 'one'` (quoted argument) and `gh issue view 1#x` frame.
@@ -714,7 +864,7 @@ known-extra set.
 |---|---|---|
 | 1 | Cron decision treats `issue view` as not a read | RED (hosted verb, cron silent) |
 | 2 | **hand-run** Own dispatch: the filter admits zero rows (empty allowlist) | RED (admitted floor) |
-| 3 | **hand-run** Second member: cron checks only the first segment | RED (row `git status && gh issue view 1`) |
+| 3 | **hand-run** Second member: cron checks only the first segment | RED (admitted chain row `gh issue comment 1 --body x && gh issue view 1`) |
 | 4 | Cron decision frames `gh issue create` (the admitted write row) | RED (cron frames, not a named known-extra row) |
 
 **Harness rows.** (H1) A filter that admits everything would compare the multiline rows too. The denied floor (> 0) and an
@@ -726,8 +876,9 @@ hook misses on an admitted row is a real divergence.
 
 ### Guard 6 — every cron gh allowlist line has a shape the cron predicate parses
 
-**Property.** Every gh line in `CRON_BASH_ALLOWLISTS` is literal `gh <noun> <verb>` or `gh api <path>/`, so no gh shape
-outside `isGhReadTokens`'s grammar can be admitted by containment.
+**Property.** Every gh line in `CRON_BASH_ALLOWLISTS` is `gh api <path>/` or literal `gh <noun> <verb>` with the verb in the
+closed canonical set (`GH_READ_VERBS` values plus `create`, `edit`, `comment`, `close`), so no gh shape outside
+`isGhReadTokens`'s grammar, alias verbs included, can be admitted by containment.
 
 **Assembly.** The imported `CRON_BASH_ALLOWLISTS` object, every cron key and every line under it, filtered to lines whose first
 token is `gh`.
@@ -738,12 +889,35 @@ token is `gh`.
 |---|---|---|
 | 1 | Add `gh issue -R jikig-ai/soleur view` to one cron | RED |
 | 2 | **hand-run** Own dispatch: the filter matches no gh line (for example keys on `"gh:"`) | RED (floor >= 1) |
-| 3 | **hand-run** Second member: add `gh pr ls` to a second cron after a compliant first | RED |
+| 3 | **hand-run** Second member: add `gh pr ls` to a second cron after a compliant first | RED (`ls` is not in the canonical verb set; the shape regex alone would pass it) |
 
 **Harness rows.** (H1) The test iterates only the first cron key: row 3 stays green, so the loop must cover every key; RED
 once fixed. (H2) Must-PASS: `gh api repos/jikig-ai/soleur/` passes.
 
 **Anchor.** The allowlists are reviewed security config; widening one is already a reviewed change.
+
+### Guard 7 — the framing hook file is write-protected in cron spawns
+
+**Property.** Every file-mutating tool call that names the framing hook file, by repo-relative or absolute clone path, is
+denied by containment `decide()` (CTO D1).
+
+**Assembly.** `WRITE_PROTECTED_PATTERNS` in `cron-bash-allowlist-hook.mjs` and the protected-path `case` in `decide()` that
+applies it to every file-mutating tool, which is the single chokepoint. Every file the framing hook imports at runtime must
+match a pattern in that list (today only the sibling, matched by `/cron-bash-allowlist-hook/`).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Remove the `/cron-gh-output-framing-hook/` entry | RED (Write row allowed) |
+| 2 | **hand-run** Anchor the pattern to the repo-relative path only (`^apps/…`) | RED (absolute clone path row allowed) |
+| 3 | **hand-run** Second member: the Write row is denied but the protected-path `case` stops covering Edit | RED (Edit row allowed) |
+| 4 | Own dispatch: the test calls `decide()` with a tool name the `case` never reaches (for example `"write"`) | RED (the must-deny row is not denied with the `protected-path write:` reason) |
+
+**Harness rows.** (H1) The rows assert only "not allowed" rather than the exact `protected-path write:` reason: a
+catch-all deny would pass, so the reason is asserted. (H2) Must-PASS: `Read` of the framing hook path is allowed.
+
+**Anchor.** Containment is reviewed security config; removing a protected pattern is a visible containment diff.
 
 ## Scope Check
 
@@ -785,13 +959,15 @@ once fixed. (H2) Must-PASS: `gh api repos/jikig-ai/soleur/` passes.
 | Exports pin for `splitSegments` / `tokenize` | — | inferred — justification: CTO risk 1; a renamed export would silently drop annotation |
 | `framingHookEntry` helper and the separate `runFramingHookSelfTest` | — | inferred (CTO C5; Kieran P2) — justification: one source for the expected entry, and the 300-line `runHookSelfTest` gets one call instead of a new branch |
 | Registration deep-equal and exact-key probe checks | — | inferred (CTO F4, C5) — justification: "checks the PostToolUse hook" is met only if the probed binary is the registered one and a `decision` key cannot ride along |
+| Write-protecting the framing hook file in containment, plus its test rows (Guard 7) | — | inferred (CTO D1, security-sentinel P1) — justification: a registered PostToolUse binary that the agent can rewrite is code execution outside the Bash allowlist with `GH_TOKEN` in the environment; the self-test cannot see in-run tampering, and leaving it to enablement would leave the dark hook unprotected on the day it is turned on |
+| Prototype-key rows and the import-side-effect row | — | inferred (security P2, CTO D4) — justification: they pin the `hasOwn` lookup and the `main()` guard that the in-process tests depend on |
 | Allowlist-shape guard (Guard 6) | — | inferred (CTO C2) — justification: the simple predicate is exact only while every allowlisted gh line is literal; the guard fires when that stops holding |
 
 ### Split Assessment
 
 - Subsystems touched: 2 — `apps/web-platform`, `knowledge-base`
-- Planned files: 10 (5 edit, 5 create, of which 3 are planning or evidence artifacts) | Estimated changed lines: ~520 (hook ~80,
-  substrate ~70, tests ~320, ADR ~45, comments ~10, planning artifacts excluded)
+- Planned files: 11 (6 edit, 5 create, of which 3 are planning or evidence artifacts) | Estimated changed lines: ~560 (hook ~80,
+  substrate ~75, containment 1 line + comments, tests ~340, ADR ~55, comments ~10, planning artifacts excluded)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -805,21 +981,25 @@ once fixed. (H2) Must-PASS: `gh api repos/jikig-ai/soleur/` passes.
 - [ ] **AC1** `cron-gh-output-framing-hook.test.ts` asserts `toStrictEqual(GH_READ_VERBS)` and
   `toBe(UNTRUSTED_PREAMBLES.github)`, and the in-process behavioural census frames every `GH_FRAME_VERBS` entry (count
   equals `GH_FRAME_VERBS.length`, > 0).
-- [ ] **AC2** The binary rows in Phase 3 all pass with exit 0. Frame rows produce exactly
-  `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":<preamble>}}`. Silent rows, including the four named
-  unreachable-gap rows, produce `""`. The census asserts the literal declared row count. The one-way differential (Guard 5)
-  and the allowlist-shape guard (Guard 6) pass.
+- [ ] **AC2** The Phase 3 AC2 rows pass in both groups. Binary rows exit 0 with empty stderr. Frame rows parse to exactly
+  `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":<preamble>}}`, and silent rows (including the
+  named unreachable-gap and prototype-key rows in the in-process group) are empty after trim. One census asserts the literal
+  declared row count across both groups. The import-has-no-side-effects row, the one-way differential (Guard 5) and the
+  allowlist-shape guard (Guard 6) pass.
 - [ ] **AC3** The serialised default `buildCronEvalSettings` output equals the hard-coded golden literal for no options, `{}`,
   `false`, `undefined`, `1` and `"true"`, and `Object.keys(hooks)` is `["PreToolUse"]` for each. With `true` the
   `PostToolUse` value deep-equals the literal single Bash entry whose command is
   `<absolute node> <spawnCwd>/apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs`, and `PreToolUse` is unchanged.
-- [ ] **AC4** The dark token scan passes: `frameGhOutput` appears in no non-test app file except the substrate, no non-test
-  app file matches `frameGhOutput\s*:\s*true`, and the substrate occurrence count equals its literal. The PR body carries
-  the output of `git grep -n frameGhOutput`, with no production line passing `true`.
+- [ ] **AC4** The dark checks pass: `frameGhOutput` appears in no non-test app file except the substrate; no non-test app file
+  matches `frameGhOutput\s*:\s*true`; and `setupEphemeralWorkspace`, run through the git-shim harness, writes a
+  `settings.json` with no `PostToolUse` key (CTO D2). The PR body carries the output of `git grep -n frameGhOutput`, with no
+  production line passing `true`.
 - [ ] **AC5** Green: `cron-claude-eval-substrate.test.ts`, `cron-bash-allowlist-hook.test.ts`, `cron-bug-fixer.test.ts`,
   `cron-untrusted-preamble.test.ts`, `untrusted-content.test.ts`, `repo-wide-containment.test.ts`, the new test file, app `tsc`
   and ESLint. The new test is not added to `repo-wide-suites.ts`, because it reads only inside `apps/web-platform`, and
-  `repo-wide-containment.test.ts` confirms that.
+  `repo-wide-containment.test.ts` confirms that. The new protected-path rows for the framing hook file in
+  `cron-bash-allowlist-hook.test.ts` pass, with the exact `protected-path write:` reason, and so does the must-PASS `Read`
+  row (Guard 7).
 - [ ] **AC6** The PR body says `Ref #11076` and `Ref #9601` and contains no `Closes`, `Fixes` or `Resolves` keyword.
   `gh pr view 12705 --json closingIssuesReferences` returns `[]`. No sentence in the PR body, the ADR or code comments claims the
   control is covered, measured or protective. The ADR uses "annotation", "unmeasured" and "dark".
@@ -859,15 +1039,21 @@ autonomous task surface.
 ## Test Scenarios
 
 - unit — Given the TS table and preamble, when the `.mjs` exports are compared, then they are strictly equal (AC1).
-- integration (real `node` child process) — Given each AC2 row as stdin, when the binary runs, then it exits 0 and prints the
-  exact framed JSON or nothing (AC2).
+- integration (real `node` child process) — Given each AC2 binary-group row as stdin, when the binary runs, then it exits 0
+  with empty stderr and prints the exact framed JSON or nothing (AC2).
+- unit — Given each AC2 in-process row, when `frameDecision` runs with the real parser, then it returns the framed object or
+  null; importing the module reads and writes nothing (AC2).
+- unit — Given a file-mutating tool call on the framing hook path, when containment `decide()` runs, then it denies with
+  `protected-path write:`, and `Read` stays allowed (Guard 7).
 - unit — Given each corpus command admitted by containment `decide()` under the real cron allowlists, when both decisions run,
   then a hosted read implies a cron frame, and every cron-only frame is a named known-extra row (Guard 5).
 - unit — Given every gh line in `CRON_BASH_ALLOWLISTS`, then it is literal `gh <noun> <verb>` or `gh api <path>/` (Guard 6).
 - unit — Given each option value, when `buildCronEvalSettings` runs, then the default output equals the golden and `true` adds
   exactly one Bash PostToolUse entry (AC3).
-- unit (token scan) — Given every non-test app source file, when scanned, then `frameGhOutput` appears only in the substrate,
-  never as `frameGhOutput: true`, and the substrate count equals its literal (AC4).
+- unit (token scan) — Given every non-test app source file, when scanned, then `frameGhOutput` appears only in the substrate
+  and never as `frameGhOutput: true` (AC4).
+- integration (git-shim harness) — Given `setupEphemeralWorkspace` on the production path, when it writes
+  `.claude/settings.json`, then that file has no `PostToolUse` key (AC4).
 - integration (real binaries in a temp spawn dir) — Given each settings fixture, when `runFramingHookSelfTest` runs (and once
   end to end through `runHookSelfTest`), then it throws or passes as Guard 3 specifies, including the "no key + sentinel stub"
   must-pass case.
