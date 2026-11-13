@@ -38,7 +38,9 @@ fi
 cases=0; failures=0
 
 T=""
-trap 'rm -rf "${T:-}"' EXIT INT TERM HUP
+trap 'rm -rf "${T:-}"' EXIT
+trap 'rm -rf "${T:-}"; exit 130' INT
+trap 'rm -rf "${T:-}"; exit 143' TERM HUP
 
 setup() {
   T="$(mktemp -d)"
@@ -47,7 +49,7 @@ setup() {
   # A real rotation always finds the secret name ALREADY present, next to a prefix decoy.
   printf '%s\t%s\n' \
     SENTRY_ACTIONS_RO_TOKEN 2026-01-01T00:00:00Z SENTRY_ACTIONS_RO_TOKEN_OLD 2026-01-01T00:00:00Z \
-    SENTRY_IAC_AUTH_TOKEN 2026-05-19T19:50:38Z SENTRY_IAC_AUTH_TOKEN_OLD 2026-05-19T19:50:38Z \
+    SENTRY_IAC_AUTH_TOKEN 2026-05-19T19:50:38Z SENTRY_IAC_AUTH_TOKEN_OLD 2026-04-01T00:00:00Z \
     UNRELATED_SECRET 2026-01-01T00:00:00Z > "$T/gh-secrets"
   # rec <tool> <argv...>: append the call, print its 1-based sequence number.
   cat > "$T/lib/rec.sh" <<'REC'
@@ -76,21 +78,32 @@ case "${1:-} ${2:-}" in
       head -c "$len" /dev/zero | tr '\0' 'A'; printf '\n'
       exit 0
     fi
-    [[ "$#" -eq 3 || ( "$#" -eq 5 && "$4" == "-R" && "$5" == "jikig-ai/soleur" ) ]] || refuse "gh bad set argv: $*"
+    [[ "$#" -eq 3 || ( "$#" -eq 5 && "$4" == "-R" && "$5" == "github.com/jikig-ai/soleur" ) ]] || refuse "gh bad set argv: $*"
     timeout 2 cat > "$STUB_STATE/rec/$n.stdin"
     rc="${STUB_GH_SET_RC:-0}"; [[ "$rc" -eq 0 ]] || exit "$rc"
     [[ -n "${STUB_GH_SET_NOOP:-}" ]] && exit 0
+    cp "$S" "$STUB_STATE/gh-secrets.pre"
     seq=$(( $(cat "$STUB_STATE/gh-seq") + 1 )); echo "$seq" > "$STUB_STATE/gh-seq"
     ts="$(printf '2026-11-13T00:00:%02dZ' "$seq")"
     awk -F'\t' -v n="$3" -v ts="$ts" 'BEGIN{OFS="\t"} $1==n{$2=ts; f=1} {print} END{if(!f) print n, ts}' "$S" > "$S.new" && mv "$S.new" "$S"
     touch "$STUB_STATE/gh-set-done"
+    if [[ -n "${STUB_GH_SET_SIGNAL:-}" ]]; then
+      [[ "$(ps -o args= -p "$PPID")" == *rotate-sentry-actions-ro-token.sh* ]] || refuse "gh signal: parent is not the script"
+      kill -TERM "$PPID"
+    fi
     exit 0 ;;
   "secret list")
     if set_done; then rc="${STUB_GH_LIST_RC:-0}"; else rc="${STUB_GH_LIST_RC_PRE:-0}"; fi
     [[ "$rc" -eq 0 ]] || { echo "HTTP 401: Bad credentials" >&2; exit "$rc"; }
     if [[ "$#" -eq 2 ]]; then cat "$S"; exit 0; fi
-    [[ "$#" -eq 6 && "$3 $4 $5 $6" == "-R jikig-ai/soleur --json name,updatedAt" ]] || refuse "gh bad list argv: $*"
-    jq -R -n '[inputs | split("\t") | {name: .[0], updatedAt: .[1]}]' < "$S" ;;
+    [[ "$#" -eq 6 && "$3 $4 $5 $6" == "-R github.com/jikig-ai/soleur --json name,updatedAt" ]] || refuse "gh bad list argv: $*"
+    src="$S"
+    # STUB_GH_LIST_STALE=N: the first N lists after the write still show the pre-write state.
+    if set_done && [[ -n "${STUB_GH_LIST_STALE:-}" ]]; then
+      k=$(( $(cat "$STUB_STATE/gh-stale" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$STUB_STATE/gh-stale"
+      (( k <= STUB_GH_LIST_STALE )) && src="$STUB_STATE/gh-secrets.pre"
+    fi
+    jq -R -n '[inputs | split("\t") | {name: .[0], updatedAt: .[1]}]' < "$src" ;;
   *) refuse "gh unhandled: $*" ;;
 esac
 STUB
@@ -134,9 +147,12 @@ STUB
 #!/usr/bin/env bash
 # shellcheck disable=SC1091
 . "$STUB_STATE/lib/rec.sh"
-[[ -z "${DOPPLER_API_HOST:-}${HTTPS_PROXY:-}${https_proxy:-}${HTTP_PROXY:-}${ALL_PROXY:-}${SSLKEYLOGFILE:-}" ]] || refuse "doppler ran with a host/proxy override in its env"
-[[ "${1:-} ${2:-}" == "--api-host https://api.doppler.com" ]] || refuse "doppler without the pinned --api-host: $*"
-shift 2
+[[ -z "${DOPPLER_API_HOST:-}${DOPPLER_VERIFY_TLS:-}${HTTPS_PROXY:-}${https_proxy:-}${HTTP_PROXY:-}${http_proxy:-}${ALL_PROXY:-}${all_proxy:-}${SSLKEYLOGFILE:-}" ]] \
+  || refuse "doppler ran with a host/proxy/TLS override in its env"
+[[ "${1:-} ${2:-} ${3:-}" == "--no-verify-tls=false --api-host https://api.doppler.com" ]] || refuse "doppler without the pinned TLS/host flags: $*"
+pargs="$(ps -o args= -p "$PPID")"
+[[ "$pargs" == "timeout --foreground 60 doppler "* ]] || refuse "doppler not run under timeout --foreground 60 (parent: $pargs)"
+shift 3
 n="$(rec doppler "$@")"
 D="$STUB_STATE/dop"
 val_file() { # val_file <cfg> <name>: the file holding the effective value, or nothing
@@ -173,7 +189,11 @@ if [[ "$#" -eq 8 && "$1 $2 $4 $5 $6 $8" == "secrets set -p soleur -c --no-intera
   echo "STUB-ALL-OTHER-SECRETS-CANARY"
   v="STUB_DOP_SET_SIGNAL_$cfg"
   # SIGTERM the script under test: doppler's parent is timeout, whose parent is the script.
-  if [[ -n "${!v:-}" ]]; then kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d ' ')"; fi
+  if [[ -n "${!v:-}" ]]; then
+    spid="$(ps -o ppid= -p "$PPID" | tr -d ' ')"
+    [[ "$(ps -o args= -p "$spid")" == *rotate-sentry-actions-ro-token.sh* ]] || refuse "doppler signal: grandparent is not the script"
+    kill -TERM "$spid"
+  fi
   exit "$rc"
 fi
 refuse "doppler unhandled: $*"
@@ -335,9 +355,11 @@ L_OLD='UNCHANGED BY THIS RUN (hold whatever they held before it): '
 L_OTHER='OTHER prd CONFIGS CARRYING SENTRY_IAC_AUTH_TOKEN '
 ALL_THREE='all three targets hold the new token'
 DO_NOT='do NOT revoke the old token yet'
+NOTE_PTF='note: if Doppler soleur/prd_terraform has no own copy it inherits soleur/prd'
+REVOKE_NEW='REVOKE THE NEW TOKEN'
 
 cfg_json() { printf '{"name":"%s","root":%s,"environment":"%s"}' "$1" "$2" "$3"; }
-setup_iac() { # setup_iac [no-carriers|no-prd-terraform|prd-not-root|ptf-root]
+setup_iac() { # setup_iac [no-carriers|no-prd-terraform|prd-not-root|ptf-root|ptf-env]
   setup; put_src "$TOKEN"
   local base list c
   base="$(cfg_json dev true dev),$(cfg_json dev_x false dev)"
@@ -346,6 +368,7 @@ setup_iac() { # setup_iac [no-carriers|no-prd-terraform|prd-not-root|ptf-root]
     no-prd-terraform) list="$base,$(cfg_json prd true prd),$(cfg_json prd_alpha false prd)" ;;
     prd-not-root)     list="$base,$(cfg_json prd false prd),$(cfg_json prd_terraform false prd)" ;;
     ptf-root)         list="$base,$(cfg_json prd true prd),$(cfg_json prd_terraform true prd)" ;;
+    ptf-env)          list="$base,$(cfg_json prd true prd),$(cfg_json prd_terraform false stg)" ;;
     *) list="$base,$(cfg_json prd true prd)"
        for c in prd_alpha prd_beta prd_gamma prd_delta prd_epsilon prd_zeta; do list="$list,$(cfg_json "$c" false prd)"; done
        list="$list,$(cfg_json prd_terraform false prd)" ;;
@@ -397,17 +420,22 @@ run_iac
 check_exit 0
 check "curl URLs are /api/0/ plus the four iac probes, in order, org host only" test "$(url_list)" == "$IAC_URLS"
 check "five curl calls, every one the exact modelled argv" test "$(calls_of curl)" -eq 5
-check "one gh store, SENTRY_IAC_AUTH_TOKEN -R jikig-ai/soleur, no body flag" \
-  test "$(grep -c '^gh secret set SENTRY_IAC_AUTH_TOKEN -R jikig-ai/soleur$' "$T/rec/calls")" -eq 1 -a "$(grep -c -- '--body' "$T/rec/calls")" -eq 0
+check "one gh store, SENTRY_IAC_AUTH_TOKEN -R github.com/jikig-ai/soleur, no body flag" \
+  test "$(grep -c '^gh secret set SENTRY_IAC_AUTH_TOKEN -R github.com/jikig-ai/soleur$' "$T/rec/calls")" -eq 1 -a "$(grep -c -- '--body' "$T/rec/calls")" -eq 0
 check "gh store stdin is the token, byte-exact" stdin_is '^gh secret set SENTRY_IAC_AUTH_TOKEN ' "$TOKEN"
 check "the repo secret's updatedAt moved" test "$(gh_updated SENTRY_IAC_AUTH_TOKEN)" != "2026-05-19T19:50:38Z"
+check "the GitHub proof line names the exact before/after updatedAt" \
+  grep -qxF '[ok] stored GitHub repo secret SENTRY_IAC_AUTH_TOKEN (updatedAt 2026-05-19T19:50:38Z -> 2026-11-13T00:00:01Z; GitHub cannot read it back)' "$T/all"
+check "exactly two GitHub lists (one before, one after the write)" \
+  test "$(grep -c '^gh secret list -R github.com/jikig-ai/soleur --json name,updatedAt$' "$T/rec/calls")" -eq 2
+check "no pre-run divergence note when the values match" absent 'held DIFFERENT values before this run'
 check "exactly two Doppler writes, prd then prd_terraform, exact argv" test "$(dop_writes)" == "$DOP_WRITES_WANT"
 check "Doppler prd write stdin is the token, byte-exact" stdin_is ' -c prd --no-interactive$' "$TOKEN"
 check "Doppler prd_terraform write stdin is the token, byte-exact" stdin_is ' -c prd_terraform --no-interactive$' "$TOKEN"
 check "Doppler prd holds the new value" dop_value_is prd "$TOKEN"
 check "Doppler prd_terraform holds the new value" dop_value_is prd_terraform "$TOKEN"
 check "an own-copy branch is not written" dop_value_is prd_beta "$OLD"
-check "other prd configs classified by digest" line_is "$L_OTHER" '(no known reader in repo; not written): follow soleur/prd (now new): prd_alpha; own copy (still the old value; removal tracked in #12740): prd_beta; unreadable: prd_delta, prd_zeta'
+check "other prd configs classified by digest" line_is "$L_OTHER" '(no known reader in repo; not written): follow soleur/prd (now new): prd_alpha; own copy (not the new value; removal tracked in #12740): prd_beta; unreadable: prd_delta, prd_zeta'
 check "all-three line printed" grep -q "$ALL_THREE" "$T/all"
 check "no partial-state report" absent "$DO_NOT"
 check "the CLI's all-secrets dump never reaches output" no_canary
@@ -442,6 +470,7 @@ check "do NOT revoke the old token yet" grep -q "$DO_NOT" "$T/all"
 check "no all-three line" absent "$ALL_THREE"
 check "prd_terraform never written" test "$(dop_writes | grep -c prd_terraform || true)" -eq 0
 check "the CLI's all-secrets dump never reaches output" no_canary
+check "no revoke-the-NEW-token line on a partial store" absent "$REVOKE_NEW"
 rm -rf "$T"
 
 echo "== I8: the prd read-back does not match"
@@ -452,6 +481,7 @@ check "HOLD NEW: GitHub only" line_is "$L_NEW" "$T_GH"
 check "UNVERIFIED: prd" line_is "$L_UNV" "$T_PRD"
 check "UNCHANGED: prd_terraform" line_is "$L_OLD" "$T_PTF"
 check "do NOT revoke the old token yet" grep -q "$DO_NOT" "$T/all"
+check "the prd_terraform inheritance note is printed" grep -qF "$NOTE_PTF" "$T/all"
 rm -rf "$T"
 
 echo "== I9: the prd_terraform read-back fails -- a failed read is never a match"
@@ -531,6 +561,8 @@ check "UNVERIFIED: GitHub" line_is "$L_UNV" "$T_GH"
 check "UNCHANGED: prd and prd_terraform" line_is "$L_OLD" "$T_PRD; $T_PTF"
 check "zero Doppler writes" test -z "$(dop_writes)"
 check "do NOT revoke the old token yet" grep -q "$DO_NOT" "$T/all"
+check "names the list failure as the reason" grep -q 'gh secret list failed after the write' "$T/all"
+check "no inheritance note when prd was never written" absent "$NOTE_PTF"
 rm -rf "$T"
 
 echo "== I12b: gh secret list fails BEFORE the write -> nothing stored, revoke the NEW token"
@@ -544,7 +576,8 @@ rm -rf "$T"
 
 echo "== I13: a hostile environment (Doppler host, proxies, TLS key log) reaches no child"
 setup_iac
-DOPPLER_API_HOST=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 ALL_PROXY=http://127.0.0.1:1 \
+DOPPLER_API_HOST=http://127.0.0.1:1 DOPPLER_VERIFY_TLS=false HTTPS_PROXY=http://127.0.0.1:1 https_proxy=http://127.0.0.1:1 \
+  HTTP_PROXY=http://127.0.0.1:1 http_proxy=http://127.0.0.1:1 ALL_PROXY=http://127.0.0.1:1 all_proxy=http://127.0.0.1:1 \
   SSLKEYLOGFILE="$T/keylog" run_iac
 check_exit 0
 check "no stub refused anything" no_refusals
@@ -570,6 +603,8 @@ check "UNCHANGED: prd_terraform" line_is "$L_OLD" "$T_PTF"
 check "do NOT revoke the old token yet" grep -q "$DO_NOT" "$T/all"
 check "trap dir removed" trap_dir_gone
 check "prd_terraform never written" test "$(dop_writes | grep -c prd_terraform || true)" -eq 0
+check "no revoke-the-NEW-token line" absent "$REVOKE_NEW"
+check "the prd_terraform inheritance note is printed" grep -qF "$NOTE_PTF" "$T/all"
 rm -rf "$T"
 
 echo "== I16: prd and prd_terraform held different values before the run -> noted"
@@ -580,11 +615,50 @@ check_exit 0
 check "the pre-run divergence is noted" grep -q 'held DIFFERENT values before this run' "$T/all"
 rm -rf "$T"
 
+echo "== I10f: the key is unreadable in prd before the run -> 2"
+setup_iac
+STUB_DOP_GET_RC_PRE_prd=1 run_iac
+check "exit 2" test "$rc" -eq 2
+check "names soleur/prd" grep -qF 'SENTRY_IAC_AUTH_TOKEN is absent or unreadable in soleur/prd) -- nothing was stored' "$T/err"
+rm -rf "$T"
+
+echo "== I10g: prd_terraform outside the prd environment -> 2"
+setup_iac ptf-env
+run_iac
+check "exit 2" test "$rc" -eq 2
+check "no store anywhere" no_stores
+rm -rf "$T"
+
+echo "== I17: SIGTERM during the GitHub write -> GitHub UNVERIFIED, no Doppler write"
+setup_iac
+STUB_GH_SET_SIGNAL=1 run_iac
+check_exit 143
+check "says the store was interrupted" grep -q 'interrupted during the store' "$T/all"
+check "UNVERIFIED: GitHub (the write in flight)" line_is "$L_UNV" "$T_GH"
+check "zero Doppler writes" test -z "$(dop_writes)"
+check "no revoke-the-NEW-token line" absent "$REVOKE_NEW"
+rm -rf "$T"
+
+echo "== I18: the first two lists after the write are stale -> the retry still proves it"
+setup_iac
+STUB_GH_LIST_STALE=2 run_iac
+check_exit 0
+check "three post-write lists were needed" \
+  test "$(grep -c '^gh secret list -R github.com/jikig-ai/soleur --json name,updatedAt$' "$T/rec/calls")" -eq 4
+rm -rf "$T"
+
+echo "== I19: a carrier unreadable after the store is 'unreadable', never 'own copy'"
+setup_iac
+STUB_DOP_GET_RC_PRE_prd_beta=1 run_iac
+check_exit 0
+check "prd_beta lands in unreadable" line_is "$L_OTHER" '(no known reader in repo; not written): follow soleur/prd (now new): prd_alpha; own copy (not the new value; removal tracked in #12740): (none); unreadable: prd_delta, prd_zeta, prd_beta'
+rm -rf "$T"
+
 echo "== H2: no other carriers -> success, nothing to classify, all-three line printed"
 setup_iac no-carriers
 run_iac
 check_exit 0
-check "other-config line is all (none)" line_is "$L_OTHER" '(no known reader in repo; not written): follow soleur/prd (now new): (none); own copy (still the old value; removal tracked in #12740): (none); unreadable: (none)'
+check "other-config line is all (none)" line_is "$L_OTHER" '(no known reader in repo; not written): follow soleur/prd (now new): (none); own copy (not the new value; removal tracked in #12740): (none); unreadable: (none)'
 check "all-three line printed" grep -q "$ALL_THREE" "$T/all"
 rm -rf "$T"
 
@@ -599,7 +673,7 @@ check "ADR-031 scope set == the script's iac EXPECTED_SCOPES" test -n "$(script_
 
 # Exact executed-assertion count: a row that stops running cannot pass silently. Reported
 # with printf + exit, never through fail(), which this floor backstops.
-EXPECTED_CASES=156
+EXPECTED_CASES=178
 echo
 echo "cases=$cases failures=$failures"
 if [[ "$cases" -ne "$EXPECTED_CASES" ]]; then

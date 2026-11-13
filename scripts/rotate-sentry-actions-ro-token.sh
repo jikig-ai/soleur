@@ -13,7 +13,7 @@
 #       the root's value or holds its own copy, so prd_terraform is written explicitly (it holds
 #       the new value either way) and each Doppler store is read back by digest. After a green
 #       store, every OTHER prd config that carries the key is classified by read-back digest:
-#       "follows soleur/prd" (now new) or "own copy" (still the old value; removal is #12740).
+#       "follows soleur/prd" (now new) or "own copy" (not the new value; removal is #12740).
 #
 # Lives ONCE; the rotation runbook
 # (knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md)
@@ -56,7 +56,7 @@
 #       before any target took the new token (revoke the NEW token); 2 usage / precondition;
 #       3 (iac) a store failed after a target took, or may have taken, the new token -- the
 #       three-list report says which, do NOT revoke the old token; 78 xtrace refusal;
-#       130/141/143 on SIGINT/SIGPIPE/SIGTERM after the trap has shredded (during the iac
+#       130/141/143 on SIGINT/SIGPIPE/SIGTERM or SIGHUP after the trap has shredded (during the iac
 #       store the same three-list report is printed first; the chain does NOT resume).
 
 set -uo pipefail
@@ -83,7 +83,7 @@ readonly REGION_HOST_PINNED="https://de.sentry.io"
 readonly DOPPLER_PROJECT="soleur"
 readonly DOPPLER_API_HOST_PINNED="https://api.doppler.com"
 readonly DOPPLER_TIMEOUT_S=60
-readonly GH_REPO_PINNED="jikig-ai/soleur"
+readonly GH_REPO_PINNED="github.com/jikig-ai/soleur"   # host included: GH_HOST cannot redirect the store
 # sha256 of the empty string: an empty Doppler read-back hashes to this, and it is a READ
 # FAILURE, never a match (CTO ruling, plan item 8).
 readonly EMPTY_DIGEST="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -193,7 +193,7 @@ done
 dop() {
   env -u DOPPLER_API_HOST -u DOPPLER_VERIFY_TLS -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY \
       -u http_proxy -u ALL_PROXY -u all_proxy -u SSLKEYLOGFILE \
-    timeout --foreground "$DOPPLER_TIMEOUT_S" doppler --api-host "$DOPPLER_API_HOST_PINNED" "$@"
+    timeout --foreground "$DOPPLER_TIMEOUT_S" doppler --no-verify-tls=false --api-host "$DOPPLER_API_HOST_PINNED" "$@"
 }
 # dig_of <config>: the sha256 of the stored value (the CLI's appended LF stripped). Returns 1
 # on a failed, timed-out or empty read. The value is never printed or held in a variable.
@@ -269,6 +269,16 @@ report_lists() {
   printf 'HOLD THE NEW TOKEN (...%s): %s\n' "$TAIL4" "$(join_or_none '; ' "${HOLD_NEW[@]}")" >&9
   printf 'UNVERIFIED (may hold the new token; value unknown): %s\n' "$(join_or_none '; ' "${UNVERIFIED[@]}")" >&9
   printf 'UNCHANGED BY THIS RUN (hold whatever they held before it): %s\n' "$(join_or_none '; ' "${old[@]}")" >&9
+  # A branch config with no own copy follows the root, so after a (possible) prd write an
+  # unwritten prd_terraform may already serve the new token.
+  local x2 prd_touched=0 ptf_unwritten=1
+  for x2 in "${HOLD_NEW[@]}" "${UNVERIFIED[@]}"; do
+    [[ "$x2" == "$T_PRD" ]] && prd_touched=1
+    [[ "$x2" == "$T_PTF" ]] && ptf_unwritten=0
+  done
+  if (( prd_touched == 1 && ptf_unwritten == 1 )); then
+    printf 'note: if %s has no own copy it inherits %s/prd and may already hold the new token -- treat it as possibly new\n' "$T_PTF" "$DOPPLER_PROJECT" >&9
+  fi
   printf 'do NOT revoke the old token yet -- re-run the rotation with a freshly minted token, then revoke every other token row (keep only the newest one) in-page\n' >&9
 }
 
@@ -290,8 +300,13 @@ cleanup() {
 }
 # shellcheck disable=SC2317,SC2329  # invoked by trap
 on_signal() {
+  trap '' INT TERM HUP PIPE   # one report: a second signal must not re-enter the handler
   if (( STORE_PHASE == 1 )); then
-    [[ -n "$IN_STORE" ]] && UNVERIFIED+=("$IN_STORE")
+    # The in-flight target counts as UNVERIFIED unless it was already classified (the handler
+    # can land between a list append and the IN_STORE reset).
+    local s listed=0
+    for s in "${HOLD_NEW[@]}" "${UNVERIFIED[@]}"; do [[ "$s" == "$IN_STORE" ]] && listed=1; done
+    if [[ -n "$IN_STORE" ]] && (( listed == 0 )); then UNVERIFIED+=("$IN_STORE"); fi
     printf '[FATAL] interrupted during the store\n' >&9
     report_lists
   fi
@@ -310,7 +325,7 @@ if [[ -n "$SELECTOR" ]]; then
   # is NOT a snapshot or a screenshot (#7947 discipline). On failure only the exit code and
   # the selector are reported -- agent-browser's stderr is not proven value-free.
   cap_rc=0
-  agent-browser get value "$SELECTOR" > "$TOK" 2>/dev/null || cap_rc=$?
+  agent-browser get value "$SELECTOR" > "$TOK" 2>/dev/null 9>&- || cap_rc=$?  # 9>&-: a daemon it starts must not hold the report fd
   if (( cap_rc != 0 )); then
     printf '[FATAL] agent-browser get value %q failed (rc=%s) -- is the Tokens panel open in the current session?\n' "$SELECTOR" "$cap_rc" >&2; exit 1
   fi
@@ -523,7 +538,7 @@ for c in "${CARRIERS[@]}"; do
     unknown+=("$c")
   fi
 done
-printf 'OTHER prd CONFIGS CARRYING %s (no known reader in repo; not written): follow soleur/prd (now new): %s; own copy (still the old value; removal tracked in #12740): %s; unreadable: %s\n' \
+printf 'OTHER prd CONFIGS CARRYING %s (no known reader in repo; not written): follow soleur/prd (now new): %s; own copy (not the new value; removal tracked in #12740): %s; unreadable: %s\n' \
   "$SECRET_NAME" "$(join_or_none ', ' "${follows[@]}")" "$(join_or_none ', ' "${own[@]}")" "$(join_or_none ', ' "${unknown[@]}")"
 printf '[ok] next: prove it, then revoke every OTHER token row by its masked last four (keep ...%s) -- the runbook'"'"'s IaC section, step "Prove, then revoke".\n' "$TAIL4"
 printf '[ok] done. The trap shreds the plaintext on exit.\n'

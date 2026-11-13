@@ -125,22 +125,27 @@ and the `get value`-only discipline above apply unchanged.
    `updatedAt`), Doppler `soleur/prd` and Doppler `soleur/prd_terraform` (each read back by
    digest). A Doppler branch config either inherits the root's value or holds its own copy, so
    `prd_terraform` is written explicitly. The script then classifies every other `prd_*` config
-   that lists the key by digest: `follow soleur/prd` (now new) or `own copy` (still the old value;
+   that lists the key by digest: `follow soleur/prd` (now new) or `own copy` (not the new value;
    no repo code reads it; removal is #12740). Exit 3 means a partial store: read the report.
 4. **Prove, then revoke.** Only after the script prints `all three targets hold the new token … at
    <UTC time>`: run `gh workflow run scheduled-sentry-alert-drift.yml` and
    `gh workflow run scheduled-terraform-drift.yml`, and take each run id from the URL that
    `gh workflow run` prints (else the newest `--event workflow_dispatch` run created after that UTC
    time — a run that started earlier proves the OLD token). Both read only the GitHub secret; the
-   Doppler copies are already proven by digest. Revoke only when BOTH hold:
-   - alert-drift: the log does NOT contain `the fidelity probe could not complete` or
-     `missing required secret`. A drift verdict (`sentry_alert live fidelity FAILED`, red run)
-     still proves the token authenticated, so drift does not block the revoke.
+   Doppler copies are already proven by digest. GitHub prints every step's script into the run
+   log, so a marker that also appears in a workflow's own source matches on EVERY run: match
+   errors only in their rendered `##[error]` form, and require a POSITIVE line, never an absence.
+   Revoke only when BOTH hold (the run has completed):
+   - alert-drift: the log contains `sentry_alert live fidelity: PASS (all <N> in-scope rules …` or
+     `divergence(s) between live Sentry` (a drift verdict reddens the run but still proves the
+     token authenticated), and no `##[error]missing required secret` /
+     `##[error]the fidelity probe could not complete` line:
+     `gh run view "$RUN" --log | grep -E 'sentry_alert live fidelity: PASS \(all |divergence\(s\) between live Sentry|##\[error\](missing required secret|the fidelity probe could not complete)'`.
    - terraform-drift: the `web-platform/sentry` leg's log contains `No drift detected in
-     web-platform/sentry` or `Drift detected in web-platform/sentry`. It blocks on
-     `Terraform plan failed in web-platform/sentry` or `sentry_iac_token_absent`. The plan output
-     itself never reaches the log, so do not search it for a 401. Command:
-     `JOB=$(gh run view "$RUN" --json jobs -q '.jobs[] | select(.name | contains("web-platform/infra/sentry")) | .databaseId'); gh run view --job "$JOB" --log | grep -E 'No drift detected in web-platform/sentry|Drift detected in web-platform/sentry|Terraform plan failed in web-platform/sentry|sentry_iac_token_absent'`.
+     web-platform/sentry` or `Drift detected in web-platform/sentry`, and no
+     `##[error]Terraform plan failed in web-platform/sentry` / `##[error]sentry_iac_token_absent`
+     line. The plan output itself never reaches the log, so do not search it for a 401:
+     `JOB=$(gh run view "$RUN" --json jobs -q '.jobs[] | select(.name | contains("web-platform/infra/sentry")) | .databaseId'); gh run view --job "$JOB" --log | grep -E 'No drift detected in web-platform/sentry|Drift detected in web-platform/sentry|##\[error\](Terraform plan failed in web-platform/sentry|sentry_iac_token_absent)'`.
 
    Then, in the `iac-terraform-prd` Tokens panel, keep the row whose masked last four the script
    printed and revoke every other row (the previous token, plus any token from an earlier
@@ -162,4 +167,4 @@ and the `get value`-only discipline above apply unchanged.
 | `[WARN] shred … failed` on exit | Non-tmpfs `/tmp` or a permission change | Remove the named directory by hand; the plaintext lived seconds under 0700 |
 | `iac`, exit 3 (or 130/143 after `interrupted during the store`): `HOLD THE NEW TOKEN … / UNVERIFIED … / UNCHANGED BY THIS RUN …` then `do NOT revoke the old token yet` | A store failed after an earlier target took, or may have taken, the new value, so more than one token may be live | Do not revoke anything yet. Mint a fresh token and re-run the chain (it rewrites all three targets), then keep only the newest row in the Tokens panel. If the SAME target fails twice, fix access to it (e.g. Doppler write permission on that config) before minting again |
 | `iac`: `[FATAL] doppler preflight failed (…) -- nothing was stored` | Doppler login expired, `soleur/prd` / `soleur/prd_terraform` is missing or reshaped, or the key is unreadable in one of them | `doppler login`, or check the config names and access; with `--from-file`, shred the named source file or re-run with it |
-| `iac`: the terraform-drift `web-platform/sentry` leg prints `Terraform plan failed in web-platform/sentry` after a store | The stored value is wrong or lacks a scope a Terraform resource needs (or an unrelated plan failure) | Do not revoke the old token; read the leg's `[ERROR]` notification for the cause, re-run the chain if it is auth, and check the scope set against ADR-031 |
+| `iac`: the terraform-drift `web-platform/sentry` leg prints `##[error]Terraform plan failed in web-platform/sentry` after a store | The stored value is wrong or lacks a scope a Terraform resource needs (or an unrelated plan failure) | Do not revoke the old token; read the leg's `[ERROR]` notification for the cause, re-run the chain if it is auth, and check the scope set against ADR-031 |
