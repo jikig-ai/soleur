@@ -4383,6 +4383,8 @@ _aff_runner_banner() {
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
 # #12348: +1 always-on (the -live tree scan; the unit suite is edge-selected, E5); re-pinned at 119-5.
+# #11556: -1 always-on (image-cve-public-claim-guard withdrawn to edge-selection when the Lever-A
+# 5-run re-price put its measured median over the 10s fast-tier cap); count 118, floor stays 114.
 _MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the

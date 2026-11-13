@@ -2922,7 +2922,7 @@ _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
 if [[ "$_f1_floor" == "114" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 114 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection + #9826 image-cve claim-guard and verdict-consumers pair + #10448 boundary-prefix wholesale dir-glob sweep + #9659 lint-gh-dedupe-shape + #12348 advisory-id/safe-status live scan (its unit suite is edge-selected, CTO ruling E5): 119-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 114 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection + #9826 image-cve claim-guard and verdict-consumers pair + #10448 boundary-prefix wholesale dir-glob sweep + #9659 lint-gh-dedupe-shape + #12348 advisory-id/safe-status live scan (its unit suite is edge-selected, CTO ruling E5) - #11556 image-cve-public-claim-guard re-priced over the 10s cap: 118-count within slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
   fail "f1: floor='${_f1_floor}' (want 114) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi

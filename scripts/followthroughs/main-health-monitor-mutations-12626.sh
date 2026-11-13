@@ -18,16 +18,21 @@
 # (it does not exercise the cron dispatch path). `cancelled`/in-progress runs are
 # excluded from the sample — a cancel is operational, not regression evidence;
 # the "run never happened" arm is owned by the missed-check-in watchdog
-# `sentry_cron_monitor.main_health_monitor`. `created_at >= MERGE_TS` pins the
-# window to post-merge code: runs before it exercised the pre-split layout and
-# are not evidence about this fix.
+# `sentry_cron_monitor.main_health_monitor`. `action_required` (a waiting
+# state, not a verdict) is excluded for the same reason. `timed_out`,
+# `startup_failure` and `neutral` are NOT excluded: a scheduled run that died
+# before producing a green verdict is exactly the signal class this probe
+# exists to see, so they stand in the sample as non-success evidence.
+# `created_at >= MERGE_TS` pins the window to post-merge code: runs before it
+# exercised the pre-split layout and are not evidence about this fix.
 #
-# Any scheduled run concluding `failure`, or a green scheduled run whose jobs
-# list is missing a `test-webplat-mutations` leg or shows one non-success, is
-# exit 1 — the leg-silently-dropped shape (matrix+EXPECTED_LEGS edited
-# consistently -> a green run that never executed the battery) is exactly what
-# the per-run jobs read exists to see, and it is not visible in the run-level
-# conclusion. Jobs reads are bounded to the newest MAX_EVAL qualifying runs.
+# Any scheduled run concluding `failure`, `timed_out`, `startup_failure` or
+# `neutral`, or a green scheduled run whose jobs list is missing a
+# `test-webplat-mutations` leg or shows one non-success, is exit 1 — the
+# leg-silently-dropped shape (matrix+EXPECTED_LEGS edited consistently -> a
+# green run that never executed the battery) is exactly what the per-run jobs
+# read exists to see, and it is not visible in the run-level conclusion. Jobs
+# reads are bounded to the newest MAX_EVAL qualifying runs.
 #
 # Followthrough-convention exit vocabulary:
 #   0 = PASS    1 = FAIL (a non-success scheduled run, or a missing/red mut leg)
@@ -86,15 +91,18 @@ printf '%s' "$runs_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2
   || fail_api "workflow runs listing unparseable"
 
 # Qualifying scheduled runs: the cron's bot actor, on main, post-merge window,
-# completed (success or failure — cancelled/in-progress excluded), newest first,
-# bounded. A `total_count` we never read: completeness comes from enumerating
-# the listed runs, not from trusting a count (the sample shrinks over time).
+# completed to a verdict (success/failure/timed_out/startup_failure/neutral —
+# cancelled, in-progress and action_required excluded), newest first, bounded.
+# A `total_count` we never read: completeness comes from enumerating the
+# listed runs, not from trusting a count (the sample shrinks over time).
 qual_tsv="$(printf '%s' "$runs_json" | jq -r --arg actor "$BOT_ACTOR" --arg since "$MERGE_TS" --argjson cap "$MAX_EVAL" '
   [.workflow_runs[]
    | select(.actor.login == $actor)
    | select(.head_branch == "main")
    | select(.created_at >= $since)
-   | select(.conclusion == "success" or .conclusion == "failure")]
+   | select(.conclusion == "success" or .conclusion == "failure"
+            or .conclusion == "timed_out" or .conclusion == "startup_failure"
+            or .conclusion == "neutral")]
   | sort_by(.created_at) | reverse | .[0:$cap][]
   | "\(.id)\t\(.conclusion)\t\(.created_at)"')" \
   || fail_api "workflow runs projection"
@@ -116,7 +124,7 @@ while IFS=$'\t' read -r id conc ts; do
   mut_total="${mut_counts%%$'\t'*}"
   mut_green="${mut_counts##*$'\t'}"
   if [ "$mut_total" -lt "$MUT_LEG_MIN" ] || [ "$mut_green" != "$mut_total" ]; then
-    evidence="${evidence} run=${id}@${ts}(mut-legs=${mut_green}/${mut_total}<${MUT_LEG_MIN});"
+    evidence="${evidence} run=${id}@${ts}(mut-legs=${mut_green}-of-${mut_total}-green,need-all-of>=${MUT_LEG_MIN});"
     continue
   fi
   green=$((green + 1))

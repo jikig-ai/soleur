@@ -84,7 +84,8 @@ jobs_body() { # <n_green_mut> <n_red_mut>
   printf '{"jobs":['
   for ((i=0;i<g;i++)); do [ "$i" -eq 0 ] || printf ','; printf '{"name":"test-webplat-mutations (leg-%d-mutation)","conclusion":"success"}' "$i"; done
   for ((i=0;i<b;i++)); do [ $((g+i)) -eq 0 ] || printf ','; printf '{"name":"test-webplat-mutations (leg-red-%d-mutation)","conclusion":"failure"}' "$i"; done
-  printf ',{"name":"test-scripts (0/1)","conclusion":"success"}]}'
+  [ $((g+b)) -eq 0 ] || printf ','
+  printf '{"name":"test-scripts (0/1)","conclusion":"success"}]}'
 }
 # mkfx <dir>: creates dir; caller writes runs.json + jobs-<id>.json
 mkfx() { assert_fixture_dir "$1"; mkdir -p "$1"; : > "$1/requests.log"; }
@@ -133,7 +134,7 @@ runs_body "$(run 1001 'soleur-ai[bot]' success '2026-11-13T06:00:31Z')" \
 jobs_body 3 0 > "$TMP/fx-missing-leg/jobs-1001.json"
 jobs_body 2 0 > "$TMP/fx-missing-leg/jobs-1000.json"
 row r-missing-leg 1 "$TMP/fx-missing-leg"
-grep -q 'mut-legs=2/2' "$TMP/fx-missing-leg/last.out" && pass 'r-missing-leg names the shortfall' || fail 'r-missing-leg missing evidence'
+grep -q 'mut-legs=2-of-2-green' "$TMP/fx-missing-leg/last.out" && pass 'r-missing-leg names the shortfall' || fail 'r-missing-leg missing evidence'
 
 # 3. older green + later red -> FAIL (a check that stops at the first member is the defect class)
 mkfx "$TMP/fx-later-red"
@@ -227,6 +228,15 @@ runs_body "$(run 1001 'soleur-ai[bot]' success '2026-11-13T06:00:31Z')" \
 jobs_body 3 0 > "$TMP/fx-tail-red/jobs-1001.json"
 row r-tail-red 1 "$TMP/fx-tail-red"
 
+# 17. a scheduled run that timed out is non-success evidence, not an exclusion
+# (a run-level timed_out is exactly the censor class this fix removed)
+mkfx "$TMP/fx-timedout"
+runs_body "$(run 1001 'soleur-ai[bot]' timed_out '2026-11-13T06:00:31Z')" \
+          "$(run 1000 'soleur-ai[bot]' success '2026-11-13T00:00:29Z')" > "$TMP/fx-timedout/runs.json"
+jobs_body 3 0 > "$TMP/fx-timedout/jobs-1000.json"
+row r-timedout 1 "$TMP/fx-timedout"
+grep -q 'conclusion=timed_out' "$TMP/fx-timedout/last.out" && pass 'r-timedout names the conclusion' || fail 'r-timedout missing evidence'
+
 # --------------------------- mutation rows ------------------------------------------------------
 # Mutated COPIES of the probe (never the probe itself). A mutant that produces
 # the contract rc on its rows is a SURVIVOR and the suite reds.
@@ -259,7 +269,7 @@ PY
 }
 expected_rc() { case "$1" in
   r-pass|r-cancelled|r-manual-red) echo 0 ;;
-  r-red-latest|r-missing-leg|r-later-red|r-red-leg|r-tail-red) echo 1 ;;
+  r-red-latest|r-missing-leg|r-later-red|r-red-leg|r-tail-red|r-timedout) echo 1 ;;
   r-manual-only|r-one-green|r-premerge|r-nonmain) echo 2 ;;
   r-malformed|r-runs-fail|r-jobs-fail) echo 3 ;;
   *) echo 9 ;; esac }
@@ -270,7 +280,10 @@ mutant m-no-jobs 'if [ "$mut_total" -lt "$MUT_LEG_MIN" ] || [ "$mut_green" != "$
 # a probe that does not filter on the bot actor counts manual dispatches
 mutant m-actor '   | select(.actor.login == $actor)' '' r-manual-only r-manual-red
 # a probe that treats cancelled as failure evidence
-mutant m-cancel-evidence 'or .conclusion == "failure")]' 'or .conclusion == "failure" or .conclusion == "cancelled")]' r-cancelled
+mutant m-cancel-evidence 'or .conclusion == "neutral")]' 'or .conclusion == "neutral" or .conclusion == "cancelled")]' r-cancelled
+# a probe that drops the non-{success,failure} verdicts silently skips a run-level timeout
+mutant m-verdict-gap 'or .conclusion == "timed_out" or .conclusion == "startup_failure"
+            or .conclusion == "neutral")]' ')]' r-timedout
 # a probe satisfied by one green run closes on the first sweep
 mutant m-one-enough '[ "$green" -ge "$MIN_GREEN" ]' '[ "$green" -ge 1 ]' r-one-green
 # a probe that skips the post-merge window counts pre-split runs
@@ -286,7 +299,7 @@ else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)
 # harness row: an always-PASS probe must turn the red-expectation rows red
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 _harness_reds=0
-for r in r-red-latest r-missing-leg r-later-red r-red-leg r-tail-red r-manual-only r-one-green r-malformed; do
+for r in r-red-latest r-missing-leg r-later-red r-red-leg r-tail-red r-timedout r-manual-only r-one-green r-malformed; do
   run_probe "$TMP/fx-${r#r-}" "$TMP/always-pass.sh"; _rc=$?
   [ "$_rc" -ne "$(expected_rc "$r")" ] && _harness_reds=$((_harness_reds + 1))
 done

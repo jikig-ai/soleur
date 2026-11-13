@@ -5019,6 +5019,9 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
 # every public-copy surface the guard walks, verbatim. Directory rows use the
 # trailing-slash dir-entry shape (the components/settings/*-toggle.tsx glob and the
 # two named files under plugins/soleur/docs are subsumed by their parent dirs).
+# The (auth)/(public)/(dashboard) rows carry parens — outside the registration-only
+# classifier's closed charset, so this array can never anchor a `registration-only`
+# diff. Runtime matching is unaffected (dir-prefix edges match parens literally).
 AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS=(
   "plugins/soleur/docs/"
   "docs/legal/"
