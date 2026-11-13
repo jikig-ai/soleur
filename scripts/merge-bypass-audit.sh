@@ -119,7 +119,7 @@ unread_notice() {
     printf '::warning::merge-bypass-audit: unread-notice dedupe projection failed; continuing\n' >&2
     return 0
   }
-  [[ "$hits" -gt 0 ]] && return 0
+  if [[ "$hits" -gt 0 ]]; then return 0; fi
   created="$(gh issue create --repo "$REPO" --title "$UNREAD_NOTICE_TITLE" \
     --body "The merge-bypass audit returned an \`unread\` verdict (exit 2). A red run is not a durable artifact — this deduped notice is the investigation trail.
 
@@ -137,7 +137,9 @@ Filed by \`scripts/merge-bypass-audit.sh\`; deduped on this fixed title — one 
 die_unread() {
   printf '::error::merge-bypass-audit: unread answer — %s\n' "$1" >&2
   printf 'verdict=unread detail=%s\n' "${1// /_}"
-  unread_notice "$1" || :   # durable artifact; best-effort, never alters the unread exit
+  # The durable artifact only fires once a real audit is in flight — an invalid-sha
+  # operand is operator error, not an audit verdict worth a repo issue.
+  if [[ "${_SHA_VALIDATED:-0}" == 1 ]]; then unread_notice "$1" || :; fi
   exit 2
 }
 
@@ -161,6 +163,7 @@ api_get() { gh api "$@"; }
 
 # ---------------------------------------------------------------- self-check
 self_check() {
+  _SHA_VALIDATED=1   # self-check gates the audit in CI — its failures are audit-blocking
   command -v gh  >/dev/null 2>&1 || die_unread "gh is not on PATH"
   command -v jq  >/dev/null 2>&1 || die_unread "jq is not on PATH"
   load_required_contexts
@@ -204,6 +207,7 @@ file_alert() {
 audit() {
   local sha="$1"
   [[ "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]] || die_unread "invalid merge sha: '$sha'"
+  _SHA_VALIDATED=1
   load_required_contexts
 
   # (a) merge_group success on the merge SHA -> OK — but ONLY a success from the
