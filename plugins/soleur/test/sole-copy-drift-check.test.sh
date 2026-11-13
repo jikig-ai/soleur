@@ -26,7 +26,7 @@
 # case of a multi-case row (fold_inv folds the earlier cases in; H7), not only the last one, and under the entry of the
 # case they belong to (switch_entry folds before the constants move). H11-H18 are the negative controls of the matrix
 # context, the issue-store id ban, the N1c/N3 document bounds, the text helpers, N4, N1's expect-404 exemption and the N3b
-# runbook-6894/postmerge exact-text pin. FLOOR and TABLE_ROWS are the realized counts of the two-entry suite (286 assertions,
+# runbook-6894/postmerge exact-text pin (with runbook 6604's verify lines V2-V4 frozen beside D and R, and census arm p5). FLOOR and TABLE_ROWS are the realized counts of the two-entry suite (286 assertions,
 # 149 table rows). Edits to ADR-119, runbook 6604, workspaces-luks.tf, runbook 6894 and the postmerge skill select this suite
 # too (scripts/lib/test-affected-paths.sh), because N1c, N3, WR1, N1 and N3b read them.
 #
@@ -2157,6 +2157,10 @@ rb_line_v3() { # rb_line_v3: verify line V3, the plaintext volume looked up by n
 rb_line_v4() { # rb_line_v4 <web1-pin>: verify line V4, the web1 volume's delete-protection flag
   printf '%s\n' "$RB_WRAP$RB_HDR"'https://api.hetzner.cloud/v1/volumes/'"$1"' | jq ".volume.protection.delete"'"'"'   # expect true after the SSH-stage apply'
 }
+# When a V line legitimately changes (#12683), edit, in order: runbook 6604's verify block, rb_line_v<k> (and N3B_V3_URL for the
+# V3 name), N3B_FROZEN_V<k> below, and the H18 rows whose A text names the old value (gVr*, hi/hj, fs-v2-url). A missed step is
+# red: the runbook alone or the builder alone reds N3 (rb_cmdline_ok); the builder and runbook without the literal red N3b
+# (`builder V<k>: frozen: ... at byte N`); a stale A text reds that row as (did-not-land).
 rb_expected() { # rb_expected <web1-pin>: the two blocks as rb_blocks prints them
   local p="$1"
   printf '%s\n' '@@read-back@@' \
@@ -2208,10 +2212,12 @@ if [[ -z "$_n3" ]]; then pass "N3 every pointer the filer text makes resolves: A
 else fail "N3 a filer pointer does not resolve:$_n3"; fi
 # N3b (#12616, CTO ruling 4): every Hetzner-bearer line of runbook 6894 and of the postmerge skill is one of two pinned texts, built
 # by the same line builders N3 binds to runbook 6604: D, the retired-volume GET (rb_line_get404 <retired>), and R, the section-5c
-# read-back (rb_line_readback <pin>). The counts are exact (runbook {D:1, R:1}, skill {R:1}), so a deleted line is red, and the
-# first fenced block under the destroy read-back heading is exactly D, so D and R trading places is red (the multiset is blind
-# to that). Each disagreement line starts with a fixed tag (slot:, builder D|R: <frozen|slots|residual|curl-argv|env-dump>:,
-# destroy-fence:, unclassified p1|p2|p3|p4:, count D|R, unreadable), which H18 reads. INNGEST_RETIRED_ID is the oracle for the
+# read-back (rb_line_readback <pin>). Runbook 6604's three verify lines V2-V4 (rb_line_v2/v3/v4 <web1-pin>, which N3 binds to
+# that runbook) get the same builder check as D and R (#12683): a frozen literal each, and the defence lists on both texts. The
+# counts are exact (runbook {D:1, R:1}, skill {R:1}), so a deleted line is red, and the first fenced block under the destroy
+# read-back heading is exactly D, so D and R trading places is red (the multiset is blind to that). Each disagreement line
+# starts with a fixed tag (slot:, builder D|R|V2|V3|V4: <frozen|slots|residual|curl-argv|env-dump>:, destroy-fence:,
+# unclassified p1|p2|p3|p4|p5:, count D|R, unreadable), which H18 reads. INNGEST_RETIRED_ID is the oracle for the
 # destroy read-back: a suite literal, deliberately NOT read from the runbook, so one runbook edit cannot move the id and its
 # oracle together.
 INNGEST_RETIRED_ID=106261946
@@ -2227,9 +2233,12 @@ n3b_census() { # n3b_census <file> <D> <R> <want-D> <want-R>: one awk pass over 
   # beside authorization. Two Hetzner-specific arms read the JOINED line: (p3) api.hetzner.cloud (any client, the host split or
   # not), (p4) hcloud_token beside curl or authorization (a token on a continuation line, the URL from a variable). The
   # generic arm (curl beside authorization) is never applied to a joined line: postmerge's Sentry curl carries Authorization on
-  # a continuation line, by design, and is not a Hetzner call. Case is folded. Left uncovered (plan limit 5): a logical line with
-  # no literal api.hetzner.cloud and no curl or authorization beside the token name (a renamed token, or another client). The census reads prose too: reword a sentence that pairs those
-  # words; never re-wrap it, which is how a command hides too. END prints one `seen` line, so a call that never ran cannot pass
+  # a continuation line, by design, and is not a Hetzner call. Case is folded for p1-p4. (p5, #12683, CTO ruling b) reads the
+  # JOINED line case-sensitively: any of $HCLOUD_TOKEN, ${HCLOUD_TOKEN, --only-secrets HCLOUD, --only-secrets=HCLOUD or
+  # secrets get HCLOUD (a token handed to another client, xh or wget); the bare name HCLOUD_TOKEN stays legal, since the prose
+  # of both documents names it. Left uncovered (plan limit 5): a renamed token (doppler run --name-transformer included), a
+  # token read by name without `$` (printenv HCLOUD_TOKEN_READONLY), and any Doppler spelling other than those five needles.
+  # The census reads prose too: reword a sentence that pairs those words; never re-wrap it, which is how a command hides too. END prints one `seen` line, so a call that never ran cannot pass
   # as one that found nothing.
   [[ -f "$1" && -r "$1" ]] || { printf 'unreadable %s: not a readable file\n' "${1##*/}"; return; }
   N3B_D="$2" N3B_R="$3" awk -v f="${1##*/}" -v wd="$4" -v wr="$5" '
@@ -2258,15 +2267,20 @@ n3b_census() { # n3b_census <file> <D> <R> <want-D> <want-R>: one awk pass over 
 # n3b_builder (CTO rulings 11c and 12a). The closure is the FROZEN LITERAL, not the word lists: N3B_FROZEN_D and N3B_FROZEN_R
 # are each the whole pinned line, written out byte for byte in a quoted heredoc (so nothing in it expands, and it cannot be
 # built from RB_WRAP, RB_HDR or the rb_line_* builders; n3b_frozen_self checks that from this file's own text), with @ID@ the
-# only placeholder. The built line (D: rb_line_get404 <retired>; R: rb_line_readback <pin>) must equal its literal with @ID@
-# replaced by the volume id, or n3b prints `builder <D|R>: frozen:`. So any change to the builders, a prefix before a slot,
+# only placeholder. N3B_FROZEN_V2, N3B_FROZEN_V3 and N3B_FROZEN_V4 do the same for runbook 6604's verify lines (#12683; V3
+# names no id, and V2's one @ID@ is its `expect [@ID@]`; n3b_frozen_self checks that placement). The built line (D:
+# rb_line_get404 <retired>; R: rb_line_readback <pin>; V<k>: rb_line_v<k> <web1-pin>) must equal its literal with @ID@
+# replaced by the volume id, or n3b prints `builder <K>: frozen:`. So any change to the builders, a prefix before a slot,
 # another printf, a shell flag or a quote-joined argv word included, is red until the literal is edited too; an edit to the
 # literal is a reviewed change this suite cannot catch (plan limit 5). Four checks stay as defence in depth, on the built
 # line AND on the literal (so an edited literal still faces them): (1) slots: each of the three slot texts occurs exactly
 # once. (2) residual: with the slots removed, no hcloud_token, authoriz, bearer or curl is left (case folded). (3) curl-argv:
 # curl's argv runs from `| curl ` to the template's real end, the volume id before `'` (D) or `)` (R); it holds no `$` or
 # backquote, no `''` or `""` joining two quoted pieces (quote-join), and only the allow-listed items D and R use, each at
-# most once, the URL a volume id. (4) env-dump: the residual names none of printenv, environ, env, set, export, eval, declare
+# most once, the URL a volume id. For a V line the end is the kind's own URL directly before ` | jq ` and the allow-list is
+# keyed per kind (ruling F2): --disable, -sS, --noproxy "*", --config -, --max-time 30 (no -o or -w, F1) and only that
+# kind's URL (V2 servers/<digits>, V3 exactly N3B_V3_URL, V4 volumes/<digits>), so a second URL anywhere is red. The flags
+# are permitted, not required (follow-up #12752), and the V tail after ` | jq` is pinned only by the literal. (4) env-dump: the residual names none of printenv, environ, env, set, export, eval, declare
 # as a word, the one declared open list (it guards an environment dump into a non-curl command's argv).
 IFS= read -r -d '' N3B_FROZEN_D <<'N3B_EOF' || true
 doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/@ID@'   # expect 404
@@ -2396,7 +2410,7 @@ n3b() { # n3b <runbook-6894> <skill> <pin> <retired> <web1-pin>: one tagged line
 }
 _n3b=$(n3b_frozen_all "$N3B_SRC"; n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID" "$_wpin")
 _n3b_ok=0   # H18 reads it: a mutation battery over base documents that are already red judges nothing
-if [[ "$_n3b" == "seen ${RUNBOOK##*/}: D=1 R=1"$'\n'"seen SKILL.md: D=0 R=1" ]]; then _n3b_ok=1; pass "N3b every Hetzner-bearer logical line (curl, a token name, Authorization or api.hetzner.cloud; backslash continuations joined) of runbook 6894 and the postmerge skill is one of the two pinned stdin-header texts: runbook 6894 holds the retired-volume GET of $INNGEST_RETIRED_ID once (as the destroy read-back fence) and the section-5c read-back of $_pin once, the skill that read-back once; both pinned lines pass the closed builder check"
+if [[ "$_n3b" == "seen ${RUNBOOK##*/}: D=1 R=1"$'\n'"seen SKILL.md: D=0 R=1" ]]; then _n3b_ok=1; pass "N3b every Hetzner-bearer logical line (curl, a token name, Authorization or api.hetzner.cloud; backslash continuations joined) of runbook 6894 and the postmerge skill is one of the two pinned stdin-header texts: runbook 6894 holds the retired-volume GET of $INNGEST_RETIRED_ID once (as the destroy read-back fence) and the section-5c read-back of $_pin once, the skill that read-back once, and no other logical line names the token as \$HCLOUD_TOKEN, \${HCLOUD_TOKEN, --only-secrets HCLOUD, --only-secrets=HCLOUD or secrets get HCLOUD (p5); both pinned lines, and runbook 6604's verify lines V2-V4, pass the closed builder check (frozen literal and per-kind defence lists)"
 else fail "N3b runbook 6894 / postmerge bearer lines (a command must equal rb_line_get404/rb_line_readback; prose: reword it, never re-wrap it): $(tr '\n' ';' <<<"${_n3b:-no census ran}")"; fi
 # N4 (CTO rulings 20 and 28): the web-1 re-protect forcing function is stated the same way in ADR-119's 2026-11-10 addendum and in
 # the sole-copy job's OWN comment block (the run of comment lines directly above the job header, after the last blank or
@@ -2895,9 +2909,10 @@ _h18_v() { # _h18_v <check>...: ` V2:<c> V3:<c> V4:<c>` for the checks (given in
 }
 _h18_bld() { # _h18_bld <label> <want> <built|both> <var> <value>: n3b on the real documents with RB_WRAP or RB_HDR set to <value> in a
   # subshell (through n3b itself, so the call to n3b_builder is pinned, never the helper alone). `built` changes the builders
-  # only, so the frozen literal must catch it; `both` rewrites N3B_FROZEN_D/R from the changed builders too, the edit a
+  # only, so the frozen literal must catch it; `both` rewrites N3B_FROZEN_D/R/V2/V3/V4 from the changed builders too, the edit a
   # reviewed diff would make to the literal, so only the defence lists are left to catch it. The reduced builder lines must be
-  # exactly <want>, so a row trips the checks it names and no other.
+  # exactly <want>, so a row trips the checks it names and no other. RB_WRAP and RB_HDR also build V2-V4 (F4), so each row's
+  # want repeats its D/R checks for the three V kinds through _h18_v.
   H18_RUN=$((H18_RUN + 1))
   local o
   o=$(printf -v "$4" '%s' "$5"
@@ -3089,7 +3104,7 @@ _h18_new g2r4; n3b_ins "$TMP/n3b/g2r4/$_RB6894" "$_ds" "$_de" "$_h18_d" "$(rb_li
 _h18_n1 g2r4 pass   # judged by n1_rb only: N3b reds it by design
 (( H18_RUN == H18_ROWS )) || _h18+=" rows:ran-$H18_RUN-declared-$H18_ROWS"   # a deleted judging call or an early return is red
 if (( ! _n3b_ok )); then fail "H18 not judged: base documents red (see N3b)"
-elif [[ -z "$_h18" ]]; then pass "H18 N3b and N1's runbook clause on copies: N3b goes RED with its named tag on an argv -H destroy line, a 5c line without --disable, the destroy line naming the pin or without its expect-404 comment, a skill copy without --max-time, a second argv bearer in prose, a deleted destroy line, an argv header on a continuation line, D and R swapped (the fence check, not the counts), a bearer staged through a variable, a curl split over continuations, a non-curl expect-404 bearer line, a deleted skill read-back, a token on a continuation line with the URL from a variable and a host split inside its quotes over a continuation (each named at its start line); the frozen-literal check goes RED, through n3b, on builders changed alone (a command before the token test, another printf, a quote-joined second URL or -v, which also red quote-join, the shell trace flag, an argv header, a change to rb_line_readback alone); with the literal edited to match, the defence lists still go RED on that check alone on a dropped slot, a curl before the printf, an argv flag off the allow-list, an environment dump into another command, a --user credential (also naming the token), a token alias and a quote-join; the literals' source check goes RED on a heredoc naming a builder, an unquoted one and an edited body, and stays quiet on this file; every judging helper reports on a known-red input and stays quiet on a known-green one; a reworded copy stays green and an empty or equal slot reports only slot:; N1 goes RED on the pin-naming and comment-less destroy lines and on no read-only line at all, and stays green on a second expect-404 GET of another id"
+elif [[ -z "$_h18" ]]; then pass "H18 N3b and N1's runbook clause on copies: N3b goes RED with its named tag on an argv -H destroy line, a 5c line without --disable, the destroy line naming the pin or without its expect-404 comment, a skill copy without --max-time, a second argv bearer in prose, a deleted destroy line, an argv header on a continuation line, D and R swapped (the fence check, not the counts), a bearer staged through a variable, a curl split over continuations, a non-curl expect-404 bearer line, a deleted skill read-back, a token on a continuation line with the URL from a variable and a host split inside its quotes over a continuation (each named at its start line); the frozen-literal check goes RED, through n3b, on builders changed alone (a command before the token test, another printf, a quote-joined second URL or -v, which also red quote-join, the shell trace flag, an argv header, a change to rb_line_readback alone); with the literal edited to match, the defence lists still go RED on that check alone on a dropped slot, a curl before the printf, an argv flag off the allow-list, an environment dump into another command, a --user credential (also naming the token), a token alias and a quote-join; the literals' source check goes RED on a heredoc naming a builder, an unquoted one and an edited body, and stays quiet on this file; every judging helper reports on a known-red input and stays quiet on a known-green one; a reworded copy stays green and an empty or equal slot reports only slot:; N1 goes RED on the pin-naming and comment-less destroy lines and on no read-only line at all, and stays green on a second expect-404 GET of another id; runbook 6604's verify lines V2-V4 go RED on a second URL after the server id (frozen and curl-argv, then curl-argv alone with the literal edited), another kind's URL, an -o, a second allow-listed URL, V3's anchor pair twice and a non-literal ?, each literal's source check goes RED on its own reason, an empty or equal web1 pin reports only slot:, and a legal id change stays green; census arm p5 goes RED on a token handed to xh, wget or a Doppler read by each of its five spellings (one on a joined continuation) and stays quiet on near misses and the bare name; the battery ran exactly its declared H18_ROWS judging calls"
 else fail "H18 N3b / N1 self-test:$_h18"; fi
 
 cmp -s "$LIBREAL" "$TMP/lib/bearer-curl.sh" || fail "Z0 the library copy drifted during the run"

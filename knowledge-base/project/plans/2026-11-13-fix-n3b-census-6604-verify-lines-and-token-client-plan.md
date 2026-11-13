@@ -605,27 +605,27 @@ operations step.
 - [ ] AC2 Phase 2 red recorded: with the new rows and without the fix, the suite's H18 line is `FAIL` and names
       `uncaught:gVr1(`, `uncaught:gVr2(` and `uncaught:g5r1 ` (each label matched with its `(` or a trailing space), and
       the fs-V rows report `(did-not-land)`.
-- [ ] AC3 `N3B_END` and the D/R allow-list arms are byte-identical to the merge base. The selector below prints 6 base
+- [x] AC3 `N3B_END` and the D/R allow-list arms are byte-identical to the merge base. The selector below prints 6 base
       lines (check that count first, so a pattern that matches nothing cannot pass silently), and each still occurs
       exactly once on HEAD:
       `git show "$(git merge-base origin/main HEAD)":plugins/soleur/test/sole-copy-drift-check.test.sh | grep -E '^N3B_END=|^      (--disable\|-sS\) ;;|--noproxy\|--config|https://api.hetzner.cloud/v1/volumes/\*\) key=url)|^        case "\$o \$v" in |^      \*\) bad\+=" \$o" ;;$' | while IFS= read -r l; do grep -cxF -- "$l" plugins/soleur/test/sole-copy-drift-check.test.sh; done | sort -u`
       prints `1`.
-- [ ] AC4 `bash plugins/soleur/test/sole-copy-drift-check.test.sh` prints `=== Results: 286/286 passed, 0 failed ===`, and its
+- [x] AC4 `bash plugins/soleur/test/sole-copy-drift-check.test.sh` prints `=== Results: 286/286 passed, 0 failed ===`, and its
       N3b and H18 lines are `pass:`.
-- [ ] AC5 Phase 3c: on a replay of the fixed head, R1 (re-made in `rb_line_v2` and runbook 6604) makes N3b FAIL naming
+- [x] AC5 Phase 3c: on a replay of the fixed head, R1 (re-made in `rb_line_v2` and runbook 6604) makes N3b FAIL naming
       `builder V2: frozen:` and `builder V2: curl-argv:` while N3 stays `pass:`, and R2 makes N3b FAIL naming
       `unclassified p5:`.
-- [ ] AC6 `grep -c "^IFS= read -r -d '' N3B_FROZEN_\(D\|R\|V2\|V3\|V4\) <<'N3B_EOF' || true$" plugins/soleur/test/sole-copy-drift-check.test.sh`
+- [x] AC6 `grep -c "^IFS= read -r -d '' N3B_FROZEN_\(D\|R\|V2\|V3\|V4\) <<'N3B_EOF' || true$" plugins/soleur/test/sole-copy-drift-check.test.sh`
       prints `5`.
-- [ ] AC7 `FLOOR=286` and `TABLE_ROWS=149` are unchanged, and the realized count in AC4 equals `FLOOR`. Why unchanged:
+- [x] AC7 `FLOOR=286` and `TABLE_ROWS=149` are unchanged, and the realized count in AC4 equals `FLOOR`. Why unchanged:
       H18 stays one assertion however many rows it judges, and `TABLE_ROWS` counts H3's `end_row` rows, which this plan
       does not touch (deepen A8). The new `H18_ROWS` constant is checked inside H18's one assertion, so it adds no
       assertion.
-- [ ] AC8 `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0, and
+- [x] AC8 `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0, and
       `(cd apps/web-platform && npx vitest run test/plugin-root-anchoring.test.ts)` passes.
-- [ ] AC9 `bash .claude/hooks/grep-q-pipe-guard.test.sh` passes (`PJ_TRIPLES` unchanged, or recomputed by its documented
+- [x] AC9 `bash .claude/hooks/grep-q-pipe-guard.test.sh` passes (`PJ_TRIPLES` unchanged, or recomputed by its documented
       recipe with the reason recorded).
-- [ ] AC10 The archived plan's item 5 names p5 and H18 row g5r1 and still records the renamed-token gap (and the no-`$`
+- [x] AC10 The archived plan's item 5 names p5 and H18 row g5r1 and still records the renamed-token gap (and the no-`$`
       read-by-name gap). Item 6 names `N3B_FROZEN_V2/V3/V4` and rows gVr1/gVr2, and no longer says "only D and R are frozen".
       Item 5 names the Doppler-spelling and `--name-transformer` residuals, and item 6 names #12752 and the open
       env-dump list.
