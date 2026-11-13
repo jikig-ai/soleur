@@ -811,7 +811,7 @@ if [[ "$fails" -ne 0 ]]; then
   exit 1
 fi
 if [[ "$passes" -lt 40 ]]; then
-  printf 'spec-kit-intake: pass count %s is under floor 40\n' "$passes" >&2
+  printf '[FAIL] spec-kit-intake: pass count %s is under the assertion floor 40\n' "$passes" >&2
   exit 1
 fi
 printf 'spec-kit-intake: %s passed\n' "$passes"
