@@ -37,7 +37,7 @@ the 2026-11-13 pre-merge readings (`knowledge-base/project/specs/feat-origin-tls
 - Flip apply, run 42426416266: apply job 23:42:34Z to 23:44:26Z; plan 0 to add, 1 to change, 0 to destroy (the `ORIGIN-TLS STRICT` rule's `enabled` false to true); the Terraform log line "cloudflare_ruleset.seo_config_settings: Modifications complete" is stamped 23:43:44.97Z; Cloudflare reports the live ruleset (version 7) `last_updated` 23:43:43.865Z.
 - `origin-tls-probe.sh --require-tls`: **passed on the first poll, at 23:44:39Z** (TLSv1.3), 13 s after the apply run ended and about 55 s after the ruleset write. **There was no earlier poll, so about 55 s is an UPPER BOUND on the flip's time-to-effect**, not a measurement of when it took effect. Before 23:44:39Z the flip was not proven effective.
 - Live ruleset, read 2026-11-08: 5 rules, 4 enabled ssl rules (flexible app, apex `full`, canary `strict`, strict), version 7 (`cloudflare-readonly.sh config-entrypoint`). Per its header, `enabled_ssl_rules` is 2 plus one per ORIGIN-TLS switch that is on (both are), hence 4.
-- **What the probe proves.** `TLS-ON-ORIGIN-HOP` shows the hop used TLS for a request through the edge to web-1 (the only weighted origin; web-2 has weight 0). It would also pass under `full`, which does not validate the certificate. The stronger evidence that the mode is `strict` is the live rule itself: enabled, and last in the list (last match wins). The canary rule is still enabled, so `--canary` no longer discriminates anything. (Both ORIGIN-TLS rules and the `--canary` mode were retired by the cleanup, ADR-321 item 13.)
+- **What the probe proves.** `TLS-ON-ORIGIN-HOP` shows the hop used TLS for a request through the edge to web-1 (the only weighted origin; web-2 has weight 0). It would also pass under `full`, which does not validate the certificate. The stronger evidence that the mode is `strict` is the live rule itself: enabled, and last in the list (last match wins). The canary rule is still enabled, so `--canary` no longer discriminates anything. (Both ORIGIN-TLS rules and the `--canary` mode were retired by the cleanup, ADR-321 item 13. Since 2026-11-08 web-2 serves at LB weight 1 (`variables.tf` `web2_lb_weight`, #12414), so a probe today is not attributed to either host.)
 
 #### Restarts before and after the flip
 
@@ -480,13 +480,20 @@ back to `flexible`, each suite run once); the file list below is what that run n
    `plugins/soleur/test/cloudflare-readonly.test.sh` derives the expected value from the `.tf` and is RED ("header states the adopted rule's ssl value") until the header says
    `flexible`; `rule_count` 3 and `enabled_ssl_rules` 2 do not change.
 4. `scripts/encryption-posture-ledger.json`, connection row 7 (Cloudflare edge -> web hosts origin): `cert_verification` back to `off`, the `tls` and `enforced_at` text, and an
-   `exception` block carrying `tracking_issue` and `expires_on`. **No suite catches this:** in the simulation `scripts/lint-encryption-posture.py` gave the same result with the
-   `.tf` at `flexible` and row 7 still `on` (it does not read the ruleset), so this edit is on the author.
+   `exception` block carrying `tracking_issue` and `expires_on`. `scripts/lint-encryption-posture.py` does not read the ruleset (in the simulation it gave the same result with the
+   `.tf` at `flexible` and row 7 still `on`); the rollback-coupling rows in `apps/web-platform/test/seo-config-rules.test.ts` (added after the simulation) go RED until
+   row 7 `cert_verification` is no longer `on`.
 5. The published wording, the SAME DAY (CLO ruling 2026-11-13): `docs/legal/privacy-policy.md` Section 11 and its Last Updated line, `docs/legal/data-protection-disclosure.md`
    8.1(c), the two mirrors `plugins/soleur/docs/pages/legal/privacy-policy.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`, and
    `LEGAL_DOC_SHAS` in `apps/web-platform/lib/legal/legal-doc-shas.ts`. The internal records that carry the same claim: `knowledge-base/legal/article-30-register.md`,
    `knowledge-base/legal/data-processing-agreement-template.md`, `knowledge-base/operations/domains.md` (SSL Mode row) and
-   `knowledge-base/engineering/architecture/nfr-register.md`. The legal lints were not part of the simulation, and none of the four suites above ties the wording to the `.tf`.
+   `knowledge-base/engineering/architecture/nfr-register.md`. The legal lints were not part of the simulation. The rollback-coupling rows (same test file) now tie the
+   Privacy Policy and DPD wording, canonical and mirror, to `ADOPTED_SSL_MODE`; the internal records are still on the author.
+6. **If `inngest-host-replace` has run** (the Inngest host polls the public `sdk_url`, `https://app.soleur.ai/...`, ADR-100): a `flexible` rollback sends that poll in plaintext
+   across the public internet and voids ledger row 6 (leg 2). The forward PR then also re-points `sdk_url` in `apps/web-platform/infra/inngest-host.tf` off the public URL
+   (or re-opens row 6 with an owner record), and corrects the ADR-100 Decision 1 amendment and the A7 addendum
+   (`knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md`). The rollback-coupling rows enforce the legal, ledger row 7 and `sdk_url`
+   edits (a public `sdk_url` with a non-`strict` mode is RED); the ADR and addendum corrections are on the author.
 
 **No `[ack-destroy]`.** Measured offline on 2026-11-13 (Terraform 1.9.8, cloudflare 4.52.7 from the plugin cache, prior state = the cleanup's 3 rules): `Plan: 0 to add,
 1 to change, 0 to destroy`, the only diff `ssl = "strict" -> "flexible"`; through the real filter `resource_deletes` 0, `nested_deletes` 0. `ssl-full-mitigation.test.sh` and
@@ -502,6 +509,10 @@ reports `PLAIN-ORIGIN-HOP`.
 What users see if `strict` goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
 certificate). Browser-to-edge TLS is unaffected.
 
+**After any 525/526 window (rollback or break-glass): redeliver failed GitHub webhook deliveries.** GitHub does not retry a failed delivery, so every webhook that hit
+`app.soleur.ai` during the window is lost until it is redelivered (the App's Advanced tab, or `gh api` on the app hook's `deliveries` and `.../attempts` endpoints, for each
+delivery with a non-2xx status inside the window).
+
 ## Break-glass (OWNER ONLY; not agent-runnable)
 
 If users are seeing 525/526 and the merge path is too slow, the owner edits the adopted rule in the Cloudflare dashboard (Rules, Configuration Rules, the rule described
@@ -516,6 +527,14 @@ The cleanup PR made the adopted rule `strict` on `app.soleur.ai` only (lb-stagin
 rules, both variables and the `--canary` probe mode, and left port 80 open (#12743). The two Doppler switches (`ENABLE_ORIGIN_TLS_CANARY_RULE`, `ENABLE_ORIGIN_TLS_STRICT`)
 are now inert; deleting them is the owner's act (#12743). The change REMOVES two rules (`nested_deletes` 2, replayed in T65 against a regenerated offline real plan), so its
 commit carries a line containing exactly `[ack-destroy]`, which reaches the squash merge message the push apply reads.
+
+**Enqueue-time checks (CTO ruling D5, 2026-11-13).** The ack covers every destroy in the merge apply's plan, so: (1) immediately before enqueue, GraphQL
+`mergeQueue(branch: "main")` lists no PR touching `apps/web-platform/infra/`; (2) after the merge, the push's commits contain only this squash commit; (3) the apply's
+destroy list equals T65's (2 nested deletes on `cloudflare_ruleset.seo_config_settings`, nothing else). If (3) differs, stop and read the plan before anything else merges.
+
+**A logs-alert count refusal at the merge apply is not a ruleset failure.** If the apply refuses on a Better Stack logs-alert count, that is a forward-PR fix to the
+alert declarations; it does not mean the ruleset write failed. Read the ruleset state with `cloudflare-readonly.sh config-entrypoint` (expected `rule_count` 3, ref
+dcb85b75 `ssl=strict`) before concluding either way.
 
 **Recovery if the acked push apply is superseded, cancelled or fails before the ruleset write.** A `workflow_dispatch` cannot ack the deletes (its head message is empty,
 so the guard refuses), and every later push apply also targets the ruleset, so EVERY later `apps/web-platform/infra` merge would be refused on the same two deletes. The

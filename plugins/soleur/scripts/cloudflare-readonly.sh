@@ -108,12 +108,10 @@
 #                       the rule's expression is host-scoped (it never prints the expression), so Records ok does not depend
 #                       on the host booleans; the owner compares the live expression with
 #                       apps/web-platform/infra/seo-config-rules.tf (the adopted rule is `(http.host eq "app.soleur.ai")`).
-#                       The 3, the 2, the ref and the ssl value are DATED SNAPSHOTS (2026-11-13, the ADR-321 item 13
-#                       cleanup, #10479: rule_count 5 -> 3 when the two ORIGIN-TLS rules and their switches were deleted, the
-#                       adopted rule flexible -> strict; 2026-11-07: rule_count 3 -> 5 when those rules became static blocks;
-#                       2026-11-05: enabled_ssl_rules 1 -> 2, the `ssl = "full"` rule was missed on 2026-11-04): they are
-#                       re-derived from that file at read time, and the wrapper test fails when the counts or the adopted
-#                       rule's ssl value here drift from it (a reviewed rollback to flexible edits this header only).
+#                       The 3, the 2, the ref and the ssl value are a DATED SNAPSHOT (2026-11-13, the ADR-321 item 13
+#                       cleanup, #10479; history in git and ADR-321): they are re-derived from that file at read time, and
+#                       the wrapper test fails when the counts or the adopted rule's ssl value here drift from it (a
+#                       reviewed rollback to flexible edits this header only).
 #   C pagerules-ssl     figures active_rule_count, ssl_rule_count and per rule the matches_app_host substring figure. Records
 #                       ok ONLY when ssl_rule_count is 0. Any SSL page rule is recorded not ok with the figures and flagged
 #                       for CTO review even when matches_app_host is false (a wildcard pattern defeats that boolean).

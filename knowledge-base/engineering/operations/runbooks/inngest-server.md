@@ -2668,18 +2668,29 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
    acceptance recorded by PR #12733 runs to 2026-11-20 only).
 
+**Typed-confirm gate (CTO ruling D2, 2026-11-13).** Until #12742 item 1 merges, the first step of the `inngest_host_replace`
+job in `.github/workflows/apply-web-platform-infra.yml` (before any credential loads) fails unless the dispatch carries
+`-f confirm=PUBLIC-SDK-URL`. The confirm is a typo-guard, not the go; its error names #12742 and the three risks the replace
+carries until then: a stale non-zero registry the registry-empty alert cannot see, the #7228 first-sync double-fire, and a
+stale private-URL app row that keeps the plaintext poll alive. The #12742 item-1 PR deletes the step.
+
 **Post-replace checks, read-only:**
 
 - `registry_fns` on the new host's probe rows is a positive integer once `uptime_s` passes 900 (the alert above pages
   otherwise), and #12742's new field shows a recent sync.
 - If the registry is empty, re-register with the explicit `PUT https://app.soleur.ai/api/inngest` (step 4 above).
-- The stored app `url` rows read through the host-local GQL the probe already uses: Inngest v1.45.1 `pollSDKs` pings
-  EVERY stored `app.Url`, not only the `--sdk-url` seed, so a surviving `http://10.0.1.10:3000/api/inngest` row would keep
-  the plaintext poll alive after the replace. Leg 2 counts as closed only when that is measured.
+- The stored app `url` rows: Inngest v1.45.1 `pollSDKs` pings EVERY stored `app.Url`, not only the `--sdk-url` seed, so a
+  surviving `http://10.0.1.10:3000/api/inngest` row would keep the plaintext poll alive after the replace. **There is no
+  no-SSH read path for these rows today** (the host-local GQL is reachable only on the host); #12742 must emit them as a probe
+  field. Leg 2 counts as closed only when that field is read.
 - The private-IP rejections logged by `apps/web-platform/lib/auth/resolve-origin.ts` for `10.0.1.10:3000` stop: a Better Stack
   `SELECT count()` of those rows falls to 0 after the replace.
 - Watch the #7228 double-fire probe after the replace: the sync checksum includes the URL, so the first sync is not
   deduplicated.
+- Mixed-build residual (ADR-100 Decision 1 amendment): web-2 serves at LB weight 1 (#12414), so each 60 s sync may land
+  on either host; during a rolling deploy with mixed builds, consecutive syncs can alternate between two function/cron sets.
+  Bounded by the deploy window (same last-writer shape as the app's boot `PUT`); read `registry_fns` again after the deploy
+  finishes, not during it.
 
 The carrier comment in `inngest-bootstrap.sh` ("polls the co-located web-platform") stays out of date until that file next
 changes for a real reason (it is an image carrier; a comment-only edit mints a no-op image release).

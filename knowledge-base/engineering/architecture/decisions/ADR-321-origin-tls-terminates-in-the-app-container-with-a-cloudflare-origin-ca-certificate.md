@@ -18,6 +18,10 @@ Rule for the app host** (`apps/web-platform/infra/seo-config-rules.tf`, the `set
 setting would be a no-op for this host. The rule's expression also matches `lb-staging.soleur.ai`, which no longer
 resolves, so that part is harmless today.
 
+> **Superseded 2026-11-13 (#10479/#10538, PR #12737):** Cloudflare has reached `app.soleur.ai` over TLS under `strict` since the ruleset write
+> of 2026-11-07T23:43:43.865Z (first proven 2026-11-07T23:44:39Z; item 10). From PR #12737's merge apply the adopted rule itself is `strict` on
+> `app.soleur.ai` only, and the `flexible` rule this paragraph describes no longer exists (item 13).
+
 The Hetzner firewall already admits Cloudflare ranges on 443 (`firewall.tf`), but the app container published only 80
 and 3000 and nothing listened on 443. The CLO ruled the hop must be fixed, with a hard stop of 2026-11-19 (#10479).
 Two web hosts serve (`var.web_hosts`); each can be replaced from Terraform, and `web-1` is frozen on its first
@@ -76,6 +80,10 @@ here and this change must not touch it.
    without validating the certificate. `apps/web-platform/infra/origin-tls-probe.sh` reports `result=` and its exit
    code: `0` TLS (or plain without `--require-tls`), `1` non-200, `2` unreachable, `3` `--require-tls` not satisfied,
    `64` usage. Today `--require-tls` exits 3 and that is the correct pre-flip answer.
+
+   > **Superseded 2026-11-13 (#10479/#10538, PR #12737):** the canary rule is deleted (item 13). Read "the zone or the canary rule" as "the
+   > adopted rule": certificate acceptance is proven only while the adopted rule is `strict`, and the probe alone cannot show that (item 13,
+   > "What proves strict"). `--require-tls` has exited 0 since the 2026-11-07 flip.
 6. **Fail closed at the flip.** With `ORIGIN_TLS_REQUIRED=1`, absent or invalid material, an unbuildable TLS context, or
    a listener error BEFORE the bind completes is reported and then fatal, so the canary container (same env-file) exits, its health
    gate fails and the old container keeps serving. Without it a bad deploy would pass the canary and Cloudflare, in
@@ -132,6 +140,9 @@ here and this change must not touch it.
   The CLO held that target and a 2026-11-19 hard stop. On 2026-11-12 the CLO decides whether the published text stays
   or is amended, with engineering supplying the status; this ADR does not restate the date as an engineering
   commitment.
+
+  > **Superseded 2026-11-13 (#10479/#10538, PR #12737):** the target was met: strict was written 2026-11-07T23:43:43.865Z (first proven
+  > 23:44:39Z). The published text no longer carries a target; PR #12737 states the measure as in place "since November 8, 2026 (UTC)" (CLO ruling).
 
 ## Cost Impacts
 
@@ -218,6 +229,10 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    (weight 0) is covered by the https LB monitor with certificate validation (item 8) and by its `origin-tls: listening` line. The `http_config_settings` phase did accept a
    request-header field (applied 2026-11-07, canary probe exit 0). *Amended again by item 10: the first shape of this rule was a `dynamic "rules"` block that came and went, which
    made the rollback a rule REMOVAL.*
+
+   > **Superseded 2026-11-13 (#10479/#10538, PR #12737) by item 13:** the canary `rules` block is no longer present and
+   > `var.enable_origin_tls_canary_rule` is deleted; `origin-tls-probe.sh --canary` exits 64. Separately, web-2 has served at LB weight 1 since
+   > 2026-11-08 (`variables.tf` `web2_lb_weight` default 1, #12414), so the "web-1 only / web-2 weight 0" scope above no longer holds.
 10. **The strict flip (decision 3, step 6; R6(6) amended 2026-11-07).**
     *Ruled by CTO agent, 2026-11-07 (variance from R6(6); there was no earlier ruling for it) and amended the same day by the review round.*
     **Status of item 10 (dated 2026-11-08; all times UTC).** Acts 1, 2 and 3 are DONE on 2026-11-07: `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` about 20:55Z and both hosts restarted on it about 21:01Z (web release v0.395.3 by
@@ -313,22 +328,19 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     budget rides out blips and not an 80-minute CDN outage. The wider release-download class (crane and others) is tracked in #12440.
 
 13. **Cleanup (2026-11-13, #10479).** *Ruled by CTO agent, 2026-11-13 (rows in `knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`); wording conditions by CLO agent, same day.*
-    **End state.** The adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, first in the list) is `ssl = "strict"` on `(http.host eq "app.soleur.ai")`, description
-    "Strict SSL for app.soleur.ai (ADR-321, #10479)". `lb-staging.soleur.ai` is dropped from it: the host has no DNS record and the Origin CA certificate does not name it (a revived
-    staging arm would get 526; `cf-lb-overlay.yml` and `lb-staging/main.tf` say so). Both ORIGIN-TLS rules (canary, item 9; strict flip, item 10) and both variables
-    (`enable_origin_tls_canary_rule`, `enable_origin_tls_strict`) are deleted; `origin-tls-probe.sh --canary` is retired (a usage error, exit 64, no request sent). The ruleset goes from 5 rules to 3 in
-    ONE whole-list PUT at merge; the destroy guard counts it as `nested_deletes` 2 (replayed in T65 against a regenerated offline real plan), acked by a line containing exactly `[ack-destroy]` in the commit that removes
-    the rules, so it rides the squash merge message. Edge behaviour for the host is unchanged by the merge (the last match was already `strict`). The two Doppler switches are now inert;
-    deleting them is the owner's act, tracked in #12743.
-    **Guard 1.** `apps/web-platform/test/seo-config-rules.test.ts` pins exactly three rules, the adopted rule's ref, expression, description and `strict` value, exactly one `strict` rule (the adopted one), every other
-    ssl-setting rule being the apex `full` rule on the marketing expression (position-agnostic: `set_config` is non-terminating and the last match wins), and tombstones for the variables, any `ORIGIN-TLS` rule and the probe header.
-    A dashboard-added rule is outside every repo guard; only the live wrapper reads before merge see it.
-    **Rollback** is a reviewed FORWARD PR setting the adopted rule back to `flexible`: an in-place update with no deletes, so it carries no `[ack-destroy]`. No switch remains, by design. Never `git revert` the
-    cleanup (it would re-add rules and switches and re-introduce the item-10 shape). Break-glass is the owner's dashboard edit of the adopted rule, followed by that forward PR first in the queue: every per-merge apply
-    targets `cloudflare_ruleset.seo_config_settings` and would undo the dashboard edit. Any return to `flexible` corrects the published wording (Privacy Policy Section 11, DPD 8.1(c), ledger row 7) the same day (CLO).
-    The recipe, simulated once in a scratch worktree, is in runbook `origin-tls-strict-flip.md` "Rollback".
-    **Port 80 stays open** (CTO ruling: closing it is a second destroy and a deploy; separate PR, #12743, with Authenticated Origin Pulls).
-    **Per-host pre-merge evidence (F3).** Recorded in the decision-challenges file, 2026-11-13 (UTC): zone `strict`; entrypoint version 7, no ruleset write since the 2026-11-07 flip; 0 SSL page rules; Better Stack
-    `origin-tls: listening` rows with `required: true` for both hosts (web-1 81, web-2 82 in 7 d); 20 of 20 `--require-tls` probes TLS-ON-ORIGIN-HOP (web-1 only, by LB weight); 24 h handshake-failure rows web-1 0, web-2 66
-    (ECONNRESET bursts, unalerted, #12744). LB pool health was not readable (no sanctioned reader, #12745); the CLO amended the evidence bar to host-attributed Better Stack rows plus a strict-mode measurement, which is met.
-    The post-apply re-measure (3 rules, adopted rule strict, through the wrapper) is recorded in runbook `origin-tls-strict-flip.md` once the merge apply has run.
+    **Decision and end state.** The adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, first in the list) is `ssl = "strict"` on `(http.host eq "app.soleur.ai")`, description
+    "Strict SSL for app.soleur.ai (ADR-321, #10479)". `lb-staging.soleur.ai` is dropped from it (no DNS record; the Origin CA certificate does not name it, so a revived staging arm
+    would get 526, as `lb-staging/main.tf` says). Both ORIGIN-TLS rules (items 9, 10) and both variables (`enable_origin_tls_canary_rule`, `enable_origin_tls_strict`) are deleted, and
+    `origin-tls-probe.sh --canary` is retired (exit 64, no request sent). The ruleset goes from 5 rules to 3 in ONE whole-list PUT at merge; the destroy guard counts it as
+    `nested_deletes` 2 (T65, replayed against a regenerated offline real plan), acked by a line containing exactly `[ack-destroy]` in the commit that removes the rules, so it rides the
+    squash merge message. For `app.soleur.ai` the edge behaviour is unchanged by the merge (the last match was already `strict`); `lb-staging.soleur.ai` falls from the rule's
+    `flexible` to the zone's `strict`, which serves nothing because the host has no DNS record. The two Doppler switches are inert; deleting them is the owner's act (#12743). Port 80
+    stays open (closing it is a second destroy and a deploy; #12743, with Authenticated Origin Pulls).
+    **What proves strict from now on.** Without the canary, `origin-tls-probe.sh --require-tls` proves the hop uses TLS but cannot tell `strict` from `full` (under `full` Cloudflare
+    dials TLS without validating the certificate; item 5). Strictness rests on Guard 1 (`apps/web-platform/test/seo-config-rules.test.ts`: exactly three rules, the adopted rule's ref,
+    expression, description and `strict` value, exactly one `strict` rule, any other ssl-setting rule the apex `full` rule, tombstones for the variables, any `ORIGIN-TLS` rule and the
+    probe header) and on the live `cloudflare-readonly.sh config-entrypoint` read through the wrapper. A dashboard-added rule is outside every repo guard; only the wrapper read sees it.
+    **Rollback** is a reviewed forward PR setting the adopted rule back to `flexible` (in place, no deletes, no `[ack-destroy]`); never `git revert` the cleanup. The recipe, the
+    break-glass, the same-day legal corrections and the coupling with the Inngest `sdk_url` are in runbook `origin-tls-strict-flip.md` ("Rollback", "Break-glass"); the per-host
+    pre-merge evidence (F3) is in the decision-challenges file. The F3 edge probes are not host-attributed: web-2 serves at LB weight 1 (`variables.tf` `web2_lb_weight` default 1,
+    persisted 2026-11-08, #12414). Follow-ups: #12742 (leg-2 delivery), #12743 (port 80 and AOP), #12744 (handshake bursts), #12745 (LB pool-health reader).

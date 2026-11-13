@@ -155,6 +155,11 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    ADR-119 workspaces-LUKS volume holder only. Detection of a serving host with an empty registry:
    `logtail_exploration_alert.inngest_registry_empty` (ADR-218 amendment 2026-11-13). The rejected
    alternatives are under "Considered Options" (#10538 alternatives).
+   **Residual (the N>1 state is already live).** web-2 serves at LB weight 1 (`variables.tf`
+   `web2_lb_weight` default 1, persisted 2026-11-08, #12414), so once the public URL is live each
+   60 s sync may land on either host. During a rolling deploy with mixed builds, consecutive syncs
+   can alternate between two function/cron sets; the window is bounded by the deploy and has the
+   same last-writer shape as the app's own boot `PUT`. Accepted; no mitigation in this change.
 2. **Hooks stay web-host-resident.** The dedicated host has no app (`rearm` posts to the local
    app's `/api/internal/schedule-reminder`) and no public ingress (the GH runner reaches only
    `deploy.soleur.ai`). Capture/rearm/inventory hooks run on the web host and reach the inngest

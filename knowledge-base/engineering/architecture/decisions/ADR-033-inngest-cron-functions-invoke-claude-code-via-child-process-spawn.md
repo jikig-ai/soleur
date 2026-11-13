@@ -254,6 +254,13 @@ dedicated host's `--sdk-url` (`http://10.0.1.10:3000/api/inngest`) is only the r
 `app/api/inngest/route.ts`, and `cloudflare_record.app` resolves that name to web-1 only. The hand
 count is replaced by a per-function manifest.
 
+> **Superseded 2026-11-13 (#10479/#10538, PR #12737):** the declared `--sdk-url` in `inngest-host.tf` is now the public
+> serve URL `https://app.soleur.ai/api/inngest` (ADR-100 Decision 1 as amended, #10538 remedy (c)), not
+> `http://10.0.1.10:3000/api/inngest`; it is live only after the owner's `inngest-host-replace` (#12742). The `10.0.1.10`
+> pin no longer shares a source with `sdk_url`: it binds to the ADR-119 workspaces-LUKS volume holder (web-1) only. Steps
+> still go to the registered serve URL, which the Cloudflare LB steers to either serving web host (web-2 at LB weight 1
+> since 2026-11-08, #12414); the placement forwarder routes pinned work to web-1.
+
 ### Decision
 
 Keep execution on the one step-executing host, web-1. Record each function's host needs now, so a

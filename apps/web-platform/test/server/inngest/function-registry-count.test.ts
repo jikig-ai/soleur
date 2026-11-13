@@ -203,10 +203,11 @@ const NON_INNGEST_MONITORS = new Set([
   // convenience. The SCHEDULER is not the problem — since the #6178 cutover (ADR-100, superseding
   // the #5450 same-host framing) the Inngest SCHEDULER runs on its own
   // host (hcloud_server.inngest, 10.0.1.40). EXECUTION is: Inngest calls step requests at the
-  // registered serve URL https://app.soleur.ai/api/inngest (Cloudflare → the `app` A record, web-1
-  // only; the sdk_url in inngest-host.tf is the registration poll, #8611/ADR-243 — declared as the
-  // same public serve URL since #10538 remedy (c), live after the owner's inngest-host-replace),
-  // i.e. the app on WEB-1, with no failover to web-2. This workflow exists to detect that web-1's /mnt/data is no
+  // registered serve URL https://app.soleur.ai/api/inngest, which the Cloudflare LB steers to either
+  // serving web host, and exec-placement.ts forwards a pinned (volume-bound) call to the exec host
+  // (the sdk_url in inngest-host.tf is the registration poll, #8611/ADR-243 — declared as the same
+  // public serve URL since #10538 remedy (c), live after the owner's inngest-host-replace), i.e.
+  // pinned work runs on WEB-1, with no fallback to web-2. This workflow exists to detect that web-1's /mnt/data is no
   // longer on the LUKS mapper — up to and including "web-1 is gone" — so a cron-*.ts dispatching it
   // would execute on the subject itself, the callback would never land, and the check would report
   // silence, read as health. A verifier must not be executed by the host it verifies (ADR-033's

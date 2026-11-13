@@ -165,8 +165,9 @@
 #
 # Once applied, this resource is in state, so `git revert` of the PR removes the
 # resource AND the import block and Terraform plans a DESTROY of the entrypoint
-# — deleting BOTH rules and dropping app.soleur.ai to the zone SSL mode (live
-# zone setting is `strict`). That is strictly worse than the bug this file
+# — deleting ALL rules (the apex `full` rule included -> HTTP 526 on the apex)
+# and dropping app.soleur.ai to the zone SSL mode (live zone setting is
+# `strict`). That is strictly worse than the bug this file
 # fixes, and the destroy-guard makes it look survivable: a full resource delete
 # increments `resource_deletes`, so the gate prints "Add [ack-destroy] to
 # acknowledge" — inviting exactly the bypass, under outage pressure, that
@@ -273,12 +274,8 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # non-terminating and the LAST match wins, so a later app-host ssl rule would
   # override it whatever it says here).
   #
-  # ROLLBACK is a reviewed FORWARD PR setting this rule back to `flexible`, an
-  # in-place update with no deletes (no `[ack-destroy]`), and it triggers the
-  # same-day correction of the published wording (Privacy Policy Section 11,
-  # DPD 8.1(c), ledger row 7). No switch remains by design. Never `git revert`
-  # the cleanup. Recipe: knowledge-base/engineering/operations/runbooks/
-  # origin-tls-strict-flip.md "Rollback".
+  # ROLLBACK: a forward PR, never `git revert`; see runbooks/
+  # origin-tls-strict-flip.md "Rollback" (incl. the legal and sdk_url coupling).
   #
   # Ordered first to match its live position. `ref` is pinned to the live
   # rule's existing ref, not omitted, and is what the test selects it by. The

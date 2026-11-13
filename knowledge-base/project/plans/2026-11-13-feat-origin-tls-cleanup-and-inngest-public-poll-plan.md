@@ -938,8 +938,27 @@ the scheduled drift plan compares the applied resource with the file.
   page (a bad PUT or an order error), or, silently, their session cookies, prompts, agent output and BYOK key at
   submission crossing the public internet in plain HTTP if the host fell back to `flexible`; for the Inngest part,
   scheduled agent runs not starting after the owner's later replace.
+  *Mitigated by:* Guard 1 (`seo-config-rules.test.ts`: exactly three rules, the adopted rule `strict`), the T65 offline
+  plan replay (`nested_deletes` 2 and nothing else), the D5 enqueue-time checks (no other infra PR queued, a lone squash
+  commit, the apply's destroy list equal to T65), the rollback-coupling guard (published wording, ledger row 7 and
+  `sdk_url` follow the adopted mode), and `logtail_exploration_alert.inngest_registry_empty` for an empty registry after
+  the replace. *Scoped out by:* the replace itself (owner-gated, after this PR's measured apply; #12742).
+- **Recovery time if it does break (no Doppler switch remains):** a reviewed forward PR to `flexible` (push apply 109 to
+  370 s plus unmeasured edge propagation), or the owner's dashboard break-glass with that PR first in the queue (runbook
+  `origin-tls-strict-flip.md` "Rollback", "Break-glass"). GitHub webhook deliveries that failed during the window are
+  not retried by GitHub and must be redelivered.
+- **Silent downgrade window:** if the app host is set back to `flexible` outside the repo (dashboard), nothing pages
+  today; the scheduled drift run catches a rule change within up to 12 h. *Scoped out by:* #12743 (CTO ruling D1: an
+  origin set to `flexible` gets a 521 and the existing Better Stack app monitors page on it).
+- **Double-fire and stale registry after an owner replace:** the first sync after the URL change is not deduplicated
+  (#7228 checksum includes the URL), a stale non-zero registry is invisible to the registry-empty alert, and a surviving
+  private-URL app row keeps the plaintext poll alive. *Mitigated by:* the D2 typed-confirm gate (`confirm=PUBLIC-SDK-URL`
+  on `inngest-host-replace`, naming all three risks) until #12742 item 1 ships the sync-evidence and app-row probe fields.
 - **If this leaks, the user's data is exposed via:** a Cloudflare-to-origin hop that is plain HTTP while the Privacy
   Policy says it is TLS (a false published claim), readable by an on-path attacker between Cloudflare and Hetzner.
+  *Mitigated by:* the rollback-coupling guard, which fails a `flexible` tree that still carries the TLS wording, ledger
+  row 7 `cert_verification: on`, or a public `sdk_url` (a `flexible` rollback after the replace would send the Inngest
+  poll in plaintext across the public internet). *Scoped out by:* Authenticated Origin Pulls and port 80 closure (#12743).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one user's session token read in transit while the policy claims TLS is a
   breach-and-misstatement incident on its own, not an aggregate pattern, so the stricter tier applies (as for the
