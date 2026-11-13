@@ -14,8 +14,10 @@
 // expiry (Observability §).
 
 import { X509Certificate } from "node:crypto";
+import { inspect } from "node:util";
 import { createChildLogger } from "./logger";
-import { reportSilentFallback } from "./observability";
+import type { HelloVerifyKeys } from "./proxy-hello";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 
 const log = createChildLogger("proxy-tls");
 
@@ -70,31 +72,95 @@ export function loadProxyTlsClientCa(): string | null {
 
 const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
 
-let helloKey: { loaded: boolean; key: Buffer | null } = { loaded: false, key: null };
+/**
+ * The relay hello keys this process loaded. `current` signs and verifies; `acceptAlso` (PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO)
+ * is verify-only (ADR-323 Decision 9). The object is frozen and redacting: `JSON.stringify` and `util.inspect` (default
+ * options, `showHidden`, or `customInspect: false`) print no key, and both slots are non-enumerable, so a copy of the set
+ * (spread, Object.assign, structuredClone) carries no key. Not covered: `util.inspect` with BOTH `showHidden: true` and
+ * `customInspect: false` prints the bytes, and no in-process code can prevent that. A Buffer read out of the set
+ * (`keys.current`) is a raw key: never log it.
+ */
+export type ProxyHelloKeys = Omit<HelloVerifyKeys, "current"> & { readonly current: Buffer | null };
+
+const KEYS_PLACEHOLDER = "[proxy-hello-keys]";
+
+function redactingKeySet(current: Buffer | null, acceptAlso: Buffer | null): ProxyHelloKeys {
+  // Every property is non-enumerable: `keys.current` reads work, while a spread, Object.assign, Object.entries,
+  // structuredClone or util.inspect({customInspect: false}) copy or print no key. The inspect.custom hook covers
+  // util.inspect({showHidden: true}); showHidden together with customInspect: false bypasses both and prints the bytes.
+  const set = Object.defineProperties({} as ProxyHelloKeys, {
+    current: { value: current },
+    acceptAlso: { value: acceptAlso },
+    toJSON: { value: () => KEYS_PLACEHOLDER },
+    [inspect.custom]: { value: () => KEYS_PLACEHOLDER },
+  });
+  return Object.freeze(set);
+}
+
+let helloKeys: ProxyHelloKeys | null = null;
 
 /**
- * The relay hello-signing key as a 32-byte Buffer, or `null` unless the env value is exactly 64
- * lowercase hex characters (the shape `random_bytes.proxy_hello_hmac` hex-encodes).
+ * The relay hello keys, each a 32-byte Buffer or `null` unless its env value is exactly 64 lowercase hex characters
+ * (the shape `random_bytes.proxy_hello_hmac` hex-encodes).
  *
- * Read ONCE, cached in module memory, and DELETED from `process.env` (CTO ruling, 2026-11-09, review
- * of #12462; the precedent is `origin-tls.ts`): every child process the server spawns with the
- * default or a spread environment would otherwise inherit the key. Call it at server boot, before
- * any child process can be spawned (index.ts does); a later caller just gets the cached value.
- * `/proc/<pid>/environ` keeps the original block either way (ADR-323 residual). The key is distinct
- * from the TLS key by construction: a leaked TLS key must not forge hellos. Rotation is a restart.
+ * Both variables are read ONCE, cached in module memory, and BOTH are DELETED from `process.env` on the first call,
+ * whatever their values (CTO ruling, 2026-11-09, review of #12462; the precedent is `origin-tls.ts`): every child
+ * process the server spawns with the default or a spread environment would otherwise inherit them. Call it at server
+ * boot, before any child process can be spawned (index.ts does); a later caller just gets the cached value.
+ * `/proc/<pid>/environ` keeps the original block either way (ADR-323 residual). The key is distinct from the TLS key
+ * by construction: a leaked TLS key must not forge hellos. Any key change is a restart.
+ *
+ * The accept-only slot (absent by default, so it ships dark):
+ * - unset or empty: `null`, silently;
+ * - set but not 64 lowercase hex: `null`, plus one `loadProxyHelloKeys.accept-also-ignored` event, whether or not
+ *   `current` is loaded;
+ * - byte-equal to `current`: kept (accepting one key twice is harmless), plus one warn-level
+ *   `loadProxyHelloKeys.accept-also-equals-current` event; `relay_hello_key_fp` then shows equal values;
+ * - well-formed and distinct: kept, plus one warn-level `loadProxyHelloKeys.accept-also-active` event (a planted slot
+ *   must not be silent);
+ * - well-formed while `current` is null: no extra event (the listener refuses to start and reports no-hello-key).
+ * Every event text is a constant: no value, length or prefix. Each fires once per process (cached).
  */
-export function loadProxyHelloKey(): Buffer | null {
-  if (!helloKey.loaded) {
-    const raw = process.env.PROXY_HELLO_HMAC_KEY;
-    helloKey = { loaded: true, key: raw !== undefined && HELLO_KEY_RE.test(raw) ? Buffer.from(raw, "hex") : null };
+export function loadProxyHelloKeys(): ProxyHelloKeys {
+  if (helloKeys === null) {
+    const rawCurrent = process.env.PROXY_HELLO_HMAC_KEY;
+    const rawAlso = process.env.PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO;
     delete process.env.PROXY_HELLO_HMAC_KEY;
+    delete process.env.PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO;
+    const current = rawCurrent !== undefined && HELLO_KEY_RE.test(rawCurrent) ? Buffer.from(rawCurrent, "hex") : null;
+    let acceptAlso: Buffer | null = null;
+    if (rawAlso !== undefined && rawAlso !== "") {
+      if (!HELLO_KEY_RE.test(rawAlso)) {
+        reportSilentFallback(null, {
+          feature: "control_plane_route",
+          op: "loadProxyHelloKeys.accept-also-ignored",
+          message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set but malformed — ignored",
+        });
+      } else {
+        acceptAlso = Buffer.from(rawAlso, "hex");
+        if (current !== null && acceptAlso.equals(current)) {
+          warnSilentFallback(null, {
+            feature: "control_plane_route",
+            op: "loadProxyHelloKeys.accept-also-equals-current",
+            message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO equals the current hello key — kept, but it adds no second key",
+          });
+        } else if (current !== null) {
+          warnSilentFallback(null, {
+            feature: "control_plane_route",
+            op: "loadProxyHelloKeys.accept-also-active",
+            message: "PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO is set — the relay also accepts a second hello key (expected only during a rotation)",
+          });
+        }
+      }
+    }
+    helloKeys = redactingKeySet(current, acceptAlso);
   }
-  return helloKey.key;
+  return helloKeys;
 }
 
 /** Test seam: the cache is module state. */
 export function __resetProxyHelloKeyForTests(): void {
-  helloKey = { loaded: false, key: null };
+  helloKeys = null;
 }
 
 /**
