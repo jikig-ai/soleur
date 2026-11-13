@@ -14,7 +14,7 @@ Evaluate current sales posture before making recommendations.
 
 - Check for existing sales artifacts: `knowledge-base/marketing/brand-guide.md` (for ICP and positioning context), any files in `knowledge-base/sales/` (pipeline definitions, playbooks, if they exist).
 - If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
-- Inventory what exists: ICP definition, outbound sequences, proposal templates, pipeline stage definitions, competitive battlecards.
+- Inventory what exists: ICP definition, outbound sequences, proposal templates, pipeline stage definitions, competitive battlecards, and `knowledge-base/sales/inbound-fit-call.md` for an inbound who already asked whether Soleur fits.
 - Report gaps. If no sales artifacts exist, bootstrap recommendations from brand guide positioning and business validation findings.
 - Output: structured table of sales readiness (artifact type, status, action needed).
 
@@ -29,7 +29,7 @@ Prioritize sales actions and dispatch specialist agents.
 
 | Agent | When to delegate |
 |-------|-----------------|
-| soleur:sales:outbound-strategist | Design or refine outbound prospecting sequences, ICP targeting, or lead scoring |
+| soleur:sales:outbound-strategist | Design or refine outbound prospecting sequences, ICP targeting, lead scoring, or an inbound fit call |
 | soleur:sales:deal-architect | Generate proposals, SOWs, battlecards, objection-handling playbooks, or discount frameworks |
 | soleur:sales:pipeline-analyst | Analyze pipeline health, model forecasts, define stage criteria, or review deal velocity |
 
