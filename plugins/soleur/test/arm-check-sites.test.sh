@@ -276,7 +276,7 @@ m2()   { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$RM_ARM" "$RM
 m2b()  { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge 7 --auto; gh pr merge 8 --auto --match-head-commit "${H:?x}"'; }
 m3()   { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "$DQ_ARM" "$DQ_ARM"$'\n''gh pr merge "$N" \'$'\n''  --squash --auto'; }
 m5()   { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "$LINK" 'review-evidence-comment.md'; }
-m5b()  { local i; for i in 1 2 3 4 5 6; do grep -qF -- "$LINK" "$1/$SETTLE" || break; edit_first "$1/$SETTLE" "$LINK" 'review-evidence-comment.md'; done; }
+m5b()  { while grep -qF -- "$LINK" "$1/$SETTLE"; do edit_first "$1/$SETTLE" "$LINK" 'review-evidence-comment.md'; done; }
 m6()   { edit "$1/$DRAIN" "$DRAIN_ARM" "$DRAIN_ARM"$'\n'"$CANON_REFUSE"; }
 m7()   { edit "$1/$CANON" "  $CANON_REFUSE"$'\n' ''; }
 m7b()  { edit "$1/$CANON" "$CANON_ARM" '--match-head-commit "$H"'; }
