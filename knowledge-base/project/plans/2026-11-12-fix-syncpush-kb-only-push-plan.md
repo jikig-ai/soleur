@@ -5,7 +5,9 @@ date: 2026-11-12
 slug: fix-syncpush-kb-only-push
 branch: feat-one-shot-12600-syncpush-owner-approval
 issue: 12600
-closes: 12600
+closes: [12600, 12718, 12714]
+related_not_closed: [12719]  # CTO X4: separable; refusal guards only
+extended: 2026-11-13  # #12718 + #12714 added (operator U1, T1)
 priority: p2
 domain: engineering
 brand_survival_threshold: single-user incident
@@ -25,6 +27,13 @@ itself: the remote tip's hash-verified tree with just the `knowledge-base` entry
 identity. It moves the local branch before the push so no other consumer of the clone sees a divergence, stops
 self-heal from erasing uncommitted code edits, and pins the behaviour with tests.
 
+**Extension (2026-11-13, operator rulings U1, T1).** The same PR also closes #12718 and #12714. #12718: the
+session-start `syncPull` mints the token only on the hardened isolated arm (a fetch from the literal URL into the
+isolated GIT_DIR, objects handed over, then a token-free local merge in the workspace), and every isolated fetch stops
+spawning a git child against the workspace `.git`. #12714: Owners and members see on the Settings Project card how many
+changed code files the sync holds back, and the agent is told at session start. Sections marked "#12718 / #12714
+extension" carry it; the #12600 sections are unchanged.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-13 (plan written and plan-reviewed 2026-11-12)
@@ -33,6 +42,12 @@ Observability, Guard Contract, Scope Check, Acceptance Criteria, Test Scenarios
 **Agents used:** plan review (dhh, kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, cto devex, cpo);
 deepen (security-sentinel, test-design-reviewer, user-impact-reviewer, observability-coverage-reviewer,
 learnings-researcher, a verify-the-negative pass); CTO rulings R1-R20.
+
+**Extension (2026-11-13, #12718 + #12714):** planned with measured probes (M1-M11, F1-F6, T1-T8, C1-C3; scripts in
+`knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/probes-12718-12714/`), CTO rulings X1-X5,
+R13b, W1-W7 and CPO rulings V1-V5 / V-M. Deepen-plan on the extension sections HALTED at Phase 4.9 (no committed
+`.pen` wireframe: the Pencil MCP hit the pen.dev plan limit, row W7, `operator (money)`); Phase 4.10 was satisfied by
+adding `## Encryption Posture`. Re-run deepen-plan on the extension sections once the wireframe is committed.
 
 ### Key Improvements
 
@@ -131,6 +146,82 @@ plus inline runs. Command shape: `git rev-list --count <flags> <base>..<head> --
 
 Conclusions: plain `rev-list` history simplification is a bypass; `--no-merges` misses an evil merge;
 `--full-history --simplify-merges` with the trailing-slash exclude is the one form that is right on every measured row.
+
+### #12718 plan-time measurements (scratch real-git probes, git 2.56.0)
+
+Scripts: `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/probes-12718-12714/probe1.sh` .. `probe6.sh`, scratch output under `/tmp/claude-1000/kbpull-probe/` (synthesized fixtures; `file://` bare origin, workspace
+`git clone --depth 1`, upstream commit `c2` changes `knowledge-base/a.md` and `src/x.ts` and adds `src/new.ts`).
+Columns: **pull** = today's `pull --no-rebase --autostash`; **iso+merge** = fetch into a server-written bare dir (copied
+`shallow`, workspace objects as `GIT_ALTERNATE_OBJECT_DIRECTORIES`), then
+`rev-list --objects <T> --not <headSha> | pack-objects --stdout | unpack-objects -q` into the workspace,
+`update-ref --no-deref refs/remotes/origin/main <T>`, `merge --no-edit --autostash <T>`; **ff-only** = the same with
+`merge --ff-only --autostash <T>`.
+
+| # | Workspace state before the pull | pull | iso+merge | ff-only |
+|---|---|---|---|---|
+| M1 | clean | rc 0, fast-forward | rc 0, fast-forward | rc 0, fast-forward |
+| M2 | KB edit auto-committed first (what `syncPull` does) | rc 0, merge commit | rc 0, merge commit (message `Merge commit '<sha>'` instead of `Merge branch 'main' of <url>`) | rc 128 `Not possible to fast-forward` (every session with a KB auto-commit would stop pulling) |
+| M3 | dirty tracked KB edit, path untouched upstream | rc 0, autostash re-applied, edit kept | same | same |
+| M4 | dirty tracked KB edit, path changed upstream | rc 0 (!), autostash pop conflicts: `UU knowledge-base/a.md` with markers, stash entry kept, no `MERGE_HEAD` | same | same |
+| M5 | dirty tracked non-KB edit, path untouched upstream | rc 0, kept | same | same |
+| M6 | dirty tracked non-KB edit, path changed upstream | rc 0, `UU src/x.ts` with markers, stash kept, no `MERGE_HEAD` | same | same |
+| M7 | untracked file colliding with incoming `src/new.ts` | rc 1 `untracked working tree files would be overwritten ... Aborting`; HEAD, file unchanged | same | same |
+| M8 | conflicting merge (committed KB `a.md` vs upstream `a.md`) | rc 1, `MERGE_HEAD`, markers, incoming files staged | same | rc 128, clean refusal |
+| M9 | M8 plus a dirty non-KB `README` | rc 1; the `README` edit leaves the tree for `.git/MERGE_AUTOSTASH` (not the stash list) | same | rc 128, edit kept |
+| M9a | M9, then `merge --abort` | — | rc 0 `Applied autostash.`, edit back, tree clean | — |
+| M9b | M9, then `reset --hard` | — | rc 0, autostash moved to the stash list (not lost) | — |
+| M9c | M9, then the next session's merge | — | rc 128 `Exiting because of an unresolved conflict` (stuck until resolved; pull is the same) | — |
+| M10 | M4, then the push-side auto-commit `add`+`commit` | — | rc 0, the committed KB blob contains `<<<<<<<` (R11's `MERGE_HEAD` guard does not see this state) | — |
+| M11 | upstream force-pushed to unrelated history | rc 128 `refusing to merge unrelated histories` | same | — |
+
+Result: the token-free local merge reproduces the merge half of today's pull exactly; `--ff-only` is not viable (M2).
+Every half-done state (M4, M6, M8-M10) exists today and is neither created nor widened by the move.
+
+| # | Isolated fetch probe | Observed |
+|---|---|---|
+| F1 | `fetch` in the isolated dir with the workspace objects as an alternate, GIT_TRACE on | spawns `git --git-dir=<ws>/.git for-each-ref --format=%(objectname)` (only `GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_DIR GIT_PREFIX` unset; every other variable, the token and askpass included, inherited); agent-planted workspace refs become `have` lines (2 with no server-written ref) |
+| F2 | same with `-c core.alternateRefsCommand=true` | 0 child runs into the workspace; rc 0; same 7 objects received and handed over |
+| F3 | F2 with a server-written have-ref at `headSha` vs none | equal on this fixture (7 objects either way) |
+| F4 | `push <sha>:refs/heads/main` from the isolated dir (the #12600 push shape), GIT_TRACE on | 0 child runs into the workspace: only fetches are affected (the new pull fetch and #12600's side-branch fetch) |
+| F5 | `shallow` after the isolated fetch (no `--depth`) | unchanged; the fetched commits connect to the copied boundary, so the workspace needs no `shallow` update |
+| F6 | upstream 3 commits ahead of a `--depth 1` workspace (`probe5.sh`): no-depth fetch vs `--depth 1` fetch | no depth: `shallow` unchanged, merge rc 0, `rev-list --objects HEAD` rc 0, `fsck --connectivity-only` rc 0. `--depth 1`: isolated `shallow` CHANGED, merge rc 0 printing `Already up to date.` with the 3 upstream commits NOT merged, fsck rc 2 (silent wrong result) |
+
+### #12718 token-destination probe (two logging HTTP servers, `http` standing in for `https` on both arms)
+
+`LIT` = the literal-URL host, `EVIL` = the rewrite target; the askpass script answers `x-access-token:TOKEN-SENTINEL`.
+Workspace `.git/config` plants `url.<EVIL>.insteadOf=<LIT>`, unscoped and `<EVIL>`-scoped `http.extraHeader=X-Evil: ...`.
+
+| # | Arm and planted scope | Requests seen | Token seen by |
+|---|---|---|---|
+| T1 | legacy (`pull`, workspace config read) + workspace `insteadOf` | EVIL x2 (`X-Evil: repo-unscoped`) | **EVIL** |
+| T2 | legacy + agent-rewritten `remote.origin.url` | EVIL x2 | **EVIL** |
+| T3 | hardened isolated `fetch <LIT>` + the same workspace config | LIT x2, no `X-Evil` | LIT only |
+| T4 | T3 + planted server-HOME `~/.gitconfig` (`insteadOf` + `extraHeader`) | LIT x2 | LIT only (`HOME` = isolated dir, `GIT_CONFIG_GLOBAL=/dev/null`) |
+| T5 | T3 + planted `~/.config/git/config` (XDG) | LIT x2 | LIT only |
+| T6 | T3 + a planted system file | LIT x2 | LIT only (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_SYSTEM=/dev/null`) |
+| T7 | control: T4 with `GIT_CONFIG_GLOBAL=<planted file>` forced into the child | EVIL x2 | **EVIL** (the probe is sensitive; the pinned env key is the control) |
+| T8 | `config --list --show-origin` in the hardened child | `command line` (7) and the isolated `config` file (2) only | — |
+
+### #12714 held-count probe (`probe6.sh`, git 2.56.0)
+
+Workspace (`--depth 1`) with a held code commit `F1` and a KB commit `K1` over `T`.
+
+| # | State | `rev-list --count --no-merges T..HEAD -- . ':(exclude)knowledge-base/'` | `diff --name-only T HEAD -- . ':(exclude)knowledge-base/'` |
+|---|---|---|---|
+| C1 | `F1` held | 1 | 1 file |
+| C2 | upstream squash-merges `F1`'s change, then the session-start merge | 1 (stale forever) | 0 |
+| C3 | then an unrelated upstream commit and merge | 0 (pathspec history simplification drops `F1`'s side) | 0 |
+
+Result: count files, from the merge base (`T...HEAD`, CTO W1; a two-dot diff would also count upstream changes not
+yet pulled).
+
+### Relevant files — #12718 / #12714 extension
+
+- `apps/web-platform/server/session-sync.ts` `syncPull` (auto-commit, then `gitWithInstallationAuth(["pull","--no-rebase","--autostash"], id, { cwd })`, then `updateLastSynced`); `updateLastSynced` is also called at the end of `syncPush`.
+- `apps/web-platform/server/git-hardened-env.ts` `HARDENED_GIT_ARGS` (no `alternateRefsCommand`); `server/host-git.ts` `HOST_GIT_EXTRA_ARGS` sets it empty (default `for-each-ref`, still spawns) and documents the `filter.*` / `merge.*.driver` residual.
+- `apps/web-platform/server/workspace-sync.ts`: legacy `pull --ff-only` (`syncWorkspace`) and `fetch origin <default>` (self-heal) — out of scope (X3); the recovery-branch block that sets commits aside before `reset --hard` (W4).
+- Settings: `app/(dashboard)/dashboard/settings/page.tsx` (service-client `workspaces` select), `components/settings/settings-content.tsx`, `components/settings/project-setup-card.tsx` ("Last synced:" for Owners; member read-only variant). `server/workspace-repo-mirror.ts` `WorkspaceRepoCols`; migration 174 grants `authenticated` a fixed `workspaces` column list; latest migration 186.
+- Agent context: `server/cc-dispatcher.ts` (`resolveCcGithubPushRegistration` -> `pushRegistration.registered` -> `ccPushPromptAddendum`); `server/cc-github-push.ts`; `server/push-branch.ts` refuses the default branch (an Owner-approved push lands on a new branch).
 
 ### Relevant files
 
@@ -326,6 +417,112 @@ reaches the remote through the sync, and no decision rests on a history walk ove
    push); ADR-050 consumer-list entry for `session-sync` updated if it names the legacy push. No `model.c4` edit (R5).
    No `PUSH_DISCLOSURE` edit (#12713).
 
+### Proposed Solution — #12718 (session-start pull on the hardened arm)
+
+Rulings X1, X2, X4 (`decision-challenges.md`); measurements under "#12718 plan-time measurements" above. Notation as in
+the #12600 Proposed Solution (`D`, `T`, `headSha`). The #12600 steps are unchanged; this reuses their pieces.
+
+1. **Unchanged front half.** `hasRemote`, `authProbe`, installation id, the allowlisted KB auto-commit, now skipping any
+   path with an unmerged index entry (X4 guard 2, shared with `syncPush`'s auto-commit).
+2. **Refuse a half-done merge first (X4 guard 1).** `.git/MERGE_HEAD` or `.git/MERGE_AUTOSTASH` present (fs read, no git),
+   or `status --porcelain` lists an unmerged entry (`DD AU UD UA DU AA UU`) -> `unresolved_merge`; no token minted, no
+   fetch, no merge, no stamp. Recovery (`merge --abort`, autostash restore) stays #12719.
+3. **Remote state (X1).** `readWorkspaceHeadRef` -> `headSha`, `refName`; `readRemoteState` from `kb-sync-publish.ts`
+   (the one hardened `ls-remote --symref` on the literal URL) -> `D`, `T`. `refName` not `refs/heads/<D>` -> no pull,
+   info line `non_default_branch` (the session works on whatever branch the agent chose; same as the push side). `T ==
+   headSha`, or `T` present locally and an ancestor of `headSha` -> stamp, return (no fetch, no merge).
+4. **Hardened fetch (X1, X2).** In a fresh `createIsolatedPushDir` (validated `shallow` copied, workspace objects as the
+   alternate): write one server-owned have-ref `refs/heads/have` = `headSha` through `runIsolatedGitLocal`
+   (`update-ref`), then `gitWithInstallationAuth(["fetch","--no-tags",<literal url>,"refs/heads/<D>"], id, { hardened })`
+   — no `--depth` (F6). `HARDENED_GIT_ARGS` now carries `-c core.alternateRefsCommand=true` (X2), so no git child reads
+   the workspace `.git` (F1, F2). Refuse `tip_mismatch` when `FETCH_HEAD` != `T`, `shallow_changed` when the isolated
+   `shallow` differs from the copy, `walk_cap` when `rev-list --objects T --not headSha` exceeds
+   `OBJECT_WALK_ENTRY_CAP`. The isolated dir is disposed in `finally`.
+5. **Hand-over (R12/R20 verbs, no allowlist growth for this step).** `rev-list --objects T --not headSha |
+   pack-objects --stdout` in the isolated dir -> `unpack-objects -q` in the workspace, then
+   `update-ref --no-deref refs/remotes/origin/<D> T` (the existing tracking-ref shape). Failure -> `handover_failed`.
+6. **Token-free local merge (X1).** `runConnectedRepoGit(["merge","--no-edit","--autostash","-m",AUTO_MERGE_MSG_PULL,T])`
+   with `ALLOW_PROTOCOL_NONE`. `merge` joins `ALLOWED_GIT_SUBCOMMANDS` behind an exact-argv guard: exactly those six
+   tokens, `T` matching `HEX40` and equal to the value step 5 wrote. rc 0 -> stamp `repo_last_synced_at`; rc 1 with
+   `MERGE_HEAD` -> `merge_conflict` (tree left as today's pull leaves it, M8); any other failure -> `merge_refused`
+   (unrelated histories M11, untracked collision M7). `--ff-only` is rejected (M2), `merge --abort` too (X4).
+7. **Observability (X1).** Op `kb-sync.pull-held` (feature `session-sync`), closed reason union exported from
+   `kb-sync-pull.ts`: `remote_state`, `fetch_failed`, `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`,
+   `unresolved_merge`, `merge_conflict`, `merge_refused` (plus the info-only `non_default_branch`, `up_to_date`). Each
+   anomaly mirrors through `reportSilentFallback` with `tags: { reason }` and the hashed user id; a static message per
+   reason; no URL, sha or path. The outer `syncPull` catch keeps op `syncPull`.
+8. **Out of scope (X3).** `server/workspace-sync.ts` (`pull --ff-only` at `syncWorkspace`, `fetch origin <default>` in
+   the self-heal) keeps the legacy arm; a P1 follow-up issue reuses the `kb-sync-pull.ts` helper.
+
+Residuals stated exactly: `filter.*` / `merge.*.driver` helpers and `.git/info/attributes` still run on the host-side
+merge (documented in `server/host-git.ts`); today they run with the token in the environment, after this change with
+none. The merge commit's identity is the workspace's (as the auto-commit's is); it is never pushed by the sync (R14
+publishes only `S`).
+
+### Proposed Solution — #12714 (Owners and members see the code changes the sync holds back)
+
+Rulings V1-V5, V-M (CPO) and W1-W7 (CTO) in `decision-challenges.md`. Wireframe (blocked, W7):
+`knowledge-base/product/design/settings/kb-sync-held-commits.pen`.
+
+1. **What is counted (W1, W4).** `held = |non-KB files|` from
+   `diff --name-only --no-renames -z T...HEAD -- . ':(exclude)knowledge-base/'`, unioned with the same diff for each
+   `refs/heads/soleur/recovered-kb-sync-*` tip (at most 20, read from the workspace refs with fs, `HEX40`-validated,
+   oldest dropped past the cap), deduplicated, clamped to 0..10000. `T` is the authoritative tip the hardened
+   `ls-remote` returned in that sync run, never `refs/remotes/origin/*`. No merge base, an unreadable ref or any git
+   failure -> `null`. Files, not commits: a commit count goes stale after a squash merge and drops to 0 under pathspec
+   history simplification while the work is still unmerged (measured, C1-C3 below).
+2. **Where it runs (W2).** Token-free, through `runIsolatedGitLocal` in the isolated dir the sync already holds (the
+   recovered tips' objects are reachable through the workspace alternate). New module `server/kb-sync-held.ts`:
+   `computeHeldFiles({ isolated, base: T, heads })` and `readRecoveredKbSyncTips(workspacePath)`. Called at the end of
+   `syncPull` (after the merge or the `up_to_date` return; on the `up_to_date` return an isolated dir is created for
+   the count only) and at the end of `syncPush` (all outcomes that read `T`; not on refusals that stop before
+   `readRemoteState`, where the stored value stays as it was).
+3. **Storage (W2).** Migration `187_workspace_kb_sync_held_files.sql` (+ `.down.sql`): `workspaces.kb_sync_held_files
+   integer null` (check `>= 0 and <= 10000`) and `workspaces.kb_sync_held_checked_at timestamptz null`; no grant to
+   `authenticated` (migration 174's column list is untouched; Settings reads through the service client). Both join
+   `WorkspaceRepoCols`. `syncPull` folds `{ kb_sync_held_files, kb_sync_held_checked_at }` into its one
+   `updateLastSynced` UPDATE; `syncPush` writes only when the value differs from the last value it wrote in this
+   process for that workspace (in-process map, no read-before-write). Display-only: no gate, approval or push decision
+   reads it (a readers census test pins the two readers).
+   Each computation logs one info line `op: "kb-sync.held-files"` with a value bucket (`0`, `1-9`, `10+`, `null`),
+   no paths.
+4. **Last-synced (V2, W5).** Owners' "Last synced:" becomes "Updated from GitHub: {date}". Only `syncPull` stamps
+   `repo_last_synced_at` (merge rc 0 or `up_to_date`, X1/X5); the `updateLastSynced` call at the end of `syncPush` is
+   removed. Members still see no date.
+5. **Publish-route predicate (W3, V5).** `server/cc-github-push.ts` exports a read-only
+   `isCcGithubPushRouteAvailable({ userId, workspaceId })` holding the flag-and-entitlement part of
+   `resolveCcGithubPushRegistration` (one source for both; the flag is only read, never set or flipped). Settings uses
+   it to pick the "route available" or "no route" string; the agent line uses `pushRegistration.registered` itself.
+6. **Settings card (V1, V3, V5).** `app/(dashboard)/dashboard/settings/page.tsx` adds `kb_sync_held_files` to its
+   service-client `workspaces` select and calls the predicate; `SettingsContent` passes `heldFiles` and
+   `publishRouteAvailable` to `ProjectSetupCard`. Owner view: the relabelled date line, then (n > 0) a neutral
+   informational notice inside the card, no new control. Member view: the same notice with the member string under the
+   "managed by" line; a count only (no paths, messages or authors, CPO C4). n = 0, null, or a repo that is not `ready`
+   -> nothing. Strings live in `lib/kb-sync-held-copy.ts` (pure functions, one per audience and route state); the UI
+   never names `github_push_branch` (CPO C5).
+7. **Agent context (V1, W3).** `server/cc-dispatcher.ts`, next to `ccPushPromptAddendum`: when the resolved workspace
+   row's `kb_sync_held_files` > 0, append the registered or not-registered line (V5), chosen from the same
+   `pushRegistration.registered` value; null or 0 appends nothing. The legacy `agent-runner.ts` path does not build the
+   cc prompt and is not edited (the legacy runner gets no line; the cc path is where the tool can exist).
+8. **I3 (V4, W6).** Not built. Follow-up issue filed at ship time with the trigger (`kb-sync.push-held`
+   `reason: remote_ahead` above 5% of post-turn syncs over 14 days, or one user report). The no-route product gap
+   (CPO C8) gets its own follow-up issue at ship time.
+
+#### #12714 copy (final, V5)
+
+| Audience | Publish route available | No publish route |
+|---|---|---|
+| Owner, n = 1 | "1 changed code file is waiting to be published to GitHub. Nothing is lost: the change stays in your workspace. Ask your agent to publish it, then approve the push." | "1 changed code file is not on GitHub. Nothing is lost: the change stays in your workspace. Publishing code changes is not available for this workspace." |
+| Owner, n > 1 | "{n} changed code files are waiting to be published to GitHub. Nothing is lost: the changes stay in your workspace. Ask your agent to publish them, then approve the push." | "{n} changed code files are not on GitHub. Nothing is lost: the changes stay in your workspace. Publishing code changes is not available for this workspace." |
+| Member, n = 1 | "1 changed code file is waiting for {ownerLabel} to approve publishing to GitHub. Nothing is lost: the change stays in the workspace." | "1 changed code file is not on GitHub. Nothing is lost: the change stays in the workspace." |
+| Member, n > 1 | "{n} changed code files are waiting for {ownerLabel} to approve publishing to GitHub. Nothing is lost: the changes stay in the workspace." | "{n} changed code files are not on GitHub. Nothing is lost: the changes stay in the workspace." |
+| Owner date line | "Updated from GitHub: {date}" | same |
+| Agent, tool registered | "This workspace has {n} file(s) outside knowledge-base/ with changes that are not on GitHub. The changes are kept in the workspace. They are published only through `github_push_branch`, and the workspace owner approves each push. Tell the user once, early in the conversation, and offer to publish them." | — |
+| Agent, not registered | — | "This workspace has {n} file(s) outside knowledge-base/ with changes that are not on GitHub. The changes are kept in the workspace. No way to publish them is available in this workspace. Tell the user once; do not offer to publish them." |
+
+`{ownerLabel}` is the card's existing value, falling back to "your workspace owner". n = 0, null, unreadable: nothing on
+any surface.
+
 ### Research Insights (deepen-plan, 2026-11-13)
 
 **Measured (scratch probes, git 2.56.0):**
@@ -396,6 +593,24 @@ Every way a commit an agent authored can reach the connected repository from the
 | Symlink or gitlink inside `knowledge-base/` | not gated | residual, accepted: a KB path, already staged by the auto-commit sweep today; no effect on CI or code |
 | Owner force-push between the tip read and the push | n/a | residual, accepted (ruling J) |
 | cc runner Bash push with the minted token | separate | #12668 |
+
+### Attack Surface — #12718 / #12714 extension
+
+Supersedes the "Session-start `syncPull` token-bearing `pull`" row above (R9 -> U1).
+
+| Route | Today | After this plan |
+|---|---|---|
+| Session-start `syncPull` token sent to a host chosen by workspace `url.*.insteadOf` / `remote.origin.url` | **yes** (measured T1, T2) | closed: hardened fetch from the literal URL in the isolated dir (X1; T3) |
+| Workspace / unscoped `http.extraHeader` riding the token-bearing pull | **yes** (T1) | closed: the isolated child reads no workspace config; `-c http.extraHeader=` reset (T3) |
+| Server-HOME `~/.gitconfig`, XDG config, system config steering the pull | n/a on prd (image identity file), measured as a class | closed: `HOME` = isolated dir, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1` (T4-T6; control T7) |
+| Isolated fetch spawning `git --git-dir=<ws>/.git for-each-ref` with the token in env; agent refs as `have` lines | **yes** for #12600's side fetch as planned (F1) | closed: `-c core.alternateRefsCommand=true` in `HARDENED_GIT_ARGS` (X2; F2) |
+| Shallow gap: a `--depth 1` fetch handing over a commit with missing parents | n/a | closed: no `--depth`, `shallow_changed` refusal (X1; F6) |
+| Agent-chosen merge target (`branch.<b>.merge`, `@{u}`, a feature branch) | **yes** (bare `pull`) | closed: merge target is the `ls-remote` tip `T`, exact-argv guard; non-default branch -> no merge (X1, X5) |
+| Conflict markers committed and published unattended (autostash-pop conflict without `MERGE_HEAD`, M4/M10) | pre-existing, unattended after #12600 | closed for commit and push: unmerged-entry skip in both auto-commits, `unresolved_merge` refusal (X4); recovery is #12719 |
+| `filter.*` / `merge.*.driver` / `.git/info/attributes` helpers on the host-side merge | pre-existing, with the token in env | residual (documented in `server/host-git.ts`), now with no token in env |
+| Legacy `syncWorkspace` `pull --ff-only` / `fetch origin` | **yes** | residual: P1 follow-up issue filed at ship time (X3) |
+| A forged object or ref skewing the held-file count | n/a | accepted: display-only, the workspace's own users see a wrong number; never read by a gate (W2) |
+| Held count exposing one member's work to another | n/a | closed: a count only, no paths, messages or authors (CPO C4) |
 
 ### Performance
 
@@ -512,6 +727,38 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
   branch is moved to `S` (or `M`) before the push.
 - ADR-050: update the host-side git consumer entry for `session-sync` if it names the legacy push (locate by text).
 
+### Phase 8 — Isolated-fetch hardening (X2)
+
+- `HARDENED_GIT_ARGS` (`server/git-hardened-env.ts`) gains `-c core.alternateRefsCommand=true`; its doc comment names
+  the measured child (F1). `test/git-auth-hardened-env.test.ts` pins the argv; TX2 runs in the Phase 9 battery.
+
+### Phase 9 — Session-start pull on the hardened arm (#12718: X1, X4, X5)
+
+- New `server/kb-sync-pull.ts`: `pullVerifiedDefault({ userId, workspaceId, workspacePath, installationId })`
+  (Proposed Solution #12718 steps 2-7), the `kb-sync.pull-held` reason union, `AUTO_MERGE_MSG_PULL`.
+- `kb-sync-publish.ts` exports `readRemoteState` and one `fetchIntoIsolated` helper; AC3's single push argv is
+  unchanged.
+- `session-sync.ts`: `syncPull` calls the new module instead of `gitWithInstallationAuth(["pull", ...])`; `merge` joins
+  `ALLOWED_GIT_SUBCOMMANDS` behind its exact-argv guard; the shared unmerged-entry skip in both auto-commits.
+- Tests first: `test/session-sync-pull-isolated-real-git.test.ts` (TX1-a..g, TX2, TX4-a/b, TX5), the allowlist unit
+  rows (TX1-e), the `kb-sync.pull-held` mirror rows.
+
+### Phase 10 — Held-files column (#12714: W2) — own commit (R13b)
+
+- Migration `187_workspace_kb_sync_held_files.sql` + `.down.sql`; `test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts`
+  (columns, null default, check constraint, no `authenticated` grant, down drops both). Applied to the dev project by
+  the normal migration path only; no production write from this plan.
+
+### Phase 11 — Held signal, Settings card, agent line (#12714: W1, W3-W5, V1-V5)
+
+- **Gate:** the W7 wireframe exists and is linked in the PR before any component code in this phase.
+- `server/kb-sync-held.ts` (`computeHeldFiles`, `readRecoveredKbSyncTips`), wired at the end of `syncPull` and
+  `syncPush`; `WorkspaceRepoCols` gains the two columns; the push-side `updateLastSynced` call is removed (W5).
+- `server/cc-github-push.ts` exports `isCcGithubPushRouteAvailable`; `server/cc-dispatcher.ts` appends the held line.
+- `lib/kb-sync-held-copy.ts`; Settings page select + predicate; `SettingsContent` and `ProjectSetupCard` props and
+  rendering.
+- Tests: TW1-TW4, the card and page unit rows, the readers census, the e2e flow (Test Scenarios).
+
 ## Files to Edit
 
 - `apps/web-platform/server/session-sync.ts` — orchestration (steps 1-2), allowlist guards, `MERGE_HEAD` skip, outer
@@ -539,6 +786,31 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
 - `knowledge-base/engineering/architecture/decisions/ADR-050-likec4-runtime-rerender-via-out-of-process-cli.md` —
   consumer-list entry, only if it names the legacy push.
 
+### Files to Edit — #12718 / #12714 extension
+
+- `apps/web-platform/server/session-sync.ts` — `syncPull` on `kb-sync-pull.ts`; `merge` guard; unmerged-entry skip in
+  both auto-commits; held-files write folded into `updateLastSynced`; push-side stamp removed (W5).
+- `apps/web-platform/server/kb-sync-publish.ts` (created by Phase 2) — export `readRemoteState`, `fetchIntoIsolated`;
+  held-files write at the end of `syncPush`'s publish path.
+- `apps/web-platform/server/git-hardened-env.ts` — `core.alternateRefsCommand=true` (X2).
+- `apps/web-platform/server/workspace-repo-mirror.ts` — `WorkspaceRepoCols` gains `kb_sync_held_files`,
+  `kb_sync_held_checked_at`.
+- `apps/web-platform/server/cc-github-push.ts` — `isCcGithubPushRouteAvailable` (read-only flag and entitlement).
+- `apps/web-platform/server/cc-dispatcher.ts` — the held line next to `ccPushPromptAddendum`.
+- `apps/web-platform/app/(dashboard)/dashboard/settings/page.tsx` — select `kb_sync_held_files`; route predicate.
+- `apps/web-platform/components/settings/settings-content.tsx` — pass `heldFiles`, `publishRouteAvailable`.
+- `apps/web-platform/components/settings/project-setup-card.tsx` — relabelled date line; Owner and member notices.
+- `apps/web-platform/test/session-sync-path-allowlist.test.ts` — `merge` guard rows (TX1-e).
+- `apps/web-platform/test/server/session-sync-sentry-mirror.test.ts` — `kb-sync.pull-held` rows.
+- `apps/web-platform/test/server/session-sync-workspace-last-synced.test.ts` — push never stamps; pull stamps on merge
+  rc 0 and `up_to_date` only; held-files folded into the pull's one UPDATE; push writes only on change (TW2).
+- `apps/web-platform/test/host-git-consumers-real-git.test.ts` — `syncPull` driver rows on the isolated arm.
+- `apps/web-platform/test/git-auth-hardened-env.test.ts` — the X2 argv pin.
+- `apps/web-platform/test/cc-github-push.test.ts` — the route predicate equals the registration's flag-and-entitlement
+  decision.
+- `apps/web-platform/test/project-setup-card.test.tsx`, `apps/web-platform/test/settings-page.test.tsx` — copy and
+  audience rows.
+
 ## Files to Create
 
 - `apps/web-platform/server/kb-sync-publish.ts` — `readRemoteState`, `buildKbOverlay`, `assertRootDiffersOnlyInKb`,
@@ -553,6 +825,21 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
 - `apps/web-platform/test/server/workspace-sync-self-heal-dirty-nonkb.test.ts` — R18 unit rows.
 - `apps/web-platform/test/server/classify-push-error.test.ts` — `GH006` line-anchoring (a `GH006` ref name in the
   status line and in `err.message` does not match), `GH013` stays `other`.
+
+### Files to Create — #12718 / #12714 extension
+
+- `apps/web-platform/server/kb-sync-pull.ts`
+- `apps/web-platform/server/kb-sync-held.ts`
+- `apps/web-platform/lib/kb-sync-held-copy.ts`
+- `apps/web-platform/supabase/migrations/187_workspace_kb_sync_held_files.sql` and `.down.sql`
+- `apps/web-platform/test/session-sync-pull-isolated-real-git.test.ts`
+- `apps/web-platform/test/kb-sync-held-real-git.test.ts` (TW1, TW4)
+- `apps/web-platform/test/kb-sync-held-copy.test.ts`
+- `apps/web-platform/test/cc-dispatcher-held-line.test.ts` (TW3)
+- `apps/web-platform/test/kb-sync-held-readers-census.test.ts` (W2: only Settings and the agent line read the column)
+- `apps/web-platform/test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts`
+- `apps/web-platform/e2e/settings-kb-sync-held.e2e.ts`
+- `knowledge-base/product/design/settings/kb-sync-held-commits.pen` (W7, blocked)
 
 ## Open Code-Review Overlap
 
@@ -611,6 +898,26 @@ CPO condition C4: the push path never stamps `repo_last_synced_at` on a refusal,
 `updateLastSynced`. `syncPull` still stamps it after every successful session-start pull; #12714 tracks that
 pre-existing meaning.
 
+### User-Brand Impact — #12718 / #12714 extension
+
+- **If this lands broken, the user experiences:**
+  - **Pull broken:** KB and code edits made on GitHub stop reaching the workspace at session start; the agent works on
+    a stale tree. "Updated from GitHub" stops advancing (it is stamped only on a merge rc 0 or `up_to_date`), so the
+    Owner can see it; the operator sees `kb-sync.pull-held` reasons (`fetch_failed`, `tip_mismatch`,
+    `shallow_changed`, `handover_failed`, `merge_refused`).
+  - **Merge guard too strict:** a workspace with a leftover `MERGE_HEAD` / `MERGE_AUTOSTASH` never pulls until resolved
+    (`unresolved_merge`, warning); today the pull fails the same way (M9c), now with a named reason.
+  - **Held count wrong:** a wrong number or no notice on Settings. It cannot publish, block or approve anything (W2).
+- **If this leaks:** the installation token reaching a host the agent chose (the #12718 bug); conflict markers
+  published unattended (X4); one member seeing another member's file names (prevented: a count only).
+- **Who is affected:** every legacy-runner session start (Owners, members, solo founders) for #12718; Owners and
+  members of workspaces whose default branch holds code changes for #12714.
+- **Degradations the user can see (accepted):** a session on a non-default branch no longer pulls at all (X5); the
+  "Last synced" label changes to "Updated from GitHub"; no session-UI banner (V1); the no-route Owner sees that
+  publishing is not available, with no way offered (C8 follow-up).
+- **Brand-survival threshold:** `single-user incident` (unchanged; one token sent off-host is a breach on its own).
+  CPO sign-off for the extension: row V-M (C1-C8); human CPO review owed with row M.
+
 ## Observability
 
 ```yaml
@@ -657,6 +964,67 @@ logs:
 discoverability_test:
   command: "grep -o -m1 kb-sync.push-held apps/web-platform/server/kb-sync-publish.ts"
   expected_output: "kb-sync.push-held"
+```
+
+### Observability — #12718 / #12714 extension
+
+```yaml
+liveness_signal:
+  what: "layer 2 (pino -> Sentry via reportSilentFallback): op kb-sync.pull-held (feature session-sync), tags reason, for the anomaly reasons (remote_state, fetch_failed, tip_mismatch, shallow_changed, walk_cap, handover_failed, unresolved_merge, merge_conflict, merge_refused); layer 1 (pino -> Better Stack): one info line per session-start pull with reason up_to_date / merged / non_default_branch"
+  cadence: "per legacy-runner session start with a connected repo"
+  alert_target: "Sentry issue stream for the web-platform project (no page); Better Stack web-platform source"
+  configured_in: "apps/web-platform/server/kb-sync-pull.ts"
+
+error_reporting:
+  destination: "layer 2: Sentry web-platform project; the outer syncPull catch keeps op syncPull"
+  fail_loud: "Sentry issue with tag op=kb-sync.pull-held, tag reason=<closed reason>, one static message per reason; no URL, sha, path or branch"
+
+failure_modes:
+  - mode: "token steered off-host on the pull (the #12718 bug returns)"
+    detection: "CI: TX1-f (EVIL logs zero requests; legacy-arm control logs the sentinel); no production signal can see a token sent elsewhere"
+    alert_route: "CI red on the PR"
+  - mode: "pull never merges (fetch, hand-over or guard bug)"
+    detection: "layer 2: kb-sync.pull-held reason fetch_failed / tip_mismatch / shallow_changed / handover_failed spikes; layer 1: Better Stack count of merged + up_to_date drops"
+    alert_route: "Sentry issue stream"
+  - mode: "half-done merge left by an earlier pull blocks every later pull"
+    detection: "layer 2: kb-sync.pull-held reason unresolved_merge (warning), debounced per workspace"
+    alert_route: "Sentry issue stream; recovery is #12719"
+  - mode: "held-files count not written or wrong"
+    detection: "layer 1: Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) per sync; layer 2: writeRepoColsToWorkspace's existing write-to-workspace mirror on a failed UPDATE"
+    alert_route: "Better Stack search (display-only value, no alert)"
+
+logs:
+  where: "web-platform container stdout (pino, child logger session-sync), shipped to Better Stack"
+  retention: "Better Stack plan retention for the web-platform source"
+
+discoverability_test:
+  command: "grep -o -m1 kb-sync.pull-held apps/web-platform/server/kb-sync-pull.ts"
+  expected_output: "kb-sync.pull-held"
+```
+
+## Encryption Posture
+
+Added for the #12714 extension (migration 187). No new store and no new connection: two nullable columns on the
+existing `public.workspaces` table in the existing `supabase.prd` store, written and read over the existing server ->
+Supabase connection; values are a file count and a timestamp (no paths, content, or personal data). Entries mirror
+`scripts/encryption-posture-ledger.json` (`supabase.prd`, connection "web-platform server -> Supabase Postgres/PostgREST").
+
+```yaml
+at_rest:
+  - store: supabase.prd (public.workspaces.kb_sync_held_files, public.workspaces.kb_sync_held_checked_at)
+    mechanism: provider-managed:supabase-postgres-aes256
+    evidence: "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation, https://supabase.com/docs/guides/security, retrieved_on 2026-07-24 per scripts/encryption-posture-ledger.json supabase.prd)"
+    defends_against: "physical-media compromise of the managed Postgres storage"
+    does_not_defend: "a leaked service-role key, an RLS bypass, or any query over a legitimate connection; the key is provider-managed"
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+in_transit:
+  - connection: "web-platform server (session-sync writer, Settings page reader, cc-dispatcher reader) -> Supabase Postgres/PostgREST"
+    enforced_at: "apps/web-platform/lib/supabase/{client,server,service,tenant}.ts"
+    tls: "https (Supabase REST) / TLS 1.2+"
+    cert_verification: on
+    does_not_defend: "a leaked anon/service key; TLS protects the channel, not the credential"
+    disclosed_as: not-publicly-claimed
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -757,6 +1125,11 @@ applicable beyond that statement.
 | 3 | "Technical forks (code-side refuse/skip of non-Soleur commits vs naming the sync in copy) are ruled by soleur:engineering:cto, never asked of the operator." [brief] | `decision-challenges.md` rows A-P, R1-R20 | mapped |
 | 4 | "no production writes; do not touch or flip the approval-queue feature flag; no edits under docs/ or legal documents" [brief] | Files lists (no `docs/`, no `knowledge-base/legal/`, no flag code); copy follow-up #12713 | mapped |
 | 5 | "if the CTO ruling would require Settings/legal copy changes, prefer the code-side fix and file the copy part as a follow-up" [brief] | Ruling A, G; #12713 | mapped |
+| 6 | "The session-start pull mints a token only on the hardened isolated arm." [issue #12718] | Proposed Solution #12718; Phase 9; AC13 | mapped |
+| 7 | "A real-git row: workspace `url.*.insteadOf` / `http.*.extraHeader` set by the agent does not change where the token goes." [issue #12718] | TX1-f; AC14 | mapped |
+| 8 | "An Owner-visible signal (Settings or the session UI) when the workspace's default branch holds commits the sync will not publish, naming the route to publish them" [issue #12714] | Proposed Solution #12714; Phases 10-11; AC18-AC19 (route named in words in the UI, by tool name in the agent line, CPO V3) | mapped |
+| 9 | "Decide whether `repo_last_synced_at` should distinguish "pulled" from "pushed"." [issue #12714] | Rulings V2, W5; AC17 | mapped |
+| 10 | "Optional (CTO ruling I, 2026-11-12): ... add the in-process "last synthetic commit" memory (option I3)." [issue #12714] | descoped — justification: CPO V4 and CTO W6 defer it until `remote_ahead` counts show the need; follow-up issue carries the trigger | descoped |
 
 ### Plan-Item Provenance
 
@@ -785,6 +1158,11 @@ applicable beyond that statement.
   leaves the forged-ref route open between merges, the pre-push branch update is inseparable from the synthetic
   commit, and the self-heal gate (R18) must ship with the change that makes held commits the steady state. Review cost
   is handled with one commit per phase.
+
+**Extension (#12718, #12714), CTO ruling R13b:** estimated +≈700 lines (#12718 ≈300 incl. the real-git battery,
+#12714 ≈400 incl. migration, copy, card, agent line, e2e), ≈42 planned files, so ≈1550 lines in all. Single PR, commits
+in the order #12600 phases 0-7, Phase 8 (X2), Phase 9 (#12718), Phase 10 (migration, own commit), Phase 11 (#12714),
+tests green at every boundary so any phase reverts alone.
 
 ## Acceptance Criteria
 
@@ -829,6 +1207,31 @@ applicable beyond that statement.
   sync; publish them through `github_push_branch` (Owner approval)" (CPO F5; a PR body is neither Settings nor legal
   copy).
 
+### Acceptance Criteria — #12718 / #12714 extension
+
+- [ ] AC13 (#12718 acceptance 1): the argv-array regex `/\[\s*["']pull["']/` matches nothing in `apps/web-platform/server/session-sync.ts`; the only
+  token mint on the session-start path is `gitWithInstallationAuth(..., { hardened })` in `kb-sync-pull.ts` /
+  `kb-sync-publish.ts` (asserted by a recorded-argv row in TX1-b: every token-bearing argv ran with `hardened` set and no
+  `cwd`).
+- [ ] AC14 (#12718 acceptance 2): TX1-f passes: with workspace `url.<EVIL>.insteadOf`, `http.extraHeader`,
+  `remote.origin.url=<EVIL>` and planted server-HOME / XDG config, `EVIL` logs zero requests and the sentinel token
+  reaches `LIT` only; the legacy-arm control row logs the sentinel at `EVIL`.
+- [ ] AC15: TX2 passes: 0 `--git-dir=<workspace>/.git` child runs in the pull fetch and the side-branch fetch.
+- [ ] AC16: TX1-a, TX4-a, TX4-b, TX5 pass; the bare remote never receives a KB blob containing `<<<<<<<`.
+- [ ] AC17: `repo_last_synced_at` is written only by `syncPull` (merge rc 0 or `up_to_date`); `syncPush` never calls
+  `updateLastSynced` (asserted in `session-sync-workspace-last-synced.test.ts`).
+- [ ] AC18 (#12714 acceptance 1): with `kb_sync_held_files = 3` and the route available, the Owner's Settings Project
+  card shows exactly the V5 Owner n > 1 string and "Updated from GitHub: {date}"; a member of the same workspace sees
+  the V5 member string and no date; n = 0 and null show nothing (unit rows and the e2e flow).
+- [ ] AC19: with the route unavailable, the Owner and member see the V5 "no route" strings; no surface names
+  `github_push_branch` except the agent line (`rg -n github_push_branch apps/web-platform/components apps/web-platform/lib/kb-sync-held-copy.ts` returns nothing).
+- [ ] AC20: TW1-TW4 pass; the readers census finds `kb_sync_held_files` read only in the Settings page and
+  `cc-dispatcher.ts`.
+- [ ] AC21: migration 187 applies and reverts on the dev project in CI's migration test; no `authenticated` grant
+  on the new columns.
+- [ ] AC22: the PR body carries `Closes #12600`, `Closes #12718`, `Closes #12714`, links #12719 (not closed, X4), the
+  X3, W6 and C8 follow-up issues, and the W7 wireframe link.
+
 ## Domain Review
 
 **Domains relevant:** Engineering, Product, Legal
@@ -868,6 +1271,14 @@ range by R4; C2 (no empty synthetic) -> ruling K; C3 (clear message and author) 
 (#12714 milestone and audience) recorded as Taste row T1; F2, F4, F5 applied; F3 -> R4. Deepen user-impact findings
 applied in User-Brand Impact; the self-heal regression -> R18.
 
+#### Product/UX Gate — #12714 extension
+
+**Tier:** UI surface (Settings Project card) — `wg-ui-feature-requires-pen-wireframe` applies.
+**Agents invoked:** soleur:product:cpo (V1-V5, conditions C1-C8), soleur:engineering:cto (W1-W7),
+soleur:product:design:ux-design-lead (wireframe).
+**Pencil available:** no — the Pencil MCP refused with a pen.dev plan usage limit on 2026-11-13; the agent did not
+fake a file. Row W7 (`operator (money)`) carries the unblock; Phase 11 component code waits for the wireframe.
+
 ## Test Scenarios
 
 All in `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts` unless named; layer `integration` (real git,
@@ -899,3 +1310,78 @@ local bare remotes, no network). Fixtures are synthesized (`cq-test-fixtures-syn
 - Unit (`test/server/classify-push-error.test.ts`): `GH006` line-anchored; `GH013` -> `other`.
 - Unit (`test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`): AC8.
 - Regression: `test/host-git-consumers-real-git.test.ts` carrier rows stay green; `test/push-branch-isolated-real-git.test.ts` stays green with `checkCommitPresent` on the runner.
+
+### Test Scenarios — #12718 / #12714 extension
+
+#### #12718 (real git unless named; `apps/web-platform/test/session-sync-pull-isolated-real-git.test.ts`)
+
+Fixtures as in the #12600 battery (bare `file://` remote, `git clone --depth 1` workspace, synthesized content, wrapped
+`gitWithInstallationAuth` rewriting only the literal fixture URL, widened `GIT_ALLOW_PROTOCOL`).
+
+- TX1-a: Given upstream 3 commits ahead of a `--depth 1` workspace, when `syncPull` runs, then HEAD contains all three,
+  `rev-list --objects HEAD` and `fsck --connectivity-only` exit 0 and the workspace `shallow` is unchanged; given the
+  fetch forced to `--depth 1` (test seam), then the pull refuses `shallow_changed` and HEAD is unchanged (F6).
+- TX1-b: Given a KB auto-commit plus an upstream code change, then HEAD is a merge commit with message
+  `AUTO_MERGE_MSG_PULL`, its committer equals the auto-commit's, and `writeRepoColsToWorkspace` is called once.
+- TX1-c: Given `T == headSha` (and, separately, `T` an ancestor of `headSha`), then no `fetch` and no `merge` argv is
+  recorded and the stamp is written.
+- TX1-d: Given an upstream force-pushed to unrelated history, then `merge_refused`, HEAD unchanged, no stamp (M11).
+- TX1-e (unit, `test/session-sync-path-allowlist.test.ts`): the `merge` guard accepts only
+  `["merge","--no-edit","--autostash","-m",AUTO_MERGE_MSG_PULL,<HEX40 == written ref>]`; an extra flag, a missing `-m`,
+  a non-hex `T`, a `T` different from the written tracking ref, `--abort`, `--ff-only` and `--no-verify` throw.
+- TX1-f (the #12718 acceptance row, port of `probe3.sh`): two local logging HTTP servers (`LIT`, `EVIL`; `http`
+  stands in for `https` through the test's protocol widening). The workspace `.git/config` sets
+  `url.<EVIL>.insteadOf=<LIT>`, unscoped and `<EVIL>`-scoped `http.extraHeader`, and `remote.origin.url=<EVIL>`; the
+  test also plants `~/.gitconfig` and `~/.config/git/config` under the server `HOME` with the same keys. Then every
+  request the pull makes goes to `LIT`, the `Authorization` header carrying the sentinel token reaches `LIT` only,
+  `EVIL` logs zero requests and no request carries `X-Evil`. Control row (same file): the legacy arm
+  (`gitWithInstallationAuth(["pull",...], id, { cwd })`) with the same config logs the sentinel at `EVIL` (T1), so the
+  fixture is proven sensitive.
+- TX1-g: Given a conflicting merge (M8), then `merge_conflict`, no stamp, `MERGE_HEAD` present and the tree equal to
+  what today's pull leaves (no new state).
+- TX2: With `GIT_TRACE` captured, the pull fetch and the #12600 side-branch fetch each show 0 child runs with
+  `--git-dir=<workspace>/.git`, and an agent-planted workspace ref (`refs/heads/planted`) produces no `have` line
+  (`GIT_TRACE_PACKET`) (F1, F2).
+- TX4-a: Given `.git/MERGE_HEAD` (and, separately, `.git/MERGE_AUTOSTASH`, and an unmerged index entry with neither),
+  then no token is minted, no `merge` argv is recorded, reason `unresolved_merge`, no stamp.
+- TX4-b: Given a `UU knowledge-base/a.md` with conflict markers and no `MERGE_HEAD` (M4), then neither the `syncPull`
+  nor the `syncPush` auto-commit adds it and the bare remote's `knowledge-base/a.md` has no `<<<<<<<` (M10).
+- Unit (`test/server/session-sync-sentry-mirror.test.ts`): each `kb-sync.pull-held` anomaly reason emits once with
+  `tags.reason` and a hashed user id; no URL or sha in the message.
+- Regression: `test/host-git-consumers-real-git.test.ts` (`syncPull` driver rows now drive the isolated arm; add a
+  `CENSUS_ONLY` row for `kb-sync-pull.ts` if it holds a literal exec) and `test/push-branch-isolated-real-git.test.ts`
+  stay green with the X2 constant.
+
+#### #12714
+
+- TW1 (real git, `test/kb-sync-held-real-git.test.ts`): Given a held `F1` (code) and `K1` (KB) over `T`, then
+  `computeHeldFiles` = 1; given the upstream squash-merges `F1`'s change and the pull merges it, then 0; given an
+  upstream code change not yet pulled, then it is not counted (three-dot base).
+- TW2 (unit): `syncPush` with an unchanged value performs no `writeRepoColsToWorkspace` call; a forged
+  `refs/remotes/origin/<D>` changes nothing (base is `T`); a forged recovered ref changes only the number.
+- TW3 (unit, `test/cc-dispatcher-held-line.test.ts`): registered -> the registered line with `{n}`; not registered ->
+  the not-registered line; null or 0 -> no line.
+- TW4 (real git): after `selfHealNonFastForward` branches commits aside to `soleur/recovered-kb-sync-*` and resets, the
+  count is still > 0 and equals the set-aside non-KB files.
+- Unit (`test/kb-sync-held-copy.test.ts`): every V5 string, singular and plural, both route states, the
+  `{ownerLabel}` fallback.
+- Unit (`test/project-setup-card.test.tsx`): Owner and member render the right string; n = 0 / null / `repoStatus`
+  not `ready` render no notice; the member notice holds no path or message text.
+- Migration (`test/supabase-migrations/187-...test.ts`): columns, check constraint, no `authenticated` grant, down.
+
+#### QA flow (Playwright, `e2e/settings-kb-sync-held.e2e.ts`, dev project only)
+
+Seed (dev Supabase, test fixture, never production): one team workspace with a ready connected repo,
+`repo_last_synced_at` set, `kb_sync_held_files = 3`; an Owner account and a member account of that workspace.
+
+1. Owner signs in, opens `/dashboard/settings`. The Project card shows the repo name, "Connected", "Updated from
+   GitHub: {date}" (no "Last synced"), and the notice "3 changed code files are waiting to be published to GitHub.
+   Nothing is lost: the changes stay in your workspace. Ask your agent to publish them, then approve the push." when
+   the route predicate is true for the seeded workspace, else the V5 no-route Owner string. No new button; Disconnect
+   is unchanged.
+2. Member signs in, opens `/dashboard/settings`. The read-only card shows "managed by {org}", no date, and "3 changed
+   code files are waiting for {org} to approve publishing to GitHub. Nothing is lost: the changes stay in the
+   workspace." (or the no-route member string). No file names anywhere on the page.
+3. Seed `kb_sync_held_files = 1`: both see the singular strings. Seed `0`, then `null`: neither sees a notice; the
+   Owner still sees "Updated from GitHub".
+4. Screenshot each state at desktop and 375 px width for the PR (compared with the W7 wireframe).
