@@ -19,11 +19,14 @@
 #
 # Contract. This is a TEXT guard over a fixed site list: it proves each listed site's arm text carries the pin outside
 # any substitution, and that the hatch's gate lines are present whole and in order. It is not a shell parser and does
-# not prove the text runs. Stated residuals (a later shape inside one is "covered by R<n>", not a new finding):
+# not prove the text runs. The two gate texts every site pastes or runs are pinned as WHOLE BLOCKS (A3: the canonical
+# arm-check fence; A7: each hatch readiness fence), so an added, commented or neutered line in them is a red row.
+# Stated residuals (a later shape inside one is "covered by R<n>", not a new finding):
 #   R1 a gate line or arm hidden by a construct that keeps its text intact (a heredoc, a function never called,
 #      an `if false`); R2 quote-state tricks inside a joined line (nested quotes inside a quoted substitution);
 #   R3 arm or merge sites outside SITES, LINK_ONLY and the A5 scripts (repo-wide walker: #12739);
-#   R4 runtime properties the canonical check owns (what EV and H resolve to): proven by the dry runs, not here.
+#   R4 runtime properties the canonical check owns (what EV and H resolve to): proven by the dry runs, not here;
+#   R5 A6 prose synonyms: A6 matches the deleted design's own phrases only; A1 still catches any arm such prose asks for.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
 
@@ -48,6 +51,26 @@ EXPECTED_LEDGER='A1 A1-floor A1-noH A2 A2b A3 A5 A6 A7'
 # A1-noH: no site file assigns H. The `-` in the first class keeps `gh api -H=...` quiet (H7).
 NOH_RE='(^|[^A-Za-z0-9_-])H(\+?=|\[[^]]*\]=)|\$\{H:?=|(read|declare|typeset|export|local|readonly|mapfile|readarray|for)([[:space:]]+[^;&|]*)?[[:space:]]H([[:space:]=;]|$)|printf[[:space:]]+-v[[:space:]]*H'
 CANON_REFUSE='|| { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }'
+# A3/A7 whole-block pins: the fence's lines with indent stripped, compared line for line.
+CANON_FENCE=$(cat <<'EOF'
+EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("coverage=")]|length==1) and ([scan("unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
+&& H=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid) \
+&& git merge-base --is-ancestor "$EV" "$H" \
+&& R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \
+|| { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }
+gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
+EOF
+)
+SETTLE_HEAD=$(cat <<'EOF'
+_top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }
+SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
+git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }
+# REPLACE THIS LINE with the arm check's first statement (review-evidence-comment.md#arm-check), PR_NUMBER replaced by <N>
+[ "${H:?run the arm check in this call}" = "$SHA" ] || { echo "ADMIN-MERGE ABORTED: evidence head check read a different head"; exit 4; }
+EOF
+)
+SETTLE_FENCE_1="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600'
+SETTLE_FENCE_2="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"'
 CANON_ARM='--match-head-commit "${H:?run the arm check in this call}"'
 # A3: the check's load-bearing fragments, each a literal that must appear in the canonical file.
 CANON_BODY=(
@@ -58,7 +81,7 @@ CANON_BODY=(
 # A6: the deleted exempt arm's tokens (anywhere under plugins/soleur/skills/) and its prose (in the site files and
 # the canonical file only, case-insensitive, with a left boundary so "non-exempt arm" elsewhere stays quiet).
 TOMB_RE='EXEMPT_HEAD|EXEMPT_ARM|EXEMPT_READ|soleur-exempt-|DOMAIN_SURFACE_RE'
-TOMB_PROSE_RE='(^|[^a-z0-9_-])(exempt(ed)?[ -](read|arm|bot prs?|prs?)([^a-z]|$)|bot exemption|exempt from the arm check)'
+TOMB_PROSE_RE='(^|[^a-z0-9_-])(exempt(ed)?[ -](read|bot prs?|prs?)([^a-z]|$)|bot exemption)'
 # A7: the admin-merge hatch's gate lines, in this order, before admin-merge-ready.sh in each readiness fence.
 SETTLE_FETCH='git fetch -q origin "pull/<N>/head" || {'
 SETTLE_PLACE="# REPLACE THIS LINE with the arm check's first statement (review-evidence-comment.md#arm-check)"
@@ -73,36 +96,50 @@ scan() {
   python3 -I - "$root" "$@" <<'PY'
 import os, re, sys
 root, rels = sys.argv[1], sys.argv[2:]
-tok = re.compile(r"(?<![A-Za-z0-9_-])gh\s+pr\s+merge(?![A-Za-z0-9_-])")
+tok = re.compile(r"(?<![A-Za-z0-9_-])gh\s+pr\s+(?:(?:--repo|-R)(?:\s+|=)\S+\s+)?merge(?![A-Za-z0-9_-])")
+SHELLS = {"bash", "sh", "shell", "zsh"}
 auto = re.compile(r"(?<![A-Za-z0-9_-])--auto(?![A-Za-z0-9_-])")
-def joined(text):
-    # (first line number, joined line, inside a ``` fence) per logical line
-    out, buf, start, fence = [], "", None, False
+def joined(text, rel):
+    # (first line number, joined line, mode) per logical line. mode: "shell" (a .sh file, or a bash/sh/shell/zsh
+    # fence), "code" (any other fence), "prose". Fences follow CommonMark: an opener is ``` or ~~~ (3+) at 0-3
+    # spaces of indent; it closes only on the same character, at least as long, with no info string. A fence line
+    # is handled before continuation joining, so a prose hard-break `\` cannot swallow it.
+    out, buf, start, fence = [], "", None, None
+    is_sh = rel.endswith(".sh")
     for n, line in enumerate(text.split("\n"), 1):
-        if start is None and re.match(r"[ \t]*```", line):
-            fence = not fence
-            out.append((n, line, False)); continue
+        m = None if is_sh else re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+        if m:
+            run, info = m.group(1), m.group(2).strip()
+            opener = fence is None and not (run[0] == "`" and "`" in info)
+            closer = fence is not None and run[0] == fence[0] and len(run) >= fence[1] and not info
+            if opener or closer:
+                if start is not None:
+                    out.append((start, buf, mode)); buf, start = "", None
+                fence = (run[0], len(run), (info.split() or [""])[0].lower()) if opener else None
+                out.append((n, line, "prose")); continue
+        mode = "shell" if is_sh or (fence and fence[2] in SHELLS) else ("code" if fence else "prose")
         if start is None:
             start = n
-        m = re.search(r"\\[ \t]*$", line)
-        if m:
-            buf += line[:m.start()] + " "
+        mm = re.search(r"\\[ \t]*$", line)
+        if mm:
+            buf += line[:mm.start()] + " "
             continue
-        out.append((start, buf + line, fence)); buf, start = "", None
+        out.append((start, buf + line, mode)); buf, start = "", None
     if start is not None:
-        out.append((start, buf, fence))
+        out.append((start, buf, mode))
     return out
-def span(line, i, nxt, fence):
+def span(line, i, nxt, mode):
     # From the token to the first unquoted ; && || | ) or ` #` outside any substitution, an unescaped
-    # backtick outside a fence (inline code), the next token, or the end of the joined line. `$(`, `$((`,
-    # `(` and, inside a fence, a backtick open a substitution level (a quote state is saved per level);
-    # a backslash escapes the next character outside single quotes. Returns (span, depth-0 text): a pin
-    # that only appears inside a substitution aborts that subshell, never the arm.
+    # backtick outside shell mode (inline code), the next token, or the end of the joined line. `$(`, `$((`,
+    # `(` and, in shell mode, a backtick outside single quotes open a substitution level (a quote state is
+    # saved per level); a backslash escapes the next character outside single quotes. Returns (span, the
+    # depth-0 text outside single quotes): a pin inside a substitution aborts only that subshell, and a pin
+    # inside single quotes never expands, so neither binds the arm.
     q, j, stack, top = None, i, [], []
     while j < nxt:
-        c, d0 = line[j], not stack
+        c, d0, qb = line[j], not stack, q
         if c == "`" and (j == 0 or line[j - 1] != "\\"):
-            if not fence:
+            if mode != "shell":
                 break
             if q != "'":
                 if stack and stack[-1][0] == "`":
@@ -130,7 +167,7 @@ def span(line, i, nxt, fence):
             q = stack.pop()[1]; j += 1; continue
         elif d0 and (c in ";|)" or line.startswith("&&", j) or (c == "#" and j > 0 and line[j - 1] in " \t")):
             break
-        if d0:
+        if d0 and qb != "'" and q != "'":
             top.append(c)
         j += 1
     return line[i:j], "".join(top)
@@ -140,10 +177,10 @@ for rel in rels:
         print("MISSING\t" + rel); continue
     with open(p, encoding="utf-8") as fh:
         text = fh.read()
-    for n, line, fence in joined(text):
+    for n, line, mode in joined(text, rel):
         hits = [m.start() for m in tok.finditer(line)]
         for k, i in enumerate(hits):
-            s, top = span(line, i, hits[k + 1] if k + 1 < len(hits) else len(line), fence)
+            s, top = span(line, i, hits[k + 1] if k + 1 < len(hits) else len(line), mode)
             if auto.search(s):
                 print("ARM\t%s\t%d\t%s\t%s" % (rel, n, top.replace("\t", " "), s.replace("\t", " ")))
 PY
@@ -204,6 +241,25 @@ run_root() {
     for frag in "${CANON_BODY[@]}"; do
       grep -qF -- "$frag" "$root/$CANON" || { echo "FAIL[A3] canonical check fragment missing: $frag"; f=1; }
     done
+    c=$(grep -cE -- "$NOH_RE" "$root/$CANON")
+    [[ "$c" == 1 ]] || { echo "FAIL[A3] canonical file sets H $c times (want 1)"; f=1; }
+    got=$(WANT="$CANON_FENCE" python3 -I - "$root/$CANON" <<'PY'
+import os, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^## Arm check\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+if not m:
+    print("no ## Arm check section"); sys.exit(0)
+fences = re.findall(r"^[ \t]*```bash\n(.*?)^[ \t]*```", m.group(1), re.S | re.M)
+if len(fences) != 1:
+    print("## Arm check has %d bash fences (want 1)" % len(fences)); sys.exit(0)
+got = [l.strip() for l in fences[0].rstrip("\n").split("\n")]
+want = os.environ["WANT"].split("\n")
+if got != want:
+    k = next((i for i, (g, w) in enumerate(zip(got, want)) if g != w), min(len(got), len(want)))
+    print("arm-check fence differs from the pinned block at line %d: %s" % (k + 1, got[k] if k < len(got) else "<missing>"))
+PY
+) || { echo "INSTRUMENT A3 block parser (python) failed"; return 2; }
+    [[ -z "$got" ]] || { echo "FAIL[A3] $got"; f=1; }
   fi
 
   # A5 -- neither script that prints re-arm instructions has an arm span, and each message names the check.
@@ -231,11 +287,17 @@ run_root() {
   else
     c=$(scan "$root" "$MON") || { echo "INSTRUMENT scanner (python) failed on $MON"; return 2; }
     [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n _ s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
-    c=$(grep -F 'AUTO-MERGE NOT ARMED' "$root/$MON" | grep -F 'printf')
+    c=$(grep -E "^[[:space:]]*printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED" "$root/$MON")
     if [[ -z "$c" ]]; then echo "FAIL[A5] no not-armed printf line in $MON"; f=1
     else
       [[ "$c" == *"plugins/soleur/skills/review/references/$LINK"* ]] || { echo "FAIL[A5] $MON not-armed line does not name $LINK by full path"; f=1; }
       [[ "$c" == *"$SETTLE_PATH"* ]] || { echo "FAIL[A5] $MON not-armed line does not name $SETTLE_PATH"; f=1; }
+    fi
+    c=$(grep -E "^[[:space:]]*printf 'LEFT THE MERGE QUEUE UNMERGED" "$root/$MON")
+    if [[ -z "$c" ]]; then echo "FAIL[A5] no left-the-queue printf line in $MON"; f=1
+    else
+      [[ "$c" == *"plugins/soleur/skills/ship/references/merge-queue-dequeue.md"* ]] || { echo "FAIL[A5] $MON left-the-queue line does not name merge-queue-dequeue.md"; f=1; }
+      [[ "$c" == *"Do NOT merge it by hand or --admin it"* ]] || { echo "FAIL[A5] $MON left-the-queue line lost its do-not-merge clause"; f=1; }
     fi
   fi
 
@@ -255,7 +317,7 @@ run_root() {
   ledger+=(A7)
   if [[ ! -f "$root/$SETTLE" ]]; then echo "FAIL[A7] missing $SETTLE"; f=1
   else
-    got=$(FETCH="$SETTLE_FETCH_LINE" PLACE="$SETTLE_PLACE" TIE="$SETTLE_TIE_LINE" python3 -I - "$root/$SETTLE" <<'PY'
+    got=$(FETCH="$SETTLE_FETCH_LINE" PLACE="$SETTLE_PLACE" TIE="$SETTLE_TIE_LINE" B1="$SETTLE_FENCE_1" B2="$SETTLE_FENCE_2" python3 -I - "$root/$SETTLE" <<'PY'
 import os, re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 fetch, place, tie = os.environ["FETCH"], os.environ["PLACE"], os.environ["TIE"]
@@ -275,6 +337,12 @@ for k, b in enumerate(ready, 1):
     pos = [p for _, p in want]
     if all(p >= 0 for p in pos) and pos != sorted(pos):
         print("BLOCK %d out of order" % k)
+    if k <= 2:
+        got = [l for l in lines if l != ""]
+        exp = os.environ["B%d" % k].split("\n")
+        if got != exp:
+            i = next((i for i, (g, w) in enumerate(zip(got, exp)) if g != w), min(len(got), len(exp)))
+            print("BLOCK %d differs from the pinned fence at line %d: %s" % (k, i + 1, got[i] if i < len(got) else "<missing>"))
 PY
 ) || { echo "INSTRUMENT A7 parser (python) failed"; return 2; }
     [[ "$got" == *"COUNT 2"* ]] || { echo "FAIL[A7] $SETTLE: want 2 readiness fences, got [${got%%$'\n'*}]"; f=1; }
@@ -448,7 +516,19 @@ m24d() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANC
 m24e() { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto $(echo --match-head-commit "${H:?run the arm check in this call}")'; }
 m24f() { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto "$(echo --match-head-commit "${H:?run the arm check in this call}")"'; }
 m16e() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "Exempt PRs re-arm directly. When it is armed, do not re-arm."; }
-m16f() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "Bot PRs are exempt from the arm check. When it is armed, do not re-arm."; }
+m16f() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "The bot exemption re-arms directly. When it is armed, do not re-arm."; }
+m25a() { edit "$1/$CANON" "  $CANON_REFUSE" "  # $CANON_REFUSE"; }
+m25b() { edit "$1/$CANON" "  $CANON_REFUSE" "  || true \\"$'\n'"  $CANON_REFUSE"; }
+m25c() { edit "$1/$CANON" $'\n## Arm check\n' $'\n## Arm check\n\nShort form:\n\n```bash\nH=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid)\ngh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?x}"\n```\n'; }
+m25d() { edit_first "$1/$SETTLE" "   $SETTLE_TIE_LINE" "   true || \\"$'\n'"   $SETTLE_TIE_LINE"; }
+m25e() { edit_first "$1/$SETTLE" "   $SETTLE_FETCH_LINE" "   trap 'exit 0' EXIT"$'\n'"   $SETTLE_FETCH_LINE"; }
+m26a() { edit "$1/$DRAIN" "$DRAIN_ARM" "gh pr merge <N> --squash --auto --body 'pinned: --match-head-commit \"\${H:?run the arm check in this call}\"'"; }
+m26b() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''````markdown'$'\n''```'$'\n''````'$'\n\n''```bash'$'\n''gh pr merge `echo 7` --squash --auto'$'\n''```'; }
+m26c() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''A hard break here\'$'\n''```bash'$'\n''gh pr merge `echo 7` --squash --auto'$'\n''```'; }
+m26d() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```bash'$'\n''gh pr --repo "$REPO" merge 7 --squash --auto'$'\n''```'; }
+m27a() { edit "$1/$MON" "      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED" "      # printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED"; }
+m27b() { edit "$1/$MON" "recovery (ONE re-enqueue): plugins/soleur/skills/ship/references/merge-queue-dequeue.md." "recovery: re-arm it."; }
+m27c() { edit "$1/$MON" "AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge" "AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge, or run \`gh pr merge %s --squash --auto\`"; }
 m17()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it first'; }
 m18()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it: gh pr merge $PR --squash --auto'; }
 h3() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge 7 --disable-auto'$'\n''gh pr merge "$N" --auto --squash --match-head-commit "${H:?x}"'; }
@@ -457,6 +537,8 @@ h5() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHO
 h6() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge 7 --squash --auto --match-head-commit "${H:?x}"'; }
 h8() { mkdir -p "$1/plugins/soleur/skills/community/scripts" && printf '%s\n' '# a non-exempt arm of the cap table' > "$1/plugins/soleur/skills/community/scripts/x.sh"; }
 h9() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```bash'$'\n''gh pr merge "$(echo 7)" --squash --auto --match-head-commit "${H:?x}" # see `x`'$'\n''```'; }
+h10() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```markdown'$'\n''`gh pr merge` is armed with `--auto` only after the arm check.'$'\n''```'; }
+h11() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "No PR is exempt from the arm check, and there is no exempt arm (CTO ruling R1). When it is armed, do not re-arm."; }
 h7() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh api -H=Accept:application/json repos/{owner}/{repo}/pulls/7'; }
 
 echo "== mutation rows"
@@ -511,9 +593,21 @@ row M24d A1 m24d 'ship/SKILL.md:'
 row M24e A1 m24e 'outside a substitution'
 row M24f A1 m24f 'outside a substitution'
 row M16e A6 m16e 'Exempt PRs'
-row M16f A6 m16f 'exempt from the arm check'
+row M16f A6 m16f 'bot exemption'
+row M25a A3 m25a 'fence differs from the pinned block at line 5'
+row M25b A3 m25b 'fence differs from the pinned block at line 5'
+row M25c A3 m25c 'sets H 2 times'
+row M25d A7 m25d 'BLOCK 1 differs from the pinned fence at line 5'
+row M25e A7 m25e 'BLOCK 1 differs from the pinned fence at line 3'
+row M26a A1 m26a 'outside a substitution'
+row M26b A1 m26b 'ship/SKILL.md:'
+row M26c A1 m26c 'ship/SKILL.md:'
+row M26d A1 m26d 'gh pr --repo'
+row M27a A5 m27a 'no not-armed printf line'
+row M27b A5 m27b 'left-the-queue line does not name merge-queue-dequeue.md'
+row M27c A5 m27c 'monitor-pr-checks.sh:'
 
-echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H, non-exempt prose off-site, a fenced pinned arm with a substitution and a trailing comment)"
+echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H, non-exempt prose off-site, a fenced pinned arm with a substitution and a trailing comment, a markdown fence, negated exempt prose)"
 row H3 GREEN h3
 row H4 GREEN h4
 row H5 GREEN h5
@@ -521,8 +615,10 @@ row H6 GREEN h6
 row H7 GREEN h7
 row H8b GREEN h8
 row H9 GREEN h9
+row H10 GREEN h10
+row H11 GREEN h11
 
-MIN_CASES=59  # 52 mutation rows + 7 harness rows; raise it in the same edit that adds a row
+MIN_CASES=73  # 64 mutation rows + 9 harness rows; raise it in the same edit that adds a row
 echo
 echo "passes=$passes fails=$fails cases=$CASES_RUN"
 if (( CASES_RUN < MIN_CASES )); then printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2; exit 1; fi
