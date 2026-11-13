@@ -11,7 +11,7 @@
 # The /api/inngest boundary is HMAC signature-verify; the :8288/:8289 control API is
 # scoped by host-local nftables (below) to web hosts only (SEC-H2).
 #
-# A bare dollar-var ($n_total, $i) is left literal by terraform templatefile() — only a
+# A bare dollar-var ($attempt, $d) is left literal by terraform templatefile() — only a
 # dollar-brace interpolates. `$${VAR}` renders a literal shell dollar-brace VAR.
 package_update: true
 # docker.io runs the bootstrap OCI extract + login (arm64-native; RUN-only host). nftables scopes the
@@ -571,7 +571,10 @@ write_files:
       # upcasing it first (the hex-run pattern is lowercase-only, so an upcased digest
       # survives it) and restoring lowercase last. ONLY `sha256=` + exactly 64 hex
       # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
-      # unchanged, so no credential class loses redaction.
+      # unchanged, so no credential class loses redaction. Residual (review P3, accepted at
+      # the 384 B headroom floor): a value-shaped NAME — a ≥40-char [A-Za-z0-9_+/-] run, e.g.
+      # an operator pasting a token into the name field — transits unmasked; Doppler's
+      # name charset bounds the shape, and the Sentry path charset-filters independently.
       detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_.-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
       # Optional 3rd arg: marker override (#10382 — the cutover-flip noop dual-emit rides
       # SOLEUR_INNGEST_NOOP so ~288 daily liveness rows never crowd the BOOT_STAGE
@@ -1206,23 +1209,46 @@ write_files:
       # soleur-inngest/prd post-cutover FATALs the WHOLE bootstrap (not just Vector) — this is
       # desirable on a DARK host: a loud boot-brick beats a silent observability blind spot. The
       # check keys on the NAME, so value rotation is safe (the name persists across a rotate).
-      if doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'CHKEOF'
+      # INNGEST_TRACE_RETENTION_(DAYS|BATCH|MAX_BATCHES|SIZE_BUDGET_BYTES) are the SIXTH
+      # instance of this class and the first measured end-to-end with per-attempt counted
+      # telemetry (#12695, RCA): the Nov-11 host FATAL'd this check 75+ times over ~17h —
+      # provision attempt 1 at 22:57:51Z through at least attempt 75 — because
+      # INNGEST_TRACE_RETENTION_MAX_BATCHES had been written into
+      # soleur-inngest/prd as a tuning knob (the RCA's candidate offender, inferred from
+      # add/remove timing — the name was never read off the wire; the .foreign= detail this
+      # check now emits exists to close exactly that gap). inngest-trace-retention.service's ExecStart is
+      # `doppler run --config prd -- inngest-trace-retention.sh` (inngest-bootstrap.sh), so the
+      # whole isolated config is injected into that unit's env and every env_int knob in the
+      # script is a name this host's runtime legitimately consumes — the check's own semantics
+      # admit it. The four env_int tuning knobs are admitted; the os.environ.get override seams
+      # (MARKER, SQLITE, PSQL) are deliberately NOT — a debug override in prd should still trip
+      # this check, same as a test seam would. Placement is inside the INNGEST_ group BEFORE
+      # HEARTBEAT_URL, for the anchor reason the note above states.
+      # THE DETAIL LINE (#12707): until #12695 the FATAL carried only counts, so the offender
+      # had to be reconstructed from a Doppler dismissal timestamp four minutes before the
+      # replacement host passed. The awk below does the whole check in ONE pass: prints ONE
+      # detail line — repeated .foreign=<name> fields first, then .n_total=<n>.n_inngest=<m>
+      # — and exits non-zero iff the set is non-isolated or under floor. The outer arm captures
+      # stdout with the check itself (d carries the detail line and nothing else — the
+      # pipeline's stdout is the script's only output) and appends it to last_stage, which
+      # rides BOTH emit channels: the Better Stack
+      # provision-attempt-exit detail and the Sentry provision_attempt_failed detail (capped at
+      # 120 chars; .foreign= is first so names survive the cap). No charset filter is duplicated
+      # — both sinks already sanitize (Sentry's A-Za-z0-9=.:_- + cap, phone-home's redaction).
+      # Names only — NEVER values: a secret's name is not sensitive; its value is. NO .foreign=
+      # field means the set matched the allowlist but failed the floor. A check that dies
+      # before printing yields an empty suffix — the pre-#12707 shape, never a stale verdict.
+      if d=$(doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'CHKEOF'
       set -euo pipefail
-      names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
-      n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-      n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
-      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 6 ]; then
-        echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_)"; exit 1
-      fi
-      echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
+      doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' | awk -v re='^(INNGEST_((SIGNING|EVENT)_KEY|REDIS_(PASSWORD|LUKS_KEY)|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|LUKS_(CUTOVER|ACTIVE_VOLUME_ID)|TLS_(KEY|CERT)|TRACE_RETENTION_(DAYS|BATCH|MAX_BATCHES|SIZE_BUDGET_BYTES)|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' '{m=$0~re;i+=m}!m{f=f".foreign="$0}END{print f".n_total="NR".n_inngest="i+0;exit(NR!=i||i<6)}'
       CHKEOF
-      then
+      ); then
         last_stage=isolation-check-passed
         /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed "attempt=$attempt iid=$IID" || true
       else
-        echo "[inngest] FATAL: doppler isolation self-check failed" >&2
-        last_stage=isolation-check-FAILED
-        /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED "attempt=$attempt iid=$IID" || true
+        echo "[inngest] FATAL: doppler isolation self-check failed$d" >&2
+        last_stage="isolation-check-FAILED$d"
+        /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED "attempt=$attempt$d iid=$IID" || true
         exit 1
       fi
       # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
