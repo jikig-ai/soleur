@@ -1877,24 +1877,13 @@ jobs:
 
   # ─── inngest-host scoped -replace (dispatch-only; re-run cloud-init; #6197) ────
   # Selected by `-f apply_target=inngest-host-replace`. The additive-only `inngest_host`
-  # job above CANNOT force-replace the host (its destroy-guard aborts on any delete), so a
-  # cloud-init/bootstrap change (e.g. the arm64 Vector wiring, #6197) that force-replaces
-  # hcloud_server.inngest needs THIS scoped -replace path — the same gated, scoped -replace
-  # shape the registry-host-replace and git-data-host-replace jobs use. The
-  # sourced inngest_host_replace_gate permits EXACTLY the server + its 2 id-referencing
-  # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis_luks).
-  # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
+  # job above CANNOT force-replace the host (its destroy-guard aborts on any delete).
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §inngest_host_replace
   inngest_host_replace:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
     runs-on: ubuntu-24.04
-    # 40, not 20: the post-apply liveness gate polls up to 20min for the new host's first
-    # SOLEUR_INNGEST_SERVER_PROBE row (#12708) — the born-dark failure class (#12695) is exactly
-    # an apply that succeeded while the host never emitted, and the gate's window is what turns
-    # that class into a run failure instead of a silent dark host.
     timeout-minutes: 40
-    # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
-    # restart-inngest-server.yml serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -1913,8 +1902,6 @@ jobs:
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
-        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
-        # satisfies var.ssh_key_path (never consumed by the scoped inngest replace).
         run: |
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
@@ -1929,12 +1916,6 @@ jobs:
             exit 1
           fi
 
-      # INHERITED-`done` PREFLIGHT (#8252, 2026-09-17). A replace of this host strands the scheduler when
-      # INNGEST_CUTOVER_FLIP is `done` (the root-disk marker is destroyed, the Doppler flag is not). This step
-      # does not block that; it makes the recovery known BEFORE the outage. It does FAIL CLOSED when it cannot
-      # measure (empty token, blind instrument, failed read of a present key): a skipped guard is not a cleared
-      # one (#9927). Rationale, the rc-capture reasoning and the non-`done` stranding values live in the runbook
-      # inngest-server.md, inherited-done section; the token is inngest-flip-read-token.tf.
       - name: 'Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)'
         env:
           DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}
@@ -2037,25 +2018,14 @@ jobs:
         run: terraform init -input=false -lockfile=readonly
 
       - name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)
-        # CTO N9: on the first replace after the flip-token split both token keys are unknown at plan
-        # time, so the user_data length precondition is deferred to APPLY (after the destroy). This
-        # offline step is the only pre-destroy size gate; see runbooks/inngest-server.md.
         run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only
 
       - name: Warn if SENTRY_DSN is absent (#6500)
-        # Advisory, and it degrades open, like the #7228 strand warning above. This job is also
-        # a RECOVERY route for the sole scheduler, and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
-        # a hard fail here would block restoring the sole scheduler over a missing observability
-        # value, or over a transient Doppler read. Decision T2 in #6500's decision-challenges.md.
         continue-on-error: true
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
-          # #6500: this host now bakes SENTRY_DSN, and its Sentry event is what zot-soak-6122.sh
-          # counts. An empty or unreadable value means the replacement reports nothing to the
-          # soak. Say so BEFORE the plan, and proceed; the shape is the precondition's job
-          # (inngest-host.tf). The value is never printed.
           dsn_rc=0
           DSN=$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
           if [[ "$dsn_rc" -ne 0 ]]; then
@@ -2073,17 +2043,6 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the inngest server + its 3 id-referencing dependents
-        # (hcloud_server_network.inngest and hcloud_volume_attachment.inngest_redis_luks; both
-        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis_luks is
-        # NOT -targeted, so the durable volume is preserved by OMISSION (the retired plaintext pair
-        # is no longer declared or targeted here, #8285). The additive VOLUME joins `inngest-host`
-        # (it must be creatable) and never this one. Its ATTACHMENT must be here, though,
-        # because inngest_host_replace_gate interpolates the server id and a replace therefore
-        # forces the attachment into the plan; without admitting it the gate aborts
-        # `out_of_scope` and a routine dispatch becomes a dead end. The sourced
-        # inngest_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
-        # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
@@ -2113,20 +2072,7 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
-          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
-          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
-          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
-          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
-          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
-          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
-          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
-          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
-          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
-          # cutover-inngest.yml:359.
           HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
-          # before any later step can echo it. This token carries destroy authority over the
-          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
@@ -2146,15 +2092,10 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Apply the saved, guarded plan. Post-apply: prove from the SAVED plan (the exact plan
-        # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
         run: |
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
-          # Mid-replace failure: the destroy ran first, so name the fresh stock class before the
-          # operator acts — stock-caused vs config/contract/apply failures take different arms.
-          # stock_recovery_report is a diagnostic annotation only; it always returns 0 (#9510).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
@@ -2183,8 +2124,6 @@ jobs:
             | jq -r '[.values.root_module.resources[]? | select(.address == "hcloud_server.inngest")] | .[0].values.id // empty')" || IID=""
           case "$IID" in
             ''|*[!0-9]*)
-              # Sanitize before echoing: this arm fires precisely when IID is NOT digits, so
-              # raw bytes (a newline = a forged ::command:: line) must not reach the parser.
               IID_SAN="$(printf '%s' "$IID" | tr -cd '0-9a-zA-Z._-' | cut -c1-40)"
               echo "::error::could not resolve the new inngest server id from terraform state (got '${IID_SAN}'). The apply reported success but the state read did not — treat the host as UNVERIFIED and read the BOOT_STAGE channel before anything else."
               exit 1 ;;
@@ -2192,42 +2131,16 @@ jobs:
           printf 'INNGEST_NEW_IID=%s\n' "$IID" >> "$GITHUB_ENV"
           echo "new host iid=$IID"
 
-      # POST-REPLACE LIVENESS GATE (#12708, #12695). Apply success means Hetzner created the
-      # server and cloud-init returned — it says nothing about whether the provision unit
-      # reached bootstrap. The Nov-11 host FATAL'd the credential isolation check on every
-      # attempt for ~17h while run 43115757996 read as a success. The proof that the whole
-      # chain ran (provision -> zot pull -> bootstrap -> vector -> probe timer) is the first
-      # SOLEUR_INNGEST_SERVER_PROBE row carrying THIS host's instance_id; the --instance-id
-      # pin keeps the destroyed host's rows inside the window from masking the replacement's
-      # silence. Exit classes: 0 = a row for this iid landed; 4 = query healthy, window empty
-      # (the host is not shipping — the gate's failure signal); 6 = the READ failed (a Better
-      # Stack/Doppler fault — never a host verdict, so it retries within the window rather
-      # than failing on an instrument blip; a window that ends on rc=6 reports INSTRUMENT,
-      # not dark). 20min bounded poll: bootstrap on a healthy replace lands its first probe
-      # row inside ~5min. One strictness to know: a host whose IMDS read failed emits
-      # instance_id=unknown, which can never satisfy the pin — the gate fails there too, and
-      # that is deliberate (an unidentified row is not a per-host liveness claim).
       - name: Post-replace liveness gate — first probe row on the new iid (#12708)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
-          # `set +e`: Actions runs a bare `run:` block as `bash -e {0}` (ADR-170), and errexit
-          # dies AT the doppler line on the first non-zero read — rc=4 is the EXPECTED state for
-          # the first minutes of every healthy replace, so the whole poll is unreachable without
-          # this. (Measured: lint-workflow-errexit-capture.py flags the bare form.)
           set +e
           deadline=$(( SECONDS + 1200 ))
           last_rc=9
           verdict_reads=0
           while [ "$SECONDS" -lt "$deadline" ]; do
-            # `timeout 90` keeps one stalled Doppler API call from eating the whole window —
-            # a timeout surfaces as rc=124 via doppler, counted as a non-verdict read.
-            # `env -u` strips the reader's override seams: doppler run injects EVERY key of
-            # prd_terraform into the env, and INNGEST_STATE_QUERY / INNGEST_PROBE_ROW_LIB /
-            # INNGEST_STATE_SINCE can substitute a fabricated row source for the real query —
-            # a green without a row. The gate's green must be exactly as trustworthy as the
-            # config it reads, so the seams cannot arrive through it.
             timeout 90 doppler run -p soleur -c prd_terraform -- \
               env -u INNGEST_STATE_QUERY -u INNGEST_STATE_SINCE -u INNGEST_PROBE_ROW_LIB -u INNGEST_PROBE_EMITTER -u INNGEST_PROBE_MARKER \
               scripts/inngest-host-state.sh --since 30m --instance-id "$INNGEST_NEW_IID" --no-errors
