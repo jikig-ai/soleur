@@ -6,7 +6,8 @@
 # review-evidence-comment.md `## Arm check` sets H (A1-noH), and its body is pinned (A3). There is no exempt arm:
 # drain-prs' bot exemption was deleted (CTO ruling R1, 2026-11-13), and A6 keeps its tokens and prose from coming back.
 # The admin-merge hatch runs the check and ties it to the head it merges (A7). The two scripts that print re-arm
-# instructions route them through the check without an arm of their own (A5).
+# instructions route them through the check without an arm of their own, and monitor-pr-checks.sh's
+# not-armed line names the check and the hatch by full path (A5).
 #
 # Two modes:
 #   bash arm-check-sites.test.sh              driver: real-tree verdict, then the H8 control, mutation and harness rows
@@ -32,6 +33,8 @@ DRAIN=plugins/soleur/skills/drain-prs/SKILL.md
 CANON=plugins/soleur/skills/review/references/review-evidence-comment.md
 SYNC=plugins/soleur/scripts/sync-pr-behind.sh
 MQJ=scripts/merge-queue-jump.sh
+MON=plugins/soleur/scripts/monitor-pr-checks.sh
+SETTLE_PATH=plugins/soleur/skills/ship/references/settle-then-admin-merge.md
 LINK='review-evidence-comment.md#arm-check'
 EXPECTED_LEDGER='A1 A1-floor A1-noH A2 A2b A3 A5 A6 A7'
 # A1-noH: no site file assigns H. The `-` in the first class keeps `gh api -H=...` quiet (H7).
@@ -40,19 +43,23 @@ CANON_REFUSE='|| { echo "ARM_CHECK refused: no passing evidence covers the PR he
 CANON_ARM='--match-head-commit "${H:?run the arm check in this call}"'
 # A3: the check's load-bearing fragments, each a literal that must appear in the canonical file.
 CANON_BODY=(
-  '|last // ""|split("\n")[0]|'
-  'test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)")'
+  'EV=$(gh pr view PR_NUMBER --json comments --jq '"'"'[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("coverage=")]|length==1) and ([scan("unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h'"'"') \'
   '&& git merge-base --is-ancestor "$EV" "$H" \'
   '&& R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \'
 )
-# A6: the deleted exempt arm and its domain-surface regex, in token and prose form.
-TOMB_RE='EXEMPT_HEAD|EXEMPT_ARM|EXEMPT_READ|soleur-exempt-|DOMAIN_SURFACE_RE|exempt (read|arm|PRs?)([^a-z]|$)'
+# A6: the deleted exempt arm's tokens (anywhere under plugins/soleur/skills/) and its prose (in the site files and
+# the canonical file only, case-insensitive, with a left boundary so "non-exempt arm" elsewhere stays quiet).
+TOMB_RE='EXEMPT_HEAD|EXEMPT_ARM|EXEMPT_READ|soleur-exempt-|DOMAIN_SURFACE_RE'
+TOMB_PROSE_RE='(^|[^a-z0-9_-])(exempt(ed)?[ -](read|arm|bot prs?|prs?)([^a-z]|$)|bot exemption|exempt from the arm check)'
 # A7: the admin-merge hatch's gate lines, in this order, before admin-merge-ready.sh in each readiness fence.
 SETTLE_FETCH='git fetch -q origin "pull/<N>/head" || {'
 SETTLE_PLACE="# REPLACE THIS LINE with the arm check's first statement (review-evidence-comment.md#arm-check)"
 SETTLE_TIE='[ "${H:?run the arm check in this call}" = "$SHA" ] || {'
+# A7 compares whole lines (indent stripped), so a commented-out or neutered gate line is a missing one.
+SETTLE_FETCH_LINE='git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }'
+SETTLE_TIE_LINE='[ "${H:?run the arm check in this call}" = "$SHA" ] || { echo "ADMIN-MERGE ABORTED: evidence head check read a different head"; exit 4; }'
 
-# scan <root> <relpath>... : one `ARM<TAB>rel<TAB>line<TAB>span` line per arm span; exit 3 on a python error.
+# scan <root> <relpath>... : one `ARM<TAB>rel<TAB>line<TAB>depth-0 text<TAB>span` line per arm span; exit 3 on a python error.
 scan() {
   local root="$1"; shift
   python3 -I - "$root" "$@" <<'PY'
@@ -61,52 +68,76 @@ root, rels = sys.argv[1], sys.argv[2:]
 tok = re.compile(r"(?<![A-Za-z0-9_-])gh\s+pr\s+merge(?![A-Za-z0-9_-])")
 auto = re.compile(r"(?<![A-Za-z0-9_-])--auto(?![A-Za-z0-9_-])")
 def joined(text):
-    out, buf, start = [], "", None
+    # (first line number, joined line, inside a ``` fence) per logical line
+    out, buf, start, fence = [], "", None, False
     for n, line in enumerate(text.split("\n"), 1):
+        if start is None and re.match(r"[ \t]*```", line):
+            fence = not fence
+            out.append((n, line, False)); continue
         if start is None:
             start = n
         m = re.search(r"\\[ \t]*$", line)
         if m:
             buf += line[:m.start()] + " "
             continue
-        out.append((start, buf + line)); buf, start = "", None
+        out.append((start, buf + line, fence)); buf, start = "", None
     if start is not None:
-        out.append((start, buf))
+        out.append((start, buf, fence))
     return out
-def span(line, i, nxt):
-    # from the token to the first unquoted ; && || | ) (outside any $( ) the span opened), an unquoted
-    # ` #` comment, an unescaped backtick (any quote state), the next token, or the end of the joined line.
-    # Quote state starts unquoted at the token.
-    q, j, d = None, i, 0
+def span(line, i, nxt, fence):
+    # From the token to the first unquoted ; && || | ) or ` #` outside any substitution, an unescaped
+    # backtick outside a fence (inline code), the next token, or the end of the joined line. `$(`, `$((`,
+    # `(` and, inside a fence, a backtick open a substitution level (a quote state is saved per level);
+    # a backslash escapes the next character outside single quotes. Returns (span, depth-0 text): a pin
+    # that only appears inside a substitution aborts that subshell, never the arm.
+    q, j, stack, top = None, i, [], []
     while j < nxt:
-        c = line[j]
+        c, d0 = line[j], not stack
         if c == "`" and (j == 0 or line[j - 1] != "\\"):
-            break
-        if q:
-            if c == q:
+            if not fence:
+                break
+            if q != "'":
+                if stack and stack[-1][0] == "`":
+                    q = stack.pop()[1]
+                else:
+                    stack.append(("`", q)); q = None
+                j += 1; continue
+        if q == "'":
+            if c == "'":
+                q = None
+        elif c == "\\":
+            if d0:
+                top.append(line[j:j + 2])
+            j += 2; continue
+        elif line.startswith("$(", j):
+            stack.append(("(", q)); q = None; j += 2; continue
+        elif q == '"':
+            if c == '"':
                 q = None
         elif c in "\"'":
             q = c
-        elif line.startswith("$(", j):
-            d += 1; j += 2; continue
-        elif c == ")" and d > 0:
-            d -= 1
-        elif d == 0 and (c in ";|)" or line.startswith("&&", j) or (c == "#" and j > 0 and line[j - 1] in " \t")):
+        elif c == "(":
+            stack.append(("(", None)); j += 1; continue
+        elif c == ")" and stack and stack[-1][0] == "(":
+            q = stack.pop()[1]; j += 1; continue
+        elif d0 and (c in ";|)" or line.startswith("&&", j) or (c == "#" and j > 0 and line[j - 1] in " \t")):
             break
+        if d0:
+            top.append(c)
         j += 1
-    return line[i:j]
+    return line[i:j], "".join(top)
 for rel in rels:
     p = os.path.join(root, rel)
     if not os.path.isfile(p):
         print("MISSING\t" + rel); continue
     with open(p, encoding="utf-8") as fh:
         text = fh.read()
-    for n, line in joined(text):
+    for n, line, fence in joined(text):
         hits = [m.start() for m in tok.finditer(line)]
         for k, i in enumerate(hits):
-            s = span(line, i, hits[k + 1] if k + 1 < len(hits) else len(line))
+            s, top = span(line, i, hits[k + 1] if k + 1 < len(hits) else len(line), fence)
             if auto.search(s):
-                print("ARM\t%s\t%d\t%s" % (rel, n, s.replace("\t", " ")))
+                print("ARM\t%s\t%d\t%s\t%s" % (rel, n, top.replace("\t", " "), s.replace("\t", " ")))
 PY
   local rc=$?; (( rc == 0 )) || return 3
 }
@@ -119,11 +150,11 @@ run_root() {
 
   # A1 -- every arm span carries the H pin.
   ledger+=(A1)
-  while IFS=$'\t' read -r kind rel n s; do
+  while IFS=$'\t' read -r kind rel n top s; do
     [[ "$kind" == ARM ]] || continue
     per_file[$rel]=$(( ${per_file[$rel]:-0} + 1 ))
     c=$(grep -o -- '--match-head-commit' <<<"$s" | wc -l)
-    if [[ "$s" != *'--match-head-commit "${H:?'* ]]; then echo "FAIL[A1] $rel:$n arm without the \${H:?} pin: $s"; f=1
+    if [[ "$top" != *'--match-head-commit "${H:?'* ]]; then echo "FAIL[A1] $rel:$n arm without the \${H:?} pin outside a substitution: $s"; f=1
     elif (( c != 1 )); then echo "FAIL[A1] $rel:$n arm with $c --match-head-commit flags (want 1): $s"; f=1; fi
   done <<<"$out"
 
@@ -172,7 +203,7 @@ run_root() {
   if [[ ! -f "$root/$SYNC" ]]; then echo "FAIL[A5] missing $SYNC"; f=1
   else
     c=$(scan "$root" "$SYNC") || { echo "INSTRUMENT scanner (python) failed on $SYNC"; return 2; }
-    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
+    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n _ s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
     c=$(grep -E '^[[:space:]]*tag dequeued 13 ' "$root/$SYNC")
     if [[ -z "$c" ]]; then echo "FAIL[A5] no kind=dequeued message line"; f=1
     else
@@ -183,10 +214,21 @@ run_root() {
   if [[ ! -f "$root/$MQJ" ]]; then echo "FAIL[A5] missing $MQJ"; f=1
   else
     c=$(scan "$root" "$MQJ") || { echo "INSTRUMENT scanner (python) failed on $MQJ"; return 2; }
-    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
+    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n _ s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
     c=$(grep -E '^[[:space:]]*die "PR #\$PR is not in the merge queue and has no auto-merge armed' "$root/$MQJ")
     if [[ -z "$c" ]]; then echo "FAIL[A5] no not-armed die line in $MQJ"; f=1
     else [[ "$c" == *"$LINK"* ]] || { echo "FAIL[A5] $MQJ not-armed message does not name $LINK"; f=1; }; fi
+  fi
+  if [[ ! -f "$root/$MON" ]]; then echo "FAIL[A5] missing $MON"; f=1
+  else
+    c=$(scan "$root" "$MON") || { echo "INSTRUMENT scanner (python) failed on $MON"; return 2; }
+    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n _ s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
+    c=$(grep -F 'AUTO-MERGE NOT ARMED' "$root/$MON" | grep -F 'printf')
+    if [[ -z "$c" ]]; then echo "FAIL[A5] no not-armed printf line in $MON"; f=1
+    else
+      [[ "$c" == *"plugins/soleur/skills/review/references/$LINK"* ]] || { echo "FAIL[A5] $MON not-armed line does not name $LINK by full path"; f=1; }
+      [[ "$c" == *"$SETTLE_PATH"* ]] || { echo "FAIL[A5] $MON not-armed line does not name $SETTLE_PATH"; f=1; }
+    fi
   fi
 
   # A6 -- tombstone: the deleted exempt arm's tokens appear nowhere under plugins/soleur/skills/.
@@ -194,23 +236,35 @@ run_root() {
   c=$(cd "$root" && grep -rnE -- "$TOMB_RE" plugins/soleur/skills/); rc=$?
   (( rc <= 1 )) || { echo "INSTRUMENT grep failed on A6"; return 2; }
   [[ -z "$c" ]] || { while IFS= read -r l; do echo "FAIL[A6] exempt-arm token: $l"; done <<<"$c"; f=1; }
+  for rel in "${SITES[@]}" "${LINK_ONLY[@]}" "$CANON"; do
+    [[ -f "$root/$rel" ]] || continue
+    c=$(grep -niE -- "$TOMB_PROSE_RE" "$root/$rel"); rc=$?
+    (( rc <= 1 )) || { echo "INSTRUMENT grep failed on A6 prose ($rel)"; return 2; }
+    [[ -z "$c" ]] || { while IFS= read -r l; do echo "FAIL[A6] exempt-arm prose: $rel:$l"; done <<<"$c"; f=1; }
+  done
 
   # A7 -- the hatch: exactly two readiness fences (step 2, carryover), each with fetch, check, tie, then readiness.
   ledger+=(A7)
   if [[ ! -f "$root/$SETTLE" ]]; then echo "FAIL[A7] missing $SETTLE"; f=1
   else
-    got=$(FETCH="$SETTLE_FETCH" PLACE="$SETTLE_PLACE" TIE="$SETTLE_TIE" python3 -I - "$root/$SETTLE" <<'PY'
+    got=$(FETCH="$SETTLE_FETCH_LINE" PLACE="$SETTLE_PLACE" TIE="$SETTLE_TIE_LINE" python3 -I - "$root/$SETTLE" <<'PY'
 import os, re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
-want = [os.environ["FETCH"], os.environ["PLACE"], os.environ["TIE"]]
+fetch, place, tie = os.environ["FETCH"], os.environ["PLACE"], os.environ["TIE"]
 fences = re.findall(r"^[ \t]*```bash\n(.*?)^[ \t]*```", text, re.S | re.M)
 ready = [b for b in fences if "admin-merge-ready.sh" in b and "gh pr merge" not in b]
 print("COUNT %d" % len(ready))
+def first(lines, ok):
+    return next((i for i, l in enumerate(lines) if ok(l)), -1)
 for k, b in enumerate(ready, 1):
-    pos = [b.find(w) for w in want] + [b.find("admin-merge-ready.sh")]
-    for w, p in zip(want, pos):
+    lines = [l.strip() for l in b.split("\n")]
+    want = [(fetch, first(lines, lambda l: l == fetch)), (place, first(lines, lambda l: l.startswith(place))),
+            (tie, first(lines, lambda l: l == tie)),
+            ("admin-merge-ready.sh", first(lines, lambda l: "admin-merge-ready.sh" in l and not l.startswith("#")))]
+    for w, p in want:
         if p < 0:
             print("BLOCK %d missing: %s" % (k, w))
+    pos = [p for _, p in want]
     if all(p >= 0 for p in pos) and pos != sorted(pos):
         print("BLOCK %d out of order" % k)
 PY
@@ -261,7 +315,7 @@ pass "real tree GREEN with ledger"
 
 # One read-only base copy of the site, canonical and script files; each row gets its own writable copy.
 BASE="$SANDBOX/base"
-for rel in "${SITES[@]}" "${LINK_ONLY[@]}" "$CANON" "$SYNC" "$MQJ"; do
+for rel in "${SITES[@]}" "${LINK_ONLY[@]}" "$CANON" "$SYNC" "$MQJ" "$MON"; do
   mkdir -p "$BASE/$(dirname "$rel")" && cp "$REPO_ROOT/$rel" "$BASE/$rel" || { echo "[FATAL] base copy of $rel" >&2; exit 2; }
 done
 chmod -R a-w "$BASE"
@@ -364,15 +418,37 @@ open(p, "w", encoding="utf-8").write(s[:j] + "true || {" + s[j + len(o):])' "$1/
 m21c() { edit_first "$1/$SETTLE" "   $SETTLE_PLACE" '   :'; }
 m21d() { edit_first "$1/$SETTLE" "$SETTLE_TIE" '[ "${H:?run the arm check in this call}" != "$SHA" ] || {'; }
 m21e() { edit_first "$1/$SETTLE" "$SETTLE_FETCH" 'git fetch -q origin "pull/<N>/head"; {'; }
+m21f() { edit_first "$1/$SETTLE" "   $SETTLE_TIE_LINE" "   # $SETTLE_TIE_LINE"; }
+m21g() { python3 -I -c '
+import sys
+p, o = sys.argv[1], sys.argv[2]; s = open(p, encoding="utf-8").read(); i = s.find(o); j = s.find(o, i + 1)
+if i < 0 or j < 0: sys.exit(1)
+open(p, "w", encoding="utf-8").write(s[:j] + o.replace("exit 4; }", "true; }") + s[j + len(o):])' "$1/$SETTLE" "$SETTLE_TIE_LINE" || { echo "[FATAL] m21g did not land" >&2; exit 2; }; }
+m21h() { edit_first "$1/$SETTLE" "   $SETTLE_TIE_LINE" "   true || $SETTLE_TIE_LINE"; }
+m21i() { edit_first "$1/$SETTLE" "   $SETTLE_TIE_LINE" "   echo '$SETTLE_TIE_LINE'"; }
+m21j() { edit_first "$1/$SETTLE" "   $SETTLE_FETCH_LINE" "   ${SETTLE_FETCH_LINE/exit 1; \}/true; \}}"; }
 m22a() { edit "$1/$CANON" '  && git merge-base --is-ancestor "$EV" "$H" \'$'\n' ''; }
 m22b() { edit "$1/$CANON" '  && R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \'$'\n' ''; }
 m22c() { edit "$1/$CANON" '|last // ""|' '|first // ""|'; }
+m22d() { edit "$1/$CANON" ' and ([scan("coverage=")]|length==1) and ([scan("unresolved-P1-P2=")]|length==1)' ''; }
+m22e() { edit "$1/$CANON" 'capture("^Review-Evidence: head=' 'capture("head='; }
+m23()  { edit "$1/$MON" "only through $SETTLE_PATH" 'only through ship/references/settle-then-admin-merge.md'; }
+m24a() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" 'gh pr merge `echo <number>` --squash --auto && \'$'\n'"$SS_LINE"; }
+m24b() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```bash'$'\n''gh pr merge `echo 7` --squash --auto'$'\n''```'; }
+m24c() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" 'gh pr merge $((7)) --squash --auto && \'$'\n'"$SS_LINE"; }
+m24d() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge $((PR)) --squash --auto'; }
+m24e() { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto $(echo --match-head-commit "${H:?run the arm check in this call}")'; }
+m24f() { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto "$(echo --match-head-commit "${H:?run the arm check in this call}")"'; }
+m16e() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "Exempt PRs re-arm directly. When it is armed, do not re-arm."; }
+m16f() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "Bot PRs are exempt from the arm check. When it is armed, do not re-arm."; }
 m17()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it first'; }
 m18()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it: gh pr merge $PR --squash --auto'; }
 h3() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge 7 --disable-auto'$'\n''gh pr merge "$N" --auto --squash --match-head-commit "${H:?x}"'; }
 h4() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''Run `gh pr merge` unlocked, or `gh pr merge <N> --squash`.'; }
 h5() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''See [the check](x/'"$LINK"').'$'\n\n''```bash'$'\n''# comment'$'\n''gh pr merge 9 --squash --auto --match-head-commit "${H:?x}"'$'\n''```'; }
 h6() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge 7 --squash --auto --match-head-commit "${H:?x}"'; }
+h8() { mkdir -p "$1/plugins/soleur/skills/community/scripts" && printf '%s\n' '# a non-exempt arm of the cap table' > "$1/plugins/soleur/skills/community/scripts/x.sh"; }
+h9() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```bash'$'\n''gh pr merge "$(echo 7)" --squash --auto --match-head-commit "${H:?x}" # see `x`'$'\n''```'; }
 h7() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh api -H=Accept:application/json repos/{owner}/{repo}/pulls/7'; }
 
 echo "== mutation rows"
@@ -409,18 +485,36 @@ row M21b A7 m21b 'BLOCK 2 missing: [ "${H:?'
 row M21c A7 m21c 'BLOCK 1 missing: # REPLACE THIS LINE'
 row M21d A7 m21d 'BLOCK 1 missing: [ "${H:?'
 row M21e A7 m21e 'BLOCK 1 missing: git fetch'
+row M21f A7 m21f 'BLOCK 1 missing: [ "${H:?'
+row M21g A7 m21g 'BLOCK 2 missing: [ "${H:?'
+row M21h A7 m21h 'BLOCK 1 missing: [ "${H:?'
+row M21i A7 m21i 'BLOCK 1 missing: [ "${H:?'
+row M21j A7 m21j 'BLOCK 1 missing: git fetch'
 row M22a A3 m22a 'merge-base --is-ancestor'
 row M22b A3 m22b 'rev-list --first-parent'
 row M22c A3 m22c '|last // ""'
+row M22d A3 m22d 'length==1'
+row M22e A3 m22e '^Review-Evidence: head='
+row M23 A5 m23 'monitor-pr-checks.sh not-armed line does not name plugins/soleur/skills/ship'
+row M24a A1 m24a 'product-roadmap/SKILL.md:'
+row M24b A1 m24b 'ship/SKILL.md:'
+row M24c A1 m24c 'product-roadmap/SKILL.md:'
+row M24d A1 m24d 'ship/SKILL.md:'
+row M24e A1 m24e 'outside a substitution'
+row M24f A1 m24f 'outside a substitution'
+row M16e A6 m16e 'Exempt PRs'
+row M16f A6 m16f 'exempt from the arm check'
 
-echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H)"
+echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H, non-exempt prose off-site, a fenced pinned arm with a substitution and a trailing comment)"
 row H3 GREEN h3
 row H4 GREEN h4
 row H5 GREEN h5
 row H6 GREEN h6
 row H7 GREEN h7
+row H8b GREEN h8
+row H9 GREEN h9
 
-MIN_CASES=41  # 36 mutation rows + 5 harness rows; raise it in the same edit that adds a row
+MIN_CASES=59  # 52 mutation rows + 7 harness rows; raise it in the same edit that adds a row
 echo
 echo "passes=$passes fails=$fails cases=$CASES_RUN"
 if (( CASES_RUN < MIN_CASES )); then printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2; exit 1; fi
