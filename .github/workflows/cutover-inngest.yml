@@ -156,6 +156,46 @@ jobs:
         env:
           DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'rollback' || inputs.op == 'resume') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
         run: echo "DOPPLER_TOKEN_INNGEST_ARM=$DOPPLER_TOKEN_INNGEST_ARM" >> "$GITHUB_ENV"
+      # #9927 step D2-2 / #12158 — the REPLACEMENT write token (design
+      # arm-token-replacement-design-12158.md, CTO rulings D1/D1b/D1c). It is an
+      # ENVIRONMENT secret on `inngest-cutover` — the main-only, required-reviewer-gated
+      # environment this job already declares for these two ops — so on an unbound `|| ''`
+      # dispatch it does not resolve at all (env-scoped secrets are unreachable with no
+      # environment bound), the strictly narrower delivery versus the arm token's repo
+      # scope. Same injection idiom as the arm export above: the `if:` is the delivery gate
+      # the census sees, the `&& secrets … || ''` ternary is the op-set parity anchor and a
+      # second mask, and $GITHUB_ENV carries the value into the run step. On every other
+      # dispatch this step is SKIPPED and the var stays unset.
+      - name: Export Inngest write token (gated ops only)
+        if: inputs.op == 'rollback' || inputs.op == 'resume'
+        env:
+          DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE: ${{ (inputs.op == 'rollback' || inputs.op == 'resume') && secrets.DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE || '' }}
+        run: echo "DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE=$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" >> "$GITHUB_ENV"
+      # The FIRST credential step of rollback and resume (D1c): an authenticated Doppler read
+      # with the NEW token, refusing with the named verdict `write_token_stale` — fail closed.
+      # Two refusal arms, one verdict: the environment secret is unset (never seeded, or the
+      # dispatch bound the '' arm — impossible in practice for these two ops, but the check
+      # states it) or it no longer authenticates against soleur-inngest/prd. A `-replace` of
+      # doppler_service_token.inngest_cutover_write mints a new key and leaves the environment
+      # secret stale; the remedy is re-running the staged relay script, then re-dispatching —
+      # never falling back to the arm token (D1: a missing secret must refuse, no legacy
+      # fallback to Tier A). No value is ever printed: the read target is DOPPLER_PROJECT, a
+      # non-secret config value.
+      - name: Write-token freshness check (gated ops only)
+        if: inputs.op == 'rollback' || inputs.op == 'resume'
+        # No env: — DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE arrives via $GITHUB_ENV from the export
+        # step above, so the environment secret's name appears on exactly one step (the
+        # op-set parity anchor the census and the G2 pins count).
+        run: |
+          if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
+            echo "::error::verdict=write_token_stale — DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty: the inngest-cutover environment secret did not resolve (approve the environment's required-reviewer gate; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing BEFORE any write."
+            exit 1
+          fi
+          if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
+            echo "::error::verdict=write_token_stale — the inngest-cutover environment secret no longer authenticates against soleur-inngest/prd (a -replace of doppler_service_token.inngest_cutover_write mints a new key and strands this secret). Re-run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh, then re-dispatch. Refusing BEFORE any write."
+            exit 1
+          fi
+          echo "::notice::write-token check OK — the inngest-cutover environment secret authenticates on soleur-inngest/prd."
       - name: Run cutover host op via webhook
         env:
           OP: ${{ inputs.op }}

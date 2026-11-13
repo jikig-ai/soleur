@@ -477,6 +477,7 @@ scripts/inngest-restart-age-gate	75	measured
 scripts/inngest-restart-poll-classify	125	measured
 scripts/inngest-soak-6178	22033	measured
 scripts/inngest-tls-soak-10136	1222	floor
+scripts/inngest-write-token-revisit-12738	1251	floor
 scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/jobs1-stopgap-7432	1222	floor
@@ -719,6 +720,7 @@ tests/scripts/registry-pull-path-health	1907	measured
 tests/scripts/registry-region-migrate-gate	556	measured
 tests/scripts/registry-replace-preflight	6628	measured
 tests/scripts/registry-restore-from-ghcr	12160	measured
+tests/scripts/relay-inngest-write-token-12158	1222	floor
 tests/scripts/rule-id-regex-parity	88	measured
 tests/scripts/rule-metrics-aggregate	2168	measured
 tests/scripts/scratch-residue	26346	measured

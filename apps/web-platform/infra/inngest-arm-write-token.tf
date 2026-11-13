@@ -159,3 +159,50 @@ resource "github_actions_secret" "doppler_token_inngest_arm" {
   secret_name     = "DOPPLER_TOKEN_INNGEST_ARM"
   plaintext_value = doppler_service_token.inngest_arm_write.key
 }
+
+# =============================================================================
+# #9927 step D2-2 / #12158 — the REPLACEMENT write token for op=rollback and op=resume
+# (design arm-token-replacement-design-12158.md; CTO rulings D1, D1b, D1c of 2026-11-06).
+# Same blast radius as the arm token above — read/write on the isolated soleur-inngest/prd
+# config, project and config BY REFERENCE so it builds the same dependency edge. The name is
+# distinct from "inngest-cutover-arm" per D1c. The gain over the arm token is DELIVERY ONLY:
+# this key is never published as a github_actions_secret (the TF App still cannot write
+# environment secrets — the 403 recorded above stands), so it surfaces ONLY as the sensitive
+# output below, and the staged relay script
+# knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh
+# copies it over stdin into the `inngest-cutover` GitHub ENVIRONMENT secret
+# DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE — a main-only, required-reviewer-gated environment. The
+# rollback and resume ops consume that environment secret (cutover-inngest.yml), narrowing
+# delivery from a repo secret resolvable on any pushed branch to a gated environment secret.
+#
+# The arm token above is NOT touched: it stays the live credential until the #12158 step-4
+# revoke change removes it, its secret, their two -target lines and the export step (the
+# owner-gated destroy then applies). This file is never deleted whole — it also defines the
+# inngest_cutover environment that still gates op=backup, rollback and resume.
+#
+# Rotation / staleness: `terraform apply -replace=doppler_service_token.inngest_cutover_write`
+# mints a new key and LEAVES THE ENVIRONMENT SECRET STALE — after a -replace, re-run the relay
+# script before re-dispatching op=rollback or op=resume. The workflow's write-token freshness
+# check refuses with verdict=write_token_stale until then (fail closed; the runbook records
+# the order: replace, then re-run the relay). Revoke of THIS token: remove this resource, its
+# -target line in apply-web-platform-infra.yml, the credential step in cutover-inngest.yml and
+# the census name, then an owner-gated destroy (or `doppler configs tokens revoke`) plus
+# `gh secret delete DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE --env inngest-cutover` — record date
+# and evidence on #12158. Revisit coverage: follow-through tracker #12738 and
+# scripts/followthroughs/inngest-write-token-revisit-12738.sh (the arm-token probe keeps
+# watching only the arm token).
+resource "doppler_service_token" "inngest_cutover_write" {
+  project = doppler_project.inngest.name         # by-reference (same dep edge as the arm token)
+  config  = doppler_environment.inngest_prd.slug # by-reference (NOT "prd")
+  name    = "inngest-cutover-write"              # distinct from "inngest-cutover-arm"
+  access  = "read/write"
+}
+
+# Read ONLY by the staged relay script via `terraform output -raw inngest_cutover_write_token`.
+# sensitive = true keeps the key out of every plan/apply log line; the value lands in the
+# R2-backed encrypted terraform.tfstate like the arm token's .key (same posture — D1c records
+# that keeping this key out of state buys nothing while the sibling keys are already there).
+output "inngest_cutover_write_token" {
+  value     = doppler_service_token.inngest_cutover_write.key
+  sensitive = true
+}

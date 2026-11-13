@@ -5063,3 +5063,18 @@ AFFECTED_SCRIPTS_HOST_KERNEL_CADENCE_12008_PATHS=(
   "knowledge-base/engineering/operations/runbooks/host-kernel-patch-cadence.md"
   "glob:apps/web-platform/infra/**.tf"
 )
+
+# tests/scripts/relay-inngest-write-token-12158 (#12158 D2-2) — the suite greps the staged
+# relay script's text at a spec path no name-stem convention reaches. The spec dir was
+# archived at ship; the dir-prefix edge also covers the suite's .env check-ignore ref, which
+# resolves to the dir itself (the .env file is gitignored, never tracked).
+AFFECTED_TESTS_SCRIPTS_RELAY_INNGEST_WRITE_TOKEN_12158_PATHS=(
+  ".github/workflows/cutover-inngest.yml"
+  "apps/web-platform/infra/inngest-arm-write-token.tf"
+  "knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/skills/operator-bootstrap/template.sh"
+  "scripts/cutover-inngest.sh"
+  "tests/scripts/test-relay-inngest-write-token-12158.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)

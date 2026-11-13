@@ -4353,6 +4353,52 @@ assert "#9927 G2 MUTATION: a one-line case arm '  newop) cmd ;;' is extracted as
 assert "#9927 G2 MUTATION: a one-line combined/quoted arm '  \"quoted-op\"|other-op) cmd ;;' yields both labels" \
   "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *other-op* && \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *quoted-op* ]]"
 
+# =============================================================================================
+# #9927 step D2-2 / #12158 — the NEW write path: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE, an
+# `inngest-cutover` ENVIRONMENT secret (main-only + required-reviewer). The arm token stays
+# exported until the step-4 revoke change but the rollback/resume arms now consume the new
+# variable, and the first credential step of those ops refuses write_token_stale fail-closed.
+# =============================================================================================
+G2W_TOK_LINE=$(grep -E '^[[:space:]]+DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:' "$_G2_YAML_CODE" | sed -n '1p' || true)
+G2W_TOK_SET=$(printf '%s' "$G2W_TOK_LINE" | _g2_ops)
+G2W_IF_LINE=$(awk '/- name: Export Inngest write token/{f=1;next} f && /^[[:space:]]+if:/{print;exit}' "$_G2_YAML_CODE")
+G2W_IF_SET=$(printf '%s' "$G2W_IF_LINE" | _g2_ops)
+G2W_CHK_BLOCK="$(mktemp)"; SCRATCH+=("$G2W_CHK_BLOCK")
+awk '/- name: Write-token freshness check/{f=1} f{print} /^      - name: Run cutover host op/{exit}' "$WF_YAML" > "$G2W_CHK_BLOCK"
+G2W_RB="$(mktemp)"; SCRATCH+=("$G2W_RB")
+awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$G2W_RB"
+G2W_RS="$(mktemp)"; SCRATCH+=("$G2W_RS")
+awk '/^            resume\)$/,/^              ;;$/' "$WF" > "$G2W_RS"
+_g2w_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oiE "secrets(\.|\[[^]]*)doppler_token_inngest_cutover_write" | wc -l | tr -d ' '; }
+assert "#9927 D2-2 the write-token secret is consumed EXACTLY once in the workflow (non-comment): the one scoped env ternary" \
+  "[[ \"\$(_g2w_secret_n '$WF_YAML')\" == 1 ]]"
+assert "#9927 D2-2 the write-token env ternary names EXACTLY the literal set: $_G2_TOKEN_OPS" \
+  "[[ '$G2W_TOK_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 D2-2 the write-token export step's own if: names EXACTLY the literal set: $_G2_TOKEN_OPS" \
+  "[[ '$G2W_IF_SET' == '$_G2_TOKEN_OPS' ]]"
+G2W_CHK_IF=$(awk '/- name: Write-token freshness check/{f=1;next} f && /^[[:space:]]+if:/{print;exit}' "$_G2_YAML_CODE")
+G2W_CHK_SET=$(printf '%s' "$G2W_CHK_IF" | _g2_ops)
+assert "#9927 D2-2 the freshness check step is gated to the same literal op set (extracted, not assumed)" \
+  "[[ '$G2W_CHK_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 D2-2 the freshness check refuses with the named verdict write_token_stale (both refusal arms)" \
+  "[[ \"\$(grep -c 'write_token_stale' '$G2W_CHK_BLOCK')\" -ge 2 ]]"
+assert "#9927 D2-2 the freshness check does an authenticated Doppler read with the NEW token BEFORE the op run step" \
+  "grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain' '$G2W_CHK_BLOCK'"
+assert "#9927 D2-2 the freshness check sits between the export step and the op run step" \
+  "awk '/- name: Export Inngest write token/{e=NR} /- name: Write-token freshness check/{c=NR} /- name: Run cutover host op/{r=NR} END{exit !(e && c && r && e<c && c<r)}' '$WF_YAML'"
+assert "#9927 D2-2 rollback) arm reads the NEW write token (non-empty extraction first)" \
+  "[[ -s '$G2W_RB' ]] && grep -qF 'DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE' '$G2W_RB'"
+assert "#9927 D2-2 resume) arm reads the NEW write token (non-empty extraction first)" \
+  "[[ -s '$G2W_RS' ]] && grep -qF 'DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE' '$G2W_RS'"
+assert "#9927 D2-2 neither rollback) nor resume) authenticates with the arm token any more" \
+  "! grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_ARM\"' '$G2W_RB' && ! grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_ARM\"' '$G2W_RS'"
+assert "#9927 D2-2 no terraform resource publishes the new key as a GitHub secret (static grep, D1c)" \
+  "! grep -rhE 'secret_name[[:space:]]*=[[:space:]]*\"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\"' apps/web-platform/infra/*.tf apps/*/infra/*.tf 2>/dev/null"
+assert "#9927 D2-2 the new token is declared read/write by-reference with a name distinct from inngest-cutover-arm" \
+  "grep -q 'name    = \"inngest-cutover-write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf) && grep -q 'access  = \"read/write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf)"
+assert "#9927 D2-2 non-vacuity: a widened write-token ternary is no longer equal to the literal set (judged RED)" \
+  "[[ \"\$(printf '%s' \"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE: \\\${{ (inputs.op == 'rollback' || inputs.op==\\\"backup\\\" || inputs.op == 'resume') && 1 }}\" | _g2_ops)\" != '$_G2_TOKEN_OPS' ]]"
+
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
@@ -4476,7 +4522,12 @@ _DISPATCHED=$((PASS + FAIL))
 # 965 -> 977 (+12) at the #9927 review round (this PR), measured from the STALE FLOOR FATAL line: Guard 2 hardening - arm-token
 #   consumption count==1, no `secrets: inherit`, tolerant op-literal extraction, one-line case-arm labels (live + mutation rows).
 # 977 -> 982 (+5, this PR's review fix round): bracket/lower-case arm readers, quoted inherit, toJSON(secrets) ban + live row.
-_EXACT_FLOOR=982
+# 982 -> 995 (+13) at #9927 step D2-2 / #12158 (this PR), measured: the D2-2 block — write-token
+#   consumption-once, env ternary + export if: literal sets, freshness-check gate set + write_token_stale
+#   + authenticated-read + step-ordering, rollback)/resume) new-variable reads + no arm-token auth, the
+#   static-grep no-github-secret pin, the by-reference read/write declaration pin, and the widened-set
+#   non-vacuity row.
+_EXACT_FLOOR=995
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

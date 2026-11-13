@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-12T20:03:04Z
+# generated-at=2026-11-13T16:54:57Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -479,6 +479,7 @@ scripts/inngest-restart-age-gate	1
 scripts/inngest-restart-poll-classify	3
 scripts/inngest-soak-6178	7
 scripts/inngest-tls-soak-10136	1
+scripts/inngest-write-token-revisit-12738	5
 scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/jobs1-stopgap-7432	1
@@ -721,6 +722,7 @@ tests/scripts/registry-pull-path-health	4
 tests/scripts/registry-region-migrate-gate	3
 tests/scripts/registry-replace-preflight	5
 tests/scripts/registry-restore-from-ghcr	3
+tests/scripts/relay-inngest-write-token-12158	5
 tests/scripts/rule-id-regex-parity	3
 tests/scripts/rule-metrics-aggregate	8
 tests/scripts/scratch-residue	1
