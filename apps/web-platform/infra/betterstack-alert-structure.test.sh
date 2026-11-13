@@ -11,7 +11,7 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 21 alerts and 21 explorations (CENSUS_FLOOR_*; the #12180 canary pair was retired by #12189), every enumerated header yields a block (a header
+#   1-4   census: at least 22 alerts and 22 explorations (CENSUS_FLOOR_*; the #12180 canary pair was retired by #12189; #10538 added inngest_registry_empty), every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
@@ -97,9 +97,9 @@ REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert 
 OPTIONAL_ATTRS=""
 # 21 = the 18 permanent alerts plus the three session-relay probe alerts (#12167). The throwaway egress_gw_probe_silent_canary
 # pair (#12180) took these floors to 19 while it lived; #12189 deleted it. The floors are -ge, so the exact pins elsewhere carry growth.
-CENSUS_FLOOR_ALERTS=21
-CENSUS_FLOOR_EXPLORATIONS=21
-GUARD_CENSUS_FLOOR=18
+CENSUS_FLOOR_ALERTS=22
+CENSUS_FLOOR_EXPLORATIONS=22
+GUARD_CENSUS_FLOOR=19
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
 JOB_IF_ALLOWED="needs.detect-changes.outputs.pr_duplicate != 'true'"

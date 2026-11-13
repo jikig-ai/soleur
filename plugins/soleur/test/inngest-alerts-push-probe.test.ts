@@ -44,7 +44,7 @@ describe("inngest-alerts-push-probe", () => {
   });
 
   it("pins TARGETS breadth AND decoy refusal: nested-block and heredoc `push = true` lines cannot arm", () => {
-    // Mutating inngest_consumer (target index 4 of 6) proves the probe walks every resource in
+    // Mutating inngest_consumer (target index 4 of 7) proves the probe walks every resource in
     // TARGETS — a shrunken list would read the real-root arm green here too. The planted decoys
     // (a nested block and a heredoc body each carrying `push = true`) would arm a comment- or
     // heredoc-blind scanner; the lib's codeView + topLevelAttributes path refuses both.
@@ -64,6 +64,27 @@ describe("inngest-alerts-push-probe", () => {
     expect(run([dir])).toMatchObject({
       rc: 1,
       out: "PUSH_MISSING betteruptime_heartbeat.inngest_consumer",
+    });
+  });
+
+  it("covers the seventh target (#10538): the registry-empty alert's push reverting reds the probe", () => {
+    // The last TARGETS entry: a list that stops at six would read this mutant PUSH_ARMED.
+    const dir = mkdtempSync(join(tmpdir(), "push-probe-registry-empty-"));
+    for (const f of readdirSync(REAL).filter((n) => n.endsWith(".tf"))) {
+      let body = readFileSync(join(REAL, f), "utf8");
+      if (f === "betterstack-logs-alerts.tf") {
+        const before = body;
+        body = body.replace(
+          /(resource "logtail_exploration_alert" "inngest_registry_empty" \{[\s\S]*?)push\s*=\s*true/,
+          "$1push           = false",
+        );
+        expect(body).not.toBe(before); // the mutation must land, or this arm proves nothing
+      }
+      writeFileSync(join(dir, f), body);
+    }
+    expect(run([dir])).toMatchObject({
+      rc: 1,
+      out: "PUSH_MISSING logtail_exploration_alert.inngest_registry_empty",
     });
   });
 });

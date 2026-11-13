@@ -652,6 +652,8 @@ jobs:
               -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
+              -target=logtail_exploration.inngest_registry_empty \
+              -target=logtail_exploration_alert.inngest_registry_empty \
               -target=logtail_exploration.claude_cost_daily_burn \
               -target=logtail_exploration_alert.claude_cost_daily_burn \
               -target=logtail_exploration.workspaces_luks_deadman_fired \

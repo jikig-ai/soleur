@@ -1487,7 +1487,8 @@ Read the last `OK`/`SUSPECT` line. On `SUSPECT`, treat the QUIESCED notice as un
 Status: **adopting** ([ADR-294](../architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md)). Everything below is
 **inert at merge**: the resolver's default is still `http://10.0.1.40:8288`, nothing reads the new secrets until the host is replaced,
 and the flag does not exist until the owner-gated flip. This section covers **leg 1 only** (the web app's sends and reads to the
-scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10, tracked as #10538) and the Cloudflare step-call leg (#10479) are not fixed
+scheduler on `:8288`). The `sdk_url` poll (#10538: declared as the public serve URL by remedy (c), live only after the owner's `inngest-host-replace`, see
+[Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c)) and the Cloudflare step-call leg (#10479) are not fixed
 here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run. One failure has no no-SSH remedy at all and is escalated instead of improvised: a non-empty directory or a root-owned `/mnt/data/inngest-link` (see "CA on web hosts", #10557).
 
 ### What the pieces are
@@ -2136,12 +2137,14 @@ window.
    *Superseded 2026-11-02:* "The owner pastes the run's evidence block and the printed `S5-A5-DONE` line on #10136 as their own comment."
 6. The legal bridge date: from 2026-11-09 the follow-through probe on #11218 also asks for A5 with the exact dispatch lines, so
    2026-11-12 is not missed. The 2026-12-10 extension is not recorded in the legal records (unverified) and is not decided here.
+   *Ruled 2026-11-13 (CLO):* the 2026-12-10 conditional extension is dead; the owner acceptance recorded by PR #12733 runs
+   to 2026-11-20 only (see [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c)).
 
 ### Tracked follow-ups (filed 2026-10-19)
 
 | Issue | What it tracks |
 |---|---|
-| #10538 | the `sdk_url` poll (leg 2): a web-side listener or poll removal, merge by 2026-11-12, accepted-risk row lapses 2026-12-10 |
+| #10538 | the `sdk_url` poll (leg 2). Ruled 2026-11-13 (CTO and CLO): remedy (c), the poll URL becomes the public serve URL `https://app.soleur.ai/api/inngest` (a web-side listener and poll removal were rejected); declared in `inngest-host.tf`, live at the owner's `inngest-host-replace`. The 2026-12-10 extension is dead (CLO): the owner acceptance runs to 2026-11-20. See [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c) |
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
 | #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 runs under the owner's per-command go) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
@@ -2608,6 +2611,78 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 4. Restart the web platform so it re-reads — re-run `web-platform-release.yml`. The container
    swap IS the restart; `ci-deploy.sh` deliberately rejects `restart web-platform` because a
    web-platform restart is docker-level, not systemd-level. No host login is involved.
+
+## Registry-empty alert (#10538)
+
+`logtail_exploration_alert.inngest_registry_empty` (`soleur-inngest-registry-empty-prd`, defined in
+`apps/web-platform/infra/betterstack-logs-alerts.tf`, drift guard `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`).
+Email and push; `higher_than 0` over 900 s, checked every 300 s, missing data counts as zero, recovery 7200 s.
+
+**What fires it.** One hourly `SOLEUR_INNGEST_SERVER_PROBE` row from the dedicated host (`host_role=dedicated`) that is
+serving (`server_active=active`, `http_code=200`), past the uptime floor (`uptime_s` above 900, the host's `/proc/uptime`),
+and whose `registry_fns` is NOT a positive integer: `0` (the server answers and owns nothing), `__UNREADABLE__` (the
+registry query failed), or the field missing. Leg B is the same field row on the vector-down phone-home envelope
+(`shipper='cloud-init-phone-home'`, `stage='inngest-server-probe-vector-down'`), read from `.detail`. After the owner's
+`inngest-host-replace` the most likely cause is the public `sdk_url` poll failing (see the next section).
+
+**What does not fire it, by design.** A not-serving row (`http_code` other than 200, or `server_active` other than `active`)
+belongs to the probe heartbeat `betteruptime_heartbeat.inngest_server_probe` ([Arming the probe heartbeat (#9703)](#arming-the-probe-heartbeat-9703)).
+The first probe after a replace is under the uptime floor and stays quiet. `uptime_s=unknown` reads 0 and stays quiet.
+A **stale non-zero** registry is not detected: the registry persists in Postgres across a replace, so a broken poll most
+likely still shows the old count. #12742 (the sync-evidence probe field) closes that and must merge before the replace.
+
+**Triage, read-only, no SSH.**
+
+1. Read the dedicated host's rows, newest first: `scripts/inngest-host-state.sh` (journal and unit state through the
+   journald to Vector to Better Stack channel, pinned to the dedicated host), and the probe row itself:
+   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE`,
+   decoded with the `jq` in that script's header; keep `host_role=dedicated` rows and read `registry_fns=`, `uptime_s=`,
+   `http_code=`, `boot_id=` per row. A phone-home row (`.shipper`, `.stage` as above) carries the field row in `.detail`.
+2. Count instead of reading when the window is long. Single-quote the SQL (the script substitutes `$BS_TABLE` and
+   `$BS_TABLE_S3`; double quotes expand them, empty, in your shell) and UNION the hot table with the archive, or the count
+   is short:
+   `SELECT count() FROM (SELECT raw FROM remote($BS_TABLE) WHERE dt > now() - INTERVAL 6 HOUR UNION ALL SELECT raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1 AND dt > now() - INTERVAL 6 HOUR) WHERE JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe' AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0 AND NOT match(JSONExtractString(raw, 'message'), 'registry_fns=[1-9][0-9]* ')`.
+3. Replace-window reading: a fresh `boot_id` with `registry_fns=0` in the first rows after an `inngest-host-replace`,
+   while `uptime_s` is still small, is the server waiting on its first sync; a page means the floor was passed and it
+   still owns nothing. Check the web side next: `resolve-origin` rejection rows and the app's `/api/inngest` responses in
+   Better Stack, and whether `https://app.soleur.ai/health` is green.
+4. Re-registration: `curl -fsS -X PUT https://app.soleur.ai/api/inngest` makes the app register itself with the server
+   (the same call that recovered crons on 2026-06-11, see `app/api/inngest/route.ts`). It writes the scheduler's app
+   record, so it runs under the go that covers the replace, not as a read. A `modified:true` answer followed by a
+   probe row with a positive `registry_fns` resolves the incident (recovery 7200 s, two emissions).
+
+## Public sdk_url poll (#10538 remedy (c))
+
+Ruled 2026-11-13 (CTO and CLO, `knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`):
+the dedicated host's `--sdk-url` becomes the public serve URL `https://app.soleur.ai/api/inngest` (ADR-100 Decision 1 as
+amended), `--poll-interval` stays 60. The poll then takes the same path as the step calls: public-CA TLS to the Cloudflare
+edge, then `strict` to the origin (ADR-321). The value is declared in `apps/web-platform/infra/inngest-host.tf` and pinned by
+Guard 4 of `exec-placement-forward.test.ts`; `hcloud_server.inngest` is not a push-apply target, so the **live host keeps
+polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-replace`**. That replace is the gate (no flag).
+
+**Preconditions, in order** (the CLO's conditions; each is a recorded measurement, not an assumption):
+
+1. The #10479 cleanup apply is measured (`strict` on the adopted rule) and #10479 is closed.
+2. #12742's sync-evidence probe field is merged (the registry-empty alert above cannot see a stale non-zero registry).
+3. Hop 1 (the Inngest server to the Cloudflare edge, certificate check) is measured against the deployed build.
+4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
+   acceptance recorded by PR #12733 runs to 2026-11-20 only).
+
+**Post-replace checks, read-only:**
+
+- `registry_fns` on the new host's probe rows is a positive integer once `uptime_s` passes 900 (the alert above pages
+  otherwise), and #12742's new field shows a recent sync.
+- If the registry is empty, re-register with the explicit `PUT https://app.soleur.ai/api/inngest` (step 4 above).
+- The stored app `url` rows read through the host-local GQL the probe already uses: Inngest v1.45.1 `pollSDKs` pings
+  EVERY stored `app.Url`, not only the `--sdk-url` seed, so a surviving `http://10.0.1.10:3000/api/inngest` row would keep
+  the plaintext poll alive after the replace. Leg 2 counts as closed only when that is measured.
+- The private-IP rejections logged by `apps/web-platform/lib/auth/resolve-origin.ts` for `10.0.1.10:3000` stop: a Better Stack
+  `SELECT count()` of those rows falls to 0 after the replace.
+- Watch the #7228 double-fire probe after the replace: the sync checksum includes the URL, so the first sync is not
+  deduplicated.
+
+The carrier comment in `inngest-bootstrap.sh` ("polls the co-located web-platform") stays out of date until that file next
+changes for a real reason (it is an image carrier; a comment-only edit mints a no-op image release).
 
 ## Arming the probe heartbeat (#9703)
 
