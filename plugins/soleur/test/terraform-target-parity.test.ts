@@ -9625,9 +9625,13 @@ function relayHelloHaltViolations(code: string): string[] {
   if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
   const text = echoes.join("\n");
   if (/luks/i.test(text)) v.push("the hello-key HALT text carries LUKS wording (it is a relay outage, not data loss)");
-  for (const need of ["[skip-web-platform-apply]", "_PREVIOUS", "relay outage", "UNWEDGE"]) {
+  // #8211: the "Intended rotation" line names the built verifier half (the accept-only slot, ADR-323 Decision 9) and the
+  // replace route #12538; it must no longer name the unbuilt `_PREVIOUS` design. "Never a -replace" is the clause that
+  // keeps the new key out of Tier-A-readable state; it was dropped once for bytes, so it is pinned here.
+  for (const need of ["[skip-web-platform-apply]", "accept-only slot (ADR-323 Decision 9)", "#12538", "Never a -replace", "relay outage", "UNWEDGE"]) {
     if (!text.includes(need)) v.push(`the hello-key HALT text lacks '${need}'`);
   }
+  if (text.includes("_PREVIOUS")) v.push("the hello-key HALT text still names the unbuilt _PREVIOUS design");
   return v;
 }
 
