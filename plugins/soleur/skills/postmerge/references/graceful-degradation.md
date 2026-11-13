@@ -8,8 +8,8 @@ carried in every `soleur:postmerge` body (ADR-229).
 | Missing Prerequisite | Behavior |
 |---------------------|----------|
 | No production URL | Skip health check with warning |
-| No `SENTRY_AUTH_TOKEN` | Skip the Sentry cron monitor check with warning (it is the monitors-only token; the error-count delta does not use it — its issue GET 403s, re-measured 2026-11-13) |
-| No `SENTRY_ISSUE_RW_TOKEN` | Skip the auto-resolve PUT only; the error-count-delta GET runs on `SENTRY_ISSUE_RO_TOKEN`. With neither RO nor RW set, the error-count delta is `SKIPPED`; recommend manual resolution as today |
+| No `SENTRY_AUTH_TOKEN` and no `SENTRY_API_TOKEN` | Skip the Sentry cron monitor check with warning (Phase 3.5 reads `SENTRY_AUTH_TOKEN`, falling back to `SENTRY_API_TOKEN`; both are monitors-only — the error-count delta does not use them, their issue GET 403s, re-measured 2026-11-13) |
+| No `SENTRY_ISSUE_RW_TOKEN` | Skip the auto-resolve PUT only; the error-count-delta GET runs on `SENTRY_ISSUE_RO_TOKEN` (on RW if RO is absent). With neither RO nor RW set, the error-count delta is `SKIPPED`; recommend manual resolution as today |
 | Sentry API unreachable | Skip Sentry cron monitor check with warning |
 | No Sentry issue identified in PR/linked issue | Skip error-count delta silently (nothing to measure) |
 | Sentry issue not found via API | Skip error-count delta with warning |

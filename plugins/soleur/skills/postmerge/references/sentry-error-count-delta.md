@@ -29,9 +29,11 @@ Loaded by [postmerge SKILL.md](../SKILL.md) Phase 3.6 when the PR body or linked
 > every token from Doppler `soleur/prd`: `SENTRY_ISSUE_RO_TOKEN` 200,
 > `SENTRY_ISSUE_RW_TOKEN` 200, `SENTRY_IAC_AUTH_TOKEN` 200, `SENTRY_AUTH_TOKEN` 403,
 > `SENTRY_API_TOKEN` 403; on `/monitors/` all five returned 200. So `SENTRY_AUTH_TOKEN`
-> is the Phase 3.5 monitors-only token. For any issue or event read — this GET, or an
-> org-level issue search — use `SENTRY_ISSUE_RO_TOKEN` first; `SENTRY_IAC_AUTH_TOKEN`
-> (admin-scoped, ADR-031) is the last-resort read only, never a write here.
+> is the Phase 3.5 monitors-only token. This phase's GET stays on the RO → RW ladder
+> below and is `SKIPPED` without them (the clarification above still holds: never widen it
+> to an admin-scoped token). For a MANUAL org-level issue search outside this phase, use
+> `SENTRY_ISSUE_RO_TOKEN` first; `SENTRY_IAC_AUTH_TOKEN` (admin-scoped, ADR-031) is the
+> last-resort read only, never a write.
 
 ```bash
 # ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body

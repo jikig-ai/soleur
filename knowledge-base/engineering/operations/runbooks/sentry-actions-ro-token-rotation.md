@@ -111,26 +111,40 @@ The same script rotates the IaC token with `--profile iac`. The integration is
 Integration", and the script's `iac` `EXPECTED_SCOPES` is the executable copy. The browser rung
 and the `get value`-only discipline above apply unchanged.
 
-1. **Dry run first, zero writes.** Against the local sentinel page:
-   `bash scripts/rotate-sentry-actions-ro-token.sh capture --profile iac --selector '#tok' --dry-run --expect ZZQP-SENTINEL-7947`.
-   It also checks Doppler login and both target configs read-only. Doppler has no no-store mode,
-   so the Doppler store form is pinned by the script's test, not by the dry run.
+1. **Dry run first, zero writes.** Serve and open the sentinel page exactly as in Recipe step 1,
+   then `bash scripts/rotate-sentry-actions-ro-token.sh capture --profile iac --selector '#tok' --dry-run --expect ZZQP-SENTINEL-7947`.
+   It also checks Doppler login, both target configs and that the key is readable in both,
+   read-only. Doppler has no no-store mode, so the Doppler store form is pinned by the script's
+   test, not by the dry run.
 2. **Mint.** `agent-browser --headed --session-name sentry open https://jikigai-eu.sentry.io/settings/developer-settings/`
    → `iac-terraform-prd` → Tokens → *New Token*.
 3. **Capture → verify → store → shred, one process:**
    `bash scripts/rotate-sentry-actions-ro-token.sh capture --profile iac --selector 'input[aria-label="Generated token"]'`.
    After exact scope equality and one 200 per IaC consumer class, it stores on stdin to three
-   targets, in order: the GitHub repo secret `SENTRY_IAC_AUTH_TOKEN`, Doppler `soleur/prd` and
-   Doppler `soleur/prd_terraform`. Doppler branch configs here are independent copies, not
-   inherited, so both are written and each is read back by digest. Other `prd_*` configs that
-   carry the key are printed as `STALE COPIES` and are not written (removal: #12740).
-4. **Prove, then revoke.** Only after the script prints `all three targets hold the new token`:
-   `gh workflow run scheduled-sentry-alert-drift.yml` and `gh workflow run scheduled-terraform-drift.yml`,
-   then watch each by run id. Revoke only when the alert-drift run concludes `success` **and** the
-   terraform-drift run's Sentry leg log shows no Sentry 401/403/auth error. That workflow is
-   plan-only and its exit 2 means drift, so a red run for a non-Sentry cause does not block. Then
-   revoke the previous token in the `iac-terraform-prd` Tokens panel, identified by its masked
-   last four; `agent-browser get count '<token row selector>'` must be 1.
+   targets, in order: the GitHub repo secret `SENTRY_IAC_AUTH_TOKEN` (proven by a changed
+   `updatedAt`), Doppler `soleur/prd` and Doppler `soleur/prd_terraform` (each read back by
+   digest). A Doppler branch config either inherits the root's value or holds its own copy, so
+   `prd_terraform` is written explicitly. The script then classifies every other `prd_*` config
+   that lists the key by digest: `follow soleur/prd` (now new) or `own copy` (still the old value;
+   no repo code reads it; removal is #12740). Exit 3 means a partial store: read the report.
+4. **Prove, then revoke.** Only after the script prints `all three targets hold the new token … at
+   <UTC time>`: run `gh workflow run scheduled-sentry-alert-drift.yml` and
+   `gh workflow run scheduled-terraform-drift.yml`, and take each run id from the URL that
+   `gh workflow run` prints (else the newest `--event workflow_dispatch` run created after that UTC
+   time — a run that started earlier proves the OLD token). Both read only the GitHub secret; the
+   Doppler copies are already proven by digest. Revoke only when BOTH hold:
+   - alert-drift: the log does NOT contain `the fidelity probe could not complete` or
+     `missing required secret`. A drift verdict (`sentry_alert live fidelity FAILED`, red run)
+     still proves the token authenticated, so drift does not block the revoke.
+   - terraform-drift: the `web-platform/sentry` leg's log contains `No drift detected in
+     web-platform/sentry` or `Drift detected in web-platform/sentry`. It blocks on
+     `Terraform plan failed in web-platform/sentry` or `sentry_iac_token_absent`. The plan output
+     itself never reaches the log, so do not search it for a 401. Command:
+     `JOB=$(gh run view "$RUN" --json jobs -q '.jobs[] | select(.name | contains("web-platform/infra/sentry")) | .databaseId'); gh run view --job "$JOB" --log | grep -E 'No drift detected in web-platform/sentry|Drift detected in web-platform/sentry|Terraform plan failed in web-platform/sentry|sentry_iac_token_absent'`.
+
+   Then, in the `iac-terraform-prd` Tokens panel, keep the row whose masked last four the script
+   printed and revoke every other row (the previous token, plus any token from an earlier
+   partial run); the panel must then show exactly one token row.
 
 ## Failure modes
 
@@ -146,6 +160,6 @@ and the `get value`-only discipline above apply unchanged.
 | A probe posts TRANSIENT after the dispatch, or every Sentry-backed probe posts 401 daily under a green run | 401: the stored value is wrong (JSON-encoded, truncated) or the integration/token was deleted dashboard-side; 403: a scope gap | 401: re-run the chain (the normalise step asserts shape), recreating the integration if the panel is empty; 403: the scope row above |
 | The sweeper run is red with `REQUIRED SECRET MISSING` | A tracker directive names a secret the workflow does not bind (retired name, misspelling, or an empty binding) | Rewrite the directive's `secrets=` clause (`gh issue edit <n> --body-file …`) or fix the workflow `env:`; the comment on the tracker names which |
 | `[WARN] shred … failed` on exit | Non-tmpfs `/tmp` or a permission change | Remove the named directory by hand; the plaintext lived seconds under 0700 |
-| `iac`: `HOLD THE NEW TOKEN … / UNVERIFIED … / STILL HOLD THE OLD TOKEN …` then `do NOT revoke the old token yet` | A store failed after an earlier target took the new value, so both tokens are live somewhere | Do not revoke anything yet. Mint a fresh token and re-run the chain (it rewrites all three targets), then revoke both the old token and the reported new one by their last four |
-| `iac`: `[FATAL] doppler preflight failed (…) -- nothing was stored` | Doppler login expired, or `soleur/prd` / `soleur/prd_terraform` is missing or reshaped | `doppler login`, or check the config names; with `--from-file`, shred the named source file or re-run with it |
-| `iac`: the terraform-drift Sentry leg shows a Sentry 401/403/auth error after a store | The stored value is wrong or lacks a scope a Terraform resource needs | Do not revoke the old token; re-run the chain, and check the scope set against ADR-031 |
+| `iac`, exit 3 (or 130/143 after `interrupted during the store`): `HOLD THE NEW TOKEN … / UNVERIFIED … / UNCHANGED BY THIS RUN …` then `do NOT revoke the old token yet` | A store failed after an earlier target took, or may have taken, the new value, so more than one token may be live | Do not revoke anything yet. Mint a fresh token and re-run the chain (it rewrites all three targets), then keep only the newest row in the Tokens panel. If the SAME target fails twice, fix access to it (e.g. Doppler write permission on that config) before minting again |
+| `iac`: `[FATAL] doppler preflight failed (…) -- nothing was stored` | Doppler login expired, `soleur/prd` / `soleur/prd_terraform` is missing or reshaped, or the key is unreadable in one of them | `doppler login`, or check the config names and access; with `--from-file`, shred the named source file or re-run with it |
+| `iac`: the terraform-drift `web-platform/sentry` leg prints `Terraform plan failed in web-platform/sentry` after a store | The stored value is wrong or lacks a scope a Terraform resource needs (or an unrelated plan failure) | Do not revoke the old token; read the leg's `[ERROR]` notification for the cause, re-run the chain if it is auth, and check the scope set against ADR-031 |
