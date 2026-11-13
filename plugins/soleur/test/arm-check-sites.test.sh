@@ -16,6 +16,14 @@
 #              2 = the instrument broke (python error, missing ledger ID). A row counts as caught only on exit 1
 #              naming its expected ID and reason; exit 2 or higher is an instrument failure, never a pass.
 # A scanner that finds no span at all is caught by A1-floor (every site needs one), so there is no separate zero check.
+#
+# Contract. This is a TEXT guard over a fixed site list: it proves each listed site's arm text carries the pin outside
+# any substitution, and that the hatch's gate lines are present whole and in order. It is not a shell parser and does
+# not prove the text runs. Stated residuals (a later shape inside one is "covered by R<n>", not a new finding):
+#   R1 a gate line or arm hidden by a construct that keeps its text intact (a heredoc, a function never called,
+#      an `if false`); R2 quote-state tricks inside a joined line (nested quotes inside a quoted substitution);
+#   R3 arm or merge sites outside SITES, LINK_ONLY and the A5 scripts (repo-wide walker: #12739);
+#   R4 runtime properties the canonical check owns (what EV and H resolve to): proven by the dry runs, not here.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
 
