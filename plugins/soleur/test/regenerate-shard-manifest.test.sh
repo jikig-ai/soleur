@@ -1079,6 +1079,8 @@ FZ3="$WORK/Z3"; mkdir -p "$FZ3/run1/suite-timings-scripts-0"; assert_fixture_dir
 # Time one REAL committed floor label so a DRIFT_ROW lands on the default path.
 Z3_LABEL="$(awk -F'\t' '$3=="floor" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
 [[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no floor row to fixture" >&2; exit 2; }
+Z3_MS="$(awk -F'\t' -v l="$Z3_LABEL" '$1==l {print $2; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
+[[ -n "$Z3_MS" ]] || { echo "FATAL: committed ms for $Z3_LABEL not found" >&2; exit 2; }
 Z3_FLOORS="$(awk -F'\t' '$3=="floor"' "$REPO_ROOT/scripts/suite-durations.tsv" | wc -l)"
 printf '%s\t700000\n' "$Z3_LABEL" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
 if python3 "$GEN" --drift-report --timings-dir "$FZ3/run1" \
@@ -1087,7 +1089,7 @@ if python3 "$GEN" --drift-report --timings-dir "$FZ3/run1" \
 else
   check fail "Z3: default drift-report refused: $(tail -2 "$FZ3/err.txt")"
 fi
-if grep -qxF "DRIFT_ROW light $Z3_LABEL 1222 700000 1/1" "$FZ3/out.txt"; then
+if grep -qxF "DRIFT_ROW light $Z3_LABEL $Z3_MS 700000 1/1" "$FZ3/out.txt"; then
   check pass "Z3: default loop reports committed floor rows that measured"
 else
   check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
