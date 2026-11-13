@@ -19,7 +19,7 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "corporate-cla":
     "03cbf51b1543cdb3699ec71fbfa2946ff28d264ef574ae7252eac17b89ab6bad",
   "data-protection-disclosure":
-    "2f9f71f371b265b3cbb67c072f2b4d0ae3be7fcae041379e685d0ec9f2968767",
+    "a123ef7268303fae71c50b3389219e92cf8e3753c73d135a3db447abdfc18abe",
   "disclaimer":
     "19c9069f166d17c179e91e9747d816d25de81156e74752cf1d67ee210f3935d6",
   "gdpr-policy":
@@ -27,5 +27,5 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "individual-cla":
     "43836d36d4c8c96a9d0363ac70b2fe3d349c121b8ad030099f82189409830f25",
   "privacy-policy":
-    "045d16444850ed43721e7acac392340bf973267220afde29d26a4694bafdb2fd",
+    "49aa2ae32d84e44a8c38bec994cec8bc606552a604e7c0d60811b284065e7b5c",
 };

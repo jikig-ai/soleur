@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-29
+last_updated: 2026-11-13
 ---
 
 # Domains
@@ -33,7 +33,7 @@ last_updated: 2026-10-29
 
 | Setting | Value |
 |---------|-------|
-| SSL Mode | Full (Strict) zone default. **Not for `app.soleur.ai`:** a Configuration Rule (`set_config`, described "Flexible SSL for web platform", in `apps/web-platform/infra/seo-config-rules.tf`) sets `ssl = "flexible"` for that host, which would mean plain HTTP from Cloudflare to the origin (configuration read; the live mode is not measured). The apex and `www` carry a separate `full` rule — see "Apex TLS: the proxy/certificate conflict" below. Fix and dates: #10479 (CLO-ruled, not an accepted risk). |
+| SSL Mode | Full (Strict) zone default. **`app.soleur.ai`: strict**, Cloudflare verifying the web hosts' Origin CA certificate, live since 2026-11-07 23:41Z (entrypoint `last_updated` 2026-11-07T23:43:43Z). Measured read-only 2026-11-13 06:50Z: zone SSL mode `strict`; `app.soleur.ai` `strict` through two later, enabled strict Configuration Rules that override the adopted rule then described "Flexible SSL for web platform" (last match wins); 0 page rules; a public-hostname probe 3/3 HTTP 200 with origin transport TLSv1.3. After the merge-apply of PR #12737 the adopted `set_config` rule in `apps/web-platform/infra/seo-config-rules.tf` (ref dcb85b75, described "Strict SSL for app.soleur.ai (ADR-321, #10479)") is itself `strict`; re-measured after that apply. Any return to `flexible` triggers a same-day correction of Privacy Policy Section 11 and DPD 8.1(c). The apex and `www` carry a separate `full` rule — see "Apex TLS: the proxy/certificate conflict" below. History: #10479. |
 | Always Use HTTPS | Off (zone toggle); path-aware via Rule 10 of `cloudflare_ruleset.seo_page_redirects` — see "Always Use HTTPS exception" below |
 | Minimum TLS Version | 1.2 |
 | HSTS | max-age=63072000; includeSubDomains; preload (source of truth: `apps/web-platform/infra/cloudflare-settings.tf` + `apps/web-platform/lib/security-headers.ts`) |
