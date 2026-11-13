@@ -316,7 +316,7 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `soleur:ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run its first statement with `PR_NUMBER=<number>`, then the block below, in one Bash call. On a refusal, follow the check's own refusal rule. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so a non-zero `rc` other than 99 means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
+3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run its first statement, both `PR_NUMBER` tokens replaced by the PR number, then the block below, in one Bash call. On a refusal, follow the check's own refusal rule. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so a non-zero exit other than 99 means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
    SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
@@ -335,8 +335,9 @@ Present an output summary listing the document path, milestones created, issues 
    # as queued — the sibling blocks in merge-pr and ship both carry it.
    if [[ "$rc" -eq 99 ]]; then
      echo "merge-main lock could not be taken (contention >600s, or the lock file could not be opened) — the merge was NOT queued. Retry."
-     exit 1
+     exit 99
    fi
+   exit "$rc"
    ```
 
    rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` unlocked, with no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.

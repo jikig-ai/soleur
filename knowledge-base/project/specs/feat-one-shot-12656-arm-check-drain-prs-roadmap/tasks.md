@@ -20,7 +20,7 @@ Plan: `knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-r
 - [x] 2.1 drain-prs/SKILL.md §4:
   - [x] 2.1.1 Opening paragraph: "arm it through the arm check". The L2 `ready-count` chain stays byte-identical.
   - [x] 2.1.2 Checked arm: fetch `pull/<N>/head`, the check's first statement, then `--match-head-commit "${H:?run the arm check in this call}"`, all in one call. Add the route rule and refusal handling.
-  - [x] 2.1.3 Exempt arm:
+  - [x] 2.1.3 Exempt arm (superseded 2026-11-13, R1: deleted in 6222d45dc0):
     - the read call, copied verbatim from plan Phase 1 item 4, with one named fail-closed statement per predicate:
       - (i) the `app/soleur-ai`/`app/soleur-infra` author plus `isCrossRepository=false`;
       - (iii) bot author and committer, or a clean sync via `git merge-tree --write-tree`, with at most 250 commits;
@@ -30,7 +30,7 @@ Plan: `knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-r
     - the arm call: read and remove the head file, a head-equality check, then `${EXEMPT_HEAD:?…}`;
     - the "never assign `H`/`EV`/`EXEMPT_HEAD` by hand" sentence;
     - the drain report line `exempt: first-party bot, bot-only or clean-sync commits, no domain surface, read at <sha>`.
-  - [x] 2.1.4 Dequeue bullet: re-arm via merge-queue-dequeue step 3, or via the exempt calls for an exempt PR.
+  - [x] 2.1.4 Dequeue bullet: re-arm via merge-queue-dequeue step 3 (the exempt route was deleted 2026-11-13, R1).
   - [x] 2.1.5 Reword the prose at :88 and :131 ("arming enqueues", "Arming auto-merge cannot bypass").
 - [x] 2.2 drain-prs/SKILL.md §5:
   - add the bot scheduled-content bullet;
@@ -40,7 +40,7 @@ Plan: `knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-r
   - a non-99 rc means read the state and report;
   - both lock arms pin `${H:?…}`;
   - the SS_LIB, with_lock, running-unlocked and rc=99 lines stay byte-identical.
-- [x] 2.4 merge-queue-dequeue.md step 3: re-arm only when `null`, only through the arm check, with `PR_NUMBER="$N"`. Exempt PRs go back to drain-prs §4.
+- [x] 2.4 merge-queue-dequeue.md step 3: re-arm only when `null`, only through the arm check, with `PR_NUMBER="$N"`. Exempt PRs go back to drain-prs §4 (superseded 2026-11-13, R1: every PR takes step 3).
 - [x] 2.5 ship/SKILL.md: reword the prose at :473, :1616 and :1635 only.
 - [x] 2.5b sync-pr-behind.sh `kind=dequeued` message step (3): re-arm only through the arm check, naming `review-evidence-comment.md#arm-check`. Update the pins in ship-phase-7-poll-fixtures.test.sh scenario 18b and sync-pr-behind.test.sh dequeue tick 2 (Phase 3b).
 - [x] 2.6 review-evidence-comment.md:

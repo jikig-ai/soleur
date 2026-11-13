@@ -487,8 +487,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      [`sql-security-definer-rpc-scaffold.sql`](./references/sql-security-definer-rpc-scaffold.sql)
      — it encodes the `search_path` pin + 4-role REVOKE + `auth.uid()`
      authorization pin that `test/migration-rpc-grants.test.ts` enforces.
-   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
-     → Bash via `gh` CLI
+   - `gh pr ready` / `gh issue close` → Bash via `gh` CLI
+   - Merging a PR → `soleur:ship` (it arms only through the review-evidence arm check)
    - End-to-end UI flow → Playwright MCP (`mcp__plugin_soleur_playwright__*` — dedicated persistent profile; a flow needing stored auth that lives in a different registration's profile uses that registration)
    - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
    - Live Stripe state → `mcp__plugin_soleur_stripe__*`

@@ -25,7 +25,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 <decision_gate>
 **Merging is outward-facing — confirm before any merge.** This skill confirms tier scope with the operator via `AskUserQuestion` **before merging anything**, and supports per-PR opt-out within a tier (not just per-tier accept/reject). Confirming a tier means **the selected PRs are squash-merged to `main`** — this is not a preview; it lands code (higher irreversibility than the issue-drain, which ends at PR-opened). Respects `wg-zero-agents-until-user-confirms`.
 
-**API budget.** Fixing or reviewing PRs may delegate to `soleur:review` (feature PRs) and spawn review agents, which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** Arming any PR that carries no passing review evidence, bot PRs included, delegates to `soleur:review`, which spawns review agents which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 </decision_gate>
 
 ## Prerequisites
@@ -61,7 +61,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 
 | Tier | Signal | Default handling |
 |------|--------|------------------|
-| `ready-green` | `mergeable=MERGEABLE`, no failing/pending checks | merge directly |
+| `ready-green` | `mergeable=MERGEABLE`, no failing/pending checks | arm through the arm check (§4) |
 | `needs-lockfile-fix` | deps PR (`labels` has `dependencies`) failing `guards-ruleset` (its `lockfile-sync` member) / `test-webplat` / `e2e` on a frozen-install step | fix-recipe (a) → merge |
 | `needs-conflict-resolution` | `mergeable=CONFLICTING`, few/no other failures | fix-recipe (b) → merge |
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
@@ -80,15 +80,15 @@ Present the tier table via `AskUserQuestion`. The operator selects which tiers t
 
 For each selected PR: bring it to green via the fix-recipes below if needed, then arm it through the arm check (under the merge queue this ENQUEUES the PR; it is not yet merged). A `ready-unarmed` PR (readied, but no full CI run exists) is NOT armed: recover it first (`gh pr ready --undo <N>` with a user token, then the whole block below; `GITHUB_TOKEN` cannot ready a PR). A draft the operator authorizes is readied the same way and armed only once `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <N>) && gh pr ready <N> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <N> --before-count "$K"` exits 0 (one Bash call, `timeout: 420000`; reasons and recoveries: [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)); on non-zero report "readied but unarmed" with the last stdout line and arm nothing:
 
-**Checked arm.** Run the arm check's first statement from [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check) with `PR_NUMBER=<N>`, after the fetch, then the arm, all in one Bash call. The fetch puts the PR head in the local object store, which the check's `merge-base` needs:
+**The arm.** Every PR takes this one arm. Run the arm check's first statement from [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check), both `PR_NUMBER` tokens replaced by the PR number, after the fetch, then the arm, all in one Bash call. The fetch puts the PR head in the local object store, which the check's `merge-base` needs:
 
 ```bash
 git fetch -q origin "pull/<N>/head" || { echo "fetch of PR <N>'s head failed: not armed"; exit 1; }
-# here: the arm check's first statement, PR_NUMBER=<N> (linked above); it exits 1 on refusal
+# REPLACE THIS LINE with the arm check's first statement (linked above), PR_NUMBER replaced by <N>; it exits 1 on refusal
 gh pr merge <N> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 ```
 
-**Which arm.** Every PR takes the checked arm. On a refusal, including a bot PR that carries no evidence, run `soleur:review` on the PR (it posts fresh evidence), then the same call again. If it still refuses, put `unarmed: no evidence covers the head` on the PR's drain report line and skip the PR. Never arm around it. First-party bot PRs normally arm themselves server-side; drain-prs arms one only when `autoMergeRequest` is `null`. Ruled by CTO agent, 2026-11-13 (R1, superseding the 2026-11-12 Item A exemption).
+On a refusal, including a bot PR that carries no evidence, run `soleur:review` on the PR (it posts fresh evidence), then the same call again. If it still refuses, skip the PR and list it in the §7 report as `unarmed: <first line of the latest Review-Evidence comment, or none>`. Never arm around it. The check cannot see code written while resolving a merge conflict (it skips merge commits), so a PR onto which drain-prs pushed a hand-resolved merge goes to `soleur:review` before this arm, even when the check passes. First-party bot PRs normally arm themselves server-side; drain-prs arms one only when `autoMergeRequest` is `null`.
 
 - **Never arm a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check each PR before arming: `gh pr view <N> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<N>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files, so a large PR could hide a workflow edit); `true` or any output means stop and ask (the tier confirmation at the decision gate does not cover it).
 - **Merge queue is active on `main`** (#9454, ADR-270; the `merge_queue` rule lives in `infra/github/ruleset-ci-required.tf`) — arming **enqueues** the PR (a green PR enqueues, so the bullet and the block above agree); the queue handles the up-to-date merge, serialization and the final merge automatically — do not hand-roll update/wait loops, and never push `gh pr update-branch` or a merge of `origin/main` to a PR that is in the queue (a push dequeues it). An admin-bypass merge (only via [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md)) is the last resort, not the drain path. CodeQL is advisory on `main` (it reports no status on `merge_group`); the post-merge `codeql-main-alert-gate.yml` run is the signal. History: a first adoption (#5800) was reverted the same day for exactly that reason (ADR-032 amendment, upstream `github/codeql-action#1537`); #5840 stays open as the upstream tracker.
@@ -97,10 +97,7 @@ gh pr merge <N> --squash --auto --match-head-commit "${H:?run the arm check in t
 
 ### 5. Review delegation
 
-- **Feature PRs** (`needs-review`, non-trivial diff): delegate to `soleur:review`. Merge only if it passes, then arm through the arm check.
-- **Single-file `priority/p3-low` bot-fixes**: inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
-- **Bot-authored scheduled content PRs** (community digests, the campaign calendar, content-distribution promotes, weakness digests): delegate to `soleur:review`, then the checked arm (§4).
-- **Bot-fix PRs that failed the cron gate** (multi-file, or the source issue is not `priority/p3-low`, so the PR carries `bot-fix/review-required`): delegate to `soleur:review`, not an inline read. Inline reading is for single-file `priority/p3-low` PRs only.
+Every PR drain-prs arms needs a passing Review-Evidence comment covering its head, and only `soleur:review` posts one, so a PR without one is delegated to `soleur:review` before §4's arm, whatever its size or author. That includes feature PRs (`needs-review`), single-file `priority/p3-low` bot-fixes, bot-authored scheduled content PRs (community digests, the campaign calendar, content-distribution promotes, weakness digests) and bot-fix PRs carrying `bot-fix/review-required`. A read of `gh pr diff <N>` is triage, not review: it can decide to skip a PR, never to arm one.
 
 ### 6. Fix-recipes
 
@@ -125,7 +122,7 @@ Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs 
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
 ```
 
-Report the drain delta: before/after open-PR count and the per-tier outcome (merged / enqueued / skipped / deferred), listing an enqueued PR as enqueued until it reads `MERGED`.
+Report the drain delta: before/after open-PR count and the per-tier outcome (merged / enqueued / skipped / deferred), listing an enqueued PR as enqueued until it reads `MERGED`, then one line per PR §4 refused (`#<N> unarmed: …`).
 
 ## Pipeline detection
 

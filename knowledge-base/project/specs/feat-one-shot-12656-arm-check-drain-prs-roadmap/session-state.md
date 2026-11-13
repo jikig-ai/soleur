@@ -18,6 +18,7 @@
 - Item C: fold in the dequeue re-arm message in sync-pr-behind.sh (Ruled by CTO agent, 2026-11-12).
 - Item D: add static test plugins/soleur/test/arm-check-sites.test.sh with mutation rows (Ruled by CTO agent, 2026-11-12).
 - Evidence-author trust gap deferred to #12721.
+- Superseded 2026-11-13: Item A's exemption and A-amend by R1 (exempt arm deleted); R2 (uncovered self-arm sites, #12739), R3 (`DOMAIN_SURFACE_RE` deleted) and R4 (admin-merge hatch runs the check) added. Ruled by CTO agent, 2026-11-13.
 
 ### Components Invoked
 

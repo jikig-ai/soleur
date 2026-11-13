@@ -388,13 +388,13 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|-> <
 # The refusal text shared by every caller that refuses (the standalone loop, a flagless --step): what to do instead of a resync. The
 # advice differs by the validated base (QW_BASE, always set when a `wait` verdict exists): for `main` the Phase 7 poll's expiry fallback
 # is the sanctioned sync and a disarm / hand-sync / re-arm is safe; for any other base that sync merges origin/main, which is wrong for
-# the PR, so the text says to sync by hand against that base and never to disarm and re-arm. The `main` text is byte-identical to the
-# pre-#10832 text (pinned by a golden row in the suite). The echoed base is cut to 60 characters (it is validated, but may be 255 long).
+# the PR, so the text says to sync by hand against that base and never to disarm and re-arm. The `main` text is the pre-#10832 text with the
+# re-arm clause pointed at the arm check (#12656), pinned by a golden row in the suite. The echoed base is cut to 60 characters (it is validated, but may be 255 long).
 qw_refusal() {
   local b="${QW_BASE:0:60}" poll hand
   if [[ "$QW_BASE" == main ]]; then
     poll="; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync"
-    hand="Truly need a hand sync? Disarm first (gh pr merge $PR --disable-auto), sync, then re-arm through review-evidence-comment.md#arm-check."
+    hand="Truly need a hand sync? Disarm first (gh pr merge $PR --disable-auto), sync, then re-arm through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check."
   else
     poll=""
     hand="Truly need a hand sync? This script and the Phase 7 poll's expiry fallback only merge origin/main, which is wrong for a PR based on '$b': sync by hand against that base (fetch origin <base>, merge origin/<base>, push) and do not disarm and re-arm."

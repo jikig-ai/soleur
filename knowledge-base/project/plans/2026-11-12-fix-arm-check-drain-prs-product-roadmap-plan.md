@@ -15,6 +15,8 @@ lane: cross-domain
 
 # fix: route drain-prs, product-roadmap and the dequeue re-arm through the Review-Evidence arm check
 
+> **Superseded in part 2026-11-13 (CTO rulings R1-R4, decision-challenges.md):** the drain-prs exempt arm, its read call, `DOMAIN_SURFACE_RE` and dry-run rows D7, D7b, D11 and D13-D15 were deleted (R1, R3). The admin-merge hatch was added as a site (R4). The text below is the plan as written on 2026-11-12; read the exempt-arm parts as history.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-12 (soleur:deepen-plan, after plan-review v2).
@@ -636,7 +638,7 @@ None. The bodies of `gh issue list --label code-review --state open --limit 200`
 - [ ] AC5 — product-roadmap step 3 links `#arm-check`, and both lock arms pin `${H:?run the arm check in this call}`. `bash plugins/soleur/test/concurrent-ship.test.sh` passes with that suite unedited.
 - [ ] AC6 — each Phase 5 suite exits 0: ci-head-verdict, drain-prs, admin-merge-ready-wiring and monitor-lock unedited; sync-pr-behind and ship-phase-7-poll-fixtures with only the Phase 3b pin edits; plus `bun test` over pr-merge-poll and components.
 - [ ] AC7 — `bash scripts/lint-orphan-test-suites.sh` and `bash scripts/test-all-corpus-weight-budget.test.sh` exit 0 with the new rows.
-- [ ] AC8 — dry runs D1, D2, D3, D4, D6, D7, D7b, D9, D11, D13, D14 and D15 print exactly the tabled last lines, full 40-hex SHAs included. They are recorded in the PR body under `## Dry-run proof` with rc and composed-block sha256. `shim-refused.log` is empty, `type -p gh` resolved to the shim in every case, and no `soleur-exempt-*.head` file remains.
+- [ ] AC8 — dry runs D1, D2, D3, D4, D6, D9 and D16-D18 (amended 2026-11-13 by R1/R4; D7, D7b, D11, D13-D15 went with the exempt arm) print exactly the tabled last lines, full 40-hex SHAs included. They are recorded in the PR body under `## Dry-run proof` with rc and composed-block sha256. `shim-refused.log` is empty, `type -p gh` resolved to the shim in every case, and no `soleur-exempt-*.head` file remains.
 - [ ] AC9 — `technical-ruling-gate.sh --branch` passes on decision-challenges.md (5 rows). The PR body links #12711, #12712, #12715 and #12721, and says `Closes #12656` in the body, not the title.
 
 ### Post-merge (operator-free)
@@ -699,7 +701,7 @@ discoverability_test:
 - T1: the static suite is RED on the unedited tree. It names drain-prs :84/:88/:89/:131, product-roadmap :325/:330, dequeue :30 and ship :473/:1616/:1635. A3/A4 fail on the missing `DOMAIN_SURFACE_RE` line, and A5 fails on sync-pr-behind's dequeue message.
 - T2: the same suite is GREEN after Phases 1-4 and 3b.
 - T3: the in-suite rows M1, M2, M2b, M3, M5, M6, M7, M8, M10, M11, M14 and M15 exit 1 naming their assertion. H1 exits 1 with `ZERO-SPANS`. H3-H7 stay GREEN, and the H8 control exits 0.
-- T4: dry runs D1, D2, D3, D4, D6, D7, D7b, D9, D11, D13, D14 and D15 (Phase 6).
+- T4: dry runs D1, D2, D3, D4, D6, D9 and D16-D18 (Phase 6; amended 2026-11-13 by R1/R4).
 - T5: the existing suites stay green, unedited except for the two Phase 3b pins (Phase 5 list).
 
 ## Sharp Edges
