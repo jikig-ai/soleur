@@ -477,6 +477,7 @@ scripts/inngest-restart-age-gate	75	measured
 scripts/inngest-restart-poll-classify	125	measured
 scripts/inngest-soak-6178	22033	measured
 scripts/inngest-tls-soak-10136	1222	floor
+scripts/inngest-write-token-revisit-12738	1251	floor
 scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/jobs1-stopgap-7432	1222	floor
@@ -696,6 +697,7 @@ tests/scripts/git-data-wipe-wedge	1222	floor
 tests/scripts/hcloud-token-readonly-no-fallback-scan	1222	floor
 tests/scripts/host-image-coherence-preflight	47	measured
 tests/scripts/infra-privileged-tier-census	16830	measured
+tests/scripts/relay-inngest-write-token-12158	1222	floor
 tests/scripts/inngest-host-dark-gate	16167	measured
 tests/scripts/inngest-host-replace-gate	1533	measured
 tests/scripts/inngest-host-shape-gate	3811	measured

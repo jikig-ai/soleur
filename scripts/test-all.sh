@@ -6252,6 +6252,10 @@ if want_scripts; then
   # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
   # while the token is still in config.
   run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
+  # #12738: exit-code harness for the inngest write-token revisit probe (notify-only; exits 2, 3 or
+  # 5, never 0 or 1). Registered explicitly (orphan-suite class above); the arm-token probe watches
+  # only the arm token, so the D2-2 replacement needs its own coverage.
+  run_suite "scripts/inngest-write-token-revisit-12738" bash scripts/followthroughs/inngest-write-token-revisit-12738.test.sh
   # #12008: exit-code harness for the host kernel cadence probe (notify-only; exits 2, 3 or 5, never 0 or 1).
   # Registered explicitly (orphan-suite class above); an unknown row read as within-cadence would turn the
   # tracker's all-clear into a false assurance about host patching.
@@ -6957,6 +6961,9 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # #12158 (D2-2): text pins for the staged relay script — stdin delivery to the environment
+  # secret, xtrace refusal, generated-operator-script v2 contract.
+  run_suite "tests/scripts/relay-inngest-write-token-12158" bash tests/scripts/test-relay-inngest-write-token-12158.sh
   # Sole-copy LUKS Guard 1 (#9927 item 10, ADR-282): registered HERE so a red Guard 1 blocks merge through the required `test` context
   # (test-scripts). Also covered by the infra runner glob (deploy-script-tests), hence its DOUBLE_COVERED_ACK entry in
   # scripts/lint-orphan-test-suites.sh; the G2f pin in plugins/soleur/test/terraform-target-parity.test.ts (test-bun leg) keeps this line from being dropped.
