@@ -36,6 +36,9 @@ Read-only, 2026-11-13 (UTC). Counts and statuses only.
 - 06:50Z `pagerules-ssl`: 0 active rules, 0 SSL rules.
 - 07:30-07:50Z Better Stack, 7 d: `origin-tls: listening` rows with `required: true` - soleur-web-platform (web-1) 81 rows, last 2026-11-12T22:18:41Z; soleur-web-2 82 rows, last 2026-11-12T22:20:02Z; both daysLeft 5469 (same certificate). Oldest evidence lapses 2026-11-13T22:18Z: re-take before a later merge.
 - 07:50Z Better Stack, 24 h: `failed the TLS handshake` rows - web-1 0; web-2 66 (ECONNRESET bursts 01:24Z-04:08Z, suppressed counts up to 259 per row; no alert covers it, #12744).
-- 07:50Z 20/20 `origin-tls-probe.sh --require-tls`: HTTP 200, origin transport TLSv1.3, TLS-ON-ORIGIN-HOP (reaches web-1 only, by LB weight).
-- 07:50Z `analytics-edge-errors 24`: 114 status-500 (origin-generated) and zero 520/521/525/526/502; covers only traffic that reached an origin (web-2 at weight 0 gets almost none).
+- 07:50Z 20/20 `origin-tls-probe.sh --require-tls`: HTTP 200, origin transport TLSv1.3, TLS-ON-ORIGIN-HOP (not host-attributed: web-2 is at LB weight 1, so a probe may reach either web host).
+- 07:50Z `analytics-edge-errors 24`: 114 status-500 (origin-generated) and zero 520/521/525/526/502; covers only traffic that reached an origin, and is not host-attributed (web-2 is at LB weight 1).
+
+> **Superseded 2026-11-13 (#12737): web-2 is at LB weight 1; probes are not host-attributed.**
+
 - Not measured: no edge-side probe of web-2; LB pool health unread (Playwright reached the Cloudflare login page 07:51Z, no sanctioned reader) - #12745.

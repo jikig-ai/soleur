@@ -60,5 +60,28 @@ Appended by a Claude Code agent under the CLO agent's ruling of 2026-11-13 (agen
   - Hetzner enumeration: 5 servers, all Jikigai (10.0.1.10, .11, .20, .30, .40).
   - tls-health at 00:53Z: `nft_rules=7`, `nft8443_sha256` present, `legacy_8288=0`, `served_sha256==cert_sha256`.
 - **Owner's words.** The quoted sentence was drafted by the agent and chosen by the owner. The CLO ruled that the record should carry the owner's own words, with a timestamp, as the 2026-11-02 record did ("I confirm A7 as read"). **That is owner-pending**: the owner confirms in their own words on #10538. An agent cannot supply it.
-- **Companion change superseded.** PR #12737 converts ledger row 7 (Cloudflare to origin) to verified TLS and removes its exception. The 2026-11-19 date that this record's companion change set no longer applies once PR #12737 merges.
-- **After PR #12737.** That PR changes the declared `--sdk-url` to `https://app.soleur.ai/api/inngest`. The live host keeps the plain-HTTP poll until the owner's `inngest-host-replace` (#12742). This does not trigger the void "pointing `--sdk-url` at the public host while Cloudflare to origin is flexible": nothing live changes at merge, and the hop is `strict`. If the owner's act lands after 2026-11-20, a record that the owner types, beginning "SIGNED BY OWNER (human, not an agent)", is required. The draft is in the PR #12737 description.
+- **Companion change superseded.** On the merge of PR #12737, ledger row 7 converts (Cloudflare to origin) to verified TLS and removes its exception. The 2026-11-19 date that this record's companion change set no longer applies once PR #12737 merges.
+- **After PR #12737.** That PR changes the declared `--sdk-url` to `https://app.soleur.ai/api/inngest`. The live host keeps the plain-HTTP poll until the owner's `inngest-host-replace` (#12742). This does not trigger the void "pointing `--sdk-url` at the public host while Cloudflare to origin is flexible": nothing live changes at merge, and the hop is `strict`. If the owner's act lands after 2026-11-20, a record that the owner types, beginning "SIGNED BY OWNER (human, not an agent)", is required. The draft is in the section 'Unsigned owner-record draft' below.
+
+## Unsigned owner-record draft (agent-authored; NOT a signature; no effect until the owner types it)
+
+Required only if the owner's `inngest-host-replace` (#12742) lands after 2026-11-20. The owner types the signed record,
+filling every `<...>` field, as a comment on #12742; an agent then mirrors it to a new audit file. Nothing below is
+filled in by an agent, and until the owner types it this draft records nothing.
+
+```text
+<owner types: SIGNED BY OWNER (human, not an agent)>
+OWNER ACCEPTED-RISK RECORD — #10538 leg 2 (Inngest sdk_url poll), post-merge window
+Supersedes my 2026-11-13 statement "I will not extend past [2026-11-20]" for this window only.
+Link: 10.0.1.40 -> http://10.0.1.10:3000/api/inngest every 60 s, plain HTTP, 10.0.1.0/24
+Data: HMAC-signed request, public function metadata; no user content, no key material
+Why: the replacement merged in PR #12737 on <date>; the live change needs my inngest-host-replace (#12742), not yet done
+Accepted by: <name>, owner. Signed on: <date>
+Accepted until: the earlier of the measured live act or <date ≤ 2026-12-10>. Not accepted after 2026-12-10.
+Gap recorded: 2026-11-13T00:00Z to <acceptance time> was not covered.
+Not accepted: any non-Jikigai peer; --sdk-url at the public host while any flexible rule applies to app.soleur.ai
+Voids: a server beyond the five on 10.0.1.0/24; any public or cross-network exposure of the plaintext poll
+Controls measured <date>: Hetzner read-only enumeration <result>; tls-health nft_rules=7, legacy_8288=0 <run/time>
+No known access to this link: <confirmed by owner>
+Signature: <typed name>
+```
