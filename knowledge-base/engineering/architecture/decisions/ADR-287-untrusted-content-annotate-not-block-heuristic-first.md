@@ -305,9 +305,13 @@ WebFetch scorer off also removes this note.
    Edit and MultiEdit to the framing hook file (`WRITE_PROTECTED_PATTERNS`), and, from this change, admits `git checkout`
    and `git switch` only in three forms (`git checkout [-q] -b <branch>`, `git switch [-q] -c <branch>`,
    `git switch [-q] <branch>`, with one branch-name-shaped token and no start point) and denies `git restore` outright;
-   every other flag, abbreviated or not, `--`, pathspec and extra positional is denied. That is an allow-list narrowing of
+   for a canonical `git <sub>` token, every other flag, abbreviated or not, `--`, pathspec and extra positional is denied.
+   An empty, padded or no-break-space-led subcommand token skips these rules today; that needs a writable global git
+   config to matter and is tracked with it in #12757. That is an allow-list narrowing of
    a live control (CTO K1, re-ruled as K1'); it is not a claim that no Bash route can rewrite the file. It governs the
-   model's Bash calls only; git run by the server itself is not routed through containment. The structural fix, running the hooks from a copy outside the clone,
+   model's Bash calls only; git run by the server itself is not routed through containment, and neither is git run inside
+   the allowlisted `worktree-manager.sh` (`reset --hard HEAD`, `checkout main`, `checkout "$branch"`), which restores
+   tracked content and was not shown to delete a hook. The structural fix, running the hooks from a copy outside the clone,
    is #12753. The self-test reads only `.claude/settings.json` on the
    `setupEphemeralWorkspace` path. A CI test fails if `plugins/soleur/hooks/hooks.json`, which `--plugin-dir` loads into every
    cron, gains a `PostToolUse` key. The self-test runs the hook with `execFileSync`, not through the shell the CLI uses for

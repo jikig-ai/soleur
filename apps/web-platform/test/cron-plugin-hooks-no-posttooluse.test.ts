@@ -12,6 +12,11 @@ const WIDEN =
   "(apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts) to read it first " +
   "(ADR-287 addendum 2026-11-12).";
 
+function frontmatterNamesPostToolUse(text: string): boolean {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  return m !== null && /PostToolUse/.test(m[1]);
+}
+
 function markdownFiles(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
@@ -34,13 +39,17 @@ describe("the plugin registers no PostToolUse hook (cron framing dark gate, #110
     expect(Object.hasOwn(manifest, "hooks"), `plugins/soleur/.claude-plugin/plugin.json gained a hooks key. ${WIDEN}`).toBe(false);
   });
 
-  it("no skill or agent frontmatter names PostToolUse", () => {
-    const files = [...markdownFiles(join(PLUGIN, "skills")), ...markdownFiles(join(PLUGIN, "agents"))];
+  it("no skill, agent or command frontmatter names PostToolUse", () => {
+    const files = ["skills", "agents", "commands"].flatMap((d) => markdownFiles(join(PLUGIN, d)));
     expect(files.length).toBeGreaterThan(50);
-    const hits = files.filter((f) => {
-      const m = /^---\n([\s\S]*?)\n---/.exec(readFileSync(f, "utf-8"));
-      return m !== null && /PostToolUse/.test(m[1]);
-    });
-    expect(hits, `skill or agent frontmatter registers PostToolUse. ${WIDEN}`).toEqual([]);
+    expect(files.some((f) => f.includes("/commands/")), "commands/ was scanned").toBe(true);
+    const hits = files.filter((f) => frontmatterNamesPostToolUse(readFileSync(f, "utf-8")));
+    expect(hits, `skill, agent or command frontmatter registers PostToolUse. ${WIDEN}`).toEqual([]);
+  });
+
+  it("the frontmatter check reads LF and CRLF files", () => {
+    expect(frontmatterNamesPostToolUse("---\nname: x\nhooks:\n  PostToolUse: []\n---\nbody")).toBe(true);
+    expect(frontmatterNamesPostToolUse("---\r\nname: x\r\nhooks:\r\n  PostToolUse: []\r\n---\r\nbody")).toBe(true);
+    expect(frontmatterNamesPostToolUse("---\nname: x\n---\nPostToolUse in the body only")).toBe(false);
   });
 });
