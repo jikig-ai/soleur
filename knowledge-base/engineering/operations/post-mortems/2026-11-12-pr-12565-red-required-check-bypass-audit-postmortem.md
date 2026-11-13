@@ -59,6 +59,7 @@ workflow may not answer itself: the bypass-actor list lives in Terraform
 change. The decision is recorded as a pending operator action in
 `knowledge-base/project/specs/feat-one-shot-12666-12583-9340-batch/decision-challenges.md`
 (authorize a follow-up Terraform PR editing the bypass-actor list). This PR ships the probe
+
 + audit only — no ruleset change.
 
 Context for that decision (not a ruling): the bypass actors exist for the documented
@@ -74,19 +75,19 @@ use is silent.
 **No move needed — the surfaces are already disjoint.** The integrity gates that caught
 this defect class are UNGATED members of the `test-scripts` matrix:
 
-- the corpus-weight-budget check (leg 3) that redded #12565 for the missing weight row,
-- the lint-orphan suite (leg 2) that polices suite registration,
-- the shard-manifest regen check,
-- the always-on-ledger suites.
++ the corpus-weight-budget check (leg 3) that redded #12565 for the missing weight row,
++ the lint-orphan suite (leg 2) that polices suite registration,
++ the shard-manifest regen check,
++ the always-on-ledger suites.
 
 The only whole-leg skip levers on `test-scripts` cannot reach these artifacts:
 
-- the **oracle lane** (`scripts/ci-oracle-lane.sh`) skips on doc-path-only diffs and
++ the **oracle lane** (`scripts/ci-oracle-lane.sh`) skips on doc-path-only diffs and
   `ORACLE_INDEX`-confined edits; its `is_oracle_data_path` allowlist is EMPTY
   (`_never_a_member_`), and `scripts/suite-*.tsv` weight manifests are `outside_surface`
   → full battery;
-- **draft-light** fires on draft PRs only;
-- **push-dedupe** fires on `push` events only, not `pull_request`.
++ **draft-light** fires on draft PRs only;
++ **push-dedupe** fires on `push` events only, not `pull_request`.
 
 So an oracle-only diff cannot touch suite registrations or weight rows, and the weight-row
 check could not have been skipped on #12565's diff — the check DID run and DID red. The
@@ -122,11 +123,11 @@ defect class recurs silently for any future bypass merge until the probe lands.
 
 ## Action items
 
-- [x] Detective probe + workflow shipped in this PR (Q4).
-- [x] This audit committed (Q1/Q3 findings, durable indexed home).
-- [ ] Operator decision on the `pull_request` bypass-actor list (Q2) — pending in
++ [x] Detective probe + workflow shipped in this PR (Q4).
++ [x] This audit committed (Q1/Q3 findings, durable indexed home).
++ [ ] Operator decision on the `pull_request` bypass-actor list (Q2) — pending in
   `decision-challenges.md`; any change routes through Terraform
   `infra/github/ruleset-ci-required.tf`, never an ad-hoc ruleset PUT.
-- [ ] Backfill-verify `aae21955e6` fires BYPASS via `workflow_dispatch` during this PR
++ [ ] Backfill-verify `aae21955e6` fires BYPASS via `workflow_dispatch` during this PR
   (the probe's success metric).
-- [ ] Issue comment on #12666 linking this doc (lead).
++ [ ] Issue comment on #12666 linking this doc (lead).
