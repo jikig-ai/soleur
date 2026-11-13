@@ -176,8 +176,9 @@ refuse "refuse: no tunnel connector" "{${W1},\"web-2\"={location=\"hel1\",privat
 refuse "refuse: a duplicate private_ip" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.10\",tunnel_connector=true}}" "private_ip values must be unique"
 refuse "refuse: the gateway address (.1)" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.1\",tunnel_connector=true}}" "last octet must be 2-254"
 refuse "refuse: an address outside the subnet" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.2.11\",tunnel_connector=true}}" "10.0.1.0/24 private subnet"
-refuse "refuse: lb_weight other than 0 or 1" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=2,tunnel_connector=true}}" "lb_weight must be 0"
-refuse "refuse: a negative lb_weight" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=-1,tunnel_connector=true}}" "lb_weight must be 0"
+refuse "refuse: lb_weight other than 0 or 1" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=2,tunnel_connector=true}}" "web_hosts lb_weight must be 0"
+refuse "refuse: a negative lb_weight" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=-1,tunnel_connector=true}}" "web_hosts lb_weight must be 0"
+refuse "refuse: a fractional lb_weight" "{${W1},\"web-2\"={location=\"hel1\",private_ip=\"10.0.1.11\",lb_weight=0.5,tunnel_connector=true}}" "web_hosts lb_weight must be 0"
 
 # ── PARITY: every hand-kept WEB_HOST_PRIVATE_IPS copy equals the derived list ──────────────────
 # Workflows cannot read Terraform at run time, so the copies stay literal; this pins them to the console values.
