@@ -3,17 +3,17 @@
 # Guard 1 of #12656 (plan: knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-roadmap-plan.md,
 # `## Guard Contract`). Every skill site that arms or re-arms auto-merge, and sync-pr-behind's dequeue message, binds
 # each arm to the head the Review-Evidence arm check set: `--match-head-commit "${H:?...}"`. Only the canonical
-# statement in review-evidence-comment.md `## Arm check` sets H. The one exception is drain-prs' exempt arm, pinned to
-# the head its read call wrote (`${EXEMPT_HEAD:?...}`). The exemption's path regex exists once, at column 0 of the
-# canonical file, and every top-level alternative in it is load-bearing against the fixtures below.
+# statement in review-evidence-comment.md `## Arm check` sets H. There is no exempt arm: drain-prs' bot exemption was
+# deleted (CTO ruling R1, 2026-11-13), and A6 keeps its tokens from coming back. The admin-merge hatch links the check
+# (A2), and the two scripts that print re-arm instructions route them through it without an arm of their own (A5).
 #
 # Two modes:
 #   bash arm-check-sites.test.sh              driver: real-tree verdict, then the H8 control, mutation and harness rows
 #   bash arm-check-sites.test.sh --root <dir> one assertion run over <dir>; prints FAIL[<id>] lines and a LEDGER line
-# --root exit: 0 = ledger is exactly the nine IDs and nothing failed; 1 = an assertion failed or ZERO-SPANS;
+# --root exit: 0 = ledger is exactly EXPECTED_LEDGER and nothing failed; 1 = an assertion failed;
 #              2 = the instrument broke (python error, missing ledger ID). A row counts as caught only on exit 1
-#              naming its expected ID; exit 2 or higher is an instrument failure, never a pass.
-# SPAN_RE overrides the `gh pr merge` token pattern (H1 sets it to a pattern that matches nothing).
+#              naming its expected ID and reason; exit 2 or higher is an instrument failure, never a pass.
+# A scanner that finds no span at all is caught by A1-floor (every site needs one), so there is no separate zero check.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
 
@@ -24,30 +24,19 @@ SITES=(
   plugins/soleur/skills/product-roadmap/SKILL.md
   plugins/soleur/skills/ship/references/merge-queue-dequeue.md
 )
+# Sites that must link the check but run no --auto arm (the admin-merge hatch gates an --admin merge).
+LINK_ONLY=(plugins/soleur/skills/ship/references/settle-then-admin-merge.md)
+SETTLE=plugins/soleur/skills/ship/references/settle-then-admin-merge.md
 DRAIN=plugins/soleur/skills/drain-prs/SKILL.md
 CANON=plugins/soleur/skills/review/references/review-evidence-comment.md
 SYNC=plugins/soleur/scripts/sync-pr-behind.sh
+MQJ=scripts/merge-queue-jump.sh
 LINK='review-evidence-comment.md#arm-check'
-EXPECTED_LEDGER='A1 A1-exempt A1-floor A1-noH A2 A2b A3 A4 A5'
+EXPECTED_LEDGER='A1 A1-floor A1-noH A2 A2b A3 A5 A6'
 # A1-noH: no site file assigns H. The `-` in the first class keeps `gh api -H=...` quiet (H7).
 NOH_RE='(^|[^A-Za-z0-9_-])H(\+?=|\[[^]]*\]=)|\$\{H:?=|(read|declare|typeset|export|local|readonly|mapfile|readarray|for)([[:space:]]+[^;&|]*)?[[:space:]]H([[:space:]=;]|$)|printf[[:space:]]+-v[[:space:]]*H'
 CANON_REFUSE='|| { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }'
 CANON_ARM='--match-head-commit "${H:?run the arm check in this call}"'
-MUST_MATCH=(
-  apps/web-platform/infra/x.tf .github/workflows/a.yml supabase/migrations/1.sql docs/legal/terms.md
-  apps/web-platform/lib/auth/x.ts apps/web-platform/package.json apps/web-platform/package-lock.json bun.lock
-  Dockerfile .env.example apps/web-platform/middleware.ts a.tfvars .terraform.lock.hcl Cargo.lock
-  .claude/settings.json AGENTS.rules.md plugins/soleur/hooks/x.sh plugins/soleur/skills/drain-prs/SKILL.md
-  plugins/soleur/skills/review/references/review-evidence-comment.md scripts/test-all.sh .gitmodules infra/main.yml
-  main.tf x.hcl db/migrations/x.rb db/seed.sql .github/CODEOWNERS lib/auth/x.yml config/secrets.yml x/doppler.yaml
-  bun.lockb ops/cloud-init.yml CLAUDE.md plugins/soleur/hooks/x.yml .claude-plugin/plugin.yml scripts/x.yml
-  bunfig.toml vitest.config.ts
-)
-# Real exempt bot PR paths (a community digest, the campaign calendar, a weakness digest, a legal-generate NOTICE).
-MUST_NOT_MATCH=(
-  knowledge-base/support/community/2026-11-12-digest.md knowledge-base/marketing/campaign-calendar.md
-  knowledge-base/project/weakness-digest.md plugins/soleur/skills/legal-generate/NOTICE
-)
 
 # scan <root> <relpath>... : one `ARM<TAB>rel<TAB>line<TAB>span` line per arm span; exit 3 on a python error.
 scan() {
@@ -55,7 +44,7 @@ scan() {
   python3 -I - "$root" "$@" <<'PY'
 import os, re, sys
 root, rels = sys.argv[1], sys.argv[2:]
-tok = re.compile(os.environ.get("SPAN_RE") or r"(?<![A-Za-z0-9_-])gh\s+pr\s+merge(?![A-Za-z0-9_-])")
+tok = re.compile(r"(?<![A-Za-z0-9_-])gh\s+pr\s+merge(?![A-Za-z0-9_-])")
 auto = re.compile(r"(?<![A-Za-z0-9_-])--auto(?![A-Za-z0-9_-])")
 def joined(text):
     out, buf, start = [], "", None
@@ -103,26 +92,19 @@ PY
   local rc=$?; (( rc == 0 )) || return 3
 }
 
-# run_root <root> : the assertion run. Prints FAIL[<id>] lines, ZERO-SPANS, and `LEDGER <ids>`; returns 0/1/2.
+# run_root <root> : the assertion run. Prints FAIL[<id>] lines and `LEDGER <ids>`; returns 0/1/2.
 run_root() {
-  local root="$1" f=0 out rel n c re p canon_hits ledger=()
-  local -A per_file=() exempt_per=()
+  local root="$1" f=0 out rel n c canon_hits ledger=()
+  local -A per_file=()
   out=$(scan "$root" "${SITES[@]}") || { echo "INSTRUMENT scanner (python) failed"; return 2; }
 
-  # A1 -- every arm span carries the H pin; the EXEMPT_HEAD pin only in drain-prs.
+  # A1 -- every arm span carries the H pin.
   ledger+=(A1)
   while IFS=$'\t' read -r kind rel n s; do
     [[ "$kind" == ARM ]] || continue
     per_file[$rel]=$(( ${per_file[$rel]:-0} + 1 ))
-    if [[ "$s" == *'--match-head-commit "${EXEMPT_HEAD:?'* ]]; then
-      exempt_per[$rel]=$(( ${exempt_per[$rel]:-0} + 1 ))
-      [[ "$rel" == "$DRAIN" ]] || { echo "FAIL[A1] $rel:$n exempt pin outside drain-prs: $s"; f=1; }
-    elif [[ "$s" != *'--match-head-commit "${H:?'* ]]; then
-      echo "FAIL[A1] $rel:$n arm without --match-head-commit \"\${H:?: $s"; f=1
-    fi
+    [[ "$s" == *'--match-head-commit "${H:?'* ]] || { echo "FAIL[A1] $rel:$n arm without --match-head-commit \"\${H:?: $s"; f=1; }
   done <<<"$out"
-  local total=0; for rel in "${!per_file[@]}"; do total=$(( total + per_file[$rel] )); done
-  (( total > 0 )) || { echo "ZERO-SPANS the scanner found no arm span in any site"; f=1; }
 
   # A1-floor -- set identity: every site present, each with at least one arm span.
   ledger+=(A1-floor)
@@ -133,28 +115,17 @@ run_root() {
 
   # A1-noH -- only the canonical statement sets H.
   ledger+=(A1-noH)
-  for rel in "${SITES[@]}"; do
+  for rel in "${SITES[@]}" "${LINK_ONLY[@]}"; do
     [[ -f "$root/$rel" ]] || continue
     c=$(grep -nE -- "$NOH_RE" "$root/$rel"); rc=$?
     (( rc <= 1 )) || { echo "INSTRUMENT grep failed on A1-noH ($rel)"; return 2; }
     [[ -z "$c" ]] || { while IFS= read -r l; do echo "FAIL[A1-noH] $rel:$l"; done <<<"$c"; f=1; }
   done
 
-  # A1-exempt -- exactly one exempt arm, in drain-prs.
-  ledger+=(A1-exempt)
-  for rel in "${SITES[@]}"; do
-    c=${exempt_per[$rel]:-0}
-    if [[ "$rel" == "$DRAIN" ]]; then
-      (( c == 1 )) || { echo "FAIL[A1-exempt] $rel has $c exempt arm spans (want exactly 1)"; f=1; }
-    else
-      (( c == 0 )) || { echo "FAIL[A1-exempt] $rel has $c exempt arm spans (want 0)"; f=1; }
-    fi
-  done
-
   # A2 -- every site links the canonical check.
   ledger+=(A2)
-  for rel in "${SITES[@]}"; do
-    [[ -f "$root/$rel" ]] || continue
+  for rel in "${SITES[@]}" "${LINK_ONLY[@]}"; do
+    [[ -f "$root/$rel" ]] || { echo "FAIL[A2] missing site file: $rel"; f=1; continue; }
     grep -qF -- "$LINK" "$root/$rel" || { echo "FAIL[A2] $rel does not link $LINK"; f=1; }
   done
 
@@ -163,34 +134,15 @@ run_root() {
   canon_hits=$(cd "$root" && grep -rlF 'echo "ARM_CHECK refused:' plugins/soleur/skills/ 2>/dev/null)
   [[ "$canon_hits" == "$CANON" ]] || { echo "FAIL[A2b] refusal statement files: [$(tr '\n' ' ' <<<"$canon_hits")] (want only $CANON)"; f=1; }
 
-  # A3 -- the canonical file carries the statement, the pinned arm and one column-0 regex line.
+  # A3 -- the canonical file carries the refusal statement and the pinned arm line.
   ledger+=(A3)
   if [[ ! -f "$root/$CANON" ]]; then echo "FAIL[A3] canonical file missing: $CANON"; f=1
   else
     grep -qF -- "$CANON_REFUSE" "$root/$CANON" || { echo "FAIL[A3] canonical refusal statement missing"; f=1; }
     grep -qF -- "$CANON_ARM" "$root/$CANON" || { echo "FAIL[A3] canonical pinned arm line missing"; f=1; }
-    c=$(grep -cE "^DOMAIN_SURFACE_RE='" "$root/$CANON")
-    [[ "$c" == 1 ]] || { echo "FAIL[A3] canonical has $c column-0 DOMAIN_SURFACE_RE lines (want 1)"; f=1; }
   fi
 
-  # A4 -- the domain regex: single copy, extracted the way drain-prs extracts it, and its behaviour.
-  ledger+=(A4)
-  canon_hits=$(cd "$root" && grep -rlE "^DOMAIN_SURFACE_RE='" plugins/soleur/skills/ 2>/dev/null)
-  [[ "$canon_hits" == "$CANON" ]] || { echo "FAIL[A4] DOMAIN_SURFACE_RE files: [$(tr '\n' ' ' <<<"$canon_hits")] (want only $CANON)"; f=1; }
-  re=$(sed -n "s/^DOMAIN_SURFACE_RE='\(.*\)'\$/\1/p" "$root/$CANON" 2>/dev/null | head -1)
-  if [[ -z "$re" ]]; then echo "FAIL[A4] DOMAIN_SURFACE_RE not extracted from $CANON"; f=1
-  else
-    for p in "${MUST_MATCH[@]}"; do
-      printf '%s\n' "$p" | grep -qE -- "$re"; rc=$?
-      (( rc <= 1 )) || { echo "INSTRUMENT grep -E failed on the extracted regex"; return 2; }
-      (( rc == 0 )) || { echo "FAIL[A4] MUST-MATCH path not matched: $p"; f=1; }
-    done
-    for p in "${MUST_NOT_MATCH[@]}"; do
-      printf '%s\n' "$p" | grep -qE -- "$re" && { echo "FAIL[A4] MUST-NOT-MATCH path matched: $p"; f=1; }
-    done
-  fi
-
-  # A5 -- sync-pr-behind.sh has no arm span, and its dequeued message routes the re-arm through the check.
+  # A5 -- neither script that prints re-arm instructions has an arm span, and each message names the check.
   ledger+=(A5)
   if [[ ! -f "$root/$SYNC" ]]; then echo "FAIL[A5] missing $SYNC"; f=1
   else
@@ -203,6 +155,20 @@ run_root() {
       [[ "$c" == *"$LINK"* ]] || { echo "FAIL[A5] dequeued message does not name $LINK"; f=1; }
     fi
   fi
+  if [[ ! -f "$root/$MQJ" ]]; then echo "FAIL[A5] missing $MQJ"; f=1
+  else
+    c=$(scan "$root" "$MQJ") || { echo "INSTRUMENT scanner (python) failed on $MQJ"; return 2; }
+    [[ -z "$c" ]] || { while IFS=$'\t' read -r _ rel n s; do echo "FAIL[A5] $rel:$n arm span: $s"; done <<<"$c"; f=1; }
+    c=$(grep -E '^[[:space:]]*die "PR #\$PR is not in the merge queue and has no auto-merge armed' "$root/$MQJ")
+    if [[ -z "$c" ]]; then echo "FAIL[A5] no not-armed die line in $MQJ"; f=1
+    else [[ "$c" == *"$LINK"* ]] || { echo "FAIL[A5] $MQJ not-armed message does not name $LINK"; f=1; }; fi
+  fi
+
+  # A6 -- tombstone: the deleted exempt arm's tokens appear nowhere under plugins/soleur/skills/.
+  ledger+=(A6)
+  c=$(cd "$root" && grep -rnE 'EXEMPT_HEAD|soleur-exempt-' plugins/soleur/skills/ 2>/dev/null); rc=$?
+  (( rc <= 1 )) || { echo "INSTRUMENT grep failed on A6"; return 2; }
+  [[ -z "$c" ]] || { while IFS= read -r l; do echo "FAIL[A6] exempt-arm token: $l"; done <<<"$c"; f=1; }
 
   echo "LEDGER $(printf '%s\n' "${ledger[@]}" | sort | tr '\n' ' ' | sed 's/ $//')"
   [[ "$(printf '%s\n' "${ledger[@]}" | sort | tr '\n' ' ' | sed 's/ $//')" == "$EXPECTED_LEDGER" ]] \
@@ -244,9 +210,9 @@ if (( real_rc != 0 )); then
 fi
 pass "real tree GREEN with ledger"
 
-# One read-only base copy of the seven files; each row gets its own writable copy.
+# One read-only base copy of the site, canonical and script files; each row gets its own writable copy.
 BASE="$SANDBOX/base"
-for rel in "${SITES[@]}" "$CANON" "$SYNC"; do
+for rel in "${SITES[@]}" "${LINK_ONLY[@]}" "$CANON" "$SYNC" "$MQJ"; do
   mkdir -p "$BASE/$(dirname "$rel")" && cp "$REPO_ROOT/$rel" "$BASE/$rel" || { echo "[FATAL] base copy of $rel" >&2; exit 2; }
 done
 chmod -R a-w "$BASE"
@@ -259,23 +225,30 @@ if s.count(o) != 1: sys.exit(1)
 open(p, "w", encoding="utf-8").write(s.replace(o, os.environ["NEW"]))
 PY
 }
+# edit_first <file> <old> <new> : replace the FIRST occurrence (for text the file repeats), or FATAL
+edit_first() {
+  OLD="$2" NEW="$3" python3 -I - "$1" <<'PY' || { echo "[FATAL] edit_first found no occurrence in $1" >&2; exit 2; }
+import os, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read(); o = os.environ["OLD"]
+if o not in s: sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(o, os.environ["NEW"], 1))
+PY
+}
 
-# row <id> <want: GREEN | ZERO-SPANS | assertion id> <fn|-> [env assignment]
+# row <id> <want: GREEN | assertion id> <fn> [reason: a substring the FAIL[<id>] line must carry; required unless GREEN]
 row() {
   CASES_RUN=$((CASES_RUN + 1))
-  local id="$1" want="$2" fn="$3" envset="${4-}" t out rc
+  local id="$1" want="$2" fn="$3" why="${4-}" t out rc
   t="$SANDBOX/row-$id"; rm -rf "$t"; cp -r "$BASE" "$t" && chmod -R u+w "$t" || { echo "[FATAL] row copy $id" >&2; exit 2; }
-  [[ "$fn" == - ]] || "$fn" "$t"
-  if [[ -n "$envset" ]]; then out=$(env "$envset" bash "$SELF" --root "$t" 2>&1); rc=$?
-  else out=$(bash "$SELF" --root "$t" 2>&1); rc=$?; fi
+  "$fn" "$t"
+  out=$(bash "$SELF" --root "$t" 2>&1); rc=$?
   if [[ "$want" == GREEN ]]; then
-    (( rc == 0 )) && pass "$id GREEN" || fail "$id want GREEN, rc=$rc: $(grep -E '^(FAIL|INSTRUMENT|ZERO)' <<<"$out" | head -3 | tr '\n' '|')"
+    (( rc == 0 )) && pass "$id GREEN" || fail "$id want GREEN, rc=$rc: $(grep -E '^(FAIL|INSTRUMENT)' <<<"$out" | head -3 | tr '\n' '|')"
   elif (( rc >= 2 )); then fail "$id instrument failure rc=$rc: $(grep INSTRUMENT <<<"$out" | head -2 | tr '\n' '|')"
-  elif [[ "$want" == ZERO-SPANS ]]; then
-    (( rc == 1 )) && grep -q '^ZERO-SPANS' <<<"$out" && pass "$id ZERO-SPANS" || fail "$id want ZERO-SPANS, rc=$rc"
   else
-    (( rc == 1 )) && grep -qF "FAIL[$want]" <<<"$out" && pass "$id caught by $want" \
-      || fail "$id want FAIL[$want], rc=$rc: $(grep -E '^(FAIL|ZERO)' <<<"$out" | head -3 | tr '\n' '|')"
+    [[ -n "$why" ]] || { echo "[FATAL] row $id names no reason" >&2; exit 2; }
+    (( rc == 1 )) && grep -F "FAIL[$want]" <<<"$out" | grep -qF -- "$why" && pass "$id caught by $want ($why)" \
+      || fail "$id want FAIL[$want] naming '$why', rc=$rc: $(grep -E '^FAIL' <<<"$out" | head -3 | tr '\n' '|')"
   fi
 }
 
@@ -293,30 +266,32 @@ RM_ARM='bash "$SS_LIB" with_lock merge-main 600 -- \'
 SS_LINE='SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"'
 DQ_ARM='gh pr merge "$N" --squash --auto --match-head-commit "${H:?run the arm check in this call}"'
 SHIP_ANCHOR='## Headless Mode Detection'
+SETTLE_TIE='   [ "$H" = "$SHA" ]'
+SETTLE_ANCHOR='## Operator-authorized variant'
+SYNC_REARM='(3) re-arm once, only when autoMergeRequest is null, through the arm check ('
+MQJ_DIE='arm it first through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check'
 
 m1()   { edit "$1/$DRAIN" "$DRAIN_ARM" 'gh pr merge <N> --squash --auto'; }
 m2()   { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$RM_ARM" "$RM_ARM"$'\n'"gh pr merge <number> --squash --auto && \\"; }
 m2b()  { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge 7 --auto; gh pr merge 8 --auto --match-head-commit "${H:?x}"'; }
 m3()   { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "$DQ_ARM" "$DQ_ARM"$'\n''gh pr merge "$N" \'$'\n''  --squash --auto'; }
 m5()   { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "$LINK" 'review-evidence-comment.md'; }
+m5b()  { local i; for i in 1 2 3 4 5 6; do grep -qF -- "$LINK" "$1/$SETTLE" || break; edit_first "$1/$SETTLE" "$LINK" 'review-evidence-comment.md'; done; }
 m6()   { edit "$1/$DRAIN" "$DRAIN_ARM" "$DRAIN_ARM"$'\n'"$CANON_REFUSE"; }
 m7()   { edit "$1/$CANON" "  $CANON_REFUSE"$'\n' ''; }
+m7b()  { edit "$1/$CANON" "$CANON_ARM" '--match-head-commit "$H"'; }
 m8a()  { rm -f "$1/plugins/soleur/skills/product-roadmap/SKILL.md"; }
 m8b()  { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "$DQ_ARM" 'gh pr merge "$N" --squash'; }
 m10a() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" 'H=$(gh pr view <number> --json headRefOid --jq .headRefOid)'$'\n'"$SS_LINE"; }
 m10b() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" 'read -r PR H'$'\n'"$SS_LINE"; }
 m10c() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" ': "${H:=x}"'$'\n'"$SS_LINE"; }
+m10d() { edit_first "$1/$SETTLE" "$SETTLE_TIE" '   H=$SHA'$'\n'"$SETTLE_TIE"; }
 m11a() { edit "$1/plugins/soleur/skills/product-roadmap/SKILL.md" "$SS_LINE" "$EXEMPT_ARM"$'\n'"$SS_LINE"; }
-m11b() { edit "$1/$DRAIN" "$EXEMPT_ARM" "$EXEMPT_ARM"$'\n'"$EXEMPT_ARM"; }
-m14p() { edit "$1/$DRAIN" "$DRAIN_ARM" "$DRAIN_ARM"$'\n'"$(grep -E "^DOMAIN_SURFACE_RE='" "$BASE/$CANON")"; }
-m15()  { python3 -I - "$1/$SYNC" <<'PY' || { echo "[FATAL] m15 did not land" >&2; exit 2; }
-import re, sys
-p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-new, n = re.subn(r"\(3\) re-arm once[^.]*\.", "(3) re-arm once: gh pr merge $PR --squash --auto.", s, count=1)
-if n != 1: sys.exit(1)
-open(p, "w", encoding="utf-8").write(new)
-PY
-}
+m15()  { edit "$1/$SYNC" "$SYNC_REARM" '(3) re-arm once: gh pr merge $PR --squash --auto ('; }
+m16()  { edit "$1/$DRAIN" "$DRAIN_ARM" "$DRAIN_ARM"$'\n''Read the head into `EXEMPT_HEAD` first.'; }
+m16b() { edit "$1/$SETTLE" "$SETTLE_ANCHOR" 'Read `soleur-exempt-<N>.head` first.'$'\n\n'"$SETTLE_ANCHOR"; }
+m17()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it first'; }
+m18()  { edit "$1/$MQJ" "$MQJ_DIE" 'arm it: gh pr merge $PR --squash --auto'; }
 h3() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh pr merge 7 --disable-auto'$'\n''gh pr merge "$N" --auto --squash --match-head-commit "${H:?x}"'; }
 h4() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''Run `gh pr merge` unlocked, or `gh pr merge <N> --squash`.'; }
 h5() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''See [the check](x/'"$LINK"').'$'\n\n''```bash'$'\n''# comment'$'\n''gh pr merge 9 --squash --auto --match-head-commit "${H:?x}"'$'\n''```'; }
@@ -324,63 +299,38 @@ h6() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHO
 h7() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''gh api -H=Accept:application/json repos/{owner}/{repo}/pulls/7'; }
 
 echo "== mutation rows"
-row M1 A1 m1
-row M2 A1 m2
-row M2b A1 m2b
-row M3 A1 m3
-row M5 A2 m5
-row M6 A2b m6
-row M7 A3 m7
-row M8a A1-floor m8a
-row M8b A1-floor m8b
-row M10a A1-noH m10a
-row M10b A1-noH m10b
-row M10c A1-noH m10c
-row M11a A1-exempt m11a
-row M11b A1-exempt m11b
-row M14-paste A4 m14p
-row M15 A5 m15
+row M1 A1 m1 'arm without'
+row M2 A1 m2 'arm without'
+row M2b A1 m2b 'arm without'
+row M3 A1 m3 'arm without'
+row M5 A2 m5 'merge-queue-dequeue.md does not link'
+row M5b A2 m5b 'settle-then-admin-merge.md does not link'
+row M6 A2b m6 'refusal statement files'
+row M7 A3 m7 'refusal statement missing'
+row M7b A3 m7b 'pinned arm line missing'
+row M8a A1-floor m8a 'missing site file'
+row M8b A1-floor m8b 'has no arm span'
+row M10a A1-noH m10a 'H=$(gh pr view'
+row M10b A1-noH m10b 'read -r PR H'
+row M10c A1-noH m10c '${H:=x}'
+row M10d A1-noH m10d 'H=$SHA'
+row M11a A1 m11a 'EXEMPT_HEAD'
+row M15 A5 m15 'arm span'
+row M16 A6 m16 'EXEMPT_HEAD'
+row M16b A6 m16b 'soleur-exempt-'
+row M17 A5 m17 'not-armed message does not name'
+row M18 A5 m18 'arm span'
 
-# M14 loop -- delete each top-level alternative of the canonical regex alone; a MUST-MATCH fixture must miss.
-RE_LINE=$(grep -E "^DOMAIN_SURFACE_RE='" "$BASE/$CANON")
-mapfile -t ALTS < <(RE_LINE="$RE_LINE" python3 -I -c '
-import os
-r = os.environ["RE_LINE"].split("=", 1)[1][1:-1]
-out, d, b, cur = [], 0, False, ""
-i = 0
-while i < len(r):
-    c = r[i]
-    if c == "\\" and i + 1 < len(r):
-        cur += r[i:i+2]; i += 2; continue
-    if b:
-        if c == "]": b = False
-    elif c == "[": b = True
-    elif c == "(": d += 1
-    elif c == ")": d -= 1
-    elif c == "|" and d == 0:
-        out.append(cur); cur = ""; i += 1; continue
-    cur += c; i += 1
-out.append(cur)
-print("\n".join(out))')
-(( ${#ALTS[@]} >= 20 )) || { printf '[FATAL] M14: split found only %s alternatives\n' "${#ALTS[@]}" >&2; exit 2; }
-m14_alt() { edit "$1/$CANON" "$RE_LINE" "$M14_NEW"; }
-for k in "${!ALTS[@]}"; do
-  rest=(); for j in "${!ALTS[@]}"; do (( j == k )) || rest+=("${ALTS[$j]}"); done
-  M14_NEW="DOMAIN_SURFACE_RE='$(IFS='|'; printf '%s' "${rest[*]}")'"
-  row "M14-alt$k" A4 m14_alt
-done
-
-echo "== harness rows"
-row H1 ZERO-SPANS - 'SPAN_RE=(?!)'
+echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H)"
 row H3 GREEN h3
 row H4 GREEN h4
 row H5 GREEN h5
 row H6 GREEN h6
 row H7 GREEN h7
 
-MIN_CASES=$(( 16 + ${#ALTS[@]} + 6 ))
+MIN_CASES=26  # 21 mutation rows + 5 harness rows; raise it in the same edit that adds a row
 echo
-echo "passes=$passes fails=$fails cases=$CASES_RUN alternatives=${#ALTS[@]}"
+echo "passes=$passes fails=$fails cases=$CASES_RUN"
 if (( CASES_RUN < MIN_CASES )); then printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2; exit 1; fi
 if (( fails > 0 )); then printf 'FAILED: %s\n' "${FAILED[@]}" >&2; exit 1; fi
 echo "arm-check-sites: all rows passed"

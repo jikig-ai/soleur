@@ -316,7 +316,7 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `soleur:ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run its first statement with `PR_NUMBER=<number>`, then the block below, in one Bash call. The check's `exit 1` stops the call before the lock, and both arms abort on `${H:?…}` if the check did not run in the same call. On a refusal from the arm check, run `soleur:review`, then the call again; never arm around it. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so a non-zero `rc` other than 99 means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
+3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run its first statement with `PR_NUMBER=<number>`, then the block below, in one Bash call. On a refusal, follow the check's own refusal rule. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so a non-zero `rc` other than 99 means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
    SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
@@ -339,7 +339,7 @@ Present an output summary listing the document path, milestones created, issues 
    fi
    ```
 
-   rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` bare, which has no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
+   rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` unlocked, with no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
 4. Poll the PR using the Monitor tool with the same state machine as `soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 

@@ -2120,7 +2120,7 @@ qw_done
 # N7: byte-exact golden texts for a main-based PR, captured from the PRE-change script's own output (PR number 4242, rules stub, fixture stderr).
 # Golden literals (quoted heredocs: the texts hold single quotes and em dashes), captured from the PRE-change script's own output on 2026-10-24.
 GOLD_REFUSAL="$(cat <<'GOLD_EOF'
-PR #4242 is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Truly need a hand sync? Disarm first (gh pr merge 4242 --disable-auto), sync, then re-arm. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued').
+PR #4242 is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Truly need a hand sync? Disarm first (gh pr merge 4242 --disable-auto), sync, then re-arm through review-evidence-comment.md#arm-check. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued').
 GOLD_EOF
 )"
 GOLD_UNREADABLE_LINE="$(cat <<'GOLD_EOF'

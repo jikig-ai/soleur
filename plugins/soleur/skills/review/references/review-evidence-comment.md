@@ -1,8 +1,7 @@
 # Review-Evidence comment and the agent-review merge gate
 
-Loaded by `soleur:review` step 3 (after `emit-review-trailer.sh` succeeds) and linked from the arm steps of
-`soleur:ship`, `soleur:merge-pr`, `soleur:drain-prs`, `soleur:product-roadmap` and ship's
-[merge-queue-dequeue.md](../../ship/references/merge-queue-dequeue.md) re-arm. This is the one copy of the gate text; the skills link here.
+Loaded by `soleur:review` step 3 (after `emit-review-trailer.sh` succeeds) and linked from every arm site listed
+in `## Arm check`. This is the one copy of the gate text; the skills link here.
 
 ## The gate
 
@@ -22,17 +21,6 @@ and recorded in the comment's `domain-ruling` field:
 - auth, secrets and URL or input-validation code: `soleur:engineering:review:security-sentinel` is in the panel;
 - the `single-user incident` and `aggregate pattern` tiers add `soleur:engineering:review:user-impact-reviewer`.
 
-drain-prs' exempt arm reads the line below, its one copy of the domain-surface paths (CTO amendment A-amend,
-2026-11-12): any changed path it matches takes the PR off the exempt arm. It adds manifests, lockfiles, build and
-CI-execution surfaces and agent-instruction files to the list above. It is a floor, not the whole gate: code it
-cannot name, such as an auth helper under another name, still routes to `soleur:review` on the agent's read, and
-in doubt the checked arm wins. Whoever edits the surface list above updates this line in the same change, and
-it stays at column 0, where drain-prs' `sed` and `arm-check-sites.test.sh` read it:
-
-```text
-DOMAIN_SURFACE_RE='(^|/)infra/|\.tf$|\.tfvars$|\.hcl$|(^|/)migrations/|\.sql$|^\.github/|(^|/)legal/|(^|/)o?auth[^/]*(/|\.)|(^|/)secrets?(/|\.|-)|doppler|(^|/)package(-lock)?\.json$|(^|/)bun\.lockb?$|\.lock$|(^|/)Dockerfile|(^|/)\.env|cloud-init|(^|/)middleware\.ts$|(^|/)\.claude/|(^|/)AGENTS[^/]*\.md$|(^|/)CLAUDE\.md$|^plugins/[^/]+/(hooks|agents|commands|scripts)/|^plugins/[^/]+/skills/.*\.(md|sh|m?js|ts|py|json)$|(^|/)\.claude-plugin/|^scripts/|(^|/)\.git(modules|attributes)$|(^|/)bunfig\.toml$|\.config\.[cm]?[jt]s$'
-```
-
 ## The comment
 
 A commit trailer is invisible to a reader of `gh pr merge`, so post one PR comment after the trailer. A comment is
@@ -50,17 +38,24 @@ after the head it names is not a pass; the arm check below enforces all three.
 Under a merge queue, the head the comment covers must be the head that enters the queue: a fix commit pushed after
 the comment and left unreviewed rides the queue, and this repo's queue builds one entry at a time
 (`max_entries_to_build = 1`), so pulling the PR out and re-entering puts it at the back. Re-review the new commits
-and post a fresh comment before arming or re-arming `gh pr merge --squash --auto`; when auto-merge is already armed,
+and post a fresh comment before arming or re-arming auto-merge; when auto-merge is already armed,
 run `gh pr merge <number> --disable-auto` before pushing a fix. **Why:** #12518 — four CI-guard fix commits entered
 the queue past the evidence head, and their P3 findings had to be fixed forward in #12633.
 
 ## Arm check
 
-Ship's arm and CI-fix re-arm, merge-pr's merge gate, drain-prs §4's checked arm, product-roadmap's locked arm,
-merge-queue-dequeue.md's step 3 re-arm and sync-pr-behind.sh's dequeue message run this one check; it is the only
-copy. drain-prs' exempt arm (first-party bot author, bot-written or clean-sync commits, no `DOMAIN_SURFACE_RE`
-path) is the one recorded exemption; it pins the head its read call wrote (drain-prs §4). Never assign `H`, `EV`
-or `EXEMPT_HEAD` by hand: only the statement, or the exempt read call, sets them. It takes the
+Ship's arm and CI-fix re-arm, merge-pr's merge gate, drain-prs §4's arm, product-roadmap's locked arm,
+merge-queue-dequeue.md's step 3 re-arm and settle-then-admin-merge.md's step 2 run this one check, and the
+re-arm instructions printed by sync-pr-behind.sh and merge-queue-jump.sh point here; it is the only copy. Never
+assign `H` or `EV` by hand: only the statement sets them.
+
+Not covered: first-party bots arm their own PRs server-side with no evidence check:
+`.github/scripts/bump-inngest-bootstrap-pin.sh` (`gh pr merge … --auto`),
+`.github/actions/bot-pr-with-synthetic-checks/action.yml` (`gh_app pr merge … --auto`) and
+`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts` (`enablePullRequestAutoMerge`). Tracked in
+#12739.
+
+The check takes the
 latest `Review-Evidence:` comment, requires its first line to say `coverage=full` and `unresolved-P1-P2=0` (each
 field exactly once), requires its `head=` to be an ancestor of the PR head, and requires that no non-merge commit
 sits on the branch's first-parent line between the two. The first statement is the check and exits 1 on refusal;
