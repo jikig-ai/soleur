@@ -389,10 +389,19 @@ locals {
     # inngest-provision-rehearsal root passes its scratch `rehearsal_<runid>` config so a
     # throwaway host never resolves the real prd. Mirroring git-data's doppler_config_name.
     inngest_doppler_config = "prd"
-    # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
-    # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
-    sdk_url = "http://10.0.1.10:3000/api/inngest"
+    # Single stable --sdk-url = the PUBLIC serve URL (#10538 remedy (c); CTO and CLO rulings
+    # 2026-11-13; ADR-100 Decision 1 as amended). The poll takes the same path the step calls
+    # already take: public-CA TLS to the Cloudflare edge, then `strict` (Origin CA certificate)
+    # to whichever web host the LB steers it to (ADR-321). It replaces the plaintext
+    # http://10.0.1.10:3000 poll and supersedes the private-VIP plan for N>1. The URL equals
+    # the route's registered serveOrigin + servePath (app/api/inngest/route.ts SERVE_HOST), so
+    # no second app identity is registered; --poll-interval stays 60 s. Pinned by Guard 4 of
+    # exec-placement-forward.test.ts. This value reaches the LIVE host only at the owner's
+    # gated `inngest-host-replace` dispatch: hcloud_server.inngest is not a push-apply target.
+    # The carrier comment in inngest-bootstrap.sh ("polls the co-located web-platform") is out
+    # of date until that file next changes for a real reason (it is an image carrier; a
+    # comment-only edit mints a no-op image release). Consumed by inngest-bootstrap.sh.
+    sdk_url = "https://app.soleur.ai/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download
     # against the matching checksum — the wrong-arch SHA fails verify. The cloud-init passes this

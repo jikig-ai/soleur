@@ -11,6 +11,9 @@ import { getAllowedOrigins } from "./validate-origin";
 // Measured on prod: the dedicated inngest host's --sdk-url sync poll
 // (http://10.0.1.10:3000/api/inngest, ~120/hr) and the deploy canary's localhost
 // probes are legitimately REJECTED — they are not admitted because
+// (#10538 remedy (c): the declared sdk_url is now https://app.soleur.ai/api/inngest;
+// the private-IP rejections stop once the live host polls the public URL, after the
+// owner's inngest-host-replace — until then they continue)
 // `x-forwarded-host` is client-supplied, so whitelisting an internal literal
 // would let any internet request claim a private-net origin. But each rejection
 // is a non-JSON console line that escapes `app_container_warn_filter`'s

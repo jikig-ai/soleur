@@ -2,8 +2,10 @@
 //
 // Every function app/api/inngest/route.ts serves EXECUTES on the one step-executing host (web-1):
 // the Inngest server calls steps at the registered serve URL (https://app.soleur.ai/api/inngest),
-// which Cloudflare routes to web-1 only. `--sdk-url` on the dedicated Inngest host is the
-// registration poll, not the step path. This leaf records where each function COULD run, so the
+// which the Cloudflare LB steers to either serving web host (exec-placement.ts forwards a pinned
+// call to the exec host). `--sdk-url` on the dedicated Inngest host is the registration poll, not
+// the step path; the declared value is the same public serve URL since #10538 remedy (c), live
+// after the owner's `inngest-host-replace`. This leaf records where each function COULD run, so the
 // ADR-143 Phase-3 flip (placement-aware execution, #9137) has a checked answer.
 //
 // Classify a function by the FIRST rule that matches:

@@ -109,6 +109,18 @@ the three load-bearing unknowns this ADR fixes:**
   ships enabled and stays enabled forever; the FSM flag is the sole gate; no step ever disables the
   timer (the terminal-state no-ops make the steady 30s poll safe).
 
+**`--sdk-url` transport alternatives (#10538, added 2026-11-13; CTO and CLO rulings 2026-11-13 — remedy (c) chosen):**
+
+- **A private VIP behind `--sdk-url`** (Decision 1's original N>1 plan). Superseded: it would keep the
+  poll on plain HTTP over the private network (the leg-2 accepted-risk row), add an LB the Cloudflare
+  LB already provides, and register a URL that differs from the `serveOrigin` the app reports.
+- **(a) A web-side TLS listener for the poll.** Rejected: it needs an IP SAN on a private certificate
+  and custom-CA trust in the pinned Inngest Go CLI, which is unverified (the v1.45.1 HTTP client
+  verifies against the system roots; read from the pinned source during planning, 2026-11-13).
+- **(b) Poll removal** (registration by the app's own `PUT` alone). Rejected: it drops
+  the server's cron self-heal after a standalone restart and breaks the #7228 verify window, which
+  relies on the periodic sync.
+
 ## Decision
 
 **Extract Inngest to one dedicated private-net Hetzner host (`hcloud_server.inngest`,
@@ -129,6 +141,20 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    plus `cloudflare_record.app`, and by the execution placement classes in the ADR-033
    amendment of 2026-09-28 (#7230). A VIP behind `--sdk-url` alone would not change where
    steps run; placement-aware execution is #9137.
+
+   **Amendment (2026-11-13, #10538 remedy (c); CTO and CLO rulings 2026-11-13):** the single stable
+   `--sdk-url` is the **public serve URL** `https://app.soleur.ai/api/inngest`, not a private address.
+   It supersedes the private VIP plan for N>1: the Cloudflare LB in front of both replicas is the
+   steering layer, and the poll URL equals the registered `serveOrigin` + `servePath`
+   (`app/api/inngest/route.ts`), so no second app identity is registered and the poll takes the same
+   path as the step calls (public-CA TLS to the edge, `strict` to the origin, ADR-321).
+   `--poll-interval` stays 60 s. The value is declared in `inngest-host.tf` (pinned by Guard 4 of
+   `exec-placement-forward.test.ts`); `hcloud_server.inngest` is not a push-apply target, so the live
+   host changes only at the owner's gated `inngest-host-replace`, which follows the measured #10479
+   cleanup apply (CLO condition). The `10.0.1.10` pin in `exec-placement.ts` now binds to the
+   ADR-119 workspaces-LUKS volume holder only. Detection of a serving host with an empty registry:
+   `logtail_exploration_alert.inngest_registry_empty` (ADR-218 amendment 2026-11-13). The rejected
+   alternatives are under "Considered Options" (#10538 alternatives).
 2. **Hooks stay web-host-resident.** The dedicated host has no app (`rearm` posts to the local
    app's `/api/internal/schedule-reminder`) and no public ingress (the GH runner reaches only
    `deploy.soleur.ai`). Capture/rearm/inventory hooks run on the web host and reach the inngest
