@@ -1,10 +1,10 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
-# generated-from-runs=local:r43308874521,r43286327218,r43278615612,r43185108804,r43138951876
-# default-weight-ms=1799
-# generated-at=2026-11-12T22:08:02Z
+# generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
+# default-weight-ms=1800
+# generated-at=2026-11-13T03:01:01Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=d1b9bd80cf2e967472f212bb8ce88732ce4877662772973b410b32a167144fff
+# growth-acked=b2017fc287d74a23d67c5b25c4e1e6b7302d190ff9bb253afbf807148c86f612
 .claude/hooks/agent-token-tee.test.sh	7099	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	851	measured
 .claude/hooks/bare-head-self-heal.test.sh	3891	measured
@@ -308,6 +308,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	3773	measured
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	162	measured
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	179	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	3924	measured
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	3296	measured
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	1093	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6681	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	92	measured
@@ -434,7 +435,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	1603	measured
 scripts/followthroughs/inngest-hostmetrics-trim-11602	3176	measured
 scripts/followthroughs/inngest-luks-keeper-dark-11265	73371	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	4037	measured
-scripts/followthroughs/main-health-monitor-mutations-12626	1799	floor
+scripts/followthroughs/main-health-monitor-mutations-12626	1800	floor
 scripts/followthroughs/mq-lever-e-verdict-12269	733	measured
 scripts/followthroughs/parked-green-synthesis-11362	172	measured
 scripts/followthroughs/placement-decision-forward-9137	413	measured

@@ -2509,6 +2509,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_IDEMPOTENCY_TEST_SH_PATHS=(
   "scripts/md-to-mrkdwn.test.mjs"
 )
 
+# plugins/soleur/test/reusable-release-push-failed-marker.test.sh — derived edges could not reach its subject (it parses
+# the workflow with PyYAML and executes the marker step's run: body); declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS=(
+  ".github/workflows/reusable-release.yml"
+  "knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md"
+  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
+  "plugins/soleur/test/reusable-release-push-failed-marker.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(

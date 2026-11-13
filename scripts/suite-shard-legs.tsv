@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=local:r43308874521,r43286327218,r43278615612,r43185108804,r43138951876
-# generated-from-runs=local:r43308874521,r43286327218,r43278615612,r43185108804,r43138951876
-# default-weight-ms=1799
-# generated-at=2026-11-12T22:08:02Z
+# generated-from-run=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
+# generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
+# default-weight-ms=1800
+# generated-at=2026-11-13T03:01:01Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -310,6 +310,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	6
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	2
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	8
 plugins/soleur/test/reusable-release-idempotency.test.sh	4
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	2
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/rtk-grammar-parity.test.sh	6

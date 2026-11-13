@@ -28,10 +28,11 @@
 # address's destroy deletes PROXY_HELLO_HMAC_KEY from prd while the new address upserts it, in an undefined
 # order, so a later full-root plan can leave the secret absent. The -target lists hide the orphan until then.
 #
-# NO auto-rotation, and no replace or taint of random_bytes.proxy_hello_hmac until the verifier accepts
-# a previous key: each host reads the secret at container start, so a rotation splits web-1 and web-2
-# across keys for the length of the rolling redeploy (CTO ruling 6; the optional _PREVIOUS key is the
-# sanctioned zero-downtime pattern, as for the egress audit token).
+# NO auto-rotation, and no replace or taint of random_bytes.proxy_hello_hmac. The rotation route is ADR-323
+# Decision 9 (2026-11-10 amendment): three phases through the verify-only slot
+# PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO (NOT minted here), and no phase can run until #12538 moves this key out of
+# Terraform. Ruling 6's endorsement of an optional dual-key PREVIOUS slot is superseded by ADR-323 Decision 9
+# (2026-11-10 amendment).
 
 resource "random_bytes" "proxy_hello_hmac" {
   count = var.host_proxy_tls_enabled ? 1 : 0
