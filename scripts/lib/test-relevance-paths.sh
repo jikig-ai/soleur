@@ -165,16 +165,88 @@ CF_TUNNEL_BATTERY_PATHS=(
 # NOT DECLARED, NAMED: the battery also materialises `git ls-files '*.test.sh'` and
 # `tests/commands/*.sh` into its sandbox — a whole-corpus read. Declaring every tracked suite would arm
 # it on nearly every PR, so it is declared by DEPENDENCY, not copy set (ADR-181's rule), and the corpus
-# is ADR-262 residual R3. .github/workflows is a DIRECTORY entry because the linter greps every
-# workflow for suite registrations, so the directory entry arms it on about a third of commits
-# (re-measure: bash scripts/ci-battery-gate-replay.sh).
+# is ADR-262 residual R3.
+#
+# `.github/workflows` NARROWED TO THE CONSUMED SET (#9340, ADR-262 2026-11-12 addendum). The bare
+# directory entry armed this battery on about a third of commits, but only a workflow that names
+# `.test.sh` can feed surfaces 5/6 and change the covered set — the other workflow edits could never
+# move the linter's verdict. The consumed members are therefore enumerated individually, in the same
+# sorted order `scripts/lint-orphan-consumed-workflows.txt` commits them; the linter's completeness arm
+# recomputes `grep -lE '\.test\.sh'` and reds when a consumed workflow is missing from the enumeration,
+# and the enumeration file is itself an element below so updating it re-arms the battery on the same
+# diff. Keep this list byte-identical to that file. The directory operand the battery file names
+# (`cp .github/workflows/*.yml`) sits in PR_GATE_CORPUS_ALLOWLIST with the reason — the consumed
+# subset is what is declared.
 LINT_ORPHAN_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/lint-orphan-test-suites.sh"                      # SUT
   "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # copied into the sandbox
   "apps/web-platform/infra/run-registered-suites.sh"        # copied; a REQUIRED_RUNNERS registration
-  ".github/workflows"                                       # cp .github/workflows/*.yml — directory, see above
+  # --- consumed workflows, byte-identical to scripts/lint-orphan-consumed-workflows.txt (#9340) ---
+  ".github/workflows/apply-delivery-gap-follower.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-git-data-root-key.yml"
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  ".github/workflows/board-status-sync.yml"
+  ".github/workflows/build-inngest-bootstrap-image.yml"
+  ".github/workflows/build-inngest-config-bundle.yml"
+  ".github/workflows/cancel-superseded-pr-runs.yml"
+  ".github/workflows/cf-lb-overlay.yml"
+  ".github/workflows/check-inngest-bootstrap-build.yml"
+  ".github/workflows/ci.yml"                                # also rides PR_GATE_MACHINERY_PATHS — listed because the enumeration must stay byte-identical to the .txt
+  ".github/workflows/cla-evidence-timestamp.yml"
+  ".github/workflows/code-quality-followups-watch.yml"
+  ".github/workflows/codeql-main-alert-gate.yml"
+  ".github/workflows/cutover-inngest.yml"
+  ".github/workflows/deploy-docs.yml"
+  ".github/workflows/diagnose-inngest-verify.yml"
+  ".github/workflows/egress-injector-spike.yml"
+  ".github/workflows/gdpr-gate-self-test.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/git-data-rung2-rehearsal.yml"
+  ".github/workflows/image-cve-scan.yml"
+  ".github/workflows/image-cve-verdict.yml"
+  ".github/workflows/infra-validation.yml"
+  ".github/workflows/inngest-host-state.yml"
+  ".github/workflows/inngest-key-rotate.yml"
+  ".github/workflows/inngest-link-flip.yml"
+  ".github/workflows/inngest-provision-rehearsal.yml"
+  ".github/workflows/key-rotate.yml"
+  ".github/workflows/main-health-monitor.yml"
+  ".github/workflows/merge-bypass-audit.yml"
+  ".github/workflows/merge-queue-stall-check.yml"
+  ".github/workflows/mint-origin-ca-cert.yml"
+  ".github/workflows/pr-quality-guards.yml"
+  ".github/workflows/registration-narrowing-watch.yml"
+  ".github/workflows/registry-host-replace-dispatch.yml"
+  ".github/workflows/registry-zot-inventory.yml"
+  ".github/workflows/restart-inngest-server.yml"
+  ".github/workflows/reusable-release.yml"
+  ".github/workflows/rule-audit.yml"
+  ".github/workflows/scheduled-cron-artifact-age.yml"
+  ".github/workflows/scheduled-dev-migration-drift.yml"
+  ".github/workflows/scheduled-devin-docs-drift.yml"
+  ".github/workflows/scheduled-inngest-health.yml"
+  ".github/workflows/scheduled-machinery-drain.yml"
+  ".github/workflows/scheduled-marketplace-drift.yml"
+  ".github/workflows/scheduled-real-sdk-ask-probe.yml"
+  ".github/workflows/scheduled-rehearsal-skip-monitor.yml"
+  ".github/workflows/scheduled-supabase-watchdog.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  ".github/workflows/scheduled-zot-restart-loop.yml"
+  ".github/workflows/secret-scan.yml"
+  ".github/workflows/shard-balance-watch.yml"
+  ".github/workflows/validate-vector-config.yml"
+  ".github/workflows/vendor-pin-verify.yml"
+  ".github/workflows/wallclock-p90-watch.yml"
+  ".github/workflows/web-host-escrow-diagnose.yml"
+  ".github/workflows/web-platform-release.yml"
+  ".github/workflows/workspaces-luks-cutover.yml"
+  ".github/workflows/workspaces-luks-verify.yml"
+  # --- end consumed-workflows enumeration ---
+  "scripts/lint-orphan-consumed-workflows.txt"              # the enumeration itself — editing it re-arms the battery on the same diff
   "scripts/lint-orphan-test-suites.test.sh"                 # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
@@ -234,6 +306,101 @@ AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
 )
 
+# --- #9340 next-tier admits (ADR-262 2026-11-12 addendum) ---------------------------------------
+# The six suites below are NOT machinery self-tests — they were admitted under the widened
+# Decision-4 rule: each verdict is a property of a closed, declarable edge set (an offline unit
+# or fixture suite over named SUT files). None is live-external (betterstack-roundtrip is the
+# unit suite for the probe, not the live probe; sentry-alert-live-fidelity is fixture-driven
+# despite the "live" in its name).
+
+# plugins/soleur/test/monitor-pr-checks.test.sh (test-all.sh glob loop) — ~245 s. Source of
+# truth: the suite's own header — SUT="$DIR/soleur/scripts/monitor-pr-checks.sh" plus the W14
+# arm, which symlinks the whole $(dirname $SUT) directory AND lib/ into its scratch copy before
+# running the copy, because the SUT resolves its probes (lib/monitor-lock.sh, ci-head-verdict.sh,
+# check-red-on-main.sh, sync-pr-behind.sh, lib/context-sanitize.sh) through sibling paths. The
+# scripts directory is therefore the honest dependency edge — a new or edited sibling can change
+# what the probes resolve, and the measured arm rate stays low either way. Guard 2 cannot see the
+# operands: the battery roots at $DIR (the plugins/ prefix), not at $REPO_ROOT/${ROOT} — the
+# exemption is recorded in PR_GATE_NO_OPERAND_ALLOWLIST.
+MONITOR_PR_CHECKS_PATHS=(
+  "plugins/soleur/scripts"                                 # SUT + sibling-probe surface (W14 mirrors the dir wholesale — see above)
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "plugins/soleur/test/monitor-pr-checks.test.sh"          # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
+# plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh (test-all.sh glob
+# loop) — ~154 s. Source of truth: the suite's Guard 2/3 arms — $REPO_ROOT/.mcp.json (the launch
+# pin it mutates), plugins/soleur/.mcp.json and plugins/soleur/.claude-plugin/plugin.json (the
+# wrapped-registration assertions), apps/web-platform/.dockerignore (the vendored re-exclusion
+# line), and `.github/workflows/{ci,reusable-release}.yml` (the vendor-step live lines). The
+# `.github/workflows/` operand the file names via interpolation is allowlisted: the two members
+# it actually reads are declared (ci.yml rides the machinery set).
+PLAYWRIGHT_MCP_REDACT_PROXY_PATHS=(
+  "plugins/soleur/skills/agent-browser"                    # the SUT proxy + capture fixtures — directory
+  ".mcp.json"                                              # Guard 2: the playwright launch pin the suite mutates
+  "plugins/soleur/.mcp.json"                               # Guard 3: the wrapped registration it asserts
+  "plugins/soleur/.claude-plugin/plugin.json"              # Guard 3: mcpServers-without-playwright assertion
+  "apps/web-platform/.dockerignore"                        # Guard 3: the _plugin-vendored/.mcp.json re-include line
+  ".github/workflows/reusable-release.yml"                 # Guard 3 vendor-exclusion live line (ci.yml is in the machinery set)
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh"  # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
+# tests/scripts/betterstack-roundtrip-latency (test-all.sh) — ~165 s. The unit suite for
+# scripts/followthroughs/betterstack-roundtrip-latency-7855.sh — it stubs the probe, it does NOT
+# read live Better Stack state, which is why it is admissible where the live probe would not be.
+# Source of truth: the suite's $REPO_ROOT operands.
+BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
+  "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # SUT
+  "scripts/lint-followthrough-varq-ban.sh"                 # named operand — the sibling var-args ban the suite reads
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "tests/scripts/test-betterstack-roundtrip-latency.sh"    # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
+# tests/scripts/git-data-birth-readiness-gate (test-all.sh) — ~160 s. Source of truth: the
+# suite's ${ROOT} operands — GATE= (the lib it sources), the sourced git-fixture-env, the live
+# cloud-init and git-data.tf fixtures, the canonical W2_PATTERN it lifts out of
+# grep-q-pipe-guard.test.sh, and the tests/scripts/lib directory its W2 sweep quantifies over.
+# The `.github/workflows` operand (the W1 seam sweep) is a corpus read — allowlisted.
+GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
+  "tests/scripts/lib/git-data-birth-readiness-gate.sh"     # SUT — the gate lib it sources
+  "tests/scripts/lib"                                      # W2 sweep corpus — directory, declared so a new sibling lib arms it
+  "plugins/soleur/test/lib/git-fixture-env.sh"             # sourced — absence is a hard abort
+  "apps/web-platform/infra/cloud-init-git-data.yml"        # the live fixture the gate hashes and interlocks on
+  "apps/web-platform/infra/git-data.tf"                    # the plaintext-id interlock fixture
+  ".claude/hooks/grep-q-pipe-guard.test.sh"                # canonical W2_PATTERN source
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "tests/scripts/test-git-data-birth-readiness-gate.sh"    # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
+# scripts/test-contention (test-all.sh) — ~135 s. Source of truth: the suite's $REPO_ROOT
+# operands — the lib it exercises and the session-state sibling it names.
+TEST_CONTENTION_PATHS=(
+  "scripts/lib/test-contention.sh"                         # SUT
+  "plugins/soleur/scripts/lib/session-state.sh"            # named operand
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/test-contention.test.sh"                        # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
+# tests/scripts/sentry-alert-live-fidelity (test-all.sh) — ~103 s. A fixture-driven drift-class
+# suite despite the "live" in its name (the live GET is replaced by SENTRY_FIXTURE_RULES) — that
+# is why it is admissible. Source of truth: the suite's $REPO_ROOT operands — PROBE, PROJ,
+# CAPTURE, COMMITTED_REF and the sentry infra directory its *.tf glob reads.
+SENTRY_ALERT_LIVE_FIDELITY_PATHS=(
+  "scripts/sentry-alert-live-fidelity.sh"                  # SUT (PROBE)
+  "tests/scripts/lib/sentry-alert-projection.jq"           # PROJ — the projection oracle
+  "apps/web-platform/infra/sentry"                         # COMMITTED_REF + vendor-default registry + *.tf glob reads — directory
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"  # CAPTURE fixture
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "tests/scripts/test-sentry-alert-live-fidelity.sh"       # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
+)
+
 # plugins/soleur/test/c4-from-components.test.sh (test-all.sh, scripts shard) — declined on 96%
 # of recent commits. Source of truth: the suite's own header — PRODUCER=, FIXTURES=, and the
 # sourced test-helpers.sh.
@@ -280,6 +447,10 @@ C4_PRODUCER_PATHS=(
   "plugins/soleur/lib"                                     # its import closure — directory, see above
   "plugins/soleur/test/test-helpers.sh"                    # sourced; absence is a hard abort
   "plugins/soleur/test/fixtures/component-docs"            # the seeded corpora — directory
+  # #9340: admitted to --pr-gated inside its existing glob-loop special-case (ADR-262 2026-11-12
+  # addendum). The spread element itself stays bare — the Guard-1 machinery-removed mutant slices
+  # on the literal line.
+  "${PR_GATE_MACHINERY_PATHS[@]}"
   "plugins/soleur/test/c4-from-components.test.sh"         # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
 )
@@ -324,6 +495,9 @@ GITHUB_SCRIPTS_SUITE_PATHS=(
   "AGENTS.md"                                              # same scan (auto-loaded content surface)
   "AGENTS.rules.md"                                        # same scan
   "CLAUDE.md"                                              # same scan
+  # #9340: admitted to --pr-gated — the required guard-script-fixture-tests home still runs it on
+  # every PR (ADR-262 2026-11-12 addendum). Bare spread line: see the C4 note above.
+  "${PR_GATE_MACHINERY_PATHS[@]}"
   ".github/scripts/test/run-all.sh"                        # SELF. Dead for MATCHING (".github" already
                                                            # covers it) — present because the linter's
                                                            # self-inclusion check reads this array.
@@ -357,6 +531,9 @@ GITHUB_SCRIPTS_SUITE_PATHS=(
 # the containment guard replaces with a checked invariant.
 WEBPLAT_APP_PATHS=(
   "apps/web-platform/"
+  # #9340: admitted to --pr-gated with the merge_group backstop — repo-wide+component stays
+  # ungated (ADR-262 2026-11-12 addendum). Bare spread line: see the C4 note above.
+  "${PR_GATE_MACHINERY_PATHS[@]}"
   # Redundant for MATCHING — the prefix above already covers it — but required
   # by lint-orphan-test-suites.sh's self-include invariant, and the invariant is
   # right: a commit that edits the containment guard must re-arm this predicate,
@@ -431,4 +608,9 @@ TEST_RELEVANCE_PREFIXES=(
   "AGENTS.md"
   "AGENTS.rules.md"
   "CLAUDE.md"
+  # Root-file pathspecs are legal here for the same reason AGENTS.md is: the linter's
+  # prefix-coverage check requires every declared predicate path to be reachable, and a file
+  # pathspec matching a tracked file is a correct no-op under `git ls-files --others`.
+  ".mcp.json"                                                # PLAYWRIGHT_MCP_REDACT_PROXY_PATHS element (#9340)
+  "knowledge-base/project/specs"                             # SENTRY_ALERT_LIVE_FIDELITY_PATHS' CAPTURE fixture (#9340)
 )

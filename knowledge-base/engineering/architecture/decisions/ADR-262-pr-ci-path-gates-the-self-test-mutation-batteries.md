@@ -140,3 +140,59 @@ ADR-181, ADR-183, ADR-217, ADR-242; issue #9323; `scripts/test-all.sh` (`_diff_t
 ## Amendment — 2026-10-14 (S4 PR B, #9729, ADR-276)
 
 Pointer only. Two things this record assumes are reversed for the PR arm by ADR-276 Decision 5, as implemented by its `## Amendment 2026-10-14 (S4 PR B, #9729)`: (1) the Residuals premise "No merge queue is enforced" (R1; ADR-270 enforces it, so the `merge_group` candidate run, not the PR run, is the full-battery authority), and (2) the Decision 4 admission rule and the two rejected Alternatives that follow from it (job-level gating of the heavy legs, the affected classifier on CI), because the PR arm grows from the five self-test batteries here to the affected set. The reversal takes effect only when ADR-276's `CI_PR_AFFECTED` switch is activated, which PR B does not do (it ships dark and locked); until then this record describes the PR arm as written. The five batteries' own decisions, arrays and guards are unchanged.
+
+## Amendment — 2026-11-12 (#9340, next-tier admissions)
+
+**Decision 4 is widened, not replaced.** The original rule admitted only "a self-test of the gate or
+test machinery whose verdict is a property of NAMED files." The widened rule is:
+
+> A suite may carry `--pr-gated` when its verdict is a property of a **closed, declarable edge
+> set** — a relevance array whose every element is named, tracked-or-committed, and justified —
+> and when it is not a live-external verdict. The machinery self-test clause is unchanged and now
+> applies to every admitted array: each carries its own suite file, `scripts/lib/test-relevance-paths.sh`,
+> and the `PR_GATE_MACHINERY_PATHS` spread, so a diff touching the gate re-arms every gated suite.
+
+"Closed, declarable" means the array's elements exhaust what the suite's verdict reads: a suite
+whose SUT glob-expands a directory it does not consume, or shells out to a live external service
+(BetterStack, Sentry, the network) for its verdict, does not qualify on the first clause and fails
+the second outright. Suites admitted under this rule keep every other Decision property: the
+decline is a counted `skip_suite` verdict, enumeration stays inert, and the three guards below
+quantify over them for free.
+
+**Admissions** (arm rates from `bash scripts/ci-battery-gate-replay.sh`, 300 first-parent commits
+against `origin/main`, measured 2026-11-12 — the window moves, re-run before quoting):
+
+| Suite | Array | Arm rate | Notes |
+|---|---|---|---|
+| `plugins/soleur/test/c4-from-components.test.sh` | `C4_PRODUCER_PATHS` | 32% | gained `PR_GATE_MACHINERY_PATHS`; gated inside its glob-loop special-case |
+| `plugins/soleur/test/monitor-pr-checks.test.sh` | `MONITOR_PR_CHECKS_PATHS` | 34% | glob-loop special-case; Guard-2 no-operand exemption (SUT resolved via `DIR=plugins/`) |
+| `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` | `PLAYWRIGHT_MCP_REDACT_PROXY_PATHS` | 32% | glob-loop special-case; `.mcp.json`/`plugin.json` elements needed root-file prefixes in `TEST_RELEVANCE_PREFIXES` |
+| `tests/scripts/git-data-birth-readiness-gate` | `GIT_DATA_BIRTH_READINESS_GATE_PATHS` | 35% | explicit `if` block replacing the bare registration |
+| `tests/scripts/betterstack-roundtrip-latency` | `BETTERSTACK_ROUNDTRIP_LATENCY_PATHS` | 30% | verdict is the recorded-fixture projection, not the live call — the live half stays ungated by name |
+| `scripts/test-contention` | `TEST_CONTENTION_PATHS` | 30% | explicit `if` block |
+| `tests/scripts/sentry-alert-live-fidelity` | `SENTRY_ALERT_LIVE_FIDELITY_PATHS` | 33% | committed CAPTURE fixture under `knowledge-base/project/specs` — needed a new prefix entry |
+| `.github/scripts/test/run-all.sh` | `GITHUB_SCRIPTS_SUITE_PATHS` | 70% | `.github`+`plugins/soleur` directory edges keep it hot; its required-workflow home (`guard-script-fixture-tests`) still runs it on every PR, so the decline buys local/PR-runner time, never coverage |
+| `apps/web-platform [unit]` | `WEBPLAT_APP_PATHS` | 63% | repo-wide+component stays ungated; the `merge_group` backstop plus the ungated sibling keep full-tree coverage |
+
+**Declines.** No candidate measured near a ~100% arm rate in this window; had one, it would have
+been left ungated — a predicate that fires on every diff is a decline that never lands, and
+gating it buys complexity for nothing. The two pre-existing hot arrays above (63–70%) were
+admitted anyway because each carries an ungated CI home or sibling leg that makes the decline
+costless in coverage terms; their gating saves runner minutes only.
+
+**The `.github/workflows` edge is narrowed, not widened.** `LINT_ORPHAN_BATTERY_PATHS` previously
+declared the whole `.github/workflows` directory. The battery's corpus is the set of workflows
+whose text names `.test.sh` — the only workflows that can change registration surfaces 5/6 — so
+the directory element is replaced by a committed sorted enumeration,
+`scripts/lint-orphan-consumed-workflows.txt` (61 members at admission, including
+`merge-bypass-audit.yml`, which over-arms until it references a suite). Completeness in the only
+direction that matters is checked always-on inside `scripts/lint-orphan-test-suites.sh`: any
+`.github/workflows/*.yml` matching `grep -lE '\.test\.sh'` that is missing from the enumeration
+is an error. That arm is deliberately ungated — it cannot be declined by the gate it protects —
+and the enumeration file is itself an element of the array, so the diff that updates it re-arms
+the battery.
+
+**Registration bookkeeping.** `scripts/merge-bypass-audit.test.sh` (#12666, sibling stream) is
+registered explicitly in `scripts/test-all.sh` — ungated, like every registration surface.
+`TEST_RELEVANCE_PREFIXES` gained `.mcp.json` and `knowledge-base/project/specs` so untracked
+members of the new arrays remain visible to the predicate while uncommitted.

@@ -277,11 +277,13 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/ccla-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/compliance-posture.md
 scripts/lint-orphan-test-suites	knowledge-base/project
 scripts/lint-orphan-test-suites	knowledge-base/project/learnings
+scripts/lint-orphan-test-suites	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 scripts/lint-skill-body-budget	knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
+scripts/merge-bypass-audit	knowledge-base/engineering/operations/post-mortems/2026-11-12-pr-12565-red-required-check-bypass-audit-postmortem.md
 scripts/pre-push-ratchet-lane	knowledge-base
 scripts/pre-push-ratchet-lane	knowledge-base/legal
 scripts/registry-htpasswd-stdin-10119	knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md
@@ -300,6 +302,7 @@ scripts/test-all-infra-coverage-notice	knowledge-base/project/learnings
 scripts/test-all-pr-battery-gate	knowledge-base
 scripts/test-all-pr-battery-gate	knowledge-base/engineering/architecture/diagrams
 scripts/test-all-pr-battery-gate	knowledge-base/project
+scripts/test-all-pr-battery-gate	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 scripts/watch-brand-hex-triggers-11177	knowledge-base/marketing/brand-guide.md
 scripts/watch-lint-ratchet-reeval-10515	knowledge-base/engineering/architecture/decisions
 scripts/web-first-deploy-10585	knowledge-base/engineering/operations/runbooks/web-host-replace.md
@@ -320,11 +323,6 @@ tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/origin-tls-
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/argv-bearer-sweep	knowledge-base/project
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
-tests/scripts/git-data-birth-readiness-gate	knowledge-base
-tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
-tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
-tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs
-tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs/archive
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
 tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md

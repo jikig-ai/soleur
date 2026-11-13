@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-11T22:00:46Z
+# generated-at=2026-11-12T22:30:16Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -573,6 +573,7 @@ scripts/marketplace-drift-check	7
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3
 scripts/measure-plan-sharp-edges-turns	3
+scripts/merge-bypass-audit	2
 scripts/monitor-streak-state	1
 scripts/no-dangling-committed-symlinks	5
 scripts/orphan-process-reaper	4

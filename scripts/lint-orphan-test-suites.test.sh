@@ -200,14 +200,23 @@ build_pristine() {
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
   # ADR-262 Guard 2 reads each --pr-gated battery's OWN text for `$REPO_ROOT/<path>` operands, so the
-  # six battery files must be the real bytes, not the empty placeholders materialised above.
+  # battery files must be the real bytes, not the empty placeholders materialised above. The set is
+  # DERIVED from the SUT's own RELEVANCE_ARRAYS table (the battery column of each row) — the
+  # previous hand list covered six batteries and silently stopped covering the rest the day #9340
+  # widened admission, which surfaced here as no-operand closures and stale-allowlist errors that
+  # the real tree never had.
   local _bf
-  for _bf in tests/scripts/test-registry-gate-mutation-battery.sh scripts/cf-tunnel-liveness-gate-mutations.test.sh \
-             scripts/lint-orphan-test-suites.test.sh scripts/battery-tag-authorship-mutations.test.sh \
-             scripts/orphan-process-reaper-mutation.test.sh \
-             scripts/test-all-affected.test.sh; do
+  while IFS= read -r _bf; do
+    [[ -n "$_bf" && -f "$REPO_ROOT/$_bf" ]] || continue
     cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
-  done
+  done < <(sed -nE 's/^[[:space:]]*"[A-Z0-9_]+_PATHS\|([^"|]+)\|[0-9]+".*/\1/p' "$SUT")
+
+  # The committed consumed-workflows enumeration is a linter INPUT (#9340), same class as the
+  # workflow copies above: materialise() created it empty via the relevance-array walk, and an
+  # empty file trips the completeness arm's `! -s` guard for a reason unrelated to any row.
+  if [[ -f "$REPO_ROOT/scripts/lint-orphan-consumed-workflows.txt" ]]; then
+    cp "$REPO_ROOT/scripts/lint-orphan-consumed-workflows.txt" "$PRISTINE/scripts/" || return 1
+  fi
 
   # (4b) Every path-shaped operand of a SUITE_COMMAND record that exists in the
   #     real tree. Surface 7's dead-target arm resolves each registration's file

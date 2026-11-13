@@ -417,6 +417,14 @@ GATED=(
   "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/orphan-process-reaper-mutations|AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS"
+  # #9340 / ADR-262 (2026-11-12 addendum): the six newly admitted --pr-gated suites. Same row
+  # shape — label byte-identical to skip_suite's $1 at the call site, the array it dereferences.
+  "plugins/soleur/test/monitor-pr-checks.test.sh|MONITOR_PR_CHECKS_PATHS"
+  "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh|PLAYWRIGHT_MCP_REDACT_PROXY_PATHS"
+  "tests/scripts/git-data-birth-readiness-gate|GIT_DATA_BIRTH_READINESS_GATE_PATHS"
+  "tests/scripts/betterstack-roundtrip-latency|BETTERSTACK_ROUNDTRIP_LATENCY_PATHS"
+  "scripts/test-contention|TEST_CONTENTION_PATHS"
+  "tests/scripts/sentry-alert-live-fidelity|SENTRY_ALERT_LIVE_FIDELITY_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
@@ -670,7 +678,13 @@ fi
 # A targeted negative fixture is the cheap pin: scripts/ is where this runner and its libraries
 # live, it is touched constantly, and no c4 dependency sits there except the predicate data file
 # itself -- which is named in full, so a whole-path element still declines on a sibling file.
-run_gate_arm scripts-only 'scripts/test-all.sh' || true
+#
+# The fixture is scripts/lint-orphan-test-suites.sh, NOT scripts/test-all.sh: since the 2026-11-12
+# ADR-262 addendum every admitted array spreads PR_GATE_MACHINERY_PATHS, and scripts/test-all.sh is
+# a declared machinery element, so a diff naming it MUST re-arm c4 — that is the machinery
+# self-test clause working, not a widened predicate. A sibling scripts/ file that is neither a
+# machinery element nor a c4 dependency is the surviving honest negative.
+run_gate_arm scripts-only 'scripts/lint-orphan-test-suites.sh' || true
 if [[ "$(gate_ran 'plugins/soleur/test/c4-from-components.test.sh')" == 0 ]]; then
   pass "a scripts-only diff still declines the c4 suite (the predicate has not been widened)"
 else

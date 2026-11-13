@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1272
-# generated-at=2026-11-11T17:55:09Z
+# generated-at=2026-11-12T22:30:16Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=19e6f0674c561633171ee96a31eef6568487dbf8ddfb1197d2e216a415254d4b
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -571,6 +571,7 @@ scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured
 scripts/measure-plan-sharp-edges-turns	2422	measured
+scripts/merge-bypass-audit	1272	floor
 scripts/monitor-streak-state	1222	floor
 scripts/no-dangling-committed-symlinks	16	measured
 scripts/orphan-process-reaper	10250	measured

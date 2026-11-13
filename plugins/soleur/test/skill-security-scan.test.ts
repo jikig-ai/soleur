@@ -398,7 +398,10 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
       }
       expect(offenders.length).toBe(0);
     },
-    180000,
+    // #12583: ~43 s baseline inflated >4x past the old 180000 bound under box
+    // contention (load ~40 on the shared runner); 600_000 bounds the measured
+    // inflation with margin. Same per-test-override shape as `30_000` (#4096).
+    600_000,
   );
 
   // The REVIEW ratio is a corpus property; only an unscoped (CI) run can measure it.
@@ -420,7 +423,10 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
       }
       expect(pct).toBeLessThan(0.05);
     },
-    180000,
+    // #12583: the two calibration tests share runCorpus()'s cache, so whichever
+    // runs second inherits the same ~43 s baseline and the same >4x contention
+    // inflation that broke the 180000 bound; 600_000 covers both (#4096 shape).
+    600_000,
   );
 });
 
