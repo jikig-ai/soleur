@@ -9,7 +9,7 @@
 apps/web-platform/infra/arm-heartbeats.test.sh	P	if [[ "$seen" -ge "$FAKE_CUT_AFTER" ]]; then kill -9 "$PPID" 2>/dev/null; exit 0; fi
 apps/web-platform/infra/git-data-luks-reopen.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
 apps/web-platform/infra/git-data-refs-assert.test.sh	W	p="$(awk '/^PPid:/ {print $2}' "/proc/$p/status")"
-apps/web-platform/infra/kernel-currency.test.sh	P	if tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -qF -- "$KC_RUN"; then kill -KILL "$PPID"; else echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65; fi
+apps/web-platform/infra/kernel-currency.test.sh	P	c=$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null) || c=; case "$c" in *"$KC_RUN"*) kill -KILL "$PPID" ;; *) echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65 ;; esac
 apps/web-platform/infra/run-registered-suites.test.sh	P	kill -9 "$_shim" 2>/dev/null
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
 apps/web-platform/infra/workspaces-luks-provision.test.sh	P	[ -f "$st/crash_after_luksFormat" ] && kill -9 "$PPID"

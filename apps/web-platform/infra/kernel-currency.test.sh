@@ -236,7 +236,7 @@ echo "reboot sem=$s marker=$m" >> "$KC_CAP"
 # Signal only the sandbox's run.sh: KC_RUN must be this suite's mktemp-nonced run.sh, and the parent's argv must
 # carry it. The guard shares the kill's line so the ancestor-signal baseline row pins guard and kill together.
 case "${KC_RUN-}" in /*/kernel-currency.????????/run.sh) ;; *) echo "REFUSED reboot bad-KC_RUN" >> "$KC_CAP"; exit 65 ;; esac
-if tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -qF -- "$KC_RUN"; then kill -KILL "$PPID"; else echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65; fi
+c=$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null) || c=; case "$c" in *"$KC_RUN"*) kill -KILL "$PPID" ;; *) echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65 ;; esac
 exit 0
 STUB
 cat > "$BIN/sleep" <<'STUB'
