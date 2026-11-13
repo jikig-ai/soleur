@@ -232,7 +232,11 @@ cat > "$BIN/reboot" <<'STUB'
 s=absent; [ -e "$KC_SEM" ] && s=present
 m=absent; [ -e "$KC_MARK" ] && m=present
 echo "reboot sem=$s marker=$m" >> "$KC_CAP"
-[ "${KC_REBOOT:-kill}" = kill ] && kill -KILL "$PPID"
+[ "${KC_REBOOT:-kill}" = kill ] || exit 0
+# Signal only the sandbox's run.sh: its path carries this run's mktemp nonce, so no other process matches.
+[ -n "${KC_RUN-}" ] && tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -qF -- "$KC_RUN" \
+  || { echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65; }
+kill -KILL "$PPID"
 exit 0
 STUB
 cat > "$BIN/sleep" <<'STUB'
@@ -257,13 +261,13 @@ chmod +x "$BIN/"*
 # run_settle: sets R_RC R_OUT R_EMITS R_REBOOT R_SLEEP R_REFUSED; KC_SETTLE overrides the script text.
 run_settle() {
   rm -rf "${SB:?}"; mkdir -p "$SB/var/lib/cloud/instance/sem" "$SB/run"
-  local cap="$WORK/cap" sem="$SB$SEM_PATH" mark="$SB/var/lib/soleur/kernel-settle"
+  local cap="$WORK/cap" sem="$SB/${SEM_PATH#/}" mark="$SB/var/lib/soleur/kernel-settle"
   : > "$cap"
   [[ "${KC_SEM_PRESENT:-1}" == 1 ]] && : > "$sem"
   if [[ "${KC_MARK_PRESENT:-0}" == 1 ]]; then mkdir -p "$SB/var/lib/soleur"; : > "$mark"; fi
   printf '%s' "${KC_SETTLE-$(cat "$WORK/settle.sh")}" > "$WORK/run.sh"
   R_OUT="$(PATH="$BIN:$PATH" KC_CAP="$cap" KC_SEM="$sem" KC_MARK="$mark" KC_TARGET="${KC_TARGET-0.0.0-2-generic}" \
-    KC_UNAME="${KC_UNAME:-0.0.0-2-generic}" KC_DPKG_RC="${KC_DPKG_RC:-0}" KC_REBOOT="${KC_REBOOT:-kill}" \
+    KC_UNAME="${KC_UNAME:-0.0.0-2-generic}" KC_DPKG_RC="${KC_DPKG_RC:-0}" KC_REBOOT="${KC_REBOOT:-kill}" KC_RUN="$WORK/run.sh" \
     "$SH" "$WORK/run.sh" 2>/dev/null)"; R_RC=$?
   R_EMITS="$(sed -n 's/^emit \(.*\)$/\1/p' "$cap" | paste -sd';' -)"
   R_REBOOT="$(grep '^reboot ' "$cap" | paste -sd';' -)"
