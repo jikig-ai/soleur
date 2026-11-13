@@ -950,13 +950,15 @@ guard_all() {
   rm -f "$LATCHF"; reset_fx keep
   printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"SUPABASE_SERVICE_ROLE_KEY":{}}\n' > "$fx/ctl/names"
   run_sc T3; common T3 1
-  _ta "$( has T3 '^phone isolation-check-FAILED attempt=2 iid=i-fixture' && [ "$(cnt T3 "$PULL_RE")" = 0 ] && echo 0 || echo 1)" "TA T3: isolation-check-FAILED (with iid), zero pulls (pulls=$(cnt T3 "$PULL_RE"))"
+  # The anchor requires the detail glued to `attempt` with `iid` LAST and clean — gluing to
+  # iid poisons the followthrough parsers' iid=[A-Za-z0-9._-]+ charset (review P2, #12722).
+  _ta "$( has T3 '^phone isolation-check-FAILED attempt=2\.[^ ]* iid=i-fixture$' && [ "$(cnt T3 "$PULL_RE")" = 0 ] && echo 0 || echo 1)" "TA T3: isolation-check-FAILED (with iid), zero pulls (pulls=$(cnt T3 "$PULL_RE"))"
   _ta "$( [ "$(grep -cE '^phone isolation-check-passed attempt=1 iid=i-fixture' "$gw/T3a.log")" = 1 ] && echo 0 || echo 1)" "TA T3: the prior attempt did pass isolation (the carry-over probe is live)"
   # #12707: the FATAL names the offender. The fixture set is the five admitted names +
   # SUPABASE_SERVICE_ROLE_KEY, so the detail carries foreign=SUPABASE_SERVICE_ROLE_KEY with
   # n_total=6.n_inngest=5 — on the stage row, on the exit-trap row via last_stage, and on the
   # Sentry emit via the same last_stage interpolation.
-  _ta "$( has T3 '^phone isolation-check-FAILED attempt=2 iid=i-fixture\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5$' && echo 0 || echo 1)" "TA T3: the stage row names the foreign secret and the set counts (#12707)"
+  _ta "$( has T3 '^phone isolation-check-FAILED attempt=2\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5 iid=i-fixture$' && echo 0 || echo 1)" "TA T3: the stage row names the foreign secret and the set counts, with iid= LAST and clean (the detail must not glue to iid — followthrough parsers read iid=[A-Za-z0-9._-]+ and would capture <iid>.foreign) (#12707)"
   _ta "$( has T3 '^phone provision-attempt-exit-1 attempt=2 why=isolation-check-FAILED\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5 iid=i-fixture' && echo 0 || echo 1)" "TA T3: the exit-trap row carries the same detail via last_stage"
   _ta "$( has T3 '^emit provision_attempt_failed warning rc=1\.attempt=2\.why=isolation-check-FAILED\.foreign=SUPABASE_SERVICE_ROLE_KEY\.n_total=6\.n_inngest=5\.iid=i-fixture' && echo 0 || echo 1)" "TA T3: the Sentry emit carries the same detail via last_stage"
 
@@ -1157,7 +1159,7 @@ ISO_OPEN = "if d=$(doppler run --project soleur-inngest --config prd -- bash -s 
 BOOT_CALL = "bash \"$EXTRACT_DIR/inngest-bootstrap.sh\" > /var/log/inngest-bootstrap.log 2>&1 &"
 Q_OPEN = "systemctl stop inngest-cutover-flip.timer >/dev/null 2>&1 || true"
 Q_CLOSE = "/usr/local/bin/inngest-boot-phone-home.sh provision-fsm-busy \"units=[$_busy] waited_s=$_q attempt=$attempt iid=$IID\" || true"
-ISO_FAILED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED \"attempt=$attempt iid=$IID$d\" || true"
+ISO_FAILED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED \"attempt=$attempt$d iid=$IID\" || true"
 ISO_PASSED = "/usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed \"attempt=$attempt iid=$IID\" || true"
 '
 

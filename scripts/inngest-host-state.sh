@@ -108,7 +108,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --since) SINCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
-    --instance-id) INSTANCE_ID="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --instance-id) INSTANCE_ID="${2:-}"; [ -n "$INSTANCE_ID" ] || { usage; exit 2; }; shift 2 || { usage; exit 2; } ;;
     --no-errors) WANT_ERRORS=0; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -126,6 +126,9 @@ if [[ -n "$INSTANCE_ID" ]]; then
     echo "  Nothing was queried. This is a usage error, not a statement about the host." >&2
     exit 2
   fi
+  # Canonicalize: a hand-typed leading-zero pin (0175…) is well-formed but never matches
+  # IMDS's canonical digits — normalize rather than let it read a live host as dark.
+  INSTANCE_ID=$((10#$INSTANCE_ID))
 fi
 
 # VALIDATE THE WINDOW BEFORE SPENDING A QUERY ON IT. `--since 90` (unit omitted) and
