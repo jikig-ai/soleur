@@ -32,3 +32,19 @@ None blocking. `gh issue list --label code-review` handled with bounded reads; `
 - FULL gate (runner-changed fallback) relaunched after sibling full-run drained —
   running in bg 088c38. Previous `runner-refused` is NOT a pass.
 - Pending: gate verdict → review exit metadata → qa → compound → ship/merge → postmerge.
+
+## Session append 2 — CI findings + battery contention
+
+- Push `3d6e54404f` fixed markdownlint MD032/MD004 on the new postmortem (was ours).
+- CI `test` red on this PR traces ONLY to `encryption-posture`: two
+  `in_transit` exceptions in scripts/encryption-posture-ledger.json expired
+  2026-11-12 — pre-existing on main (main's 00:00 run f55750d8f1 red the same
+  way). Exception 7 needs a SIGNED-BY-OWNER record to renew; exception 6's
+  bound requires #10538 merged by 2026-11-12 (still OPEN) — both are
+  owner/CLO-gated, NOT agent-renewable. PR stays BLOCKED on `test` until
+  main's posture leg heals.
+- Local FULL gate attempt 2 was disrupted mid-run: 4 suites SIGTERM-killed
+  (rc=143, UNRESOLVED) when the sibling worktree's test-all restarted; run
+  ended failed-before-budget. Attempt 3 refused (rc=4 sibling-run); armed
+  the sanctioned battery-refusal-wait recipe (30-min budget → CI_IS_THE_GATE
+  or relaunch).
