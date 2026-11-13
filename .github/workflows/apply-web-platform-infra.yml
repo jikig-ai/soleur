@@ -2180,10 +2180,13 @@ jobs:
           set -euo pipefail
           IID="$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform show -json \
-            | jq -r '[.values.root_module.resources[]? | select(.address == "hcloud_server.inngest")] | .[0].values.id // empty')"
+            | jq -r '[.values.root_module.resources[]? | select(.address == "hcloud_server.inngest")] | .[0].values.id // empty')" || IID=""
           case "$IID" in
             ''|*[!0-9]*)
-              echo "::error::could not resolve the new inngest server id from terraform state (got '${IID}'). The apply reported success but the state read did not — treat the host as UNVERIFIED and read the BOOT_STAGE channel before anything else."
+              # Sanitize before echoing: this arm fires precisely when IID is NOT digits, so
+              # raw bytes (a newline = a forged ::command:: line) must not reach the parser.
+              IID_SAN="$(printf '%s' "$IID" | tr -cd '0-9a-zA-Z._-' | cut -c1-40)"
+              echo "::error::could not resolve the new inngest server id from terraform state (got '${IID_SAN}'). The apply reported success but the state read did not — treat the host as UNVERIFIED and read the BOOT_STAGE channel before anything else."
               exit 1 ;;
           esac
           printf 'INNGEST_NEW_IID=%s\n' "$IID" >> "$GITHUB_ENV"
@@ -2201,44 +2204,75 @@ jobs:
       # Stack/Doppler fault — never a host verdict, so it retries within the window rather
       # than failing on an instrument blip; a window that ends on rc=6 reports INSTRUMENT,
       # not dark). 20min bounded poll: bootstrap on a healthy replace lands its first probe
-      # row inside ~5min.
+      # row inside ~5min. One strictness to know: a host whose IMDS read failed emits
+      # instance_id=unknown, which can never satisfy the pin — the gate fails there too, and
+      # that is deliberate (an unidentified row is not a per-host liveness claim).
       - name: Post-replace liveness gate — first probe row on the new iid (#12708)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
+          # `set +e`: Actions runs a bare `run:` block as `bash -e {0}` (ADR-170), and errexit
+          # dies AT the doppler line on the first non-zero read — rc=4 is the EXPECTED state for
+          # the first minutes of every healthy replace, so the whole poll is unreachable without
+          # this. (Measured: lint-workflow-errexit-capture.py flags the bare form.)
+          set +e
           deadline=$(( SECONDS + 1200 ))
           last_rc=9
+          verdict_reads=0
           while [ "$SECONDS" -lt "$deadline" ]; do
-            doppler run -p soleur -c prd_terraform -- \
+            # `timeout 90` keeps one stalled Doppler API call from eating the whole window —
+            # a timeout surfaces as rc=124 via doppler, counted as a non-verdict read.
+            # `env -u` strips the reader's override seams: doppler run injects EVERY key of
+            # prd_terraform into the env, and INNGEST_STATE_QUERY / INNGEST_PROBE_ROW_LIB /
+            # INNGEST_STATE_SINCE can substitute a fabricated row source for the real query —
+            # a green without a row. The gate's green must be exactly as trustworthy as the
+            # config it reads, so the seams cannot arrive through it.
+            timeout 90 doppler run -p soleur -c prd_terraform -- \
+              env -u INNGEST_STATE_QUERY -u INNGEST_STATE_SINCE -u INNGEST_PROBE_ROW_LIB -u INNGEST_PROBE_EMITTER -u INNGEST_PROBE_MARKER \
               scripts/inngest-host-state.sh --since 30m --instance-id "$INNGEST_NEW_IID" --no-errors
             last_rc=$?
             if [ "$last_rc" -eq 0 ]; then
               echo "liveness gate PASSED: a SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID has landed — the new host is emitting."
               exit 0
             fi
-            if [ "$last_rc" -eq 6 ]; then
-              echo "liveness gate: the read path failed (rc=6, instrument fault, not a host verdict) — retrying in 60s."
-            else
-              echo "liveness gate: no probe row for iid=$INNGEST_NEW_IID yet (rc=$last_rc) — retrying in 60s."
-            fi
+            case "$last_rc" in
+              4)
+                verdict_reads=$(( verdict_reads + 1 ))
+                echo "liveness gate: no probe row for iid=$INNGEST_NEW_IID yet (rc=4, host not shipping) — retrying in 60s." ;;
+              6)
+                echo "liveness gate: the read path failed (rc=6, instrument fault, not a host verdict) — retrying in 60s." ;;
+              *)
+                echo "liveness gate: unexpected read rc=$last_rc (not a host verdict) — retrying in 60s." ;;
+            esac
             sleep 60
           done
           {
             echo "## inngest-host-replace liveness gate FAILED (#12708)"
             echo ""
-            echo "No \`SOLEUR_INNGEST_SERVER_PROBE\` row for iid=\`$INNGEST_NEW_IID\` within 20min of apply"
-            echo "(last read rc=\`$last_rc\`; 4 = host not shipping, 6 = the read path itself failed)."
+            if [ "$verdict_reads" -eq 0 ]; then
+              echo "No read completed a verdict in 20min (last rc=\`$last_rc\`) — the host's emission"
+              echo "state is UNMEASURED (instrument fault), not confirmed dark."
+            else
+              echo "No \`SOLEUR_INNGEST_SERVER_PROBE\` row for iid=\`$INNGEST_NEW_IID\` within 20min of apply"
+              echo "(last read rc=\`$last_rc\`; 4 = host not shipping, 6 = the read path itself failed)."
+            fi
             echo ""
-            echo "The apply succeeded but the host is not emitting. Read the BOOT_STAGE channel for the"
+            echo "The apply succeeded. Read the BOOT_STAGE channel for the"
             echo "first failing stage — \`isolation-check-FAILED\` now names the offending secret in its"
-            echo "detail (#12707):"
+            echo "detail (#12707). NOTE: a host whose metadata read failed emits probe rows with"
+            echo "\`instance_id=unknown\`, which cannot satisfy the pin — check unfiltered"
+            echo "\`inngest-host-state.sh\` output before re-dispatching:"
             echo ""
             echo '```'
             echo "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_INNGEST_BOOT_STAGE"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::liveness gate: no SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID within 20min of apply (last rc=$last_rc). The host is provisioned but not emitting — read SOLEUR_INNGEST_BOOT_STAGE rows for the failing stage before re-dispatching."
+          if [ "$verdict_reads" -eq 0 ]; then
+            echo "::error::liveness gate: no verdict read completed within 20min of apply (last rc=$last_rc, instrument fault — the host's emission state is UNMEASURED, not confirmed dark). Run the betterstack-query above directly before re-dispatching."
+          else
+            echo "::error::liveness gate: no SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID within 20min of apply (last rc=$last_rc). The host is provisioned but not emitting — read SOLEUR_INNGEST_BOOT_STAGE rows for the failing stage before re-dispatching."
+          fi
           exit 1
 
       - name: Dispatch summary
