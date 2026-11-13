@@ -83,7 +83,7 @@ export LC_ALL=C
 # two deliberate hardenings: a REPEATED --rows exits 2 rather than letting the last flag win —
 # the tiling extractor would then assert a coverage the battery ignores — and in_range takes an
 # optional ordinal argument that FATALs when it drifts from _site_seq.
-DECLARED_TOTAL=35   # the gated mutation rows M1..M35; C0/R1/R1b are unconditional
+DECLARED_TOTAL=40   # the gated mutation rows M1..M40; C0/R1/R1b are unconditional
 ROWS_UNIT=rows
 # shellcheck source=scripts/lib/rows-range.sh
 source "$REPO_ROOT/scripts/lib/rows-range.sh"
@@ -1073,6 +1073,99 @@ assert_lacks "M35 — lib/ helper not named" "tests/scripts/lib/helper-gate.sh i
 assert_lacks "M35 — fixture .sh (no test- basename) not named" "tests/scripts/fixtures/testdata.sh is never run"
 }
 
+# =============================================================================================
+# M36-M40 — the consumed-workflows completeness arm (#9340, ADR-262 addendum; strict-equality
+# direction added 2026-11-13). The arm binds THREE copies — the live `grep -lE '\.test\.sh'`
+# derivation, the committed .txt, and the LINT_ORPHAN_BATTERY_PATHS enumeration block — and each
+# copy can drift in a direction no other check sees. M36/M37 cover live ⊆ .txt; M38/M39 cover
+# .txt == array in both directions; M40 covers the derivation going vacuous.
+# =============================================================================================
+run_M36() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M36 "completeness arm: a new workflow naming .test.sh missing from the .txt reds"
+new_sandbox m36
+# The derivation greps the workflow DIRECTORY (never the index), so an on-disk file is the
+# honest fixture — same convention as the M9/M10 workflow edits.
+cat > "$SB/.github/workflows/m36-added.yml" <<'YML' || harness_die "M36 workflow write"
+name: m36-added
+on: [push]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/m36-added.test.sh
+YML
+run_lint "$SB"; rc=$?
+assert_red "M36" "$rc"
+assert_has "M36 — the missing-member ERROR names the new workflow" \
+  ".github/workflows/m36-added.yml names .test.sh (it can feed surfaces 5/6) but is missing from scripts/lint-orphan-consumed-workflows.txt"
+}
+
+run_M37() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M37 "completeness arm: dropping a live member from the .txt reds"
+new_sandbox m37
+# validate-vector-config.yml is live (it carries the S5 `run: bash …` step M10 mutates), so
+# dropping it exercises the live ⊆ .txt direction — and the strict-equality direction too, since
+# the array still lists it; the asserted kill is attributable to the named ERROR either way.
+_before=$(grep -c '^\.github/workflows/validate-vector-config\.yml$' "$SB/scripts/lint-orphan-consumed-workflows.txt")
+sed -i '/^\.github\/workflows\/validate-vector-config\.yml$/d' "$SB/scripts/lint-orphan-consumed-workflows.txt" || harness_die "M37 sed"
+_after=$(grep -c '^\.github/workflows/validate-vector-config\.yml$' "$SB/scripts/lint-orphan-consumed-workflows.txt")
+[[ "$_before" == 1 && "$_after" == 0 ]] || harness_die "M37: the mutation did not land (before=${_before} after=${_after})"
+pass "M37 precondition: the member was present exactly once and is gone"
+run_lint "$SB"; rc=$?
+assert_red "M37" "$rc"
+assert_has "M37 — the missing-member ERROR names the dropped member" \
+  ".github/workflows/validate-vector-config.yml names .test.sh (it can feed surfaces 5/6) but is missing from scripts/lint-orphan-consumed-workflows.txt"
+}
+
+run_M38() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M38 "strict equality: a .github/workflows/* element dropped from LINT_ORPHAN_BATTERY_PATHS reds"
+new_sandbox m38
+# The .txt still lists the member, so only the array→.txt direction of the strict-equality arm
+# can name this — ci.yml would NOT work here (it also arrives via PR_GATE_MACHINERY_PATHS).
+_before=$(grep -c '^  "\.github/workflows/validate-vector-config\.yml"$' "$SB/scripts/lib/test-relevance-paths.sh")
+sed -i '/^  "\.github\/workflows\/validate-vector-config\.yml"$/d' "$SB/scripts/lib/test-relevance-paths.sh" || harness_die "M38 sed"
+_after=$(grep -c '^  "\.github/workflows/validate-vector-config\.yml"$' "$SB/scripts/lib/test-relevance-paths.sh")
+[[ "$_before" == 1 && "$_after" == 0 ]] || harness_die "M38: the mutation did not land (before=${_before} after=${_after})"
+pass "M38 precondition: the array element was present exactly once and is gone"
+run_lint "$SB"; rc=$?
+assert_red "M38" "$rc"
+assert_has "M38 — the strict-equality ERROR names the .txt-only member and both files" \
+  ".github/workflows/validate-vector-config.yml is listed in scripts/lint-orphan-consumed-workflows.txt but is NOT an element of LINT_ORPHAN_BATTERY_PATHS"
+}
+
+run_M39() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M39 "strict equality: a .txt member no array element matches reds"
+new_sandbox m39
+# 'zzzz-' sorts after every real member (last is workspaces-luks-verify.yml), so the append
+# keeps the file sorted — the red is attributable to strict equality, not the sort guard.
+printf '%s\n' '.github/workflows/zzzz-m39-only-in-txt.yml' >> "$SB/scripts/lint-orphan-consumed-workflows.txt" || harness_die "M39 append"
+LC_ALL=C sort -c "$SB/scripts/lint-orphan-consumed-workflows.txt" \
+  || harness_die "M39: the appended member left the enumeration unsorted — the kill would be attributable to the sort guard, not strict equality"
+run_lint "$SB"; rc=$?
+assert_red "M39" "$rc"
+assert_has "M39 — the strict-equality ERROR names the .txt-only member and both files" \
+  ".github/workflows/zzzz-m39-only-in-txt.yml is listed in scripts/lint-orphan-consumed-workflows.txt but is NOT an element of LINT_ORPHAN_BATTERY_PATHS"
+}
+
+run_M40() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M40 "completeness arm: the derivation narrowed to empty is a named vacuity ERROR"
+new_sandbox m40
+# Narrow the glob to a directory that does not exist — nullglob leaves an empty operand list,
+# the derivation writes an empty live set, and only the floor separates that from a clean pass.
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
+  '_consumed_workflows=( "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml )' \
+  '_consumed_workflows=( "$WORKFLOW_DIR"/zzz-no-such-dir/*.yml )'
+run_lint "$SB"; rc=$?
+assert_red "M40" "$rc"
+assert_has "M40 — the vacuity floor names the narrowed derivation" \
+  "enumerated 0 workflow(s) naming .test.sh, below the tripwire of 20"
+}
+
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------
 # Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
 # asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
@@ -1090,7 +1183,7 @@ assert_lacks "M35 — fixture .sh (no test- basename) not named" "tests/scripts/
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
@@ -1279,7 +1372,7 @@ else
 fi
 
 # FLOORS — equality, not thresholds, so a deleted site can never read as a smaller green.
-# _site_seq counts every gated call site (M1..M35): a removed row FATALs here even when the
+# _site_seq counts every gated call site (M1..M40): a removed row FATALs here even when the
 # range it fell in still produces a green half. (The old MIN_ROWS=18 was a floor over 19 sites
 # — deleting R1 or R1b stayed green. Equality removes that slack; conservation below pins the
 # unconditional sites.)

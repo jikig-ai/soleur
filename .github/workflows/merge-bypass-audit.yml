@@ -4,8 +4,10 @@
 # merge SHA and covers the landing paths that matter through one chokepoint: direct merge,
 # admin/bypass merge, and direct push all emit a push event. Queue merges may not emit one
 # (#12478) — they need no audit: a merge_group success run is by construction the
-# full-battery authority (ADR-276), and when the workflow DOES see a queue merge's push,
-# the probe's first arm classifies it `ok via=merge_group`.
+# full-battery authority (ADR-276). When the workflow DOES see a queue landing's push, the
+# squash-method queue run's head_sha differs from the landed SHA, so queue landings
+# typically classify `ok via=pr_head` off the resolved source PR — `via=merge_group` is
+# the sha-matching case (and only a ci.yml merge_group success confers queue authority).
 #
 # Verdict contract is in the script header (plan Guard 1): ok | bypass (+deduped
 # compliance/critical issue) | check_flipped_after_merge | unread. Any API read that
@@ -16,6 +18,8 @@
 # the anomaly — the same blind window every push-triggered audit shares.
 #
 # Manual backfill: gh workflow run merge-bypass-audit.yml -f merge_sha=<sha>
+# Backfill caution: a historical merge is judged by TODAY's canonical required set —
+# see the KNOWN RESIDUALS block in the script header before adjudicating findings.
 
 name: merge-bypass-audit
 

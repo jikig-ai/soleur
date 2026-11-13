@@ -734,17 +734,17 @@ in_range && row "MUSTPASS" "$CI_YML" \
 # end-to-end. These rows drive the extraction chain red through scripts/test-all.sh.
 
 # ROWS-GAP: shrink the -b range so battery rows 19-20 execute in no leg. The tile check
-# reports "range '21-35' starts at 21, expected 19 (gap or overlap)".
+# reports "range '21-40' starts at 21, expected 19 (gap or overlap)".
 in_range && row "ROWS-GAP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 21-35' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 21-40' \
   RED "a gapped --rows range leaves battery rows 19-20 unexecuted in every leg" \
   'scripts/lint-orphan-test-suites.test.sh: --rows ranges do not tile'
 
 # ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
 # MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
 in_range && row "ROWS-DROP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "a dropped --rows flag yields a MIXED flagged/unflagged contract" \
   'MIXED --rows contract'
@@ -757,8 +757,8 @@ in_range && row "ROWS-DROP" "$RUNNER" \
 # carries FOUR spaces since ADR-262: both registrations sit inside the --pr-gated `if` block.
 in_range && row "ROWS-SWAP" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40
     run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18' \
   GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
@@ -860,16 +860,16 @@ in_range && row "ROWS-CI-KEY2-QUOTE" "$CI_YML" \
 # a failure deferred to the surface it was meant to guard. Whole-token
 # capture emits the verbatim token and the malformed-spec arm names it.
 in_range && row "ROWS-MALFORMED-SUFFIX" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35x' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40x' \
   RED "a garbage-suffixed --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
 # ROWS-MALFORMED-TRISEG: same class, three-segment spec — the prefix match
 # extracted `14-27` and discarded `-24`.
 in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35-24' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40-24' \
   RED "a three-segment --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
@@ -888,7 +888,7 @@ in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
 # -a/-b adjacency the same way ROWS-SWAP's does.
 in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh
     run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "every registration unflagged beside a DECLARED_TOTAL declaration" \
@@ -963,8 +963,8 @@ export DECLARED_TOTAL=2' \
 # resolve the declared total, so the guard must stay GREEN end-to-end. A
 # RED-only matrix cannot see over-tightness; this is the tolerance proof.
 in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" \
-  'DECLARED_TOTAL=35   # the gated mutation rows M1..M35; C0/R1/R1b are unconditional' \
-  'export DECLARED_TOTAL=35   # the gated mutation rows M1..M35; C0/R1/R1b are unconditional' \
+  'DECLARED_TOTAL=40   # the gated mutation rows M1..M40; C0/R1/R1b are unconditional' \
+  'export DECLARED_TOTAL=40   # the gated mutation rows M1..M40; C0/R1/R1b are unconditional' \
   GREEN "an export-prefixed DECLARED_TOTAL resolves identically on the registered battery"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------

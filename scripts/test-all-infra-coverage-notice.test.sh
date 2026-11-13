@@ -797,7 +797,7 @@ fi
 # deleted, or the prefix list it is scoped to can lose an entry. The second is what makes
 # plugins/soleur load-bearing: without that prefix, a brand-new UNTRACKED fixture corpus is
 # invisible to C4_PRODUCER_PATHS and the c4 suite declines on the diff that added it.
-if grep -qF 'git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}"' "$TARGET"; then
+if grep -qF 'git -c core.quotePath=false ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}"' "$TARGET"; then
   pass "the runner feeds untracked files into the diff blob, scoped to the declared prefixes"
 else
   fail "the runner no longer asks git for untracked files, so a new UNTRACKED target is invisible"

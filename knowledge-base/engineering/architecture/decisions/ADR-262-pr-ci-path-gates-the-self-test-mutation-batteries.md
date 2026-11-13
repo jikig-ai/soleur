@@ -160,7 +160,14 @@ decline is a counted `skip_suite` verdict, enumeration stays inert, and the thre
 quantify over them for free.
 
 **Admissions** (arm rates from `bash scripts/ci-battery-gate-replay.sh`, 300 first-parent commits
-against `origin/main`, measured 2026-11-12 — the window moves, re-run before quoting):
+against `origin/main`, measured 2026-11-12 — the window moves, re-run before quoting; re-measured
+2026-11-13 after the replay gained `--diff-merges=first-parent` — previously merge commits counted
+in the denominator while never being able to arm — and all nine rates below were unchanged, while
+the pre-existing batteries moved to REGISTRY 33% / CF_TUNNEL 36% / LINT_ORPHAN 42% / TAG_AUTHORSHIP
+33% / TEST_ALL_AFFECTED 31% / ORPHAN_PROCESS_REAPER 34%. **All arm rates are lower bounds**:
+rebase-merged multi-commit PRs replay as their individual commits, so a PR whose union diff arms a
+battery but whose per-commit diffs each miss it still reads as unarmed — single-commit replay
+under-counts multi-commit-PR arming on `pull_request`):
 
 | Suite | Array | Arm rate | Notes |
 |---|---|---|---|

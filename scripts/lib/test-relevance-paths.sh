@@ -354,6 +354,8 @@ PLAYWRIGHT_MCP_REDACT_PROXY_PATHS=(
 # Source of truth: the suite's $REPO_ROOT operands.
 BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # SUT
+  "scripts/lib/betterstack-sources.sh"                   # unconditionally sourced by the SUT (:162) — carries the source-id invariant the verdict derives from
+  "scripts/lib/betterstack-absence.sh"                   # unconditionally sourced by the SUT (:164) — the absence-read oracle
   "scripts/lint-followthrough-varq-ban.sh"                 # named operand — the sibling var-args ban the suite reads
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "tests/scripts/test-betterstack-roundtrip-latency.sh"    # SELF — see the note above
@@ -371,6 +373,7 @@ GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"             # sourced — absence is a hard abort
   "apps/web-platform/infra/cloud-init-git-data.yml"        # the live fixture the gate hashes and interlocks on
   "apps/web-platform/infra/git-data.tf"                    # the plaintext-id interlock fixture
+  "apps/web-platform/infra/modules/git-data-userdata"      # the render-module corpus the bound-file digest quantifies over (derived from dirname(cloud-init) — invisible to the operand extraction)
   ".claude/hooks/grep-q-pipe-guard.test.sh"                # canonical W2_PATTERN source
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "tests/scripts/test-git-data-birth-readiness-gate.sh"    # SELF — see the note above

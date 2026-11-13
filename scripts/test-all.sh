@@ -214,7 +214,7 @@ _EMIT_COMMANDS=0
 #              sharded full battery (the required `test` context), not any
 #              local run. A green affected run is not a full-coverage claim.
 # --full       The whole battery — what CI runs on push, merge_group and dispatch (a
-#              pull_request run declines six self-test mutation batteries whose subject
+#              pull_request run declines fifteen self-test mutation batteries whose subject
 #              the diff does not touch, ADR-262). Refused under SOLEUR_SUBAGENT=1
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
@@ -405,7 +405,7 @@ Usage: bash scripts/test-all.sh [flags] [all|webplat|bun|scripts|infra]
    or: TEST_GROUP=<value> bash scripts/test-all.sh [flags]
 
 Modes (local default is --affected; CI runs the full battery, except that a pull_request run
-declines six self-test mutation batteries whose subject the diff does not touch — ADR-262):
+declines fifteen self-test mutation batteries whose subject the diff does not touch — ADR-262):
   --affected            run the suites this diff can move, plus every always-on
                         repo-global ratchet. Exempt from the full-gate refusals.
                         TEST_GROUP=affected is a deprecated compat alias of this
@@ -2765,7 +2765,7 @@ fi
 # this append's line — a wrapping conditional truncates that extraction
 # mid-statement, and naming the command here would end it a line early.
 _diff_names="${_diff_names}
-$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
+$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git -c core.quotePath=false ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
 # Affected mode ALSO appends the UNSCOPED untracked list (#8322): any untracked
 # file can be an edge target — a brand-new suite file's own path is its
 # self-edge, and a new file under a declared prefix must select the suite
@@ -2790,7 +2790,7 @@ if (( _AFFECTED == 1 )); then
   # `if (( _AFFECTED == 1 )); then` opener to its first column-0 `fi`.
   if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
-$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
 fi
 # --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
@@ -6113,13 +6113,13 @@ if want_scripts; then
   # leaves every one of them ANCHOR MISSING (measured on #7718: 9/42 rows red).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
     run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
       "bash scripts/lint-orphan-test-suites.test.sh --rows 1-18"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 19-35"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 19-40"
   fi
   # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
   # working tree; the battery builds synthetic fixture repos and proves each
@@ -7164,7 +7164,7 @@ if want_scripts; then
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/followthroughs/pr-battery-gate-saving-9323" bash scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
-  # ADR-262 Guard 1: the pull_request gate over the six self-test mutation batteries. Explicit run_suite
+  # ADR-262 Guard 1: the pull_request gate over the fifteen self-test mutation batteries. Explicit run_suite
   # (scripts/*.test.sh is covered by no glob here), classified ALWAYS_ON (it is a runner-SUT property
   # suite), and registered at the end of the block for the positional-shard reason stated just above.
   run_suite "scripts/test-all-pr-battery-gate" bash scripts/test-all-pr-battery-gate.test.sh

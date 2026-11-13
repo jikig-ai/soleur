@@ -388,21 +388,83 @@ grep -hEo '^[[:space:]]*(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A
 # This arm lives in the UNGATED leg on purpose: it runs on every diff, so it cannot be declined
 # out of existence by the gate it protects.
 ENUM_FILE="$REPO_ROOT/scripts/lint-orphan-consumed-workflows.txt"
-grep -lE '\.test\.sh' "$WORKFLOW_DIR"/*.yml 2>/dev/null \
-  | sed "s|^${REPO_ROOT}/||" | LC_ALL=C sort -u > "$WORK/consumed_live"
+# *.yml AND *.yaml — Actions accepts both spellings, so globbing only one would silently stop
+# seeing a consumed workflow the day somebody commits the other form. nullglob keeps an absent
+# *.yaml glob from reaching grep as a literal pattern (today the directory carries zero).
+shopt -s nullglob
+_consumed_workflows=( "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml )
+shopt -u nullglob
+_consumed_rc=0
+if (( ${#_consumed_workflows[@]} > 0 )); then
+  grep -lE '\.test\.sh' "${_consumed_workflows[@]}" 2>/dev/null \
+    | sed "s|^${REPO_ROOT}/||" | LC_ALL=C sort -u > "$WORK/consumed_live" || _consumed_rc=$?
+else
+  : > "$WORK/consumed_live"
+  _consumed_rc=1
+fi
+# AN EMPTY OR BROKEN DERIVATION IS A NAMED ERROR, never a bare `set -e` abort: under pipefail a
+# grep exit 1 ("no matches") or >= 2 (unreadable operand) would kill the script mid-pipeline
+# with nothing attributable, and an empty live set makes `live ⊆ enumeration` below pass
+# VACUOUSLY — the worst shape, the guard certifying a subset while reporting completeness.
+if (( _consumed_rc >= 2 )); then
+  echo "ERROR: the consumed-workflow derivation FAILED — grep exited ${_consumed_rc} over the .github/workflows glob (an unreadable operand), so the comparisons below measured an unreadable input rather than the consumed set." >&2
+  fails=$((fails + 1))
+fi
+_consumed_n=$(wc -l < "$WORK/consumed_live" | tr -d ' ')
+# VACUITY FLOOR. The floor is a tripwire for a NARROWING derivation, not a target — live is
+# ~60 members today; a glob or pattern that stops seeing workflows leaves a shorter set that
+# the comm arms compare "successfully" against the enumeration.
+if (( _consumed_n < 20 )); then
+  echo "ERROR: the consumed-workflow derivation enumerated ${_consumed_n} workflow(s) naming .test.sh, below the tripwire of 20 (live is ~60) -- the glob or pattern narrowed, so the completeness comparison below would pass vacuously while a consumed workflow arms nothing." >&2
+  fails=$((fails + 1))
+fi
 if [[ ! -s "$ENUM_FILE" ]]; then
   echo "ERROR: scripts/lint-orphan-consumed-workflows.txt is missing or empty -- LINT_ORPHAN_BATTERY_PATHS gates on it, so its absence would let a consumed-workflow addition arm nothing. Every workflow matching 'grep -lE \"\\\\.test\\\\.sh\" .github/workflows/*.yml' must be listed." >&2
   fails=$((fails + 1))
 else
+  _enum_sorted=1
   if ! LC_ALL=C sort -c "$ENUM_FILE" 2>/dev/null; then
-    echo "ERROR: scripts/lint-orphan-consumed-workflows.txt is not sorted -- it is a committed sorted enumeration; unsorted members churn diffs and desynchronise it from the live computation. Run 'LC_ALL=C sort -o' on it." >&2
+    _enum_sorted=0
+    echo "ERROR: scripts/lint-orphan-consumed-workflows.txt is not sorted -- it is a committed sorted enumeration; unsorted members churn diffs and desynchronise it from the live computation. Run 'LC_ALL=C sort -o scripts/lint-orphan-consumed-workflows.txt scripts/lint-orphan-consumed-workflows.txt' on it." >&2
     fails=$((fails + 1))
   fi
-  while IFS= read -r _missing_wf; do
-    [[ -n "$_missing_wf" ]] || continue
-    echo "ERROR: ${_missing_wf} names .test.sh (it can feed surfaces 5/6) but is missing from scripts/lint-orphan-consumed-workflows.txt -- the lint-orphan battery would stay declined on the diff that adds it. Add the member (sorted), or stop it referencing .test.sh." >&2
-    fails=$((fails + 1))
-  done < <(LC_ALL=C comm -23 "$WORK/consumed_live" "$ENUM_FILE")
+  # comm READS AN UNSORTED INPUT AS A DIFF IT INVENTED: running it on a file sort -c just
+  # rejected emits spurious "missing member" errors beneath the real one, so every comparison
+  # below is gated on the sort check.
+  if (( _enum_sorted )); then
+    while IFS= read -r _missing_wf; do
+      [[ -n "$_missing_wf" ]] || continue
+      echo "ERROR: ${_missing_wf} names .test.sh (it can feed surfaces 5/6) but is missing from scripts/lint-orphan-consumed-workflows.txt -- the lint-orphan battery would stay declined on the diff that adds it. Add the member (sorted) to BOTH the .txt and the LINT_ORPHAN_BATTERY_PATHS enumeration block in scripts/lib/test-relevance-paths.sh, or stop it referencing .test.sh." >&2
+      fails=$((fails + 1))
+    done < <(LC_ALL=C comm -23 "$WORK/consumed_live" "$ENUM_FILE")
+
+    # STRICT EQUALITY with the array-side copy. The .txt and the .github/workflows/* block of
+    # LINT_ORPHAN_BATTERY_PATHS are TWO COPIES of one set, bound until now only by a prose
+    # "byte-identical" comment — nothing enforced it. The lib is DECLARATIONS-ONLY (inert) and
+    # is sourced again below for the relevance arrays; if it is absent the REL_LIB arm below
+    # names that, so this arm just has nothing to compare against.
+    if [[ -f "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" ]]; then
+      # shellcheck source=scripts/lib/test-relevance-paths.sh
+      source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
+      printf '%s\n' ${LINT_ORPHAN_BATTERY_PATHS[@]+"${LINT_ORPHAN_BATTERY_PATHS[@]}"} \
+        | grep '^\.github/workflows/' | LC_ALL=C sort -u > "$WORK/consumed_declared"
+      if [[ ! -s "$WORK/consumed_declared" ]]; then
+        echo "ERROR: LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh yielded ZERO .github/workflows/* elements -- the array-side copy of the consumed enumeration is gone, so the strict-equality comparison cannot run and the .txt is again the only copy." >&2
+        fails=$((fails + 1))
+      else
+        while IFS= read -r _txt_only; do
+          [[ -n "$_txt_only" ]] || continue
+          echo "ERROR: ${_txt_only} is listed in scripts/lint-orphan-consumed-workflows.txt but is NOT an element of LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh -- the two copies of the consumed enumeration drifted. Update BOTH (the .txt and the array's enumeration block) so the committed enumeration and the gated edge set agree." >&2
+          fails=$((fails + 1))
+        done < <(LC_ALL=C comm -23 "$ENUM_FILE" "$WORK/consumed_declared")
+        while IFS= read -r _arr_only; do
+          [[ -n "$_arr_only" ]] || continue
+          echo "ERROR: ${_arr_only} is an element of LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh but is missing from scripts/lint-orphan-consumed-workflows.txt -- the two copies of the consumed enumeration drifted. Update BOTH (the .txt and the array's enumeration block) so the committed enumeration and the gated edge set agree." >&2
+          fails=$((fails + 1))
+        done < <(LC_ALL=C comm -13 "$ENUM_FILE" "$WORK/consumed_declared")
+      fi
+    fi
+  fi
 fi
 
 # --- Assembly ------------------------------------------------------------------------------
@@ -691,8 +753,8 @@ else
     "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|9"
     "MONITOR_PR_CHECKS_PATHS|plugins/soleur/test/monitor-pr-checks.test.sh|9"
     "PLAYWRIGHT_MCP_REDACT_PROXY_PATHS|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh|14"
-    "BETTERSTACK_ROUNDTRIP_LATENCY_PATHS|tests/scripts/test-betterstack-roundtrip-latency.sh|10"
-    "GIT_DATA_BIRTH_READINESS_GATE_PATHS|tests/scripts/test-git-data-birth-readiness-gate.sh|14"
+    "BETTERSTACK_ROUNDTRIP_LATENCY_PATHS|tests/scripts/test-betterstack-roundtrip-latency.sh|12"
+    "GIT_DATA_BIRTH_READINESS_GATE_PATHS|tests/scripts/test-git-data-birth-readiness-gate.sh|15"
     "TEST_CONTENTION_PATHS|scripts/test-contention.test.sh|10"
     "SENTRY_ALERT_LIVE_FIDELITY_PATHS|tests/scripts/test-sentry-alert-live-fidelity.sh|12"
   )
