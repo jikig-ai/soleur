@@ -7,7 +7,8 @@ Plan: `knowledge-base/project/plans/2026-11-13-fix-n3b-census-6604-verify-lines-
 - [ ] 1.1 Record the baseline: the suite prints `=== Results: 286/286 passed, 0 failed ===`.
 - [ ] 1.2 Write the R1 and R2 content-anchored edit scripts in the scratchpad. R1 edits one function body with a `#`
       delimiter, R2 is an ENVIRON-fed awk insertion. Each asserts exactly one changed line per file.
-- [ ] 1.3 Replay R1 and R2 on two detached worktrees of HEAD, at the same time. Expect 286/286 from both, then remove
+- [ ] 1.3 Replay R1 and R2 on two detached worktrees of HEAD, at the same time, running each worktree's own suite
+      copy, and record the diff counts and the N3 `pass:` line. Expect 286/286 from both, then remove
       the worktrees (AC1).
 
 ## 2. Core implementation
@@ -18,10 +19,12 @@ Plan: `knowledge-base/project/plans/2026-11-13-fix-n3b-census-6604-verify-lines-
   - [ ] 2.2.1 Add `_h18_vbld` (modes `built`, `both`, `builder-only`, and the `@@precondition@@` channel) and `_h18_v`.
   - [ ] 2.2.2 Add `n3b_frozen_all`, and rework `_h18_fs <label> <awk> <key> <reason>` to use it.
   - [ ] 2.2.3 Rewrite `_h18_red` as ERE over `D|R|V[234]`.
-  - [ ] 2.2.4 Add Guard 1 rows gVr1, gVr2, gVr4, gVr5, gVr6, gVr11, fs-v4-unquoted, fs-v3-id, fs-v2-url, fs-r-unquoted, and
-        the hb web1-pin cases.
-  - [ ] 2.2.5 Add Guard 2 rows g5r1-g5r6 and g5r8.
-  - [ ] 2.2.6 Add harness rows H-d, H-e, H-f and H-g as instrument controls.
+  - [ ] 2.2.4 Add Guard 1 rows gVr1, gVr2, gVr4, gVr5, gVr6, gVr11, gVr12 (duplicated V3 anchor), gVr13 (V3 `?` literal),
+        fs-v4-unquoted, fs-v3-id, fs-v2-url, fs-r-unquoted, and the hb web1-pin cases.
+  - [ ] 2.2.5 Add Guard 2 rows g5r1-g5r6 and g5r8 (g5r2/g5r4 use the write token; g5r8's continuation unindented; each
+        pinned with `_h18_at`), plus the g5s1 near-miss `_h18_silent` row.
+  - [ ] 2.2.6 Add harness rows H-d, H-e, H-f, H-g, H-i and H-j as instrument controls, and the `H18_RUN`/`H18_ROWS`
+        row-count check. `_h18_fs` also rejects another key's `frozen:` line; `_h18_vbld` reports `(misplaced)`.
   - [ ] 2.2.7 Pass `$_wpin` as `n3b`'s 5th argument at all 6 call sites. Keep the `_n3b=` line and the fs-self control
         on D/R.
   - [ ] 2.2.8 Run the suite. H18 FAIL names the new rows, and the fs-V rows report `(did-not-land)`. Save the line (AC2).
@@ -31,7 +34,7 @@ Plan: `knowledge-base/project/plans/2026-11-13-fix-n3b-census-6604-verify-lines-
   - [ ] 2.3.2 In `n3b_frozen_self`, add the `@ID@` placement checks before the `case`, with the `@ID@ placement:`
         message.
   - [ ] 2.3.3 In `n3b_lists`, select the anchor by kind (V3 as a fixed string), and add the `if [[ $k == V* ]]` V `case`
-        with `key=url`. Leave the D/R lines untouched, and print ` (no <K> URL end)` for V kinds.
+        with `key=url`, cutting V3's `seg` at the LAST occurrence. Leave the D/R lines untouched, and print ` (no <K> URL end)` for V kinds.
   - [ ] 2.3.4 In `n3b`, extend the `slot:` check to the web1 pin, and add the V2/V3/V4 `n3b_builder` calls.
   - [ ] 2.3.5 In `_h18_bld` `both` mode, add `N3B_FROZEN_V<k>=$(rb_line_v<k> @ID@)`. Give the F4 rows the `_h18_v` suffix.
   - [ ] 2.3.6 Add p5 to `n3b_census`'s `flush()`.
@@ -43,7 +46,8 @@ Plan: `knowledge-base/project/plans/2026-11-13-fix-n3b-census-6604-verify-lines-
 
 ## 3. Documents, guards and ship
 
-- [ ] 3.1 Edit items 5 and 6 of the archived 2026-11-11 plan (AC10).
+- [ ] 3.1 Edit items 5 and 6 of the archived 2026-11-11 plan, including the deepen declarations (#12752, open env-dump
+      list, Doppler spellings, `--name-transformer`) (AC10).
 - [ ] 3.2 Run AC3, AC6, AC8 (lint-skill-body-budget, plugin-root-anchoring) and AC9 (grep-q-pipe-guard).
 - [ ] 3.3 Check AC11 (diff scope). Never edit either runbook or the encryption-posture ledger.
-- [ ] 3.4 Merge only after main's CI is green (AC12), under the standing delegation on #9927 scope item 2.
+- [ ] 3.4 Merge only after main's CI is green at main's `headSha` (AC12), under the standing delegation on #9927 scope item 2.

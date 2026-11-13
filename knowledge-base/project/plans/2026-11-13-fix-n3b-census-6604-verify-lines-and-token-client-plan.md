@@ -14,6 +14,25 @@ brand_survival_threshold: none
 
 # fix(sole-copy suite): freeze runbook 6604's verify lines and catch a token handed to a non-curl client
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-13. **Reviewers:** security-sentinel, test-design-reviewer, a verify-the-negative pass, and the
+CTO, who ruled every fork they raised (see `decision-challenges.md`).
+
+- **Verify-the-negative:** every factual negative claim is confirmed. The p5 needles occur only at 6894:357, 6894:415
+  and SKILL:506. Runbook 6604 is not censused. The AC3 selector matches 6 base lines. No stale references to cut rows.
+- **Correctness fix (F1):** the V3 `seg` cut is now the LAST occurrence of `$N3B_V3_URL | jq `. New row gVr12 pins the
+  direction.
+- **New rows:** gVr13 (V3 `?` is literal), H-i/H-j (green controls for `_h18_vbld`), g5s1 (near-miss silent row), and
+  `H18_ROWS` row-count conservation (CTO: ACCEPT). g5r2/g5r4 now use the write token. g5r8's continuation has no indent,
+  and p5 rows pin their start line with `_h18_at`. `_h18_fs` rejects a `frozen:` line from any other key.
+  `_h18_vbld` reports `(misplaced)`.
+- **Declared, not built (CTO):** flags are permitted but not required (follow-up #12752); the V tail after ` | jq` is
+  pinned only by the literal; Doppler spellings beyond the five exact needles; `--name-transformer` renames. The
+  per-kind URL arm is defence in depth.
+- **Process:** replays run the worktree's own suite path. AC7 states why `FLOOR`/`TABLE_ROWS` stay put. AC12 filters on
+  main's `headSha`. Added the `## Observability` section (probe: a `git grep -c` of the frozen heredocs, `:5`).
+
 ## Overview
 
 Close the two P3 gaps the final verification pass of PR #12645 left in row N3b of the sole-copy drift suite
@@ -169,7 +188,8 @@ mutation-testing and secret-scanner skills were judged not to fit. Nothing was i
 3. **Source check.** Add `n3b_frozen_all <suite-file>`, which loops `n3b_frozen_self` over `D R V2 V3 V4`. Three callers use
    it, so the rows pin the key list: the `_n3b=` line, the clean-file control (the `spurious:fs-self` line under the fs
    rows), and `_h18_fs`. `_h18_fs <label> <awk> <key> <reason>` runs `n3b_frozen_all` on the copy and requires a line that
-   starts `builder <key>: frozen:` and contains `<reason>`. It never calls `n3b_frozen_self` with a key. `n3b_frozen_self`
+   starts `builder <key>: frozen:` and contains `<reason>`, and no `builder <other-key>: frozen:` line (deepen A9: an awk
+   program that hits several heredocs cannot pass; one key may print more than one line, e.g. fs-v3-id). It never calls `n3b_frozen_self` with a key. `n3b_frozen_self`
    also checks `@ID@` placement (CTO concern 2), on `$body` and *before* its `case`, so the value-equality arm (which fires
    on any edited copy) cannot mask it. Each failure prints its own message, `builder <key>: frozen: @ID@ placement: ...`.
    The rules: D, R, V2 and V4 hold exactly one `@ID@`, V2's is inside `expect [@ID@]`, and V3 holds none.
@@ -177,8 +197,10 @@ mutation-testing and secret-scanner skills were judged not to fit. Nothing was i
    - Select the end anchor by kind. D and R keep `N3B_END`, byte-identical. V2 uses
      `N3B_END_V2='^(.*https://api\.hetzner\.cloud/v1/servers/[0-9]+) [|] jq '` and V4 uses
      `N3B_END_V4='^(.*https://api\.hetzner\.cloud/v1/volumes/[0-9]+) [|] jq '`. V3 matches as a fixed string,
-     `[[ "$a" == *"$N3B_V3_URL | jq "* ]]` with `seg` cut at the end of `$N3B_V3_URL`, so no `.` or `?` can act as a
-     wildcard (CTO concern 3). The no-anchor message names the kind: D and R keep ` (no volume-id end)`, and V kinds print
+     `[[ "$a" == *"$N3B_V3_URL | jq "* ]]` with `seg` cut at the LAST occurrence of that string,
+     `seg=${a%"$N3B_V3_URL | jq "*}$N3B_V3_URL` (deepen F1: when the pair occurs twice, a first-occurrence `%%` cut would leave
+     every word after the first pair outside curl-argv), so no `.` or `?` can act as a
+     wildcard (CTO concern 3). The V2/V4 regex anchors are greedy `^(.*URL)`, so they bind the last match already. The no-anchor message names the kind: D and R keep ` (no volume-id end)`, and V kinds print
      ` (no <K> URL end)`.
    - Control-flow shape (Kieran, DHH). In the word loop, put `if [[ "$k" == V* ]]; then` on a new line before the existing
      `case "$o" in`. That branch holds a V `case` at its own indentation, then `else`. The D/R `case ... esac` lines stay
@@ -225,7 +247,9 @@ It reads the joined logical line `j`, not the folded `l`, so the match is case-s
 p1-p4 did not, so every existing row keeps its tag (Kieran traced each one). Update the comment block above `n3b_census`,
 which today calls another client a "plan limit 5" gap. Name p5 there, and name the residual that remains: a renamed
 token, or a token read by name without `$`, such as `printenv HCLOUD_TOKEN_READONLY`. Case-sensitivity is declared, not
-pinned by a row (code-simplicity): lowercase spellings are not this repo's shell syntax for the variable.
+pinned by a row (code-simplicity): `doppler run --name-transformer` can inject the token under another name, which is
+limit 5 (deepen F5, CTO). A p5 clause on `--name-transformer` was rejected: runbook 6894's `tf()` wrapper uses it and
+would turn the base red.
 
 ### Documentation
 
@@ -235,7 +259,9 @@ pinned by a row (code-simplicity): lowercase spellings are not this repo's shell
 - Archived plan, item 6: state that V2-V4 are now frozen and run the defence lists with the per-kind allow-list, so the
   second-URL edit is red. Cite rows gVr1/gVr2. Keep "Other runbooks are out of scope". Keep the remaining gaps: a literal
   edited together with its builder and runbook still faces only the defence lists, and 6604's prose outside its two
-  pinned blocks is not censused.
+  pinned blocks is not censused. Add the two new declarations: the flags are permitted but not required (#12752), and
+  the V tail after ` | jq` is pinned only by the literal (env-dump is an open list).
+- Archived plan, item 5 also records the Doppler-spelling and `--name-transformer` residuals from item 3 above.
 - Suite comments, found by content anchor (line numbers move as the phases add lines): the header phrase
   `runbook-6894/postmerge exact-text pin`, the comment starting `# N3b (#12616, CTO ruling 4)`, the comment starting
   `# n3b_builder (CTO rulings 11c and 12a)`, the comment block under `_h18_bld() {`, and the census comment holding
@@ -261,7 +287,11 @@ temporary WIP commit, never a stash.
    - **R2 (xh line).** It inserts the issue's xh line after the R line inside runbook 6894's section-5c fence. The awk
      reads R through `ENVIRON` (`N3B_R="$r" awk 'BEGIN { a = ENVIRON["N3B_R"] } ...'`), never `-v`, which would read
      R's backslashes as escapes. It asserts that the runbook differs in exactly one line.
-3. Run R1 and R2 each on its own throwaway worktree of HEAD (`git worktree add --detach <scratchpad>/r1 HEAD`). Expect
+3. Run R1 and R2 each on its own throwaway worktree of HEAD (`git worktree add --detach <scratchpad>/r1 HEAD`), invoking
+   that worktree's own copy, `bash "$WT/plugins/soleur/test/sole-copy-drift-check.test.sh"` (`REPO_ROOT` comes from the
+   script path, so the live tree's copy would replay the wrong tree). Plain detached worktrees are the isolation; the
+   suite needs no allocator because `TMP` is `mktemp -d`. Record each edit script's one-line `diff` counts and the N3
+   `pass:` line beside the total (deepen A7). Expect
    286/286 from both. Remove the worktrees (`git worktree remove --force`).
 
 ### Phase 1: pure extraction (green)
@@ -329,19 +359,59 @@ How a read-only Hetzner bearer can leave these documents, after this change:
    directly precede ` | jq` and every word before it must be on the kind's allow-list.
 2. **A token handed to a non-curl client** (#12683 item 2). Closed for the five spellings by p5, in both documents, on
    logical lines.
-3. **Remaining, declared (limit 5):** a renamed token; a token read by name without `$`, `${` or a Doppler flag
-   (`printenv HCLOUD_TOKEN_READONLY | xh ...`); same-line quote concatenation of the host beside a renamed token. Any of
+3. **Remaining, declared (limit 5):** a renamed token, including one injected under another name by
+   `doppler run --name-transformer` (`lower-snake`, `tf-var`); a token read by name without `$` or `${`
+   (`printenv HCLOUD_TOKEN_READONLY | xh ...`); any Doppler spelling other than the five exact needles (flag order,
+   whitespace, quoting, comma lists, e.g. `secrets get --plain HCLOUD_...`), and any Doppler read that names no secret
+   (`secrets download`, `run` with no `--only-secrets`); same-line quote concatenation of the host beside a renamed
+   token (deepen F4/F5, CTO: DECLARE). Any of
    these would be new text in a reviewed diff.
 4. **Remaining, declared (limit 6):** the frozen literals are edited by a reviewed diff the suite cannot see. Other
    runbooks are out of scope. Runbook 6604 itself is not walked by the census: its two pinned blocks are exact text under
    N3, so any extra line there (an xh line included) is red, but a bearer command in 6604's *prose* outside those blocks
    is seen by neither N3 nor p5. That was true before this change too, and the archived plan's item 6 keeps it declared.
+   Also declared here (deepen F2/F3, CTO: DECLARE): the allow-list permits `--disable`, `--noproxy "*"` and `--config -`
+   but does not require them, for any kind (follow-up #12752); and the V tail after ` | jq` is pinned only by the frozen
+   literal, since env-dump is an open word list.
 
-### Why no Observability, Encryption Posture, IaC, Task Design or ADR section
+### Why no Encryption Posture, IaC, Task Design or ADR section
 
 The change edits a test suite and an archived plan. It adds no server code, no `plugins/*/scripts/` code, no store, no
 connection, no infrastructure, no autonomous task surface, and no architectural decision (it extends ADR-282's exact-text
 pin within its own design). The C4 model is unaffected: no actor, system, container or relationship changes.
+
+## Observability
+
+The only runtime surface is the suite itself, run in CI. It touches no server, host or Sentry path, so the signal is the
+CI check and its log. The probe counts the frozen heredocs in the suite. It prints `...:2` on main today and must print
+`...:5` after the fix. It is a single `git grep`, well under Check 10's 15-second cap, and it never runs the suite.
+
+```yaml
+liveness_signal:
+  what: the sole-copy drift suite runs on every PR via scripts/test-all.sh (glob plugins/soleur/test/*.test.sh)
+  cadence: per-PR and per-push CI run
+  alert_target: the failing required CI check on the PR, plus the main-health-monitor sweep on main
+  configured_in: scripts/test-all.sh (the plugins/soleur/test/*.test.sh registration) and .github/workflows/ci.yml
+error_reporting:
+  destination: GitHub Actions check status (no Sentry; this is a test suite, not runtime code)
+  fail_loud: the suite prints "=== Results: N/286 passed, K failed ===" with K > 0, names the failing row (N3b or H18), and exits non-zero
+failure_modes:
+  - mode: a V2-V4 line or its frozen literal gains a second destination or a non-allow-listed curl word
+    detection: N3b curl-argv check fails, naming the kind (no V<k> URL end) or the extra word
+    alert_route: red CI check on the PR
+  - mode: a Hetzner token spelling ($HCLOUD_TOKEN, ${HCLOUD_TOKEN, --only-secrets HCLOUD, --only-secrets=HCLOUD, secrets get HCLOUD) appears on a logical line that is not D or R
+    detection: n3b_census arm p5 fails, naming the file and line
+    alert_route: red CI check on the PR
+  - mode: a frozen literal is unquoted, names a builder, or loses its @ID@ placement
+    detection: n3b_frozen_self fails with its named reason
+    alert_route: red CI check on the PR
+logs:
+  where: GitHub Actions job log for the test-all.sh scripts group
+  retention: GitHub Actions default log retention (90 days)
+discoverability_test:
+  command: git grep -c "^IFS= read -r -d '' N3B_FROZEN_" -- ':(glob)plugins/soleur/**/sole-copy-drift-check.*'
+  expected_output: ":5"
+```
 
 ## Guard Contract
 
@@ -370,7 +440,8 @@ written in `@ID@` form. In a subshell, the helper:
 2. overrides `rb_line_<k>` to print `${t2//@ID@/$1}`;
 3. in `both` mode, sets `N3B_FROZEN_<K>=$t2`;
 4. except in `builder-only` mode, edits a runbook-6604 copy on the one verify line whose text after its leading whitespace
-   equals the real `rb_line_<k> "$_wpin"`, asserting that exactly one line differs;
+   equals the real `rb_line_<k> "$_wpin"`, asserting that exactly one line differs (otherwise it reports
+   `<label>(misplaced)`, as `_h18_placed` does, never caught);
 5. prints `@@precondition@@` if `rb_cmdline_ok "$copy" "$_wpin"` fails;
 6. runs `n3b ... "$_wpin" | _h18_red`.
 
@@ -391,6 +462,8 @@ exactly.
 | 10 | fs-v2-url | `servers/123931471` made `servers/@ID@` in `N3B_FROZEN_V2` in a suite copy | RED `builder V2: frozen:` containing `@ID@ placement:` |
 | 11 | fs-r-unquoted | `N3B_FROZEN_R`'s heredoc made unquoted in a suite copy (pins R in the key list) | RED `builder R: frozen:` containing `is not a quoted heredoc` |
 | 12 | hb (own dispatch) | `n3b` called with a web1 pin that is empty, equal to the pin, or equal to the retired id | exactly one line, `slot:` |
+| 13 | gVr12 | V3, both: ` $N3B_V3_URL \| jq .` appended after the real jq filter inside the `sh -c` body, so the anchor pair occurs twice (deepen F1: red under the last-occurrence cut, green under a first-occurrence `%%` cut, so it pins the direction) | RED `V3:curl-argv` |
+| 14 | gVr13 | V3, both: `volumes?name=` replaced by `volumesXname=` (deepen A3: pins that `?` is literal in both the V3 anchor and the V3 arm) | RED `V3:curl-argv` |
 
 Each fs row pins its reason, not only the `frozen:` prefix. A `no N3B_FROZEN_<K> heredoc` line counts as
 `(did-not-land)`, never as caught, so a copy that deleted the heredoc cannot satisfy a row.
@@ -406,11 +479,16 @@ a URL before the anchor, `$(env)` in V3's filter, a dropped slot, an argv `-H` o
 | H-e | gVr2's real edit with the wrong want `V2:frozen` | reported `uncaught`. With its right want, it is gVr2 itself and stays quiet |
 | H-f | `_h18_red` fed one `builder V3: env-dump: ...` line | reduces to `V3:env-dump`, so a V line survives the reduction |
 | H-g | a V row whose A is absent from the builder text | reported `(did-not-land)` |
+| H-i | `_h18_vbld` `both`, legal edit `servers/123931471` to `servers/123931472` (deepen A1) | want `''`: a broken override or a `both` literal that does not take effect would print `V2:curl-argv` |
+| H-j | the same legal edit, `built` | want exactly `V2:frozen` (no `curl-argv`), so the anchor passes a legal id and only the literal disagrees |
+| H18_ROWS | `_h18_judge`, `_h18_silent`, `_h18_bld`, `_h18_fs` and `_h18_vbld` each increment `H18_RUN` on entry; H18 requires `H18_RUN` to equal the declared `H18_ROWS`, the same pattern as H3's `TABLE_ROWS` (CTO: ACCEPT) | a deleted helper call or an early return reds H18. Checked inside H18's one assertion, so `FLOOR` is unchanged |
 
 **Anchor.** The literals live in the suite and the runbook in another file. A weakening that keeps N3b green must edit
 the builder, the literal and the runbook in one diff, and it still meets the defence lists (rows 2-7). The server id
 `123931471` and the V3 name sit in the heredocs and in the per-kind allow-list, never in a value read from the runbook.
-Declared limit: a reviewed diff can edit all of them together.
+Declared limit: a reviewed diff can edit all of them together. The per-kind URL arm is defence in depth behind the end
+anchor and the `key=url` at-most-once check: when the anchor matches, `seg` already holds the kind's own URL, so no row
+isolates the arm (deepen A2, CTO: DECLARE).
 
 ### Guard 2 — census arm p5: a token spelling on any logical line must be D or R
 
@@ -429,12 +507,15 @@ fence use `n3b_ins "$_5s" "$_5e" "$_h18_r" <line>`, so the destroy fence stays e
 | # | Row | Mutation | Expected |
 | --- | --- | --- | --- |
 | 1 | g5r1 | the issue's xh line, verbatim, in the 6894 section-5c fence after R | RED `unclassified p5: inngest-luks-cutover-6894.md:<its line>` |
-| 2 | g5r2 | `wget -q --header="X-Token: $HCLOUD_TOKEN_READONLY" -O - "$U"` (only `$HCLOUD_TOKEN`) | RED `unclassified p5:` |
+| 2 | g5r2 | `wget -q --header="X-Token: $HCLOUD_TOKEN" -O - "$U"` (only `$HCLOUD_TOKEN`; the write token, deepen A4) | RED `unclassified p5:` |
 | 3 | g5r3 | `xh -a "${HCLOUD_TOKEN_READONLY}" "$U"` (only `${HCLOUD_TOKEN`) | RED `unclassified p5:` |
-| 4 | g5r4 | `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- xh -A bearer "$U"` (only `--only-secrets HCLOUD`) | RED `unclassified p5:` |
+| 4 | g5r4 | `doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN -- xh -A bearer "$U"` (only `--only-secrets HCLOUD`; the write token, deepen A4) | RED `unclassified p5:` |
 | 5 | g5r5 | the same with `--only-secrets=HCLOUD_TOKEN_READONLY` (only `--only-secrets=HCLOUD`) | RED `unclassified p5:` |
 | 6 | g5r6 | `T=$(doppler secrets get HCLOUD_TOKEN_READONLY --plain)` (only `secrets get HCLOUD`) | RED `unclassified p5:` |
-| 7 | g5r8 | `xh -a "$HCLOUD_\` then `TOKEN_READONLY" "$U"` (the needle exists only on the joined line) | RED `unclassified p5:` at the start line |
+| 7 | g5r8 | `xh -a "$HCLOUD_\` then `TOKEN_READONLY" "$U"` (the needle exists only on the joined line; the continuation line has NO leading whitespace, since the join deletes only `\` and the newline) | RED `unclassified p5:` at the start line |
+| 8 | g5s1 (`_h18_silent`) | synthetic near misses in the 5c fence: `echo "$HCLOUD_URL"`, `--only-secrets SENTRY_DSN`, `secrets get SENTRY_DSN`, and a bare `HCLOUD_TOKEN_READONLY` in prose (deepen A6: pins against needle widening independently of today's document text) | silent |
+
+Rows 1-7 pin their start line with `_h18_at`, as g1r15 does, not only the `unclassified p5:` prefix (deepen A5).
 
 Rows 2-6 each hold exactly one needle, so deleting any one needle leaves its own row uncaught. Deleting `$HCLOUD_TOKEN`
 also leaves g5r8 uncaught, since its joined line holds only that needle. g5r1 holds two needles (`--only-secrets HCLOUD`
@@ -536,19 +617,25 @@ operations step.
       `unclassified p5:`.
 - [ ] AC6 `grep -c "^IFS= read -r -d '' N3B_FROZEN_\(D\|R\|V2\|V3\|V4\) <<'N3B_EOF' || true$" plugins/soleur/test/sole-copy-drift-check.test.sh`
       prints `5`.
-- [ ] AC7 `FLOOR=286` and `TABLE_ROWS=149` are unchanged, and the realized count in AC4 equals `FLOOR`.
+- [ ] AC7 `FLOOR=286` and `TABLE_ROWS=149` are unchanged, and the realized count in AC4 equals `FLOOR`. Why unchanged:
+      H18 stays one assertion however many rows it judges, and `TABLE_ROWS` counts H3's `end_row` rows, which this plan
+      does not touch (deepen A8). The new `H18_ROWS` constant is checked inside H18's one assertion, so it adds no
+      assertion.
 - [ ] AC8 `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0, and
       `(cd apps/web-platform && npx vitest run test/plugin-root-anchoring.test.ts)` passes.
 - [ ] AC9 `bash .claude/hooks/grep-q-pipe-guard.test.sh` passes (`PJ_TRIPLES` unchanged, or recomputed by its documented
       recipe with the reason recorded).
 - [ ] AC10 The archived plan's item 5 names p5 and H18 row g5r1 and still records the renamed-token gap (and the no-`$`
       read-by-name gap). Item 6 names `N3B_FROZEN_V2/V3/V4` and rows gVr1/gVr2, and no longer says "only D and R are frozen".
+      Item 5 names the Doppler-spelling and `--name-transformer` residuals, and item 6 names #12752 and the open
+      env-dump list.
 - [ ] AC11 `git diff --name-only origin/main...HEAD` lists only: the suite, the archived 2026-11-11 plan, this plan (or its
       `plans/archive/<ts>-` copy), the `specs/[archive/<ts>-]feat-one-shot-12683-n3b-census/` files
       `decision-challenges.md`, `tasks.md` and `session-state.md`, and at most one new
       `knowledge-base/project/learnings/**/*.md`. Neither runbook and no encryption-posture file appears.
-- [ ] AC12 The merge happens only after `gh run list --branch main --workflow ci.yml -L 1 --json conclusion --jq '.[0].conclusion'`
-      prints `success`. Until then the PR stays open, ready, with its checks green.
+- [ ] AC12 The merge happens only after main's CI is green at main's current tip:
+      `git fetch origin main && gh run list --branch main --workflow ci.yml --status completed -L 1 --json conclusion,headSha --jq '.[0] | "\(.headSha) \(.conclusion)"'`
+      prints `$(git rev-parse origin/main) success` (filtered on `headSha`, so an older or in-progress run cannot satisfy it). Until then the PR stays open, ready, with its checks green.
 
 ## Test Scenarios
 
