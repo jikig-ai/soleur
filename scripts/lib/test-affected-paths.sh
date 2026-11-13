@@ -472,9 +472,12 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
 )
-# The web-platform [repo-wide+component] bundle's edges. The first three entries are
-# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim, so the app diff and the
-# relevance-lib diff still select it; scripts/lint-orphan-test-suites.sh enforces that
+# The web-platform [repo-wide+component] bundle's edges. The first NINE entries are
+# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim — including the
+# PR_GATE_MACHINERY_PATHS spread it gained at #9340, hand-copied element-for-element because a
+# live spread here would resolve at source time and source order is not guaranteed — so the app
+# diff, the machinery diff and the relevance-lib diff still select it;
+# scripts/lint-orphan-test-suites.sh enforces that
 # WEBPLAT_APP_PATHS is a prefix of this array. The rest are files OUTSIDE
 # apps/web-platform/ that a repo-wide suite reads, which neither the wrapper argv nor
 # `vitest related` (app-relative inputs only) can reach (#8643):
@@ -486,6 +489,14 @@ AFFECTED_INFRA_RUNNER_PATHS=(
 # the CI run of the bundle instead.
 AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS=(
   "apps/web-platform/"
+  # --- WEBPLAT_APP_PATHS' PR_GATE_MACHINERY_PATHS spread, copied by hand (#9340) ---
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"  # also THIS FILE below — a machinery member now
+  "scripts/lib/affected-glob.sh"
+  ".github/workflows/ci.yml"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-shard-legs-heavy.tsv"
+  # --- end copied machinery spread ---
   "apps/web-platform/test/repo-wide-containment.test.ts"
   "scripts/lib/test-relevance-paths.sh"
   "plugins/soleur/skills/model-launch-review/scripts/audit-models.sh"  # claude-cli-pin-knows-models.test.ts › AUDIT_SH
