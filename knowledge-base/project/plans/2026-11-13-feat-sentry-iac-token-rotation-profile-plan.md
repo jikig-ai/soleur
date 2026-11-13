@@ -11,6 +11,32 @@ brand_survival_threshold: aggregate pattern
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-13. The pass was kept proportionate for a small tooling and docs PR. Plan-review had already run DHH, Kieran, code-simplicity, the CTO devex lens and the full sharp-edges catalogue pass, so no further agent fan-out was spawned.
+**Sections enhanced:** Risks and Sharp Edges (precedent diff), `tasks.md` (brought in line with the post-review design).
+**Gates run:**
+
+- Phase 4.6 (User-Brand Impact): present, threshold `aggregate pattern`.
+- Phase 4.7 (Observability): 5 fields; `bash` verb; literal `--profile`.
+- Phase 4.8 (PAT patterns): none.
+- Phases 4.9, 4.10 and 4.13: not triggered.
+- Phase 4.11: `lint-guard-contract.py` green.
+- Phase 4.12 (Scope Check): 1 unfenced section, `Recommendation:` present.
+- `technical-ruling-gate.sh --branch`: PASS, 14 rows.
+- All cited rule ids are present in `AGENTS.md`.
+- All cited issues and PRs were resolved live: #8681 open, #12740 open, #7942 open, #12665 merged, #7797 open.
+- `gh secret set --help` lists `--no-store`.
+
+### Key Improvements
+
+1. `tasks.md` previously carried the pre-review design: seven probes, a conditional `prd_terraform` write and a per-branch digest loop. It now matches this plan: four probes, an unconditional two-config write with read-back, a non-blocking stale-copies report, a three-list reporter, and the SKILL.md byte plan.
+2. A precedent diff against `scripts/mint-origin-ca-cert.sh` (Phase 4.4) is recorded under Risks and Sharp Edges.
+
+### New Considerations Discovered
+
+- The literal strings are consistent across the Implementation, AC, Observability and Test sections, checked by grep: `do NOT revoke the old token yet`, `HOLD THE NEW TOKEN`, `UNVERIFIED (value unknown)`, `STILL HOLD THE OLD TOKEN`, `STALE COPIES (no known reader in repo)`, `doppler preflight failed`.
+
 ## Overview
 
 Two Sentry-token fixes in one PR.
@@ -488,6 +514,15 @@ There is no Product/UX surface (no UI files) and no Legal trigger: no new proces
 - **`TOKEN_MINLEN=40`.** Synthesized fixtures must be ≥ 40 chars and non-hex, to stay clear of secret scanners.
 - **Test setup.** The test must set `TMPDIR`, and run the script with `< /dev/null`, before invoking it. Stubs read stdin only on their `set` arms.
 - **The S7 executed row.** The row in `tests/scripts/test-argv-bearer-sweep.sh` extracts the ONE fenced block in `postmerge/SKILL.md` containing `--config -` and `monitors/`. Adding a second such block, or changing the Phase 3.5 token resolution order, reds it.
+- **Precedent diff (deepen Phase 4.4), Doppler store + read-back.** `scripts/mint-origin-ca-cert.sh` is the closest sibling.
+
+  | Aspect | `mint-origin-ca-cert.sh` | This plan's `iac` store | Why it differs |
+  |---|---|---|---|
+  | Write | `mc_set`: value on stdin from a file, `--no-interactive`, stdout+stderr → `/dev/null` | same form, `< "$TOK" >/dev/null 2>&1` | — |
+  | Read-back | `mc_get` into a shell variable, then `printf '%s' "$got" \| sha256sum` | `doppler … --plain 2>/dev/null \| sed -z 's/\n$//' \| sha256sum`, digest only | The value must never be assigned to a variable (P2). `sed -z` strips the CLI's LF, the same way `$(…)` does in the precedent. |
+  | Read failure | `mc_get … \|\| state=unreadable` | rc captured explicitly, and the empty-string digest also rejected | The precedent's variable path cannot hash "" by accident. The pipeline path can. |
+  | Failure handling | `mc_fail_restore` writes the previous value back | no restore: the previous token stays valid until the revoke, and the three-list report says what holds what | A restore would need the old plaintext read into the trap dir, which widens exposure. The vendor-side token stays live, so a rollback is not needed. |
+
 - **The `## User-Brand Impact` section.** A plan whose section is empty, contains only placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `soleur:work`.
 
 ## Plan Review Revisions (2026-11-13)
