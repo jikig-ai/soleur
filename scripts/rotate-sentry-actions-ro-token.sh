@@ -459,6 +459,7 @@ fi
 # iac: three targets, in order. A failure after any target holds, or may hold, the new value
 # means both tokens may be live somewhere, so the old one must not be revoked yet (exit 3).
 store_fail() { # store_fail <what failed>: the partial-state report; exits 1 or 3
+  STORE_PHASE=0   # this IS the report: a signal arriving while it prints must not add a second
   printf '[FATAL] %s\n' "$1" >&2
   if (( ${#HOLD_NEW[@]} == 0 && ${#UNVERIFIED[@]} == 0 )); then
     printf '[FATAL] nothing holds the new token: REVOKE THE NEW TOKEN (ends ...%s) IN-PAGE NOW (the %s Tokens panel), then retry.\n' "$TAIL4" "$INTEGRATION" >&2
