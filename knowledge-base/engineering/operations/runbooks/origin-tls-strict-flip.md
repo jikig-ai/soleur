@@ -8,16 +8,25 @@ date: 2026-11-07
 # Origin-TLS strict flip (ADR-321 decision 3 and item 10, #10479)
 
 Makes Cloudflare validate the Origin CA certificate on EVERY request to `app.soleur.ai` (`strict`) instead of dialing it unvalidated over plain HTTP
-(`flexible`). The code is merged inert: the strict rule is ALWAYS in the ruleset but `enabled = var.enable_origin_tls_strict`, which defaults to false, so
-merging adds one disabled rule and changes no edge behaviour. The flip is the owner's three ordered acts. **The order is the safety property.**
+(`flexible`). The flip was the owner's three ordered acts on 2026-11-07, through a strict rule that was always in the ruleset behind a Doppler switch
+(`enable_origin_tls_strict`). **Since the cleanup (ADR-321 item 13, #10479, 2026-11-13) there is no switch:** the adopted rule itself (ref
+`dcb85b75bc3c4f4aa2a8c13a080bf854`, "Strict SSL for app.soleur.ai (ADR-321, #10479)") is `strict` on `(http.host eq "app.soleur.ai")`, the two ORIGIN-TLS rules
+and their variables are deleted, and `origin-tls-probe.sh --canary` is retired (exit 64, no request). The acts below are a dated record; what is live today is
+in "Cleanup", "Rollback" and "Break-glass".
 
 ## Status (dated; all times UTC; verified 2026-11-08 unless a row says otherwise)
+
+**Cleanup status (2026-11-13; ADR-321 item 13).** The cleanup change is written (the PR that closes #10479: 5 rules to 3, adopted rule `flexible` to `strict`,
+both ORIGIN-TLS rules and both variables deleted). Merge apply: **pending** (record here the push-apply run id and its destroy-guard line, expected `nested_deletes` 2
+acked by the merge message). Post-apply re-measure: **pending** (record here `cloudflare-readonly.sh config-entrypoint`, expected `rule_count` 3, `enabled_ssl_rules` 2,
+ref dcb85b75 `ssl=strict`, a new `version` and `last_updated`; and 20 runs of `origin-tls-probe.sh --require-tls`, all `TLS-ON-ORIGIN-HOP`). Until both rows are filled,
+the 2026-11-13 pre-merge readings (`knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`, "Pre-merge evidence readings (F3)") are the latest.
 
 | Act | State | Evidence |
 |---|---|---|
 | 0. Read-only preconditions | **DONE before act 3**, with three exceptions stated in "What was NOT run" below | the Act 0 table's expectations are the PRE-FLIP state (they are historical now; see "Act 0" for what holds today) |
 | 1. `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` | **DONE** about 20:55Z on 2026-11-07. Do NOT set it again | `doppler secrets --only-names -p soleur -c prd` lists `ORIGIN_TLS_REQUIRED` |
-| 2. Restart both hosts on it | **DONE**: redeploy completed about 21:01Z (the 21:00:04Z / 21:01:04Z `soleur-web-platform` and 21:00:35Z / 21:01:32Z `soleur-web-2` `origin-tls: listening` pairs; web release v0.395.3 by publish order). It is NOT the last restart before the flip: see "Restarts before and after the flip" | `origin-tls-probe.sh --canary` exit 0 `TLS-ON-ORIGIN-HOP` TLSv1.3 at 21:22Z |
+| 2. Restart both hosts on it | **DONE**: redeploy completed about 21:01Z (the 21:00:04Z / 21:01:04Z `soleur-web-platform` and 21:00:35Z / 21:01:32Z `soleur-web-2` `origin-tls: listening` pairs; web release v0.395.3 by publish order). It is NOT the last restart before the flip: see "Restarts before and after the flip" | `origin-tls-probe.sh --canary` (the mode retired on 2026-11-13) exit 0 `TLS-ON-ORIGIN-HOP` TLSv1.3 at 21:22Z |
 | 3. The flip | **DONE** on 2026-11-07: ruleset written at 23:43:43.9Z (Cloudflare `last_updated`), apply job ended 23:44:26Z, first passing probe 23:44:39Z. Do NOT dispatch it again while strict is live | see "Act 3 record" below |
 
 ### Act 3 record (dated facts only)
@@ -28,7 +37,7 @@ merging adds one disabled rule and changes no edge behaviour. The flip is the ow
 - Flip apply, run 42426416266: apply job 23:42:34Z to 23:44:26Z; plan 0 to add, 1 to change, 0 to destroy (the `ORIGIN-TLS STRICT` rule's `enabled` false to true); the Terraform log line "cloudflare_ruleset.seo_config_settings: Modifications complete" is stamped 23:43:44.97Z; Cloudflare reports the live ruleset (version 7) `last_updated` 23:43:43.865Z.
 - `origin-tls-probe.sh --require-tls`: **passed on the first poll, at 23:44:39Z** (TLSv1.3), 13 s after the apply run ended and about 55 s after the ruleset write. **There was no earlier poll, so about 55 s is an UPPER BOUND on the flip's time-to-effect**, not a measurement of when it took effect. Before 23:44:39Z the flip was not proven effective.
 - Live ruleset, read 2026-11-08: 5 rules, 4 enabled ssl rules (flexible app, apex `full`, canary `strict`, strict), version 7 (`cloudflare-readonly.sh config-entrypoint`). Per its header, `enabled_ssl_rules` is 2 plus one per ORIGIN-TLS switch that is on (both are), hence 4.
-- **What the probe proves.** `TLS-ON-ORIGIN-HOP` shows the hop used TLS for a request through the edge to web-1 (the only weighted origin; web-2 has weight 0). It would also pass under `full`, which does not validate the certificate. The stronger evidence that the mode is `strict` is the live rule itself: enabled, and last in the list (last match wins). The canary rule is still enabled, so `--canary` no longer discriminates anything.
+- **What the probe proves.** `TLS-ON-ORIGIN-HOP` shows the hop used TLS for a request through the edge to web-1 (the only weighted origin; web-2 has weight 0). It would also pass under `full`, which does not validate the certificate. The stronger evidence that the mode is `strict` is the live rule itself: enabled, and last in the list (last match wins). The canary rule is still enabled, so `--canary` no longer discriminates anything. (Both ORIGIN-TLS rules and the `--canary` mode were retired by the cleanup, ADR-321 item 13.)
 
 #### Restarts before and after the flip
 
@@ -359,7 +368,7 @@ If step 1 shows no run for the merge commit, or step 2 shows `skipped`, `failure
 | +1 h and +24 h rechecks (the 30-request loop and the Sentry query), rollback kept armed for the whole window | whoever runs the soak | pending |
 | Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip. The alert rule `origin-tls-event` (any `feature=origin_tls` event, `frequency_minutes` 47) is **DECLARED** in the follow-ups PR; it is live only after the merge-triggered `apply-sentry-infra.yml` run has been read (see "Verify the rule is live" below). Until then the pull-based query in "Sentry check" is the only check |
 | Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** mints the token, then the **agent** runs it (no sanctioned reader until then) | open. A read-only reader needs the `CF_API_TOKEN_ANALYTICS_READ` token and a `cloudflare-readonly.sh` subcommand (with a documented read-only-POST exception), tracked in `#12441`; see "/health p90 after the strict flip" Step C |
-| Port 80 | stays OPEN until the bake passes (CLO condition 3); the post-flip probe passing is necessary, not sufficient | open |
+| Port 80 | stays OPEN (CTO ruling 2026-11-13: closing it is a second destroy and a deploy, in its own PR with Authenticated Origin Pulls, #12743) | open |
 | Rollback time-to-effect at the edge | | **unmeasured**: the apply run took 109 to 370 s on this workflow; the flip's own upper bound (about 55 s from the ruleset write to the first passing probe) is the only edge figure |
 
 ## Why this order
@@ -388,12 +397,15 @@ https LB monitor (an "Unhealthy" email only; web-1 is never drained). **No Sentr
 
 ## Act 0 - read-only preconditions before act 3 (anyone; all runnable; the Expected column is the PRE-FLIP state)
 
+**Historical (done 2026-11-07).** Since the cleanup the `--canary` row exits 64 (retired), the `ENABLE_ORIGIN_TLS_*` names are inert, and the live ruleset has 3 rules
+(`rule_count` 3, `enabled_ssl_rules` 2, the adopted rule `strict`). Use "Rollback" for any change to the app host's SSL mode now.
+
 | Check | Command | Expected |
 |---|---|---|
 | Doppler names only | `doppler secrets --only-names -p soleur -c prd \| grep ORIGIN_TLS` and `doppler secrets --only-names -p soleur -c prd_terraform \| grep ENABLE_ORIGIN_TLS` | `ORIGIN_TLS_CERT_B64`, `ORIGIN_TLS_KEY_B64`, `ORIGIN_TLS_REQUIRED`; and only `ENABLE_ORIGIN_TLS_CANARY_RULE` (strict absent). Never print values |
 | Both hosts listening on the minted certificate, and `required` per host | `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep 'origin-tls: listening' --limit 300 \| jq -r '.raw \| fromjson \| select(has("CONTAINER_NAME")) \| select(tostring \| contains("origin-tls: listening")) \| "\(.SYSLOG_TIMESTAMP) host=\(.host) required=\(.message.required)"' \| sort \| tail` (the pino fields are an OBJECT at `.message`, verified against production rows on 2026-11-08; rows from before PR #12388 print `required=null`) | fresh lines for `soleur-web-platform` AND `soleur-web-2` after the act 2 redeploy, and `required=true` on both once the release carrying PR #12388 is live; (the same rows carry `fingerprint256` 7B:E5:11:D0... and `daysLeft` about 5474 inside the pino message) |
 | No origin-TLS errors in Sentry | see "Sentry check" below | 0 events (and the control query returns rows) |
-| Canary still proves the strict handshake | `bash apps/web-platform/infra/origin-tls-probe.sh --canary` | exit 0, `mode=canary result=TLS-ON-ORIGIN-HOP`, TLSv1.3 |
+| Canary still proves the strict handshake (retired 2026-11-13: `--canary` now exits 64) | `bash apps/web-platform/infra/origin-tls-probe.sh --canary` | exit 0, `mode=canary result=TLS-ON-ORIGIN-HOP`, TLSv1.3 |
 | Normal traffic still plain | `bash apps/web-platform/infra/origin-tls-probe.sh` | `PLAIN-ORIGIN-HOP` (the pre-flip truth) |
 | No page rule can override the Configuration Rule | `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh pagerules-ssl` | `active_rule_count` 0 |
 | Live ruleset matches the code | `... cloudflare-readonly.sh config-entrypoint` | `rule_count` 5, `enabled_ssl_rules` 2 plus one per ORIGIN-TLS switch that is on (3 before the flip: flexible app, apex `full`, canary `strict`; 4 after it); the app-host strict rule present with `enabled` false once the merge apply has run |
@@ -432,6 +444,9 @@ Owner acts (no probe exists): the `web_lb_health` "Unhealthy" notification mail 
 
 ## Act 3 - the flip (owner's go)
 
+**Historical record (done 2026-11-07). Do NOT run:** since the cleanup the `enable_origin_tls_strict` variable does not exist, so the Doppler secret below is inert
+and the dispatch changes nothing at the edge.
+
 ```bash
 doppler secrets set ENABLE_ORIGIN_TLS_STRICT=true -p soleur -c prd_terraform > /dev/null
 gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason="ADR-321: strict flip for app.soleur.ai"
@@ -442,42 +457,70 @@ not just this rule. After the apply, read the plan in the run log (`gh run view 
 
 Proof after (and record the time-to-effect: poll the probe every 10 s from the moment the apply ends until it passes):
 
-- `bash apps/web-platform/infra/origin-tls-probe.sh --require-tls` (NOT `--canary`) exits 0 with `result=TLS-ON-ORIGIN-HOP`, `transport=TLSv1.3`.
+- `bash apps/web-platform/infra/origin-tls-probe.sh --require-tls` (`--canary` is retired) exits 0 with `result=TLS-ON-ORIGIN-HOP`, `transport=TLSv1.3`.
 - The 30-request loop: still 30 of 30, p50/p90 compared with the baseline.
 - Sentry `feature:origin_tls` quiet; no `origin-tls: a client failed the TLS handshake` burst in Better Stack; the pool still healthy; the signed-in WebSocket connects (owner act).
 - Re-check at **+1 h and +24 h** with the loop and the Sentry query, and keep the rollback below armed for that whole window. Port 80 stays open until these pass (CLO condition 3).
 
-## Rollback (an in-place update; never `git revert` the resource)
+## Rollback (a reviewed forward PR to `flexible`; never `git revert`)
 
-The strict rule is always present and only `enabled` toggles, so the rollback is an in-place attribute update with the rule count constant. This was **measured, not asserted**:
-real `terraform plan` + `terraform show -json` documents replayed through the real destroy-guard filter (`tests/scripts/test-destroy-guard-counter-web-platform.sh`, T65)
-give `nested_deletes` 0 for flip-on, rollback, canary-off and canary-off-while-strict-on, so the apply job does not refuse them on a `workflow_dispatch` (where
-`github.event.head_commit.message` is empty and `[ack-destroy]` cannot be supplied). The first design (a rule that came and went) planned a rule REMOVAL (`nested_deletes` 1)
-that the same dispatch path refuses.
+*Ruled by CTO agent, 2026-11-13: no switch remains, by design; the rollback is a forward PR, the owner's dashboard edit is the break-glass.* Never `git revert` the
+cleanup: it would re-add the two ORIGIN-TLS rules and their switches. **Simulated once on 2026-11-13** in a scratch detached worktree (the PR state with the adopted rule set
+back to `flexible`, each suite run once); the file list below is what that run needed, not a guess.
 
-```bash
-doppler secrets delete ENABLE_ORIGIN_TLS_STRICT -p soleur -c prd_terraform --yes > /dev/null     # or set it to the lowercase string false
-gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason="ADR-321: roll back the strict flip"
-```
+**What the forward PR edits (one diff):**
 
-Time to effect: the apply run. Measured on this workflow in this repository: the canary enabling dispatch (run 42407585597) took 302 s wall clock with the apply job 111 s; recent push
-applies took 109 to 370 s. For the FLIP the first passing probe came about 55 s after the ruleset write (an upper bound: it was the first poll); propagation of a ROLLBACK has not been timed. Plan on 2 to 6 minutes plus about a minute of propagation.
-Real traffic is never in the canary's scope, but a bad flip hits every user until this lands.
+1. `apps/web-platform/infra/seo-config-rules.tf`: the adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`) `ssl = "flexible"`, its `description` (it must stop saying
+   "Strict"), and its comment block. Keep its `ref`, its expression `(http.host eq "app.soleur.ai")` and its position. If the expression changes too, the three exclusion
+   sites in `apps/web-platform/infra/ssl-full-mitigation.test.sh` change with it.
+2. `apps/web-platform/test/seo-config-rules.test.ts`: the Guard 1 constants `ADOPTED_SSL_MODE` (to `"flexible"`) and `ADOPTED_SSL_DESCRIPTION`. Measured: with only the `.tf`
+   edited, two rows go RED ("the adopted rule is strict, enabled, ref-pinned, expression and description exact" and the exactly-one `ssl = <mode>` row); with the two
+   constants edited the suite is 25 of 25 again. No other test row changes.
+3. `plugins/soleur/scripts/cloudflare-readonly.sh`, header B only: `with ssl=flexible`, plus a dated snapshot note. Measured:
+   `plugins/soleur/test/cloudflare-readonly.test.sh` derives the expected value from the `.tf` and is RED ("header states the adopted rule's ssl value") until the header says
+   `flexible`; `rule_count` 3 and `enabled_ssl_rules` 2 do not change.
+4. `scripts/encryption-posture-ledger.json`, connection row 7 (Cloudflare edge -> web hosts origin): `cert_verification` back to `off`, the `tls` and `enforced_at` text, and an
+   `exception` block carrying `tracking_issue` and `expires_on`. **No suite catches this:** in the simulation `scripts/lint-encryption-posture.py` gave the same result with the
+   `.tf` at `flexible` and row 7 still `on` (it does not read the ruleset), so this edit is on the author.
+5. The published wording, the SAME DAY (CLO ruling 2026-11-13): `docs/legal/privacy-policy.md` Section 11 and its Last Updated line, `docs/legal/data-protection-disclosure.md`
+   8.1(c), the two mirrors `plugins/soleur/docs/pages/legal/privacy-policy.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`, and
+   `LEGAL_DOC_SHAS` in `apps/web-platform/lib/legal/legal-doc-shas.ts`. The internal records that carry the same claim: `knowledge-base/legal/article-30-register.md`,
+   `knowledge-base/legal/data-processing-agreement-template.md`, `knowledge-base/operations/domains.md` (SSL Mode row) and
+   `knowledge-base/engineering/architecture/nfr-register.md`. The legal lints were not part of the simulation, and none of the four suites above ties the wording to the `.tf`.
 
-What users see if the flip goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
+**No `[ack-destroy]`.** Measured offline on 2026-11-13 (Terraform 1.9.8, cloudflare 4.52.7 from the plugin cache, prior state = the cleanup's 3 rules): `Plan: 0 to add,
+1 to change, 0 to destroy`, the only diff `ssl = "strict" -> "flexible"`; through the real filter `resource_deletes` 0, `nested_deletes` 0. `ssl-full-mitigation.test.sh` and
+the T65 suite stay green unchanged.
+
+**Queue rule.** The forward PR goes FIRST in the merge queue. After an owner dashboard break-glass (below), no other `apps/web-platform/infra` PR may merge until it lands:
+every per-merge apply targets `cloudflare_ruleset.seo_config_settings` and would put the dashboard edit back to `strict`.
+
+Time to effect: the push apply (109 to 370 s on this workflow) plus edge propagation (unmeasured for a rollback; about 55 s was the flip's upper bound). Proof after:
+`cloudflare-readonly.sh config-entrypoint` shows ref dcb85b75 `ssl=flexible`, `rule_count` 3, `enabled_ssl_rules` 2; `origin-tls-probe.sh` (without `--require-tls`)
+reports `PLAIN-ORIGIN-HOP`.
+
+What users see if `strict` goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
 certificate). Browser-to-edge TLS is unaffected.
 
-**Break-glass (OWNER ONLY, not agent-runnable, not tested).** If the apply path itself is unavailable, the ruleset can be edited at the Cloudflare entrypoint
-(`PUT /zones/<zone>/rulesets/phases/http_config_settings/entrypoint`, with `CF_API_TOKEN_RULESETS`, which carries Config Rules:Edit). This runbook does not give a runnable
-procedure on purpose: the sanctioned reader (`cloudflare-readonly.sh config-entrypoint`) returns a summary, not a PUT body; a whole-list PUT can silently drop the apex `full`
-rule (an HTTP 526 on the HSTS-preloaded apex) or reorder the adopted `flexible` rule (last match wins); and nothing here verifies the read-back. Use the dashboard to
-disable the `ORIGIN-TLS STRICT` rule instead, then unset the Doppler switch so the next apply does not re-enable it.
+## Break-glass (OWNER ONLY; not agent-runnable)
 
-## After the flip has baked: the cleanup change
+If users are seeing 525/526 and the merge path is too slow, the owner edits the adopted rule in the Cloudflare dashboard (Rules, Configuration Rules, the rule described
+"Strict SSL for app.soleur.ai (ADR-321, #10479)", SSL to Flexible), then opens the forward PR above at once so the next apply does not undo the edit (see "Queue rule").
+The same-day wording correction applies from the moment of the dashboard edit. No API recipe is given on purpose: the sanctioned reader returns a summary, not a PUT body,
+and a whole-list entrypoint PUT can silently drop the apex `full` rule (HTTP 526 on the HSTS-preloaded apex). The scheduled drift plan will also show the edit as drift
+until the forward PR lands.
 
-A cleanup PR edits the adopted `flexible` rule to `strict`, removes both ORIGIN-TLS rules and both variables, and the owner deletes `ENABLE_ORIGIN_TLS_CANARY_RULE` and
-`ENABLE_ORIGIN_TLS_STRICT` from Doppler. That change REMOVES rules (replayed: `nested_deletes` 2), so it must be merged to main with a line containing exactly `[ack-destroy]` in the
-merge commit message (a push apply; the dispatch path cannot ack). That is the right friction for a deliberate removal, and it is never an emergency path.
+## Cleanup (ADR-321 item 13, #10479, 2026-11-13)
+
+The cleanup PR made the adopted rule `strict` on `app.soleur.ai` only (lb-staging dropped: no DNS record, and the certificate does not name it), deleted both ORIGIN-TLS
+rules, both variables and the `--canary` probe mode, and left port 80 open (#12743). The two Doppler switches (`ENABLE_ORIGIN_TLS_CANARY_RULE`, `ENABLE_ORIGIN_TLS_STRICT`)
+are now inert; deleting them is the owner's act (#12743). The change REMOVES two rules (`nested_deletes` 2, replayed in T65 against a regenerated offline real plan), so its
+commit carries a line containing exactly `[ack-destroy]`, which reaches the squash merge message the push apply reads.
+
+**Recovery if the acked push apply is superseded, cancelled or fails before the ruleset write.** A `workflow_dispatch` cannot ack the deletes (its head message is empty,
+so the guard refuses), and every later push apply also targets the ruleset, so EVERY later `apps/web-platform/infra` merge would be refused on the same two deletes. The
+recovery is a re-merge: the next merge to main whose squash message carries an `[ack-destroy]` line on its own (a small follow-up PR is enough) plans the same 5 to 3
+change and applies it. Read that plan's destroys first: the ack covers every destroy in it.
 
 ## Act 2 reference (done 2026-11-07; for a repeat)
 
@@ -491,5 +534,6 @@ WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11 REDEPLOY_TIMEOUT_S=4800 \
 ```
 
 An agent session can run this only if its Doppler login can read `soleur-infra-privileged/prd` (the author's could); the act is production-mutating and needs the owner's own go.
-Proof: exit 0 with a terminal frame `reason=ok`, fresh per-host `origin-tls: listening` lines, no `feature:origin_tls` Sentry events, `--canary` probe exit 0.
+Proof: exit 0 with a terminal frame `reason=ok`, fresh per-host `origin-tls: listening` lines, no `feature:origin_tls` Sentry events, `--require-tls` probe exit 0 (the
+`--canary` probe used on 2026-11-07 is retired).
 web-2 (weight 0) is covered only by the https LB monitor with certificate validation and its own listening line; the edge canary reaches web-1 only.

@@ -266,7 +266,7 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# TWENTY-ONE explorations carry this line (#12167's relay_listener_down, relay_probe_silent and relay_peer_probe_failed; monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #10321's registry_zot_log_credential_shape, #8611's two (its third, claude_cost_capture_dark, and #8706's
+# TWENTY-TWO explorations carry this line (#10538's inngest_registry_empty; #12167's relay_listener_down, relay_probe_silent and relay_peer_probe_failed; monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #10321's registry_zot_log_credential_shape, #8611's two (its third, claude_cost_capture_dark, and #8706's
 # luks_monitor_host_timer_dark were retired by #11631), #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback, #9391's ghcr_hostsfile_deny_lost, #9534's egress_gw_deny_spike and
 # egress_gw_probe_silent, the review follow-up's egress_gw_probe_fail, #10445's agent_sandbox_bash_denial, #10453's faithful_canary_sandbox_broken, #9639 F8's
 # web_nic_guard_unpinned_url, #9927's inngest_luks_key_probe_fail and #11820's inngest_cutover_flip_silent), and the guard
@@ -275,7 +275,7 @@ expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vec
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 21, "anchor"
+assert s.count(old) == 22, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"

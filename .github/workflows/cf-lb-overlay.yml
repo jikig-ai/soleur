@@ -85,6 +85,11 @@ env:
   PROBE_LOG: /tmp/lb-staging-continuity.log
 
 jobs:
+  # STAGING ARMS AFTER #10479 (ADR-321 item 13, 2026-11-13): the zone's adopted config rule
+  # (apps/web-platform/infra/seo-config-rules.tf) now covers app.soleur.ai ONLY, the zone is
+  # `strict`, and the Cloudflare Origin CA certificate names app.soleur.ai only. A re-run of a
+  # staging arm would therefore get HTTP 526 on lb-staging.soleur.ai. Reviving the staging arms
+  # needs a host-scoped rule or a certificate that names the host, in its own reviewed PR.
   staging_record:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
     runs-on: ubuntu-24.04

@@ -974,6 +974,12 @@ jobs:
       - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
         run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
 
+      # (#10538) The registry-empty Logs alert: a serving dedicated Inngest host whose registry_fns is not
+      # a positive integer. Canonical SQL equality from derived needles (the probe's own emit line),
+      # the no-volume-reference row (ADR-282), parameters, both -target lines, and the mutation rows.
+      - name: Run inngest registry-empty alert drift guard (#10538)
+        run: bash apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh
+
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both
       # -target lines, and the mutation rows that each require this guard to red.

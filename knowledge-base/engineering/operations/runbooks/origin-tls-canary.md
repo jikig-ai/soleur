@@ -1,11 +1,23 @@
 ---
-title: Origin-TLS canary rule (strict for one probe request)
+title: Origin-TLS canary rule (strict for one probe request) - RETIRED 2026-11-13
 category: operations
-tags: [tls, cloudflare, canary, origin-ca]
+tags: [tls, cloudflare, canary, origin-ca, retired]
 date: 2026-11-07
 ---
 
-# Origin-TLS canary rule (ADR-321, #10479)
+# Origin-TLS canary rule (ADR-321, #10479) - RETIRED
+
+> **RETIRED 2026-11-13 (ADR-321 item 13, #10479).** The cleanup deleted the canary rule, its variable `enable_origin_tls_canary_rule` and the
+> `--canary` mode of `origin-tls-probe.sh` (now a usage error, exit 64, that sends no request). The adopted rule in
+> `apps/web-platform/infra/seo-config-rules.tf` is itself `strict` for `app.soleur.ai`, so there is nothing left to canary. The Doppler secret
+> `ENABLE_ORIGIN_TLS_CANARY_RULE` is inert; deleting it is the owner's act (#12743). **Do not run any command below**: it is kept as the dated record of
+> the 2026-11-07 canary. For the live state, rollback and break-glass see `origin-tls-strict-flip.md` and item 13 of
+> `knowledge-base/engineering/architecture/decisions/ADR-321-origin-tls-terminates-in-the-app-container-with-a-cloudflare-origin-ca-certificate.md`.
+>
+> To prove the edge-to-origin hop today: `bash apps/web-platform/infra/origin-tls-probe.sh --require-tls` (exit 0 `TLS-ON-ORIGIN-HOP`; with the host `strict`, that also
+> proves Cloudflare accepted the certificate).
+
+## History (as written 2026-11-07)
 
 A Configuration Rule that makes Cloudflare dial the origin in `strict` for ONE kind of request: `/health` on `app.soleur.ai` carrying
 `x-origin-tls-probe: 1`. Everything else to the host stays `flexible`. It measures the real edge-to-origin handshake against the Origin CA

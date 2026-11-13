@@ -13,8 +13,11 @@
 //            (startInngestExecReceiver + a fixture app server over synthesized
 //            TLS, helpers/proxy-test-tls.ts);
 //   Guard 4  the 10.0.1.10 pin is one source of truth across exec-placement.ts,
-//            infra/inngest-host.tf sdk_url, infra/variables.tf web-1, the
-//            network.tf attachment pair, and the workspaces-LUKS host binding.
+//            infra/variables.tf web-1, the network.tf attachment pair, and the
+//            workspaces-LUKS host binding (the pin follows the volume holder);
+//            infra/inngest-host.tf sdk_url is the PUBLIC serve URL, equal to
+//            the route's SERVE_HOST + servePath (#10538 remedy (c)), so it no
+//            longer carries the pin.
 //
 // All fixtures synthesized (cq-test-fixtures-synthesized-only).
 
@@ -84,6 +87,23 @@ const infraFile = (rel: string): string =>
   readFileSync(join(APP_ROOT, "infra", rel), "utf8");
 
 const ROUTE_SRC = appFile(ROUTE_REL);
+
+/**
+ * Guard 4 (#10538 remedy (c)): the declared --sdk-url is the registered serve
+ * URL. Read from the route's runtime code (SERVE_HOST is not exported), so a
+ * test-only edit cannot make a wrong sdk_url match.
+ */
+const SDK_URL_PUBLIC = "https://app.soleur.ai/api/inngest";
+function routeServeUrl(): string {
+  const src = stripComments(ROUTE_SRC, "route.ts");
+  const host = src.match(
+    /const SERVE_HOST\s*=\s*process\.env\.NODE_ENV === "production"\s*\?\s*"([^"]+)"\s*:\s*undefined/,
+  );
+  expect(host, "route.ts must declare a literal production SERVE_HOST").not.toBeNull();
+  const path = src.match(/servePath:\s*"([^"]+)"/);
+  expect(path, "route.ts must pin servePath").not.toBeNull();
+  return `${host![1]}${path![1]}`;
+}
 
 /** RFC 7230 §6.1 hop-by-hop set + host — the envelope's allowed mutations. */
 const HOP_BY_HOP = new Set([
@@ -761,15 +781,28 @@ describe("Guard 4 — pin-target drift", () => {
     expect(src).toContain('EXEC_HOST_PRIVATE_IP = "10.0.1.10"');
   });
 
-  it("inngest-host.tf sdk_url's host IS the pin", () => {
-    // RED row: sdk_url host changed.
+  it("inngest-host.tf sdk_url is the public serve URL — SERVE_HOST + servePath of the route (#10538 remedy (c))", () => {
+    // RED rows: sdk_url back to the private-IP plaintext poll, a scheme
+    // downgrade to http://, SERVE_HOST moved while sdk_url stays, or the
+    // sdk_url line removed. The registered serve URL is the ONE source of
+    // truth: the poll URL equals it, so no second app identity is registered.
     const tf = infraFile("inngest-host.tf");
-    const m = tf.match(
-      /sdk_url\s*=\s*"http:\/\/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\/api\/inngest"/,
-    );
+    const m = tf.match(/^\s*sdk_url\s*=\s*"([^"]*)"/m);
     expect(m, "inngest-host.tf must declare a literal sdk_url").not.toBeNull();
-    expect(m![1]).toBe(EXEC_HOST_PRIVATE_IP);
-    expect(tf).toContain('sdk_url = "http://10.0.1.10:3000/api/inngest"');
+    expect(m![1]).toBe(SDK_URL_PUBLIC);
+    expect(m![1]).toBe(routeServeUrl());
+    expect(m![1].startsWith("https://"), "sdk_url must be https").toBe(true);
+    expect(m![1]).not.toContain(EXEC_HOST_PRIVATE_IP);
+  });
+
+  it("whitespace around = in the sdk_url line stays GREEN (must-PASS variant)", () => {
+    const tf = infraFile("inngest-host.tf").replace(
+      /^(\s*)sdk_url\s*=\s*"/m,
+      "$1sdk_url     =   \"",
+    );
+    const m = tf.match(/^\s*sdk_url\s*=\s*"([^"]*)"/m);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe(routeServeUrl());
   });
 
   it("variables.tf web-1 private_ip IS the pin, and network.tf attaches var.web_hosts at each.value.private_ip", () => {
@@ -837,20 +870,23 @@ describe("Guard 4 — pin-target drift", () => {
     );
   });
 
-  it("must-PASS: the constants agree across code, sdk_url, web-1, and the tuples (real tree, unmutated)", () => {
-    // GREEN row: one source of truth.
+  it("must-PASS: the pin agrees across code and web-1, and sdk_url is the public serve URL (real tree, unmutated)", () => {
+    // GREEN row: one source of truth for the pin (the volume holder), and one
+    // for the registered app URL (the route's SERVE_HOST + servePath).
     const tf = infraFile("inngest-host.tf");
     const vars = infraFile("variables.tf");
-    const sdkHost = tf.match(
-      /sdk_url\s*=\s*"http:\/\/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):/,
-    )![1];
+    const sdkUrl = tf.match(/^\s*sdk_url\s*=\s*"([^"]*)"/m)![1];
     const web1ip = vars
       .match(/"web-1"\s*=\s*\{[^}]*\}/)![0]
       .match(/private_ip\s*=\s*"([^"]+)"/)![1];
     expect(
-      new Set([EXEC_HOST_PRIVATE_IP, sdkHost, web1ip]),
-      "pin / sdk_url / web-1 private_ip must agree",
+      new Set([EXEC_HOST_PRIVATE_IP, web1ip]),
+      "pin / web-1 private_ip must agree",
     ).toEqual(new Set(["10.0.1.10"]));
+    expect(sdkUrl, "sdk_url must be the public serve URL").toBe(
+      SDK_URL_PUBLIC,
+    );
+    expect(routeServeUrl()).toBe(SDK_URL_PUBLIC);
   });
 
   it("the dev script's SOLEUR_HOST_PRIVATE_IP default IS the pin — replicated literal (review #12554 fix-round)", () => {

@@ -70,12 +70,21 @@ const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
 
 /**
  * The pre-existing dashboard-created rule this resource had to ADOPT, and the
- * ID of the ruleset it lives in. Not this PR's work: a `kind = "zone"` ruleset
- * owns its phase entrypoint as a whole-list replacement, so leaving this rule
- * out of the config would have DELETED it from production rather than left it
- * alone, dropping app.soleur.ai to the zone-level SSL mode. See #6767.
+ * ID of the ruleset it lives in. A `kind = "zone"` ruleset owns its phase
+ * entrypoint as a whole-list replacement, so leaving this rule out of the
+ * config would DELETE it from production rather than leave it alone (#6767).
+ *
+ * Adopted `flexible` on `app.soleur.ai` + `lb-staging.soleur.ai` on 2026-07-20;
+ * made `strict` on `app.soleur.ai` only by the origin-TLS cleanup (ADR-321
+ * item 13, #10479), which also removed the canary and strict-flip rules. The
+ * rule is selected by its pinned `ref`, never by its `ssl` value: the value is
+ * what a rollback changes, so it cannot also be the selector. A rollback to
+ * `flexible` is a reviewed forward PR that edits these constants in the same
+ * diff (runbooks/origin-tls-strict-flip.md "Rollback").
  */
-const ADOPTED_SSL_EXPRESSION = '(http.host in {"app.soleur.ai" "lb-staging.soleur.ai"})';
+const ADOPTED_SSL_EXPRESSION = '(http.host eq "app.soleur.ai")';
+const ADOPTED_SSL_DESCRIPTION = "Strict SSL for app.soleur.ai (ADR-321, #10479)";
+const ADOPTED_SSL_MODE = "strict";
 const ADOPTED_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
 const ADOPTED_SSL_REF = "dcb85b75bc3c4f4aa2a8c13a080bf854";
 
@@ -125,9 +134,9 @@ function obfuscationRule(): string {
   return ruleWithParam(/email_obfuscation\s*=/);
 }
 
-/** The adopted pre-existing rule: Flexible SSL on app.soleur.ai. */
-function flexibleSslRule(): string {
-  return ruleWithParam(/ssl\s*=\s*"flexible"/);
+/** The adopted pre-existing rule (strict SSL on app.soleur.ai), selected by its pinned ref. */
+function adoptedSslRule(): string {
+  return ruleWithParam(new RegExp(`ref\\s*=\\s*"${ADOPTED_SSL_REF}"`));
 }
 
 /**
@@ -135,7 +144,7 @@ function flexibleSslRule(): string {
  * edge accepts the expired GitHub Pages origin cert.
  *
  * Selected on `"full"` specifically, never on a bare /ssl\s*=/ — that would also
- * match the adopted `"flexible"` rule and make `ruleWithParam`'s
+ * match the adopted `"strict"` rule and make `ruleWithParam`'s
  * exactly-one assertion fail confusingly. It also means a mutant that widens
  * this to `"off"` (plaintext to origin) does not silently satisfy this helper:
  * it fails the exactly-one assertion instead of passing under a laxer regex.
@@ -167,28 +176,29 @@ function importBlockBody(): string | null {
   return null;
 }
 
-/** The origin-TLS rules (ADR-321). Selected by description PREFIX, never by position: the prefix is also what the break-glass step
- * in runbooks/origin-tls-strict-flip.md searches for, so a rename must break a test. */
-const CANARY_EXPRESSION =
-  '(http.host eq "app.soleur.ai" and http.request.uri.path eq "/health" and any(http.request.headers["x-origin-tls-probe"][*] eq "1"))';
-const STRICT_EXPRESSION = '(http.host eq "app.soleur.ai")';
-
-function canaryRule(): string {
-  return ruleWithParam(/description\s*=\s*"ORIGIN-TLS CANARY\b/);
-}
-function strictRule(): string {
-  return ruleWithParam(/description\s*=\s*"ORIGIN-TLS STRICT\b/);
-}
 /** The resource body, comment-stripped. */
 function body(): string {
   return extractResourceBody(stripHclComments(readFileSync(TF_PATH, "utf-8")), RESOURCE_NAME);
 }
-/** A variable's body from variables.tf, comment-stripped. */
-function variableBody(name: string): string {
-  const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
-  const m = vars.match(new RegExp(`variable\\s+"${name}"\\s*\\{([\\s\\S]*?)\\n\\}`));
-  expect(m, `variable ${name} must be declared`).not.toBeNull();
-  return m![1];
+/** The `ssl` value a rule sets, or null when it sets none. */
+function sslValue(rule: string): string | null {
+  return rule.match(/^\s*ssl\s*=\s*"([^"]*)"\s*$/m)?.[1] ?? null;
+}
+/** Every .tf / .tftest.hcl file under apps/web-platform/infra (recursive; .terraform and node_modules skipped). */
+function infraTerraformFiles(): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== ".terraform" && e.name !== "node_modules") walk(full);
+      } else if (/\.tf$|\.tftest\.hcl$/.test(e.name)) {
+        out.push(full);
+      }
+    }
+  };
+  walk(path.join(REPO_ROOT, "apps/web-platform/infra"));
+  return out;
 }
 
 describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () => {
@@ -222,11 +232,12 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // serving 526. This count is the guard that forced this update to be
   // deliberate rather than incidental — working as designed. When the Pages cert
   // is valid again and that rule is removed, this goes back to 2.
-  // FIVE rules: the three above, plus the two ORIGIN-TLS rules (ADR-321: canary, strict flip) that are ALWAYS present and only
-  // toggle `enabled` (a rule that came and went with a switch made the documented rollback a REMOVAL, which the destroy guard
-  // refuses on a workflow_dispatch). When the cleanup change after the flip removes both, this goes back to three.
-  test("ruleset declares exactly five rules (three baseline + the two always-present origin-TLS rules)", () => {
-    expect(allRuleBlocks()).toHaveLength(5);
+  // The two ORIGIN-TLS rules (ADR-321 canary and strict flip) made it FIVE from #10479's flip PRs until the
+  // cleanup (ADR-321 item 13, 2026-11-13) removed both and made the adopted rule itself strict: back to THREE.
+  // An exact count is also the dispatch guard: a renamed resource yields 0 rules and must fail here, never
+  // pass "0 checked" through the per-rule property rows below.
+  test("ruleset declares exactly three rules (adopted strict SSL, email obfuscation, apex full)", () => {
+    expect(allRuleBlocks()).toHaveLength(3);
   });
 
   test("the rule disables email obfuscation via set_config and is enabled", () => {
@@ -247,10 +258,8 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   test("each rule's action_parameters set exactly one expected setting", () => {
     const cases: ReadonlyArray<readonly [string, string, string]> = [
       ["obfuscation", obfuscationRule(), "email_obfuscation"],
-      ["adopted Flexible SSL", flexibleSslRule(), "ssl"],
+      ["adopted strict SSL", adoptedSslRule(), "ssl"],
       ["apex Full SSL mitigation", apexFullSslRule(), "ssl"],
-      ["origin-TLS canary", canaryRule(), "ssl"],
-      ["origin-TLS strict flip", strictRule(), "ssl"],
     ];
     for (const [label, rule, expected] of cases) {
       const params = rule.match(/action_parameters\s*\{([^}]*)\}/)?.[1];
@@ -306,23 +315,48 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(quotedAttr(apexFullSslRule(), "description")).toMatch(/TEMPORARY/);
   });
 
-  // Guards the adoption itself. This rule is NOT this PR's work — it is a live
-  // production rule reproduced verbatim so that applying this resource does not
-  // delete it. The failure mode being pinned is a future edit "tidying up" a
-  // rule that looks unrelated to this file's stated purpose; doing so would
-  // drop app.soleur.ai to the zone-level SSL mode. Both the expression and the
-  // action parameter are pinned, because silently changing `flexible` to
-  // `full`/`strict` breaks the origin just as effectively as deleting it.
-  test("the adopted Flexible SSL rule is preserved verbatim", () => {
-    const rule = flexibleSslRule();
+  // Guard 1 (ADR-321 item 13, #10479): the adopted rule is strict, enabled,
+  // ref-pinned, and its expression and description are exact. Deleting it
+  // drops app.soleur.ai to the zone-level SSL mode; changing its `ssl` value
+  // changes the origin transport for every user. Both are reviewed acts that
+  // must edit the constants above in the same diff.
+  test("the adopted rule is strict, enabled, ref-pinned, expression and description exact", () => {
+    const rule = adoptedSslRule();
     expect(quotedAttr(rule, "expression")).toBe(ADOPTED_SSL_EXPRESSION);
+    expect(quotedAttr(rule, "description")).toBe(ADOPTED_SSL_DESCRIPTION);
     expect(rule).toMatch(/action\s*=\s*"set_config"/);
-    expect(rule).toMatch(/ssl\s*=\s*"flexible"/);
-    expect(rule).toMatch(/enabled\s*=\s*true/);
+    expect(sslValue(rule)).toBe(ADOPTED_SSL_MODE);
+    expect(rule).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
     // `ref` is the live rule's existing ref. The v4 provider preserves rule IDs
     // across a whole-list PUT by matching on it, so dropping it re-randomises
-    // both rules' IDs on every future edit — and makes "verbatim" untrue.
+    // every rule's ID on every future edit.
     expect(quotedAttr(rule, "ref")).toBe(ADOPTED_SSL_REF);
+  });
+
+  // Guard 1 property, position-agnostic. `set_config` is non-terminating and the
+  // LAST match wins, so a later ssl rule that matches app.soleur.ai would
+  // override the adopted one whatever the adopted rule says. Hence: exactly one
+  // rule sets `ssl = "strict"` and it is the adopted rule; every other
+  // ssl-setting rule is the apex `full` rule on the canonical marketing
+  // expression. Order between the obfuscation and apex rules is not pinned.
+  // Keyed on ADOPTED_SSL_MODE ("strict") rather than a second literal, so the
+  // reviewed rollback to `flexible` edits the constants only (simulated
+  // 2026-11-13, runbooks/origin-tls-strict-flip.md "Rollback").
+  test(`exactly one rule sets ssl = "${ADOPTED_SSL_MODE}", and it is the adopted rule`, () => {
+    const same = allRuleBlocks().filter((r) => sslValue(r) === ADOPTED_SSL_MODE);
+    expect(same).toHaveLength(1);
+    expect(quotedAttr(same[0], "ref")).toBe(ADOPTED_SSL_REF);
+  });
+
+  test("every other ssl-setting rule is the apex full rule on the canonical marketing expression", () => {
+    const others = allRuleBlocks().filter(
+      (r) => sslValue(r) !== null && quotedAttr(r, "ref") !== ADOPTED_SSL_REF,
+    );
+    expect(others).toHaveLength(1);
+    for (const r of others) {
+      expect(sslValue(r)).toBe("full");
+      expect(quotedAttr(r, "expression")).toBe(CANONICAL_EXPRESSION);
+    }
   });
 
   // Without a REACHABLE import block Terraform CREATES this resource, and
@@ -396,7 +430,7 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // specific host that was gained or lost.
   //
   // Scoped to the obfuscation rule ONLY. It cannot iterate every rule any more:
-  // the adopted Flexible SSL rule legitimately targets app.soleur.ai, which is
+  // the adopted strict SSL rule legitimately targets app.soleur.ai, which is
   // in OUT_OF_SCOPE_HOSTS. Running this over both rules would fail on the rule
   // it is not about — a false positive that would push someone toward
   // "fixing" it by deleting the adopted rule, which is the production
@@ -442,18 +476,12 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   });
 });
 
-// ORIGIN-TLS CANARY AND STRICT-FLIP RULES (ADR-321, #10479). Both are STATIC `rules` blocks that are always in the ruleset and only
-// toggle `enabled` from a bool variable that defaults to false. They are NOT `dynamic` blocks: a rule that appears and disappears
-// with a switch makes the rollback a REMOVAL (nested_deletes >= 1 in the destroy guard), which the apply job refuses on a
-// workflow_dispatch because github.event.head_commit.message is empty there. tests/scripts/test-destroy-guard-counter-web-platform.sh
-// (T65) replays real plans through the real filter; these pins hold the shape that makes those replays true.
-describe("seo-config-rules.tf origin-TLS canary + strict-flip rules (ADR-321)", () => {
-  const GATES: ReadonlyArray<readonly [string, string, () => string]> = [
-    ["enable_origin_tls_canary_rule", "canary", canaryRule],
-    ["enable_origin_tls_strict", "strict flip", strictRule],
-  ];
-
-  test("the resource declares NO dynamic rules block (a removable rule makes the rollback a refused removal)", () => {
+// ORIGIN-TLS CLEANUP TOMBSTONES (ADR-321 item 13, #10479). The canary and strict-flip rules, and the two Doppler-backed
+// switches that set their `enabled` flags, were deleted by the cleanup that made the adopted rule strict. The rows below keep
+// them deleted: a re-introduced switch or ORIGIN-TLS rule is a second app-host SSL path that Guard 1 above would have to
+// reason about, and a rollback is a reviewed forward PR on the adopted rule, never a switch.
+describe("seo-config-rules.tf origin-TLS cleanup tombstones (ADR-321 item 13)", () => {
+  test("the resource declares NO dynamic rules block", () => {
     expect(body()).not.toMatch(/\bdynamic\s+"rules"/);
   });
 
@@ -461,56 +489,30 @@ describe("seo-config-rules.tf origin-TLS canary + strict-flip rules (ADR-321)", 
     expect(body()).not.toMatch(/^\s*(count|for_each)\s*=/m);
   });
 
-  for (const [variable, label, rule] of GATES) {
-    test(`${label}: enabled is exactly var.${variable}, on its own line`, () => {
-      expect(rule()).toMatch(new RegExp(`^\\s*enabled\\s*=\\s*var\\.${variable}\\s*$`, "m"));
-    });
-
-    test(`${label}: the variable is a bool whose default is exactly false (merge adds an inert rule)`, () => {
-      const v = variableBody(variable);
-      expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
-      expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
-      // exactly one `default` line, so `default = false || true`-style decoys cannot ride beside the anchored one.
-      expect(v.match(/^\s*default\s*=/gm) ?? []).toHaveLength(1);
-    });
-
-    test(`${label}: sets exactly one setting, ssl = "strict", via set_config (never full, off or flexible)`, () => {
-      const r = rule();
-      expect(r).toMatch(/action\s*=\s*"set_config"/);
-      const params = r.match(/action_parameters\s*\{([^}]*)\}/)?.[1] ?? "";
-      const keys = params
-        .split("\n")
-        .map((l) => l.trim().match(/^([a-z_]+)\s*=/)?.[1])
-        .filter((k): k is string => Boolean(k));
-      expect(keys).toEqual(["ssl"]);
-      expect(params).toMatch(/^\s*ssl\s*=\s*"strict"\s*$/m);
-    });
-  }
-
-  test("the canary expression is EXACTLY host + /health + the probe header", () => {
-    expect(quotedAttr(canaryRule(), "expression")).toBe(CANARY_EXPRESSION);
+  test("no var.enable_origin_tls_ reference anywhere under apps/web-platform/infra/", () => {
+    const offenders = infraTerraformFiles().filter((f) =>
+      /var\.enable_origin_tls_/.test(stripHclComments(readFileSync(f, "utf-8"))),
+    );
+    expect(offenders.map((f) => path.relative(REPO_ROOT, f))).toEqual([]);
   });
 
-  test("the flip expression is EXACTLY the app host and nothing else", () => {
-    expect(quotedAttr(strictRule(), "expression")).toBe(STRICT_EXPRESSION);
+  test("neither origin-TLS switch variable is declared (variables.tf or any other .tf)", () => {
+    const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
+    expect(vars).not.toMatch(/variable\s+"enable_origin_tls_canary_rule"/);
+    expect(vars).not.toMatch(/variable\s+"enable_origin_tls_strict"/);
+    const offenders = infraTerraformFiles().filter((f) =>
+      /variable\s+"enable_origin_tls_/.test(stripHclComments(readFileSync(f, "utf-8"))),
+    );
+    expect(offenders.map((f) => path.relative(REPO_ROOT, f))).toEqual([]);
   });
 
-  test("order: flexible, then canary, then strict (set_config: the LAST match wins, so both must follow flexible)", () => {
-    const rules = allRuleBlocks();
-    const at = (r: string) => rules.indexOf(r);
-    expect(at(flexibleSslRule())).toBeGreaterThan(-1);
-    expect(at(canaryRule())).toBeGreaterThan(at(flexibleSslRule()));
-    expect(at(strictRule())).toBeGreaterThan(at(canaryRule()));
+  test("no rule description starts with ORIGIN-TLS", () => {
+    const offenders = allRuleBlocks().filter((r) => /^ORIGIN-TLS/.test(quotedAttr(r, "description") ?? ""));
+    expect(offenders).toEqual([]);
   });
 
-  test("the baseline rules are untouched by the origin-TLS rules (flexible verbatim, apex full pinned)", () => {
-    expect(quotedAttr(flexibleSslRule(), "expression")).toBe(ADOPTED_SSL_EXPRESSION);
-    expect(quotedAttr(flexibleSslRule(), "ref")).toBe(ADOPTED_SSL_REF);
-    expect(quotedAttr(apexFullSslRule(), "expression")).toBe(CANONICAL_EXPRESSION);
-  });
-
-  // PLUMBING. The switches must live ONLY in Doppler prd_terraform (an owner act). A tfvars file or a workflow line that sets either
-  // variable would let the strict flip reach production through a merge, which is the one thing the gate exists to prevent.
+  // PLUMBING. Kept after the cleanup: they still guard a RE-INTRODUCED switch. A tfvars file or a workflow line that sets an
+  // origin-TLS variable would let an SSL-mode change reach production without the reviewed rule edit Guard 1 pins.
   test("no tfvars file under apps/web-platform/infra can set a switch", () => {
     const dir = path.join(REPO_ROOT, "apps/web-platform/infra");
     const offenders: string[] = [];
@@ -546,7 +548,7 @@ describe("seo-config-rules.tf origin-TLS canary + strict-flip rules (ADR-321)", 
 
   // The archived plan's "Guard 1 - strict-flip precondition test" (knowledge-base/project/plans/archive/20261105-200240-...-plan.md)
   // asked for a tree-level property: a tree with an app-host strict rule also contains the preconditions that make strict safe.
-  // The strict rule now exists (disabled) in every tree, so the property is asserted unconditionally. The 443 publish at the
+  // The adopted rule is strict in every tree since the cleanup, so the property is asserted unconditionally. The 443 publish at the
   // prod and first-boot docker-run sites is already mutation-pinned by infra/docker-run-tuple.test.sh (K24e, K27i); what was
   // unpinned was the LB monitor: an http/:80 monitor stays green on a broken :443 and the B1 fallback hides it.
   test("strict-flip precondition: the LB monitor probes https/443 with certificate validation", () => {
@@ -560,8 +562,11 @@ describe("seo-config-rules.tf origin-TLS canary + strict-flip rules (ADR-321)", 
     expect(m![1]).toMatch(/^\s*allow_insecure\s*=\s*false\s*$/m);
   });
 
-  test("the probe sends the same header the canary rule matches", () => {
+  // The canary header is retired with the canary rule (`origin-tls-probe.sh --canary` now exits 64 and sends nothing).
+  test("origin-tls-probe.sh no longer sends x-origin-tls-probe, and no rule expression matches it", () => {
     const probe = readFileSync(path.join(REPO_ROOT, "apps/web-platform/infra/origin-tls-probe.sh"), "utf-8");
-    expect(probe).toContain("x-origin-tls-probe: 1");
+    expect(probe).not.toContain("x-origin-tls-probe");
+    const offenders = allRuleBlocks().filter((r) => (quotedAttr(r, "expression") ?? "").includes("x-origin-tls-probe"));
+    expect(offenders).toEqual([]);
   });
 });

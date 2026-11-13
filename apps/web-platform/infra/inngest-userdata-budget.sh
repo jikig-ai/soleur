@@ -209,7 +209,7 @@ locals {
     doppler_token          = join(".", ["dp", "st", "prd", substr(replace(replace(base64sha512("boot"), "+", "a"), "/", "b"), 0, 48)])
     doppler_flip_token     = join(".", ["dp", "st", "prd", substr(replace(replace(base64sha512("flip"), "+", "a"), "/", "b"), 0, 48)])
     inngest_doppler_config = "prd"
-    sdk_url                = "http://10.0.1.10:3000/api/inngest"
+    sdk_url                = "https://app.soleur.ai/api/inngest"
     inngest_cli_arch       = "amd64"
     inngest_cli_sha256     = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
     vector_sha256          = "8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1"

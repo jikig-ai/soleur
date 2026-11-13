@@ -23,7 +23,7 @@
 # Moved from http/:80 by the ga-monitor-https arm of cf-lb-overlay.yml (ADR-321 R7, #10479) - dispatch only,
 # never a push apply, and ONLY after the app's TLS listener (server/origin-tls.ts) is proven bound on BOTH hosts.
 #
-# WHY IT WAS http/:80 (2026-11-01): the zone's config rule sets `ssl = "flexible"` for app.soleur.ai
+# WHY IT WAS http/:80 (2026-11-01): the zone's config rule then set `ssl = "flexible"` for app.soleur.ai
 # (seo-config-rules.tf), so the edge dials the origin over plain HTTP, and the :443 listener was INERT until an
 # Origin CA certificate was loaded. The original type=https create shape failed TCP connect on every origin and
 # permanently reported them down, which the B1 self-fallback then hid. Both facts have changed: the certificate is
@@ -31,8 +31,8 @@
 #
 # WHAT THIS PROVES, AND WHAT IT DOES NOT. A healthy https/:443 pool proves a listener answers TLS on :443 on each
 # origin and that Cloudflare's monitor accepts its Origin CA certificate. It does NOT prove the edge-to-origin
-# TRAFFIC hop uses TLS: that is still `flexible` for this host until the strict flip (ADR-321 decision 3), and
-# the probe (apps/web-platform/infra/origin-tls-probe.sh) reports that separately.
+# TRAFFIC hop uses TLS: that is set by the adopted config rule (`strict` for this host since the ADR-321 item 13
+# cleanup, #10479), and the probe (apps/web-platform/infra/origin-tls-probe.sh) reports that separately.
 #
 # allow_insecure = false: the certificate IS validated. An unvalidated probe would report a listener with ANY
 # certificate healthy and prove nothing about the trust R7 requires. Whether Cloudflare's monitor trusts an Origin

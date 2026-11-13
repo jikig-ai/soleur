@@ -51,12 +51,15 @@ const log = createChildLogger("inngest-exec-placement");
 export const EXEC_PLACEMENT_FEATURE = "inngest-exec-placement";
 
 /**
- * The exec host's private-net IP — the ADR-119 volume holder and the host
- * `inngest-host.tf`'s `sdk_url` already polls (web-1). HARDCODED by CTO ruling
- * T2: an env-derived pin re-opens #5182 (a Doppler write silently re-pointing
- * execution). Drift against `infra/inngest-host.tf` sdk_url and
- * `infra/variables.tf`/`network.tf` web-1 `private_ip` is guarded (Guard 4 of
- * test/server/inngest/exec-placement-forward.test.ts).
+ * The exec host's private-net IP — the ADR-119 workspaces-LUKS volume holder
+ * (web-1). HARDCODED by CTO ruling T2: an env-derived pin re-opens #5182 (a
+ * Doppler write silently re-pointing execution). Since #10538 remedy (c) it no
+ * longer equals the `sdk_url` host: `infra/inngest-host.tf` declares the public
+ * serve URL (https://app.soleur.ai/api/inngest) as the poll. Drift against
+ * `infra/variables.tf`/`network.tf` web-1 `private_ip` and the
+ * `workspaces-luks.tf` attachment host is guarded (Guard 4 of
+ * test/server/inngest/exec-placement-forward.test.ts), which also pins the
+ * `sdk_url` to the route's SERVE_HOST + servePath.
  */
 export const EXEC_HOST_PRIVATE_IP = "10.0.1.10";
 

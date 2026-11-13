@@ -2,7 +2,7 @@
 
 Tracks NFRs across the Soleur platform with per-container and per-link applicability. Each NFR maps to specific C4 containers and relationships, with evidence of enforcement at each point.
 
-**Last updated:** 2026-03-27
+**Last updated:** 2026-11-13
 
 ## Status Legend
 
@@ -492,13 +492,13 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 
 ### NFR-026: Encryption In-Transit
 
-**Category:** Security | **Scope:** Link | **System-Level Status:** Partially Implemented (the Cloudflare edge to web-host origin link for `app.soleur.ai` is Not Implemented, #10479)
+**Category:** Security | **Scope:** Link | **System-Level Status:** Partially Implemented (the Web Host -> Owner Host row is Adopting; the Cloudflare edge to web-host origin link for `app.soleur.ai` is Implemented since 2026-11-07, #10479; the private-network Inngest `sdk_url` poll between the web hosts and the job scheduler is plain HTTP and has no row here, #10538)
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
 | Founder -> Dashboard | Implemented | Cloudflare | TLS terminated at Cloudflare edge |
-| Cloudflare edge -> web-host origin (`app.soleur.ai`) | Not Implemented | — | Zone SSL mode for this host is `flexible` per the `set_config` rule in `apps/web-platform/infra/seo-config-rules.tf` (configuration read; live mode not measured); the container publishes `80:3000`/`3000:3000` plus `443:3443` (#10479, ADR-321), but the TLS listener behind it is inert until an Origin CA certificate is loaded, so the hop stays plain until the staged flip. Fix CLO-ruled (Origin CA + `strict` + handshake probe), target 2026-11-12, #10479 |
-| Dashboard -> API Routes | Implemented | HTTPS | **[Superseded 2026-10-29 (#10479): not HTTPS between Cloudflare and the origin; see the Cloudflare edge row above.]** Internal HTTPS via Next.js |
+| Cloudflare edge -> web-host origin (`app.soleur.ai`) | Implemented | Cloudflare `strict` + Origin CA certificate | Since 2026-11-07 23:41Z Cloudflare reaches the origin over TLS in `strict` mode, verifying the Origin CA certificate served by the `443:3443` listener (`apps/web-platform/server/origin-tls.ts`, ADR-321). Measured read-only 2026-11-13 06:50Z: zone SSL mode `strict`; `app.soleur.ai` `strict` through enabled strict Configuration Rules (last match wins) that override the adopted rule then described "Flexible SSL for web platform"; 0 page rules; a public-hostname probe 3/3 HTTP 200 with origin transport TLSv1.3. After the merge-apply of PR #12737 the adopted `set_config` rule in `apps/web-platform/infra/seo-config-rules.tf` (ref dcb85b75, described "Strict SSL for app.soleur.ai (ADR-321, #10479)") is itself `strict`. Not defended: Cloudflare terminates TLS and sees plaintext; port 80 stays open behind the Cloudflare IP allowlist; no Authenticated Origin Pulls. #10479 |
+| Dashboard -> API Routes | Implemented | HTTPS | **[Superseded 2026-10-29 (#10479): not HTTPS between Cloudflare and the origin; see the Cloudflare edge row above.]** **[Superseded 2026-11-13 (#10479): since 2026-11-07, TLS (Cloudflare `strict`) between Cloudflare and the origin; see the Cloudflare edge row above.]** Internal HTTPS via Next.js |
 | API Routes -> Agent Runtime | Implemented | WebSocket WSS | Encrypted WebSocket protocol |
 | API Routes -> Supabase | Implemented | TLS | Supabase requires TLS connections |
 | API Routes -> Stripe | Implemented | HTTPS | Stripe SDK enforces HTTPS |

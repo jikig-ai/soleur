@@ -396,14 +396,25 @@ grp_source() {
   tn "source: header never shows doppler run ... -- bash" grep -Eq -- '--[[:space:]]+bash' "$SUT_SRC"
   # drift pin (#10479, Ref #10205): the header's dated snapshot of the config-settings ruleset must equal the counts in the
   # Terraform file, so a rule added to seo-config-rules.tf without a header update fails here instead of misleading a flip go.
-  local TF="$REPO_ROOT/apps/web-platform/infra/seo-config-rules.tf" TF_RULES TF_SSL
+  local TF="$REPO_ROOT/apps/web-platform/infra/seo-config-rules.tf" TF_RULES TF_SSL TF_ADOPTED_SSL
   TF_RULES="$(grep -cE '^[[:space:]]+rules \{' "$TF" || true)"
-  # The header snapshots the ruleset with BOTH origin-TLS switches off (ADR-321). The two ORIGIN-TLS rules are static blocks that are
-  # always present (rule_count counts them) but only `enabled` while their Doppler switches are on, so the baseline enabled_ssl_rules
-  # excludes their `ssl = "strict"` lines; their own pins live in apps/web-platform/test/seo-config-rules.test.ts.
-  TF_SSL="$(grep -E '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" | grep -cvE '"strict"' || true)"
+  # Since the ADR-321 item 13 cleanup (#10479) the two ORIGIN-TLS rules and their Doppler switches are gone and every rule in the
+  # file is enabled, so enabled_ssl_rules is every `ssl = "..."` line (no exclusion). The adopted rule's ssl value is DERIVED from
+  # the .tf (the rules block carrying ref dcb85b75...), never a fixed string: a reviewed rollback to `flexible` then edits only the
+  # wrapper header's `with ssl=<value>`, and a header that disagrees with the .tf fails here. Guard 1 itself (the adopted rule is
+  # the only app-host ssl rule, and it is strict) lives in apps/web-platform/test/seo-config-rules.test.ts.
+  TF_SSL="$(grep -cE '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" || true)"
+  TF_ADOPTED_SSL="$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]+rules \{/ { inr = 1; ref = 0; ssl = "" }
+    inr && /^[[:space:]]+ref[[:space:]]+=[[:space:]]+"dcb85b75bc3c4f4aa2a8c13a080bf854"/ { ref = 1 }
+    inr && /^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"/ { v = $0; sub(/^[^"]*"/, "", v); sub(/".*$/, "", v); ssl = v }
+    inr && /^  \}/ { if (ref && ssl != "") print ssl; inr = 0 }
+  ' "$TF")"
   t "snapshot: anchor - the Terraform file yields a non-zero rule count" test "${TF_RULES:-0}" -gt 0
+  t "snapshot: anchor - the adopted rule's ssl value is derived from the .tf (${TF_ADOPTED_SSL:-<none>})" test -n "$TF_ADOPTED_SSL"
   t "snapshot: header enabled_ssl_rules equals the ssl rules in seo-config-rules.tf ($TF_SSL)" has_file "$SUT_SRC" "enabled_ssl_rules is $TF_SSL AND one of those rules has ref"
+  t "snapshot: header states the adopted rule's ssl value from seo-config-rules.tf (with ssl=${TF_ADOPTED_SSL:-<none>})" has_file "$SUT_SRC" "ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=${TF_ADOPTED_SSL:-<none>} "
   t "snapshot: header rule_count equals the rules in seo-config-rules.tf ($TF_RULES)" has_file "$SUT_SRC" "AND rule_count is $TF_RULES; anything else"
   tn "snapshot: header no longer states the stale enabled_ssl_rules is 1" has_file "$SUT_SRC" 'enabled_ssl_rules is 1 AND'
   # census controls: the scan is live

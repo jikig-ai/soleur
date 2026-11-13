@@ -1,9 +1,10 @@
 // origin-tls.ts — the Cloudflare-to-origin TLS listener (#10479, epic #10205).
 //
-// WHY. Cloudflare reaches the web hosts over plain HTTP because the zone carries an enabled
-// `flexible` rule for app.soleur.ai (apps/web-platform/infra/seo-config-rules.tf). The Cloudflare
-// `strict` mode needs the origin to answer TLS on :443 with a certificate Cloudflare verifies
-// (a Cloudflare Origin CA certificate). This module is that listener: a SECOND server inside the
+// WHY. Cloudflare reached the web hosts over plain HTTP while the zone carried an enabled
+// `flexible` rule for app.soleur.ai (apps/web-platform/infra/seo-config-rules.tf); since the ADR-321
+// item 13 cleanup (#10479) that adopted rule is `strict`. The Cloudflare `strict` mode needs the
+// origin to answer TLS on :443 with a certificate Cloudflare verifies (a Cloudflare Origin CA
+// certificate). This module is that listener: a SECOND server inside the
 // same Node process, on container port 3443 (published as host :443 by ci-deploy.sh /
 // cloud-init.yml), that hands every request and every WebSocket upgrade to the SAME handlers as
 // the plain-HTTP server. It is a transport, not a second app: no route, auth or session logic
@@ -12,7 +13,8 @@
 // INERT BY DEFAULT. With no ORIGIN_TLS_* material in the environment nothing starts (dev, CI, e2e
 // and every host before the certificate is minted). With material that does not validate, nothing
 // starts either, the reason is mirrored to Sentry, and the plain-HTTP listener keeps serving: a
-// bad certificate must never take the :80 path down while the zone is still `flexible`.
+// bad certificate must never take the :80 path down (it served every edge request while the app host
+// was `flexible`; with the host `strict`, REQUIRED MODE below is what keeps bad material from shipping).
 //
 // REQUIRED MODE. With ORIGIN_TLS_REQUIRED=1 (an owner write to Doppler `prd`, act 1 of the ADR-321 item 10
 // flip order; read at container start, so it applies from the next restart) "inert" is no longer
@@ -38,9 +40,10 @@
 // PROOF OF TRANSPORT. Every /health response served through this listener carries
 // `x-origin-transport: <negotiated TLS version>`. The plain-HTTP listener never sets it, so a
 // probe through Cloudflare that sees the header has proven the Cloudflare-to-origin hop used TLS.
-// It proves that Cloudflare ACCEPTED the certificate only when the zone (or the canary rule) is in
-// `strict` for that request: under `full`, Cloudflare dials TLS without validating the certificate,
-// so the header appears with any certificate. The probe's pass/fail text says which it measured.
+// It proves that Cloudflare ACCEPTED the certificate only when the app host is in `strict` for that
+// request (the adopted rule in seo-config-rules.tf, since the ADR-321 item 13 cleanup): under `full`,
+// Cloudflare dials TLS without validating the certificate, so the header appears with any certificate.
+// The probe's pass/fail text says which it measured.
 //
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
 // change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
