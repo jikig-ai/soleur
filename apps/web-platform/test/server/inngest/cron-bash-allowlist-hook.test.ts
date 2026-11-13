@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FRAMING_HOOK_REL_PATH } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import {
   decide,
   hasDotSegment,
@@ -163,6 +164,55 @@ describe("Bash — blanket git staging denied (#5091)", () => {
   });
 });
 
+// #11076 review (CTO K1) — a checkout/switch that deletes or reverts the tracked hook files
+// removes containment (a missing hook fails open). `git checkout`/`git switch` are allowlisted,
+// so these must deny on gitVerbReason itself; the reason text proves which layer denied.
+describe("Bash — git checkout/switch/restore cannot remove or revert the hooks (#11076 K1)", () => {
+  it.each([
+    ["git switch --orphan x"],
+    ["git switch --orphan=x"],
+    ["git checkout --orphan x"],
+    ["git checkout -- ."],
+    ["git checkout ."],
+    ["git checkout ./"],
+    ["git checkout HEAD~5 -- apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs"],
+    ["git checkout HEAD apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs"],
+    ["git checkout .claude/settings.json"],
+    ["git checkout .claude"],
+    ["git checkout ':/'"],
+    ["git checkout '*.mjs'"],
+    ["git checkout /workspaces/cron-x/repo"],
+    ["git checkout -f main"],
+    ["git checkout -qf main"],
+    ["git checkout --force main"],
+    ["git switch --discard-changes main"],
+    ["git switch -f main"],
+    ["git checkout --pathspec-from-file=list.txt"],
+    ["git checkout --pathspec-from-file list.txt"],
+  ])("denies %s on the git-verb rule", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+    expect(reason(bash(cmd))).toContain("can remove or revert the run's hook files");
+  });
+
+  it("denies git restore shapes on the git-verb rule even before the allowlist", () => {
+    const out = decide(bash("git restore ."), [...ALLOW, "git restore"]).hookSpecificOutput as {
+      permissionDecision: string;
+      permissionDecisionReason?: string;
+    };
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toContain("can remove or revert the run's hook files");
+  });
+
+  it.each([
+    ["git checkout -b fix/x"],
+    ["git switch -c fix/x"],
+    ["git checkout main"],
+    ["git switch main"],
+  ])("still allows branch creation and switching by name: %s", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("allow");
+  });
+});
+
 describe("Bash — deny-by-default (non-allowlisted)", () => {
   it("denies a non-allowlisted verb", () => {
     expect(verdict(bash("uname -a"))).toBe("deny");
@@ -303,7 +353,9 @@ describe("Write/Edit — self-protection (D-new-2)", () => {
   // #11076 (CTO D1) — once registered, the CLI runs the framing hook under node after every
   // Bash call with the spawn env, so a rewrite of it is code execution outside the allowlist.
   describe("the gh-output framing hook file is write-protected", () => {
-    const REL = "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
+    // Driven from the path the substrate registers, so renaming the hook without widening
+    // WRITE_PROTECTED_PATTERNS reds here.
+    const REL = FRAMING_HOOK_REL_PATH;
     const ABS = `/workspaces/cron-x/repo/${REL}`;
     const rows = ["Write", "Edit", "MultiEdit"].flatMap((tool) => [
       { tool, path: REL },

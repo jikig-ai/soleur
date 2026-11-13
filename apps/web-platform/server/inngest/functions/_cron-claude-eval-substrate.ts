@@ -688,7 +688,7 @@ const HOOK_REL_PATH =
   "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
 const ALLOWLIST_REL_PATH = ".claude/cron-allow.txt";
 // #11076 — the opt-in PostToolUse(Bash) gh-output framing hook (ADR-287 addendum 2026-11-12).
-const FRAMING_HOOK_REL_PATH =
+export const FRAMING_HOOK_REL_PATH =
   "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
 
 // Resolve `node` by ABSOLUTE path for the hook command. Relying on PATH lookup
@@ -752,7 +752,8 @@ export function buildCronEvalSettings(
 // (iii) runs an `ls` probe that must print nothing. The probes are deterministic (fixed
 // payloads, no network), so any failure is a defect in the registered hook and throws,
 // which aborts the cron like every containment probe. It cannot see the file being
-// changed during the run; containment write-protects the file for that.
+// changed during the run. Containment denies Write, Edit and MultiEdit to the file; a
+// Bash route that rewrites it is a named gap in ADR-287, not a protected property.
 export function runFramingHookSelfTest(args: {
   spawnCwd: string;
   cronName: string;
@@ -772,11 +773,11 @@ export function runFramingHookSelfTest(args: {
     );
   }
   const framingAbs = join(spawnCwd, FRAMING_HOOK_REL_PATH);
-  // Its own wrapper: the containment `run` helper is hard-wired to that binary and its
-  // allowlist argument. Same semantics: a non-zero exit, a timeout or a missing binary fails.
-  const exec = (command: string): { ok: true; stdout: string } | { ok: false; error: string } => {
+  // Its own exec: the containment `run` helper is hard-wired to that binary and its
+  // allowlist argument. A non-zero exit, a timeout or a missing binary fails as `exec-error`.
+  const exec = (probe: string, command: string): string => {
     try {
-      const stdout = execFileSync(nodeBin, [framingAbs], {
+      return execFileSync(nodeBin, [framingAbs], {
         input: JSON.stringify({
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
@@ -786,28 +787,38 @@ export function runFramingHookSelfTest(args: {
         encoding: "utf-8",
         timeout: 10_000,
       });
-      return { ok: true, stdout };
     } catch (err) {
-      return { ok: false, error: `self-test-exec-error: ${(err as Error).message}` };
+      return fail(`${probe} probe exec-error: ${(err as Error).message.slice(0, 200)}`);
     }
   };
-  const ghRead = exec("gh issue view 1");
-  let ghOk = false;
-  if (ghRead.ok) {
-    try {
-      ghOk = isDeepStrictEqual(JSON.parse(ghRead.stdout), {
-        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
-      });
-    } catch {
-      ghOk = false;
+  const ghStdout = exec("gh-read", "gh issue view 1");
+  const ghExpected = {
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
+  };
+  if (ghStdout.trim() === "") fail("gh-read probe empty-stdout");
+  let ghGot: unknown;
+  try {
+    ghGot = JSON.parse(ghStdout);
+  } catch {
+    fail(`gh-read probe non-json (stdout length ${ghStdout.length})`);
+  }
+  if (!isDeepStrictEqual(ghGot, ghExpected)) {
+    // Name the failure kind and where it diverges; never echo the whole payload.
+    const out = (ghGot as { hookSpecificOutput?: Record<string, unknown> })?.hookSpecificOutput;
+    const keys = out && typeof out === "object" ? Object.keys(out).sort().join(",") : "none";
+    if (keys !== "additionalContext,hookEventName" || Object.keys(ghGot as object).join(",") !== "hookSpecificOutput") {
+      fail(`gh-read probe key-set-mismatch (hookSpecificOutput keys: ${keys})`);
     }
+    if (out!.hookEventName !== "PostToolUse") {
+      fail(`gh-read probe event-mismatch (hookEventName ${JSON.stringify(String(out!.hookEventName).slice(0, 40))})`);
+    }
+    const got = String(out!.additionalContext);
+    const want = UNTRUSTED_PREAMBLES.github;
+    let at = 0;
+    while (at < got.length && at < want.length && got[at] === want[at]) at++;
+    fail(`gh-read probe preamble-mismatch (length ${got.length} vs ${want.length}, first difference at ${at})`);
   }
-  if (!ghOk) {
-    fail(`gh-read probe returned ${(ghRead.ok ? ghRead.stdout : ghRead.error).slice(0, 200)}`);
-  }
-  const ls = exec("ls");
-  if (!ls.ok) fail(`ls probe returned ${ls.error.slice(0, 200)}`);
-  if (ls.ok && ls.stdout.trim() !== "") fail("ls probe framed a non-gh command");
+  if (exec("ls", "ls").trim() !== "") fail("ls probe framed a non-gh command");
 }
 
 // Spawn-time hook self-test (D2 — mitigates the probe D-new-1 fail-open: a

@@ -680,17 +680,17 @@ postponed to its own issue, because nothing is decided here beyond the dark hook
 
 ```yaml
 liveness_signal:
-  what: "runFramingHookSelfTest (registration deep-equal, gh-read probe, ls probe) on every cron spawn whose settings.json registers a PostToolUse key; a failure throws, which the cron's existing FAILED self-report surfaces through the Inngest function error -> Sentry (layer 2 app error reporting) and the run report. No spawn registers the hook in this change, so the signal is inactive by design and fires nowhere until enablement."
+  what: "runFramingHookSelfTest (registration deep-equal, gh-read probe, ls probe) on every cron spawn whose settings.json registers a PostToolUse key; a failure throws out of setupEphemeralWorkspace inside step.run("setup-workspace") (Inngest retries the step; layer 1 breadcrumbs per attempt). The cron's setup catch redacts the message and calls reportSilentFallback with op "setup-ephemeral-workspace", which is a pino logger.error (layer 2 breadcrumb mirror; shipped to Better Stack by the Vector journald shipper, layer 3) plus Sentry.captureException tagged by the Inngest sentry-correlation middleware (layer 1), then posts the Sentry cron heartbeat with ok:false and returns {ok:false}. There is no Inngest function error and no run report (corrected at review, observability F1). No spawn registers the hook in this change, so the signal is inactive by design and fires nowhere until enablement."
   cadence: "per cron spawn that registers the hook (zero today); every other spawn returns early"
-  alert_target: "the existing cron FAILED self-report path and Sentry issue routing for the cron function; no new alert is provisioned"
+  alert_target: "the existing Sentry issue routing and the cron's Sentry heartbeat monitor (ok:false); no new alert is provisioned"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (runFramingHookSelfTest, called from runHookSelfTest)"
 error_reporting:
-  destination: "Sentry, through the existing cron function error path (the self-test throw propagates out of setupEphemeralWorkspace exactly like the containment probes)"
+  destination: "Sentry (layers 1-2) and Better Stack (layer 3) through reportSilentFallback op setup-ephemeral-workspace in each cron's setup catch, exactly like the containment probes; told apart from them only by the message prefix until the K3 stage-tag issue lands"
   fail_loud: "a thrown Error starting '[<cron>] gh-output framing hook self-test FAILED:' that aborts the cron before the agent spawns"
 failure_modes:
   - mode: "framing hook missing, crashed, or emitting the wrong text in an opted-in spawn"
     detection: "in-surface probe: the host runs the clone's framing binary with the byte-identical node and path the CLI would use, and compares its stdout to UNTRUSTED_PREAMBLES.github; one throw message per probe names which of registration, gh-read or ls failed"
-    alert_route: "cron FAILED self-report + Sentry issue"
+    alert_route: "Sentry issue (layers 1-2) + Sentry cron heartbeat ok:false; the message names the failure kind: registration mismatch, exec-error, empty-stdout, non-json, key-set-mismatch, event-mismatch, preamble-mismatch with lengths and first difference, or ls probe"
   - mode: "CLI drops PostToolUse additionalContext under --print"
     detection: "Phase 0 nonce probe at the pinned CLI (probe-delivery.md); not observable at runtime because the hook emits no telemetry"
     alert_route: "none at runtime (accepted; the ADR records delivery as verified or unverified per the probe, and enablement re-runs the probe)"
@@ -701,7 +701,7 @@ failure_modes:
     detection: "not detectable by design; named in the ADR addendum"
     alert_route: "none (accepted, documented gap)"
 logs:
-  where: "the hook writes no logs (stdout is the hook protocol channel); self-test failures land in the Inngest function error and the cron run report"
+  where: "the hook writes no logs (stdout is the hook protocol channel); self-test failures land in pino logger.error (layer 2, then Better Stack via layer 3) and Sentry via reportSilentFallback op setup-ephemeral-workspace"
   retention: "Sentry plan retention for function errors; nothing new is retained"
 discoverability_test:
   command: "node -e 'process.stdout.write(require(\"node:child_process\").spawnSync(process.execPath,[\"apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs\"],{input:JSON.stringify({hook_event_name:\"PostToolUse\",tool_name:\"Bash\",tool_input:{command:\"gh issue view 1\"}}),encoding:\"utf8\"}).stdout)'"

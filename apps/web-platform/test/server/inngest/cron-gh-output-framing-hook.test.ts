@@ -28,7 +28,12 @@ const FRAMED = {
 };
 // Minimal child env: no NODE_OPTIONS, no GH_TOKEN. (ProcessEnv in this app declares NODE_ENV.)
 const MIN_ENV = { PATH: "/usr/bin:/bin" } as unknown as NodeJS.ProcessEnv;
-const parser = { splitSegments: containment.splitSegments, tokenize: containment.tokenize };
+const parser = {
+  splitSegments: containment.splitSegments,
+  tokenize: containment.tokenize,
+  normalizeSegmentWhitespace: containment.normalizeSegmentWhitespace,
+  MAX_BASH_COMMAND_CHARS: containment.MAX_BASH_COMMAND_CHARS,
+};
 
 const tmpDirs: string[] = [];
 afterAll(() => {
@@ -99,8 +104,12 @@ const BINARY_ROWS: BinaryRow[] = [
   { name: "nothing: gh issue create", stdin: payload("gh issue create --title t --body b"), frames: false },
   { name: "nothing: ls", stdin: payload("ls"), frames: false },
   {
-    name: "nothing: non-Bash tool (Read)",
-    stdin: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: "README.md" } }),
+    name: "nothing: non-Bash tool (Read) carrying a gh-read command",
+    stdin: JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Read",
+      tool_input: { file_path: "README.md", command: "gh issue view 1" },
+    }),
     frames: false,
   },
   { name: "nothing: malformed JSON", stdin: "{not json", frames: false },
@@ -130,6 +139,11 @@ const IN_PROCESS_ROWS: InProcessRow[] = [
   { name: "frame: quoted argument", raw: payload("gh issue view 'one'"), frames: true },
   { name: "frame: mid-word # is not a comment", raw: payload("gh issue view 1#x"), frames: true },
   { name: "frame: gh search issues", raw: payload("gh search issues foo"), frames: true },
+  // Review K2 / C2': containment matches the whitespace-normalised join of the tokens, so these
+  // are admitted under a `gh pr view` / `gh issue view` line and must frame.
+  { name: "frame, K2: an empty token before the noun", raw: payload('gh "" pr view 1'), frames: true },
+  { name: "frame, K2: noun and verb inside one quoted token", raw: payload('gh issue "view 1"'), frames: true },
+  { name: "frame, K2: a no-break space inside a token", raw: payload("gh issue\u00a0view 1"), frames: true },
   { name: "nothing: gh issue comment", raw: payload("gh issue comment 1 --body x"), frames: false },
   { name: "nothing: git log", raw: payload("git log -1"), frames: false },
   { name: "nothing: noun outside the table (gh label list)", raw: payload("gh label list"), frames: false },
@@ -175,14 +189,14 @@ describe("AC2 — frameDecision in-process with the real containment parser", ()
       },
       tokenize: containment.tokenize,
     };
-    expect(framing.frameDecision(payload("gh issue view 1"), throwing)).toBeNull();
+    expect(framing.frameDecision(payload("gh issue view 1"), { ...parser, ...throwing })).toBeNull();
   });
 });
 
 describe("AC2 — row census", () => {
   it("both groups together hold the literal declared row count", () => {
-    expect(BINARY_ROWS.length + IN_PROCESS_ROWS.length).toBe(34);
-    expect(new Set([...BINARY_ROWS, ...IN_PROCESS_ROWS].map((r) => r.name)).size).toBe(34);
+    expect(BINARY_ROWS.length + IN_PROCESS_ROWS.length).toBe(37);
+    expect(new Set([...BINARY_ROWS, ...IN_PROCESS_ROWS].map((r) => r.name)).size).toBe(37);
   });
 });
 
@@ -190,15 +204,21 @@ describe("import has no side effects (CTO D4)", () => {
   it("importing the module reads no stdin and writes no stdout", () => {
     // A child process imports the module with a gh-read payload waiting on stdin. If main()
     // ran on import, it would consume that payload and print the framed object.
-    const r = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `await import(${JSON.stringify(pathToFileURL(HOOK).href)}); process.stdout.write("IMPORTED");`,
-      ],
-      { input: payload("gh issue view 1"), encoding: "utf-8", env: MIN_ENV, timeout: 10_000 },
+    // A real importer file, so process.argv[1] is a path as it is for any importing module.
+    const dir = mkdtempSync(join(tmpdir(), "soleur-framing-importer-"));
+    tmpDirs.push(dir);
+    const importer = join(dir, "importer.mjs");
+    writeFileSync(
+      importer,
+      `await import(${JSON.stringify(pathToFileURL(HOOK).href)}); process.stdout.write("IMPORTED");\n`,
+      "utf-8",
     );
+    const r = spawnSync(process.execPath, [importer], {
+      input: payload("gh issue view 1"),
+      encoding: "utf-8",
+      env: MIN_ENV,
+      timeout: 10_000,
+    });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("IMPORTED");
   });
@@ -218,6 +238,12 @@ describe("adversarial size (in-process)", () => {
     const cmd = pad("; gh issue view 1");
     expect(cmd.length).toBe(MAX);
     expect(framing.frameDecision(payload(cmd), parser)).toStrictEqual(FRAMED);
+  }, 10_000);
+
+  it("one character over the cap emits nothing (containment denied it, so it never ran)", () => {
+    const cmd = " " + pad("; gh issue view 1");
+    expect(cmd.length).toBe(MAX + 1);
+    expect(framing.frameDecision(payload(cmd), parser)).toBeNull();
   }, 10_000);
 
   it("the same length with an unbalanced quote inside the final gh segment emits nothing", () => {
@@ -292,8 +318,9 @@ describe("one-way differential against the hosted ghReadVerbOf on admitted comma
   });
 });
 
-describe("allowlist-shape guard: every cron gh line has a shape isGhReadTokens parses (CTO C2)", () => {
+describe("allowlist-shape guard: every cron gh line has a shape the framing hook parses (CTO C2, C2')", () => {
   const CANONICAL = new Set([...Object.values(GH_READ_VERBS).flat(), "create", "edit", "comment", "close"]);
+  const UNFRAMED_NOUNS_NAMED_IN_ADR = new Set(["label"]);
   it("every gh line in every cron is `gh api <path>/` or literal `gh <noun> <verb>` with a canonical verb", () => {
     let checked = 0;
     for (const [cron, lines] of Object.entries(CRON_BASH_ALLOWLISTS)) {
@@ -304,6 +331,11 @@ describe("allowlist-shape guard: every cron gh line has a shape isGhReadTokens p
         const m = /^gh ([a-z-]+) ([a-z-]+)$/.exec(line);
         expect(m, `${cron}: ${line}`).not.toBeNull();
         expect(CANONICAL.has(m![2]), `${cron}: ${line} (verb outside the canonical set)`).toBe(true);
+        // A noun outside the table is an unframed read; each one must be a named ADR-287 gap.
+        expect(
+          Object.hasOwn(GH_READ_VERBS, m![1]) || UNFRAMED_NOUNS_NAMED_IN_ADR.has(m![1]),
+          `${cron}: ${line} (noun outside GH_READ_VERBS and not a named ADR-287 gap)`,
+        ).toBe(true);
       }
     }
     expect(checked).toBeGreaterThanOrEqual(1);
@@ -311,8 +343,10 @@ describe("allowlist-shape guard: every cron gh line has a shape isGhReadTokens p
 });
 
 describe("cron-bash-allowlist-hook exports consumed by cron-gh-output-framing-hook.mjs", () => {
-  it("splitSegments and tokenize are exported functions", () => {
+  it("splitSegments, tokenize and normalizeSegmentWhitespace are exported functions; the cap is a number", () => {
     expect(typeof containment.splitSegments).toBe("function");
     expect(typeof containment.tokenize).toBe("function");
+    expect(typeof containment.normalizeSegmentWhitespace).toBe("function");
+    expect(typeof containment.MAX_BASH_COMMAND_CHARS).toBe("number");
   });
 });

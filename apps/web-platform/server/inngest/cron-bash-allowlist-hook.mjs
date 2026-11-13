@@ -638,6 +638,32 @@ function gitVerbReason(tokens) {
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
     }
   }
+  // #11076 review (CTO K1) — deny-only tightening. In the depth-1 clone the hooks run from
+  // tracked files, so a branch or path switch that deletes or reverts them (`--orphan`, a forced
+  // checkout, a pathspec restore of `.`, `.claude/` or a hook file) removes containment, and a
+  // missing hook fails open. Branch creation and switching by name stay allowed.
+  if (sub === "checkout" || sub === "switch" || sub === "restore") {
+    const why = (t, what) => `git ${sub} ${what} '${t}' denied (can remove or revert the run's hook files)`;
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--") return why(t, "pathspec separator");
+      if (t.startsWith("--")) {
+        if (t === "--orphan" || t.startsWith("--orphan=")) return why(t, "flag");
+        if (t === "--force" || t === "--discard-changes") return why(t, "flag");
+        if (t === "--pathspec-from-file" || t.startsWith("--pathspec-from-file=")) return why(t, "flag");
+        continue;
+      }
+      if (t.startsWith("-") && t.length > 1) {
+        if (t.slice(1).includes("f")) return why(t, "flag");
+        continue;
+      }
+      const path = t.replace(/^\.\//, "");
+      if (t === "." || t === "./" || path.startsWith(":") || t.includes("*") || t.startsWith("/"))
+        return why(t, "pathspec");
+      // The same paths Write/Edit/MultiEdit may not touch: `.claude/`, both hooks, settings.
+      if (WRITE_PROTECTED_PATTERNS.some((re) => re.test(path))) return why(t, "pathspec");
+    }
+  }
   // `commit -a`/`--all` stages every tracked modification/deletion without
   // any `git add` at all — the same blanket vector through a side door.
   if (sub === "commit") {
@@ -664,9 +690,16 @@ function loadAllowlist(path) {
   }
 }
 
+// Collapse every whitespace run (JS `\s`, so NBSP and other Unicode spaces too) to one space.
+// Consumers: `segmentMatchesAllowlist()` here and `cron-gh-output-framing-hook.mjs`, which
+// matches gh reads on the same normalised text containment admitted (#11076 review K2).
+export function normalizeSegmentWhitespace(segment) {
+  return segment.replace(/\s+/g, " ").trim();
+}
+
 function segmentMatchesAllowlist(segment, allowPrefixes) {
   // normalize internal whitespace for prefix comparison
-  const norm = segment.replace(/\s+/g, " ").trim();
+  const norm = normalizeSegmentWhitespace(segment);
   // A match requires a SEPARATOR after the allowlisted prefix — never a bare
   // continuation of the prefix's final token. The bare `startsWith(p)` clause
   // that was here let `bash …/worktree-manager.sh-pwn` prefix-match the

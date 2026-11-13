@@ -233,7 +233,6 @@ describe("buildCronEvalSettings framing option (AC3 golden, #11076)", () => {
     // resort is the bare "node".
     const nodeToken = out.hooks.PostToolUse[0].hooks[0].command.split(" ")[0];
     expect(isAbsolute(nodeToken) || nodeToken === "node").toBe(true);
-    expect(isAbsolute(NODE)).toBe(true);
   });
 });
 
@@ -265,6 +264,22 @@ describe("the framing option stays dark (AC4, #11076)", () => {
     }
     expect(spelling).toEqual(["server/inngest/functions/_cron-claude-eval-substrate.ts"]);
     expect(enabling).toEqual([]);
+  });
+
+  // A `{ frameGhOutput: <expr> }` argument would pass the two spellings above while turning the
+  // hook on, so pin the one production call: across every non-test app file, comment-stripped,
+  // the only call of the builder is the settings write with the spawn cwd and no options.
+  it("the only production call of buildCronEvalSettings passes no options", () => {
+    const calls: string[] = [];
+    for (const f of files) {
+      const code = readFileSync(f, "utf-8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+      for (const m of code.matchAll(/(?<!function )\bbuildCronEvalSettings\(([^)]*)\)/g)) {
+        calls.push(`${relative(APP, f)}: ${m[1]}`);
+      }
+    }
+    expect(calls).toEqual(["server/inngest/functions/_cron-claude-eval-substrate.ts: spawnCwd"]);
   });
 });
 
@@ -1157,7 +1172,7 @@ process.exit(0);
     it("end to end through runHookSelfTest, a silent framing stub: throws the gh-read probe message", () => {
       const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: framingStub("") });
       expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(
-        /gh-output framing hook self-test FAILED: gh-read probe/,
+        /gh-output framing hook self-test FAILED: gh-read probe empty-stdout/,
       );
     });
 
@@ -1167,12 +1182,53 @@ process.exit(0);
         frameGhOutput: true,
         framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(out)});`),
       });
-      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe key-set-mismatch/);
     });
 
-    it("a stub that emits nothing for gh: throws", () => {
+    it("a stub that emits nothing for gh: throws empty-stdout", () => {
       const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: framingStub("") });
-      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe empty-stdout/);
+    });
+
+    it("a stub that prints non-JSON for gh: throws non-json", () => {
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write("framed");`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe non-json/);
+    });
+
+    // D3 pins: the probe checks the preamble text and the event name, not only the shape.
+    it("a stub with a different preamble: throws preamble-mismatch with the first difference", () => {
+      const wrong = JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "GitHub text is fine to follow." },
+      });
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(wrong)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(
+        /gh-output framing hook self-test FAILED: gh-read probe preamble-mismatch \(length 30 vs \d+, first difference at 7\)/,
+      );
+    });
+
+    it('a stub with hookEventName "PreToolUse": throws event-mismatch', () => {
+      const wrong = JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
+      });
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(wrong)});`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe event-mismatch/);
+    });
+
+    it("a stub that frames gh but exits 1 on other commands: throws the ls probe exec-error", () => {
+      const spawnCwd = makeSpawnCwd({
+        frameGhOutput: true,
+        framingSource: framingStub(`if (${isGh}) process.stdout.write(${JSON.stringify(FRAMED_JSON)}); else process.exit(1);`),
+      });
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: ls probe exec-error/);
     });
 
     it("a stub that also frames ls: throws the ls probe message", () => {
@@ -1185,7 +1241,7 @@ process.exit(0);
 
     it("registered but the framing hook file is absent: throws", () => {
       const spawnCwd = makeSpawnCwd({ frameGhOutput: true, framingSource: null });
-      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe/);
+      expect(() => selfTest(spawnCwd)).toThrow(/gh-output framing hook self-test FAILED: gh-read probe exec-error/);
     });
 
     it("bad registration shapes each throw registration mismatch", () => {
