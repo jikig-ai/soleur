@@ -51,6 +51,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/context-queries-hook.test.ts",
   "test/context-queries-shell-parity.test.ts",
   "test/conversations-update-grep-detector.test.ts",
+  "test/cron-plugin-hooks-no-posttooluse.test.ts",
   "test/destroy-ask-hook-parity.test.ts",
   "test/dsar-worm-guc-sites.test.ts",
   "test/ensure-workspace-repo-ancestry-real-git.test.ts",

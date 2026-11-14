@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CRON_BASH_ALLOWLISTS, FRAMING_HOOK_REL_PATH } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import {
   decide,
   hasDotSegment,
@@ -163,6 +164,103 @@ describe("Bash — blanket git staging denied (#5091)", () => {
   });
 });
 
+// #11076 review (CTO K1') — checkout/switch admit only three branch forms, and restore is denied.
+// `git checkout`/`git switch` are allowlisted here, so every deny must come from gitVerbReason
+// itself; the reason text proves which layer denied. The same rows then run on the two real cron
+// allowlists that admit these verbs.
+const K1_DENY: string[] = [
+  "git switch --orphan x",
+  "git switch --orphan=x",
+  "git switch --orph x",
+  "git checkout --orphan x",
+  "git checkout --no-overlay HEAD:.claude apps",
+  "git checkout --fo main",
+  "git switch --disc main",
+  "git checkout --pathspec-from=f",
+  "git checkout HEAD '.clau?e/settings.jso?'",
+  "git checkout HEAD '[a]pps'",
+  "git checkout -- .",
+  "git checkout .",
+  "git checkout ./.",
+  "git checkout apps",
+  "git checkout apps/web-platform",
+  "git checkout main",
+  "git checkout 52705ed218",
+  "git checkout HEAD~5 -- apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs",
+  "git checkout -b x HEAD~1",
+  "git checkout -B x",
+  "git checkout -f main",
+  "git switch -C x",
+  "git switch -c x main",
+  "git switch -",
+  "git switch ../x",
+  "git switch .claude",
+  "git switch a..b",
+  "git switch a//b",
+  "git switch x.lock",
+  "git switch x/",
+  "git switch x.",
+  "git checkout -q -- x",
+  "git checkout -b",
+  "git switch",
+  "git checkout '--orph' x",
+  'git checkout "-f" main',
+];
+const K1_ALLOW: string[] = [
+  "git checkout -b feat/x-1",
+  "git checkout -q -b x",
+  "git checkout --quiet -b fix/issue-12",
+  "git switch -c x.env",
+  "git switch -c fix/settings.json",
+  "git switch main",
+  "git switch --quiet feat/x",
+];
+
+describe("Bash — git checkout/switch/restore admit only branch forms (#11076 K1')", () => {
+  it.each(K1_DENY)("denies %s on the git-verb rule", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+    expect(reason(bash(cmd))).toMatch(/^cron-containment: .*git (checkout|switch) form denied/);
+  });
+
+  it("denies every git restore form on the git-verb rule, even when allowlisted", () => {
+    for (const cmd of ["git restore x", "git restore .", "git restore --staged x"]) {
+      const out = decide(bash(cmd), [...ALLOW, "git restore"]).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(out.permissionDecision, cmd).toBe("deny");
+      expect(out.permissionDecisionReason, cmd).toContain("git restore denied");
+    }
+  });
+
+  it.each(K1_ALLOW)("allows %s", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("allow");
+  });
+
+  // On the real allowlists: wherever `git <sub>` is allowlisted, the K1' rule decides.
+  const REAL = ["cron-roadmap-review", "cron-bug-fixer"].map((cron) => [cron, CRON_BASH_ALLOWLISTS[cron]] as const);
+  it.each(REAL)("%s: every deny row denies on the git-verb rule and every allow row passes", (cron, lines) => {
+    expect(lines, cron).toBeDefined();
+    const admits = (cmd: string) => lines.includes(cmd.split(" ").slice(0, 2).join(" "));
+    let checked = 0;
+    for (const cmd of [...K1_DENY, ...K1_ALLOW]) {
+      if (!admits(cmd)) continue;
+      checked++;
+      const out = decide(bash(cmd), lines).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      if (K1_ALLOW.includes(cmd)) expect(out.permissionDecision, `${cron}: ${cmd}`).toBe("allow");
+      else expect(out.permissionDecisionReason ?? "", `${cron}: ${cmd}`).toMatch(/git (checkout|switch) form denied/);
+    }
+    expect(checked, cron).toBeGreaterThan(10);
+  });
+
+  it("the deny reason names the admitted forms (live model self-corrects)", () => {
+    expect(reason(bash("git checkout main"))).toContain("change branch with `git switch <branch>`");
+  });
+});
+
 describe("Bash — deny-by-default (non-allowlisted)", () => {
   it("denies a non-allowlisted verb", () => {
     expect(verdict(bash("uname -a"))).toBe("deny");
@@ -298,6 +396,30 @@ describe("Write/Edit — self-protection (D-new-2)", () => {
     expect(verdict({ tool_name: "Write", tool_input: { file_path: "knowledge-base/product/roadmap.md" } })).toBe(
       "allow",
     );
+  });
+
+  // #11076 (CTO D1) — once registered, the CLI runs the framing hook under node after every
+  // Bash call with the spawn env, so a rewrite of it is code execution outside the allowlist.
+  describe("the gh-output framing hook file is write-protected", () => {
+    // Driven from the path the substrate registers, so renaming the hook without widening
+    // WRITE_PROTECTED_PATTERNS reds here.
+    const REL = FRAMING_HOOK_REL_PATH;
+    const ABS = `/workspaces/cron-x/repo/${REL}`;
+    const rows = ["Write", "Edit", "MultiEdit"].flatMap((tool) => [
+      { tool, path: REL },
+      { tool, path: ABS },
+    ]);
+    it.each(rows)("$tool of $path is denied with the protected-path reason", ({ tool, path }) => {
+      const out = decide({ tool_name: tool, tool_input: { file_path: path } }, ALLOW).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(out.permissionDecision).toBe("deny");
+      expect(out.permissionDecisionReason).toMatch(/^cron-containment: protected-path write: /);
+    });
+    it("Read of the framing hook file is still allowed", () => {
+      expect(verdict({ tool_name: "Read", tool_input: { file_path: ABS } })).toBe("allow");
+    });
   });
 });
 
