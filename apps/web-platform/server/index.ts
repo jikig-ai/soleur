@@ -10,7 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { startInngestExecReceiver } from "./inngest-exec-receiver";
-import { loadProxyHelloKey, logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { loadProxyHelloKeys, logProxyCertExpiryAtStartup } from "./proxy-tls";
 import { denyReporter } from "./proxy-deny-report";
 import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
 import { applyPlainHttpTimeouts } from "./http-timeouts";
@@ -88,10 +88,10 @@ const log = createChildLogger("startup");
 // OnUncaughtException/OnUnhandledRejection integrations so these report once.
 installCrashHandlers();
 
-// #12289 — read the relay hello key into module memory and delete it from process.env NOW, before the
-// server can spawn any child process (a child spawned with the default or a spread environment would
-// inherit it). A no-op value (null) when the relay is not configured (dev / single host).
-loadProxyHelloKey();
+// #12289 — read the relay hello keys (current and the verify-only slot, ADR-323 Decision 9) into module memory and
+// delete both from process.env NOW, before the server can spawn any child process (a child spawned with the
+// default or a spread environment would inherit them). Null values when the relay is not configured (dev / single host).
+loadProxyHelloKeys();
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-11T22:00:46Z
+# generated-at=2026-11-13T00:31:51Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -310,6 +310,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	6
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	2
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	8
 plugins/soleur/test/reusable-release-idempotency.test.sh	4
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	2
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/rtk-grammar-parity.test.sh	1
@@ -328,6 +329,7 @@ plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	3
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/ship-prepush-secret-scan.test.sh	2
 plugins/soleur/test/sole-copy-drift-check.test.sh	1
+plugins/soleur/test/spec-kit-intake.test.sh	2
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/technical-ruling-gate.test.sh	8
 plugins/soleur/test/technical-ruling-owner-list.test.sh	4
@@ -363,6 +365,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	7
 scripts/alarm-issue-filing-guard	1
+scripts/allowlist-diff	3
 scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6

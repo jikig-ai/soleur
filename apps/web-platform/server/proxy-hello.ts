@@ -4,7 +4,8 @@
 //   {type:"proxy_hello", userId, workspaceId, ts, nonce, mac}
 //   mac = HMAC-SHA256(key, "soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce)
 // `ts` is Unix SECONDS as a decimal string, `nonce` 32 lowercase hex, `mac` 64 lowercase hex, both ids
-// strict lowercase UUIDs. The key is a dedicated secret (PROXY_HELLO_HMAC_KEY), distinct from the TLS key.
+// strict lowercase UUIDs. The key is a dedicated secret (PROXY_HELLO_HMAC_KEY), distinct from the TLS key. The
+// verifier also accepts the verify-only slot when set (ADR-323 Decision 9).
 //
 // One canonical-string builder serves the sender and the verifier (no second copy to drift). The
 // verifier is fail-closed on EVERY input and checks, in this order, the cheapest unauthenticated gates
@@ -35,13 +36,14 @@ export function isCanonicalUuid(v: unknown): v is string {
   return typeof v === "string" && UUID_RE.test(v);
 }
 
-/** The exact byte string the MAC covers. */
-export function buildHelloMacInput(userId: string, workspaceId: string, ts: string, nonce: string): string {
+/** The exact byte string the MAC covers. Module-private: the sender and the verifier are its only callers. */
+function buildHelloMacInput(userId: string, workspaceId: string, ts: string, nonce: string): string {
   return HELLO_DOMAIN + "\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce;
 }
 
-function computeMac(key: Buffer, userId: string, workspaceId: string, ts: string, nonce: string): Buffer {
-  return createHmac("sha256", key).update(buildHelloMacInput(userId, workspaceId, ts, nonce)).digest();
+/** HMAC-SHA256 of one canonical MAC input (built once per hello by the caller). */
+function macOf(key: Buffer, input: string): Buffer {
+  return createHmac("sha256", key).update(input).digest();
 }
 
 /** Sign a hello for `userId`/`workspaceId`. Throws on a non-canonical id (the caller closes the client). */
@@ -56,8 +58,19 @@ export function signProxyHello(
   }
   const ts = String(Math.floor((opts.now ?? Date.now)() / 1000));
   const nonce = opts.nonce ?? randomBytes(16).toString("hex");
-  const mac = computeMac(key, userId, workspaceId, ts, nonce).toString("hex");
+  const mac = macOf(key, buildHelloMacInput(userId, workspaceId, ts, nonce)).toString("hex");
   return JSON.stringify({ type: "proxy_hello", userId, workspaceId, ts, nonce, mac });
+}
+
+const KEY_FP_DOMAIN = "soleur-relay-hello-key-fp-v1";
+
+/**
+ * The `relay_hello_key_fp` value for one key: the first 8 hex characters (32 bits) of
+ * HMAC-SHA256(key, "soleur-relay-hello-key-fp-v1"). Domain-separated from HELLO_DOMAIN, never a raw-key prefix
+ * and never a plain hash of the key: it proves two hosts hold the same key without disclosing a key byte.
+ */
+export function helloKeyFingerprint(key: Buffer): string {
+  return createHmac("sha256", key).update(KEY_FP_DOMAIN).digest("hex").slice(0, 8);
 }
 
 export interface ReplayCache {
@@ -93,13 +106,23 @@ function toBuffer(data: unknown): Buffer | null {
 }
 
 /**
- * Verify the owner-side first frame. `data`/`isBinary` are the `ws` "message" arguments, `key` the loaded
- * hello key, `now` the owner's clock in ms (injected in tests; production passes Date.now).
+ * The keys a verifier accepts. `current` is the signing key and a verifying key; `acceptAlso` is verify-only and
+ * `null` by default (ADR-323 Decision 9). `signProxyHello` takes a single Buffer, so passing this set to the signer is
+ * a type error. The loaded set (`ProxyHelloKeys` in proxy-tls.ts) is derived from this type.
+ */
+export interface HelloVerifyKeys {
+  readonly current: Buffer;
+  readonly acceptAlso: Buffer | null;
+}
+
+/**
+ * Verify the owner-side first frame. `data`/`isBinary` are the `ws` "message" arguments, `keys` the loaded
+ * hello key set, `now` the owner's clock in ms (injected in tests; production passes Date.now).
  */
 export function verifyProxyHello(
   data: unknown,
   isBinary: boolean,
-  key: Buffer,
+  keys: HelloVerifyKeys,
   cache: ReplayCache,
   now: () => number = Date.now,
 ): VerifyResult {
@@ -133,8 +156,15 @@ export function verifyProxyHello(
     return { ok: false, reason: "shape" };
   }
 
-  const expected = computeMac(key, userId, workspaceId, ts, nonce);
-  if (!timingSafeEqual(Buffer.from(mac, "hex"), expected)) return { ok: false, reason: "mac" };
+  // Both compares ALWAYS run when the slot is set (no short-circuit), so the timing does not tell which key
+  // matched. `mac` only when neither matches; skew, replay and AP-2 then apply whichever key matched.
+  const given = Buffer.from(mac, "hex");
+  const input = buildHelloMacInput(userId, workspaceId, ts, nonce);
+  const matchesCurrent = timingSafeEqual(given, macOf(keys.current, input));
+  // A non-Buffer slot (null, or undefined on a copy of the loaded set) is absent.
+  const acceptAlso = keys.acceptAlso;
+  const matchesAlso = Buffer.isBuffer(acceptAlso) && timingSafeEqual(given, macOf(acceptAlso, input));
+  if (!matchesCurrent && !matchesAlso) return { ok: false, reason: "mac" };
 
   const nowS = Math.floor(now() / 1000);
   const tsS = Number(ts);

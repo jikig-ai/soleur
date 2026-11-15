@@ -311,6 +311,32 @@ done
 
 **What changed in the status tables above.** As of the merge of this change, the token `CF_API_TOKEN_ANALYTICS_READ` exists (per the owner; this change did not read Doppler) and `plugins/soleur/scripts/cloudflare-readonly.sh` has the subcommands `analytics-health` and `analytics-edge-errors` (fixed read-only GraphQL queries sent as a POST; see ADR-289 and `standing-delegation.md` section 9), so Step C is runnable through the wrapper after the merge, from a checkout that matches `origin/main`. Until a sanctioned read is recorded, the "Real 502/520 rate" row stays open and every analytics figure above is the owner's, not the wrapper's.
 
+##### Addendum 2026-11-11: first sanctioned wrapper reads (Cloudflare analytics, Ref #12441)
+
+Additions-only: the 2026-11-09 addendum above, including its `not yet read` row, is left as written; this addendum is the record that row pointed to, and the evidence files named in the median recipe above now exist. The owner authorised these reads in session on 2026-11-11 (they are Class R and need no typed go; this records the authorisation, not a gate). They ran at 2026-11-11T17:26:46Z (`analytics-health`) and 2026-11-11T17:26:47Z (`analytics-edge-errors`), from a detached checkout of `origin/main` at `408ad9c0e1` where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` printed nothing, as `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand> 216`. Each exited 0, printed `cloudflare-readonly: <subcommand> ok` on line 1, wrote nothing to stderr, and its line 2 parsed with `jq -e .`. No wrapper fix PR was needed (0 of the 2 allowed). No cause is claimed for anything below. Every figure is a sampled estimate. The results are `Unverified:` lines because the wrapper's own header says the two analytics reads stay `Unverified:` records, never `Checked:`, even after the first sanctioned read.
+
+Unverified: Cloudflare analytics-health (F) #12441 returned `ok`, 216 hourly rows, 2026-11-02T17Z to 2026-11-11T16Z (the 216-hour window cannot reach the owner's 2026-10-31T20Z start). Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-11-analytics-health-216h.json`. Medians of the hourly values, 2026-11-07T23Z (the straddling hour) excluded from both sides, using the jq above:
+
+| Period | Hours (rows) | Median hourly p50 | Median hourly p90 |
+|---|---|---|---|
+| Before the flip: 2026-11-02T17Z to 2026-11-07T22Z | 126 | 331 ms | 475 ms |
+| After the flip: 2026-11-08T00Z to 2026-11-11T16Z | 89 | 277 ms | 859 ms |
+
+Against the owner's figures (p50 332 and 269 ms, p90 477 and 855 ms): the before-flip medians (331 and 475 ms, on 126 h against the owner's 171 h) are within 2 ms; the after-flip medians (277 and 859 ms, on 89 h against the owner's 45 h, because this read runs about two days past the owner's window) differ by 8 ms (p50) and 4 ms (p90). The p90 step is present across the whole after-flip period (no hour below 778 ms). The p50 is not flat across it: the upper median of the hourly p50 by day is 258 ms (11-08), 279 ms (11-09), 416 ms (11-10) and 548 ms (11-11, 17 h), the last six hours read 547 to 675 ms, and the last three hourly p90 values are 1396 to 1465 ms. The owner's reading that p50 did not rise therefore holds for the first two days after the flip and not for the last two. This describes the series and claims no cause; the counts behind each hour are sampled estimates (32 to 48 requests per hour in the last six hours). This read is not host- or `requestSource`-scoped, and it separates none of the candidates in the table above.
+
+Unverified: Cloudflare analytics-edge-errors (G) #12441 returned `ok`, 61 rows (hour and status), `truncated: false`, 216-hour window, rows spanning 2026-11-02T17Z to 2026-11-08T19Z. Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-11-analytics-edge-errors-216h.json`. The 5xx histogram (sampled counts summed over the rows):
+
+| Period | Rows | 500 | 503 | 520 | 521 | 522 | 524 | 525 / 526 |
+|---|---|---|---|---|---|---|---|---|
+| Window total | 61 | 163 | 5 | 39 | 143 | 8 | 2 | no rows |
+| Before the flip (to 2026-11-07T22Z) | 56 | 163 | 5 | 22 | 120 | 8 | 2 | no rows |
+| Straddling hour 2026-11-07T23Z | 1 | 0 | 0 | 0 | 3 | 0 | 0 | no rows |
+| After the flip (2026-11-08T00Z on) | 4 | 0 | 0 | 17 | 20 | 0 | 0 | no rows |
+
+The status dimension, its range operators, `orderBy datetimeHour_DESC` and the duration quantile names (p50 and p90 are present) were the unverified items in the caveats above; both queries were accepted and returned `ok`. With `truncated: false` the wrapper re-sorts the rows, so the ordering itself is not observable and only its acceptance is shown. The edge query is filtered to the host `app.soleur.ai` (all paths) while the health query is filtered to the `/health` path, so the two reads do not cover the same requests. All 163 of the 500 counts fall on 2026-11-06. The last row is 2026-11-08T19Z; no row was returned for 2026-11-08T20Z to 2026-11-11T16Z, which is recorded as no rows, never as no errors (sampling, and the dataset may under-report edge-generated blank 502/503/504 pages). No 525 or 526 row appears in the window, which is a description of this read and not evidence about certificate validation on the hop. No 502 or 504 row appears either. 520 and 521 rows exist on both sides of the flip (after it: three 521 rows and one 520 row of 17 at 2026-11-08T19Z, all within the first 20 hours), so as a description they do not mark it.
+
+Not separated by these reads: candidates 1 to 4 of the table above, and any link between the p90 step and the edge 5xx rows. A controlled flip-back is the owner's production decision and is not proposed here.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.

@@ -132,7 +132,7 @@ describe("proxyClientToOwner", () => {
     expect(Object.keys(sent).sort()).toEqual(["mac", "nonce", "ts", "type", "userId", "workspaceId"]);
     expect(sent).toMatchObject({ type: "proxy_hello", userId: U, workspaceId: W });
     // The hello verifies under the same key through the REAL verifier (sender and verifier agree).
-    expect(verifyProxyHello(Buffer.from(owner.sent[0] as string), false, KEY, createReplayCache())).toEqual({
+    expect(verifyProxyHello(Buffer.from(owner.sent[0] as string), false, { current: KEY, acceptAlso: null }, createReplayCache())).toEqual({
       ok: true,
       userId: U,
       workspaceId: W,

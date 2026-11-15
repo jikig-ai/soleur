@@ -31,6 +31,7 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import { createProxyServer } from "@/server/session-proxy";
+import { helloKeyFingerprint } from "@/server/proxy-hello";
 import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 import {
   PROXY_REPORT_INTERVAL_MS,
@@ -61,8 +62,26 @@ const opened: HttpsServer[] = [];
 const blockers: NetServer[] = [];
 const onProxiedSession = vi.fn();
 
+// The hello key stubbed in beforeEach, and the one relay_hello_key_fp line (#8211) a listener start prints for it.
+const HELLO_KEY_HEX = "a".repeat(64);
+const EXPECTED_FP_LINE = `relay_hello_key_fp current=${helloKeyFingerprint(Buffer.from(HELLO_KEY_HEX, "hex"))} accept_also=none`;
+// The fingerprint line each startProxy call printed (at most one per call). Only those are dropped from warnLines():
+// a second line from one start, or one from anywhere else, still fails the exact relay_probe checks below.
+const startFpCalls = new WeakSet<unknown[]>();
+
+/** createProxyServer, recording the one fingerprint line this listener start printed (exact text). */
+function startProxy(params: Parameters<typeof createProxyServer>[0]): ReturnType<typeof createProxyServer> {
+  const before = mockWarn.mock.calls.length;
+  try {
+    return createProxyServer(params);
+  } finally {
+    const own = mockWarn.mock.calls.slice(before).find((c) => c[1] === EXPECTED_FP_LINE);
+    if (own) startFpCalls.add(own);
+  }
+}
+
 function warnLines(): string[] {
-  return mockWarn.mock.calls.map((c) => String(c[1]));
+  return mockWarn.mock.calls.filter((c) => !startFpCalls.has(c)).map((c) => String(c[1]));
 }
 
 function whenListeningOrError(s: HttpsServer): Promise<"listening" | "error"> {
@@ -97,7 +116,7 @@ beforeEach(() => {
   vi.stubEnv("SOLEUR_PROXY_BIND", "");
   // #12289: the relay refuses to start without a hello key (the check sits after tls/bind/allowlist, so the
   // disabled / no_bind / no_allowlist assertions below keep their meaning).
-  vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(64));
+  vi.stubEnv("PROXY_HELLO_HMAC_KEY", HELLO_KEY_HEX);
   __resetProxyHelloKeyForTests();
   __resetProxyListenerStatusForTests();
 });
@@ -112,7 +131,7 @@ afterEach(async () => {
 
 describe("relay bind is reported from the live server", () => {
   it("a real socket on 127.0.0.1 port 0 reports listening with the ACTUAL addr and port", async () => {
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     expect(await whenListeningOrError(server)).toBe("listening");
     const a = server.address();
     if (!a || typeof a === "string") throw new Error("no address");
@@ -124,7 +143,7 @@ describe("relay bind is reported from the live server", () => {
   });
 
   it("binds the given private address and NOT the wildcard (listen(port, bindAddress, cb))", async () => {
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     await whenListeningOrError(server);
     const a = server.address();
     if (!a || typeof a === "string") throw new Error("no address");
@@ -139,7 +158,7 @@ describe("relay bind is reported from the live server", () => {
     // 192.0.2.0/24 (TEST-NET-1) is never assigned to a local interface.
     let server!: HttpsServer;
     expect(() => {
-      server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "192.0.2.1", port: 0 }));
+      server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "192.0.2.1", port: 0 }));
     }).not.toThrow();
     expect(await whenListeningOrError(server)).toBe("error");
 
@@ -157,7 +176,7 @@ describe("relay bind is reported from the live server", () => {
     await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", () => r()));
     const busy = (blocker.address() as { port: number }).port;
 
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: busy }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: busy }));
     expect(await whenListeningOrError(server)).toBe("error");
 
     expect(getProxyStatus().state).toBe("error");
@@ -171,18 +190,18 @@ describe("the non-listening states", () => {
   it("no PROXY_TLS material -> disabled (and createProxyServer returns null)", () => {
     vi.stubEnv("PROXY_TLS_KEY", "");
     vi.stubEnv("PROXY_TLS_CERT", "");
-    expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
     expect(getProxyStatus()).toEqual({ state: "disabled", addr: "none", port: 0 });
   });
 
   it("TLS but no bind address -> no_bind", () => {
-    expect(createProxyServer({ onProxiedSession, port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, port: 0 })).toBeNull();
     expect(getProxyStatus()).toEqual({ state: "no_bind", addr: "none", port: 0 });
   });
 
   it("TLS and bind but empty peer allowlist -> no_allowlist", () => {
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", " , ");
-    expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
     expect(getProxyStatus()).toEqual({ state: "no_allowlist", addr: "none", port: 0 });
   });
 
@@ -191,10 +210,10 @@ describe("the non-listening states", () => {
   });
 
   it("a later non-enabled call replaces an earlier recorded server", async () => {
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     await whenListeningOrError(server);
     expect(getProxyStatus().state).toBe("listening");
-    createProxyServer({ onProxiedSession, port: 0 });
+    startProxy({ onProxiedSession, port: 0 });
     expect(getProxyStatus().state).toBe("no_bind");
   });
 });
@@ -208,16 +227,16 @@ describe("line grammar and level", () => {
       lines.push(...warnLines());
     };
     collect(); // disabled
-    createProxyServer({ onProxiedSession, port: 0 });
+    startProxy({ onProxiedSession, port: 0 });
     collect(); // no_bind
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "");
-    createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 });
+    startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 });
     collect(); // no_allowlist
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", PEER);
-    const bad = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "192.0.2.1", port: 0 }));
+    const bad = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "192.0.2.1", port: 0 }));
     await whenListeningOrError(bad);
     collect(); // error
-    const good = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const good = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     await whenListeningOrError(good);
     collect(); // listening
     emitProxyListenerStatusOnce({ readWorkspacesPopulated: () => { throw new Error("boom"); } });
@@ -292,7 +311,7 @@ describe("/internal/readyz: the proxy block is NON-GATING", () => {
     mkdirSync(join(root, "ws-1"));
     vi.stubEnv("PROXY_TLS_KEY", "");
     vi.stubEnv("PROXY_TLS_CERT", "");
-    createProxyServer({ onProxiedSession, port: 0 });
+    startProxy({ onProxiedSession, port: 0 });
 
     const r = buildReadinessResponse();
     expect(r.ready).toBe(true);
@@ -301,14 +320,14 @@ describe("/internal/readyz: the proxy block is NON-GATING", () => {
   });
 
   it("ready stays false on an unpopulated host even if the relay is listening, and true on a populated host whose relay errored", async () => {
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     await whenListeningOrError(server);
     expect(buildReadinessResponse().ready).toBe(false); // empty root
     expect(buildReadinessResponse().proxy.state).toBe("listening");
 
     mkdirSync(join(root, "ws-1"));
     __resetProxyListenerStatusForTests();
-    createProxyServer({ onProxiedSession, port: 0 }); // no_bind
+    startProxy({ onProxiedSession, port: 0 }); // no_bind
     const r = buildReadinessResponse();
     expect(r.ready).toBe(true);
     expect(r.proxy.state).toBe("no_bind");
@@ -348,7 +367,7 @@ describe("collapsed (docker env-file) PEM reaches a working listener", () => {
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
     expect(process.env.PROXY_TLS_KEY).not.toContain("\n");
     const { loadProxyTlsClientCa } = await import("@/server/proxy-tls");
-    const server = track(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 }));
     expect(await whenListeningOrError(server)).toBe("listening");
     const a = server.address();
     if (!a || typeof a === "string") throw new Error("no address");
@@ -361,7 +380,7 @@ describe("collapsed (docker env-file) PEM reaches a working listener", () => {
     vi.stubEnv("PROXY_TLS_KEY", `${marker}\\nmore`);
     let result: unknown;
     expect(() => {
-      result = createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 });
+      result = startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 });
     }).not.toThrow();
     expect(result).toBeNull();
     expect(getProxyStatus()).toEqual({ state: "error", addr: "none", port: 0 });
@@ -383,7 +402,7 @@ describe("collapsed (docker env-file) PEM reaches a working listener", () => {
       { stdio: "ignore" },
     );
     vi.stubEnv("PROXY_TLS_KEY", collapse(readFileSync(join(tlsDir, "k2.pem"), "utf8")));
-    expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
     expect(getProxyStatus().state).toBe("error");
   });
 });
@@ -394,7 +413,7 @@ describe("bind address validation (fail closed: 0.0.0.0 or IPv4 10.0.1.x only)",
     it(`refuses ${JSON.stringify(addr)}: null, no_bind, mirrored as bad-bind, never listens`, () => {
       let result: unknown;
       expect(() => {
-        result = createProxyServer({ onProxiedSession, bindAddress: addr, port: 0 });
+        result = startProxy({ onProxiedSession, bindAddress: addr, port: 0 });
       }).not.toThrow();
       expect(result).toBeNull();
       expect(getProxyStatus()).toEqual({ state: "no_bind", addr: "none", port: 0 });
@@ -404,24 +423,24 @@ describe("bind address validation (fail closed: 0.0.0.0 or IPv4 10.0.1.x only)",
 
   it("a bad SOLEUR_PROXY_BIND env value is refused too", () => {
     vi.stubEnv("SOLEUR_PROXY_BIND", "::");
-    expect(createProxyServer({ onProxiedSession, port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, port: 0 })).toBeNull();
     expect(mockReportSilentFallback.mock.calls.some((c) => c[1]?.op === "createProxyServer.bad-bind")).toBe(true);
   });
 
   it("0.0.0.0 (container-namespace bind; docker -p applies the private IP) is accepted without any seam", async () => {
-    const server = track(createProxyServer({ onProxiedSession, bindAddress: "0.0.0.0", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, bindAddress: "0.0.0.0", port: 0 }));
     expect(await whenListeningOrError(server)).toBe("listening");
     expect(mockReportSilentFallback.mock.calls.some((c) => c[1]?.op === "createProxyServer.bad-bind")).toBe(false);
   });
 
   it("a 10.0.1.x address passes validation (it then binds or hits the kernel, never bad-bind)", async () => {
-    const server = track(createProxyServer({ onProxiedSession, bindAddress: "10.0.1.5", port: 0 }));
+    const server = track(startProxy({ onProxiedSession, bindAddress: "10.0.1.5", port: 0 }));
     await whenListeningOrError(server);
     expect(mockReportSilentFallback.mock.calls.some((c) => c[1]?.op === "createProxyServer.bad-bind")).toBe(false);
   });
 
   it("the test-only seam lifts only the prefix: a non-IPv4 is still refused", () => {
-    expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "localhost", port: 0 })).toBeNull();
+    expect(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "localhost", port: 0 })).toBeNull();
     expect(getProxyStatus().state).toBe("no_bind");
   });
 
@@ -429,7 +448,7 @@ describe("bind address validation (fail closed: 0.0.0.0 or IPv4 10.0.1.x only)",
     const saved = process.env.VITEST;
     delete process.env.VITEST;
     try {
-      expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
+      expect(startProxy({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
       expect(getProxyStatus().state).toBe("no_bind");
       expect(mockReportSilentFallback.mock.calls.some((c) => c[1]?.op === "createProxyServer.bad-bind")).toBe(true);
     } finally {

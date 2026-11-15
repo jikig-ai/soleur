@@ -92,3 +92,12 @@ already carries — see
 - **When a verification's VERDICT is the deliverable, do not bound its wall — a timeout kill is `unknown`, never pass or fail.** A `ratchet`/suite verify re-run under a self-imposed `timeout`/bounded exec was killed at 120 s mid-run and could have been misread either direction; re-run unbounded and let it finish. Bound the SUT's per-invocation calls (a `REPLAY_SUT_TIMEOUT`-style knob), never the verification harness itself. **Why:** PR #12419 — see `knowledge-base/project/learnings/performance-issues/mutant-side-runaway-read-as-pristine-site-cost-ci-replay-20261108.md` session error 4.
 
 - **A suite run is evidence for the tree it ran on — re-run the touched suites after the LAST edit of the commit, comment-only edits included.** A comment can trip a strict substring pin: a test-all.sh comment naming an array that contains a refused prefix turned the lint's unit suite red at the pushed head, after the suite had run green one edit earlier. **Why:** #12348/PR #12561 — all 11 escalation seats found it; see `knowledge-base/project/learnings/2026-11-11-each-fix-round-found-the-next-sibling-until-the-test-stated-its-residuals.md`.
+
+## `0 issues in 0 files` is a skipped lint, not a clean one
+
+`markdownlint-cli2` never reads a path matched by `.markdownlintignore` (for
+example `knowledge-base/project/`), and still prints a clean-looking summary.
+Lint a `/var/tmp` copy with the pinned binary and `-c .markdownlint.json`, and
+confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
+`knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
+session error 5.

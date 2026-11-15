@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1272
-# generated-at=2026-11-11T17:55:09Z
+# generated-at=2026-11-12T20:03:04Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=19e6f0674c561633171ee96a31eef6568487dbf8ddfb1197d2e216a415254d4b
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -308,6 +308,7 @@ plugins/soleur/test/resolve-target-decision.test.sh	4113	measured
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	50	measured
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	178	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	2754	measured
+plugins/soleur/test/reusable-release-push-failed-marker.test.sh	1272	floor
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	974	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor
@@ -326,6 +327,7 @@ plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	124725	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2569	measured
 plugins/soleur/test/ship-prepush-secret-scan.test.sh	1222	floor
 plugins/soleur/test/sole-copy-drift-check.test.sh	1222	floor
+plugins/soleur/test/spec-kit-intake.test.sh	1222	floor
 plugins/soleur/test/sync-pr-behind.test.sh	32366	measured
 plugins/soleur/test/technical-ruling-gate.test.sh	1222	floor
 plugins/soleur/test/technical-ruling-owner-list.test.sh	1261	floor
@@ -361,6 +363,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	413	measured
 scripts/actions-queue-health	2503	measured
 scripts/actions-queue-tail-8450	1990	measured
 scripts/alarm-issue-filing-guard	2320	measured
+scripts/allowlist-diff	1239	floor
 scripts/always-on-ledger	1222	floor
 scripts/anthropic-admin-key-6297	1883	measured
 scripts/anthropic-double-bill-8611	92	measured

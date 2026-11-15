@@ -264,6 +264,7 @@ ALWAYS_ON_SUITES=(
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
+  "scripts/allowlist-diff"
   "scripts/assert-dependabot-drain-unit"
   "scripts/expenses-verify-by-check"
   "scripts/ship-incident-pir-gate-mutations"
@@ -634,6 +635,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MERGE_QUEUE_STALL_CHECK_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHELL_ARGV_PARITY_TEST_SH_PATHS=(
   ".claude/hooks/lib/filing-shape.pl"  # plugins/soleur/test/shell-argv-parity.test.sh:8
   "plugins/soleur/test/shell-argv-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_SPEC_KIT_INTAKE_TEST_SH_PATHS=(
+  "knowledge-base/project/specs/"  # feature spec read; the plan-step needle is charged as this directory
+  "plugins/soleur/scripts/spec-kit-intake.sh"  # SUT
+  "plugins/soleur/skills/brainstorm/SKILL.md"  # caller pin
+  "plugins/soleur/skills/plan/SKILL.md"  # caller pin
+  "plugins/soleur/skills/plan/references/spec-kit-intake.md"  # intake reference
+  "plugins/soleur/test/spec-kit-intake.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_TECHNICAL_RULING_GATE_TEST_SH_PATHS=(
@@ -1305,6 +1315,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CHANGED_PATH_READERS_TEST_SH_PATHS=(
   "plugins/soleur/skills/preflight/SKILL.md"  # the sentinel pins each skill's spelling of the helper call
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/references/settle-then-admin-merge.md"  # the steps section EXECUTES its classifier block
+  "plugins/soleur/skills/one-shot/SKILL.md"
+  "plugins/soleur/skills/work/SKILL.md"  # PROSE_FILES: the census reads each of these for a plain changed-path reader
+  "plugins/soleur/skills/qa/SKILL.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md"
+  "plugins/soleur/skills/ship/references/adr-ordinal-collision.md"
+  "plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md"
+  "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md"
+  "scripts/hooks/pre-push"  # extension-less, so the code census cannot see it: held by a PINNED_Z row
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2500,6 +2520,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_IDEMPOTENCY_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/md-to-mrkdwn.mjs"
   "scripts/md-to-mrkdwn.test.mjs"
+)
+
+# plugins/soleur/test/reusable-release-push-failed-marker.test.sh — derived edges could not reach its subject (it parses
+# the workflow with PyYAML and executes the marker step's run: body); declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS=(
+  ".github/workflows/reusable-release.yml"
+  "knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md"
+  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
+  "plugins/soleur/test/reusable-release-push-failed-marker.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh — derived edges could not reach its subject; declared from the
