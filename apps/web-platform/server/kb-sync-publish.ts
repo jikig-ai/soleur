@@ -588,12 +588,12 @@ export async function buildKbOverlay(
   baseRoot: readonly TreeEntry[],
   kb: TreeEntry,
   parents: readonly string[],
-): Promise<string> {
+): Promise<{ sha: string; tree: string }> {
   const entries = [...baseRoot.filter((e) => e.name !== KB_ENTRY), { mode: TREE_MODE, name: KB_ENTRY, id: kb.id }];
   const mk = await runIsolatedGitLocal(isolated, ["mktree", "-z"], { input: mktreeInput(entries) });
   const tree = mk.stdout.toString("utf8").trim();
   if (mk.code !== 0 || !HEX40_RE.test(tree)) throw new KbSyncError("local_git_failed");
-  return commitTree(isolated, tree, parents, KB_SYNC_SIDE_COMMIT_MSG);
+  return { sha: await commitTree(isolated, tree, parents, KB_SYNC_SIDE_COMMIT_MSG), tree };
 }
 
 /**
@@ -651,6 +651,60 @@ export async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
   }
 }
 
+/** The message of the local merge `M` that keeps held (non-KB) commits on the local branch next to `S` (P7). */
+export const KB_SYNC_MERGE_MSG = "Soleur: merge knowledge-base sync";
+
+/**
+ * The workspace writes the sync makes, injected by `session-sync.ts` (its guarded `runConnectedRepoGit`, R12, R19, R20):
+ * `unpack-objects -q` with the pack on stdin, the `--no-deref` CAS of `refs/heads/<b>` and the tracking ref. Each throws
+ * on failure (the error carries git's stderr).
+ */
+export interface KbWorkspaceWriter {
+  unpack(pack: Buffer): void;
+  casBranch(branch: string, next: string, prev: string): void;
+  setTracking(branch: string, sha: string): void;
+}
+
+const stderrOf = (err: unknown): string => {
+  const raw = (err as { stderr?: unknown } | null)?.stderr;
+  return Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
+};
+
+/** Hand the objects of `tips` not reachable from `exclude` to the workspace: `pack-objects --revs` | `unpack-objects -q`. */
+async function handOver(
+  isolated: IsolatedPushDirHandle,
+  writer: KbWorkspaceWriter,
+  tips: readonly string[],
+  exclude: readonly string[],
+): Promise<void> {
+  const revs = `${[...tips, ...exclude.map((e) => `^${e}`)].join("\n")}\n`;
+  const pack = await runIsolatedGitLocal(isolated, ["pack-objects", "--revs", "--stdout", "-q"], { input: revs });
+  if (pack.code !== 0) throw new KbHeld("unpack_failed");
+  try {
+    writer.unpack(pack.stdout);
+  } catch {
+    throw new KbHeld("unpack_failed");
+  }
+}
+
+/** The `--no-deref` CAS of the local branch: a moved branch (`but expected`) is `head_moved`, anything else `ref_update_failed`. */
+function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string, prev: string): void {
+  try {
+    writer.casBranch(branch, next, prev);
+  } catch (err) {
+    throw new KbHeld(/but expected/.test(stderrOf(err)) ? "head_moved" : "ref_update_failed");
+  }
+}
+
+/** The advisory tracking ref (R8): best-effort, a failure only means one more token mint next turn. */
+function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: string): void {
+  try {
+    writer.setTracking(branch, sha);
+  } catch {
+    log.warn({ op: "kb-sync.tracking-ref" }, "KB sync: tracking ref update failed");
+  }
+}
+
 /** The literal `https://github.com/<owner>/<repo>.git` push URL (R2): never `remote.origin.url`. */
 async function resolvePushUrl(userId: string, workspaceId: string): Promise<{ url: string; owner: string; repo: string }> {
   const { getCurrentRepoUrl } = await import("./current-repo-url");
@@ -671,14 +725,15 @@ export interface KbPublishInput extends KbSyncContext {
   /** Frozen HEAD (`readWorkspaceHeadRef`), read before any git child. */
   readonly headSha: string;
   readonly refName: string;
+  readonly writer: KbWorkspaceWriter;
 }
 
 /**
- * Steps 2-3 of the post-session sync (#12600): authoritative remote state, the refusals, the hash checks, the build of
- * `S`, Guard 1 and the push. One isolated directory per turn, disposed in `finally`.
+ * Steps 2-5 of the post-session sync (#12600): authoritative remote state, the refusals, the hash checks, the build of
+ * `S`, Guard 1, the local branch update and the push. One isolated directory per turn, disposed in `finally`.
  */
 export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishResult> {
-  const { headSha, installationId } = input;
+  const { headSha, installationId, writer } = input;
   let isolated: IsolatedPushDirHandle | undefined;
   try {
     const { url } = await resolvePushUrl(input.userId, input.workspaceId);
@@ -692,7 +747,11 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const D = remote.defaultBranch;
     if (input.refName !== `refs/heads/${D}`) throw new KbHeld("non_default_branch");
     const T = remote.tip;
-    if (T === headSha) return { kind: "noop" };
+    if (T === headSha) {
+      // Nothing to push; the tracking ref stops the next turn's token mint (R8).
+      setTrackingBestEffort(writer, D, T);
+      return { kind: "noop" };
+    }
     if (!(await isCommitPresent(isolated, T))) throw new KbHeld("remote_unknown_tip");
     if (!(await isAncestor(isolated, T, headSha))) throw new KbHeld("remote_ahead");
 
@@ -707,8 +766,16 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
       return { kind: "noop" };
     }
 
-    const S = await buildKbOverlay(isolated, tV.root, headKb, [T]);
+    const { sha: S, tree: sTree } = await buildKbOverlay(isolated, tV.root, headKb, [T]);
     if (!(await assertRootDiffersOnlyInKb(isolated, S, tV.root))) throw new KbHeld("guard_failed");
+
+    // Step 4 (R1, R14; P7): keep the clone fast-forwardable BEFORE the push. KB-only local changes: the branch moves to
+    // `S` itself (same tree, linear history). Held non-KB changes: the branch moves to `M` = merge(headSha, S), which keeps
+    // them. Either way the next turn's `T` (= `S`) is an ancestor of the local branch.
+    const localNext =
+      sTree === hV.commit.tree ? S : await commitTree(isolated, hV.commit.tree, [headSha, S], KB_SYNC_MERGE_MSG);
+    await handOver(isolated, writer, [localNext], [T, headSha]);
+    casLocalBranch(writer, D, localNext, headSha);
 
     try {
       await pushVerifiedKbOnly({ isolated, installationId, url, baseRoot: tV.root, sha: S, ref: `refs/heads/${D}`, defaultBranch: D });
@@ -716,6 +783,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
       if (err instanceof KbSyncError && err.pushClass === "protected_branch") return { kind: "protected", pushErr: err };
       throw err;
     }
+    setTrackingBestEffort(writer, D, S);
     reportPushHeld("synthetic_pushed", "pushed", input);
     return { kind: "pushed" };
   } catch (err) {

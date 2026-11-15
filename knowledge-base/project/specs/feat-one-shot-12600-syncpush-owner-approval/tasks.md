@@ -68,9 +68,9 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 3: Local branch update (P7)
 
-- [ ] 3.1 CAS-to-`S` arm when the trees are equal; otherwise the `M` arm with `KB_SYNC_MERGE_MSG`.
-- [ ] 3.2 Hand the objects over with `pack-objects` | `unpack-objects`, then the `--no-deref` CAS before the push.
-- [ ] 3.3 On failure, refuse with `head_moved` / `ref_update_failed` / `unpack_failed`. After the push, set the
+- [x] 3.1 CAS-to-`S` arm when the trees are equal; otherwise the `M` arm with `KB_SYNC_MERGE_MSG`.
+- [x] 3.2 Hand the objects over with `pack-objects` | `unpack-objects`, then the `--no-deref` CAS before the push.
+- [x] 3.3 On failure, refuse with `head_moved` / `ref_update_failed` / `unpack_failed`. After the push, set the
   tracking ref to `S`.
 
 ## Phase 4: Protected-branch fallback

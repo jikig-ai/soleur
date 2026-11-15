@@ -21,7 +21,7 @@ import {
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
-import { KbSyncError, publishKbOnly, reportPushHeld, runProtectedFallback } from "./kb-sync-publish";
+import { KbSyncError, publishKbOnly, reportPushHeld, runProtectedFallback, type KbWorkspaceWriter } from "./kb-sync-publish";
 import { readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
@@ -694,6 +694,22 @@ export async function syncPull(
   }
 }
 
+/** The KB sync's workspace writes (#12600): only the guarded verbs of `runConnectedRepoGit`. */
+function kbWorkspaceWriter(workspacePath: string): KbWorkspaceWriter {
+  const opts = { cwd: workspacePath, stdio: "pipe" as const };
+  return {
+    unpack: (pack) => {
+      runConnectedRepoGit(["unpack-objects", "-q"], { ...opts, input: pack });
+    },
+    casBranch: (branch, next, prev) => {
+      runConnectedRepoGit(["update-ref", "--no-deref", `refs/heads/${branch}`, next, prev], opts);
+    },
+    setTracking: (branch, sha) => {
+      runConnectedRepoGit(["update-ref", "--no-deref", `refs/remotes/origin/${branch}`, sha], opts);
+    },
+  };
+}
+
 /** `.git/MERGE_HEAD` present (any type, or unreadable): a merge is in progress, so neither commit nor push (R11). */
 function mergeInProgress(workspacePath: string): boolean {
   try {
@@ -798,6 +814,7 @@ export async function syncPush(
       installationId,
       headSha: head.sha,
       refName: head.refName,
+      writer: kbWorkspaceWriter(workspacePath),
     });
 
     if (result.kind === "protected") {
