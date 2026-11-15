@@ -6,17 +6,17 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 0: Measure, then write the failing tests
 
-- [ ] 0.1 Build the Dockerfile `runner` stage. Rerun `probe6.sh`, `probe7.sh` and `probe8.sh` inside it, using them as
+- [x] 0.1 Build the Dockerfile `runner` stage. Rerun `probe6.sh`, `probe7.sh` and `probe8.sh` inside it, using them as
   synthesized fixture scripts. Record `git --version` in the image and on CI. If a hash-check or hand-off row differs,
   stop: that is a P0 redesign.
-- [ ] 0.2 On the hardened isolated arm against a `file://` bare remote, measure:
+- [x] 0.2 On the hardened isolated arm against a `file://` bare remote, measure:
   - `ls-remote --symref <url> HEAD refs/heads/soleur/kb-sync`;
   - `fetch --depth 1 --no-tags <url> refs/heads/soleur/kb-sync`.
-- [ ] 0.3 Measure a two-parent side commit `(P, T)`: after a simulated PR merge, `pull --ff-only` must still be a
+- [x] 0.3 Measure a two-parent side commit `(P, T)`: after a simulated PR merge, `pull --ff-only` must still be a
   fast-forward.
-- [ ] 0.4 Record what a bare push from a feature branch in a single-branch `--depth 1` clone does today (the "before"
+- [x] 0.4 Record what a bare push from a feature branch in a single-branch `--depth 1` clone does today (the "before"
   behaviour for `non_default_branch`).
-- [ ] 0.5 Write `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts`.
+- [x] 0.5 Write `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts`.
   - Cover matrix rows 1-21, harness rows H1-H7 and the Test Scenarios list.
   - Build a template remote in `beforeAll` and copy it per row; no row mutates the template.
   - Record every argv. Widen protocols for `buildIsolatedGitEnv`, and also for `hostGitInvocation` in the
