@@ -17,7 +17,7 @@ issues: ['#12736', '#12740', '#8090']
 
 PR #12736 extended `scripts/rotate-sentry-actions-ro-token.sh` with `--profile iac` (three
 stores: GitHub repo secret, Doppler `soleur/prd`, Doppler `soleur/prd_terraform`) and wrote a
-runbook "prove, then revoke" gate. Three defects survived the plan, the TDD suite and a 12-row
+runbook "prove, then revoke" gate. Three defects survived the plan, the TDD suite and an ad-hoc (uncommitted)
 mutation battery, and were found only by the review panel and its fix round:
 
 1. **The prove gate could never be satisfied, twice over.** Version 1 said "the terraform-drift

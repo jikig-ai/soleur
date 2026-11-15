@@ -13,7 +13,8 @@
 #       the root's value or holds its own copy, so prd_terraform is written explicitly (it holds
 #       the new value either way) and each Doppler store is read back by digest. After a green
 #       store, every OTHER prd config that carries the key is classified by read-back digest:
-#       "follows soleur/prd" (now new) or "own copy" (not the new value; removal is #12740).
+#       "follow soleur/prd" (now new), "own copy" (not the new value; removal is #12740)
+#       or "unreadable".
 #
 # Lives ONCE; the rotation runbook
 # (knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md)
