@@ -3,7 +3,8 @@
 # single-branch `--depth 1` clone (what a user on a non-default branch got from syncPush before #12600).
 # Usage: probe11.sh [scratch-root]
 set -uo pipefail
-R="${1:-$(mktemp -d)}/p11-$$"; mkdir -p "$R"; cd "$R"
+if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
+R="$BASE/p11-$$"; mkdir -p "$R"; cd "$R"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 git init -q -b main --bare remote.git

@@ -2,6 +2,9 @@
 # Probe 3: where does the token go? Two logging HTTP servers: LIT (the literal URL host) and EVIL (the rewrite target).
 # `http` stands in for `https` (GIT_ALLOW_PROTOCOL=http on both arms); every other setting mirrors the two arms.
 set -u
+case "$-" in
+  *x*) echo "probe3: refusing to run under xtrace (it binds a token sentinel)" >&2; exit 1 ;;
+esac
 R=/tmp/claude-1000/kbpull-probe/p3
 rm -rf "$R"; mkdir -p "$R"
 cat > "$R/srv.py" <<'PY'

@@ -2,7 +2,8 @@
 # Synthesized fixture probe (copied from the deepen-plan scratch probe7.sh; root parameterized).
 # Usage: probe7.sh [scratch-root]   (default: a fresh mktemp dir)
 set -uo pipefail
-R="${1:-$(mktemp -d)}/p7-$$"
+if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
+R="$BASE/p7-$$"
 mkdir -p "$R"; cd "$R"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }

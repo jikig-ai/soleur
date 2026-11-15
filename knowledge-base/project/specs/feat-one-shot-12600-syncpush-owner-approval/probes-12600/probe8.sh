@@ -2,7 +2,8 @@
 # Synthesized fixture probe (copied from the deepen-plan scratch probe8.sh; root parameterized).
 # Usage: probe8.sh [scratch-root]   (default: a fresh mktemp dir)
 set -uo pipefail
-R="${1:-$(mktemp -d)}/p8-$$"
+if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
+R="$BASE/p8-$$"
 mkdir -p "$R"; cd "$R"; export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 g init -q -b main ws; cd ws; mkdir -p knowledge-base src; echo a > knowledge-base/a.md; echo s > src/s.ts; g add -A; g commit -qm T; T=$(git rev-parse HEAD); TT=$(git rev-parse "$T^{tree}")

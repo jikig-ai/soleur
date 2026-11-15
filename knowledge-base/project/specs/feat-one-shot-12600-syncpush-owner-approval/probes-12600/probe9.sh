@@ -5,7 +5,8 @@
 # GIT_ALLOW_PROTOCOL widened to file exactly as test/push-branch-isolated-real-git.test.ts does.
 # Usage: probe9.sh [scratch-root]
 set -euo pipefail
-R="${1:-$(mktemp -d)}/p9-$$"; mkdir -p "$R"; cd "$R"
+if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
+R="$BASE/p9-$$"; mkdir -p "$R"; cd "$R"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 git init -q -b main --bare remote.git
