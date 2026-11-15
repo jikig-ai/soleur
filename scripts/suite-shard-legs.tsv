@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-13T07:28:15Z
+# generated-at=2026-11-15T10:53:49Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -329,6 +329,7 @@ plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	3
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/ship-prepush-secret-scan.test.sh	2
 plugins/soleur/test/sole-copy-drift-check.test.sh	1
+plugins/soleur/test/spec-kit-intake.test.sh	2
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/technical-ruling-gate.test.sh	8
 plugins/soleur/test/technical-ruling-owner-list.test.sh	4
@@ -364,6 +365,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
 scripts/actions-queue-tail-8450	7
 scripts/alarm-issue-filing-guard	1
+scripts/allowlist-diff	3
 scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6

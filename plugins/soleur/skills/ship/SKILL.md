@@ -893,8 +893,8 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-record-recurring-vendor-expense-before-ready n
 **Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
-# (a) Is the ledger already touched in this same change? If so the gate is satisfied.
-LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-base/operations/expenses.md' || true)
+# (a) Ledger edited in this change? Exact path only; `unknown` (exit 2/127) is NOT an edit.
+ledger_touched=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/operations/expenses\.md$' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 1 ] || ledger_touched=unknown; }
 
 # (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
 # unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
@@ -909,13 +909,13 @@ printf '%s' "$PR_BODY" | awk '
 # (c) Vendor-cost keyword scan over the fence-stripped body. Intentionally a
 # BROAD keyword match (NOT list-anchored like the Undeferred gate) — a PR often
 # describes a subscription in prose, not a bullet, so over-detection is preferred
-# here; false positives are absorbed by the LEDGER_TOUCHED branch and the
+# here; false positives are absorbed by the ledger_touched branch and the
 # operator-attestation override below.
 SIGNAL_RE='(^|[^a-z])[Pp]ro\b|subscription|upgrade|paid[[:space:]]+tier|\$[0-9]+(\.[0-9]+)?/mo'
 SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 ```
 
-**Rule.** If a vendor-cost signal fires (plan-tier string, new paid dependency, or new vendor credential) AND `LEDGER_TOUCHED` is `0`, the change MUST carry a `(Tracks|Refs) #NNNN` companion pointing at an OPEN `type/chore` issue whose body contains the `deferred-automation` sentinel — the operator-driven-billing branch (same verification loop as the Undeferred Operator-Step Gate: state OPEN + label `type/chore` + sentinel). Absent both the ledger edit and a valid tracked follow-up, the gate is **triggered**.
+**Rule.** If a vendor-cost signal fires (plan-tier string, new paid dependency, or new vendor credential) AND `ledger_touched` is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate), the change MUST carry a `(Tracks|Refs) #NNNN` companion pointing at an OPEN `type/chore` issue whose body contains the `deferred-automation` sentinel — the operator-driven-billing branch (same verification loop as the Undeferred Operator-Step Gate: state OPEN + label `type/chore` + sentinel). Absent both the ledger edit and a valid tracked follow-up, the gate is **triggered**.
 
 **If not triggered:** Skip silently (no signal, or the ledger was edited in this change, or a valid tracked follow-up exists).
 
@@ -978,7 +978,7 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 
 ### Counsel-Review CLO-Attestation Gate
 
-**Trigger:** the diff touches `docs/legal/`, `plugins/soleur/docs/pages/legal/` or `knowledge-base/legal/`, AND the referenced plan declares `brand_survival_threshold: single-user incident` or an added line in those directories carries a `[DRAFT — pending CLO/counsel review` marker. The reviewing authority is the `soleur:legal:clo` agent, not the operator. If it triggers, read [counsel-review-clo-attestation.md](./references/counsel-review-clo-attestation.md) now and follow it; otherwise skip silently.
+**Trigger:** the diff touches `docs/legal/`, `plugins/soleur/docs/pages/legal/` or `knowledge-base/legal/`, AND the referenced plan declares `brand_survival_threshold: single-user incident` or an added line in those directories carries a `[DRAFT — pending CLO/counsel review` marker. The reviewing authority is the `soleur:legal:clo` agent, not the operator. If it triggers, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) now and follow it; otherwise skip silently.
 
 ### Deploy Pipeline Fix Drift Gate
 
@@ -1296,7 +1296,7 @@ esac
   **Meta-case — the PR's subject IS this gate.** Available in **both** modes. Proceed **without**
   a PIR only when ALL THREE hold:
 
-  1. `git diff --name-only origin/main...HEAD` touches
+  1. `list=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD)` lists
      [scripts/ship-incident-pir-gate.sh](../../../../scripts/ship-incident-pir-gate.sh),
      [scripts/ship-incident-pir-gate-mutation.test.sh](../../../../scripts/ship-incident-pir-gate-mutation.test.sh),
      `plugins/soleur/test/ship-incident-pir-gate.test.ts`,
@@ -1304,9 +1304,7 @@ esac
      `plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`,
      `plugins/soleur/test/ship-pir-action-items-gate.test.sh`, or
      `plugins/soleur/test/fixtures/ship-pir-action-items/`.
-  2. **Every** changed path is one of those, or
-     [scripts/test-all.sh](../../../../scripts/test-all.sh), or a
-     `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact. If this file is also
+  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. Exit 2/127 from the helper = unknown = not contained: take the PIR path above. If this file is also
      changed, **every hunk** of `git diff -U0 origin/main...HEAD -- plugins/soleur/skills/ship/SKILL.md`
      must land inside this Phase 5.5 section — a section is not a path, so without that check
      conjunct 2 cannot tell a Phase 5.5 edit from a rewrite of the merge gate below it.
@@ -1315,13 +1313,11 @@ esac
      body is itself part of the haystack, so "no production outage occurred" makes the gate fire
      on the declaration exempting it (measured). "No live event took place" does not.
 
-  **Why conjuncts 2 and 3 exist — verified in both directions, not asserted.** Issue #7242 ("Web
-  Platform Release blocked at the zot mirror … prod is 3 releases behind") was a real production
-  delivery outage; the PR that fixed it, #7244 (commit `d31d8a2c7`), **edited the gate script**
-  — adding the `releases? behind` alternation — *and* shipped a post-mortem in the same commit.
-  Conjunct 1 alone would have exempted it. Conjunct 2 rejects it **without consulting any
-  declaration**, because that commit also touches `.github/workflows/reusable-release.yml`,
-  [scripts/zot-mirror-diagnosis.sh](../../../../scripts/zot-mirror-diagnosis.sh) and a runbook.
+  **Why conjuncts 2 and 3 exist (verified both ways).** #7242 was a real production delivery outage;
+  its fix PR #7244 (commit `d31d8a2c7`) edited the gate script *and* shipped a post-mortem, so
+  conjunct 1 alone would have exempted it. Conjunct 2 rejects it without consulting any
+  declaration: the commit also touches `.github/workflows/reusable-release.yml`,
+  a diagnosis script and a runbook.
 
   **The named residual, because conjunct 2's tempting universal form is false.** *"A PR fixing this
   gate because of a production event necessarily touches the thing that broke"* holds for #7244 and
@@ -1330,13 +1326,9 @@ esac
   regression in it can satisfy conjuncts 1 and 2 while owing a PIR. Conjunct 3 is the only thing
   standing there, and it is a self-attestation.
 
-  A fourth, mechanical conjunct was tried and REJECTED on measurement: *"the gate must not signal
-  on the PR's own added `knowledge-base/` artifacts, read alone."* It voids the exemption for
-  essentially every PR in this class, including the one that introduced the arm — a plan ABOUT an
-  incident gate is necessarily dense with outage vocabulary, so it signals whether or not any
-  event occurred. It therefore cannot separate the residual case from the ordinary one, and a
-  conjunct that no legitimate user can satisfy is a gate that gets bypassed rather than met.
-  Measured on this PR: the plan and `tasks.md` both signal; `session-state.md` does not.
+  A fourth conjunct (the gate must not signal on the PR's own added `knowledge-base/` artifacts)
+  was REJECTED on measurement: a plan ABOUT an incident gate is dense with outage vocabulary, so it
+  voids the exemption for nearly every PR in this class and gets bypassed.
 
   Conjunct 3 remains because 1 and 2 are necessary and not sufficient, and a false declaration is
   then a deliberate, recorded act. Note the honest limit: unlike `[ack-destroy]`, which is pinned
@@ -1607,7 +1599,7 @@ Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-questio
 
 ### ADR-Ordinal Collision Gate (mandatory)
 
-**Trigger:** the branch adds a NEW `ADR-NNN-*.md`. Run `git fetch origin main -q && bash scripts/check-adr-ordinals.sh`; exit 0 passes silently. On exit 1 for an ADR this branch introduced (a sibling PR claimed the ordinal mid-pipeline), read [adr-ordinal-collision.md](./references/adr-ordinal-collision.md) and follow it: renumber to `max + 1` after a fresh fetch, sweep every reference (code and deny strings included), re-run the check, push. Re-run the check after any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`.
+**Trigger:** the branch adds a NEW `ADR-NNN-*.md`. Run `git fetch origin main -q && bash scripts/check-adr-ordinals.sh`; exit 0 passes silently. On exit 1 for an ADR this branch introduced (a sibling PR claimed the ordinal mid-pipeline), read [adr-ordinal-collision.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/adr-ordinal-collision.md) and follow it: renumber to `max + 1` after a fresh fetch, sweep every reference (code and deny strings included), re-run the check, push. Re-run the check after any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`.
 
 ## Phase 6.4: Unpushed-Commits Gate
 
@@ -1664,15 +1656,15 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 # matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
 # A \b here makes this gate catch zero lines while reading as if it works.
 CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
-PLAN_REFS=$(git diff --name-only origin/main...HEAD | grep -E 'knowledge-base/project/(plans|specs)/' || true)
-[[ -n "$PLAN_REFS" ]] && grep -inE "$CLOSE_DEFER_RE" $PLAN_REFS | head -5
+plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }
+[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && tr '\n' '\0' <<<"$plan_refs" | xargs -0 grep -inE -e "$CLOSE_DEFER_RE" -- | head -5; }
 ```
 
-Any hit ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
+Any hit or `unverifiable` (exit 2/127) ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
 
 Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. The grep is wider than [work/SKILL.md](../work/SKILL.md)'s prose list ("Closes-after-apply", "manual close after", …) because a plan rarely uses those exact words — it writes *"close #N only **after** Phase 4.5 passes"*, where the markdown bold also defeats any regex that expects `after` to be followed by a space.
 
-**Why this lives here and not only in `work`:** the rule was already documented in `work/SKILL.md` §Common Pitfalls, but `soleur:ship` Phase 6 is where the PR body is actually written — a rule that fires in a different skill than the action it governs cannot catch anyone. #6537 proved it: `tasks.md` 7.6 said *"`gh issue close 6537` only **after** Phase 4.5 passes"*, the body shipped `Closes #6537`, and the merge closed the issue while the monitor it was filed about was **still paused**. The issue had to be reopened post-merge. Recording an observability gap as handled while it silently alarms nobody is that issue's own defect, reproduced by the PR fixing it.
+**Why this lives here and not only in `work`:** `soleur:ship` Phase 6 is where the PR body is written, so a rule living only in another skill cannot catch it. #6537: `tasks.md` said *"`gh issue close 6537` only **after** Phase 4.5 passes"*, the body shipped `Closes #6537`, and the merge closed the issue while its monitor was still paused.
 
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
@@ -2541,7 +2533,7 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
-**ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch and collide with this branch's ADR at the same ordinal; the required `guards-ruleset` check catches it on the PR (the poll's required-check exit names it), but nothing renumbers for you. After an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt, and on `NEW ADR ordinal collision` follow [adr-ordinal-collision.md](./references/adr-ordinal-collision.md) ("Phase 7 half").
+**ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch and collide with this branch's ADR at the same ordinal; the required `guards-ruleset` check catches it on the PR (the poll's required-check exit names it), but nothing renumbers for you. After an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt, and on `NEW ADR ordinal collision` follow [adr-ordinal-collision.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/adr-ordinal-collision.md) ("Phase 7 half").
 
 **Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs, but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section, which also covers `--allow-local-merge`); UNTRUSTED-CI / DIRTY still refuse.
 

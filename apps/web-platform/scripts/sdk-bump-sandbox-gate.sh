@@ -172,9 +172,22 @@ if [[ "${SANDBOX_CANARY_GATE_ENABLED:-0}" == "1" ]]; then
 # bump-ack (a soft-degraded capture must never REMOVE the ack requirement).
 # No colon in the default: an explicitly-empty SDK_GATE_CHANGED_FILES means "no
 # relevant changes" (test injection); only an UNSET var falls back to the diff.
-CHANGED="${SDK_GATE_CHANGED_FILES-$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null || true)}"
+# The git arm is a SELECT reader: -z keeps a C-quoted name exact, --no-renames lists a rename's OLD path (moving a
+# gated file away is a change to it), --ignore-submodules=none lists a hidden gitlink, and the pipefail scope makes a
+# git failure the capture's status. A FAILED diff must not read as "no relevant changes" (the old `|| true` did):
+# it sets git_failed, OR-ed into capture_trigger below (a separate flag: the `capture_trigger=0` line after this
+# would clobber an assignment made here). A subshell inside `${VAR-...}` could not set a flag, hence the if/elif.
+git_failed=0
+if [[ -n "${SDK_GATE_CHANGED_FILES+x}" ]]; then
+  CHANGED="$SDK_GATE_CHANGED_FILES"
+elif ! CHANGED="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...HEAD" | tr '\0' '\n')"; then
+  CHANGED=""
+  git_failed=1
+  echo "::warning::sdk-bump-gate: could not read the changed-file list (git diff ${BASE_REF}...HEAD failed); treating the capture gate as triggered."
+fi
 capture_trigger=0
 [[ "${#bumped_pkgs[@]}" -gt 0 ]] && capture_trigger=1
+[[ "$git_failed" -eq 1 ]] && capture_trigger=1
 # Fixture-only edits are IN the trigger set: a hand-edit to sandbox-canary-argv.json
 # is a command-injection sink into the prod canary container (ci-deploy.sh replay),
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
