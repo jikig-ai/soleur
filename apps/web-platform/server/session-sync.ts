@@ -22,6 +22,7 @@ import {
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { classifyPushError, pushWorkspaceDefault, runProtectedFallback } from "./kb-sync-publish";
+import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
@@ -49,7 +50,55 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   "commit",
   "remote",
   "rev-list",
+  // #12600 (CTO rulings R12, R19, R20): the KB sync's only two workspace WRITE verbs, each behind the exact-argv guard
+  // in `assertConnectedRepoArgv`. Decision verbs (hash checks, tree and commit builds) never run here: they run token-free
+  // in the isolated GIT_DIR (server/git-isolated-local.ts).
+  "update-ref",
+  "unpack-objects",
 ]);
+
+const HEX40_RE = /^[0-9a-f]{40}$/;
+
+/** A branch name the guarded `update-ref` shapes accept (git's ref-format rules; throws a static error otherwise). */
+function guardedBranch(name: string): boolean {
+  try {
+    validateBranchFormat(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The exact argv shapes of the two guarded write verbs (#12600):
+ *   - `["update-ref", "--no-deref", "refs/heads/<b>", <40hex new>, <40hex old>]` (CAS mandatory, R1/R19), and
+ *   - `["update-ref", "--no-deref", "refs/remotes/origin/<b>", <40hex>]` (the advisory tracking ref, R8/R17);
+ *   - `["unpack-objects", "-q"]` (the pack arrives on stdin).
+ * Any other argv for these verbs throws.
+ */
+function assertGuardedWriteArgv(argv: readonly string[]): void {
+  const refuse = (): never => {
+    throw new Error(`connected-repo git: '${argv[0]}' argv is not one of the guarded shapes`);
+  };
+  if (argv[0] === "unpack-objects") {
+    if (argv.length !== 2 || argv[1] !== "-q") refuse();
+    return;
+  }
+  if (argv[0] !== "update-ref") return;
+  if (argv[1] !== "--no-deref") refuse();
+  const ref = argv[2] ?? "";
+  if (ref.startsWith("refs/heads/")) {
+    if (argv.length !== 5 || !guardedBranch(ref.slice("refs/heads/".length))) refuse();
+    if (!HEX40_RE.test(argv[3]) || !HEX40_RE.test(argv[4])) refuse();
+    return;
+  }
+  if (ref.startsWith("refs/remotes/origin/")) {
+    if (argv.length !== 4 || !guardedBranch(ref.slice("refs/remotes/origin/".length))) refuse();
+    if (!HEX40_RE.test(argv[3])) refuse();
+    return;
+  }
+  refuse();
+}
 
 // Forbidden flags — applied across ANY allowed subcommand. Reject in argv,
 // not just at the start, so `commit --amend` or `push --force` (if either
@@ -83,6 +132,30 @@ function autoCommitFailure(err: unknown, stage: "pull" | "push"): Error | null {
 }
 
 /**
+ * The argv-shape guard of `runConnectedRepoGit`, exported for its unit rows: the subcommand allowlist, the forbidden
+ * flags on every allowed subcommand, and the exact shapes of the guarded write verbs. Throws before any git runs.
+ */
+export function assertConnectedRepoArgv(argv: readonly string[]): void {
+  if (argv.length === 0) {
+    throw new Error("connected-repo git: argv must include a subcommand");
+  }
+  const subcmd = argv[0];
+  if (!ALLOWED_GIT_SUBCOMMANDS.has(subcmd)) {
+    throw new Error(
+      `connected-repo git: subcommand '${subcmd}' is not allowed (allowed: ${[...ALLOWED_GIT_SUBCOMMANDS].join(", ")})`,
+    );
+  }
+  for (const arg of argv) {
+    if (FORBIDDEN_GIT_FLAGS.has(arg)) {
+      throw new Error(
+        `connected-repo git: flag '${arg}' is forbidden (subcommand: ${subcmd})`,
+      );
+    }
+  }
+  assertGuardedWriteArgv(argv);
+}
+
+/**
  * Connected-repo git wrapper. Runs `execFileSync("git", ...)` through the shared host-git invocation
  * (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) with
  * an argv-shape guard that rejects:
@@ -100,22 +173,7 @@ function runConnectedRepoGit(
   // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
   opts: Omit<ExecFileSyncOptions, "env"> & { cwd: string },
 ): Buffer {
-  if (argv.length === 0) {
-    throw new Error("connected-repo git: argv must include a subcommand");
-  }
-  const subcmd = argv[0];
-  if (!ALLOWED_GIT_SUBCOMMANDS.has(subcmd)) {
-    throw new Error(
-      `connected-repo git: subcommand '${subcmd}' is not allowed (allowed: ${[...ALLOWED_GIT_SUBCOMMANDS].join(", ")})`,
-    );
-  }
-  for (const arg of argv) {
-    if (FORBIDDEN_GIT_FLAGS.has(arg)) {
-      throw new Error(
-        `connected-repo git: flag '${arg}' is forbidden (subcommand: ${subcmd})`,
-      );
-    }
-  }
+  assertConnectedRepoArgv(argv);
   // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
   // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
   const h = hostGitInvocation(argv, { cwd: opts.cwd, allowProtocol: ALLOW_PROTOCOL_NONE });

@@ -30,21 +30,21 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 1: Move, runner and reads
 
-- [ ] 1.1 Move `runProtectedFallback` and the push call into `server/kb-sync-publish.ts` with no behaviour change, as
+- [x] 1.1 Move `runProtectedFallback` and the push call into `server/kb-sync-publish.ts` with no behaviour change, as
   its own commit. Add a header comment that states Guard 1.
-- [ ] 1.2 Create `server/git-isolated-local.ts` with `runIsolatedGitLocal` (lazy `child_process`, `HARDENED_GIT_ARGS`,
+- [x] 1.2 Create `server/git-isolated-local.ts` with `runIsolatedGitLocal` (lazy `child_process`, `HARDENED_GIT_ARGS`,
   `buildIsolatedGitEnv`, a timeout, exit codes surfaced) and `verifyObject`.
   - Rewrite `checkCommitPresent` in `push-branch.ts` on top of it.
   - Export `disposeIsolated`.
   - Add a `CENSUS_ONLY` row in `test/host-git-consumers-real-git.test.ts`.
-- [ ] 1.3 Add `readWorkspaceHeadRef` -> `{ sha, refName | null }` to `server/approval/workspace-head.ts`. Leave the
+- [x] 1.3 Add `readWorkspaceHeadRef` -> `{ sha, refName | null }` to `server/approval/workspace-head.ts`. Leave the
   existing export unchanged.
-- [ ] 1.4 Add two verbs to `ALLOWED_GIT_SUBCOMMANDS`:
+- [x] 1.4 Add two verbs to `ALLOWED_GIT_SUBCOMMANDS`:
   - `update-ref --no-deref`, in the two guarded shapes only, with CAS mandatory on `refs/heads/<D>`;
   - `unpack-objects -q`.
 
   Any other argv throws. Add path-allowlist test rows.
-- [ ] 1.5 Export `AGENT_AUTHOR_NAME` / `AGENT_AUTHOR_EMAIL` from `push-branch.ts`.
+- [x] 1.5 Export `AGENT_AUTHOR_NAME` / `AGENT_AUTHOR_EMAIL` from `push-branch.ts`.
 
 ## Phase 2: Remote state, verify, build, guard, push
 

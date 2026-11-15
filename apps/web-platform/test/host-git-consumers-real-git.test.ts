@@ -866,6 +866,7 @@ describe("census: every host-side git exec site is classified (consistency with 
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
     "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",
     "git-worktree-validity.ts": "census-only: own minimal env, rev-parse probe; a redirect only changes its verdict",
+    "git-isolated-local.ts": "census-only: token-free local git in the server-created isolated GIT_DIR (HARDENED_GIT_ARGS + buildIsolatedGitEnv, cwd = the isolated dir); never runs against the workspace `.git`, reads its object store only as the validated alternate (#12600)",
     "push-branch.ts": "census-only: the file holds the operator-held isolated-GIT_DIR push; its direct `cat-file` / `config user.*` calls run unhardened (writes follow a redirect, read from source, not measured)",
   };
   // Cron handlers: classified PER FILE (a new file here is an unclassified hit, not covered by a directory exemption).

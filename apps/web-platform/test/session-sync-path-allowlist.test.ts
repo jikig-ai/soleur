@@ -116,7 +116,7 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 
-import { syncPull, syncPush } from "../server/session-sync";
+import { assertConnectedRepoArgv, syncPull, syncPush } from "../server/session-sync";
 
 // ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
 // workspace id. A minimal stub satisfies writeRepoColsToWorkspace's chain.
@@ -294,5 +294,48 @@ describe("session-sync path allowlist (#2905)", () => {
     // Tight invariant: the staged argv MUST be exactly add + -- + paths.
     // Rejects "-A", "-u", ".", ":", and any future regression to a sweep flag.
     expect(adds[0].args).toEqual(["add", "--", "knowledge-base/foo.md"]);
+  });
+});
+
+// #12600 (CTO rulings R12, R19, R20): the only two workspace WRITE verbs the KB sync adds, each behind an exact-argv
+// guard. Every other argv for these verbs throws before git runs.
+describe("connected-repo argv guard: update-ref --no-deref and unpack-objects -q (#12600)", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  test.each([
+    [["update-ref", "--no-deref", "refs/heads/main", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/trunk", A, B]],
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", A]],
+    [["unpack-objects", "-q"]],
+  ])("accepts the guarded shape %j", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).not.toThrow();
+  });
+  test.each([
+    [["update-ref", "refs/heads/main", A, B]], // no --no-deref (R19)
+    [["update-ref", "--no-deref", "refs/heads/main", A]], // CAS old value mandatory on refs/heads
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, B, "extra"]],
+    [["update-ref", "--no-deref", "refs/tags/v1", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", "HEAD", B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A.toUpperCase(), B]],
+    [["update-ref", "--no-deref", "refs/heads/bad..name", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, "0".repeat(39)]],
+    [["update-ref", "-d", "refs/heads/main"]],
+    [["update-ref", "--stdin"]],
+    [["update-ref", "--no-deref", "-m", "x", "refs/heads/main", A, B]],
+    [["update-ref", "--no-deref", "refs/remotes/upstream/main", A]],
+    [["update-ref", "--no-deref", "HEAD", A, B]],
+    [["unpack-objects"]],
+    [["unpack-objects", "-q", "--strict"]],
+    [["unpack-objects", "-n"]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, B, "--force"]],
+  ])("refuses %j", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow();
+  });
+  test("other verbs keep their existing checks (destructive verbs and forbidden flags still refuse)", () => {
+    expect(() => assertConnectedRepoArgv(["reset", "--hard"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["checkout", "main"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["commit", "--amend"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["status", "--porcelain=v1", "-z"])).not.toThrow();
   });
 });
