@@ -49,7 +49,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. inngest-host-replace requires PUBLIC-SDK-URL (#10538, #12742). Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. inngest-host-replace: PUBLIC-SDK-URL. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -1890,19 +1890,15 @@ jobs:
       group: deploy-inngest-restart
       cancel-in-progress: false
     steps:
-      # (#10538, CTO D2) PUBLIC-SDK-URL typo-guard, FIRST step, before any credential loads. Since #12737 the
-      # host's --sdk-url is the public serve URL, which reaches the live host only through this replace. It
-      # carries three known risks until #12742 item 1 lands (that PR deletes this step). Unconditional (no if:).
+      # (#10538, CTO D2) FIRST step, unconditional; #12742 item 1 deletes it. Why: the §inngest_host_replace rationale.
       - name: Validate dispatch inputs (PUBLIC-SDK-URL confirm token, #12742)
         env:
           CONFIRM_RAW: ${{ inputs.confirm }}
         run: |
-          set -euo pipefail
           if [[ "$CONFIRM_RAW" != "PUBLIC-SDK-URL" ]]; then
-            echo "::error::confirm must be exactly 'PUBLIC-SDK-URL' (got '${CONFIRM_RAW}'). This replace boots the host with --sdk-url https://app.soleur.ai/api/inngest (#10538). Until #12742 item 1 lands it carries three risks: (1) a stale non-zero registry hides a failing public poll from the registry-empty alert; (2) the first sync after boot can double-fire functions (#7228); (3) the stale private-URL app row keeps being polled over plaintext. Read #12742 before dispatching. It is NOT the authorization -- the infra-privileged environment and the replace gate are."
+            echo "::error::confirm must be exactly 'PUBLIC-SDK-URL': this replace boots the public sdk_url (#10538) with three open risks; read #12742 first."
             exit 1
           fi
-          echo "dispatch validated: inngest-host-replace with the public sdk_url (#12742 risks acknowledged)"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
