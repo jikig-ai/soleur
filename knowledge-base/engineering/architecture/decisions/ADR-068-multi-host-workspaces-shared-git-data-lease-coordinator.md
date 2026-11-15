@@ -1565,3 +1565,17 @@ The one-way language and the "only feeder is the serve arm" invariant lived in t
 The 2026-07-02 amendment (a) says the peer allowlist is checked "BEFORE the handshake". Until this change it was not: `session-proxy.ts` checked `req.socket.remoteAddress` inside `wss.on("connection")`, i.e. after TLS and after the WebSocket upgrade, so any private-net host could force a handshake and one Sentry report per connection. The check now runs on the raw TCP `connection` event through a prepended listener (`admitProxyPeer`) and destroys a non-allowlisted source before Node's TLS wrapper reads a byte; the in-`wss` check remains as defence in depth. Denies are reported through a bounded reporter (5 events per reason per 60 s window plus an exact counter).
 
 The proxy hello is no longer `{type, userId, workspaceId}`: it is `{type, userId, workspaceId, ts, nonce, mac}` with an HMAC-SHA256 under a dedicated key (`PROXY_HELLO_HMAC_KEY`), verified fail-closed before the AP-2 membership lookup, ±30 s skew and a replay window of about 61 s. A malformed `SOLEUR_PROXY_PORT` or an absent hello key stops only the relay (`proxy_state=error`). The mTLS option stays rejected as dominated, as in the original amendment. Decision, check order, residuals and the rolling-deploy behaviour are in ADR-323; this addendum does not restate them.
+
+## Addendum — 2026-11-13 (#12600): the sync push keeps the GitHub tip an ancestor of the local branch
+
+Appended; no earlier text is edited. §(d)'s rationale says `syncPush` auto-commits only `knowledge-base/**`, "so the
+agent's real commits never land on origin's default branch". Until #12600 that was not enforced: the sync ran a bare
+`git push` of the checked-out branch, which published whatever commits the agent had made on it. It now holds by
+construction: the sync pushes only `S`, a commit the server builds on the remote tip `T` with `T`'s root tree and the
+workspace's `knowledge-base` entry (ADR-309 addendum of this date). The overlay's precondition, "the GitHub tip is an
+ancestor of the local branch", also holds after every sync push, because the local branch is moved to `S` (a KB-only
+turn) or to a merge `M` of HEAD and `S` (agent code held local) by a compare-and-swap `update-ref` BEFORE the push, and
+the tracking ref is set to `S` after it. git-data therefore still holds at least what GitHub holds: `S` and `M` are
+local `refs/heads/*` commits that `replicateToGitData` replicates like any other. The protected-branch side commit on
+`soleur/kb-sync` is built on `T` the same way, so a merged PR fast-forwards the clone. Pinned by
+`test/session-sync-kb-only-push-real-git.test.ts` (H7, matrix 14, matrix 20).

@@ -105,10 +105,10 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 7: Records and verification
 
-- [ ] 7.1 ADR-309: addendum plus three pointers, located by text. ADR-068 (d): addendum. ADR-050: update its entry if
+- [x] 7.1 ADR-309: addendum plus three pointers, located by text. ADR-068 (d): addendum. ADR-050: update its entry if
   it names the legacy push.
-- [ ] 7.2 Run each matrix mutation and record the RED run with that phase's commit.
-- [ ] 7.3 Run the AC11 vitest suite and `tsc --noEmit`.
+- [x] 7.2 Run each matrix mutation and record the RED run with that phase's commit.
+- [x] 7.3 Run the AC11 vitest suite and `tsc --noEmit`.
 - [ ] 7.4 PR body, via `soleur:ship`:
   - `Closes #12600`, `Closes #12718`, `Closes #12714` (AC22);
   - links to #12713, #12714, #12718, #12719 and #12734;

@@ -549,6 +549,47 @@ seven tools still fall back to a card the requesting member can answer") on the 
   `APPROVAL_EXEMPT_TOOLS`), the gate-flow dormancy cases in `test/approval/gate-flow.test.ts`, and battery rows `G1-LO1`..`G1-LO15` in
   `test/approval-guard1-mutation.test.sh`.
 
+## Addendum — 2026-11-13 (#12600): the post-session sync push publishes only Soleur-built knowledge-base commits
+
+Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20 in the #12600 decision record,
+`knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
+
+- **What changed.** `syncPush` (`server/session-sync.ts`, push half in `server/kb-sync-publish.ts`) no longer runs a bare
+  `git push` of the checked-out branch. Each turn it reads the default branch `D` and its tip `T` from one hardened
+  `ls-remote --symref` against the literal `https://github.com/<owner>/<repo>.git` (never `remote.origin.url`, never
+  `@{u}` or `refs/remotes/*`). It hash-verifies `T`'s commit and root tree and HEAD's commit and root tree by recomputing
+  their ids, then builds `S`: parent `T`, root tree = `T`'s root with only the `knowledge-base` entry taken from HEAD,
+  message "Soleur: sync knowledge-base", author and committer "Soleur Agent" / `agent@soleur.ai`. Guard 1
+  (`assertRootDiffersOnlyInKb`) is re-run on the exact sha inside `pushVerifiedKbOnly`, the only push argv of the flow,
+  which pushes `<S>:refs/heads/<D>` non-force from the server-created isolated GIT_DIR. Every decision and build runs
+  token-free in that directory (`server/git-isolated-local.ts`); the workspace receives only `unpack-objects -q` and a
+  `--no-deref` CAS `update-ref`, the two guarded verbs added to `runConnectedRepoGit`.
+- **Effect.** An agent-authored commit object, message or author never reaches the remote through the sync, whatever
+  the agent did in the workspace (`push.default`, a second branch, `remote.origin.url`, forged tracking refs, forged
+  object bytes). Agent code commits on the default branch stay local ("held"); publishing them is `github_push_branch`
+  and its Owner approval. The local branch moves to `S` (KB-only turn) or to a merge `M` of HEAD and `S` (code held)
+  before the push, so the clone stays fast-forwardable.
+- **Refusals** (op `kb-sync.push-held`, tags `reason` + `outcome`): `merge_in_progress`, `detached_head`,
+  `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`,
+  `ref_update_failed`, `unpack_failed` and `side_ahead` warn (debounced per workspace and reason); `remote_ahead`,
+  `remote_unknown_tip`, `held_foreign` and `synthetic_pushed` log only.
+- **Protected default branch.** On GitHub's `GH006` line (line-anchored, stderr only; `GH013` stays unrouted, #12734)
+  the side commit on `soleur/kb-sync` is built the same way on `T` (parents `T`, the side tip `P` when it already
+  descends from `T`, or `(P, T)`), in the isolated directory: no workspace checkout, commit or `reset --hard`. The ops
+  `kb-sync.protected-fallback-failed` (now with a closed `fallback_reason` tag) and `kb-sync.push-protected-fallback`
+  are unchanged.
+- **Self-heal.** `selfHealNonFastForward` no longer resets a diverged default-branch clone that has tracked changes
+  outside `knowledge-base/` (op `self-heal-aborted-dirty-nonkb`), since held commits are now the steady state.
+- **Discharges** the three places this ADR names the sync as a separate path (located by text, left as written):
+  decision item 8 ("the post-session sync push is a separate path, #12600"), the 2026-11-05 #11635 addendum ("the
+  post-session sync push (`syncPush`) is a separate path, #12600") and the 2026-11-11 addendum ("The post-session sync
+  (`session-sync.ts`) still re-reads the workspace; it is #12600's path"). The sync still re-reads the workspace for
+  HEAD and its knowledge-base tree, but it can publish only that tree.
+- **Pins.** `test/session-sync-kb-only-push-real-git.test.ts` (real git against a `file://` bare remote with a real
+  `pre-receive` GH006 hook: harness rows H1-H7, the Guard 1 mutation matrix and the push-argv census),
+  `test/server/classify-push-error.test.ts`, `test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`.
+- **Open.** The sync-push disclosure copy (#12713) and the held-files signal (#12714) are separate.
+
 ## Diagram
 
 C4: `platform.infra.approvalStore` ("Approval Requests") with `webapp -> approvalStore` and `engine -> approvalStore`, included in the `containers` view.
