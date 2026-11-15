@@ -1774,7 +1774,10 @@ jobs:
   test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts,')) }}
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04 (GNU coreutils) because ubuntu-latest is now ubuntu-26.04, whose
+    # coreutils is uutils, and seven suites in these shards fail on it (#12790). Return to
+    # ubuntu-latest once those suites pass on uutils.
+    runs-on: ubuntu-24.04
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
     # named below). The three cost-heaviest registrations moved to

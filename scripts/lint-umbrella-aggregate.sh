@@ -76,7 +76,7 @@
 # name `secret-guards` is not checked.
 #
 # Parsing: PyYAML (the same dependency the required quality-guards member `workflow-duplicate-keys`
-# has, assumed preinstalled on the runner: ubuntu-latest for the `test-scripts` job that runs this lint, ubuntu-24.04
+# has, assumed preinstalled on the runner: ubuntu-24.04 for the `test-scripts` job that runs this lint (pinned, #12790), ubuntu-24.04
 # for `secret-guards`, which runs it through scripts/ci-parked-hold.test.sh; the `pyyaml=<version>` this lint
 # prints on success is the evidence). A missing PyYAML fails this lint (exit 2) rather than skipping it.
 # Census scope: *.yml and *.yaml under .github/workflows (none uses .yaml today; measured with `ls`).
@@ -102,7 +102,7 @@ try:
     import yaml
 except ImportError:
     print("::error::lint-umbrella-aggregate: PyYAML is required to parse the workflows (python3 -c 'import yaml' failed); failing closed. "
-          "Its presence on ubuntu-latest is ASSUMED, not installed here: other suites in the test-scripts job already require it "
+          "Its presence on the runner is ASSUMED, not installed here: other suites in the test-scripts job already require it "
           "(measure with: git grep -n 'import yaml' scripts)", file=sys.stderr)
     sys.exit(2)
 
