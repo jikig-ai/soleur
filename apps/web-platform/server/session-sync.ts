@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { execFileSync, type ExecFileSyncOptions } from "child_process";
-import { readdirSync } from "fs";
+import { lstatSync, readdirSync } from "fs";
 import { join } from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -21,7 +21,8 @@ import {
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
-import { classifyPushError, pushWorkspaceDefault, runProtectedFallback } from "./kb-sync-publish";
+import { KbSyncError, publishKbOnly, reportPushHeld, runProtectedFallback } from "./kb-sync-publish";
+import { readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
@@ -693,9 +694,21 @@ export async function syncPull(
   }
 }
 
+/** `.git/MERGE_HEAD` present (any type, or unreadable): a merge is in progress, so neither commit nor push (R11). */
+function mergeInProgress(workspacePath: string): boolean {
+  try {
+    lstatSync(join(workspacePath, ".git", "MERGE_HEAD"));
+    return true;
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
+  }
+}
+
 /**
- * Push local changes to remote after an agent session.
- * Best-effort: failures are logged but never throw.
+ * Push the session's knowledge-base changes after an agent session (#12600). Only a commit the server built reaches the
+ * remote: `S` = the remote tip's verified root with HEAD's `knowledge-base` entry, parent the remote tip, Soleur's
+ * message and identity (server/kb-sync-publish.ts). Best-effort: failures are logged but never throw.
  */
 export async function syncPush(
   userId: string,
@@ -716,7 +729,14 @@ export async function syncPush(
     return;
   }
 
+  const ctx = { userId, workspaceId };
   try {
+    // A conflicted session-start merge: committing would publish conflict markers (matrix 17).
+    if (mergeInProgress(workspacePath)) {
+      reportPushHeld("merge_in_progress", "held", ctx);
+      return;
+    }
+
     // Auto-commit any uncommitted changes before pushing.
     // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
     try {
@@ -760,58 +780,62 @@ export async function syncPush(
       return;
     }
 
+    // Frozen HEAD, read from the files (no git child): the sha every later step builds on and CASes against.
+    let head: { sha: string; refName: string | null };
     try {
-      await pushWorkspaceDefault(installationId, workspacePath);
-    } catch (pushErr) {
-      const pushClass = classifyPushError(pushErr);
-      if (pushClass === "protected_branch") {
-        // #5426 — protected default: route writes to soleur/kb-sync + PR.
-        const fallback = await runProtectedFallback(
-          userId,
-          workspacePath,
-          installationId,
-        );
-        if (!fallback.ok) {
-          // `reason` discriminates "the fallback ran and failed" from the
-          // persistent_other branch below (which never entered the fallback)
-          // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
-          // test pin the single `kb-sync.protected-fallback-failed` op.
-          reportSilentFallback(pushErr, {
-            feature: "session-sync",
-            op: "kb-sync.protected-fallback-failed",
-            extra: { userId, reason: "fallback_failed" },
-            message:
-              "KB-sync protected-branch fallback failed — writes preserved on default for retry",
-          });
-          return;
-        }
-        warnSilentFallback(null, {
-          feature: "session-sync",
-          op: "kb-sync.push-protected-fallback",
-          extra: {
-            userId,
-            prUrl: fallback.prUrl,
-            commitCount: fallback.commitCount,
-          },
-          message:
-            "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",
-        });
-        // Fall through to history recording + last-synced (writes delivered).
-      } else if (pushClass === "persistent_other") {
-        // Non-protection persistent reject (e.g. shallow update not allowed) —
-        // retrying would loop forever. Emit a distinct op and stop here.
-        reportSilentFallback(pushErr, {
+      head = readWorkspaceHeadRef(workspacePath);
+    } catch {
+      throw new KbSyncError("head_unreadable");
+    }
+    if (head.refName === null) {
+      reportPushHeld("detached_head", "held", ctx);
+      return;
+    }
+
+    const result = await publishKbOnly({
+      ...ctx,
+      workspacePath,
+      installationId,
+      headSha: head.sha,
+      refName: head.refName,
+    });
+
+    if (result.kind === "protected") {
+      // #5426 — protected default: route writes to soleur/kb-sync + PR.
+      const fallback = await runProtectedFallback(
+        userId,
+        workspacePath,
+        installationId,
+      );
+      if (!fallback.ok) {
+        // `reason` discriminates "the fallback ran and failed" from the
+        // persistent_other branch below (which never entered the fallback)
+        // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
+        // test pin the single `kb-sync.protected-fallback-failed` op.
+        reportSilentFallback(result.pushErr, {
           feature: "session-sync",
           op: "kb-sync.protected-fallback-failed",
-          extra: { userId, reason: "persistent_other" },
+          extra: { userId, reason: "fallback_failed" },
           message:
-            "KB-sync push persistently rejected (non-protection) — not retried",
+            "KB-sync protected-branch fallback failed — writes preserved on default for retry",
         });
         return;
-      } else {
-        // Auth/network/transient — existing best-effort retry-next-session.
-        throw pushErr;
       }
+      warnSilentFallback(null, {
+        feature: "session-sync",
+        op: "kb-sync.push-protected-fallback",
+        extra: {
+          userId,
+          prUrl: fallback.prUrl,
+          commitCount: fallback.commitCount,
+        },
+        message:
+          "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",
+      });
+      // Fall through to history recording + last-synced (writes delivered).
+    } else if (result.kind !== "pushed") {
+      // Held or nothing to sync: no push happened, so no bookkeeping (CPO condition C4).
+      return;
     }
 
     // Best-effort: record KB file count for analytics sparklines
@@ -831,12 +855,25 @@ export async function syncPush(
     await updateLastSynced(service, workspaceId);
     log.info({ userId }, "Sync push completed");
   } catch (err) {
+    if (err instanceof KbSyncError && err.pushClass === "persistent_other") {
+      // Non-protection persistent reject (e.g. shallow update not allowed) —
+      // retrying would loop forever. Emit a distinct op and stop here.
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: "kb-sync.protected-fallback-failed",
+        extra: { userId, reason: "persistent_other" },
+        message:
+          "KB-sync push persistently rejected (non-protection) — not retried",
+      });
+      return;
+    }
     log.warn({ err, userId }, "Sync push failed — next session will retry");
     reportSilentFallback(err, {
       feature: "session-sync",
       op: "syncPush",
       // workspacePath dropped — see syncPull catch for the rationale.
       extra: { userId },
+      tags: { reason: err instanceof KbSyncError ? err.reason : "unclassified" },
       message: "Sync push failed — next session will retry",
     });
   }

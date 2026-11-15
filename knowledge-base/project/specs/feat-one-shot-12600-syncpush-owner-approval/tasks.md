@@ -48,16 +48,16 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 2: Remote state, verify, build, guard, push
 
-- [ ] 2.1 `readRemoteState`: one hardened `ls-remote --symref`, exactly one `ref: refs/heads/<D>\tHEAD` line, an exact
+- [x] 2.1 `readRemoteState`: one hardened `ls-remote --symref`, exactly one `ref: refs/heads/<D>\tHEAD` line, an exact
   match on the `soleur/kb-sync` line, and a throw on duplicate lines.
-- [ ] 2.2 `buildKbOverlay(parent, kbSourceSha, { secondParent? })` builds with `ls-tree -z` / `mktree -z` /
+- [x] 2.2 `buildKbOverlay(parent, kbSourceSha, { secondParent? })` builds with `ls-tree -z` / `mktree -z` /
   `commit-tree`, the `-c user.*` identity and `KB_SYNC_SIDE_COMMIT_MSG`. Add `assertRootDiffersOnlyInKb` and the
   three-object hash check (`hash_mismatch`).
-- [ ] 2.3 `pushVerifiedKbOnly`: re-run the guard, then a non-force push of `<sha>:<ref>`, with `ref` limited to `D` or
+- [x] 2.3 `pushVerifiedKbOnly`: re-run the guard, then a non-force push of `<sha>:<ref>`, with `ref` limited to `D` or
   `soleur/kb-sync`. It holds the only push argv.
-- [ ] 2.4 `classifyPushError` matches the line-anchored `^remote: error: GH006:` and keeps `GH013` as `other`. Add
+- [x] 2.4 `classifyPushError` matches the line-anchored `^remote: error: GH006:` and keeps `GH013` as `other`. Add
   `test/server/classify-push-error.test.ts`.
-- [ ] 2.5 `syncPush` steps 1-3:
+- [x] 2.5 `syncPush` steps 1-3:
   - `MERGE_HEAD` skip before the auto-commit;
   - refusals: `detached_head`, `non_default_branch`, `remote_branch_absent`, `remote_unknown_tip`, `remote_ahead`,
     `kb_not_tree`, `held_foreign`;
