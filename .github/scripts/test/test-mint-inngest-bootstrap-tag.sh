@@ -947,6 +947,7 @@ run_mint g2-ref-hang --tag
 MINT_WRAP=()
 # Both codes mean the timeout killed the script. GNU timeout exits 137 (128+9) for a -s KILL
 # timeout. The uutils timeout that ships as coreutils on ubuntu-26.04 (ubuntu-latest) exits 124.
+# Accepting 124 on every host is safe only while the mint script itself never exits 124 (today: 78, 1 or 0).
 case "$LAST_RC" in 124|137) g2_ref_hang_rc=timeout-killed ;; *) g2_ref_hang_rc="$LAST_RC" ;; esac
 a_eq 'g2.ref-hang:rc' "$g2_ref_hang_rc" timeout-killed
 a_eq 'g2.ref-hang:gout' "$(paste -sd' ' "$LAST_GOUT")" 'tag=vinngest-v1.1.41 tag_state=unknown'
