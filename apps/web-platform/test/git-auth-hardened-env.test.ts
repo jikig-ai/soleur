@@ -340,6 +340,17 @@ describe("gitWithInstallationAuth child env and argv", () => {
     expect(args.slice(-3)).toEqual(["push", "u", `${"c".repeat(40)}:refs/heads/x`]);
   });
 
+  test("hardened argv: core.alternateRefsCommand=true, so a fetch spawns no token-env for-each-ref child in the workspace .git (#12600 X2, F1)", async () => {
+    await call();
+    const { args } = calls[0] as Call;
+    const i = args.indexOf("core.alternateRefsCommand=true");
+    expect(i).toBeGreaterThan(0);
+    expect(args[i - 1]).toBe("-c");
+    expect(i).toBeLessThan(args.indexOf("push"));
+    // the empty value is NOT enough: git treats an empty alternateRefsCommand as unset and still spawns the child
+    expect(args).not.toContain("core.alternateRefsCommand=");
+  });
+
   test("legacy form (field unset): the shared host-git block precedes the credential reset, the env is scrubbed, GIT_DIR is the workspace's own", async () => {
     await gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { cwd: "/ws/parent/work" });
     const { args, opts } = calls[0] as Call;

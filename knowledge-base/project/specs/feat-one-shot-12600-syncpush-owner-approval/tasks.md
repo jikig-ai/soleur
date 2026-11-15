@@ -119,7 +119,7 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 8: Isolated-fetch hardening (X2)
 
-- [ ] 8.1 Add `-c core.alternateRefsCommand=true` to `HARDENED_GIT_ARGS` with the F1 rationale in its comment; pin the
+- [x] 8.1 Add `-c core.alternateRefsCommand=true` to `HARDENED_GIT_ARGS` with the F1 rationale in its comment; pin the
   argv in `test/git-auth-hardened-env.test.ts`.
 
 ## Phase 9: Session-start pull on the hardened arm (#12718)

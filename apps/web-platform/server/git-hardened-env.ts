@@ -56,7 +56,15 @@ export const HARDENED_ENV_ALLOWLIST: readonly string[] = [
 
 /**
  * Global git options for a hardened invocation: the shared hardening, the proxy / extra-header resets (unscoped and
- * `https://github.com/` only) and `push.followTags=false` (no unapproved tag refs ride along).
+ * `https://github.com/` only), `push.followTags=false` (no unapproved tag refs ride along) and
+ * `core.alternateRefsCommand=true`.
+ *
+ * `core.alternateRefsCommand=true` (#12600, CTO ruling X2; measured F1): during a `fetch`, git advertises the alternate's
+ * refs by spawning `git --git-dir=<workspace>/.git for-each-ref --format=%(objectname)` with the caller's environment (the
+ * token and the askpass included), so a fetch from the isolated directory would read the agent-writable workspace config
+ * and refs in a token-bearing child, and agent-planted refs would become `have` lines. `true` replaces that child with one
+ * that prints nothing. An EMPTY value does not: git treats it as unset and spawns the default child. `push` spawns no such
+ * child, so the shared constant changes nothing there.
  */
 export const HARDENED_GIT_ARGS: readonly string[] = [
   ...GIT_HARDENING_ARGS,
@@ -68,6 +76,8 @@ export const HARDENED_GIT_ARGS: readonly string[] = [
   "http.extraHeader=",
   "-c",
   "push.followTags=false",
+  "-c",
+  "core.alternateRefsCommand=true",
 ];
 
 /** The only transport a hardened push may use. An environment variable beats every repo-level `protocol.*.allow`. */
