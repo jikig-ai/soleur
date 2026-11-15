@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016,SC1003  # row functions are dispatched indirectly; A && B || C is the assertion idiom; literals are single-quoted on purpose; a trailing backslash inside single quotes is a literal continuation marker
-# Guard 1 of #12656 (plan: knowledge-base/project/plans/2026-11-12-fix-arm-check-drain-prs-product-roadmap-plan.md,
+# Guard 1 of #12656 (plan: knowledge-base/project/plans/archive/20261115-130014-2026-11-12-fix-arm-check-drain-prs-product-roadmap-plan.md,
 # `## Guard Contract`). Every skill site that arms or re-arms auto-merge binds each arm to the head the
 # Review-Evidence arm check set: `--match-head-commit "${H:?...}"` (A1). Only the canonical statement in
 # review-evidence-comment.md `## Arm check` sets H (A1-noH), and its body is pinned (A3). There is no exempt arm:
