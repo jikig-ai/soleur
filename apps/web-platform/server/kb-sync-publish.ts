@@ -491,12 +491,27 @@ function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string,
   }
 }
 
-/** The advisory tracking ref (R8): best-effort, a failure only means one more token mint next turn. */
-function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: string): void {
+/**
+ * The advisory tracking ref (R8): best-effort, a failure only means one more token mint next turn. A failure that
+ * repeats (a stale `.lock`, a broken ref store) mints a token every turn, so it mirrors to Sentry at warning level,
+ * debounced per workspace (cq-silent-fallback-must-mirror-to-sentry; CTO ruling D4). No path, sha or branch name.
+ */
+function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: string, ctx: KbSyncContext): void {
   try {
     writer.setTracking(branch, sha);
   } catch {
     log.warn({ op: "kb-sync.tracking-ref" }, "KB sync: tracking ref update failed");
+    mirrorWarnWithDebounce(
+      null,
+      {
+        feature: "session-sync",
+        op: "kb-sync.tracking-ref",
+        message: "KB sync: tracking ref update failed",
+        extra: { userId: ctx.userId },
+      },
+      ctx.workspaceId,
+      "kb-sync-tracking-ref",
+    );
   }
 }
 
@@ -623,7 +638,7 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
     try {
       await handOver(isolated, f.writer, [side], [f.S, T, headSha]);
       casLocalBranch(f.writer, D, side, f.S);
-      setTrackingBestEffort(f.writer, D, side);
+      setTrackingBestEffort(f.writer, D, side, f.ctx);
     } catch (err) {
       if (!(err instanceof KbHeld)) throw err;
       reportPushHeld(err.reason, "held", f.ctx);
@@ -654,7 +669,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const T = remote.tip;
     if (T === headSha) {
       // Nothing to push; the tracking ref stops the next turn's token mint (R8).
-      setTrackingBestEffort(writer, D, T);
+      setTrackingBestEffort(writer, D, T, input);
       return { kind: "noop" };
     }
     if (!(await isCommitPresent(isolated, T))) throw new KbHeld("remote_unknown_tip");
@@ -690,7 +705,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
         isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headKb, S, localNext, pushErr: err,
       });
     }
-    setTrackingBestEffort(writer, D, S);
+    setTrackingBestEffort(writer, D, S, input);
     reportPushHeld("synthetic_pushed", "pushed", input);
     return { kind: "pushed" };
   } catch (err) {

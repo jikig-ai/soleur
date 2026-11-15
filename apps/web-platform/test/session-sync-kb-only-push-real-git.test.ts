@@ -284,6 +284,25 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(H.writeRepoCols).toHaveBeenCalledTimes(1);
   });
 
+  test("H1c: a failing tracking-ref update still publishes S and mirrors one debounced kb-sync.tracking-ref warning", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb edit\n");
+    const lock = join(row.ws, ".git", "refs", "remotes", "origin", "main.lock");
+    mkdirSync(join(row.ws, ".git", "refs", "remotes", "origin"), { recursive: true });
+    writeFileSync(lock, "");
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(localMain(row)).toBe(S);
+    expect(tracking(row)).toBe(row.T);
+    const mirrored = H.mirrorWarnWithDebounce.mock.calls.filter(([, , , cls]) => cls === "kb-sync-tracking-ref");
+    expect(mirrored).toHaveLength(1);
+    const [, ctx, key] = mirrored[0] as [unknown, { op: string; feature: string; extra: Record<string, unknown> }, string];
+    expect(ctx).toEqual(expect.objectContaining({ feature: "session-sync", op: "kb-sync.tracking-ref", extra: { userId: USER } }));
+    expect(key).toBe(WS_ID);
+    rmSync(lock);
+  });
+
   test("H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T", async () => {
     row = newRow();
     write(join(row.ws, "knowledge-base", "a.md"), "a\nkb edit\n");
