@@ -475,8 +475,10 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     // name and exits on an unknown one (`coreutils: unknown program 'x) Z y'`, #12783), and the
     // basename check above does not see that. It runs a /bin/sh script instead. The kernel names a
     // script's process after the script file, so comm still reads "x) Z y" on GNU and uutils hosts.
-    // After the SIGKILL, the script's current `sleep 1` child is orphaned for at most about 1s.
-    const canRunScript = existsSync("/bin/sh") && hasProc;
+    // After the SIGKILL, the script's current `sleep 1` child is orphaned for at most about 1s. The
+    // loop is bounded at 120 iterations, like the copied `sleep 120`, so a script orphaned by a killed
+    // worker still ends. It calls SLEEP_BIN by path, so a host with no sleep on PATH skips the row.
+    const canRunScript = SLEEP_BIN !== undefined && existsSync("/bin/sh") && hasProc;
     const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const child = actual.spawn(...args);
@@ -497,7 +499,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
           if (name === "sleep") {
             copyFileSync(SLEEP_BIN as string, exe);
           } else {
-            writeFileSync(exe, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+            writeFileSync(exe, `#!/bin/sh\ni=0; while [ "$i" -lt 120 ]; do ${SLEEP_BIN as string} 1; i=$((i+1)); done\n`);
           }
           chmodSync(exe, 0o755);
           const child = await spawnReal(exe, name === "sleep" ? ["120"] : [], { stdio: "ignore" });
