@@ -47,6 +47,23 @@ function classifyGitSyncError(err: unknown): KbSyncErrorClass {
 }
 
 /**
+ * `git status --porcelain -z --untracked-files=no` output names a tracked path outside `knowledge-base/` (#12600, R18).
+ * Entries are `XY <path>\0`; a rename or copy (`R`/`C` in either column) is followed by its source path as its own NUL
+ * entry, and both paths count.
+ */
+function hasTrackedNonKbChange(out: Buffer | string): boolean {
+  const entries = out.toString().split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.length < 4) continue;
+    const paths = [entry.slice(3)];
+    if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < entries.length) paths.push(entries[++i]);
+    if (paths.some((p) => !p.startsWith("knowledge-base/"))) return true;
+  }
+  return false;
+}
+
+/**
  * Resolve the workspace clone's default branch as `<short>` (e.g. `main`) via
  * `git symbolic-ref --short refs/remotes/origin/HEAD`. Falls back to `main`
  * only if the symbolic ref is missing.
@@ -277,6 +294,41 @@ async function selfHealNonFastForward(
         return {
           ok: false,
           error: new Error("non-fast-forward with un-pushed local commits"),
+          errorClass: ERROR_CLASS_NON_FAST_FORWARD,
+        };
+      }
+
+      // #12600 (CTO ruling R18): held foreign commits are the steady state
+      // since the sync pushes only Soleur's KB commit, so this arm now runs on
+      // every upstream push to the default branch. `reset --hard` would erase
+      // a member's uncommitted code edits: refuse when any TRACKED change lies
+      // outside knowledge-base/ (untracked files survive a reset). The stall
+      // ends at the next session-start `pull --no-rebase --autostash`; #5221
+      // keeps the broader recovery-and-lock work. A failing status read throws
+      // into the catch below (fail closed: no reset).
+      if (hasTrackedNonKbChange(
+        await gitWithInstallationAuth(
+          ["status", "--porcelain", "-z", "--untracked-files=no"],
+          installationId,
+          gitOpts,
+        ),
+      )) {
+        log.warn(
+          { userId: context.userId, op: context.op, localCommits },
+          `kb/${context.op}: self-heal aborted — tracked changes outside knowledge-base/`,
+        );
+        reportSilentFallback(
+          new Error("self-heal aborted: tracked changes outside knowledge-base"),
+          {
+            feature: "kb-route-helpers",
+            op: "self-heal-aborted-dirty-nonkb",
+            extra: { userId: context.userId },
+            message: `kb/${context.op}: self-heal aborted (tracked changes outside knowledge-base/)`,
+          },
+        );
+        return {
+          ok: false,
+          error: new Error("non-fast-forward with tracked changes outside knowledge-base"),
           errorClass: ERROR_CLASS_NON_FAST_FORWARD,
         };
       }

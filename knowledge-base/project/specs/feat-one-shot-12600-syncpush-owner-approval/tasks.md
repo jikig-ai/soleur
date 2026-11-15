@@ -87,9 +87,9 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 5: Self-heal gate (R18)
 
-- [ ] 5.1 In the default-branch arm of `selfHealNonFastForward`: if `status --porcelain --untracked-files=no` shows a
+- [x] 5.1 In the default-branch arm of `selfHealNonFastForward`: if `status --porcelain --untracked-files=no` shows a
   tracked non-KB change, fire `self-heal-aborted-dirty-nonkb` and return `ERROR_CLASS_NON_FAST_FORWARD`.
-- [ ] 5.2 Add `test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`. Keep
+- [x] 5.2 Add `test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`. Keep
   `workspace-sync-no-pre-self-heal-error-mirror.test.ts` and `kb-route-helpers.test.ts` green.
 
 ## Phase 6: Observability
