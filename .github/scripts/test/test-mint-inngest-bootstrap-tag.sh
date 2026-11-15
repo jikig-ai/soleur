@@ -945,7 +945,10 @@ MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_REF_HANG=1)
 MINT_WRAP=(timeout -s KILL 3)
 run_mint g2-ref-hang --tag
 MINT_WRAP=()
-a_eq 'g2.ref-hang:rc' "$LAST_RC" 137
+# Both codes mean the timeout killed the script. GNU timeout exits 137 (128+9) for a -s KILL
+# timeout. The uutils timeout that ships as coreutils on ubuntu-26.04 (ubuntu-latest) exits 124.
+case "$LAST_RC" in 124|137) g2_ref_hang_rc=timeout-killed ;; *) g2_ref_hang_rc="$LAST_RC" ;; esac
+a_eq 'g2.ref-hang:rc' "$g2_ref_hang_rc" timeout-killed
 a_eq 'g2.ref-hang:gout' "$(paste -sd' ' "$LAST_GOUT")" 'tag=vinngest-v1.1.41 tag_state=unknown'
 a_eq 'g2.ref-hang:origin-tags' "$(origin_tags)" vinngest-v1.1.40,vinngest-v1.1.41
 
