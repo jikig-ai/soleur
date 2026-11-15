@@ -96,6 +96,7 @@ apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
 apps/web-platform/infra/inngest-flip-token.test.sh	10000	measured
 apps/web-platform/infra/inngest-gate-witness-classify.test.sh	1000	measured
 apps/web-platform/infra/inngest-host-replace-preflight.test.sh	4000	floor
+apps/web-platform/infra/inngest-host-replace-liveness-gate.test.sh	1500	measured
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	8000	measured
 apps/web-platform/infra/inngest-host.test.sh	7000	measured
 apps/web-platform/infra/inngest-inventory.test.sh	8000	measured

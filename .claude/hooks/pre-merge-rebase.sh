@@ -812,11 +812,12 @@ fi
 # --no-renames so a main-side rename of a PR-touched path lists its OLD name
 # (delete+add) instead of only the destination — a rename+modify would
 # otherwise read disjoint. --name-only reports post-image names under default
-# rename detection.
+# rename detection. --ignore-submodules=none so a gitlink hidden by a
+# .gitmodules `ignore = all` still lists (a shared submodule bump is an overlap).
 _PR_FILES=""
 _INCOMING_FILES=""
-if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HEAD 2>/dev/null) \
-   && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
+if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames --ignore-submodules=none "$MERGE_BASE" HEAD 2>/dev/null) \
+   && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames --ignore-submodules=none "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
   # Fixed-string whole-line membership: no sorting, no locale hazard, -q
   # early-exit. rc is captured because ! alone conflates grep error (rc>=2 →
   # must fall through to the sync) with clean no-match (rc=1 → disjoint). A

@@ -1156,8 +1156,14 @@ jobs:
         name: Detect capture-input changes
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
-          CHANGED="$(git diff --no-renames --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' >/dev/null; then
+          # NUL stream (-z) so a C-quoted name cannot dodge the match; gitlinks visible; the
+          # pipefail is scoped to the capture so a git failure is NOT read as "no change".
+          rc=0
+          CHANGED="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only origin/main...HEAD | tr '\0' '\n')" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::sandbox-canary-capture-gate: git diff failed (rc=$rc) - cannot prove no capture-input change; running the gate."
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          elif printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -1184,7 +1190,10 @@ jobs:
         name: Detect propagation-input changes
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
-          CHANGED="$(git diff --no-renames --name-only origin/main...HEAD 2>/dev/null || true)"
+          # NUL stream (-z) so a C-quoted name cannot dodge the match; gitlinks visible; the
+          # pipefail is scoped to the capture so a git failure is NOT read as "no change".
+          rc=0
+          CHANGED="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only origin/main...HEAD | tr '\0' '\n')" || rc=$?
           # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
           # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
           # + the SDK (package-lock.json) + the probe itself. Deliberately NOT
@@ -1192,7 +1201,10 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-auth-env-vars\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)' >/dev/null; then
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::plugin-root-propagation-gate: git diff failed (rc=$rc) - cannot prove no propagation-input change; running the gate."
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          elif printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-auth-env-vars\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
