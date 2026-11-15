@@ -2460,13 +2460,29 @@ def git_out(args: list[str]) -> list[str]:
     return [ln for ln in res.stdout.splitlines() if ln.strip()]
 
 
+def git_out_z(args: list[str]) -> list[str]:
+    """Like git_out, for a NUL-separated listing (`-z`): a name with a non-ASCII, tab or quote
+    character is C-quoted in the newline form and the quoted spelling is never an existing
+    file. Decoded with surrogateescape so a non-UTF-8 name cannot raise; a git failure is
+    still exit 2, never an empty list."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *args],
+            capture_output=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"git error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    return [n for n in res.stdout.decode("utf-8", errors="surrogateescape").split("\0") if n]
+
+
 def all_shell_files() -> list[Path]:
     # `git ls-files` lists the INDEX, which still names a file deleted from the
     # working tree. Without this filter such a path reaches check_file, which
     # fail-closes at rc=2 and reds the required `test` shard for an ordinary
     # deletion. Fail-closed is right for an UNREADABLE file and wrong for an
     # ABSENT one -- they are different conditions.
-    return [p for p in (REPO_ROOT / q for q in git_out(["ls-files", "*.sh"])) if p.exists()]
+    return [p for p in (REPO_ROOT / q for q in git_out_z(["ls-files", "-z", "*.sh"])) if p.exists()]
 
 
 def rule_e_files() -> list[Path]:
@@ -2474,7 +2490,7 @@ def rule_e_files() -> list[Path]:
     and cloud-init YAML. Rules A to D and `--changed` stay shell-only (decision D1: an
     unrelated edit to a baselined workflow must not force its full remediation)."""
     shell = all_shell_files()
-    tracked = sorted({REPO_ROOT / q for q in git_out(["ls-files", "--", *E_YAML_PATHSPECS])})
+    tracked = sorted({REPO_ROOT / q for q in git_out_z(["ls-files", "-z", "--", *E_YAML_PATHSPECS])})
     yaml_files = [p for p in tracked if p.exists()]
     return shell + yaml_files
 
@@ -2484,8 +2500,8 @@ def changed_shell_files(base: str) -> list[Path]:
     if not merge_base:
         print("git error: no merge base", file=sys.stderr)
         sys.exit(2)
-    changed = git_out(["diff", "--name-only", f"{merge_base[0]}...HEAD"])
-    untracked = git_out(["ls-files", "--others", "--exclude-standard", "*.sh"])
+    changed = git_out_z(["diff", "-z", "--no-renames", "--ignore-submodules=none", "--name-only", f"{merge_base[0]}...HEAD"])
+    untracked = git_out_z(["ls-files", "-z", "--others", "--exclude-standard", "*.sh"])
     names = {c for c in changed if c.endswith(".sh")} | set(untracked)
     return [REPO_ROOT / n for n in sorted(names) if (REPO_ROOT / n).exists()]
 

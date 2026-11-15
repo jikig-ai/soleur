@@ -1978,6 +1978,56 @@ else
   fail "Rule E baseline: could not build the sandbox repo"
 fi
 
+# --- Path lists are read NUL-separated (changed-path readers) -------------------
+# `git diff --name-only` and `git ls-files` C-quote a non-ASCII name in the newline form; the quoted
+# name no longer ends in ".sh" and the script was silently never scanned. A non-ASCII-named offender
+# must be scanned by --changed (committed and untracked) and by the repo-wide walk; a name that is
+# not valid UTF-8 must not raise; a git that fails the read is exit 2, never an empty set.
+NA_NAME="caf$(printf '\303\251')"
+if sbx_repo ''; then
+  "${SBX_GIT[@]}" -C "$SBX" -c user.name=t -c user.email=t@t.invalid -c commit.gpgsign=false commit -qm base >/dev/null 2>&1
+  cp "$FIX/violation-argv-bearer-literal.sh" "$SBX/scripts/${NA_NAME}-committed.sh"
+  "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+  "${SBX_GIT[@]}" -C "$SBX" -c user.name=t -c user.email=t@t.invalid -c commit.gpgsign=false commit -qm feat >/dev/null 2>&1
+  cp "$FIX/violation-argv-bearer-literal.sh" "$SBX/scripts/${NA_NAME}-untracked.sh"
+  rc="$(sbx_run --changed --base HEAD~1)"
+  if [ "$rc" = "1" ] && grep -qF -- "-committed.sh" "$WORK/err" && grep -qF -- "-untracked.sh" "$WORK/err" && sbx_clean_run; then
+    pass "changed-path read: --changed scans a non-ASCII-named offender, committed and untracked"
+  else
+    fail "changed-path read: --changed must report both non-ASCII-named offenders (rc=1), got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+  "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -qF -- "-committed.sh" "$WORK/err" && sbx_clean_run; then
+    pass "changed-path read: the repo-wide walk scans a tracked non-ASCII-named offender"
+  else
+    fail "changed-path read: the repo-wide walk must report the non-ASCII-named offender (rc=1), got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+  # A name that is not valid UTF-8 must not raise (surrogateescape on the decode).
+  cp "$FIX/compliant-stdin-bearer-procsub.sh" "$SBX/scripts/$(printf 'bad\377name').sh"
+  rc="$(sbx_run --changed --base HEAD~1)"
+  if [ "$rc" = "1" ] && sbx_clean_run; then
+    pass "changed-path read: a non-UTF-8 file name does not crash --changed"
+  else
+    fail "changed-path read: a non-UTF-8 file name must not crash --changed (rc=1, no traceback), got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+  # A git whose changed-set read fails is exit 2: a shim fails the named subcommand only.
+  NA_REAL_GIT="$(command -v git)"
+  for NA_SUB in diff ls-files; do
+    mkdir -p "$WORK/shim-$NA_SUB" || fail "changed-path read: could not make the shim dir"
+    printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "%s" ] && exit 128; done\nexec "%s" "$@"\n' "$NA_SUB" "$NA_REAL_GIT" > "$WORK/shim-$NA_SUB/git"
+    chmod +x "$WORK/shim-$NA_SUB/git"
+    rc="$(PATH="$WORK/shim-$NA_SUB:$PATH" sbx_run --changed --base HEAD~1)"
+    if [ "$rc" = "2" ] && sbx_clean_run; then
+      pass "changed-path read: --changed with a failing git $NA_SUB exits 2 (fail-closed)"
+    else
+      fail "changed-path read: --changed with a failing git $NA_SUB must exit 2, got rc=$rc: $(head -c 300 "$WORK/err")"
+    fi
+  done
+else
+  fail "changed-path read: could not build the sandbox repo"
+fi
+
 # Row 8: drop the "e" entry from the rule -> baseline map. An E-only offender listed
 # in baseline E must then REPORT (it falls back to the A/B/C list, which lacks it).
 if sbx_repo 'scripts/offender.sh\t1\n' 's/, "e": baseline_e_ok(?=\})//'; then
@@ -3090,7 +3140,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=651
+MIN_ASSERTIONS=656
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
