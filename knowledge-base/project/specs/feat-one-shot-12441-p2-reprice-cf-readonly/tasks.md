@@ -5,20 +5,20 @@ Issue: #12441 (Ref only, never closed by this PR). PR: #12778. Follow-up: #12780
 
 ## 1. Setup
 
-- [ ] 1.1 Confirm the row on `origin/main` is still `plugins/soleur/test/cloudflare-readonly.test.sh<TAB>1261<TAB>floor` (rebase if main moved the TSV).
+- [x] 1.1 Confirm the row on `origin/main` is still `plugins/soleur/test/cloudflare-readonly.test.sh<TAB>1261<TAB>floor` (rebase if main moved the TSV).
 
 ## 2. Core Implementation
 
-- [ ] 2.1 Edit tool: replace that one row with `plugins/soleur/test/cloudflare-readonly.test.sh<TAB>155229<TAB>measured`. Leave every other byte alone: headers, other rows and `scripts/suite-shard-legs.tsv`.
-- [ ] 2.2 Never run `regenerate-shard-manifest.py --write` against committed paths. Never touch #12698.
+- [x] 2.1 Edit tool: replace that one row with `plugins/soleur/test/cloudflare-readonly.test.sh<TAB>155229<TAB>measured`. Leave every other byte alone: headers, other rows and `scripts/suite-shard-legs.tsv`.
+- [x] 2.2 Never run `regenerate-shard-manifest.py --write` against committed paths. Never touch #12698.
 
 ## 3. Testing
 
-- [ ] 3.1 `bash plugins/soleur/test/scripts-shard-manifest.test.sh`
-- [ ] 3.2 `bash plugins/soleur/test/regenerate-shard-manifest.test.sh`
-- [ ] 3.3 `bash scripts/test-all-corpus-weight-budget.test.sh`
-- [ ] 3.4 `bash scripts/test-all-fast-tier-budget.test.sh`
-- [ ] 3.5 AC1 diff checks (numstat is `1 1 scripts/suite-durations.tsv` only; exactly the two `-`/`+` lines).
+- [x] 3.1 `bash plugins/soleur/test/scripts-shard-manifest.test.sh`
+- [x] 3.2 `bash plugins/soleur/test/regenerate-shard-manifest.test.sh`
+- [x] 3.3 `bash scripts/test-all-corpus-weight-budget.test.sh`
+- [x] 3.4 `bash scripts/test-all-fast-tier-budget.test.sh`
+- [x] 3.5 AC1 diff checks (numstat is `1 1 scripts/suite-durations.tsv` only; exactly the two `-`/`+` lines).
 
 ## 4. Ship
 
