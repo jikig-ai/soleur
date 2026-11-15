@@ -17,33 +17,8 @@ lane: cross-domain
 
 Spec lacks valid lane: defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch.
 
-## Enhancement Summary
-
-**Deepened on:** 2026-11-15.
-**Research:** kept proportionate to a one-row data change, per the pipeline brief.
-- Before deepening, the plan-review panel ran: DHH, Kieran, code-simplicity and the CTO devex lens. Its findings were applied.
-- The deepen pass ran the mechanical halts and live citation checks inline. It did not run the 40-agent fan-out.
-
-### Key Improvements
-
-1. Added an `## Observability` section with a 3 ms grep probe. Phase 4.7 Step 1 triggers on any
-   path outside the docs set.
-2. Checked live:
-   - #12441, #10479, #10205, #11679 and #12780 are OPEN; #12515 is MERGED.
-   - #12515 is commit `8dad4ed240` on main and touches the suite.
-   - #11679 does mention the replay re-price.
-   - `wg-when-deferring-a-capability-create-a` is active in AGENTS.md.
-   - The labels `semver:patch` and `meta/machinery` exist.
-3. Halts: 4.6 passes (threshold `none`, no sensitive path). 4.8 found 0 PAT-shaped tokens. 4.12
-   passes: one unfenced Scope Check, all three subsections present, no `unmapped` row.
-   - 4.9, 4.10, 4.11 and 4.13 do not trigger: no UI surface, no store or connection, no guard
-     deliverable and no new autonomous task. The drift gate named here is existing machinery, not
-     a deliverable.
-
-### New Considerations Discovered
-
-- The discoverability probe prints `0` before the edit and `1` after it, verified on a scratch
-  copy, so it can fail.
+Deepened 2026-11-15 inline (no fan-out); the plan-review panel's findings are applied (see
+`decision-challenges.md`).
 
 Change one data row in `scripts/suite-durations.tsv`:
 
@@ -64,20 +39,22 @@ anywhere. `closingIssuesReferences` must stay `[]`.
 
 ## Rulings carried in (not re-opened)
 
-- **Ruled by CTO agent, 2026-11-15:** open a row-only PR now from `origin/main`. #12698, another
-  session's full Lever-A re-price, carries the same `155229 measured` row. That PR is
-  `CONFLICTING`, has auto-merge off and has not been updated since 2026-11-13T16:48Z. Use
-  155229 ms, `src=measured`, byte-identical to #12698's line. If
-  `scripts/regenerate-shard-manifest.py` would rewrite rows other than this one, make a single-row
-  edit instead. Never edit or push to #12698.
-- **Evidence:** the `suite-timings` artifacts of three green `merge_group` runs on 2026-11-12
-  (43325786672, 43324336862, 43315786965) gave 192026, 186106 and 129838 ms for this suite.
-  #12698's 5-run median is 155229. Re-checked today: all three runs are `merge_group` / `success`.
-- **Ruled by CTO agent, 2026-11-15 (plan-review devex panel):**
-  - Do not run an `--incremental --durations` header-refresh pass after the edit. It would add
-    two `suite-shard-legs.tsv` header lines, which breaks "edit no other file". Row-only wins.
-  - Do not file an issue for a new single-row re-price flag: the two-step recipe already exists.
-  - Track the "never hand-edited" docs wording as follow-up **#12780**, not in this PR.
+The CTO rulings for this PR are recorded once, in
+`knowledge-base/project/specs/feat-one-shot-12441-p2-reprice-cf-readonly/decision-challenges.md`.
+
+**Evidence for the value.** 155229 ms is the median of the five green `merge_group` runs #12698
+priced from, read from each run's `suite-timings-scripts-4` artifact:
+
+| Run | ms |
+|---|---|
+| 43308874521 | 155229 |
+| 43286327218 | 109810 |
+| 43278615612 | 195051 |
+| 43185108804 | 133090 |
+| 43138951876 | 164643 |
+
+Three later green `merge_group` runs (43325786672, 43324336862, 43315786965) gave 192026, 186106
+and 129838 ms, so the value sits inside the suite's observed spread.
 
 ## Research Insights
 
@@ -120,6 +97,8 @@ anywhere. `closingIssuesReferences` must stay `[]`.
      | `scripts/ci-oracle-lane.test.sh` `check_legs` | Sums leg loads (`LEG-OVER-BUDGET` > 1500000) | None: only members of `scripts/ci-oracle-lane-legs.tsv` count, and this label is not one |
      | `scripts/test-all.sh` `_aff_full_cost_min` | Sums every row for the runner-changed banner | Cosmetic: about +2.6 min |
      | `plugins/soleur/test/pr-overlap-preflight.test.sh` | Matches the filename only | None |
+     | `plugins/soleur/test/test-pyramid-fixtures.test.sh`, `scripts/followthroughs/registry-clientip-alert-7530.test.sh` | Read other rows or their own label | None (both pass at HEAD) |
+     | `test-design-reviewer` agent | Compares `floor` rows to the `# default-weight-ms` header | None for this row; the header stays 1272 until the next regen |
 2. **Does a hand edit pass, and is there a single-row mode? A hand edit passes. No mode re-prices one row on its own.**
 
    | Mode | What it does | Result for this row |
@@ -127,7 +106,7 @@ anywhere. `closingIssuesReferences` must stay `[]`.
    | `--incremental` against the committed table | Pins incumbent rows verbatim and fetches no timings | No-op. Dry run: `0 moved, 0 new`, `+0 floor row(s)`, leg 5 still priced at 1373887 ms |
    | `--incremental --durations <hand-edited table>`, scratch copies | Same pinning, priced from the edited table | Durations table "already in parity — untouched". Manifest: `0 moved`, and only 2 header lines change (`default-weight-ms` 1272→1275, `generated-at`). It confirms the hand edit is in parity; it does not price anything. Not used (CTO ruling above) |
    | `--runs N` / `--run` / `--timings-dir` | Full re-aggregation of every row | Rewrites the whole table (that is #12698's Lever-A). Learning `2026-10-30-…regen-pricing-can-break-committed-invariants.md` records that a full re-price reds `test-all-fast-tier-budget` on drift already on main |
-   | Seed path (learning `2026-10-31-shard-reprice-checkpoint-mechanics.md`): `--durations seed.tsv --write` without `--incremental` | Same full pass, fed a seed table | Simulated on scratch copies, with no repo writes: rewrites 140 floor rows (1222 → 1275), rewrites the headers, drops `# growth-acked=` and a free-text comment line, and moves 45 manifest legs |
+   | Seed path (learning `2026-10-31-shard-reprice-checkpoint-mechanics.md`): `--durations seed.tsv --write` without `--incremental` | Same full pass, fed a seed table | Simulated on scratch copies, with no repo writes: rewrites 140 floor rows (101 at 1222, the rest at values from 1223 to 45000; all → 1275), rewrites the headers, drops `# growth-acked=` and a free-text comment line, and moves 45 manifest legs |
 
    So the hand edit is the only way to change this row without touching others, which meets the
    ruling's condition.
@@ -142,10 +121,6 @@ anywhere. `closingIssuesReferences` must stay `[]`.
 
    The measured total rises from 9446707 to 9601936 ms (+1.6%). The gate's limit is 10%. So no
    `--allow-growth` is needed, and the existing `# growth-acked=` stamp stays as it is.
-3. **P.2's original wording** (archived `…cf-analytics-reader-12441/tasks.md`, items 6.4 and P.2)
-   says to re-price "through `scripts/regenerate-shard-manifest.py`". It says `--incremental` would
-   re-price the row and that "the tsv is never hand-edited". The code shows `--incremental` cannot
-   re-price a row, so that premise was wrong. See the reconciliation below; the docs fix is #12780.
 
 **Committed-weight gates checked against the new value.**
 - `test-all-fast-tier-budget`: this label is not in `ALWAYS_ON_SUITES`, so its 10 s per-suite cap
@@ -161,24 +136,19 @@ anywhere. `closingIssuesReferences` must stay `[]`.
 **Property List.**
 - P1: the committed weight for `plugins/soleur/test/cloudflare-readonly.test.sh` is the CI-measured
   `155229 measured`.
-- P2: no other row, header or file changes, so #12698 can still be rebased onto this.
+- P2: no other row, header or file changes.
 - P3: the PR references #12441 and does not close it.
 
-**Cut List.**
-- Regenerating through the script → buys P1 but breaks P2 (shown above) → cut.
-- The `--incremental --durations` header-refresh pass → buys nothing listed and breaks P2 → cut by
-  the CTO ruling.
+**Cut List** (beyond the generator modes and header refresh above).
 - A `# … re-priced …` header comment (there is a precedent comment line for `replay-a`) → buys no
   listed property and breaks P2 → cut. Provenance goes in the commit message and PR body instead.
-- Re-running the drift gate during work → it repeats the recorded simulation, and running the
-  generator with `--write` near committed paths is the risk Sharp Edges names → cut (plan review).
-- Re-pulling the artifacts and recomputing the median → buys nothing; the value is fixed by the ruling → cut.
+- Re-running the drift gate during work → it repeats the recorded simulation → cut (plan review).
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Reality | Plan response |
 |---|---|---|
-| P.2 / 6.4: re-price "through `scripts/regenerate-shard-manifest.py`"; "`--incremental` … re-prices it"; "the tsv is never hand-edited" | `--incremental` pins incumbent rows verbatim (docstring §INCREMENTAL REGEN; dry run: 0 moved, +0 floor rows). Every pricing mode re-aggregates the whole table | Single-row edit per the CTO ruling's explicit fallback. The drift gate's verdict carries over (see equivalence above). Docs fix: #12780 |
+| P.2 / 6.4: re-price "through `scripts/regenerate-shard-manifest.py`"; "`--incremental` … re-prices it"; "the tsv is never hand-edited" | `--incremental` pins incumbent rows verbatim (docstring §INCREMENTAL REGEN; dry run: 0 moved, +0 floor rows). Every pricing mode re-aggregates the whole table | Single-row edit per the CTO ruling's explicit fallback. The drift gate's verdict carries over (see equivalence above). Docs follow-up: #12780 |
 | `scripts/test-all.sh` run_suite comments and ADR-242's amendment text say "suite-durations.tsv are NOT hand-edited" / "never hand-edited" | Doctrine text, not a gate. The runbook's replay-a re-seat is a precedent for a single-row re-seat | The CTO ruling overrides it for this row. The wording fix is tracked in #12780 and is out of scope here |
 | Runbook: "merge conflict on the TSV → regenerate, never hand-merge" | This PR does not resolve a conflict | Not triggered. If main moves the TSV before merge, rebase. A textual conflict on a *different* row is resolved by keeping both sides' rows, since rows are independent and label-sorted. Then re-run the gates |
 
@@ -256,8 +226,9 @@ None. The bodies of the 95 open `code-review` issues were searched for
 ## Gates
 
 **CI (automatic on the PR and merge_group).** The `test-scripts` matrix runs
-`bash scripts/test-all.sh scripts` across 8 legs, which is the full light group. That covers every
-suite that reads this file:
+`bash scripts/test-all.sh scripts` across 8 legs, which is the full light group. When those legs
+run (a draft PR skips them, and oracle `skip_legs` can too, so "skipping" is not green), that covers
+every suite that reads this file:
 
 - the edge-set members in `scripts/lib/test-affected-paths.sh` (`scripts-shard-manifest`,
   `regenerate-shard-manifest`, `scripts-shard-totality`, `test-all-fast-tier-budget`,
@@ -345,12 +316,15 @@ drift-gate verdict carries over.
   `claude-code-action-auth`, `cloud-init-strip-helpers-mutation`,
   `codeql-main-alert-gate-workflow-wiring` and `codeql-main-alert-gate`, so a 3-way merge still
   overlaps this hunk. Byte-identity means #12698 can take its own side of that hunk and get the
-  same value for this row. #12698 is already `CONFLICTING` and must regenerate anyway.
+  same value for this row. #12698 is already `CONFLICTING` and must regenerate anyway. Measured at
+  review: `git merge-file` of this branch's table against #12698's head (3f9923a5) reports one
+  conflict hunk spanning lines 7-461, because #12698 rewrites most of the table.
 - **Process constraint:** no `gh`/`git push` command in this session targets #12698 or its head ref
   `feat-one-shot-11556-epic-ac-chain`. Its baseline `headRefOid` was 3f9923a5 at plan time; that is
   for reference only, since its owner may push to it.
-- **Do not "fix" a red gate by running the generator with `--write` to the committed paths.** That
-  rewrites 140 floor rows, the headers and 45 manifest legs, which breaks P2 and the ruling.
+- **Do not "fix" a red gate by running the generator with `--write` to the committed paths.** A full
+  or seed `--write` rewrites the table (see the mode table); even `--incremental --write` changes
+  manifest header lines. Either breaks P2 and the ruling.
 - **Local suite runs may wait on `dev-suite-mutex`** while the two foreign `test-all.sh` processes
   from collision-precheck are running. Waiting is expected. Do not kill another worktree's processes.
 

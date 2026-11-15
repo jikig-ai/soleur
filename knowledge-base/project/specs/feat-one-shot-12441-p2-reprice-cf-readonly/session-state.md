@@ -22,6 +22,17 @@
 
 - soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto
 
+## Work Phase
+
+- Status: complete. Row edit committed as 7a0565b30a; four local gates rc=0 (scripts-shard-manifest 50/50, regenerate-shard-manifest 145/145, corpus-weight-budget 14, fast-tier-budget 9).
+- Components invoked: soleur:work.
+
+## Review Phase
+
+- Panel (non-code class, tier `none`): git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst, code-simplicity-reviewer. No P1.
+- Fixed inline: the "no conflict on this row" claim (measured: #12698's table conflicts with this branch as one hunk, lines 7-461); the 155229 provenance now names #12698's five runs; a reconciliation cell pairing a closing keyword with the #12780 follow-up (now worded "follow-up"); seed-mode and `--write` overstatements; readers table; a deduplicated rulings block and process log.
+- CI red is not from this diff: quality-guards `g2.ref-hang` timeout rc (#12781, fix PR #12782); `test` red by design while draft (heavy legs skipped).
+
 ## Operator Constraints
 
 - constraint: No production write, dispatch, apply or admin bypass without the owner's typed go for each command, naming the command.
