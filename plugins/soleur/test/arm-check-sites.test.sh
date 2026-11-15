@@ -636,9 +636,13 @@ row H10 GREEN h10
 row H11 GREEN h11
 row H12 GREEN h12
 
-MIN_CASES=77  # 67 mutation rows + 10 harness rows; raise it in the same edit that adds a row
 echo
 echo "passes=$passes fails=$fails cases=$CASES_RUN"
-if (( CASES_RUN < MIN_CASES )); then printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2; exit 1; fi
+# The floor is a multi-line block with its bound directly above, so guard-vacuity-floor can build its mutant.
+MIN_CASES=77  # 67 mutation rows + 10 harness rows, raised in the same edit that adds a row
+if (( CASES_RUN < MIN_CASES )); then
+  printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2
+  exit 1
+fi
 if (( fails > 0 )); then printf 'FAILED: %s\n' "${FAILED[@]}" >&2; exit 1; fi
 echo "arm-check-sites: all rows passed"
