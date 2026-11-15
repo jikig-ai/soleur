@@ -19,6 +19,10 @@ const {
   mockWriteRepoCols,
   mockTenantUpdate,
   mockTenantUpdateEq,
+  mockPublish,
+  mockHead,
+  mergeHead,
+  mockMirrorWarn,
 } = vi.hoisted(() => {
   const mockTenantUpdateEq = vi.fn().mockResolvedValue({ error: null });
   const mockTenantUpdate = vi.fn(() => ({ eq: mockTenantUpdateEq }));
@@ -29,6 +33,11 @@ const {
     mockWriteRepoCols: vi.fn().mockResolvedValue(undefined),
     mockTenantUpdate,
     mockTenantUpdateEq,
+    // #12600: the KB-only publish is the seam (its git is asserted on real git in the battery).
+    mockPublish: vi.fn(),
+    mockHead: vi.fn(),
+    mergeHead: { present: false },
+    mockMirrorWarn: vi.fn(),
   };
 });
 
@@ -68,6 +77,7 @@ vi.mock("@/server/workspace-repo-mirror", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
+  mirrorWarnWithDebounce: mockMirrorWarn,
   hashUserId: (s: string) => `hash(${s})`,
 }));
 
@@ -86,9 +96,16 @@ vi.mock("child_process", () => ({
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
-  lstatSync: vi.fn(() => {
+  lstatSync: vi.fn((p: string) => {
+    if (mergeHead.present && p.endsWith("MERGE_HEAD")) return {}; // a conflicted session-start merge
     throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // host-git shape guard: the fake workspace has no .git
   }),
+}));
+
+vi.mock("@/server/approval/workspace-head", () => ({ readWorkspaceHeadRef: mockHead }));
+vi.mock("@/server/kb-sync-publish", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/kb-sync-publish")>()),
+  publishKbOnly: mockPublish,
 }));
 
 import { syncPull, syncPush } from "@/server/session-sync";
@@ -105,6 +122,9 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     mockGetFreshTenantClient.mockResolvedValue(makeTenantClient());
     mockResolveInstallationId.mockResolvedValue(123);
     mockWriteRepoCols.mockResolvedValue(undefined);
+    mockPublish.mockResolvedValue({ kind: "pushed" });
+    mockHead.mockReturnValue({ sha: "c".repeat(40), refName: "refs/heads/main" });
+    mergeHead.present = false;
   });
 
   // Scenario 7 — write lands on workspaces, keyed on resolved workspace id.
@@ -145,5 +165,43 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     const wsId = mockWriteRepoCols.mock.calls[0][1];
     expect(wsId).toBe(TEAM_WORKSPACE_ID);
     expect(wsId).not.toBe(USER_ID);
+  });
+
+  // AC6 (#12600): bookkeeping only after a delivered push. A refused, held or nothing-to-sync turn writes nothing.
+  test("held, nothing-to-sync (T == headSha) and failed-fallback turns do not call writeRepoColsToWorkspace", async () => {
+    for (const result of [
+      { kind: "held", reason: "remote_ahead" },
+      { kind: "held", reason: "head_moved" },
+      { kind: "noop" },
+      { kind: "fallback_failed", fallbackReason: "side_push_rejected", pushErr: new Error("x") },
+    ]) {
+      mockPublish.mockResolvedValueOnce(result);
+      await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    }
+    expect(mockPublish).toHaveBeenCalledTimes(4);
+    expect(mockWriteRepoCols).not.toHaveBeenCalled();
+  });
+
+  test("a refused turn (detached HEAD, merge in progress, publish throws) does not call writeRepoColsToWorkspace", async () => {
+    mockHead.mockReturnValueOnce({ sha: "c".repeat(40), refName: null });
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mergeHead.present = true;
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mergeHead.present = false;
+    mockPublish.mockRejectedValueOnce(new Error("ls-remote broke"));
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    expect(mockPublish).toHaveBeenCalledTimes(1); // only the third turn reached the publish
+    expect(mockMirrorWarn.mock.calls.map(([, , , cls]) => cls)).toEqual([
+      "kb-sync-push-held:detached_head",
+      "kb-sync-push-held:merge_in_progress",
+    ]);
+    expect(mockWriteRepoCols).not.toHaveBeenCalled();
+  });
+
+  test("a delivered protected-branch fallback does write last-synced", async () => {
+    mockPublish.mockResolvedValueOnce({ kind: "fallback", prUrl: "https://github.com/acme/widget/pull/1", commitCount: 1 });
+    await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
+    expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
+    expect(mockWriteRepoCols.mock.calls[0][1]).toBe(TEAM_WORKSPACE_ID);
   });
 });

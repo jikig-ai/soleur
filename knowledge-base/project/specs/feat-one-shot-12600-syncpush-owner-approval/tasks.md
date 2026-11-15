@@ -94,13 +94,13 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 6: Observability
 
-- [ ] 6.1 Reason union. Each outcome first writes an unconditional `log.info`. Anomalies go through
+- [x] 6.1 Reason union. Each outcome first writes an unconditional `log.info`. Anomalies go through
   `mirrorWarnWithDebounce`:
   - `errorClass` is `kb-sync-push-held:<reason>`, with one static message per reason;
   - tags are `reason` / `outcome`;
   - extra is the hashed `userId`.
-- [ ] 6.2 Add a `reason` tag to the outer `syncPush` catch. Add the registry comment in `server/observability.ts`.
-- [ ] 6.3 Update `test/server/session-sync-sentry-mirror.test.ts` (AC5) and
+- [x] 6.2 Add a `reason` tag to the outer `syncPush` catch. Add the registry comment in `server/observability.ts`.
+- [x] 6.3 Update `test/server/session-sync-sentry-mirror.test.ts` (AC5) and
   `test/server/session-sync-workspace-last-synced.test.ts` (AC6).
 
 ## Phase 7: Records and verification

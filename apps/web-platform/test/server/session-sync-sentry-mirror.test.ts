@@ -12,8 +12,10 @@ import { stripHostGitBlock } from "../helpers/host-git-block";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
 
-const { reportSilentFallbackSpy, gitWithInstallationAuthSpy } = vi.hoisted(() => ({
+const { reportSilentFallbackSpy, gitWithInstallationAuthSpy, captureMessageSpy, childLog } = vi.hoisted(() => ({
   reportSilentFallbackSpy: vi.fn(),
+  captureMessageSpy: vi.fn(),
+  childLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   gitWithInstallationAuthSpy: vi.fn<
     (argv: string[]) => Promise<Buffer>
   >(async () => Buffer.from("")),
@@ -69,9 +71,19 @@ vi.mock("@/lib/supabase/tenant", () => {
   };
 });
 
-vi.mock("@/server/observability", () => ({
+// #12600 AC5: the REAL warn path and debounce (`mirrorWarnWithDebounce` -> `warnSilentFallback` -> Sentry), observed at
+// the Sentry SDK; `reportSilentFallback` stays a spy for the catch-site rows.
+vi.mock("@sentry/nextjs", () => ({ captureMessage: captureMessageSpy, captureException: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
   reportSilentFallback: reportSilentFallbackSpy,
   hashUserId: (s: string) => `hash-${s}`,
+}));
+// The KB sync reaches its isolated directory only through a resolvable repo URL and a readable HEAD.
+vi.mock("../../server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
+vi.mock("../../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
+vi.mock("../../server/approval/workspace-head", () => ({
+  readWorkspaceHeadRef: () => ({ sha: "d".repeat(40), refName: "refs/heads/main" }),
 }));
 
 // gitWithInstallationAuth is the throw point we toggle per test to drive
@@ -82,15 +94,12 @@ vi.mock("../../server/git-auth", () => ({
 
 vi.mock("../../server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  createChildLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+  createChildLogger: () => childLog,
 }));
 
 import { syncPull, syncPush } from "../../server/session-sync";
+import { reportPushHeld } from "../../server/kb-sync-publish";
+import { __resetMirrorDebounceForTests } from "../../server/observability";
 
 // ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
 // workspace id. These tests force the catch path; a minimal stub suffices.
@@ -109,6 +118,9 @@ beforeEach(() => {
   gitWithInstallationAuthSpy.mockReset();
   gitWithInstallationAuthSpy.mockResolvedValue(Buffer.from(""));
   throwOnPullPush = null;
+  captureMessageSpy.mockReset();
+  childLog.info.mockReset();
+  __resetMirrorDebounceForTests();
 });
 
 describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
@@ -144,6 +156,19 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
 
     await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
+    // #12600 AC5: a closed reason tag, a static message, and an error that names no URL or sha.
+    const outer = reportSilentFallbackSpy.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === "syncPush");
+    expect(outer).toHaveLength(1);
+    const [outerErr, outerCtx] = outer[0] as [unknown, { tags?: Record<string, string>; message?: string }];
+    expect([
+      "ls_remote_failed", "fetch_failed", "push_rejected", "push_transient", "isolated_refused",
+      "remote_state_invalid", "local_git_failed", "head_unreadable", "unclassified",
+    ]).toContain(outerCtx.tags?.reason);
+    expect(outerCtx.tags?.reason).not.toBe("unclassified");
+    for (const text of [String((outerErr as Error)?.message ?? outerErr), outerCtx.message ?? ""]) {
+      expect(text).not.toMatch(/github\.com|https?:\/\/|[0-9a-f]{40}/);
+    }
+
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>
         (ctx as { feature: string; op?: string }).feature === "session-sync" &&
@@ -157,5 +182,42 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
         message: expect.stringMatching(/sync push failed/i),
       }),
     );
+  });
+});
+
+describe("kb-sync.push-held observability (#12600 AC5)", () => {
+  const ctx = { userId: "user-1", workspaceId: "ws-1" };
+  const heldLines = () =>
+    childLog.info.mock.calls.filter(([o]) => (o as { op?: string } | undefined)?.op === "kb-sync.push-held");
+
+  test("a warning reason emits one Sentry warning: tags reason + outcome, extra carries the hashed user id only", () => {
+    reportPushHeld("head_moved", "held", ctx);
+    expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+    const [message, payload] = captureMessageSpy.mock.calls[0] as [string, { level: string; tags: Record<string, string>; extra: Record<string, unknown> }];
+    expect(payload.level).toBe("warning");
+    expect(payload.tags).toEqual({ feature: "session-sync", op: "kb-sync.push-held", reason: "head_moved", outcome: "held" });
+    expect(Object.keys(payload.extra).filter((k) => k !== "err")).toEqual(["userIdHash"]);
+    expect(payload.extra.userIdHash).not.toBe("user-1");
+    expect(JSON.stringify(payload)).not.toContain("user-1");
+    expect(message).not.toMatch(/https?:\/\/|[0-9a-f]{40}|refs\//);
+  });
+
+  test("two different reasons in one window both emit; a repeat is debounced; every outcome still writes its info line", () => {
+    reportPushHeld("head_moved", "held", ctx);
+    reportPushHeld("head_moved", "held", ctx);
+    reportPushHeld("unpack_failed", "held", ctx);
+    expect(captureMessageSpy.mock.calls.map(([, p]) => (p as { tags: Record<string, string> }).tags.reason)).toEqual([
+      "head_moved",
+      "unpack_failed",
+    ]);
+    expect(heldLines().map(([o]) => (o as { reason: string }).reason)).toEqual(["head_moved", "head_moved", "unpack_failed"]);
+  });
+
+  test("the expected outcomes are info only: no Sentry event", () => {
+    for (const reason of ["synthetic_pushed", "held_foreign", "remote_ahead", "remote_unknown_tip"] as const) {
+      reportPushHeld(reason, reason === "synthetic_pushed" ? "pushed" : "held", ctx);
+    }
+    expect(captureMessageSpy).not.toHaveBeenCalled();
+    expect(heldLines()).toHaveLength(4);
   });
 });

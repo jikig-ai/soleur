@@ -417,6 +417,12 @@ export function infoSilentFallback(
  *   `cc-github-read-visibility-unknown`.
  * - `agent-sandbox-bash-tool-result:<errorCode>` (cc-dispatcher `onToolResult` Bash denial mirror; one slot per
  *   classified code, so a code that fires does not mask another one for the same user, #10445).
+ * - `session-sync` family (#12600): `kb-sync-push-held:<reason>` (warn-level via `mirrorWarnWithDebounce`, op
+ *   `kb-sync.push-held`; dedup key is the WORKSPACE id, not a userId, so each workspace gets one slot per reason).
+ *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
+ *   `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`, `side_ahead`.
+ *   The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`) never reach this
+ *   map; every reason writes its pino line before the debounce (`reportPushHeld` in kb-sync-publish.ts).
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
