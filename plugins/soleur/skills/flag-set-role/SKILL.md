@@ -116,7 +116,7 @@ is the closed operator-only list:
    the `<flag>-orgs` segment membership in `flag-list --json`.
 1. **LLM-free behaviour in trigger paths** (the conversation-in-rail flow): run the harness
    yourself with the `postmerge` Phase 5.5 step 2 command. Or read CI's verdict, but only from
-   a run created AFTER the flip: `bash plugins/soleur/scripts/deploy-arm.sh find --wait
+   a run created AFTER the flip: `bash plugins/soleur/scripts/deploy-arm.sh find --wait 25
    <full-merge-sha>` prints `ARM=<digits>` (`ARM=none` or a skipped deploy means nothing ran),
    then `gh run view <digits> --json jobs,createdAt` for the `live-verify` job and `gh run view
    --job <id> --log` for its `RESULT:` line. **Only `RESULT: PASS` counts.** A green job is not

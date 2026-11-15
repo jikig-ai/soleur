@@ -30,3 +30,4 @@ e68d1cc2ce56c3e60c6ed939172ef19d83bcb85a606ae8442934898e873941e3  2026-08-16  in
 5130360de005d5534dfab73ad5fb1af8dd8a196c72e97eb1eb08d17ceb7facbe  2026-09-30  model moved to claude-sonnet-5-5
 45fdc5c5e0060d8ced95d64688061dc567beba1329a9323b6b6a7817ecdd2895  2026-10-05  adds the github_token input (needed for OIDC) and moves the action pin forward
 58377282013228a6bd5bbf1a9d647ee2710622711efa58710999b3c46585a1da  2026-11-05  moves the action pin to the Bun 1.4.4 pair
+1afd3b5ab6254dc0c42cc8d29fb06ef718943eb1422e318ea5b5d6fa260f0c43  2026-11-09  changed-path enumeration adds --no-renames --ignore-submodules=none (rename into scope and gitlinks no longer unseen)

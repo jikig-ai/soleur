@@ -672,8 +672,8 @@ affected_resolve_base || {
   fi
 }
 
-# Changed set: committed-vs-base ∪ staged ∪ unstaged ∪ untracked. Rename-aware
-# (-M): the new path is what exists on disk. The committed arm is the one that
+# Changed set: committed-vs-base ∪ staged ∪ unstaged ∪ untracked. Rename-free
+# (--no-renames: a rename lists its OLD path too, so a code file moved under docs is not inert; --ignore-submodules=none lists a gitlink hidden by ignore=all). The committed arm is the one that
 # can fail outright (unresolvable base) — it is captured ONCE: its rc is the
 # fail-closed probe and its stdout the first leg of the union, so a bad --base
 # refuses rather than reading as an empty diff and no diff runs twice.
@@ -682,12 +682,12 @@ affected_mktemp changed || finish 4 none mktemp-failed - "$CI_NAME" - - -; CHANG
 _base_rc=0
 # -c core.quotePath=false: without it git emits non-ASCII paths C-quoted
 # ("dir/\303\251.txt"), which never matches a glob and misses the file system.
-_base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
+_base_diff="$(git -c core.quotePath=false diff --name-only --no-renames --ignore-submodules=none "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
 if (( _base_rc != 0 )); then
   if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
     affected_timeout 60 git fetch --no-tags --deepen=200 >/dev/null 2>&1 || true
     _base_rc=0
-    _base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
+    _base_diff="$(git -c core.quotePath=false diff --name-only --no-renames --ignore-submodules=none "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
   fi
   if (( _base_rc != 0 )); then
     finish 4 none no-base-ref - "$CI_NAME" - - -
@@ -700,9 +700,9 @@ fi
 # (reason=census-degraded), the same contract as an empty diff — never a silent
 # narrow, never a refusal for a recoverable shape.
 _census_rc=0
-_leg_staged="$(git -c core.quotePath=false diff --name-only --cached -M -- 2>/dev/null)" \
+_leg_staged="$(git -c core.quotePath=false diff --name-only --cached --no-renames --ignore-submodules=none -- 2>/dev/null)" \
   || _census_rc=$?
-_leg_unstaged="$(git -c core.quotePath=false diff --name-only -M -- 2>/dev/null)" \
+_leg_unstaged="$(git -c core.quotePath=false diff --name-only --no-renames --ignore-submodules=none -- 2>/dev/null)" \
   || _census_rc=$?
 _leg_untracked="$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null)" \
   || _census_rc=$?
