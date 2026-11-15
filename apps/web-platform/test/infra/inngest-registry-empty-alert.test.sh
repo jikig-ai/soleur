@@ -293,7 +293,7 @@ grep -qE '(^[[:space:]]*|&&[[:space:]]+)host_role=dedicated[[:space:]]*$' "$BOOT
 RG_EX="$(res_block logtail_exploration "$NAME")"
 RG_AL="$(res_block logtail_exploration_alert "$NAME")"
 _runbook_line="$(grep -E '^[[:space:]]*inngest_registry_empty_runbook_url[[:space:]]*=' "$TF" || true)"
-if printf '%s\n%s\n%s\n%s\n' "$LOCAL_SQL" "$RG_EX" "$RG_AL" "$_runbook_line" | grep -qE 'inngest_luks_wrong_volume_alias|hcloud_volume'; then
+if grep -qE 'inngest_luks_wrong_volume_alias|hcloud_volume' < <(printf '%s\n%s\n%s\n%s\n' "$LOCAL_SQL" "$RG_EX" "$RG_AL" "$_runbook_line"); then
   no "the registry-empty SQL or a resource block references a volume (inngest_luks_wrong_volume_alias / hcloud_volume) — a second apply path to the sole-copy LUKS volume (ADR-282)"
 else
   ok "no volume reference in the SQL, the resource blocks or the runbook local (ADR-282: no second apply path to the LUKS volume)"
