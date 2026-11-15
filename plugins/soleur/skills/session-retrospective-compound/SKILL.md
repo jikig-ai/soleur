@@ -15,7 +15,7 @@ Session-end retrospective that mines a session transcript via a **fresh-context 
 
 - **Claude Code:** Stop hook (`hooks/stop-hook.sh`) auto-fires at true session end (Phase 2).
 - **All harnesses:** Pipeline skills invoke as their final step.
-- **All harnesses:** Manual invocation (`/session-retrospective-compound`) anytime.
+- **All harnesses:** Manual invocation (`soleur:session-retrospective-compound`) anytime.
 
 ## Input & cost control
 
