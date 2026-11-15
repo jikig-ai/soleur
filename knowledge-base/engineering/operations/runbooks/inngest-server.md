@@ -2173,7 +2173,7 @@ window.
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
-| #10544 | `inngest-host-replace` has no confirm or id-pin input |
+| #10544 | `inngest-host-replace` has no id-pin input (a typed confirm, `PUBLIC-SDK-URL`, landed with #10538 in PR #12737; it is a typo-guard, not an id-pin) |
 | #10545 | the Inngest host's nft loader is not idempotent |
 | #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
 | #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
@@ -2691,11 +2691,21 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
    acceptance recorded by PR #12733 runs to 2026-11-20 only).
 
-**Typed-confirm gate (CTO ruling D2, 2026-11-13).** Until #12742 item 1 merges, the first step of the `inngest_host_replace`
-job in `.github/workflows/apply-web-platform-infra.yml` (before any credential loads) fails unless the dispatch carries
-`-f confirm=PUBLIC-SDK-URL`. The confirm is a typo-guard, not the go; its error names #12742 and the three risks the replace
-carries until then: a stale non-zero registry the registry-empty alert cannot see, the #7228 first-sync double-fire, and a
-stale private-URL app row that keeps the plaintext poll alive. The #12742 item-1 PR deletes the step.
+**Typed-confirm gate (CTO rulings D2, 2026-11-13, and fix-round F1, 2026-11-15).** Until #12742 item 1 merges, the step
+right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any
+credential loads) fails unless the dispatch carries `-f confirm=PUBLIC-SDK-URL`. The `inngest_host` birth job (the
+"server absent" recovery row) needs `-f confirm=PUBLIC-SDK-URL-BIRTH`, because a birth boots the same public sdk_url.
+Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. The confirm is a typo-guard, not the go; its error points
+to #12742. The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
+alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
+They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the
+first post-boot run of each cron function for a duplicate (two runs inside one schedule slot) before declaring recovery.
+The #12742 item-1 PR replaces the script with a fail-closed live-mode preflight (it is never deleted bare).
+
+**Precondition re-read at dispatch time (CTO fix-round F2).** Precondition 1 is a fresh reading, not the historical one:
+within 30 minutes before the dispatch, run `plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint` and confirm
+the last rule matching `app.soleur.ai` is the adopted rule with `ssl = strict`. A dashboard break-glass to `flexible`
+leaves the repo `strict` and every guard green, so only this read can see it.
 
 **Post-replace checks, read-only:**
 

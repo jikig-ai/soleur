@@ -571,8 +571,9 @@ describe("seo-config-rules.tf origin-TLS cleanup tombstones (ADR-321 item 13)", 
 });
 
 // The committed cleanup plan fixture (tests/scripts/fixtures/tfplan-origin-tls-cleanup.json) is what the plan-shape gate
-// reads; if it drifts from the .tf it certifies a tree that no longer exists. Each fixture rule is matched to its .tf block
-// by `ref` (or by description for the two ref-less rules) and its description, expression, ssl and enabled are compared.
+// reads; if it drifts from the .tf it certifies a tree that no longer exists. The two rule lists are compared IN ORDER
+// (set_config is last-match-wins, so order is part of the certified state) on ref, description, expression, enabled,
+// action, ssl and email_obfuscation. A duplicated or missing rule breaks the ordered key list.
 describe("tfplan-origin-tls-cleanup.json fixture matches the .tf rule blocks", () => {
   test("after.rules agrees with seo-config-rules.tf rule for rule", () => {
     const plan = JSON.parse(
@@ -582,26 +583,31 @@ describe("tfplan-origin-tls-cleanup.json fixture matches the .tf rule blocks", (
     expect(rc).toHaveLength(1);
     const fixtureRules = rc[0].change.after?.rules ?? [];
     const tfRules = allRuleBlocks();
-    expect(fixtureRules).toHaveLength(tfRules.length);
-    for (const fr of fixtureRules) {
-      const key = fr.ref ?? fr.description;
-      const tf = tfRules.filter((r) =>
-        fr.ref ? quotedAttr(r, "ref") === fr.ref : quotedAttr(r, "description") === fr.description,
-      );
-      expect(tf, `exactly one .tf rule for fixture rule ${key}`).toHaveLength(1);
-      const enabled = tf[0].match(/^\s*enabled\s*=\s*(true|false)\s*$/m)?.[1];
-      expect({
-        description: quotedAttr(tf[0], "description"),
-        expression: quotedAttr(tf[0], "expression"),
-        ssl: sslValue(tf[0]),
-        enabled: enabled === undefined ? null : enabled === "true",
-      }, `fixture rule ${key}`).toEqual({
-        description: fr.description,
-        expression: fr.expression,
-        ssl: fr.action_parameters?.[0]?.ssl ?? null,
-        enabled: fr.enabled,
-      });
-    }
+    const boolAttr = (r: string, k: string) => {
+      const v = r.match(new RegExp(`^\\s*${k}\\s*=\\s*(true|false)\\s*$`, "m"))?.[1];
+      return v === undefined ? null : v === "true";
+    };
+    const fromTf = tfRules.map((r) => ({
+      ref: quotedAttr(r, "ref"),
+      description: quotedAttr(r, "description"),
+      expression: quotedAttr(r, "expression"),
+      enabled: boolAttr(r, "enabled"),
+      action: quotedAttr(r, "action"),
+      ssl: sslValue(r),
+      email_obfuscation: boolAttr(r, "email_obfuscation"),
+    }));
+    const fromFixture = fixtureRules.map((fr, i) => ({
+      // A rule the .tf leaves ref-less shows a stand-in ref in a plan; compare ref only where the .tf pins one.
+      ref: fromTf[i]?.ref === null ? null : fr.ref,
+      description: fr.description,
+      expression: fr.expression,
+      enabled: fr.enabled,
+      action: fr.action,
+      ssl: fr.action_parameters?.[0]?.ssl ?? null,
+      email_obfuscation: fr.action_parameters?.[0]?.email_obfuscation ?? null,
+    }));
+    expect(fromFixture.map((r) => r.ref ?? r.description)).toEqual(fromTf.map((r) => r.ref ?? r.description));
+    expect(fromFixture).toEqual(fromTf);
   });
 });
 
@@ -610,20 +616,42 @@ interface FixtureRule {
   description: string;
   expression: string;
   enabled: boolean;
-  action_parameters?: Array<{ ssl: string | null }>;
+  action: string;
+  action_parameters?: Array<{ ssl: string | null; email_obfuscation?: boolean | null }>;
 }
 
-// ROLLBACK COUPLING (C5 + Security seat, #10479). The published wording, the ledger and the public sdk_url all assume the
-// adopted rule is strict. A rollback to any other mode is a reviewed forward PR that must, in the same diff, correct the
-// Privacy Policy and the DPD (canonical and mirror), set ledger row 7 cert_verification off, and re-point sdk_url off the
-// public host (or re-open ledger row 6). Correction notes `*( ... )*` describe what a document USED to say, so they are
-// stripped (paren-depth aware) before matching.
-const PP_CERT_PHRASE = "verifies our servers' certificate";
-const DPD_CERT_PHRASES = [
-  "with Cloudflare verifying the servers' certificate",
-  "FULFILLED as to the Cloudflare-to-origin connection",
+// ROLLBACK COUPLING (C5 + Security seat, #10479; widened in fix round 1). The published wording, the DPA template, the
+// Article 30 register, the ledger and the public sdk_url all assume the adopted rule is strict. A rollback to any other
+// mode is a reviewed forward PR that must, in the same diff, correct every document below (canonical and mirror), set
+// ledger row 7 cert_verification off, and re-point sdk_url off every soleur.ai host. Two claim classes: a CERT claim
+// is false under every non-strict mode (`full` encrypts but does not verify); a TLS claim is false only when the origin
+// hop is plaintext (`flexible`, `off`, or the ssl attribute dropped). Correction notes `*( ... )*` describe what a
+// document USED to say, so they are stripped (paren-depth aware) before matching.
+const CERT_CLAIM =
+  /verif(?:ies|ying) (?:our|the) (?:servers'|web hosts' origin ca) certificate|fulfilled as to the cloudflare-to-origin connection/g;
+const TLS_CLAIM =
+  /forwards requests to [a-z']+ web servers over tls|tls from cloudflare to our web servers|tls covers the cloudflare-to-origin connection/g;
+const COUPLED_DOCS = [
+  "docs/legal/privacy-policy.md",
+  "plugins/soleur/docs/pages/legal/privacy-policy.md",
+  "docs/legal/data-protection-disclosure.md",
+  "plugins/soleur/docs/pages/legal/data-protection-disclosure.md",
+  "knowledge-base/legal/data-processing-agreement-template.md",
+  "knowledge-base/legal/article-30-register.md",
 ];
 const LEDGER_DISCLOSED_AS = "docs/legal/privacy-policy.md:Encryption in transit";
+
+/** True when sdk_url can reach a Cloudflare-proxied soleur.ai name (any scheme), or cannot be read as a literal URL. */
+function sdkUrlIsPublic(sdkUrl: string): boolean {
+  if (sdkUrl.includes("${")) return true; // an interpolated value cannot be proven private: fail closed
+  let host: string;
+  try {
+    host = new URL(sdkUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return true;
+  }
+  return host === "soleur.ai" || host.endsWith(".soleur.ai");
+}
 
 /** Remove every `*( ... )*` span, tracking paren depth so a nested `(UTC)` does not end the note early. Unbalanced: kept. */
 function stripCorrectionNotes(text: string): string {
@@ -656,24 +684,21 @@ function stripCorrectionNotes(text: string): string {
 
 function rollbackCouplingViolations(input: {
   mode: string | null;
-  privacyTexts: Record<string, string>;
-  dpdTexts: Record<string, string>;
+  docs: Record<string, string>;
   row7Cert: string | null;
   sdkUrl: string | null;
 }): string[] {
   if (input.mode === "strict") return [];
+  const plaintextOrigin = input.mode !== "full";
   const v: string[] = [];
-  const norm = (t: string) => stripCorrectionNotes(t).replace(/\s+/g, " ");
-  for (const [name, text] of Object.entries(input.privacyTexts)) {
-    if (norm(text).includes(PP_CERT_PHRASE)) v.push(`${name}: "${PP_CERT_PHRASE}" while mode=${input.mode}`);
-  }
-  for (const [name, text] of Object.entries(input.dpdTexts)) {
-    for (const phrase of DPD_CERT_PHRASES) {
-      if (norm(text).includes(phrase)) v.push(`${name}: "${phrase}" while mode=${input.mode}`);
-    }
+  const norm = (t: string) => stripCorrectionNotes(t).replace(/\s+/g, " ").toLowerCase();
+  for (const [name, text] of Object.entries(input.docs)) {
+    const t = norm(text);
+    for (const m of t.matchAll(CERT_CLAIM)) v.push(`${name}: cert claim "${m[0]}" while mode=${input.mode}`);
+    if (plaintextOrigin) for (const m of t.matchAll(TLS_CLAIM)) v.push(`${name}: TLS claim "${m[0]}" while mode=${input.mode}`);
   }
   if (input.row7Cert === "on") v.push(`ledger row (${LEDGER_DISCLOSED_AS}): cert_verification=on while mode=${input.mode}`);
-  if (input.sdkUrl?.startsWith("https://app.soleur.ai")) v.push(`inngest-host.tf sdk_url=${input.sdkUrl} while mode=${input.mode}`);
+  if (input.sdkUrl !== null && sdkUrlIsPublic(input.sdkUrl)) v.push(`inngest-host.tf sdk_url=${input.sdkUrl} while mode=${input.mode}`);
   return v;
 }
 
@@ -690,49 +715,73 @@ describe("rollback coupling: published wording, ledger and sdk_url follow the ad
     expect(sdk, "exactly one sdk_url in inngest-host.tf").toHaveLength(1);
     const input = {
       mode: sslValue(adoptedSslRule()),
-      privacyTexts: {
-        "docs/legal/privacy-policy.md": read("docs/legal/privacy-policy.md"),
-        "plugins/soleur/docs/pages/legal/privacy-policy.md": read("plugins/soleur/docs/pages/legal/privacy-policy.md"),
-      },
-      dpdTexts: {
-        "docs/legal/data-protection-disclosure.md": read("docs/legal/data-protection-disclosure.md"),
-        "plugins/soleur/docs/pages/legal/data-protection-disclosure.md": read("plugins/soleur/docs/pages/legal/data-protection-disclosure.md"),
-      },
+      docs: Object.fromEntries(COUPLED_DOCS.map((rel) => [rel, read(rel)])),
       row7Cert: rows[0].in_transit?.cert_verification ?? null,
       sdkUrl: sdk[0][1],
     };
-    // Positive controls: the guard is only meaningful while the inputs it would fire on are actually present.
-    expect(input.mode).toBe("strict");
+    if (input.mode !== "strict") {
+      // A rollback PR: it is correct exactly when it corrected every coupled surface in the same diff.
+      expect(rollbackCouplingViolations(input)).toEqual([]);
+      return;
+    }
+    // Positive controls (strict): the guard is only meaningful while the inputs it would fire on are present.
     expect(input.row7Cert).toBe("on");
-    expect(input.sdkUrl).toMatch(/^https:\/\/app\.soleur\.ai\//);
-    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(8); // 2 PP + 4 DPD + row 7 + sdk_url
+    expect(sdkUrlIsPublic(input.sdkUrl)).toBe(true);
+    // flexible: PP 2x(cert+TLS)=4, DPD 2x(2 cert+TLS)=6, DPA 2x(cert+TLS)=4, Art 30 5x(cert+TLS)=10, row 7, sdk_url.
+    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(26);
+    // full: the cert claims only (2+4+2+5=13), row 7, sdk_url.
+    expect(rollbackCouplingViolations({ ...input, mode: "full" }).length).toBe(15);
+    for (const rel of COUPLED_DOCS) {
+      expect(rollbackCouplingViolations({ ...input, mode: "flexible", docs: { [rel]: input.docs[rel] }, row7Cert: null, sdkUrl: null }).length, rel).toBeGreaterThan(0);
+    }
     expect(rollbackCouplingViolations(input)).toEqual([]);
   });
 
-  const none = { privacyTexts: {}, dpdTexts: {}, row7Cert: null, sdkUrl: null };
+  const none = { docs: {}, row7Cert: null, sdkUrl: null };
+  const NON_STRICT = ["flexible", "off", "full", null] as const;
   test.each([
-    ["PP phrase", { privacyTexts: { pp: `TLS and ${PP_CERT_PHRASE}.` } }],
-    ["DPD verifying phrase", { dpdTexts: { dpd: `TLS, ${DPD_CERT_PHRASES[0]}, and` } }],
-    ["DPD FULFILLED phrase", { dpdTexts: { dpd: `**${DPD_CERT_PHRASES[1]}**` } }],
+    ["PP cert phrase", { docs: { pp: "TLS and verifies our servers' certificate." } }],
+    ["DPD verifying phrase", { docs: { dpd: "TLS, with Cloudflare verifying the servers' certificate, and" } }],
+    ["DPD FULFILLED phrase", { docs: { dpd: "**FULFILLED as to the Cloudflare-to-origin connection**" } }],
+    ["DPA cert phrase", { docs: { dpa: "and verifies the servers' certificate" } }],
+    ["Art 30 cert phrase", { docs: { a30: "with Cloudflare verifying the web hosts' Origin CA certificate" } }],
     ["row 7 cert on", { row7Cert: "on" }],
-    ["public sdk_url", { sdkUrl: "https://app.soleur.ai/api/inngest" }],
-  ])("mode flexible + %s -> violation", (_label, over) => {
-    expect(rollbackCouplingViolations({ ...none, ...over, mode: "flexible" })).toHaveLength(1);
+    ["public sdk_url (https)", { sdkUrl: "https://app.soleur.ai/api/inngest" }],
+    ["public sdk_url (http)", { sdkUrl: "http://app.soleur.ai/api/inngest" }],
+    ["public sdk_url (uppercase, trailing dot)", { sdkUrl: "https://APP.soleur.ai./api/inngest" }],
+    ["public sdk_url (apex)", { sdkUrl: "https://soleur.ai/api/inngest" }],
+    ["interpolated sdk_url", { sdkUrl: "https://${local.app_host}/api/inngest" }],
+  ])("every non-strict mode + %s -> exactly one violation", (_label, over) => {
+    for (const mode of NON_STRICT) expect(rollbackCouplingViolations({ ...none, ...over, mode }), String(mode)).toHaveLength(1);
+  });
+
+  test.each([
+    ["PP TLS phrase", "Cloudflare forwards requests to our web servers over TLS."],
+    ["DPA TLS phrase", "Cloudflare forwards requests to Jikigai's web servers over TLS."],
+    ["DPD TLS phrase", "and TLS from Cloudflare to our web servers"],
+    ["Art 30 TLS phrase", "TLS covers the Cloudflare-to-origin connection"],
+  ])("%s -> violation under a plaintext origin hop, none under full", (_label, text) => {
+    for (const mode of ["flexible", "off", null]) expect(rollbackCouplingViolations({ ...none, docs: { d: text }, mode }), String(mode)).toHaveLength(1);
+    expect(rollbackCouplingViolations({ ...none, docs: { d: text }, mode: "full" })).toEqual([]);
+  });
+
+  test("a private sdk_url is not a violation in any mode", () => {
+    for (const mode of NON_STRICT) expect(rollbackCouplingViolations({ ...none, sdkUrl: "http://10.0.1.10:3000/api/inngest", mode })).toEqual([]);
   });
 
   test("mode flexible + phrase only inside a *( ... )* correction note (with nested parens) -> no violation", () => {
-    const pp = `**Last Updated:** *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare "${PP_CERT_PHRASE}" (see 5.8).)* Body: plain HTTP to origin.`;
-    expect(rollbackCouplingViolations({ ...none, mode: "flexible", privacyTexts: { pp } })).toEqual([]);
+    const phrase = "verifies our servers' certificate";
+    const pp = `**Last Updated:** *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare "${phrase}" (see 5.8).)* Body: plain HTTP to origin.`;
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp } })).toEqual([]);
     // Control: the same phrase after the note closes still fires.
-    expect(rollbackCouplingViolations({ ...none, mode: "flexible", privacyTexts: { pp: `${pp} ${PP_CERT_PHRASE}` } })).toHaveLength(1);
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp: `${pp} ${phrase}` } })).toHaveLength(1);
   });
 
   test("mode strict + everything present -> no violation", () => {
     expect(
       rollbackCouplingViolations({
         mode: "strict",
-        privacyTexts: { pp: PP_CERT_PHRASE },
-        dpdTexts: { dpd: DPD_CERT_PHRASES.join(" ") },
+        docs: { pp: "forwards requests to our web servers over TLS and verifies our servers' certificate" },
         row7Cert: "on",
         sdkUrl: "https://app.soleur.ai/api/inngest",
       }),

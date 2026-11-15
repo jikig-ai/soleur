@@ -250,7 +250,7 @@ done
 # must not mask the 0 (the leading-space anchor; without it the decoy satisfies the positive match).
 _render() {  # _render <line> <registry value> -> the quoted payload with $vars substituted
   local t="$1"
-  t="${t#*\"${INNGEST_PROBE_MARKER} }"; [ "$t" = "$1" ] && t="${1#*${MUT_STAGE} \"}"
+  t="${t#*\""${INNGEST_PROBE_MARKER}" }"; [ "$t" = "$1" ] && t="${1#*"${MUT_STAGE}" \"}"
   t="${t%%\"*}"
   t="${t//\$host_role/dedicated}"; t="${t//\$server_active/active}"; t="${t//\$http_code/200}"
   t="${t//\$uptime_s/1000}"; t="${t//\$registry_fns/$2}"

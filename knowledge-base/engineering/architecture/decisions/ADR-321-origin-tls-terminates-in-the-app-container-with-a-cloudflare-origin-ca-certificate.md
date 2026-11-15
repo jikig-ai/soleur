@@ -340,7 +340,9 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     dials TLS without validating the certificate; item 5). Strictness rests on Guard 1 (`apps/web-platform/test/seo-config-rules.test.ts`: exactly three rules, the adopted rule's ref,
     expression, description and `strict` value, exactly one `strict` rule, any other ssl-setting rule the apex `full` rule, tombstones for the variables, any `ORIGIN-TLS` rule and the
     probe header) and on the live `cloudflare-readonly.sh config-entrypoint` read through the wrapper. A dashboard-added rule is outside every repo guard; only the wrapper read sees it.
-    **Rollback** is a reviewed forward PR setting the adopted rule back to `flexible` (in place, no deletes, no `[ack-destroy]`); never `git revert` the cleanup. The recipe, the
+    **Rollback** is a reviewed forward PR setting the adopted rule to `full` (in place, no deletes, no `[ack-destroy]`; CTO fix-round ruling 2026-11-15: `full` keeps the hop
+    encrypted and still works through port 443 after #12743 closes port 80, while `flexible` today serves plaintext with nothing paging), with `flexible` a same-day last resort
+    only when the origin TLS listener itself is down; never `git revert` the cleanup. The recipe, the
     break-glass, the same-day legal corrections and the coupling with the Inngest `sdk_url` are in runbook `origin-tls-strict-flip.md` ("Rollback", "Break-glass"); the per-host
     pre-merge evidence (F3) is in the decision-challenges file. The F3 edge probes are not host-attributed: web-2 serves at LB weight 1 (`variables.tf` `web2_lb_weight` default 1,
     persisted 2026-11-08, #12414). Follow-ups: #12742 (leg-2 delivery), #12743 (port 80 and AOP), #12744 (handshake bursts), #12745 (LB pool-health reader).

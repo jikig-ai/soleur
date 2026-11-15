@@ -302,9 +302,8 @@ done
 # names it, or whose sql_query reads a local whose heredoc names it; an alert that binds such an exploration) OR its name starts
 # with the bare stem (so `inngest_luks_key_probe2_fail` and the bare stem are counted, #11388). Leading whitespace and a
 # trailing comment after the brace do not hide a header. The declared set must equal KEY_PROBE_EXPLORATIONS for BOTH the
-# exploration side and the alert side. Every root *.tf is scanned, the key is the substring LUKS_KEY_PROBE, a local name may
-# contain a hyphen, a heredoc closer ends the current local, and a single-line local that names a marked local carries the
-# marker too (transitively; a reference inside a string interpolation or a multi-line local is NOT followed). A family-wide structural suite
+# exploration side and the alert side. Every root *.tf is scanned and the key is the substring LUKS_KEY_PROBE. The lib's
+# contract and known limits are in its header (logtail-pair-census.awk). A family-wide structural suite
 # (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
 CENSUS_AWK_LIB="${PAIR_CENSUS_AWK:-$REPO/apps/web-platform/test/infra/logtail-pair-census.awk}"
 CENSUS_AWK="$(cat "$CENSUS_AWK_LIB" 2>/dev/null || true)"
@@ -469,15 +468,19 @@ PY
   }
 
   # Raising PRESENCE_ROWS above what an inner run asserts must trip the assertion floor (the floor is
-  # pass+fail >= floor, so only a RAISE reds; lowering it cannot). The scratch copy gets every path through
-  # the override env, so nothing resolves relative to its own location.
+  # pass+fail >= floor, so only a RAISE reds; lowering it cannot). The scratch copy gets its REPO line
+  # rewritten to the real repo and every overridable path (the census lib included) through the env, so
+  # nothing resolves relative to its own location. rc=1 alone cannot tell the floor from any other [FAIL]
+  # (fix round 1: a missing lib reded this row for the wrong reason), so RED also needs the floor's own
+  # [FATAL] line and no [FAIL] row in the inner log.
   mutate_floor_red() {  # mutate_floor_red <label>
-    local label="$1" copy rc=0
-    copy="$MUT_DIR/floor-mutated.test.sh"
-    sed 's/^PRESENCE_ROWS=38$/PRESENCE_ROWS=39/' "$SELF" > "$copy"
-    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    local label="$1" copy log rc=0
+    copy="$MUT_DIR/floor-mutated.test.sh"; log="$MUT_DIR/floor-mutated.log"
+    sed -e 's/^PRESENCE_ROWS=38$/PRESENCE_ROWS=39/' -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
+    if ! grep -q '^PRESENCE_ROWS=39$' "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
     KEYPROBE_GUARD_TF="$TF" KEYPROBE_GUARD_WF="$WF" KEYPROBE_GUARD_FLIP="$FLIP" KEYPROBE_GUARD_RB="$RB" KEYPROBE_GUARD_CI="$CI" KEYPROBE_GUARD_VT="$VT" \
-      MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+      PAIR_CENSUS_AWK="$CENSUS_AWK_LIB" MUT_SKIP=1 bash "$copy" >"$log" 2>&1 || rc=$?
+    if [ "$rc" = 1 ] && { ! grep -q '^\[FATAL\] assertion floor' "$log" || grep -q '^\[FAIL\]' "$log"; }; then rc=fail-row; fi
     case "$rc" in
       1) ok "mutation RED: $label" ;;
       0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;

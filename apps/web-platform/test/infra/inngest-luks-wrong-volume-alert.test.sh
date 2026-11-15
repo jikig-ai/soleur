@@ -553,13 +553,15 @@ PY
   # gets its REPO line rewritten to the real repo, so its non-overridable reads (BOOT/CI/RB/
   # VT/LIB) resolve — no fourth env axis exists to subvert.
   mutate_floor_red() {  # mutate_floor_red <label>
-    local label="$1" copy rc=0
-    copy="$MUT_DIR/floor-mutated.test.sh"
+    local label="$1" copy log rc=0
+    copy="$MUT_DIR/floor-mutated.test.sh"; log="$MUT_DIR/floor-mutated.log"
     sed -e 's/^PRESENCE_ROWS=44$/PRESENCE_ROWS=45/' \
         -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
-    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    if ! grep -q '^PRESENCE_ROWS=45$' "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
     LUKS_GUARD_TF="$TF" LUKS_GUARD_VARS="$VARS" LUKS_GUARD_WF="$WF" \
-      MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+      PAIR_CENSUS_AWK="$CENSUS_AWK_LIB" MUT_SKIP=1 bash "$copy" >"$log" 2>&1 || rc=$?
+    # rc=1 alone cannot tell the floor from any other [FAIL]: RED needs the floor's own line and no [FAIL] row.
+    if [ "$rc" = 1 ] && { ! grep -q '^\[FATAL\] assertion floor' "$log" || grep -q '^\[FAIL\]' "$log"; }; then rc=fail-row; fi
     case "$rc" in
       1) ok "mutation RED: $label" ;;
       0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;

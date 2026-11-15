@@ -462,21 +462,25 @@ Proof after (and record the time-to-effect: poll the probe every 10 s from the m
 - Sentry `feature:origin_tls` quiet; no `origin-tls: a client failed the TLS handshake` burst in Better Stack; the pool still healthy; the signed-in WebSocket connects (owner act).
 - Re-check at **+1 h and +24 h** with the loop and the Sentry query, and keep the rollback below armed for that whole window. Port 80 stays open until these pass (CLO condition 3).
 
-## Rollback (a reviewed forward PR to `flexible`; never `git revert`)
+## Rollback (a reviewed forward PR to `full`; `flexible` only as a last resort; never `git revert`)
 
-*Ruled by CTO agent, 2026-11-13: no switch remains, by design; the rollback is a forward PR, the owner's dashboard edit is the break-glass.* Never `git revert` the
-cleanup: it would re-add the two ORIGIN-TLS rules and their switches. **Simulated once on 2026-11-13** in a scratch detached worktree (the PR state with the adopted rule set
-back to `flexible`, each suite run once); the file list below is what that run needed, not a guess.
+*Ruled by CTO agent, 2026-11-13: no switch remains, by design; the rollback is a forward PR, the owner's dashboard edit is the break-glass.* *Ruled by CTO agent,
+2026-11-15 (fix round): the rollback target is `full`, not `flexible`.* `full` keeps the Cloudflare-to-origin hop encrypted (without certificate validation) and keeps
+working through `0.0.0.0:443:3443` after #12743 closes port 80. `flexible` is a last resort, only when the origin TLS listener itself is down: **plaintext to origin,
+nothing pages, revert the same day** (port 80 is open to Cloudflare today, so a `flexible` origin serves 200 with no alert; after #12743 it returns 521). Never `git revert`
+the cleanup: it would re-add the two ORIGIN-TLS rules and their switches. **Simulated once on 2026-11-13** in a scratch detached worktree with the adopted rule set back
+to `flexible` (each suite run once); the file list below is what that run needed, not a guess. A `full` forward PR edits the same files with `full` in place of
+`flexible`; it has not been separately simulated. Below, "the rollback mode" is `full` (or `flexible` in the last-resort case).
 
 **What the forward PR edits (one diff):**
 
-1. `apps/web-platform/infra/seo-config-rules.tf`: the adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`) `ssl = "flexible"`, its `description` (it must stop saying
+1. `apps/web-platform/infra/seo-config-rules.tf`: the adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`) `ssl = "<rollback mode>"`, its `description` (it must stop saying
    "Strict"), and its comment block. Keep its `ref`, its expression `(http.host eq "app.soleur.ai")` and its position. If the expression changes too, the three exclusion
    sites in `apps/web-platform/infra/ssl-full-mitigation.test.sh` change with it.
-2. `apps/web-platform/test/seo-config-rules.test.ts`: the Guard 1 constants `ADOPTED_SSL_MODE` (to `"flexible"`) and `ADOPTED_SSL_DESCRIPTION`. Measured: with only the `.tf`
+2. `apps/web-platform/test/seo-config-rules.test.ts`: the Guard 1 constants `ADOPTED_SSL_MODE` (to the rollback mode) and `ADOPTED_SSL_DESCRIPTION`. Measured: with only the `.tf`
    edited, two rows go RED ("the adopted rule is strict, enabled, ref-pinned, expression and description exact" and the exactly-one `ssl = <mode>` row); with the two
    constants edited the suite is 25 of 25 again. No other test row changes.
-3. `plugins/soleur/scripts/cloudflare-readonly.sh`, header B only: `with ssl=flexible`, plus a dated snapshot note. Measured:
+3. `plugins/soleur/scripts/cloudflare-readonly.sh`, header B only: `with ssl=<rollback mode>`, plus a dated snapshot note. Measured:
    `plugins/soleur/test/cloudflare-readonly.test.sh` derives the expected value from the `.tf` and is RED ("header states the adopted rule's ssl value") until the header says
    `flexible`; `rule_count` 3 and `enabled_ssl_rules` 2 do not change.
 4. `scripts/encryption-posture-ledger.json`, connection row 7 (Cloudflare edge -> web hosts origin): `cert_verification` back to `off`, the `tls` and `enforced_at` text, and an
@@ -488,12 +492,16 @@ back to `flexible`, each suite run once); the file list below is what that run n
    `LEGAL_DOC_SHAS` in `apps/web-platform/lib/legal/legal-doc-shas.ts`. The internal records that carry the same claim: `knowledge-base/legal/article-30-register.md`,
    `knowledge-base/legal/data-processing-agreement-template.md`, `knowledge-base/operations/domains.md` (SSL Mode row) and
    `knowledge-base/engineering/architecture/nfr-register.md`. The legal lints were not part of the simulation. The rollback-coupling rows (same test file) now tie the
-   Privacy Policy and DPD wording, canonical and mirror, to `ADOPTED_SSL_MODE`; the internal records are still on the author.
-6. **If `inngest-host-replace` has run** (the Inngest host polls the public `sdk_url`, `https://app.soleur.ai/...`, ADR-100): a `flexible` rollback sends that poll in plaintext
-   across the public internet and voids ledger row 6 (leg 2). The forward PR then also re-points `sdk_url` in `apps/web-platform/infra/inngest-host.tf` off the public URL
-   (or re-opens row 6 with an owner record), and corrects the ADR-100 Decision 1 amendment and the A7 addendum
-   (`knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md`). The rollback-coupling rows enforce the legal, ledger row 7 and `sdk_url`
-   edits (a public `sdk_url` with a non-`strict` mode is RED); the ADR and addendum corrections are on the author.
+   Privacy Policy, DPD, DPA template and Article 30 register wording (canonical and mirror) to the adopted rule's mode: a certificate claim is RED under any
+   non-`strict` mode, a TLS-to-origin claim under `flexible`, `off` or a dropped `ssl`. `domains.md` and the NFR register are still on the author.
+6. **`sdk_url`, whether or not `inngest-host-replace` has run.** The declared value is public (`https://app.soleur.ai/...`, ADR-100), and any later replace or birth
+   would boot it; once a host polls it, a `full` rollback sends that poll over an unverified hop and a `flexible` one in plaintext across the public internet and voids ledger row 6 (leg 2). The forward PR
+   re-points `sdk_url` in `apps/web-platform/infra/inngest-host.tf` off every soleur.ai host, and in the same diff updates Guard 4 in
+   `apps/web-platform/test/server/inngest/exec-placement-forward.test.ts` (it pins `sdk_url` to the route's `SERVE_HOST` + `servePath`) and the route if needed. It
+   also corrects the ADR-100 Decision 1 amendment and the A7 addendum
+   (`knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md`). The rollback-coupling rows enforce the legal wording (Privacy Policy,
+   DPD, DPA template and Article 30 register, canonical and mirror), ledger row 7 and `sdk_url` (any soleur.ai host, any scheme, or an interpolated value, with a
+   non-`strict` mode is RED); there is no row-6 escape in the guard. The ADR and addendum corrections are on the author.
 
 **No `[ack-destroy]`.** Measured offline on 2026-11-13 (Terraform 1.9.8, cloudflare 4.52.7 from the plugin cache, prior state = the cleanup's 3 rules): `Plan: 0 to add,
 1 to change, 0 to destroy`, the only diff `ssl = "strict" -> "flexible"`; through the real filter `resource_deletes` 0, `nested_deletes` 0. `ssl-full-mitigation.test.sh` and
@@ -503,23 +511,31 @@ the T65 suite stay green unchanged.
 every per-merge apply targets `cloudflare_ruleset.seo_config_settings` and would put the dashboard edit back to `strict`.
 
 Time to effect: the push apply (109 to 370 s on this workflow) plus edge propagation (unmeasured for a rollback; about 55 s was the flip's upper bound). Proof after:
-`cloudflare-readonly.sh config-entrypoint` shows ref dcb85b75 `ssl=flexible`, `rule_count` 3, `enabled_ssl_rules` 2; `origin-tls-probe.sh` (without `--require-tls`)
-reports `PLAIN-ORIGIN-HOP`.
+`cloudflare-readonly.sh config-entrypoint` shows ref dcb85b75 `ssl=<rollback mode>`, `rule_count` 3, `enabled_ssl_rules` 2; under the last-resort `flexible`,
+`origin-tls-probe.sh` (without `--require-tls`) reports `PLAIN-ORIGIN-HOP`.
 
 What users see if `strict` goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
 certificate). Browser-to-edge TLS is unaffected.
 
 **After any 525/526 window (rollback or break-glass): redeliver failed GitHub webhook deliveries.** GitHub does not retry a failed delivery, so every webhook that hit
 `app.soleur.ai` during the window is lost until it is redelivered (the App's Advanced tab, or `gh api` on the app hook's `deliveries` and `.../attempts` endpoints, for each
-delivery with a non-2xx status inside the window).
+delivery with a non-2xx status inside the window). Those endpoints (`GET /app/hook/deliveries`, `POST /app/hook/deliveries/{id}/attempts`) accept only a GitHub App
+JWT, not the CLI user token (a plain `gh api` gets 401): mint one with the inline Option B recipe in `github-app-provisioning.md` (no helper script exists yet),
+then call both with `-H "Authorization: Bearer <jwt>"`. The dashboard Advanced tab is the fallback.
 
 ## Break-glass (OWNER ONLY; not agent-runnable)
 
 If users are seeing 525/526 and the merge path is too slow, the owner edits the adopted rule in the Cloudflare dashboard (Rules, Configuration Rules, the rule described
-"Strict SSL for app.soleur.ai (ADR-321, #10479)", SSL to Flexible), then opens the forward PR above at once so the next apply does not undo the edit (see "Queue rule").
+"Strict SSL for app.soleur.ai (ADR-321, #10479)", SSL to **Full**; Flexible only if the origin TLS listener itself is down, and then plaintext to origin, nothing
+pages, revert the same day), then opens the forward PR above at once so the next apply does not undo the edit (see "Queue rule").
 The same-day wording correction applies from the moment of the dashboard edit. No API recipe is given on purpose: the sanctioned reader returns a summary, not a PUT body,
 and a whole-list entrypoint PUT can silently drop the apex `full` rule (HTTP 526 on the HSTS-preloaded apex). The scheduled drift plan will also show the edit as drift
 until the forward PR lands.
+
+- **The Inngest coupling (CTO fix-round F2).** A dashboard edit leaves the repo `strict`, so no guard sees it. If any Inngest host already polls the public `sdk_url`,
+  the edit makes that poll plaintext at once and voids ledger row 6 (A7 leg 2) from that moment: the forward PR carries Rollback item 6 (`sdk_url` re-pointed,
+  Guard 4, the ADR-100 amendment and A7 addendum) the same day. Until the forward PR lands, do not dispatch `inngest-host-replace` or an `inngest-host` birth
+  (both boot the public `sdk_url`; the dispatch-time re-read in `inngest-server.md` would show the edit).
 
 ## Cleanup (ADR-321 item 13, #10479, 2026-11-13)
 

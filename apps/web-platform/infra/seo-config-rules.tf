@@ -165,7 +165,8 @@
 #
 # Once applied, this resource is in state, so `git revert` of the PR removes the
 # resource AND the import block and Terraform plans a DESTROY of the entrypoint
-# — deleting ALL rules (the apex `full` rule included -> HTTP 526 on the apex)
+# — deleting ALL rules (the apex `full` rule included -> the apex falls to the
+# zone default `strict`: HTTP 526 while the Pages origin cert is still invalid)
 # and dropping app.soleur.ai to the zone SSL mode (live zone setting is
 # `strict`). That is strictly worse than the bug this file
 # fixes, and the destroy-guard makes it look survivable: a full resource delete

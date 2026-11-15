@@ -1,9 +1,17 @@
 # logtail exploration / exploration_alert PAIR CENSUS over apps/web-platform/infra/*.tf.
 # Shared by the three Inngest logs-alert guards (inngest-registry-empty-alert.test.sh,
 # inngest-luks-wrong-volume-alert.test.sh, inngest-luks-key-probe-alert.test.sh), which used to
-# carry three byte-identical copies (#12737 review). Invoke: awk -v MARK=<stem> -f <this> <tf...>
+# carry three byte-identical copies (#12737 review). The consumers read this file into a program
+# string and run `awk -v MARK=<stem> "$CENSUS_AWK" <tf...>` (an empty read is their presence row's RED).
 # Output: `E|<exploration>|<carries MARK>` and `A|<alert>|<carries MARK>|<bound exploration>`.
 # A resource carries MARK when its body, or a local it references (transitively), contains it.
+# Contract and known limits (a consumer must not assume more):
+#   - A header hides behind neither leading whitespace nor a trailing comment after the brace.
+#   - Quoted strings and `#` / `//` comments are blanked before references are looked for, so a
+#     reference inside a string interpolation is NOT followed.
+#   - A local name may contain a hyphen; a heredoc closer ends the current local.
+#   - Only a single-line local that names a marked local inherits the mark (transitively); a
+#     multi-line local's references are NOT followed.
 function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
 function hdopen(c) {
   if (match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) { hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd) }

@@ -617,7 +617,7 @@ classes `technical`, `taste` and `operator (<category>)`), and quote them in the
 3. Re-measure (CLO condition 2): `cloudflare-readonly.sh ssl-mode` (strict) and `config-entrypoint` (`rule_count` 3,
    `enabled_ssl_rules` 2, ref dcb85b75 `ssl=strict`), 20 `origin-tls-probe.sh --require-tls` runs, and the three F3
    readings again; record them on #10479 as a comment.
-4. Any red reading: the forward PR to `flexible` per the rewritten runbook. That PR carries the corrected legal
+4. Any red reading: the forward PR to `full` per the rewritten runbook (`flexible` only as its last resort; CTO fix-round ruling 2026-11-15). That PR carries the corrected legal
    wording, ledger row 7 and `LEGAL_DOC_SHAS` in its own diff (CPO condition 2), so the published claim and the
    live mode change in the same merge; only the owner's dashboard break-glass can precede it, and then the PR lands
    the same day (CLO).
@@ -943,17 +943,21 @@ the scheduled drift plan compares the applied resource with the file.
   commit, the apply's destroy list equal to T65), the rollback-coupling guard (published wording, ledger row 7 and
   `sdk_url` follow the adopted mode), and `logtail_exploration_alert.inngest_registry_empty` for an empty registry after
   the replace. *Scoped out by:* the replace itself (owner-gated, after this PR's measured apply; #12742).
-- **Recovery time if it does break (no Doppler switch remains):** a reviewed forward PR to `flexible` (push apply 109 to
+- **Recovery time if it does break (no Doppler switch remains):** a reviewed forward PR to `full` (`flexible` only as a last resort; push apply 109 to
   370 s plus unmeasured edge propagation), or the owner's dashboard break-glass with that PR first in the queue (runbook
   `origin-tls-strict-flip.md` "Rollback", "Break-glass"). GitHub webhook deliveries that failed during the window are
   not retried by GitHub and must be redelivered.
 - **Silent downgrade window:** if the app host is set back to `flexible` outside the repo (dashboard), nothing pages
-  today; the scheduled drift run catches a rule change within up to 12 h. *Scoped out by:* #12743 (CTO ruling D1: an
-  origin set to `flexible` gets a 521 and the existing Better Stack app monitors page on it).
+  today; the scheduled drift run catches a rule change within up to 12 h. *Scoped out by:* #12743 (CTO ruling D1: once
+  #12743 closes port 80, an origin set to `flexible` gets a 521 and the existing Better Stack app monitors page on it;
+  today port 80 is open to Cloudflare, so a `flexible` origin serves 200 in plaintext and nothing pages).
 - **Double-fire and stale registry after an owner replace:** the first sync after the URL change is not deduplicated
   (#7228 checksum includes the URL), a stale non-zero registry is invisible to the registry-empty alert, and a surviving
-  private-URL app row keeps the plaintext poll alive. *Mitigated by:* the D2 typed-confirm gate (`confirm=PUBLIC-SDK-URL`
-  on `inngest-host-replace`, naming all three risks) until #12742 item 1 ships the sync-evidence and app-row probe fields.
+  private-URL app row keeps the plaintext poll alive. This applies to an emergency replace or birth too, not only the
+  owner's planned window. *Acknowledged, not mitigated:* the D2/F1 typed-confirm gates (`confirm=PUBLIC-SDK-URL` on
+  `inngest-host-replace`, `confirm=PUBLIC-SDK-URL-BIRTH` on `inngest-host`) make the dispatcher read #12742, but they
+  detect nothing. No layer sees a failing public poll behind a stale non-zero registry until #12742 item 1 ships the
+  sync-evidence and app-row probe fields; until then, the inngest-server.md post-boot duplicate-run read is manual.
 - **If this leaks, the user's data is exposed via:** a Cloudflare-to-origin hop that is plain HTTP while the Privacy
   Policy says it is TLS (a false published claim), readable by an on-path attacker between Cloudflare and Hetzner.
   *Mitigated by:* the rollback-coupling guard, which fails a `flexible` tree that still carries the TLS wording, ledger
