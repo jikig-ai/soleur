@@ -20,7 +20,7 @@ in "Cleanup", "Rollback" and "Break-glass".
 both ORIGIN-TLS rules and both variables deleted). Merge apply: **pending** (record here the push-apply run id and its destroy-guard line, expected `nested_deletes` 2
 acked by the merge message). Post-apply re-measure: **pending** (record here `cloudflare-readonly.sh config-entrypoint`, expected `rule_count` 3, `enabled_ssl_rules` 2,
 ref dcb85b75 `ssl=strict`, a new `version` and `last_updated`; and 20 runs of `origin-tls-probe.sh --require-tls`, all `TLS-ON-ORIGIN-HOP`). Until both rows are filled,
-the 2026-11-13 pre-merge readings (`knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`, "Pre-merge evidence readings (F3)") are the latest.
+the 2026-11-13 pre-merge readings (`knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`, "Pre-merge evidence readings (F3)") are the latest.
 
 | Act | State | Evidence |
 |---|---|---|

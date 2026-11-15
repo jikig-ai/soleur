@@ -327,7 +327,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     **Also in this change (not an architectural fork):** the pinned gitleaks installs (seven) and the actionlint install carry `--fail --retry 5 --retry-all-errors`; the roughly 31 s retry
     budget rides out blips and not an 80-minute CDN outage. The wider release-download class (crane and others) is tracked in #12440.
 
-13. **Cleanup (2026-11-13, #10479).** *Ruled by CTO agent, 2026-11-13 (rows in `knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`); wording conditions by CLO agent, same day.*
+13. **Cleanup (2026-11-13, #10479).** *Ruled by CTO agent, 2026-11-13 (rows in `knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`); wording conditions by CLO agent, same day.*
     **Decision and end state.** The adopted rule (ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, first in the list) is `ssl = "strict"` on `(http.host eq "app.soleur.ai")`, description
     "Strict SSL for app.soleur.ai (ADR-321, #10479)". `lb-staging.soleur.ai` is dropped from it (no DNS record; the Origin CA certificate does not name it, so a revived staging arm
     would get 526, as `lb-staging/main.tf` says). Both ORIGIN-TLS rules (items 9, 10) and both variables (`enable_origin_tls_canary_rule`, `enable_origin_tls_strict`) are deleted, and

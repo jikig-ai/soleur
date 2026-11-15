@@ -2676,7 +2676,7 @@ likely still shows the old count. #12742 (the sync-evidence probe field) closes 
 
 ## Public sdk_url poll (#10538 remedy (c))
 
-Ruled 2026-11-13 (CTO and CLO, `knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`):
+Ruled 2026-11-13 (CTO and CLO, `knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`):
 the dedicated host's `--sdk-url` becomes the public serve URL `https://app.soleur.ai/api/inngest` (ADR-100 Decision 1 as
 amended), `--poll-interval` stays 60. The poll then takes the same path as the step calls: public-CA TLS to the Cloudflare
 edge, then `strict` to the origin (ADR-321). The value is declared in `apps/web-platform/infra/inngest-host.tf` and pinned by

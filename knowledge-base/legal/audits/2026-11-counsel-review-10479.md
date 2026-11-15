@@ -34,7 +34,7 @@ This is the v1 internal counsel-review attestation under the ship Phase 5.5 gate
 - `apps/web-platform/infra/dns.tf`: `cloudflare_record.app` proxied; `api` unproxied to Supabase; deploy, ssh and registry are tunnel CNAMEs.
 - The runbook `origin-tls-strict-flip.md` (Rollback and Break-glass).
 - `rollbackCouplingViolations` in `apps/web-platform/test/seo-config-rules.test.ts`.
-- The CLO rows and the pre-merge evidence readings in `knowledge-base/project/specs/feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`.
+- The CLO rows and the pre-merge evidence readings in `knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`.
 
 Live state was not re-read by this review. Measurements are cited from the records named.
 
