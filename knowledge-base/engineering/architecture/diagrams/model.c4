@@ -3,7 +3,7 @@
 // C4 level (context / container / component) with clickable drill-down.
 // Migrated 1:1 from the former Mermaid C4 diagrams (system-context, container,
 // component-plugin) — union of all elements and relationships, nothing dropped.
-// last-verified: 2026-11-08
+// last-verified: 2026-11-15
 // 2026-10-18 audit: drift recorded as `//` comments next to the affected elements (api,
 // github -> tunnel, the L3 command components), NOT as description edits. Every
 // description/element change must ship with a regenerated model.likec4.json
@@ -21,6 +21,12 @@
 // match plugins/soleur/README.md. Every earlier DRIFT note still holds; the SSH-provisioner count
 // moved again (28 -> 30, #12167 PR-G nonlocal_bind_sysctl pair). One new stale claim on the Session
 // Router (placement is at first-message auth, not the WS upgrade): search "DRIFT (2026-11-08".
+// 2026-11-15 audit: comment-only (no model.likec4.json change). Skills (107) and agents (68, 8 departments)
+// match plugins/soleur/README.md; the "twelve" --plugin-dir server-side agents re-measure at 12. The SSH-provisioner
+// DRIFT note is RESOLVED (the github -> tunnel description now carries the server.tf-scoped 28, which equals
+// FLOOR_RESOURCES). OpenCode/Antigravity, the `version` command, the forget-workflow citation and the Session Router
+// note still hold (the last one extended for ADR-323). Two new items: the cloudflare -> webapp edge (no tunnel on the
+// app path; ADR-321 origin TLS) and the unmodelled CLA evidence archive: search "DRIFT (2026-11-15".
 model {
 
   codex = system "Codex" {
@@ -56,7 +62,7 @@ model {
   founder -> cursorCli "Runs Soleur from the local Cursor CLI"
   cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
 
-  // DRIFT (2026-10-25 audit, re-confirmed 2026-11-01 and 2026-11-08): two more harnesses load the plugin and have no element here.
+  // DRIFT (2026-10-25 audit, re-confirmed 2026-11-01, 2026-11-08 and 2026-11-15): two more harnesses load the plugin and have no element here.
   // (1) OpenCode V2 (ADR-291, accepted 2026-10-20, shipped v3.342.0 / PR #10571): `opencode` is a
   // member of the Harness union in plugins/soleur/lib/harness.ts; the adapter is
   // plugins/soleur/opencode/ (plugin.ts hook module binding the guards at permission.evaluate,
@@ -211,7 +217,7 @@ model {
       }
 
       // C4 L3 — components inside the Soleur Plugin
-      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25, 2026-11-01 and 2026-11-08): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
+      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25, 2026-11-01, 2026-11-08 and 2026-11-15): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
       // version); only three are drawn here. /soleur:version is the explicit, user-started
       // installed-vs-latest compare named on the `plugin -> github` edge (#10064). Add a
       // `version` component (and its views.c4 include) with a model.likec4.json regeneration.
@@ -376,7 +382,7 @@ model {
       // USER-STICKY (ADR-068 2026-07-01 amendment): a session routes to the host
       // holding that user's per-user worktree lease; control ops are sticky to
       // the owner (NO cross-host forwarding). Redis enters at Phase 4a. GA at P3.
-      // DRIFT (2026-11-08 audit): the description below says the owning host is resolved "at the
+      // DRIFT (2026-11-08 audit, re-confirmed 2026-11-15): the description below says the owning host is resolved "at the
       // WS-upgrade handshake", but apps/web-platform/server/session-router.ts takes the placement
       // decision at FIRST-MESSAGE AUTH, explicitly NOT at the raw upgrade (no userId exists there),
       // then relays the socket transparently. The relay transport is now concrete (#12167 PR-E/PR-G):
@@ -384,6 +390,11 @@ model {
       // source-address allowlist, the dialer pins PROXY_TLS_CERT and resolves peers from
       // SOLEUR_HOST_ROSTER, and ci-deploy.sh publishes :8443 on the host's private IP (canary publishes
       // none). Rewording the description needs a model.likec4.json regeneration.
+      // 2026-11-15: ADR-323 (accepted 2026-11-09, amended 2026-11-10) adds two relay controls the description
+      // also omits: the SOLEUR_PROXY_PEER_ALLOWLIST check now runs on the RAW socket before the TLS handshake,
+      // and every relay hello is HMAC-signed under the dedicated PROXY_HELLO_HMAC_KEY (proxy-hello.ts; one
+      // verify-only slot PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO). inngest-exec-receiver.ts (:8445) reuses the same
+      // raw-socket admission. Fold both into the same regeneration.
       coordinator = container "Session Router" {
         technology "Node — co-located sticky reverse-proxy"
         description "Co-located stateless sticky router (in each web-host process, not a separate box) — resolves a session's owning host from the per-user worktree lease at the WS-upgrade handshake; local ⇒ serve, remote ⇒ proxy over one-way-TLS private net. Control ops are host-local (no cross-host forwarding). Lease in Postgres (ADR-068 user-sticky amendment)"
@@ -624,6 +635,15 @@ model {
   engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
   engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
   engine -> discord "Notifications" { technology "Webhook" }
+  // DRIFT (2026-11-15 audit): this edge is stale in two ways. (1) "Tunnel": app.soleur.ai does NOT traverse the
+  // tunnel. It is one CF-proxied A record per web host (dns.tf, proxied = true), and the tunnel container's own
+  // description says the same. (2) "HTTPS": the CF-to-origin hop is plain HTTP by default, because the adopted
+  // `flexible` set_config rule for the app host (seo-config-rules.tf) overrides the zone's strict mode. ADR-321
+  // (active, 2026-11-05) adds an origin TLS listener INSIDE the app container (origin-tls.ts, container :3443 published
+  // as host :443 by ci-deploy.sh) with a Cloudflare Origin CA certificate (ORIGIN_TLS_KEY_B64 / ORIGIN_TLS_CERT_B64
+  // from Doppler prd). The host-wide strict override is gated by var.enable_origin_tls_strict (default false), and
+  // the code does not show whether the flip has happened. Suggested rewording: "DNS, CDN, WAF; origin fetch over
+  // HTTP (flexible) or Origin-CA TLS :443 once the ADR-321 strict flip is enabled". Needs a model.likec4.json regeneration.
   cloudflare -> webapp "Tunnel, DNS, CDN" { technology "HTTPS" }
   // #6698 — the cert-reissue remediation path (ADR-125).
   github -> letsencrypt "Places the ACME order for the Pages custom-domain cert whenever the cname is (re-)set — so every cname toggle consumes a validation attempt against limits that are hourly and COMPOUNDING (5 failures per identifier per account per hour). GitHub surfaces none of it: GET /pages returns bad_authz regardless of cause, which is why probe-only mode exists and is the default (ADR-125, #6698)." { technology "ACME" }
@@ -775,6 +795,11 @@ model {
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
   tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE — whichever connector replica answers proxies to the correct zot host, but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416 (historical): web-2 was not a subnet member, so CI's registry bridge failed and the zot mirror silently skipped (masked green by continue-on-error). web-2 was retired 2026-07-17 (#6538); the surviving web-1 connector is a subnet member, so this failure mode is closed. 2026-07-29 CAUSE CLASS (#7071) — a DIFFERENT failure on this same edge, recorded so the closed #6416 mode above is not re-derived as the explanation: CI's bridge failed with websocket: bad handshake, and THAT TIME the cause was the EDGE refusing the upgrade (CF Access rejecting a rotated service token), NOT a missing origin route — a missing route would handshake and fail origin-side. Root cause: every doppler_secret carrying a token declares lifecycle{ignore_changes=[value]}, so Terraform REPLACED the registry_push Access service token and could never propagate the new value; the stale one was still being served. Detected by scripts/check-cloudflare-token-drift.sh, now wired into scheduled-terraform-drift.yml + a release preflight. 2026-08-03 THIRD CAUSE CLASS (#7242) — this record's dichotomy (edge-refusal vs missing-route) was NOT exhaustive, and reading it as exhaustive is what misdirected the next investigation. A bad handshake means only that the tunnel could not complete an ORIGIN DIAL. Third case, measured: the route was present AND Access ADMITTED the request, but the origin was RESTARTING — zot crash-looping at ~4/min, which a tens-of-seconds docker login + three-tag crane copy is near-certain to straddle. The Access policy was intact and the connector had never dropped. So bad handshake is a SYMPTOM, never a cause: since #7242 the failing step branches on a verdict the job measured (scripts/zot-mirror-diagnosis.sh, ADR-166) rather than naming one. NOTE also that a plain HTTPS GET here returns an empty 200 BY DESIGN (tcp:// ingress is not a WS upgrade) and is not a health probe." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
+  // RESOLVED (2026-11-15 audit): the description below no longer says "25". It says "the 28 server.tf terraform_data SSH
+  // provisioners", which matches the code: server.tf has 29 terraform_data, 28 of them with connection { type = "ssh" }
+  // (deploy_pipeline_fix is local-exec), and web-host-provisioner-parity.test.sh pins FLOOR_RESOURCES = 28. The whole
+  // root is 32 (server.tf 28, workspaces-luks.tf 3, ci-ssh-key.tf 1). The history below is kept for the record and can
+  // be deleted at the next regeneration.
   // DRIFT (2026-10-18 audit, re-measured 2026-10-22, 2026-10-25 and 2026-11-01 — 28; re-measured 2026-11-08 — now 30): the "25 terraform_data SSH provisioners" count below is stale. The
   // web-platform root now carries 30 terraform_data resources with an ssh connection{} block
   // (server.tf 26, workspaces-luks.tf 3, ci-ssh-key.tf 1; deploy_pipeline_fix is local-exec and
@@ -819,11 +844,18 @@ model {
   // project, ONE edge for both tokens so the model never carries an edge for only the weaker one. Kept
   // apart from the soleur-project edges above (a different project, repo-level secrets, not Tier B).
   github -> doppler "CI credentials into the ISOLATED soleur-inngest/prd project (ADR-282 addendum 2026-11-05, #9927 item 8; ADR-100 Decision 6b). TWO repo-level Actions secrets, both minted by Terraform in the per-merge apply. DOPPLER_TOKEN_INNGEST_ARM (doppler_service_token.inngest_arm_write, READ/WRITE) is consumed only by cutover-inngest.yml's op=rollback and op=resume, both held behind the inngest-cutover required-reviewer environment, since op=arm, op=reflush and op=luks-cutover were retired by deletion; its revoke is owner-reserved, undelegated, not done and blocked on those two verbs. DOPPLER_TOKEN_INNGEST_FLIP_READ (doppler_service_token.inngest_flip_read, READ-ONLY) is consumed only by apply-web-platform-infra.yml's inngest_host_replace inherited-done preflight, which reads INNGEST_CUTOVER_FLIP and FAILS CLOSED when the token is empty or the read cannot be trusted. Neither token is a read boundary: a config token reads the WHOLE config, including INNGEST_REDIS_LUKS_KEY and INNGEST_TLS_KEY, so the read-only token bounds writes only. Both are repo-scoped rather than environment secrets because the Terraform GitHub App cannot write environment secrets (an advisory deviation from ADR-241 D2); a repo secret resolves in any workflow on any pushed branch" { technology "doppler CLI (config-scoped service tokens: one read/write, one read-only; repo Actions secrets)" }
+  // DRIFT (2026-11-15 audit): the CLA signature evidence archive has no element or edge. It is a separate Terraform
+  // root (apps/cla-evidence/infra, issue #3209) that provisions the R2 bucket soleur-cla-evidence: WORM through an R2
+  // Lock Rule with a 10-year floor, a `weur` location hint on the default (non-EU) jurisdiction, and two scoped CF API
+  // tokens. Two workflows write to it. cla-evidence.yml (pull_request_target + issue_comment) uploads signature
+  // evidence through apps/cla-evidence/scripts/upload-evidence.sh. cla-evidence-timestamp.yml (monthly cron, `0 6 1 * *`)
+  // gets RFC 3161 timestamps from https://freetsa.org/tsr. The model would need a github -> cloudflare edge (or a
+  // distinct archive store) and a new #external FreeTSA system. This is a structural change, so it needs a regeneration.
   github -> cloudflare "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-136, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern). NOT ON THIS EDGE, AND RECORDED HERE BECAUSE THE MODEL CARRIES NO SEPARATE ONE: every CI Terraform run also reaches Cloudflare R2 as its S3-compatible STATE BACKEND, with an AWS_* key pair that is neither CF_API_TOKEN_RULESETS nor the DNS-edit token. Since #8209/ADR-241 that path is TIERED and there are TWO state buckets, not one. (a) soleur-terraform-state keeps the web-platform, infra/github, sentry and the other roots' objects; its Tier-A key pair in prd_terraform becomes READ-ONLY, and the read/write pair moves to Tier B as TF_STATE_AWS_* — before that split a branch actor could FORGE state a later main run acts on, for example by swapping a doppler_service_token.key that a main run then publishes (ADR-241 residual R7, closed at the runbook's state-key step). Every backend-credential extraction in a Tier-B job therefore prefers the Tier-B pair and falls back to the prd_terraform pair, which is what makes the change work in both the before and after states. (b) soleur-terraform-state-privileged is a SECOND bucket (cloudflare_r2_bucket.terraform_state_privileged in infra-privileged-environment.tf) holding exactly one object, the git-data root-key state — the state that contains the private key that is root on the host storing every connected user's repositories. Only a bucket-scoped Tier-B token reads it, and that token is operator-minted because no credential here can mint one programmatically (ADR-130). The separation is real rather than nominal because the prd_terraform keys are BUCKET-SCOPED, measured: ListBuckets returns AccessDenied while ListObjectsV2 returned all seven objects of the shared bucket — so a bucket they are not scoped to is genuinely out of reach, which is what reverses ADR-220's D2.1 shared-bucket amendment. The root's backend is now PARTIAL (no literal bucket; -backend-config=bucket=$BUCKET), and the legacy bucket is refused once the repo variable GIT_DATA_ROOT_STATE_MIGRATED=1 is set." { technology "HTTPS (CF API v4 rulesets phase entrypoint GET, curl --max-time)" }
   // CI -> Hetzner Cloud API. Absent until the G3 generation anchor (2026-09-24), although several
   // workflows already call the API. This edge is the CONTROL-PLANE API, not the hosts: nothing here
   // reaches the dedicated host, which has no inbound path (ADR-225).
-  // DRIFT (2026-11-01 audit, re-confirmed 2026-11-08): the description below names "the single-use workspaces-plaintext-forget.yml"
+  // DRIFT (2026-11-01 audit, re-confirmed 2026-11-08 and 2026-11-15): the description below names "the single-use workspaces-plaintext-forget.yml"
   // in the present tense, but that workflow is gone from .github/workflows/: PR #9348 deleted it after its
   // one run from main (run 37803274724, 2026-10-08). ADR-241 now cites it at 59abf6a76c and the
   // destruction record is knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md.
