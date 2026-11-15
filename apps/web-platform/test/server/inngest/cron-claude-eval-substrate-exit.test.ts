@@ -466,10 +466,17 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
   // succeeds.
   describe("isAlive oracle controls", () => {
     const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
-    // Only a standalone sleep binary can be copied under another name (a multicall binary
-    // such as busybox would reject the unknown applet name).
     const hasProc = existsSync("/proc/self/stat");
+    // The "sleep" row runs a copy of the sleep binary under its own name. That works for a
+    // standalone binary and for a multicall one (uutils on ubuntu-26.04, busybox), because the
+    // name it dispatches on is still "sleep". The basename check rejects a busybox-style link.
     const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && hasProc;
+    // The odd-name row cannot copy sleep: a multicall binary picks its command from its own file
+    // name and exits on an unknown one (`coreutils: unknown program 'x) Z y'`, #12783), and the
+    // basename check above does not see that. It runs a /bin/sh script instead. The kernel names a
+    // script's process after the script file, so comm still reads "x) Z y" on GNU and uutils hosts.
+    // After the SIGKILL, the script's current `sleep 1` child is orphaned for at most about 1s.
+    const canRunScript = existsSync("/bin/sh") && hasProc;
     const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const child = actual.spawn(...args);
@@ -477,16 +484,23 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
       return child;
     };
 
-    for (const name of ["sleep", "x) Z y"]) {
-      it.skipIf(!canCopySleep)(
+    for (const [name, runnable] of [
+      ["sleep", canCopySleep],
+      ["x) Z y", canRunScript],
+    ] as const) {
+      it.skipIf(!runnable)(
         `a live process reads alive and a killed one dead (comm "${name}")`,
         async () => {
           const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
           dirs.push(dir);
           const exe = join(dir, name);
-          copyFileSync(SLEEP_BIN as string, exe);
+          if (name === "sleep") {
+            copyFileSync(SLEEP_BIN as string, exe);
+          } else {
+            writeFileSync(exe, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+          }
           chmodSync(exe, 0o755);
-          const child = await spawnReal(exe, ["120"], { stdio: "ignore" });
+          const child = await spawnReal(exe, name === "sleep" ? ["120"] : [], { stdio: "ignore" });
           try {
             const pid = child.pid as number;
             expect(Number.isInteger(pid) && pid > 1).toBe(true);
