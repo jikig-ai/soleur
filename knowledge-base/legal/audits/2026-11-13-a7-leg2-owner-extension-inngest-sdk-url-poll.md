@@ -3,6 +3,7 @@ title: "A7 ledger: new acceptance after a lapse of the leg-2 accepted-risk recor
 status: record (owner-pending)
 date: 2026-11-13
 related: [10136, 10538, 10479, 10205]
+addenda: ["2026-11-13 CLO-cures addendum (PR #12737; its ledger-row and sdk_url limbs fire on that PR's merge), amended 2026-11-15 by CLO fix-round rulings (a) and (c): see 'Addendum — 2026-11-13 (CLO cures, PR #12737)' and 'Unsigned owner-record draft'"]
 ---
 
 # A7 ledger: owner extension, leg-2 Inngest `sdk_url` poll
@@ -61,7 +62,7 @@ Appended by a Claude Code agent under the CLO agent's ruling of 2026-11-13 (agen
 - **Controls.** The body says the controls "were not re-measured". They were re-measured on 2026-11-13, read-only, and recorded in #10538 comment 6840514776 (00:55:51Z):
   - Hetzner enumeration: 5 servers, all Jikigai (10.0.1.10, .11, .20, .30, .40).
   - tls-health at 00:53Z: `nft_rules=7`, `nft8443_sha256` present, `legacy_8288=0`, `served_sha256==cert_sha256`.
-- **Owner's words.** The quoted sentence was drafted by the agent and chosen by the owner. The CLO ruled that the record should carry the owner's own words, with a timestamp, as the 2026-11-02 record did ("I confirm A7 as read"). **That is owner-pending**: the owner confirms in their own words on #10538. An agent cannot supply it.
+- **Owner's words.** The quoted sentence was drafted by the agent and chosen by the owner. The CLO ruled that the record should carry the owner's own words, with a timestamp, as the 2026-11-02 record did ("I confirm A7 as read"). **That is owner-pending**: the owner confirms in their own words on #12742 (#10538 closes on the merge of PR #12737). An agent cannot supply it.
 - **Companion change superseded.** On the merge of PR #12737, ledger row 7 converts (Cloudflare to origin) to verified TLS and removes its exception. The 2026-11-19 date that this record's companion change set no longer applies once PR #12737 merges.
 - **After PR #12737.** That PR changes the declared `--sdk-url` to `https://app.soleur.ai/api/inngest`. The live host keeps the plain-HTTP poll until the owner's `inngest-host-replace` (#12742). *(Corrected 2026-11-15, CLO fix-round ruling (c): this sentence used to say "nothing live changes at merge".)* On the merge of PR #12737, the push apply rewrites the live Cloudflare config ruleset (`cloudflare_ruleset.seo_config_settings`: the adopted rule becomes `ssl = "strict"` for `app.soleur.ai` alone and the two ORIGIN-TLS rules are deleted). The effective SSL mode for `app.soleur.ai` (`strict`) and the live `--sdk-url` (private plain HTTP until #12742) stay the same. The void "pointing `--sdk-url` at the public host while Cloudflare to origin is flexible" is avoided only because #12742 lands after that apply; before #12742 runs, a read-only read-back (`cloudflare-readonly.sh config-entrypoint`) must show that no `flexible` rule matches `app.soleur.ai`. If the owner's act lands after 2026-11-20, a record that the owner types, beginning "SIGNED BY OWNER (human, not an agent)", is required. The draft is in the section 'Unsigned owner-record draft' below.
 
