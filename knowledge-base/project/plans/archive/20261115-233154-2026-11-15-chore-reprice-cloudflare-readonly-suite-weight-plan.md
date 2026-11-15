@@ -282,13 +282,13 @@ The rest run in CI (AC3).
 
 ## Acceptance Criteria
 
-- [ ] AC1: the diff outside plan, spec and learning artifacts is exactly this row.
+- [x] AC1: the diff outside plan, spec and learning artifacts is exactly this row.
       `git diff --numstat origin/main...HEAD -- . ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/learnings'`
       prints exactly `1	1	scripts/suite-durations.tsv`.
       `git diff origin/main...HEAD -- scripts/suite-durations.tsv | grep -E '^[-+][^-+]'` prints exactly
       `-plugins/soleur/test/cloudflare-readonly.test.sh	1261	floor` and
       `+plugins/soleur/test/cloudflare-readonly.test.sh	155229	measured`.
-- [ ] AC2: no closing reference anywhere.
+- [x] AC2: no closing reference anywhere.
       This command prints `true`:
       `gh pr view 12778 --json title,body,closingIssuesReferences --jq '(.closingIssuesReferences|length==0) and (.body|test("Ref #12441")) and (((.title+"\n"+.body)|test("(?i)\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\b:?\\s+(jikig-ai/soleur)?#[0-9]+"))|not)'`
       This command prints `0`:
