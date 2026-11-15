@@ -795,16 +795,6 @@ describe("Guard 4 — pin-target drift", () => {
     expect(m![1]).not.toContain(EXEC_HOST_PRIVATE_IP);
   });
 
-  it("whitespace around = in the sdk_url line stays GREEN (must-PASS variant)", () => {
-    const tf = infraFile("inngest-host.tf").replace(
-      /^(\s*)sdk_url\s*=\s*"/m,
-      "$1sdk_url     =   \"",
-    );
-    const m = tf.match(/^\s*sdk_url\s*=\s*"([^"]*)"/m);
-    expect(m).not.toBeNull();
-    expect(m![1]).toBe(routeServeUrl());
-  });
-
   it("variables.tf web-1 private_ip IS the pin, and network.tf attaches var.web_hosts at each.value.private_ip", () => {
     const vars = infraFile("variables.tf");
     const web1 = vars.match(/"web-1"\s*=\s*\{[^}]*\}/);

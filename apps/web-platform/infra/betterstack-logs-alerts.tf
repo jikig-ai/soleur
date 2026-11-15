@@ -2469,53 +2469,18 @@ resource "logtail_exploration_alert" "relay_peer_probe_failed" {
 }
 
 # ── #10538: a serving dedicated Inngest host that owns no functions (registry-empty alert) ───────
-# After #10538 remedy (c) the dedicated host's `--sdk-url` is the PUBLIC serve URL
-# (https://app.soleur.ai/api/inngest, inngest-host.tf) instead of the plaintext private-IP poll. The
-# value reaches the live host only at the owner's `inngest-host-replace`, and a broken public poll
-# otherwise degrades silently: the server answers /health, the scheduler is "up", and nothing is
-# planned. The hourly SOLEUR_INNGEST_SERVER_PROBE row already carries the measurement
-# (`registry_fns`, probe_schema>=8: the count of functions the server owns, or __UNREADABLE__), so
-# this alert pages when a SERVING dedicated row (server_active=active, http_code=200) past the
-# uptime floor reports a `registry_fns` that is not a positive integer. Rulings: CTO 2026-11-13
-# (decision-challenges.md "Alert shape under the 900 s ceiling" and "#10538 remedy"); plan
-# 2026-11-13-feat-origin-tls-cleanup-and-inngest-public-poll-plan.md Phase 3. Pinned by
-# apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh.
-#
-# SHAPE copied from inngest_luks_wrong_volume_sql (emitter anchor, marker at message position 1,
-# key-anchored trailing-space field matches, the vector-down phone-home leg B on `detail`); the
-# BODY is not copied:
-#   * no `local.inngest_luks_wrong_volume_alias`, no `hcloud_volume` address: that alias reads
-#     hcloud_volume.inngest_redis_luks.id, and a second reference would give every merge apply a
-#     second path to the sole-copy LUKS volume (ADR-282; the G2e rows of
-#     terraform-target-parity.test.ts). The drift guard has a no-volume-reference row;
-#   * no `detail = ''` disjunct: a not-serving or fieldless row belongs to the probe heartbeat
-#     (betteruptime_heartbeat.inngest_server_probe, uptime-alerts.tf), not to this alert (ruling F1).
-# The positive-integer test is NEGATED over the field (`NOT match(…, 'registry_fns=[1-9][0-9]* ')`),
-# so a row whose `registry_fns` field is missing, renamed, 0 or __UNREADABLE__ FIRES rather than
-# going quiet. One probe is enough (not three): three hourly probes need ~3 h of lookback, and new
-# logs alerts are capped at query_period 900 (logs-alert-query-period-ceiling.test.sh); each hourly
-# row sits in the 900 s window for three 300 s checks.
-# The uptime floor: `uptime_s` is the host's /proc/uptime, so `> 900` keeps the first probe after a
-# replace (the server still syncing its registry) from paging. `toUInt64OrZero(extract(…))` has no
-# precedent in this file (only toInt64 casts exist); the live counts below are the proof it parses.
-# Residual edges, recorded so they are not re-derived:
-#   * it does NOT see a STALE non-zero registry: the registry persists in Postgres across a replace,
-#     so a broken public poll most likely shows an old non-zero count. #12742 adds a sync-evidence
-#     probe field and must merge before the owner's replace;
-#   * `uptime_s=unknown` extracts '' -> 0 and stays quiet (fail-quiet on that one field);
-#   * a not-serving row (http_code!=200 or server_active!=active) is out of scope by design: the
-#     probe heartbeat pages on those;
-#   * every identity field (SYSLOG_IDENTIFIER, message, shipper, stage, detail) is sender-attested:
-#     a source-token holder can forge either leg (false pages, never a masked real one).
-# LIVE-PROBED 2026-11-13 ~07:54 UTC (scripts/betterstack-query.sh, SELECT count() only), 24 h over the
-# hot remote() UNION s3Cluster archive:
-#   (a) full predicate (both legs, as below)                                 ->  0 rows (quiet control)
-#   (b) positive control: the same predicate with the match un-negated       -> 14 rows (registry_fns=77)
-#   (c) population: emitter + marker + host_role=dedicated                   -> 16 rows
-#   The 2 population rows outside (b) are the 2026-11-12 17:05 UTC boot (http_code=000,
-#   server_active=activating, registry_fns=__UNREADABLE__, uptime below the floor): not serving, so the
-#   heartbeat's domain, excluded here as designed. Leg-B population (shipper + stage) -> 1 row, not
-#   counted by (a).
+# Pages when an hourly SOLEUR_INNGEST_SERVER_PROBE row from a SERVING dedicated host (server_active=active,
+# http_code=200) past the uptime floor (uptime_s > 900: the first probe after a replace is still syncing)
+# reports a registry_fns that is not a positive integer: the public sdk_url poll (#10538) may be failing.
+# Shape from inngest_luks_wrong_volume_sql (emitter anchor, marker at position 1, phone-home leg B on
+# `detail`); every needle is space-delimited on BOTH sides (`detail` starts with a field, hence `(?:^| )`),
+# and the registry test is NEGATED so a missing/renamed/0/__UNREADABLE__ field fires. No volume reference
+# (ADR-282) and no `detail = ''` disjunct (ruling F1: not-serving rows are the probe heartbeat's).
+# LIVE 2026-11-13 17:30 UTC, SELECT count() only, 24 h hot remote() UNION s3Cluster archive: (a) predicate
+# 0; (b) negation dropped 24 (registry_fns=77); (c) emitter+marker+' host_role=dedicated ' 24. Leg B, 7 d:
+# 1 row (not serving), 0 un-negated matches; the `(?:^| )` extract/match forms were checked on constants.
+# Residual: a STALE non-zero registry is invisible (#12742). Runbook: inngest-server.md#registry-empty-alert-10538.
+# Pinned by apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh.
 locals {
   inngest_registry_empty_sql = <<-SQL
     SELECT {{time}} AS time, count(*) AS value
@@ -2524,19 +2489,19 @@ locals {
       AND (
         JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
         AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
-        AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
-        AND position(JSONExtractString(raw, 'message'), 'server_active=active ') > 0
-        AND position(JSONExtractString(raw, 'message'), 'http_code=200 ') > 0
-        AND toUInt64OrZero(extract(JSONExtractString(raw, 'message'), 'uptime_s=([0-9]+) ')) > 900
-        AND NOT match(JSONExtractString(raw, 'message'), 'registry_fns=[1-9][0-9]* ')
+        AND position(JSONExtractString(raw, 'message'), ' host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' server_active=active ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' http_code=200 ') > 0
+        AND toUInt64OrZero(extract(JSONExtractString(raw, 'message'), ' uptime_s=([0-9]+) ')) > 900
+        AND NOT match(JSONExtractString(raw, 'message'), ' registry_fns=[1-9][0-9]* ')
         OR (
           JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
           AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
-          AND position(JSONExtractString(raw, 'detail'), 'host_role=dedicated ') > 0
-          AND position(JSONExtractString(raw, 'detail'), 'server_active=active ') > 0
-          AND position(JSONExtractString(raw, 'detail'), 'http_code=200 ') > 0
-          AND toUInt64OrZero(extract(JSONExtractString(raw, 'detail'), 'uptime_s=([0-9]+) ')) > 900
-          AND NOT match(JSONExtractString(raw, 'detail'), 'registry_fns=[1-9][0-9]* ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )host_role=dedicated ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )server_active=active ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )http_code=200 ')
+          AND toUInt64OrZero(extract(JSONExtractString(raw, 'detail'), '(?:^| )uptime_s=([0-9]+) ')) > 900
+          AND NOT match(JSONExtractString(raw, 'detail'), '(?:^| )registry_fns=[1-9][0-9]* ')
         )
       )
     GROUP BY time

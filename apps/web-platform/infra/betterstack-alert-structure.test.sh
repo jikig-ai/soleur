@@ -95,7 +95,7 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-# 21 = the 18 permanent alerts plus the three session-relay probe alerts (#12167). The throwaway egress_gw_probe_silent_canary
+# 22 = the 18 permanent alerts, the three session-relay probe alerts (#12167) and inngest_registry_empty (#10538). The throwaway egress_gw_probe_silent_canary
 # pair (#12180) took these floors to 19 while it lived; #12189 deleted it. The floors are -ge, so the exact pins elsewhere carry growth.
 CENSUS_FLOOR_ALERTS=22
 CENSUS_FLOOR_EXPLORATIONS=22

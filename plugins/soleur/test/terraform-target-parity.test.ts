@@ -5194,6 +5194,18 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
+  // #10538 CTO D2: the replace boots the public sdk_url; until #12742 item 1 lands (which deletes this step) the
+  // dispatch must type PUBLIC-SDK-URL, checked FIRST (before checkout and credentials) and unconditionally.
+  test("B10: inngest_host_replace's FIRST step is the unconditional PUBLIC-SDK-URL confirm gate (#10538, #12742)", () => {
+    const parsed = parseYaml(wf) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
+    const first = parsed.jobs.inngest_host_replace.steps[0];
+    expect(String(first.name)).toContain("PUBLIC-SDK-URL");
+    expect("if" in first).toBe(false);
+    expect((first.env as Record<string, string>).CONFIRM_RAW).toBe("${{ inputs.confirm }}");
+    expect(String(first.run)).toContain('if [[ "$CONFIRM_RAW" != "PUBLIC-SDK-URL" ]]; then');
+    expect(String(first.run)).toMatch(/#12742[\s\S]*exit 1\n\s*fi/);
+  });
+
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("random_password.inngest_redis_luks")).toBe(false);
     const perMerge = extractAllTargets(stripDispatchJobs(wf));

@@ -27,6 +27,10 @@
 #     leg would give every merge apply a second path to the sole-copy LUKS volume (the G2e rows of
 #     terraform-target-parity.test.ts).
 #   * NO `detail = ''` DISJUNCT (ruling F1): a fieldless row belongs to the probe heartbeat.
+#   * NEEDLE ANCHORING. Every needle is space-delimited on both sides (leg B: `(?:^| )`, since
+#     `detail` starts with a field); every needle key is space-delimited on the emit and phone-home
+#     lines; the SQL's own needles, run on rendered sample lines, fire on registry_fns=0, stay quiet
+#     on 77, and are not masked by a `prior_registry_fns=5` decoy.
 #   * BLOCK-SCOPED PARAMETERS, exactly once, anchored at both ends; the -target pair; the runbook
 #     anchor and its heading; the .tf-wide pair census.
 #
@@ -142,17 +146,23 @@ LOCAL_SQL="$(sql_local_raw "${NAME}_sql")"
 RG_SQL="$(printf '%s' "$LOCAL_SQL" | tr -d '[:space:]')"
 RG_COL="$(printf '%s' "$LOCAL_SQL" | tr -s '[:space:]' ' ')"
 
-# The canon, per leg, from the derived literals. `field_conj <col>` is the five serving / floor /
-# negated-registry conjuncts on one column (message on leg A, detail on leg B).
-field_conj() {
-  printf "ANDposition(JSONExtractString(raw,'%s'),'%s=dedicated')>0" "$1" "$K_ROLE"
-  printf "ANDposition(JSONExtractString(raw,'%s'),'%s=active')>0" "$1" "$K_SA"
-  printf "ANDposition(JSONExtractString(raw,'%s'),'%s=200')>0" "$1" "$K_HC"
-  printf "ANDtoUInt64OrZero(extract(JSONExtractString(raw,'%s'),'%s=([0-9]+)'))>900" "$1" "$K_UP"
-  printf "ANDNOTmatch(JSONExtractString(raw,'%s'),'%s=[1-9][0-9]*')" "$1" "$K_REG"
-}
-LEG_A="JSONExtractString(raw,'SYSLOG_IDENTIFIER')='${MUT_EMITTER}'ANDposition(JSONExtractString(raw,'message'),'${INNGEST_PROBE_MARKER}')=1$(field_conj message)"
-LEG_B_FIELDS="$(field_conj detail)"
+# The canon, per leg, from the derived literals. The five serving / floor / negated-registry
+# conjuncts, every needle space-delimited on BOTH sides (a leading-space-less needle also matches
+# a longer key ending in it, e.g. `prior_registry_fns=5`). Leg A reads `message`, which starts with
+# the marker, so a plain leading space is exact. Leg B reads `detail`, which STARTS with a field
+# (the phone-home detail is the bare field list), so its needles are `(?:^| )` regexes.
+LEG_A_FIELDS="ANDposition(JSONExtractString(raw,'message'),'${K_ROLE}=dedicated')>0"
+LEG_A_FIELDS+="ANDposition(JSONExtractString(raw,'message'),'${K_SA}=active')>0"
+LEG_A_FIELDS+="ANDposition(JSONExtractString(raw,'message'),'${K_HC}=200')>0"
+LEG_A_FIELDS+="ANDtoUInt64OrZero(extract(JSONExtractString(raw,'message'),'${K_UP}=([0-9]+)'))>900"
+LEG_A_FIELDS+="ANDNOTmatch(JSONExtractString(raw,'message'),'${K_REG}=[1-9][0-9]*')"
+B_PRE='(?:^|)'
+LEG_B_FIELDS="ANDmatch(JSONExtractString(raw,'detail'),'${B_PRE}${K_ROLE}=dedicated')"
+LEG_B_FIELDS+="ANDmatch(JSONExtractString(raw,'detail'),'${B_PRE}${K_SA}=active')"
+LEG_B_FIELDS+="ANDmatch(JSONExtractString(raw,'detail'),'${B_PRE}${K_HC}=200')"
+LEG_B_FIELDS+="ANDtoUInt64OrZero(extract(JSONExtractString(raw,'detail'),'${B_PRE}${K_UP}=([0-9]+)'))>900"
+LEG_B_FIELDS+="ANDNOTmatch(JSONExtractString(raw,'detail'),'${B_PRE}${K_REG}=[1-9][0-9]*')"
+LEG_A="JSONExtractString(raw,'SYSLOG_IDENTIFIER')='${MUT_EMITTER}'ANDposition(JSONExtractString(raw,'message'),'${INNGEST_PROBE_MARKER}')=1${LEG_A_FIELDS}"
 LEG_B="JSONExtractString(raw,'shipper')='${MUT_SHIPPER}'ANDJSONExtractString(raw,'stage')='${MUT_STAGE}'${LEG_B_FIELDS}"
 REGEMPTY_CANON="SELECT{{time}}AStime,count(*)ASvalueFROM{{source}}WHEREtimeBETWEEN{{start_time}}AND{{end_time}}AND(${LEG_A}OR(${LEG_B}))GROUPBYtime"
 
@@ -179,18 +189,23 @@ has "position(JSONExtractString(raw, 'message'), '${INNGEST_PROBE_MARKER}') = 1"
   && ok "leg A is scoped to the probe marker, anchored at message position 1" \
   || no "the marker scope is missing or unanchored"
 for _col in message detail; do
-  _leg=A; [ "$_col" = detail ] && _leg=B
-  has "position(JSONExtractString(raw, '${_col}'), '${K_ROLE}=dedicated ') > 0" \
-    && ok "leg ${_leg} scopes ${K_ROLE}=dedicated (space-terminated) on ${_col}" \
-    || no "leg ${_leg}: no space-terminated ${K_ROLE}=dedicated scope on ${_col} — web rows would drive this alert"
-  has "position(JSONExtractString(raw, '${_col}'), '${K_SA}=active ') > 0" \
-    && has "position(JSONExtractString(raw, '${_col}'), '${K_HC}=200 ') > 0" \
-    && ok "leg ${_leg} requires a SERVING row (${K_SA}=active and ${K_HC}=200, space-terminated) on ${_col}" \
+  _leg=A; _pre=' '; _pos=1
+  [ "$_col" = detail ] && { _leg=B; _pre='(?:^| )'; _pos=0; }
+  _needle() {  # _needle <key=value> -> the presence conjunct this leg uses for it
+    if [ "$_pos" = 1 ]; then printf "position(JSONExtractString(raw, '%s'), ' %s ') > 0" "$_col" "$1"
+    else printf "match(JSONExtractString(raw, '%s'), '%s%s ')" "$_col" "$_pre" "$1"; fi
+  }
+  has "AND $(_needle "${K_ROLE}=dedicated")" \
+    && ok "leg ${_leg} scopes ${K_ROLE}=dedicated (space-delimited both sides) on ${_col}" \
+    || no "leg ${_leg}: no space-delimited ${K_ROLE}=dedicated scope on ${_col} — web rows would drive this alert"
+  has "AND $(_needle "${K_SA}=active")" \
+    && has "AND $(_needle "${K_HC}=200")" \
+    && ok "leg ${_leg} requires a SERVING row (${K_SA}=active and ${K_HC}=200, space-delimited both sides) on ${_col}" \
     || no "leg ${_leg}: the serving scope (${K_SA}=active, ${K_HC}=200) is missing on ${_col} — not-serving rows belong to the heartbeat"
-  has "toUInt64OrZero(extract(JSONExtractString(raw, '${_col}'), '${K_UP}=([0-9]+) ')) > 900" \
+  has "toUInt64OrZero(extract(JSONExtractString(raw, '${_col}'), '${_pre}${K_UP}=([0-9]+) ')) > 900" \
     && ok "leg ${_leg} carries the uptime floor (${K_UP} > 900) on ${_col}" \
     || no "leg ${_leg}: the uptime floor is missing on ${_col} — the first probe after a replace would page"
-  has "AND NOT match(JSONExtractString(raw, '${_col}'), '${K_REG}=[1-9][0-9]* ')" \
+  has "AND NOT match(JSONExtractString(raw, '${_col}'), '${_pre}${K_REG}=[1-9][0-9]* ')" \
     && ok "leg ${_leg} NEGATES the positive-integer test on ${_col}: a missing, renamed, 0 or __UNREADABLE__ field FIRES" \
     || no "leg ${_leg}: the ${K_REG} test on ${_col} is not a negated positive-integer match — the rule would go quiet on a dropped field"
 done
@@ -212,6 +227,63 @@ done
 [ -z "$_ph_miss" ] \
   && ok "the phone-home fallback detail carries every field key leg B reads (same key=\$var tokens as the emit line)" \
   || no "the phone-home fallback detail lacks field key(s):${_ph_miss} — leg B would read nothing"
+
+# Every needle key must sit space-delimited on BOTH sides of its token on the emit line, because the
+# needles are (' key=…' and 'key=… '). A key moved to the LAST field is followed by the closing quote,
+# not a space, and its needle never matches. On the phone-home line the first field may follow the
+# opening quote: that is the start of `detail`, which leg B reads with `(?:^| )`.
+for _ln in EMIT PH; do
+  _txt="$EMIT_LINE"; _lead='[[:space:]]'
+  [ "$_ln" = PH ] && { _txt="$PH_LINE"; _lead='[[:space:]"]'; }
+  _sd_miss=""
+  for _pair in "$K_ROLE:host_role" "$K_SA:server_active" "$K_HC:http_code" "$K_UP:uptime_s" "$K_REG:registry_fns"; do
+    grep -qE "${_lead}${_pair%%:*}=\\\$${_pair#*:}[[:space:]]" <<< "$_txt" || _sd_miss="$_sd_miss ${_pair%%:*}"
+  done
+  [ -z "$_sd_miss" ] \
+    && ok "every needle key is space-delimited on both sides on the ${_ln} line (none is the last field)" \
+    || no "needle key(s) not space-delimited on the ${_ln} line:${_sd_miss} — a trailing-space needle never matches the last field"
+done
+
+# RENDERED-LINE SEMANTICS. Render each line with sample values and evaluate the needles READ FROM THE
+# SQL (not re-typed here) in bash ERE: a serving row with registry_fns=0 must FIRE, the same row
+# with registry_fns=77 must stay quiet, and a decoy ` prior_registry_fns=5` field before registry_fns
+# must not mask the 0 (the leading-space anchor; without it the decoy satisfies the positive match).
+_render() {  # _render <line> <registry value> -> the quoted payload with $vars substituted
+  local t="$1"
+  t="${t#*\"${INNGEST_PROBE_MARKER} }"; [ "$t" = "$1" ] && t="${1#*${MUT_STAGE} \"}"
+  t="${t%%\"*}"
+  t="${t//\$host_role/dedicated}"; t="${t//\$server_active/active}"; t="${t//\$http_code/200}"
+  t="${t//\$uptime_s/1000}"; t="${t//\$registry_fns/$2}"
+  t="$(sed -E 's/\$[A-Za-z_]+/x/g' <<< "$t")"
+  [ "$1" = "$EMIT_LINE" ] && t="${INNGEST_PROBE_MARKER} $t"
+  printf '%s' "$t"
+}
+_fires() {  # _fires <col> <text> -> rc 0 when every leg conjunct on <col> (read from RG_COL) holds
+  local col="$1" txt="$2" n re up
+  while IFS= read -r n; do [ -n "$n" ] && { [[ "$txt" == *"$n"* ]] || return 1; }; done \
+    < <(grep -oE "position\(JSONExtractString\(raw, '${col}'\), '[^']*'\) > 0" <<< "$RG_COL" | sed -E "s/^.*, '([^']*)'\) > 0$/\1/" | grep -v "^${INNGEST_PROBE_MARKER}\$")
+  while IFS= read -r re; do
+    [ -n "$re" ] || continue; re="${re//(?:/(}"; [[ "$txt" =~ $re ]] || return 1
+  done < <(grep -oE "AND match\(JSONExtractString\(raw, '${col}'\), '[^']*'\)" <<< "$RG_COL" | sed -E "s/^.*, '([^']*)'\)$/\1/")
+  re="$(grep -oE "extract\(JSONExtractString\(raw, '${col}'\), '[^']*'\)\) > 900" <<< "$RG_COL" | sed -E "s/^.*, '([^']*)'\)\) > 900$/\1/")"
+  re="${re//(?:/(}"; [ -n "$re" ] || return 1
+  [[ "$txt" =~ $re ]] || return 1
+  up="${BASH_REMATCH[${#BASH_REMATCH[@]}-1]}"; [ "${up:-0}" -gt 900 ] || return 1
+  re="$(grep -oE "AND NOT match\(JSONExtractString\(raw, '${col}'\), '[^']*'\)" <<< "$RG_COL" | sed -E "s/^.*, '([^']*)'\)$/\1/")"
+  re="${re//(?:/(}"; [ -n "$re" ] || return 1
+  ! [[ "$txt" =~ $re ]]
+}
+for _ln in EMIT PH; do
+  _txt="$EMIT_LINE"; _col=message
+  [ "$_ln" = PH ] && { _txt="$PH_LINE"; _col=detail; }
+  _r0="$(_render "$_txt" 0)"; _r77="$(_render "$_txt" 77)"
+  _rdecoy="${_r0/ ${K_REG}=0/ prior_${K_REG}=5 ${K_REG}=0}"
+  if [ "$_rdecoy" != "$_r0" ] && _fires "$_col" "$_r0" && ! _fires "$_col" "$_r77" && _fires "$_col" "$_rdecoy"; then
+    ok "rendered ${_ln} line: the SQL's ${_col} needles fire on ${K_REG}=0, stay quiet on ${K_REG}=77, and a prior_${K_REG}=5 decoy does not mask the 0"
+  else
+    no "rendered ${_ln} line: the SQL's ${_col} needles misjudge a sample row (fire on 0 / quiet on 77 / decoy-proof) — rendered: ${_r0}"
+  fi
+done
 
 grep -qE '(^[[:space:]]*|&&[[:space:]]+)host_role=dedicated[[:space:]]*$' "$BOOT" \
   && ok "the emitter assigns host_role=dedicated on the dedicated arm (the value leg A/B scope on)" \
@@ -236,9 +308,12 @@ printf '%s' "$RG_SQL" | grep -cF >/dev/null 'WHEREtimeBETWEEN{{start_time}}AND{{
   && ok "the window filter WHERE time BETWEEN {{start_time}} AND {{end_time}} is present" \
   || no "the WHERE time BETWEEN window is missing or altered"
 
-! grep -qE "replace\\(msg.*(${K_REG}|${K_UP}|${K_HC}|${K_SA}|${K_ROLE}|shipper|stage|${INNGEST_PROBE_MARKER})" "$VT" \
-  && ok "the needle keys are absent from vector.toml's scrub rewrites" \
-  || no "a needle key now appears in a pii_scrub replace() — the needle is dead before ingest"
+_vt_rc=0; grep -qE "replace\\(msg.*(${K_REG}|${K_UP}|${K_HC}|${K_SA}|${K_ROLE}|shipper|stage|${INNGEST_PROBE_MARKER})" "$VT" || _vt_rc=$?
+case "$_vt_rc" in
+  1) ok "the needle keys are absent from vector.toml's scrub rewrites (grep rc 1: no match)" ;;
+  0) no "a needle key now appears in a pii_scrub replace() — the needle is dead before ingest" ;;
+  *) no "the vector.toml scrub grep errored (rc ${_vt_rc}) — absence is not proven" ;;
+esac
 
 # ── presence rows: resources and block-scoped parameters ─────────────────────────────────────
 if [ -n "$RG_EX" ] && [ -n "$RG_AL" ]; then
@@ -558,7 +633,7 @@ s = s.replace("registry_fns=$registry_fns data_luks", "registry_count=$registry_
     "ruled form"
   # 7. a copied wrong-volume leg brings a volume reference
   mutate_red "7: the SQL gains a reference to local.inngest_luks_wrong_volume_alias (a copied leg; ADR-282)" TF \
-    's = edit(s, RGSQL, "        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"host_role=dedicated "+Q+") > 0\n", "        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"host_role=dedicated "+Q+") > 0\n        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"data_mount_devid=${local.inngest_luks_wrong_volume_alias} "+Q+") = 0\n", SQLEND)' \
+    's = edit(s, RGSQL, "        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+" host_role=dedicated "+Q+") > 0\n", "        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+" host_role=dedicated "+Q+") > 0\n        AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"data_mount_devid=${local.inngest_luks_wrong_volume_alias} "+Q+") = 0\n", SQLEND)' \
     "volume"
   mutate_red "7b: the alert block gains an hcloud_volume address (a second apply path to the LUKS volume)" TF \
     's = edit(s, RGAL, "  paused = false\n", "  paused = false\n  # volume: ${hcloud_volume.inngest_redis_luks.id}\n  depends_on = [hcloud_volume.inngest_redis_luks]\n")' \
@@ -566,13 +641,13 @@ s = s.replace("registry_fns=$registry_fns data_luks", "registry_count=$registry_
 
   # ── extra rows: mute knobs, scope, ruling F1, census ────────────────────────────────────
   mutate_red "the uptime floor is dropped on leg A (the first probe after a replace pages)" TF \
-    's = edit(s, RGSQL, "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"uptime_s=([0-9]+) "+Q+")) > 900\n", "", SQLEND)' \
+    's = edit(s, RGSQL, "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+" uptime_s=([0-9]+) "+Q+")) > 900\n", "", SQLEND)' \
     "uptime floor"
   mutate_red "the serving scope http_code=200 is dropped on leg B" TF \
-    's = edit(s, RGSQL, "          AND position(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"http_code=200 "+Q+") > 0\n", "", SQLEND)' \
+    's = edit(s, RGSQL, "          AND match(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"(?:^| )http_code=200 "+Q+")\n", "", SQLEND)' \
     "serving scope"
   mutate_red "a detail='' disjunct joins leg B (ruling F1: fieldless rows are the heartbeat's)" TF \
-    's = edit(s, RGSQL, "          AND position(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"host_role=dedicated "+Q+") > 0\n", "          AND (JSONExtractString(raw, "+Q+"detail"+Q+") = "+Q+Q+" OR position(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"host_role=dedicated "+Q+") > 0)\n", SQLEND)' \
+    's = edit(s, RGSQL, "          AND match(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"(?:^| )host_role=dedicated "+Q+")\n", "          AND (JSONExtractString(raw, "+Q+"detail"+Q+") = "+Q+Q+" OR match(JSONExtractString(raw, "+Q+"detail"+Q+"), "+Q+"(?:^| )host_role=dedicated "+Q+"))\n", SQLEND)' \
     "detail="
   mutate_red "the query_period widens 900 -> 1800 (above the new-alert ceiling)" TF \
     's = edit(s, RGAL, "  query_period        = 900\n", "  query_period        = 1800\n")' \
@@ -608,15 +683,31 @@ gutted = "  inngest_registry_empty_sql = <<-SQL\n    SELECT 1\n  SQL\n"
 s = s[:i] + "  /*\n" + body + "  */\n" + gutted + s[j:]' \
     "opener count"
 
+  # ── needle anchoring (both sides space-delimited) ───────────────────────────────────────
+  mutate_red "(i) the probe moves uptime_s to the LAST field (its trailing-space needle can never match)" BOOT \
+    'old = " uptime_s=$uptime_s "
+assert s.count(old) == 2, "expected the emit line and the phone-home line, got %d" % s.count(old)
+s = s.replace(old, " ")
+s = s.replace("data_luks=$data_luks\"", "data_luks=$data_luks uptime_s=$uptime_s\"")
+assert s.count("uptime_s=$uptime_s\"") == 2' \
+    "space-delimited"
+  mutate_green "(ii) the probe adds a prior_registry_fns=5 field before registry_fns (harmless: the leading-space anchor; the rendered rows still fire on 0)" BOOT \
+    'old = " registry_fns=$registry_fns "
+assert s.count(old) == 2, "expected the emit line and the phone-home line, got %d" % s.count(old)
+s = s.replace(old, " prior_registry_fns=5 registry_fns=$registry_fns ")'
+  mutate_red "the leading space is dropped from leg A's registry_fns needle (a prior_registry_fns=5 decoy masks a 0)" TF \
+    's = edit(s, RGSQL, Q+" registry_fns=[1-9][0-9]* "+Q, Q+"registry_fns=[1-9][0-9]* "+Q, SQLEND)' \
+    "rendered EMIT line"
+
   # ── harness rows ───────────────────────────────────────────────────────────────────────
   mutate_self_red "the extraction is replaced with an empty string (the floor and canon rows must red)" \
     's|^LOCAL_SQL="$(sql_local_raw "${NAME}_sql")"$|LOCAL_SQL=""|'
   mutate_self_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor" \
-    's/^PRESENCE_ROWS=44$/PRESENCE_ROWS=45/'
+    's/^PRESENCE_ROWS=48$/PRESENCE_ROWS=49/'
 
   # ── must-PASS variants ─────────────────────────────────────────────────────────────────
   mutate_green "the SQL is reformatted across lines (leg A's uptime conjunct wrapped; the resource collapses whitespace)" TF \
-    's = edit(s, RGSQL, "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"uptime_s=([0-9]+) "+Q+")) > 900\n", "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"),\n            "+Q+"uptime_s=([0-9]+) "+Q+"))\n          > 900\n", SQLEND)'
+    's = edit(s, RGSQL, "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+" uptime_s=([0-9]+) "+Q+")) > 900\n", "        AND toUInt64OrZero(extract(JSONExtractString(raw, "+Q+"message"+Q+"),\n            "+Q+" uptime_s=([0-9]+) "+Q+"))\n          > 900\n", SQLEND)'
   mutate_green "a # comment line naming no pinned token is added inside the locals block" TF \
     'old = "  inngest_registry_empty_runbook_url ="
 assert s.count(old) == 1
@@ -626,8 +717,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer
 # run adds one row per mutation. The instrument control above catches a floor that drifts past the
 # presence rows.
-PRESENCE_ROWS=44
-MUT_ROWS=24
+PRESENCE_ROWS=48
+MUT_ROWS=27
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

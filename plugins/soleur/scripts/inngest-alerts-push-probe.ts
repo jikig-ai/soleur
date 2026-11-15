@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Discoverability probe for #11068: do all SEVEN Inngest-serving Better Stack alert resources
+// Discoverability probe for #11068: do the seven TARGETS below (Inngest-serving Better Stack alert resources)
 // declare `push = true` in SOURCE? The flip is the measured-acceptance convention (#9168,
 // #11001): email stays on, push is additive, and a vendor refusal at apply reverts the
 // attribute — a silent source-level revert is exactly what this probe exists to catch.

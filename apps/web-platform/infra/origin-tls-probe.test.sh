@@ -108,6 +108,8 @@ stop_srv
 # cannot read a verdict off a rule that no longer exists. A live server is up so a request, if sent, would be logged.
 TF_RULES="$SCRIPT_DIR/seo-config-rules.tf"
 TF_RULES_CODE="$(grep -v '^[[:space:]]*#' "$TF_RULES" || true)"
+# Positive control: the absence check below is vacuous on an empty or wrong read (a moved file reads as "no match").
+if [ -n "$TF_RULES_CODE" ] && grep -qF 'dcb85b75bc3c4f4aa2a8c13a080bf854' <<<"$TF_RULES_CODE"; then pass "C0a seo-config-rules.tf read non-empty and carries the adopted rule ref (the absence check has a real subject)"; else fail "C0a seo-config-rules.tf read empty or lacks ref dcb85b75bc3c4f4aa2a8c13a080bf854 — C0 below would pass vacuously"; fi
 if grep -qF 'x-origin-tls-probe' <<<"$TF_RULES_CODE"; then fail "C0 seo-config-rules.tf still matches the retired x-origin-tls-probe header"; else pass "C0 no rule in seo-config-rules.tf matches the retired x-origin-tls-probe header"; fi
 start_srv 200 TLSv1.3 || exit 1
 run;                    expect_rc "C1 default mode, TLS header" 0 "result=TLS-ON-ORIGIN-HOP"
@@ -135,7 +137,7 @@ OUT="$(ORIGIN_TLS_PROBE_URL="ftp://example.invalid/health" bash "$PROBE" 2>&1)";
 echo
 echo "=== origin-tls-probe: $PASSES passed, $FAILS failed, $ASSERTED asserted ==="
 
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=34
 if [ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]; then
   echo "ANTI-VACUITY: only $ASSERTED assertions ran, floor is $MIN_ASSERTIONS." >&2
   echo "Assertions were removed or the dispatch was disarmed." >&2

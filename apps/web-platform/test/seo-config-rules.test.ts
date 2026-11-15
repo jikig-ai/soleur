@@ -496,10 +496,9 @@ describe("seo-config-rules.tf origin-TLS cleanup tombstones (ADR-321 item 13)", 
     expect(offenders.map((f) => path.relative(REPO_ROOT, f))).toEqual([]);
   });
 
+  // The infraTerraformFiles walk includes variables.tf, so no separate VARIABLES_PATH read is needed.
   test("neither origin-TLS switch variable is declared (variables.tf or any other .tf)", () => {
-    const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
-    expect(vars).not.toMatch(/variable\s+"enable_origin_tls_canary_rule"/);
-    expect(vars).not.toMatch(/variable\s+"enable_origin_tls_strict"/);
+    expect(infraTerraformFiles()).toContain(VARIABLES_PATH);
     const offenders = infraTerraformFiles().filter((f) =>
       /variable\s+"enable_origin_tls_/.test(stripHclComments(readFileSync(f, "utf-8"))),
     );
@@ -568,5 +567,175 @@ describe("seo-config-rules.tf origin-TLS cleanup tombstones (ADR-321 item 13)", 
     expect(probe).not.toContain("x-origin-tls-probe");
     const offenders = allRuleBlocks().filter((r) => (quotedAttr(r, "expression") ?? "").includes("x-origin-tls-probe"));
     expect(offenders).toEqual([]);
+  });
+});
+
+// The committed cleanup plan fixture (tests/scripts/fixtures/tfplan-origin-tls-cleanup.json) is what the plan-shape gate
+// reads; if it drifts from the .tf it certifies a tree that no longer exists. Each fixture rule is matched to its .tf block
+// by `ref` (or by description for the two ref-less rules) and its description, expression, ssl and enabled are compared.
+describe("tfplan-origin-tls-cleanup.json fixture matches the .tf rule blocks", () => {
+  test("after.rules agrees with seo-config-rules.tf rule for rule", () => {
+    const plan = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "tests/scripts/fixtures/tfplan-origin-tls-cleanup.json"), "utf-8"),
+    ) as { resource_changes: Array<{ address: string; change: { after: { rules: FixtureRule[] } | null } }> };
+    const rc = plan.resource_changes.filter((r) => r.address === RESOURCE_ADDRESS);
+    expect(rc).toHaveLength(1);
+    const fixtureRules = rc[0].change.after?.rules ?? [];
+    const tfRules = allRuleBlocks();
+    expect(fixtureRules).toHaveLength(tfRules.length);
+    for (const fr of fixtureRules) {
+      const key = fr.ref ?? fr.description;
+      const tf = tfRules.filter((r) =>
+        fr.ref ? quotedAttr(r, "ref") === fr.ref : quotedAttr(r, "description") === fr.description,
+      );
+      expect(tf, `exactly one .tf rule for fixture rule ${key}`).toHaveLength(1);
+      const enabled = tf[0].match(/^\s*enabled\s*=\s*(true|false)\s*$/m)?.[1];
+      expect({
+        description: quotedAttr(tf[0], "description"),
+        expression: quotedAttr(tf[0], "expression"),
+        ssl: sslValue(tf[0]),
+        enabled: enabled === undefined ? null : enabled === "true",
+      }, `fixture rule ${key}`).toEqual({
+        description: fr.description,
+        expression: fr.expression,
+        ssl: fr.action_parameters?.[0]?.ssl ?? null,
+        enabled: fr.enabled,
+      });
+    }
+  });
+});
+
+interface FixtureRule {
+  ref: string | null;
+  description: string;
+  expression: string;
+  enabled: boolean;
+  action_parameters?: Array<{ ssl: string | null }>;
+}
+
+// ROLLBACK COUPLING (C5 + Security seat, #10479). The published wording, the ledger and the public sdk_url all assume the
+// adopted rule is strict. A rollback to any other mode is a reviewed forward PR that must, in the same diff, correct the
+// Privacy Policy and the DPD (canonical and mirror), set ledger row 7 cert_verification off, and re-point sdk_url off the
+// public host (or re-open ledger row 6). Correction notes `*( ... )*` describe what a document USED to say, so they are
+// stripped (paren-depth aware) before matching.
+const PP_CERT_PHRASE = "verifies our servers' certificate";
+const DPD_CERT_PHRASES = [
+  "with Cloudflare verifying the servers' certificate",
+  "FULFILLED as to the Cloudflare-to-origin connection",
+];
+const LEDGER_DISCLOSED_AS = "docs/legal/privacy-policy.md:Encryption in transit";
+
+/** Remove every `*( ... )*` span, tracking paren depth so a nested `(UTC)` does not end the note early. Unbalanced: kept. */
+function stripCorrectionNotes(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("*(", i)) {
+      let depth = 0;
+      let end = -1;
+      for (let j = i + 1; j < text.length; j++) {
+        if (text[j] === "(") depth++;
+        else if (text[j] === ")") {
+          depth--;
+          if (depth === 0) {
+            if (text[j + 1] === "*") end = j + 2;
+            break;
+          }
+        }
+      }
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+function rollbackCouplingViolations(input: {
+  mode: string | null;
+  privacyTexts: Record<string, string>;
+  dpdTexts: Record<string, string>;
+  row7Cert: string | null;
+  sdkUrl: string | null;
+}): string[] {
+  if (input.mode === "strict") return [];
+  const v: string[] = [];
+  const norm = (t: string) => stripCorrectionNotes(t).replace(/\s+/g, " ");
+  for (const [name, text] of Object.entries(input.privacyTexts)) {
+    if (norm(text).includes(PP_CERT_PHRASE)) v.push(`${name}: "${PP_CERT_PHRASE}" while mode=${input.mode}`);
+  }
+  for (const [name, text] of Object.entries(input.dpdTexts)) {
+    for (const phrase of DPD_CERT_PHRASES) {
+      if (norm(text).includes(phrase)) v.push(`${name}: "${phrase}" while mode=${input.mode}`);
+    }
+  }
+  if (input.row7Cert === "on") v.push(`ledger row (${LEDGER_DISCLOSED_AS}): cert_verification=on while mode=${input.mode}`);
+  if (input.sdkUrl?.startsWith("https://app.soleur.ai")) v.push(`inngest-host.tf sdk_url=${input.sdkUrl} while mode=${input.mode}`);
+  return v;
+}
+
+describe("rollback coupling: published wording, ledger and sdk_url follow the adopted SSL mode", () => {
+  const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), "utf-8");
+
+  test("the REAL tree has no violations (mode read from seo-config-rules.tf)", () => {
+    const ledger = JSON.parse(read("scripts/encryption-posture-ledger.json")) as {
+      connections: Array<{ in_transit?: { disclosed_as?: string; cert_verification?: string } }>;
+    };
+    const rows = ledger.connections.filter((c) => c.in_transit?.disclosed_as === LEDGER_DISCLOSED_AS);
+    expect(rows, `exactly one ledger row disclosed_as ${LEDGER_DISCLOSED_AS}`).toHaveLength(1);
+    const sdk = [...stripHclComments(read("apps/web-platform/infra/inngest-host.tf")).matchAll(/^\s*sdk_url\s*=\s*"([^"]*)"/gm)];
+    expect(sdk, "exactly one sdk_url in inngest-host.tf").toHaveLength(1);
+    const input = {
+      mode: sslValue(adoptedSslRule()),
+      privacyTexts: {
+        "docs/legal/privacy-policy.md": read("docs/legal/privacy-policy.md"),
+        "plugins/soleur/docs/pages/legal/privacy-policy.md": read("plugins/soleur/docs/pages/legal/privacy-policy.md"),
+      },
+      dpdTexts: {
+        "docs/legal/data-protection-disclosure.md": read("docs/legal/data-protection-disclosure.md"),
+        "plugins/soleur/docs/pages/legal/data-protection-disclosure.md": read("plugins/soleur/docs/pages/legal/data-protection-disclosure.md"),
+      },
+      row7Cert: rows[0].in_transit?.cert_verification ?? null,
+      sdkUrl: sdk[0][1],
+    };
+    // Positive controls: the guard is only meaningful while the inputs it would fire on are actually present.
+    expect(input.mode).toBe("strict");
+    expect(input.row7Cert).toBe("on");
+    expect(input.sdkUrl).toMatch(/^https:\/\/app\.soleur\.ai\//);
+    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(8); // 2 PP + 4 DPD + row 7 + sdk_url
+    expect(rollbackCouplingViolations(input)).toEqual([]);
+  });
+
+  const none = { privacyTexts: {}, dpdTexts: {}, row7Cert: null, sdkUrl: null };
+  test.each([
+    ["PP phrase", { privacyTexts: { pp: `TLS and ${PP_CERT_PHRASE}.` } }],
+    ["DPD verifying phrase", { dpdTexts: { dpd: `TLS, ${DPD_CERT_PHRASES[0]}, and` } }],
+    ["DPD FULFILLED phrase", { dpdTexts: { dpd: `**${DPD_CERT_PHRASES[1]}**` } }],
+    ["row 7 cert on", { row7Cert: "on" }],
+    ["public sdk_url", { sdkUrl: "https://app.soleur.ai/api/inngest" }],
+  ])("mode flexible + %s -> violation", (_label, over) => {
+    expect(rollbackCouplingViolations({ ...none, ...over, mode: "flexible" })).toHaveLength(1);
+  });
+
+  test("mode flexible + phrase only inside a *( ... )* correction note (with nested parens) -> no violation", () => {
+    const pp = `**Last Updated:** *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare "${PP_CERT_PHRASE}" (see 5.8).)* Body: plain HTTP to origin.`;
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", privacyTexts: { pp } })).toEqual([]);
+    // Control: the same phrase after the note closes still fires.
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", privacyTexts: { pp: `${pp} ${PP_CERT_PHRASE}` } })).toHaveLength(1);
+  });
+
+  test("mode strict + everything present -> no violation", () => {
+    expect(
+      rollbackCouplingViolations({
+        mode: "strict",
+        privacyTexts: { pp: PP_CERT_PHRASE },
+        dpdTexts: { dpd: DPD_CERT_PHRASES.join(" ") },
+        row7Cert: "on",
+        sdkUrl: "https://app.soleur.ai/api/inngest",
+      }),
+    ).toEqual([]);
   });
 });
