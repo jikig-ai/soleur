@@ -78,9 +78,9 @@ the second, all in one Bash call: the `exit 1` stops the call before the lock bl
 run the check again; never arm around it. If it refuses again after that review, stop and report the PR unarmed
 with the `evidence=` and `unreviewed=` values its refusal line prints: shell state does not survive the call, so
 that line is the only record of them. `unreviewed=` lists `git rev-list --first-parent --no-merges "$EV..$H"`, the
-commits after the evidence head; `evidence=none` means no passing comment, and `unreviewed=none` beside a real
+commits after the evidence head; `evidence=none` means no passing comment (or the first `gh pr view` read failed), and `unreviewed=none` beside a real
 `evidence=` head means the check stopped before it could list commits: the evidence head is not an ancestor of the
-PR head (a rebase or force-push), a head is missing from the local object store, or the `gh` or `git` call failed.
+PR head (a rebase or force-push), a head is missing from the local object store, or the `gh` read of the PR head (`headRefOid`) or a `git` call failed.
 The `fatal:` or `gh` line above the refusal names which. Run one check per Bash call: the statement assigns `R` only
 when it reaches `git rev-list`, so a shell that already holds `R` from another PR's check reports that PR's commits.
 

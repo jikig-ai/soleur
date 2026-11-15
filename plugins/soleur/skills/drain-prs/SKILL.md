@@ -122,7 +122,7 @@ Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs 
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
 ```
 
-Report the drain delta: before/after open-PR count and the per-tier outcome (merged / enqueued / skipped / deferred), listing an enqueued PR as enqueued until it reads `MERGED`, then one line per PR §4 refused (`#<N> unarmed: …`).
+Report the drain delta: before/after open-PR count and the per-tier outcome (merged / enqueued / skipped / deferred), listing an enqueued PR as enqueued until it reads `MERGED`, then one line per PR §4 refused (`#<N> unarmed: …`) and one per PR whose head fetch failed (`#<N> unarmed: fetch failed`; not a refusal, so no `soleur:review` retry).
 
 ## Pipeline detection
 

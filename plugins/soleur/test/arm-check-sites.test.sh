@@ -42,6 +42,8 @@ SITES=(
 LINK_ONLY=(plugins/soleur/skills/ship/references/settle-then-admin-merge.md)
 SETTLE="${LINK_ONLY[0]}"
 DRAIN=plugins/soleur/skills/drain-prs/SKILL.md
+# drain-prs §4's fence opens with this guard (a failed fetch is reported as itself, not as a refusal).
+DRAIN_FETCH='git fetch -q origin "pull/<N>/head" || { echo "fetch of PR <N>'"'"'s head failed: not armed"; exit 1; }'
 CANON=plugins/soleur/skills/review/references/review-evidence-comment.md
 SYNC=plugins/soleur/scripts/sync-pr-behind.sh
 MQJ=scripts/merge-queue-jump.sh
@@ -243,6 +245,7 @@ run_root() {
   else
     grep -qF -- "$CANON_REFUSE" "$root/$CANON" || { echo "FAIL[A3] canonical refusal statement missing"; f=1; }
     grep -qF -- "$CANON_ARM" "$root/$CANON" || { echo "FAIL[A3] canonical pinned arm line missing"; f=1; }
+    grep -qxF -- "$DRAIN_FETCH" "$root/$DRAIN" || { echo "FAIL[A3] drain-prs fetch line missing"; f=1; }
     for frag in "${CANON_BODY[@]}"; do
       grep -qF -- "$frag" "$root/$CANON" || { echo "FAIL[A3] canonical check fragment missing: $frag"; f=1; }
     done
@@ -550,6 +553,8 @@ h9() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHO
 h10() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```markdown'$'\n''`gh pr merge` is armed with `--auto` only after the arm check.'$'\n''```'; }
 m28a() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''1. Push and re-queue:'$'\n\n''   - the push:'$'\n\n''      ```bash'$'\n''      gh pr merge `gh pr view --json number --jq .number` --squash --auto'$'\n''      ```'; }
 m28b() { edit "$1/plugins/soleur/skills/ship/SKILL.md" "$SHIP_ANCHOR" "$SHIP_ANCHOR"$'\n\n''```'$'\n''gh pr merge `echo 7` --squash --auto'$'\n''```'; }
+m29a() { edit "$1/$DRAIN" "$DRAIN_FETCH" "${DRAIN_FETCH/exit 1; \}/true; \}}"; }
+m29b() { edit "$1/$DRAIN" "$DRAIN_FETCH"$'\n' ''; }
 m28c() { edit "$1/$DRAIN" "$DRAIN_ARM" "$DRAIN_ARM"$'\n''Then arm it through the arm check (or the exempt arm below).'; }
 h12() { edit "$1/$MON" '#!/usr/bin/env bash' '#!/usr/bin/env bash'$'\n''# This script never arms: `gh pr merge` with `--auto` belongs to the arm check.'; }
 h11() { edit "$1/plugins/soleur/skills/ship/references/merge-queue-dequeue.md" "When it is armed, do not re-arm." "No PR is exempt from the arm check, and there is no exempt arm (CTO ruling R1). When it is armed, do not re-arm."; }
@@ -623,6 +628,8 @@ row M27c A5 m27c 'monitor-pr-checks.sh:'
 row M28a A1 m28a 'ship/SKILL.md:'
 row M28b A1 m28b 'ship/SKILL.md:'
 row M28c A6 m28c 'exempt arm below'
+row M29a A3 m29a 'drain-prs fetch line missing'
+row M29b A3 m29b 'drain-prs fetch line missing'
 
 echo "== harness rows (each must stay GREEN: a disarm, a prose mention, a fenced comment, a lock-wrapped pinned arm, gh api -H, non-exempt prose off-site, a fenced pinned arm with a substitution and a trailing comment, a markdown fence, negated exempt prose, a backticked .sh comment)"
 row H3 GREEN h3
@@ -639,7 +646,7 @@ row H12 GREEN h12
 echo
 echo "passes=$passes fails=$fails cases=$CASES_RUN"
 # The floor is a multi-line block with its bound directly above, so guard-vacuity-floor can build its mutant.
-MIN_CASES=77  # 67 mutation rows + 10 harness rows, raised in the same edit that adds a row
+MIN_CASES=79  # 69 mutation rows + 10 harness rows, raised in the same edit that adds a row
 if (( CASES_RUN < MIN_CASES )); then
   printf '[FATAL] only %s rows ran (want >= %s)\n' "$CASES_RUN" "$MIN_CASES" >&2
   exit 1
