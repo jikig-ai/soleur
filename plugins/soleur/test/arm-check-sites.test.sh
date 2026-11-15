@@ -69,14 +69,19 @@ EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^
 gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 EOF
 )
+# Defined before SETTLE_HEAD and spliced in: a fetch written as a heredoc line reads as a live command to the
+# battery tag-authorship census (scripts/battery-tag-authorship.test.sh); a quoted literal does not.
+SETTLE_FETCH_LINE='git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }'
 SETTLE_HEAD=$(cat <<'EOF'
 _top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }
 SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
-git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }
+@SETTLE_FETCH_LINE@
 # REPLACE THIS LINE with the arm check's first statement (review-evidence-comment.md#arm-check), PR_NUMBER replaced by <N>
 [ "${H:?run the arm check in this call}" = "$SHA" ] || { echo "ADMIN-MERGE ABORTED: evidence head check read a different head"; exit 4; }
 EOF
 )
+SETTLE_HEAD=${SETTLE_HEAD/@SETTLE_FETCH_LINE@/"$SETTLE_FETCH_LINE"}
+[[ $SETTLE_HEAD == *"$SETTLE_FETCH_LINE"* && $SETTLE_HEAD != *@SETTLE_FETCH_LINE@* ]] || { printf '[FATAL] SETTLE_HEAD splice failed\n' >&2; exit 2; }
 SETTLE_FENCE_1="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600'
 SETTLE_FENCE_2="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"'
 CANON_ARM='--match-head-commit "${H:?run the arm check in this call}"'
@@ -96,7 +101,6 @@ SETTLE_FETCH='git fetch -q origin "pull/<N>/head" || {'
 SETTLE_PLACE="# REPLACE THIS LINE with the arm check's first statement (review-evidence-comment.md#arm-check)"
 SETTLE_TIE='[ "${H:?run the arm check in this call}" = "$SHA" ] || {'
 # A7 compares whole lines (indent stripped), so a commented-out or neutered gate line is a missing one.
-SETTLE_FETCH_LINE='git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }'
 SETTLE_TIE_LINE='[ "${H:?run the arm check in this call}" = "$SHA" ] || { echo "ADMIN-MERGE ABORTED: evidence head check read a different head"; exit 4; }'
 
 # scan <root> <relpath>... : one `ARM<TAB>rel<TAB>line<TAB>depth-0 text<TAB>span` line per arm span; exit 3 on a python error.
