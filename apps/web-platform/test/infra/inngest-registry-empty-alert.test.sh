@@ -399,68 +399,13 @@ done
   && ok "both resources have exactly one anchored -target= line in the apply workflow (applied at merge)" \
   || no "missing -target= line(s):$_miss — the resource would never be applied"
 
-# ── presence row: the .tf-wide pair census (copied from the sibling guard) ───────────────────
-CENSUS_AWK='function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
-function hdopen(c) {
-  if (match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) { hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd) }
-}
-FNR == 1 { hd = ""; loc = ""; inb = 0 }
-{
-  line = $0
-  if (hd != "") {
-    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) { hd = ""; loc = "" }
-    else if (index(line, MARK) > 0) { if (inb) braw[nb] = braw[nb] " " MARK; else if (loc != "") marked[loc] = 1 }
-    next
-  }
-  if (line ~ /^[[:space:]]*(#|\/\/)/) next
-  c = cv(line)
-  if (!inb) {
-    if (match(line, /^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+"?[[:space:]]*\{/)) {
-      kind = (line ~ /logtail_exploration_alert/) ? "A" : "E"
-      nm = line
-      sub(/^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?/, "", nm)
-      sub(/["[:space:]{].*$/, "", nm)
-      nb++; bkind[nb] = kind; bname[nb] = nm; braw[nb] = ""; bcv[nb] = ""; inb = 1; d = 0
-    } else {
-      if (match(c, /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
-        loc = c; sub(/^[[:space:]]*/, "", loc); sub(/[[:space:]]*=.*$/, "", loc)
-      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/) {
-        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); lbody[l2] = line
-        if (index(line, MARK) > 0) marked[l2] = 1
-      }
-      hdopen(c)
-      next
-    }
-  }
-  if (inb) {
-    braw[nb] = braw[nb] " " line; bcv[nb] = bcv[nb] " " c
-    o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
-    hdopen(cv(line))
-    if (d <= 0) { inb = 0 }
-  }
-}
-END {
-  do {
-    ch = 0
-    for (l in lbody) if (!(l in marked)) for (m in marked) if (lbody[l] ~ ("local\\." m "([^A-Za-z0-9_-]|$)")) { newm[l] = 1; break }
-    for (l in newm) { marked[l] = 1; ch = 1 }
-    delete newm
-  } while (ch)
-  for (i = 1; i <= nb; i++) {
-    car[i] = (index(braw[i], MARK) > 0)
-    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_-]|$)")) car[i] = 1
-  }
-  for (i = 1; i <= nb; i++) if (bkind[i] == "E") ecar[bname[i]] = car[i]
-  for (i = 1; i <= nb; i++) {
-    if (bkind[i] == "E") { printf "E|%s|%d\n", bname[i], car[i]; continue }
-    b = ""; t = bcv[i]
-    if (match(t, /exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.[A-Za-z0-9_-]+\.id/)) {
-      b = substr(t, RSTART, RLENGTH); sub(/^.*logtail_exploration\./, "", b); sub(/\.id$/, "", b)
-    }
-    printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
-  }
-}'
+# ── presence row: the .tf-wide pair census (shared lib logtail-pair-census.awk) ─────────────
+CENSUS_AWK_LIB="${PAIR_CENSUS_AWK:-$REPO/apps/web-platform/test/infra/logtail-pair-census.awk}"
+CENSUS_AWK="$(cat "$CENSUS_AWK_LIB" 2>/dev/null || true)"
 CENSUS="$(awk -v MARK="$REGEMPTY_STEM" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
+[ -n "$CENSUS_AWK" ] && grep -q '^E|' <<<"$CENSUS" \
+  && ok "the shared pair-census lib (logtail-pair-census.awk) read non-empty and enumerated explorations" \
+  || no "the shared pair-census lib ${CENSUS_AWK_LIB} is missing or empty, or enumerated no exploration: the census rows compare nothing"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$REGEMPTY_STEM"* ]]; then printf '%s\n' "$_n"; fi
@@ -703,7 +648,16 @@ s = s.replace(old, " prior_registry_fns=5 registry_fns=$registry_fns ")'
   mutate_self_red "the extraction is replaced with an empty string (the floor and canon rows must red)" \
     's|^LOCAL_SQL="$(sql_local_raw "${NAME}_sql")"$|LOCAL_SQL=""|'
   mutate_self_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor" \
-    's/^PRESENCE_ROWS=48$/PRESENCE_ROWS=49/'
+    's/^PRESENCE_ROWS=49$/PRESENCE_ROWS=50/'
+  # Neutering row (#12737): the pair census lives in apps/web-platform/test/infra/logtail-pair-census.awk, shared by
+  # the three Inngest logs-alert guards. An emptied lib must red this suite, not leave the census rows comparing nothing.
+  _empty_awk="$MUT_DIR/empty-pair-census.awk"; : > "$_empty_awk"; _nrc=0
+  PAIR_CENSUS_AWK="$_empty_awk" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || _nrc=$?
+  case "$_nrc" in
+    1) ok "mutation RED: the shared pair-census lib is emptied" ;;
+    0) no "mutation SURVIVED: an emptied logtail-pair-census.awk leaves this suite green" ;;
+    *) no "mutation UNRESOLVED (inner rc=$_nrc): emptied pair-census lib - instrument, not evidence" ;;
+  esac
 
   # ── must-PASS variants ─────────────────────────────────────────────────────────────────
   mutate_green "the SQL is reformatted across lines (leg A's uptime conjunct wrapped; the resource collapses whitespace)" TF \
@@ -717,8 +671,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer
 # run adds one row per mutation. The instrument control above catches a floor that drifts past the
 # presence rows.
-PRESENCE_ROWS=48
-MUT_ROWS=27
+PRESENCE_ROWS=49
+MUT_ROWS=28
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

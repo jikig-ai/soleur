@@ -306,69 +306,14 @@ done
 # contain a hyphen, a heredoc closer ends the current local, and a single-line local that names a marked local carries the
 # marker too (transitively; a reference inside a string interpolation or a multi-line local is NOT followed). A family-wide structural suite
 # (apps/web-platform/infra/betterstack-alert-structure.test.sh) independently enforces one alert per exploration.
-CENSUS_AWK='function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
-function hdopen(c) {
-  if (match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) { hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd) }
-}
-FNR == 1 { hd = ""; loc = ""; inb = 0 }
-{
-  line = $0
-  if (hd != "") {
-    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) { hd = ""; loc = "" }
-    else if (index(line, MARK) > 0) { if (inb) braw[nb] = braw[nb] " " MARK; else if (loc != "") marked[loc] = 1 }
-    next
-  }
-  if (line ~ /^[[:space:]]*(#|\/\/)/) next
-  c = cv(line)
-  if (!inb) {
-    if (match(line, /^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+"?[[:space:]]*\{/)) {
-      kind = (line ~ /logtail_exploration_alert/) ? "A" : "E"
-      nm = line
-      sub(/^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?/, "", nm)
-      sub(/["[:space:]{].*$/, "", nm)
-      nb++; bkind[nb] = kind; bname[nb] = nm; braw[nb] = ""; bcv[nb] = ""; inb = 1; d = 0
-    } else {
-      if (match(c, /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
-        loc = c; sub(/^[[:space:]]*/, "", loc); sub(/[[:space:]]*=.*$/, "", loc)
-      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/) {
-        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); lbody[l2] = line
-        if (index(line, MARK) > 0) marked[l2] = 1
-      }
-      hdopen(c)
-      next
-    }
-  }
-  if (inb) {
-    braw[nb] = braw[nb] " " line; bcv[nb] = bcv[nb] " " c
-    o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
-    hdopen(cv(line))
-    if (d <= 0) { inb = 0 }
-  }
-}
-END {
-  do {   # a single-line local that names a marked local carries the marker too, however deep the chain
-    ch = 0
-    for (l in lbody) if (!(l in marked)) for (m in marked) if (lbody[l] ~ ("local\\." m "([^A-Za-z0-9_-]|$)")) { newm[l] = 1; break }
-    for (l in newm) { marked[l] = 1; ch = 1 }
-    delete newm
-  } while (ch)
-  for (i = 1; i <= nb; i++) {
-    car[i] = (index(braw[i], MARK) > 0)
-    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_-]|$)")) car[i] = 1
-  }
-  for (i = 1; i <= nb; i++) if (bkind[i] == "E") ecar[bname[i]] = car[i]
-  for (i = 1; i <= nb; i++) {
-    if (bkind[i] == "E") { printf "E|%s|%d\n", bname[i], car[i]; continue }
-    b = ""; t = bcv[i]
-    if (match(t, /exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.[A-Za-z0-9_-]+\.id/)) {
-      b = substr(t, RSTART, RLENGTH); sub(/^.*logtail_exploration\./, "", b); sub(/\.id$/, "", b)
-    }
-    printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
-  }
-}'
+CENSUS_AWK_LIB="${PAIR_CENSUS_AWK:-$REPO/apps/web-platform/test/infra/logtail-pair-census.awk}"
+CENSUS_AWK="$(cat "$CENSUS_AWK_LIB" 2>/dev/null || true)"
 # Every root *.tf is scanned (a local may live in another file than the resource that reads it), and the key is the
 # substring LUKS_KEY_PROBE of the marker, so a renamed prefix (SOLEUR_<other>_LUKS_KEY_PROBE) still carries it.
 CENSUS="$(awk -v MARK="LUKS_KEY_PROBE" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
+[ -n "$CENSUS_AWK" ] && grep -q '^E|' <<<"$CENSUS" \
+  && ok "the shared pair-census lib (logtail-pair-census.awk) read non-empty and enumerated explorations" \
+  || no "the shared pair-census lib ${CENSUS_AWK_LIB} is missing or empty, or enumerated no exploration: the census rows compare nothing"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
@@ -529,7 +474,7 @@ PY
   mutate_floor_red() {  # mutate_floor_red <label>
     local label="$1" copy rc=0
     copy="$MUT_DIR/floor-mutated.test.sh"
-    sed 's/^PRESENCE_ROWS=37$/PRESENCE_ROWS=38/' "$SELF" > "$copy"
+    sed 's/^PRESENCE_ROWS=38$/PRESENCE_ROWS=39/' "$SELF" > "$copy"
     if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
     KEYPROBE_GUARD_TF="$TF" KEYPROBE_GUARD_WF="$WF" KEYPROBE_GUARD_FLIP="$FLIP" KEYPROBE_GUARD_RB="$RB" KEYPROBE_GUARD_CI="$CI" KEYPROBE_GUARD_VT="$VT" \
       MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
@@ -595,6 +540,15 @@ s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks
     's = s.replace("\"inngest_luks_key_probe_fail\" {", "\"inngest_luks_key_probe_failx\" {")' \
     "add it to KEY_PROBE_EXPLORATIONS in this PR"
   mutate_floor_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor"
+  # Neutering row (#12737): the pair census lives in apps/web-platform/test/infra/logtail-pair-census.awk, shared by
+  # the three Inngest logs-alert guards. An emptied lib must red this suite, not leave the census rows comparing nothing.
+  _empty_awk="$MUT_DIR/empty-pair-census.awk"; : > "$_empty_awk"; _nrc=0
+  PAIR_CENSUS_AWK="$_empty_awk" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || _nrc=$?
+  case "$_nrc" in
+    1) ok "mutation RED: the shared pair-census lib is emptied" ;;
+    0) no "mutation SURVIVED: an emptied logtail-pair-census.awk leaves this suite green" ;;
+    *) no "mutation UNRESOLVED (inner rc=$_nrc): emptied pair-census lib - instrument, not evidence" ;;
+  esac
   mutate_green "the declared set is still the one pair; only a comment above the paging alert is reworded" TF \
     's = s.replace("# Presence-only, so safe before the probe is delivered", "# Presence-only (reworded), so safe before the probe is delivered")'
   # #11483 review round 1 (census): each branch of the awk gets a row. The repro for a branch the old awk got WRONG is a
@@ -709,8 +663,8 @@ fi
 # the presence rows (that control, not this comment, is the guard against a dead battery).
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a row
 # deletion stays green — PRESENCE_ROWS is two-write-site (here + the floor row's sed anchor).
-PRESENCE_ROWS=37
-MUT_ROWS=46
+PRESENCE_ROWS=38
+MUT_ROWS=47
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
