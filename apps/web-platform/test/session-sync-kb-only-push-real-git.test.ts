@@ -152,7 +152,7 @@ interface Row {
 }
 
 beforeAll(() => {
-  gitVersion = execFileSync("git", ["--version"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } }).trim();
+  gitVersion = execFileSync("git", ["--version"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv }).trim();
   // eslint-disable-next-line no-console -- recorded once per run for the PR body (plan Phase 0)
   console.log(`[kb-only-push battery] ${gitVersion}`);
   base = realpathSync(mkdtempSync(join(tmpdir(), "kbpush-")));
