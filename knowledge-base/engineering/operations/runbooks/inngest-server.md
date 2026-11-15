@@ -2695,7 +2695,9 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any
 credential loads) fails unless the dispatch carries `-f confirm=PUBLIC-SDK-URL`. The `inngest_host` birth job (the
 "server absent" recovery row) needs `-f confirm=PUBLIC-SDK-URL-BIRTH`, because a birth boots the same public sdk_url.
-Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. The confirm is a typo-guard, not the go; its error points
+Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. A third path has no gate: an operator-local untargeted
+`terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of `hcloud_server.inngest` because its
+user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. The confirm is a typo-guard, not the go; its error points
 to #12742. The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
 alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
 They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the

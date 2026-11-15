@@ -625,12 +625,14 @@ interface FixtureRule {
 // mode is a reviewed forward PR that must, in the same diff, correct every document below (canonical and mirror), set
 // ledger row 7 cert_verification off, and re-point sdk_url off every soleur.ai host. Two claim classes: a CERT claim
 // is false under every non-strict mode (`full` encrypts but does not verify); a TLS claim is false only when the origin
-// hop is plaintext (`flexible`, `off`, or the ssl attribute dropped). Correction notes `*( ... )*` describe what a
-// document USED to say, so they are stripped (paren-depth aware) before matching.
+// hop is plaintext (`flexible`, `off`, or the ssl attribute dropped). A PAST-TENSE correction note `*(Corrected …)*`
+// (also Added / Updated / Changed / Removed) describes what a document USED to say, so it is stripped (paren-depth
+// aware) before matching. A present-tense note such as the Last Updated line's "*(Section 11 now says …)*" is a live
+// claim and is matched like body text (verifier round).
 const CERT_CLAIM =
   /verif(?:ies|ying) (?:our|the) (?:servers'|web hosts' origin ca) certificate|fulfilled as to the cloudflare-to-origin connection/g;
 const TLS_CLAIM =
-  /forwards requests to [a-z']+ web servers over tls|tls from cloudflare to our web servers|tls covers the cloudflare-to-origin connection/g;
+  /forwards requests to [a-z']+ web servers over tls|tls (?:is used )?from cloudflare to our web servers|tls covers the cloudflare-to-origin connection/g;
 const COUPLED_DOCS = [
   "docs/legal/privacy-policy.md",
   "plugins/soleur/docs/pages/legal/privacy-policy.md",
@@ -641,24 +643,33 @@ const COUPLED_DOCS = [
 ];
 const LEDGER_DISCLOSED_AS = "docs/legal/privacy-policy.md:Encryption in transit";
 
-/** True when sdk_url can reach a Cloudflare-proxied soleur.ai name (any scheme), or cannot be read as a literal URL. */
+/**
+ * True unless sdk_url is provably private: a literal URL whose host is loopback or on the Inngest private network
+ * 10.0.1.0/24. Allowlist, not denylist (verifier round): a public IP or any other name is as exposed as soleur.ai.
+ * An interpolated or unparseable value fails closed.
+ */
 function sdkUrlIsPublic(sdkUrl: string): boolean {
-  if (sdkUrl.includes("${")) return true; // an interpolated value cannot be proven private: fail closed
+  if (sdkUrl.includes("${")) return true;
   let host: string;
   try {
     host = new URL(sdkUrl).hostname.toLowerCase().replace(/\.$/, "");
   } catch {
     return true;
   }
-  return host === "soleur.ai" || host.endsWith(".soleur.ai");
+  const isPrivate = host === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.0\.1\.\d{1,3}$/.test(host);
+  return !isPrivate;
 }
 
-/** Remove every `*( ... )*` span, tracking paren depth so a nested `(UTC)` does not end the note early. Unbalanced: kept. */
+/**
+ * Remove every past-tense `*(Corrected|Added|Updated|Changed|Removed … )*` span, tracking paren depth so a nested
+ * `(UTC)` does not end the note early. Unbalanced: kept. Any other `*( … )*` (a present-tense note) is kept.
+ */
+const PAST_NOTE = /^\*\((?:Corrected|Added|Updated|Changed|Removed)\b/;
 function stripCorrectionNotes(text: string): string {
   let out = "";
   let i = 0;
   while (i < text.length) {
-    if (text.startsWith("*(", i)) {
+    if (text.startsWith("*(", i) && PAST_NOTE.test(text.slice(i, i + 16))) {
       let depth = 0;
       let end = -1;
       for (let j = i + 1; j < text.length; j++) {
@@ -727,10 +738,12 @@ describe("rollback coupling: published wording, ledger and sdk_url follow the ad
     // Positive controls (strict): the guard is only meaningful while the inputs it would fire on are present.
     expect(input.row7Cert).toBe("on");
     expect(sdkUrlIsPublic(input.sdkUrl)).toBe(true);
-    // flexible: PP 2x(cert+TLS)=4, DPD 2x(2 cert+TLS)=6, DPA 2x(cert+TLS)=4, Art 30 5x(cert+TLS)=10, row 7, sdk_url.
-    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(26);
-    // full: the cert claims only (2+4+2+5=13), row 7, sdk_url.
-    expect(rollbackCouplingViolations({ ...input, mode: "full" }).length).toBe(15);
+    // flexible, per doc x2 (canonical+mirror) unless noted: PP body (cert+TLS) + Last Updated note (cert+TLS) = 8;
+    // DPD body (2 cert+TLS) + Last Updated note (2 cert+TLS) = 12; DPA x2 lines (cert+TLS) = 4; Art 30 x5 lines
+    // (cert+TLS) = 10; row 7; sdk_url. Total 36.
+    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(36);
+    // full: the cert claims only (PP 4 + DPD 8 + DPA 2 + Art 30 5 = 19), row 7, sdk_url.
+    expect(rollbackCouplingViolations({ ...input, mode: "full" }).length).toBe(21);
     for (const rel of COUPLED_DOCS) {
       expect(rollbackCouplingViolations({ ...input, mode: "flexible", docs: { [rel]: input.docs[rel] }, row7Cert: null, sdkUrl: null }).length, rel).toBeGreaterThan(0);
     }
@@ -765,16 +778,28 @@ describe("rollback coupling: published wording, ledger and sdk_url follow the ad
     expect(rollbackCouplingViolations({ ...none, docs: { d: text }, mode: "full" })).toEqual([]);
   });
 
-  test("a private sdk_url is not a violation in any mode", () => {
-    for (const mode of NON_STRICT) expect(rollbackCouplingViolations({ ...none, sdkUrl: "http://10.0.1.10:3000/api/inngest", mode })).toEqual([]);
+  test("a private sdk_url is not a violation in any mode; a public IP or other name is", () => {
+    for (const mode of NON_STRICT) {
+      for (const ok of ["http://10.0.1.10:3000/api/inngest", "http://127.0.0.1:3000/api/inngest", "http://localhost:3000/api/inngest"]) {
+        expect(rollbackCouplingViolations({ ...none, sdkUrl: ok, mode }), ok).toEqual([]);
+      }
+      for (const bad of ["http://203.0.113.7:3000/api/inngest", "http://10.0.2.10:3000/api/inngest", "https://example.com/api/inngest", "not a url"]) {
+        expect(rollbackCouplingViolations({ ...none, sdkUrl: bad, mode }), bad).toHaveLength(1);
+      }
+    }
   });
 
-  test("mode flexible + phrase only inside a *( ... )* correction note (with nested parens) -> no violation", () => {
+  test("mode flexible + phrase only inside a PAST-TENSE *(Corrected ...)* note (with nested parens) -> no violation", () => {
     const phrase = "verifies our servers' certificate";
-    const pp = `**Last Updated:** *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare "${phrase}" (see 5.8).)* Body: plain HTTP to origin.`;
+    const pp = `Body: plain HTTP to origin. *(Corrected 2026-11-20 (UTC), ref #1: this bullet previously read "Cloudflare ${phrase} (see 5.8)".)*`;
     expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp } })).toEqual([]);
     // Control: the same phrase after the note closes still fires.
     expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp: `${pp} ${phrase}` } })).toHaveLength(1);
+  });
+
+  test("mode flexible + phrase inside a PRESENT-TENSE note (the Last Updated line) -> violation", () => {
+    const pp = `**Last Updated:** November 15, 2026 *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare verifies our servers' certificate.)*`;
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp } })).toHaveLength(1);
   });
 
   test("mode strict + everything present -> no violation", () => {

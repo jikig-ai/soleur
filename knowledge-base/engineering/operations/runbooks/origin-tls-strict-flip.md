@@ -496,12 +496,12 @@ to `flexible` (each suite run once); the file list below is what that run needed
    non-`strict` mode, a TLS-to-origin claim under `flexible`, `off` or a dropped `ssl`. `domains.md` and the NFR register are still on the author.
 6. **`sdk_url`, whether or not `inngest-host-replace` has run.** The declared value is public (`https://app.soleur.ai/...`, ADR-100), and any later replace or birth
    would boot it; once a host polls it, a `full` rollback sends that poll over an unverified hop and a `flexible` one in plaintext across the public internet and voids ledger row 6 (leg 2). The forward PR
-   re-points `sdk_url` in `apps/web-platform/infra/inngest-host.tf` off every soleur.ai host, and in the same diff updates Guard 4 in
+   re-points `sdk_url` in `apps/web-platform/infra/inngest-host.tf` to a private URL (loopback or 10.0.1.0/24), and in the same diff updates Guard 4 in
    `apps/web-platform/test/server/inngest/exec-placement-forward.test.ts` (it pins `sdk_url` to the route's `SERVE_HOST` + `servePath`) and the route if needed. It
    also corrects the ADR-100 Decision 1 amendment and the A7 addendum
    (`knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md`). The rollback-coupling rows enforce the legal wording (Privacy Policy,
-   DPD, DPA template and Article 30 register, canonical and mirror), ledger row 7 and `sdk_url` (any soleur.ai host, any scheme, or an interpolated value, with a
-   non-`strict` mode is RED); there is no row-6 escape in the guard. The ADR and addendum corrections are on the author.
+   DPD, DPA template and Article 30 register, canonical and mirror), ledger row 7 and `sdk_url` (any host other than loopback or 10.0.1.0/24, any scheme, or an interpolated value, with a
+   non-`strict` mode is RED; a present-tense note such as the Last Updated line counts, a past-tense *(Corrected …)* note does not); there is no row-6 escape in the guard. The ADR and addendum corrections are on the author.
 
 **No `[ack-destroy]`.** Measured offline on 2026-11-13 (Terraform 1.9.8, cloudflare 4.52.7 from the plugin cache, prior state = the cleanup's 3 rules): `Plan: 0 to add,
 1 to change, 0 to destroy`, the only diff `ssl = "strict" -> "flexible"`; through the real filter `resource_deletes` 0, `nested_deletes` 0. `ssl-full-mitigation.test.sh` and
@@ -533,7 +533,7 @@ and a whole-list entrypoint PUT can silently drop the apex `full` rule (HTTP 526
 until the forward PR lands.
 
 - **The Inngest coupling (CTO fix-round F2).** A dashboard edit leaves the repo `strict`, so no guard sees it. If any Inngest host already polls the public `sdk_url`,
-  the edit makes that poll plaintext at once and voids ledger row 6 (A7 leg 2) from that moment: the forward PR carries Rollback item 6 (`sdk_url` re-pointed,
+  the edit makes that poll unverified under Full and plaintext under Flexible at once, and voids ledger row 6 (A7 leg 2) from that moment: the forward PR carries Rollback item 6 (`sdk_url` re-pointed,
   Guard 4, the ADR-100 amendment and A7 addendum) the same day. Until the forward PR lands, do not dispatch `inngest-host-replace` or an `inngest-host` birth
   (both boot the public `sdk_url`; the dispatch-time re-read in `inngest-server.md` would show the edit).
 

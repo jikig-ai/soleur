@@ -5222,6 +5222,16 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(parsed.defaults, "workflow-level defaults").toBeUndefined();
     const firstCred = steps.findIndex((s) => /credential|doppler/i.test(`${s.name ?? ""} ${s.uses ?? ""}`));
     expect(firstCred, `${job} has a credential step`).toBeGreaterThan(1);
+    // Verifier round: nothing may run past a refused gate or pre-arm it. No later step re-opens on a failed job
+    // (a status function in `if:`) unless it is secret-free and touches no credential, terraform or Doppler; the job
+    // carries no env (a job-level secret would reach the gate step); checkout takes no `with` (a `ref` input would
+    // swap the script the gate runs).
+    for (const [i, st] of steps.entries()) {
+      if (i < 2 || !/always\(|failure\(|cancelled\(/.test(String(st.if ?? ""))) continue;
+      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused gate`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
+    }
+    expect(j.env, `${job} job-level env`).toBeUndefined();
+    expect(steps[0].with, `${job} checkout with`).toBeUndefined();
   });
 
   test("B10: the birth and replace tokens are distinct, and the confirm description does not print either", () => {
@@ -5232,11 +5242,12 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 
   // Fix-round sweep (data-integrity / agent-native / user-impact seats): a recovery command that tells an operator or
   // agent to dispatch either job without its token is refused at step 2, mid-incident. Every copy-paste recipe
-  // (`-f apply_target=inngest-host[-replace]`) in scripts, workflows and runbooks carries its own token. Exempt: a
-  // table row recording a past run (`**done YYYY-MM-DD`), and prose that only NAMES the selector (the flag closed by
-  // a backtick right after the target, e.g. "selected by `-f apply_target=inngest-host-replace`").
+  // (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`, bare or quoted) in scripts, skills,
+  // workflows and runbooks carries its own token. Exempt: a recipe that sits inside the same backtick span as a
+  // `**done YYYY-MM-DD` marker earlier on its line (a past run), and prose that only NAMES the selector (the flag
+  // closed by a backtick right after the target, e.g. "selected by `-f apply_target=inngest-host-replace`").
   test("B10: every live dispatch recipe for the two public-sdk_url jobs carries its confirm token", () => {
-    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github/workflows", "knowledge-base/engineering/operations/runbooks"], {
+    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github/workflows", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
       encoding: "utf8",
       env: gitCleanEnv(),
     });
@@ -5247,13 +5258,18 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     let recipes = 0;
     for (const f of files) {
       readFileSync(join(REPO_ROOT, f), "utf-8").split("\n").forEach((line, i) => {
-        if (/\*\*done \d{4}-\d{2}-\d{2}/.test(line)) return;
-        for (const m of line.matchAll(/-f apply_target=(inngest-host-replace|inngest-host)(?![-\w])/g)) {
-          const token = m[1] === "inngest-host" ? "confirm=PUBLIC-SDK-URL-BIRTH" : "confirm=PUBLIC-SDK-URL";
+        const FLAG = String.raw`(?:-f|-F|--field|--raw-field)[ =]`;
+        const re = new RegExp(String.raw`(?<flag>${FLAG})(?<q>["']?)apply_target=(?<q2>["']?)(?<t>inngest-host-replace|inngest-host)(?![-\w])\k<q2>\k<q>`, "g");
+        for (const m of line.matchAll(re)) {
+          const t = m.groups!.t;
+          const want = t === "inngest-host" ? "PUBLIC-SDK-URL-BIRTH" : "PUBLIC-SDK-URL";
           const tail = line.slice(m.index! + m[0].length);
           if (tail.startsWith("`") && line[m.index! - 1] === "`") continue;
+          const head = line.slice(0, m.index!);
+          // A past-run record: a `**done YYYY-MM-DD` marker before the recipe on its line (a table row's status cell).
+          if (/\*\*done \d{4}-\d{2}-\d{2}/.test(head)) continue;
           recipes++;
-          if (!new RegExp(`^\\s+-f ${token}(?![-\\w])`).test(tail)) offenders.push(`${f}:${i + 1}`);
+          if (!new RegExp(String.raw`^\s+${FLAG}["']?confirm=["']?${want}(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1}`);
         }
       });
     }
@@ -5265,7 +5281,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const lib = join(REPO_ROOT, CONFIRM_LIB);
     const run = (args: string[], confirm: string | undefined) =>
       spawnSync("bash", [lib, ...args], {
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...(confirm === undefined ? {} : { CONFIRM_RAW: confirm }) },
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...ciEnv, ...(confirm === undefined ? {} : { CONFIRM_RAW: confirm }) },
         encoding: "utf8",
       });
     const table: Array<[string[], string | undefined, number]> = [
@@ -5281,12 +5297,17 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       [[], "PUBLIC-SDK-URL", 64],
       [[""], "", 64],
     ];
+    // Run the table twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
+    let ciEnv: Record<string, string> = {};
+    for (const env of [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }]) {
+    ciEnv = env;
     for (const [args, confirm, rc] of table) {
       const r = run(args, confirm);
       expect(`${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${r.status}`).toBe(
         `${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${rc}`,
       );
       if (rc === 1) expect(r.stdout).toContain("#12742");
+    }
     }
     const echoed = run(["PUBLIC-SDK-URL"], "canary-7f3e");
     expect(echoed.stdout + echoed.stderr).not.toContain("canary-7f3e");
