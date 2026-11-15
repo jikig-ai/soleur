@@ -36,7 +36,7 @@ A matching value is a claim about content. "No conflict" is a claim about hunks,
 5. **A closing keyword appeared in a plan cell, again in my note describing the fix, and again in the first draft of this learning.** Recovery: reworded both and re-grepped with a positive control. **Prevention:** already covered by ship's `closingIssuesReferences == []` gate and `2026-06-05-followthrough-pr-body-prose-closes-keyword-autocloses-tracker.md`. Grep after every prose edit that mentions an issue number, including notes about the fix.
 6. **I overstated what seed mode and `--write` rewrite.** Recovery: corrected the counts from the scratch dry run. **Prevention:** quote the dry-run output, not a recollection of it.
 7. **`green_main_runs()` samples push runs, which have no timings (pre-existing).** Recovery: routed to #12780 as added scope. **Prevention:** tracked in #12780 (selector fix plus a die-on-empty test).
-8. **quality-guards went red because of #12781, and #12700 was ejected from the queue.** Neither came from this diff. Recovery: confirmed both came from main; fix PR #12782 is open. **Prevention:** tracked in #12781/#12782.
+8. **quality-guards went red because of #12781, and #12700 was ejected from the queue.** Neither came from this diff. Recovery: confirmed both came from main; PR #12782, which carries the repair, is open. **Prevention:** tracked in #12781/#12782.
 9. **I read an exit code through `| tail`.** Recovery: re-ran with the output redirected and `echo RC=$?`. **Prevention:** already covered by work's "the wrapper that reports a gate is itself a guard" rule.
 10. **I re-armed monitors more than once.** Recovery: one watch per condition. **Prevention:** none needed (one-off).
 11. **A turn ended on an announcement instead of "Paused:" or "Blocked:".** Recovery: continued in the same turn. **Prevention:** already enforced by the stop hook.
@@ -44,4 +44,4 @@ A matching value is a claim about content. "No conflict" is a claim about hunks,
 ## Tags
 
 category: workflow-issues
-module: shard-manifest
+module: scripts/suite-durations.tsv, scripts/regenerate-shard-manifest.py
