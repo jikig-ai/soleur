@@ -51,14 +51,14 @@ LINK='review-evidence-comment.md#arm-check'
 EXPECTED_LEDGER='A1 A1-floor A1-noH A2 A2b A3 A5 A6 A7'
 # A1-noH: no site file assigns H. The `-` in the first class keeps `gh api -H=...` quiet (H7).
 NOH_RE='(^|[^A-Za-z0-9_-])H(\+?=|\[[^]]*\]=)|\$\{H:?=|(read|declare|typeset|export|local|readonly|mapfile|readarray|for)([[:space:]]+[^;&|]*)?[[:space:]]H([[:space:]=;]|$)|printf[[:space:]]+-v[[:space:]]*H'
-CANON_REFUSE='|| { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }'
+CANON_REFUSE='|| { echo "ARM_CHECK refused: no passing evidence covers the PR head; evidence=${EV:-none}; unreviewed=$(echo ${R:-none})"; exit 1; }'
 # A3/A7 whole-block pins: the fence's lines with indent stripped, compared line for line.
 CANON_FENCE=$(cat <<'EOF'
 EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^\\s*review-evidence:";"i"))]|last // ""|split("\n")[0]|select(test("; coverage=full[; ]") and test("; unresolved-P1-P2=0([; ]|$)") and ([scan("coverage=")]|length==1) and ([scan("unresolved-P1-P2=")]|length==1))|capture("^Review-Evidence: head=(?<h>[0-9a-f]{7,40})[; ]").h') \
 && H=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid) \
 && git merge-base --is-ancestor "$EV" "$H" \
 && R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \
-|| { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }
+|| { echo "ARM_CHECK refused: no passing evidence covers the PR head; evidence=${EV:-none}; unreviewed=$(echo ${R:-none})"; exit 1; }
 gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 EOF
 )

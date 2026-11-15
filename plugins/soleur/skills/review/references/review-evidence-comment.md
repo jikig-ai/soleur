@@ -68,7 +68,7 @@ EV=$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(test("^
   && H=$(gh pr view PR_NUMBER --json headRefOid --jq .headRefOid) \
   && git merge-base --is-ancestor "$EV" "$H" \
   && R=$(git rev-list --first-parent --no-merges "$EV..$H") && [ -z "$R" ] \
-  || { echo "ARM_CHECK refused: no passing evidence covers the PR head"; exit 1; }
+  || { echo "ARM_CHECK refused: no passing evidence covers the PR head; evidence=${EV:-none}; unreviewed=$(echo ${R:-none})"; exit 1; }
 gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm check in this call}"
 ```
 
@@ -76,8 +76,11 @@ Where a skill wraps the merge in the merge-main lock, run the first statement an
 the second, all in one Bash call: the `exit 1` stops the call before the lock block, and the lock block's
 `${H:?…}` aborts if it runs without the check. On refusal, run `soleur:review`, which posts fresh evidence, then
 run the check again; never arm around it. If it refuses again after that review, stop and report the PR unarmed
-with the commits the next line names.
-`git rev-list --first-parent --no-merges "$EV..$H"` names the unreviewed commits.
+with the `evidence=` and `unreviewed=` values its refusal line prints: shell state does not survive the call, so
+that line is the only record of them. `unreviewed=` lists `git rev-list --first-parent --no-merges "$EV..$H"`, the
+commits after the evidence head; `evidence=none` means no passing comment, and `unreviewed=none` beside a real
+`evidence=` head means that head is not an ancestor of the PR head (a rebase, a force-push, or a head missing from
+the local object store).
 
 - A main-sync merge (`git merge origin/main`, or GitHub's update-branch) passes: `--first-parent` keeps main's
   commits, which arrive through the merge's second parent, out of the range. Without it every synced PR refuses.

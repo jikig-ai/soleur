@@ -17,3 +17,11 @@ Every block was pulled from the edited site file by `compose.py` (no hand-pastin
 Blocks ran under a `gh` shim as plain `bash` files, so no PreToolUse hook (`.claude/hooks/pre-merge-rebase.sh`) saw them; a shim rc=0 is not proof that an arm passes in a session. The drain-prs exempt-arm rows (D7, D11, D13-D15) were removed with the exempt arm (CTO ruling R1, 2026-11-13).
 
 Separately, read-only: `git rev-list --first-parent --no-merges 0127b5dc45..7d20e7c1a6` prints `7d20e7c1a61aa99ff7cdaaae66919ca19f51e50b`.
+
+## Addendum — 2026-11-15 (refusal line names the commits)
+
+The refusal line now prints `evidence=` and `unreviewed=`, because shell state does not survive the refused call
+and the report needs the SHAs. Re-run of the edited canonical statement, last line swapped for an echo:
+
+- #12619: `ARM_CHECK refused: no passing evidence covers the PR head; evidence=0127b5dc45; unreviewed=7d20e7c1a61aa99ff7cdaaae66919ca19f51e50b`, rc=1.
+- #12706 (evidence at f09d2a4512): `WOULD ARM head=f09d2a4512853fbf7b5d25a8f674c10f5c151bb5`, rc=0.
