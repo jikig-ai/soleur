@@ -75,14 +75,14 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 4: Protected-branch fallback
 
-- [ ] 4.1 Side parent: take it from `readRemoteState`, `fetch --depth 1` it when it is not local, and hash-verify it.
-- [ ] 4.2 Extend ruling I to the side branch (`side_ahead`). Parents are `(P, T)`, or `T` alone. Skip when the KB entry
+- [x] 4.1 Side parent: take it from `readRemoteState`, `fetch --depth 1` it when it is not local, and hash-verify it.
+- [x] 4.2 Extend ruling I to the side branch (`side_ahead`). Parents are `(P, T)`, or `T` alone. Skip when the KB entry
   is equal. Push via `pushVerifiedKbOnly` with base `T`. The PR base is `D`.
-- [ ] 4.3 Delete `resolveDefaultBranchForFallback`, plus the workspace `checkout -f -B` / overlay checkout / `commit` /
+- [x] 4.3 Delete `resolveDefaultBranchForFallback`, plus the workspace `checkout -f -B` / overlay checkout / `commit` /
   `reset --hard`.
-- [ ] 4.4 When the trees are equal, CAS local `D` to `side` and set the tracking ref to `side`. A failed CAS after a
+- [x] 4.4 When the trees are equal, CAS local `D` to `side` and set the tracking ref to `side`. A failed CAS after a
   successful push is `head_moved`, not a fallback failure. Add the `fallback_reason` tag.
-- [ ] 4.5 Trim `test/server/session-sync-protected-fallback.test.ts` to the op and alert-contract rows on the new call
+- [x] 4.5 Trim `test/server/session-sync-protected-fallback.test.ts` to the op and alert-contract rows on the new call
   shapes.
 
 ## Phase 5: Self-heal gate (R18)

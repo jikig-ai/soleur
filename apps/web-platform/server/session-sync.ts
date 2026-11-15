@@ -21,7 +21,7 @@ import {
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
-import { KbSyncError, publishKbOnly, reportPushHeld, runProtectedFallback, type KbWorkspaceWriter } from "./kb-sync-publish";
+import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
 import { readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
@@ -817,34 +817,31 @@ export async function syncPush(
       writer: kbWorkspaceWriter(workspacePath),
     });
 
-    if (result.kind === "protected") {
-      // #5426 — protected default: route writes to soleur/kb-sync + PR.
-      const fallback = await runProtectedFallback(
-        userId,
-        workspacePath,
-        installationId,
-      );
-      if (!fallback.ok) {
-        // `reason` discriminates "the fallback ran and failed" from the
-        // persistent_other branch below (which never entered the fallback)
-        // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
-        // test pin the single `kb-sync.protected-fallback-failed` op.
-        reportSilentFallback(result.pushErr, {
-          feature: "session-sync",
-          op: "kb-sync.protected-fallback-failed",
-          extra: { userId, reason: "fallback_failed" },
-          message:
-            "KB-sync protected-branch fallback failed — writes preserved on default for retry",
-        });
-        return;
-      }
+    if (result.kind === "fallback_failed") {
+      // `reason` discriminates "the fallback ran and failed" from the
+      // persistent_other branch below (which never entered the fallback)
+      // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
+      // test pin the single `kb-sync.protected-fallback-failed` op. The closed
+      // `fallback_reason` tag names the step (#12600).
+      reportSilentFallback(result.pushErr, {
+        feature: "session-sync",
+        op: "kb-sync.protected-fallback-failed",
+        extra: { userId, reason: "fallback_failed" },
+        tags: { fallback_reason: result.fallbackReason },
+        message:
+          "KB-sync protected-branch fallback failed — writes preserved on default for retry",
+      });
+      return;
+    }
+    if (result.kind === "fallback") {
+      // #5426 — protected default: writes routed to soleur/kb-sync + PR.
       warnSilentFallback(null, {
         feature: "session-sync",
         op: "kb-sync.push-protected-fallback",
         extra: {
           userId,
-          prUrl: fallback.prUrl,
-          commitCount: fallback.commitCount,
+          prUrl: result.prUrl,
+          commitCount: result.commitCount,
         },
         message:
           "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",

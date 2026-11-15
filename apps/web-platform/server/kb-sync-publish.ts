@@ -43,9 +43,10 @@ export function classifyPushError(err: unknown): PushErrorClass {
 }
 
 // #5426 — protected-branch fallback. When the user's default branch is
-// protected, the post-session KB commit can't be pushed onto it; instead we
-// accrete the latest KB tree onto a durable side branch in the user's OWN repo
-// and open/update a never-auto-merged PR into their default branch.
+// protected, the post-session KB commit can't be pushed onto it; instead a side
+// commit (built on the remote tip like S, #12600 R17) accretes onto a durable
+// side branch in the user's OWN repo, with a never-auto-merged PR into the
+// default branch.
 const KB_SYNC_SIDE_BRANCH = "soleur/kb-sync";
 const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
 const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
@@ -92,212 +93,6 @@ function parseOwnerRepo(repoUrl: string | null): {
     return { owner: "", repo: "" };
   }
   return { owner, repo };
-}
-
-/**
- * Resolve the remote default branch (mirrors `workspace-sync.ts`'s
- * `resolveDefaultBranch`: `symbolic-ref --short refs/remotes/origin/HEAD`,
- * stripping the `origin/` prefix). Falls back to `main` on any error so the
- * fallback never hard-fails on a missing origin/HEAD ref.
- */
-async function resolveDefaultBranchForFallback(
-  installationId: number,
-  workspacePath: string,
-): Promise<string> {
-  try {
-    const out = await gitWithInstallationAuth(
-      ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-      installationId,
-      { cwd: workspacePath, timeout: 30_000 },
-    );
-    const branch = out.toString().trim().replace(/^origin\//, "");
-    return branch || "main";
-  } catch {
-    return "main";
-  }
-}
-
-/**
- * Protected-branch fallback for `syncPush`. Accretes the latest KB tree onto a
- * durable `soleur/kb-sync` side branch via TREE-OVERLAY (not cherry-pick, not
- * `checkout -B` from default — both would lose the side branch's prior commits;
- * see plan R1/AC4) and opens/updates a non-draft, never-auto-merged PR into the
- * user's default branch.
- *
- * Ordering is load-bearing: the local default branch is reset to
- * `origin/<default>` ONLY AFTER the side-branch push + PR succeed. On any
- * failure the un-pushed commit stays on default (default NOT reset) and HEAD is
- * restored to the default branch, so next session retries with no data loss
- * (AC6). All git runs via `gitWithInstallationAuth` — `runConnectedRepoGit`
- * forbids checkout/branch/reset/push.
- *
- * Returns `{ ok: false }` on any failure (the caller emits the failure op);
- * never throws.
- */
-export async function runProtectedFallback(
-  userId: string,
-  workspacePath: string,
-  installationId: number,
-): Promise<{ ok: boolean; prUrl?: string; commitCount?: number }> {
-  const git = (args: string[]) =>
-    gitWithInstallationAuth(args, installationId, {
-      cwd: workspacePath,
-      timeout: 60_000,
-    });
-
-  let defaultBranch = "main";
-  let restoredClean = false;
-  try {
-    defaultBranch = await resolveDefaultBranchForFallback(
-      installationId,
-      workspacePath,
-    );
-
-    const { getCurrentRepoUrl } = await import("./current-repo-url");
-    const repoUrl = await getCurrentRepoUrl(userId);
-    const { owner, repo } = parseOwnerRepo(repoUrl);
-    if (!owner || !repo) {
-      throw new Error(
-        "protected-fallback: could not resolve owner/repo from repo_url",
-      );
-    }
-
-    // Capture the stranded default tip — its KB tree is what we overlay onto
-    // the side branch. Captured BEFORE any branch switch.
-    const defaultHead = (await git(["rev-parse", "HEAD"])).toString().trim();
-
-    let commitCount = 0;
-    try {
-      commitCount =
-        parseInt(
-          (
-            await git([
-              "rev-list",
-              "--count",
-              `origin/${defaultBranch}..HEAD`,
-            ])
-          )
-            .toString()
-            .trim(),
-          10,
-        ) || 0;
-    } catch {
-      commitCount = 0;
-    }
-
-    // Bring origin/<default> and the side branch (may not exist yet) up to date.
-    await git(["fetch", "origin", defaultBranch]);
-    let sideExists = false;
-    try {
-      await git(["fetch", "origin", KB_SYNC_SIDE_BRANCH]);
-      sideExists = true;
-    } catch {
-      sideExists = false;
-    }
-    if (!sideExists) {
-      try {
-        await git([
-          "rev-parse",
-          "--verify",
-          "--quiet",
-          `refs/remotes/origin/${KB_SYNC_SIDE_BRANCH}`,
-        ]);
-        sideExists = true;
-      } catch {
-        sideExists = false;
-      }
-    }
-
-    // Tree-overlay accretion. Base the local side branch on the EXISTING side
-    // branch (preserving its prior commits) when present, else branch it from
-    // origin/<default>. Never base it on the stranded default tip.
-    //
-    // `-f`: the auto-commit allowlist (ALLOWED_AUTOCOMMIT_PATHS) deliberately
-    // leaves non-`knowledge-base/` tracked files dirty. Without -f, this
-    // branch switch aborts ("local changes would be overwritten") whenever a
-    // dirty tracked non-KB file differs in the side branch's tree — silently
-    // stranding the fallback every session. Forcing discards only those
-    // never-synced working-tree edits (they are never committed, never pushed,
-    // and the success-path `reset --hard origin/<default>` below already
-    // discards them), so -f loses nothing the fallback wouldn't drop anyway.
-    await git([
-      "checkout",
-      "-f",
-      "-B",
-      KB_SYNC_SIDE_BRANCH,
-      sideExists
-        ? `origin/${KB_SYNC_SIDE_BRANCH}`
-        : `origin/${defaultBranch}`,
-    ]);
-    // Overlay the latest KB tree from the captured default tip.
-    await git(["checkout", defaultHead, "--", "knowledge-base"]);
-
-    // Commit only when the overlay introduced changes (idempotent re-entry, AC7).
-    let hasStaged = true;
-    try {
-      await git(["diff", "--cached", "--quiet"]);
-      hasStaged = false;
-    } catch {
-      hasStaged = true;
-    }
-    if (hasStaged) {
-      await git(["commit", "-m", KB_SYNC_SIDE_COMMIT_MSG]);
-    }
-
-    // Push the side branch fast-forward (no --force). A non-fast-forward reject
-    // (concurrent co-member push, R3) throws → caught below → default NOT reset.
-    await git(["push", "origin", `HEAD:refs/heads/${KB_SYNC_SIDE_BRANCH}`]);
-
-    // Create-or-update the PR in the user's OWN repo. Dynamic import keeps
-    // github-app out of session-sync's static graph (sibling tests mock
-    // git-auth but not github-app).
-    const { createPullRequest, findOpenPullRequest } = await import(
-      "./github-app"
-    );
-    const existing = await findOpenPullRequest(
-      installationId,
-      owner,
-      repo,
-      KB_SYNC_SIDE_BRANCH,
-      defaultBranch,
-    );
-    let prUrl: string | undefined;
-    if (existing) {
-      prUrl = existing.htmlUrl;
-    } else {
-      const pr = await createPullRequest(
-        installationId,
-        owner,
-        repo,
-        KB_SYNC_SIDE_BRANCH,
-        defaultBranch,
-        KB_SYNC_PR_TITLE,
-        kbSyncPrBody(defaultBranch),
-      );
-      prUrl = pr.htmlUrl;
-    }
-
-    // SUCCESS — only now drop the orphan commit from default so it ends `==
-    // origin/<default>` (selfHeal then stays cold; AC3/R2).
-    await git(["checkout", defaultBranch]);
-    await git(["reset", "--hard", `origin/${defaultBranch}`]);
-    restoredClean = true;
-
-    return { ok: true, prUrl, commitCount };
-  } catch (err) {
-    // Failure preserves writes: do NOT reset default. Restore HEAD to the
-    // default branch (without reset) so the un-pushed commit survives there for
-    // next-session retry and the workspace isn't left parked on the side branch.
-    if (!restoredClean) {
-      try {
-        await git(["checkout", defaultBranch]);
-      } catch {
-        // best-effort
-      }
-    }
-    log.warn({ err, userId }, "Protected-branch fallback failed");
-    return { ok: false };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -713,11 +508,15 @@ async function resolvePushUrl(userId: string, workspaceId: string): Promise<{ ur
   return { url: `https://github.com/${owner}/${repo}.git`, owner, repo };
 }
 
+/** Why the protected-branch fallback did not deliver (the `fallback_reason` tag, closed). */
+export type KbFallbackReason = "side_fetch_failed" | "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "pr_failed";
+
 export type KbPublishResult =
   | { readonly kind: "pushed" }
   | { readonly kind: "held"; readonly reason: KbPushHeldReason }
   | { readonly kind: "noop" }
-  | { readonly kind: "protected"; readonly pushErr: KbSyncError };
+  | { readonly kind: "fallback"; readonly prUrl: string; readonly commitCount: number }
+  | { readonly kind: "fallback_failed"; readonly fallbackReason: KbFallbackReason; readonly pushErr: KbSyncError };
 
 export interface KbPublishInput extends KbSyncContext {
   readonly workspacePath: string;
@@ -728,15 +527,121 @@ export interface KbPublishInput extends KbSyncContext {
   readonly writer: KbWorkspaceWriter;
 }
 
+interface SideFallbackInput {
+  readonly isolated: IsolatedPushDirHandle;
+  readonly installationId: number;
+  readonly url: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly writer: KbWorkspaceWriter;
+  readonly ctx: KbSyncContext;
+  readonly remote: RemoteState;
+  readonly tV: VerifiedCommit;
+  readonly headSha: string;
+  readonly headKb: TreeEntry;
+  /** `S` and the value step 4 moved the local branch to (`S`, or `M`). */
+  readonly S: string;
+  readonly localNext: string;
+  readonly pushErr: KbSyncError;
+}
+
+/** Find or create the never-auto-merged PR `soleur/kb-sync` -> `D` in the user's own repo. */
+async function ensureKbSyncPr(installationId: number, owner: string, repo: string, D: string): Promise<string> {
+  // Dynamic import keeps github-app out of the static graph (sibling tests mock git-auth but not github-app).
+  const { createPullRequest, findOpenPullRequest } = await import("./github-app");
+  const existing = await findOpenPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D);
+  if (existing) return existing.htmlUrl;
+  const pr = await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D));
+  return pr.htmlUrl;
+}
+
 /**
- * Steps 2-5 of the post-session sync (#12600): authoritative remote state, the refusals, the hash checks, the build of
- * `S`, Guard 1, the local branch update and the push. One isolated directory per turn, disposed in `finally`.
+ * Step 6, the protected-branch fallback (rulings F, R3, R4, R15, R17), entirely in the isolated directory: no checkout, no
+ * reset, no workspace commit. Side parent `P` = the side tip `ls-remote` returned (fetched `--depth 1` when not local,
+ * hash-verified), never a workspace ref. Ruling I extended: build only when the side branch is absent, `P` is an ancestor
+ * of `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s with
+ * HEAD's KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push stays a
+ * fast-forward) or `(P, T)`. A post-success workspace failure is a held reason, never a fallback failure.
+ */
+async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
+  const { isolated, installationId, url, remote, tV, headSha, headKb } = f;
+  const fail = (fallbackReason: KbFallbackReason): KbPublishResult => ({ kind: "fallback_failed", fallbackReason, pushErr: f.pushErr });
+  const D = remote.defaultBranch;
+  const T = remote.tip;
+  const P = remote.sideTip;
+  let parents: string[] = [T];
+  let fetched = false;
+  if (P !== null) {
+    if (!(await isCommitPresent(isolated, P))) {
+      try {
+        await gitWithInstallationAuth(["fetch", "--depth", "1", "--no-tags", url, SIDE_REF], installationId, {
+          hardened: isolated,
+          timeout: PUSH_TIMEOUT_MS,
+        });
+      } catch {
+        return fail("side_fetch_failed");
+      }
+      fetched = true;
+      if (!(await isCommitPresent(isolated, P))) return fail("side_fetch_failed");
+    }
+    const pV = await readVerified(isolated, P);
+    if (!pV) return fail("side_hash_mismatch");
+    const pKb = kbOf(pV.root);
+    const tKb = kbOf(tV.root);
+    const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
+    if (!prMerged && !(await isAncestor(isolated, P, headSha))) throw new KbHeld("side_ahead");
+    if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) {
+      // The side branch already carries this KB: nothing to push, keep the PR (idempotent re-entry).
+      try {
+        return { kind: "fallback", prUrl: await ensureKbSyncPr(installationId, f.owner, f.repo, D), commitCount: 0 };
+      } catch {
+        return fail("pr_failed");
+      }
+    }
+    parents = pV.commit.parents.includes(T) || (await isAncestor(isolated, T, P)) ? [P] : [P, T];
+  }
+
+  const { sha: side } = await buildKbOverlay(isolated, tV.root, headKb, parents);
+  if (!(await assertRootDiffersOnlyInKb(isolated, side, tV.root))) return fail("side_guard_failed");
+  try {
+    await pushVerifiedKbOnly({ isolated, installationId, url, baseRoot: tV.root, sha: side, ref: SIDE_REF, defaultBranch: D });
+  } catch (err) {
+    return fail(err instanceof KbHeld ? "side_guard_failed" : "side_push_rejected");
+  }
+  let prUrl: string;
+  try {
+    prUrl = await ensureKbSyncPr(installationId, f.owner, f.repo, D);
+  } catch {
+    return fail("pr_failed");
+  }
+  reportPushHeld("synthetic_pushed", "side_pushed", f.ctx);
+
+  // KB-only case (the local branch is `S`, whose tree is the side's) with every parent already local: move the branch to
+  // the side commit and the tracking ref with it (R17: no token mint every turn while the PR is open). Otherwise the
+  // workspace stays as step 4 left it.
+  if (f.localNext === f.S && !fetched) {
+    try {
+      await handOver(isolated, f.writer, [side], [f.S, T, headSha]);
+      casLocalBranch(f.writer, D, side, f.S);
+      setTrackingBestEffort(f.writer, D, side);
+    } catch (err) {
+      if (!(err instanceof KbHeld)) throw err;
+      reportPushHeld(err.reason, "held", f.ctx);
+    }
+  }
+  return { kind: "fallback", prUrl, commitCount: 1 };
+}
+
+/**
+ * Steps 2-6 of the post-session sync (#12600): authoritative remote state, the refusals, the hash checks, the build of
+ * `S`, Guard 1, the local branch update, the push and the protected-branch fallback. One isolated directory per turn,
+ * disposed in `finally`.
  */
 export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishResult> {
   const { headSha, installationId, writer } = input;
   let isolated: IsolatedPushDirHandle | undefined;
   try {
-    const { url } = await resolvePushUrl(input.userId, input.workspaceId);
+    const { url, owner, repo } = await resolvePushUrl(input.userId, input.workspaceId);
     try {
       isolated = createIsolatedPushDir(input.workspacePath);
     } catch {
@@ -780,8 +685,10 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     try {
       await pushVerifiedKbOnly({ isolated, installationId, url, baseRoot: tV.root, sha: S, ref: `refs/heads/${D}`, defaultBranch: D });
     } catch (err) {
-      if (err instanceof KbSyncError && err.pushClass === "protected_branch") return { kind: "protected", pushErr: err };
-      throw err;
+      if (!(err instanceof KbSyncError) || err.pushClass !== "protected_branch") throw err;
+      return await runSideFallback({
+        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headKb, S, localNext, pushErr: err,
+      });
     }
     setTrackingBestEffort(writer, D, S);
     reportPushHeld("synthetic_pushed", "pushed", input);
