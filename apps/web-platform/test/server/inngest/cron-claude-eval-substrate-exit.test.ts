@@ -11,9 +11,9 @@
 //         draft; a lost line is a rejected day. The spawn now also waits (bounded) for
 //         the stdout readline `close` before resolving.
 import { EventEmitter } from "node:events";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadavg, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -465,11 +465,14 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
   // read dead once killed, and a zombie that is NOT reaped must read dead while kill(0) still
   // succeeds.
   describe("isAlive oracle controls", () => {
-    const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
-    // Only a standalone sleep binary can be copied under another name (a multicall binary
-    // such as busybox would reject the unknown applet name).
+    // The process under test is a `#!/bin/sh` script with the test name as its file name. The
+    // kernel sets comm from that file name. Copying the sleep binary under another name does not
+    // work everywhere: the uutils coreutils on ubuntu-26.04 (ubuntu-latest) is a multicall binary
+    // that picks its command from its own exe path and exits with "unknown program" under any
+    // other name, and argv0 does not change that (#12783). The script waits in `sleep 1`, so it
+    // reads state S, and once it is killed only a one-second orphan sleep is left.
     const hasProc = existsSync("/proc/self/stat");
-    const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && hasProc;
+    const canRunScript = hasProc && existsSync("/bin/sh");
     const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const child = actual.spawn(...args);
@@ -478,15 +481,15 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     };
 
     for (const name of ["sleep", "x) Z y"]) {
-      it.skipIf(!canCopySleep)(
+      it.skipIf(!canRunScript)(
         `a live process reads alive and a killed one dead (comm "${name}")`,
         async () => {
           const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
           dirs.push(dir);
           const exe = join(dir, name);
-          copyFileSync(SLEEP_BIN as string, exe);
+          writeFileSync(exe, "#!/bin/sh\nwhile :; do sleep 1; done\n");
           chmodSync(exe, 0o755);
-          const child = await spawnReal(exe, ["120"], { stdio: "ignore" });
+          const child = await spawnReal(exe, [], { stdio: "ignore" });
           try {
             const pid = child.pid as number;
             expect(Number.isInteger(pid) && pid > 1).toBe(true);
