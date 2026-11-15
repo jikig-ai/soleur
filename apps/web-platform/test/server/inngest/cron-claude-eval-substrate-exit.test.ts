@@ -493,7 +493,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
           try {
             const pid = child.pid as number;
             expect(Number.isInteger(pid) && pid > 1).toBe(true);
-            // comm is the copy's name only once exec has replaced the forked parent.
+            // comm is the script's name only once exec has replaced the forked parent.
             await vi.waitFor(() => expect(readFileSync(`/proc/${pid}/stat`, "utf8")).toContain(`(${name})`), {
               timeout: 5_000,
               interval: 10,
