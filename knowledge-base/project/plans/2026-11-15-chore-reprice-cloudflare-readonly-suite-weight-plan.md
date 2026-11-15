@@ -17,6 +17,34 @@ lane: cross-domain
 
 Spec lacks valid lane: defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-15.
+**Research:** kept proportionate to a one-row data change, per the pipeline brief.
+- Before deepening, the plan-review panel ran: DHH, Kieran, code-simplicity and the CTO devex lens. Its findings were applied.
+- The deepen pass ran the mechanical halts and live citation checks inline. It did not run the 40-agent fan-out.
+
+### Key Improvements
+
+1. Added an `## Observability` section with a 3 ms grep probe. Phase 4.7 Step 1 triggers on any
+   path outside the docs set.
+2. Checked live:
+   - #12441, #10479, #10205, #11679 and #12780 are OPEN; #12515 is MERGED.
+   - #12515 is commit `8dad4ed240` on main and touches the suite.
+   - #11679 does mention the replay re-price.
+   - `wg-when-deferring-a-capability-create-a` is active in AGENTS.md.
+   - The labels `semver:patch` and `meta/machinery` exist.
+3. Halts: 4.6 passes (threshold `none`, no sensitive path). 4.8 found 0 PAT-shaped tokens. 4.12
+   passes: one unfenced Scope Check, all three subsections present, no `unmapped` row.
+   - 4.9, 4.10, 4.11 and 4.13 do not trigger: no UI surface, no store or connection, no guard
+     deliverable and no new autonomous task. The drift gate named here is existing machinery, not
+     a deliverable.
+
+### New Considerations Discovered
+
+- The discoverability probe prints `0` before the edit and `1` after it, verified on a scratch
+  copy, so it can fail.
+
 Change one data row in `scripts/suite-durations.tsv`:
 
 ```text
@@ -166,6 +194,38 @@ anywhere. `closingIssuesReferences` must stay `[]`.
   no user data or product surface. The diff touches no path matching the preflight
   `SENSITIVE_PATH_RE`.
 
+## Observability
+
+This section is here because deepen-plan Phase 4.7 Step 1 triggers on any path outside the docs
+set. The change adds no runtime surface; the signals below already exist.
+
+```yaml
+liveness_signal:
+  what: the committed row reads `155229 measured`, and the CI `test-scripts` legs that consume the table/manifest pass
+  cadence: every PR and merge_group run
+  alert_target: the PR's and merge queue's required checks
+  configured_in: .github/workflows/ci.yml (test-scripts matrix -> bash scripts/test-all.sh scripts)
+error_reporting:
+  destination: red CI check on #12778 / the merge_group run (GitHub Actions)
+  fail_loud: true — scripts-shard-manifest.test.sh exits 1 with a named FAIL line on a malformed, unsorted or key-divergent row
+failure_modes:
+  - mode: malformed or unsorted row, or durations keys != manifest keys
+    detection: plugins/soleur/test/scripts-shard-manifest.test.sh check_durations (CI test-scripts leg)
+    alert_route: required check red on the PR / merge queue
+  - mode: the weight later goes stale (the suite's real time drifts >= 4x and >= 120 s)
+    detection: shard-balance-watch.yml weekly --drift-report PRICE_DRIFT_ROW
+    alert_route: the watch-owned tracker issue "ci-shard-balance-watch: manifest drift findings"
+  - mode: the weight breaches the per-suite corpus cap (600000 ms)
+    detection: scripts/test-all-corpus-weight-budget.test.sh (always-on)
+    alert_route: required check red on the PR / merge queue
+logs:
+  where: GitHub Actions job logs plus the suite-timings-scripts-* artifacts of each run
+  retention: 14 days for artifacts; job logs per the repo's Actions retention
+discoverability_test:
+  command: grep -c 'cloudflare-readonly.*155229.measured$' scripts/suite-durations.tsv
+  expected_output: "1"
+```
+
 ## Files to Edit
 
 - `scripts/suite-durations.tsv`: the single row whose content is
@@ -274,7 +334,8 @@ AC3 gates.
 **Domains relevant:** none
 
 No cross-domain implications detected. This is a CI tooling data change (one scheduling weight).
-There is no UI surface, no code-class path and no new infrastructure. There is no architectural
+There is no UI surface, no new runtime surface (the Observability section only names existing
+signals) and no new infrastructure. There is no architectural
 decision either: the row's value is the generator's own merge_group median, and the generator's
 drift-gate verdict carries over.
 
