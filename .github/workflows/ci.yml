@@ -1842,9 +1842,9 @@ jobs:
     # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
     timeout-minutes: 60
     # No setup-node — bash + python3 + a stock node (with npm) ship on
-    # ubuntu-latest by default, and the one `node --test` entry in the
-    # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
-    # ubuntu-latest node — no version pin needed (same bare-`node` precedent as
+    # the runner image (ubuntu-24.04 while the pin above holds), and the one
+    # `node --test` entry in the scripts group (scripts/md-to-mrkdwn.test.mjs)
+    # runs on that stock node — no version pin needed (same bare-`node` precedent as
     # secret-scan.yml; node --test ships in Node >=18).
     #
     # `setup-bun` IS required (#7332). This comment previously asserted "No `bun`

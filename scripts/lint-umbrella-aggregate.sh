@@ -76,8 +76,8 @@
 # name `secret-guards` is not checked.
 #
 # Parsing: PyYAML (the same dependency the required quality-guards member `workflow-duplicate-keys`
-# has, assumed preinstalled on the runner: ubuntu-24.04 for the `test-scripts` job that runs this lint (pinned, #12790), ubuntu-24.04
-# for `secret-guards`, which runs it through scripts/ci-parked-hold.test.sh; the `pyyaml=<version>` this lint
+# has, assumed preinstalled on the runner: ubuntu-24.04 for both the `test-scripts` job that runs this lint (pinned, #12790)
+# and `secret-guards`, which runs it through scripts/ci-parked-hold.test.sh; the `pyyaml=<version>` this lint
 # prints on success is the evidence). A missing PyYAML fails this lint (exit 2) rather than skipping it.
 # Census scope: *.yml and *.yaml under .github/workflows (none uses .yaml today; measured with `ls`).
 # The member(...) call's THIRD argument is the single-quoted CSV of step ids.
