@@ -349,7 +349,7 @@ WebFetch scorer off also removes this note.
 5. **Residuals.** The effect on model behaviour in headless `--print` is unmeasured. The added value over the 2026-10-25
    system-prompt append is positional only: the same text, placed next to each result. Delivery was verified at CLI 2.1.321 on
    2026-11-13: a stub hook's nonce came back in the `result`, and a control without the hook returned `NONE`
-   (`knowledge-base/project/specs/feat-one-shot-11076-cron-gh-output-framing/probe-delivery.md`). That probe ran with
+   (`knowledge-base/project/specs/archive/20261115-120458-feat-one-shot-11076-cron-gh-output-framing/probe-delivery.md`). That probe ran with
    `--setting-sources project` to keep the developer's own hooks out, which production does not pass. The annotation could
    make a legitimate task under-act, and it repeats after every matching call. No public claim follows.
 6. **Enablement steps.** None are in this change. They run in this order, each authorized by the operator:
