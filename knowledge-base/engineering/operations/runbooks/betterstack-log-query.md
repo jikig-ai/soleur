@@ -369,10 +369,12 @@ Live standing alarms over this source:
 
 - **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
-  **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
-  `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
-  stuck-at-0 showed on `egress_gw_probe_silent` (no `JSONType`) before #12180 inverted it, so the cause is not yet isolated and no
-  replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
+  **ARMED** (re-armed 2026-11-12 under #9927 step D2-1a, on #12221 decision 2). It was paused pending
+  #11869: its first evaluation opened an incident and it read `Current value: 0` while the query API
+  showed the rows arriving every ~5 min; the same stuck-at-0 showed on `egress_gw_probe_silent` (no
+  `JSONType`) before #12180 inverted it. The cause was never isolated and the predicate is UNCHANGED,
+  so the stuck-at-0 can recur — an open incident while rows arrive is that failure mode, not a real
+  silence; the evaluated response is a #12180-class predicate change, not a silent re-pause. Armed behaviour:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
   row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition

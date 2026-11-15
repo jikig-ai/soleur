@@ -2111,7 +2111,8 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
 # Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file.
 #
-# PAUSED PENDING #11869 (false positive, measured 2026-11-02). The alert opened an incident at its
+# WAS PAUSED PENDING #11869 (false positive, measured 2026-11-02); RE-ARMED 2026-11-12 under #9927
+# step D2-1a on #12221 decision 2. The alert opened an incident at its
 # first evaluation (started 14:00:00Z, alert created 14:05:54Z) and has read `Current value: 0` ever
 # since, while the query API returns 3 rows for a 900 s window (269 object rows in 24 h;
 # `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
@@ -2121,9 +2122,13 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
 # returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
 # (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
-# cycle plus another false page. The resource is kept, predicate unchanged, and paused; re-arming is
-# one line (`paused = false`) once an evaluator-side fix is MEASURED on a live alert, and the guard
-# pins `paused = true` with this issue number so the pause cannot be lost silently.
+# cycle plus another false page. The resource is kept and the predicate is UNCHANGED: #12221
+# decision 2 made the re-arm conditional on the first post-replace `noop-*` row arriving from the
+# new host, and that precondition is met (13 `noop-done` rows on new host 175859399 as of
+# 2026-11-12), so the alert was re-armed as it stood. The guard now pins `paused = false` so the
+# armed state cannot be lost silently. The stuck-at-0 failure mode is not excluded: if the
+# evaluator reads 0 while rows arrive again, the response is the #12180-class measured predicate
+# change, not another silent pause.
 #
 # THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
 # `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
@@ -2198,10 +2203,10 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   recovery_period     = 900
   on_missing_data     = "treat_as_zero"
 
-  # Paused pending #11869 (see "PAUSED PENDING #11869" above). A literal true keeps the
-  # reconciler's `logs-alert-paused` arm quiet: it reports only a live pause under a declaration
-  # that resolves to `paused = false`.
-  paused = true
+  # Armed: re-armed under #9927 step D2-1a (was paused under #11869 — see "WAS PAUSED PENDING
+  # #11869" above). The reconciler's `logs-alert-paused` arm reports exactly this shape: a live
+  # pause under a declaration that resolves to `paused = false`.
+  paused = false
 
   email          = true
   push           = false

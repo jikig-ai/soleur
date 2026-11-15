@@ -142,13 +142,16 @@ declare -A ALLOW=(
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
   ["scripts/lib/test-affected-paths.sh"]="the AFFECTED_*_PATHS declaration index — it names this lib as a feeder-read edge member and selects nothing"
   ["plugins/soleur/skills/cve-exposure/scripts/host-state.sh"]="reads the probe marker only for per-host freshness and uptime (ADR-322); it makes no Inngest-liveness claim and gates nothing on a probe row"
+  [".github/workflows/apply-web-platform-infra.yml"]="names INNGEST_PROBE_MARKER only inside the env -u seam-strip of the #12708 post-replace liveness poll; the probe-row selection lives inside scripts/inngest-host-state.sh, itself a classified reader"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
 # watchdog workflow — the consumer that caused the incident — and stay green).
-# (#8285 PR B: apply-web-platform-infra.yml left this list; its only probe-row reader was the retired
-# inngest_backstop_retire live-store gate, deleted with that job.)
+# (#8285 PR B: apply-web-platform-infra.yml left this list when its only probe-row reader, the
+# retired inngest_backstop_retire live-store gate, was deleted; #12708 re-adds it — its liveness
+# gate env -u list names INNGEST_PROBE_MARKER, and dropping that seam-strip must stay observable.)
 MUST_FIND=(
+  ".github/workflows/apply-web-platform-infra.yml"
   ".github/workflows/scheduled-inngest-health.yml"
   "scripts/cutover-inngest.sh"
   "tests/scripts/lib/inngest-host-dark-gate.sh"
