@@ -85,6 +85,17 @@ Live standing alarms over this source:
   then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
   an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
   check, so the `detail=''` disjunct is what carries it), not a healthy skip.
+- **`logtail_exploration_alert.inngest_registry_empty`** (#10538, `higher_than 0` over 900 s, checked every 300 s,
+  missing data counts as zero, recovery 7200 s): `soleur-inngest-registry-empty-prd`. Pages (email and push) when a
+  dedicated Inngest host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row is serving (`server_active=active`, `http_code=200`),
+  past the uptime floor (`uptime_s` above 900), and its `registry_fns` is NOT a positive integer (0, `__UNREADABLE__`, or
+  the field missing): the server answers but owns no functions, so nothing is planned. Leg B reads the same field row on the
+  vector-down phone-home envelope (`shipper='cloud-init-phone-home'`, `stage='inngest-server-probe-vector-down'`) from
+  `.detail`. A not-serving row is the probe heartbeat's (`betteruptime_heartbeat.inngest_server_probe`), not this alert's.
+  It does NOT see a stale non-zero registry (#12742). Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift
+  guard `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`. Runbook:
+  [`inngest-server.md`](./inngest-server.md) "Registry-empty alert (#10538)". Readback: `--grep SOLEUR_INNGEST_SERVER_PROBE`,
+  decode, keep `host_role=dedicated` rows, read `registry_fns=` / `uptime_s=` / `http_code=` per row.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
