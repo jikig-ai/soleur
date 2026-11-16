@@ -9,7 +9,7 @@
 /** The `workspace_sync` value a KB write route adds to its success body when the workspace was held. */
 export const WORKSPACE_SYNC_PENDING = "pending" as const;
 
-export type KbWriteOp = "upload" | "delete" | "rename";
+export type KbWriteOp = "upload" | "delete" | "rename" | "save";
 
 export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
   /** First clause, per op. */
@@ -17,6 +17,7 @@ export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
     upload: "Saved to GitHub.",
     delete: "Deleted on GitHub.",
     rename: "Renamed on GitHub.",
+    save: "Saved to GitHub.",
   } satisfies Record<KbWriteOp, string>,
   /** The shared second clause. */
   detail: "Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.",

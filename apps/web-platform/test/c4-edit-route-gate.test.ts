@@ -113,6 +113,22 @@ describe("PUT /api/kb/c4/[...path] — c4-edit gate (security boundary)", () => 
     expect(mocks.mockWriteC4Diagram).toHaveBeenCalledTimes(1);
   });
 
+  it("D16 — a designed workspace hold answers 200 plus workspace_sync: pending (the c4 save is a KB write)", async () => {
+    process.env.FLAG_C4_EDIT = "1";
+    mocks.mockWriteC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending" });
+    const res = await PUT(putRequest(), { params: PARAMS });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.commitSha).toBe("abc123");
+    expect(body.workspace_sync).toBe("pending");
+  });
+
+  it("D16 — no hold ⇒ no workspace_sync key", async () => {
+    process.env.FLAG_C4_EDIT = "1";
+    const res = await PUT(putRequest(), { params: PARAMS });
+    expect(Object.keys(await res.json())).not.toContain("workspace_sync");
+  });
+
   it("AC8 — resolves the REAL identity (createClient → resolveIdentity) before the gate", async () => {
     process.env.FLAG_C4_EDIT = "0";
     await PUT(putRequest(), { params: PARAMS });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateAndResolveKbPath } from "@/server/kb-route-helpers";
 import { writeC4Diagram } from "@/server/c4-writer";
+import { WORKSPACE_SYNC_PENDING } from "@/lib/kb-workspace-sync-notice";
 import { createClient } from "@/lib/supabase/server";
 import { resolveIdentity } from "@/lib/feature-flags/identity";
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
@@ -85,6 +86,8 @@ export async function PUT(
       ...(result.rerenderDiagnostic
         ? { rerenderDiagnostic: result.rerenderDiagnostic }
         : {}),
+      // #12600 D16: the commit landed but the workspace was held; the client shows the shared non-error notice.
+      ...(result.workspaceSync === "pending" ? { workspace_sync: WORKSPACE_SYNC_PENDING } : {}),
     },
     { status: 200 },
   );

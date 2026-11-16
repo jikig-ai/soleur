@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, renderHook, screen, fireEvent, waitFor } from "@testing-library/react";
+import { kbWorkspaceSyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
 
 // c4-shared.tsx imports browser-only deps at module top (@likec4/diagram,
 // @likec4/core/model, CodeMirror). Stub them so the REAL C4Diagnostics /
@@ -228,6 +229,28 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
     expect(screen.getByText(/diagram updated/i)).toBeTruthy();
     // No "re-rendering…" present-progressive lie.
     expect(screen.queryByText(/re-rendering/i)).toBeNull();
+  });
+
+  it("#12600 D16: a held workspace shows the shared pending notice, not the supersede line", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: false, workspace_sync: "pending" }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
+    expect(screen.getByText(kbWorkspaceSyncPendingNotice("save"))).toBeTruthy();
+    expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
   });
 
   it("on a failed re-render: copy defers, onSaved(false) (Layer 2)", async () => {
