@@ -80,7 +80,7 @@ Rulings: `decision-challenges.md` in this directory. One PR. No flag, prd, Docke
 - [ ] 4.2 `./node_modules/.bin/tsc --noEmit`.
 - [ ] 4.3 The `discoverability_test` probe prints `protected-path write`.
 - [ ] 4.4 `bash plugins/soleur/test/c4-count-parity.test.sh` stays green.
-- [ ] 4.5 Apply the AC10 mutation rows locally, confirm RED, revert, and list them in the PR body:
+- [x] 4.5 Apply the AC10 mutation rows locally, confirm RED, revert, and list them in the PR body:
   - Guard 3 rows #5, #6 and #7e
   - Guard 2 rows #2, #4 and #5
   - Guard 1 rows #6b and #8

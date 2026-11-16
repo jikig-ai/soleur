@@ -1186,18 +1186,18 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: the `discoverability_test` command prints a deny containing `protected-path write`. Pre-fix it printed
+- [x] AC1: the `discoverability_test` command prints a deny containing `protected-path write`. Pre-fix it printed
   `"permissionDecision":"allow"`.
-- [ ] AC2: every Guard 1 deny row and must-pass row in `cron-bash-allowlist-hook.test.ts` passes. Each deny row failed
+- [x] AC2: every Guard 1 deny row and must-pass row in `cron-bash-allowlist-hook.test.ts` passes. Each deny row failed
   pre-fix (Phase 0 log in the PR body).
-- [ ] AC3: census row 2 is green (every `HOME` literal ends with `...CRON_GIT_CONFIG_PIN`, and `KNOWN_HOME_LITERALS`
+- [x] AC3: census row 2 is green (every `HOME` literal ends with `...CRON_GIT_CONFIG_PIN`, and `KNOWN_HOME_LITERALS`
   matches), and Guard 3 mutation 1 applied locally turns it red with a message naming `cron-roadmap-review.ts`.
-- [ ] AC4: `git grep -n "agent.gitconfig" -- apps/web-platform/server/inngest` returns nothing (row 4b). The path
+- [x] AC4: `git grep -n "agent.gitconfig" -- apps/web-platform/server/inngest` returns nothing (row 4b). The path
   appears only in `host-git.ts` among server files.
-- [ ] AC5: `git diff origin/main...HEAD -- apps/web-platform/server | grep -E '^\+.*(GIT_CONFIG_COUNT|safe\.bareRepository)'`
+- [x] AC5: `git diff origin/main...HEAD -- apps/web-platform/server | grep -E '^\+.*(GIT_CONFIG_COUNT|safe\.bareRepository)'`
   prints nothing, and census row 0 asserts `CRON_GIT_CONFIG_PIN` has no `GIT_CONFIG_COUNT` key.
   `git diff --quiet origin/main...HEAD -- apps/web-platform/server/agent-env.ts apps/web-platform/Dockerfile` exits 0.
-- [ ] AC6: the irregular-command-word battery passes.
+- [x] AC6: the irregular-command-word battery passes.
   - The 40 verb-table rows (5 verbs × 4 forms × the roadmap-review and bug-fixer allowlists) and the 8 irregular
     single rows deny with `irregular command word in a (git|gh) command (word #N …)`.
   - The bare-`git` row reports `word #2 missing`, and the two flag-led rows give the flag reason.
@@ -1206,7 +1206,7 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   - Three must-pass groups pass: the allowlist census (exact equality with the 22 stored lines), the raw-rule regression
     rows (`--repo "origin evil"`), and the must-pass rows (including `git commit -m "use -a flag"`).
   - Every irregular row either passed or was denied with a different reason before the fix (Phase 0 log).
-- [ ] AC7: these rows pass:
+- [x] AC7: these rows pass:
   - `cron-spawn-git-config-pin.test.ts` rows 0, 2, 4, 4b, 4c, 4d, 5, 5b and 6, plus the binding check, its
     synthetic-source FAIL controls and the walk self-test
   - `cron-claude-eval-substrate-exit.test.ts` rows 1, 3 and 6, including the re-arm case
@@ -1214,17 +1214,17 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   - Row 5's control arm shows the fixture fires: `planted` is read and `H/fired` exists. Its pinned arm shows that
     neither happens.
   - Row 5b shows the XDG `ignore` residual and the hook's deny on that file.
-- [ ] AC8: the existing suites stay green unchanged: the K1' rows, `cron-gh-output-framing-hook.test.ts`,
+- [x] AC8: the existing suites stay green unchanged: the K1' rows, `cron-gh-output-framing-hook.test.ts`,
   `cron-claude-eval-substrate.test.ts`, every edited cron's own test, `host-git.test.ts`, `agent-env.test.ts`, and
   `dockerfile-git-version-floor.test.ts`.
-- [ ] AC9: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] AC10: these mutation rows were applied locally, drove the suite RED, and were reverted:
+- [x] AC9: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] AC10: these mutation rows were applied locally, drove the suite RED, and were reverted:
   - at least three Guard 3 rows, including #5 (the dispatch row), #6 (the second-member row) and #7e (gh with no env)
   - at least three Guard 2 rows, including #2 (the dispatch row), #4 (the second-member row) and #5 (position 2)
   - Guard 1 rows #6b (normalisation) and #8 (drift)
 
   The PR body lists which rows ran.
-- [ ] AC11: ADR-033 carries the dated #12757 amendment. It contains:
+- [x] AC11: ADR-033 carries the dated #12757 amendment. It contains:
   - the I7(a) paths, including the trust-root directory and the normalised-path check
   - the pin invariant, scoped to git-capable children
   - the command-word shape rule
@@ -1232,9 +1232,9 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
     non-literal spawn command, and a flag-led allowlist line
 
   ADR-287's addendum item 2 carries the dated G1 cross-reference line.
-- [ ] AC12: a `soleur:review` round ran after the implementation commits, separate from the work phase, with
+- [x] AC12: a `soleur:review` round ran after the implementation commits, separate from the work phase, with
   security-sentinel and user-impact-reviewer seats. Its findings are resolved or filed before merge.
-- [ ] AC13: the PR body contains `Closes #12757` and `Ref #9601`, plus the sentence "Prod HOME: assumed writable per
+- [x] AC13: the PR body contains `Closes #12757` and `Ref #9601`, plus the sentence "Prod HOME: assumed writable per
   the Dockerfile and deploy flags; not checked live."
 
 ### Post-merge (read-only verification, automated by the next scheduled run)
