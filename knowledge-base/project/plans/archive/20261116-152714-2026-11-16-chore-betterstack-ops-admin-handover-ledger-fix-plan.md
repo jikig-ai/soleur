@@ -34,7 +34,7 @@ lane: cross-domain
 
 ### New Considerations Discovered
 
-- The provider's `Read` still runs on the forgotten address during the plan. A 404 drops the entry (no change). Any other error, such as a 5xx or a 401/403, fails the whole per-merge plan. AC13 covers the token. A 5xx is transient, and a re-run recovers.
+- The provider's `Read` still runs on the forgotten address during the plan. A 404 drops the entry (no change). *(Superseded: see the 2026-11-16 Addendum at the end of this plan.)* Any other error, such as a 5xx or a 401/403, fails the whole per-merge plan. AC13 covers the token. A 5xx is transient, and a re-run recovers.
 - Census G4b only reads steps containing a literal `terraform apply`. The saved-plan step qualifies only because of an `::error::` echo line. G4b also merges the target lists across steps, so mutation row 6 rests on FIX B (c) alone.
 - Between the merge and the forget applying, the scheduled drift job (a full plan with no `-target`) would show the forget and exit 2. The per-merge apply on the same push closes that window.
 
@@ -430,7 +430,7 @@ workflow fires on the merge push.
   outcomes show `0 to destroy`.
 - No API write reaches Better Stack. There is no downtime and no host is touched.
 - The blast radius is one state entry.
-- Lookup during the plan: the provider's `Read` (`GET /api/v2/team-members?email=…`) still runs on the forgotten address. A 404 drops the entry, giving no change. A non-404 error, such as a 5xx or a 401/403, fails the per-merge plan loudly. AC13 pre-checks the token, and a 5xx is re-run (terraform-architect, deepen 2026-11-16).
+- Lookup during the plan: the provider's `Read` (`GET /api/v2/team-members?email=…`) still runs on the forgotten address. A 404 drops the entry, giving no change. *(Superseded: see the 2026-11-16 Addendum at the end of this plan.)* A non-404 error, such as a 5xx or a 401/403, fails the per-merge plan loudly. AC13 pre-checks the token, and a 5xx is re-run (terraform-architect, deepen 2026-11-16).
 
 ### Host fan-out
 
@@ -781,7 +781,7 @@ infra, ledger and docs change, so the tier is NONE.
   `removed` block.
 - **(integration, post-merge)** Select the merge commit's push run:
   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --json databaseId,conclusion`.
-  It concludes `success`. Its `apply` job log shows `0 to destroy`, and for
+  It concludes `success`. *(Superseded: see the 2026-11-16 Addendum at the end of this plan.)* Its `apply` job log shows `0 to destroy`, and for
   `betteruptime_team_member.ops` it shows either `will no longer be managed by Terraform` or no
   change.
 
