@@ -2,9 +2,9 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-16T18:40:11Z
+# generated-at=2026-11-16T20:55:11Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=d5d218bb023bbf79c4b169c9809c73e7f3538fd20b9d4ad21f82de48f1cbc83d
+# growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	851	measured
 .claude/hooks/bare-head-self-heal.test.sh	3891	measured
@@ -576,6 +576,7 @@ scripts/marketplace-drift-check	1711	measured
 scripts/marketplace-manifest-validate	705	measured
 scripts/md-to-mrkdwn	235	measured
 scripts/measure-plan-sharp-edges-turns	2590	measured
+scripts/merge-bypass-audit	1802	floor
 scripts/monitor-streak-state	13200	measured
 scripts/no-dangling-committed-symlinks	17	measured
 scripts/orphan-process-reaper	9319	measured

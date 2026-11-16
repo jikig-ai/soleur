@@ -159,7 +159,7 @@ old = '_diff_touches() {'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
 s = s.replace(old, (
     '[[ -n "${SANDBOX_DIFF_NAMES+x}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
-    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" && "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_names="${_diff_names}\n$(git ls-files --others --exclude-standard 2>/dev/null)"\n'
+    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" && "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_names="${_diff_names}\n$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null)"\n'
     '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
     '[[ -n "${SANDBOX_HEAD_OK:-}" ]] && _diff_head_ok="$SANDBOX_HEAD_OK"\n'
     '[[ -n "${SANDBOX_PREFIXES+x}" ]] && TEST_RELEVANCE_PREFIXES=($SANDBOX_PREFIXES)\n'
@@ -1690,7 +1690,7 @@ if in_range; then
 # a new file under a declared prefix are otherwise invisible to the diff blob.
 cases=$((cases + 1))
 _untr_block="$(awk '/^if \(\( _AFFECTED == 1 \)\); then/{f=1} f&&/^fi$/{exit} f' "$RUNNER")"
-if grep -qF 'git ls-files --others --exclude-standard 2>/dev/null' <<<"$_untr_block" \
+if grep -qF 'git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null' <<<"$_untr_block" \
   && ! grep -qE 'ls-files --others --exclude-standard --' <<<"$_untr_block"; then
   pass "w1: affected mode appends the UNSCOPED untracked list to _diff_names"
 else
