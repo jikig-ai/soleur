@@ -2399,6 +2399,17 @@
 "id": "2j2hmcu9o8e7p",
 "title": "Recommends ADR creation"
 },
+"2k2buyxji1kej": {
+"technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
+"source": {
+"model": "betterstack"
+},
+"target": {
+"model": "founder"
+},
+"id": "2k2buyxji1kej",
+"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient) (2026-11-16: a Responder seat is now billed, see expenses.md; escalation stays gated, #12817). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
+},
 "2lu63nr6gqhmq": {
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
 "source": {
@@ -2640,17 +2651,6 @@
 },
 "id": "33oelk4lvl3u7",
 "title": "Git operations"
-},
-"34wi5wsojzgx9": {
-"technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
-"source": {
-"model": "betterstack"
-},
-"target": {
-"model": "founder"
-},
-"id": "34wi5wsojzgx9",
-"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
 },
 "351viohfkymya": {
 "technology": "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)",
@@ -6415,7 +6415,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"2k2buyxji1kej"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15987,7 +15987,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"2k2buyxji1kej"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26742,7 +26742,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"2k2buyxji1kej"
 ],
 "color": "gray",
 "line": "dashed",

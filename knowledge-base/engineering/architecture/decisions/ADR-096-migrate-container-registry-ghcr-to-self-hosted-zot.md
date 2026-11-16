@@ -675,6 +675,10 @@ mitigations un-live. Both are structural, not one-off:
   is a `betteruptime_outgoing_webhook` forward or a Responder-tier upgrade (expense-gated, out of
   scope). Status stays **Adopting**.
 
+  *2026-11-16: `betteruptime_team_member.ops` is forgotten (`removed { destroy = false }`). ops@ is
+  now the org Admin, managed by the vendor, because the provider manages non-admin members only.
+  The `-target` stays as a tombstone.*
+
 ### Disk-full root cause + blind-host observability (amendment 2026-07-08, #6240/#6244)
 
 The 2026-07-08 17:20 UTC `registry-host-replace` (fresh host, PRESERVED 30 GB volume) did **not**
