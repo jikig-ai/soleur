@@ -18,8 +18,8 @@
 //
 // Only `-c key=value` pairs and environment are used, never a new global option: the built image's git version is
 // not measured here and an unknown global option exits 129 on git 2.38/2.39.
-import { lstatSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { accessSync, constants, lstatSync, readdirSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
 
@@ -29,6 +29,49 @@ import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-
  * workspace's own local identity still beats it (local > global).
  */
 export const AGENT_GIT_GLOBAL_CONFIG = "/usr/local/share/soleur/agent.gitconfig";
+
+/**
+ * #12757 — every cron child-process env (agent, script, server-side git) carries this, spread LAST, so HOME's
+ * writable ~/.gitconfig (and ~/.config/git/config) and the system gitconfig are never read. Identity-only file, same
+ * identity as today. Identity-only: no command-scope config pairs here (out of scope; command-scope config beats local
+ * identity).
+ *
+ * Every cron env literal under server/inngest must end with ...CRON_GIT_CONFIG_PIN. Enforced by
+ * test/server/inngest/cron-spawn-git-config-pin.test.ts.
+ */
+export const CRON_GIT_CONFIG_PIN: Readonly<{ GIT_CONFIG_GLOBAL: string; GIT_CONFIG_NOSYSTEM: "1" }> = Object.freeze({
+  GIT_CONFIG_GLOBAL: AGENT_GIT_GLOBAL_CONFIG,
+  GIT_CONFIG_NOSYSTEM: "1",
+});
+
+/**
+ * #12757 (CTO G2/H1) — git treats a missing/unreadable global as empty, so a broken identity file is silent (cron
+ * commits then fail "Author identity unknown"). Pure, uncached: re-probed per call.
+ */
+export function agentGitConfigReadable(path: string = AGENT_GIT_GLOBAL_CONFIG): boolean {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** #12757 (CTO H4) — the XDG ignore/attributes defaults are read whatever GIT_CONFIG_GLOBAL says (residual G3). */
+export function xdgGitResidualPresent(home: string = homedir()): boolean {
+  return ["ignore", "attributes"].some((f) => {
+    try {
+      return statSync(join(home, ".config/git", f)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** #12757 (CTO H5) — pin an env, but keep a caller's stricter /dev/null global (F-A). */
+export function withCronGitConfigPin(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return env.GIT_CONFIG_GLOBAL === "/dev/null" ? { ...env, GIT_CONFIG_NOSYSTEM: "1" } : { ...env, ...CRON_GIT_CONFIG_PIN };
+}
 
 export type BaseEnv = Readonly<Record<string, string | undefined>>;
 

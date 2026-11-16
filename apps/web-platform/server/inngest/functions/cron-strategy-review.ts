@@ -46,6 +46,7 @@ import type { Octokit } from "@octokit/core";
 import { parseFrontMatterSafe } from "@/server/front-matter-guard";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 import {
   REPO_OWNER,
   REPO_NAME,
@@ -126,6 +127,8 @@ async function setupEphemeralWorkspace(token: string): Promise<{
   }>((resolve) => {
     const child = spawn("git", ["clone", "--depth=1", cloneUrl, repoRoot], {
       stdio: "ignore",
+      // #12757 — a token-bearing clone must not read HOME's ~/.gitconfig.
+      env: { ...process.env, ...CRON_GIT_CONFIG_PIN },
     });
     child.on(
       "exit",
