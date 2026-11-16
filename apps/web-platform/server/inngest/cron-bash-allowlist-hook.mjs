@@ -798,8 +798,9 @@ function gitVerbReason(tokens) {
         continue;
       }
       const cluster = t.slice(1);
-      const at = [...cluster].findIndex((c) => VALUE_SHORT.includes(c));
-      if (at === cluster.length - 1) i++;
+      // `-S`/`-u` take an OPTIONAL attached value, so the rest of the cluster is theirs (`-Sc` is key id "c").
+      const at = [...cluster].findIndex((c) => "mFCctSu".includes(c));
+      if (at === cluster.length - 1 && VALUE_SHORT.includes(cluster[at])) i++;
     }
   }
   return null;

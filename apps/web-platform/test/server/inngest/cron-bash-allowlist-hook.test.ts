@@ -1924,7 +1924,7 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
         expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason, cron).toMatch(/^cron-containment: metachar: tilde expansion/);
     },
   );
-  it.each(["git commit -m x .", "git commit -m x -- .", "git commit -m x :/", "git commit -m x src/a.ts", "git commit -qm x .", "git commit --message x .", "git commit --mess x .", "git commit -F msg.txt ."])(
+  it.each(["git commit -m x .", "git commit -m x -- .", "git commit -m x :/", "git commit -m x src/a.ts", "git commit -qm x .", "git commit --message x .", "git commit --mess x .", "git commit -F msg.txt .", "git commit -m x -Sc .", "git commit -m x -SF .", "git commit -m x -uc ."])(
     "both crons: git commit with a pathspec %s is denied",
     (cmd) => {
       for (const cron of VERB_TABLE_CRONS)
