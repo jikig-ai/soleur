@@ -5,7 +5,8 @@
 # PROPERTY. A reader that lists a pull request's changed paths and matches them against a gated surface must (1) see the EXACT bytes of a
 # name git would C-quote (a non-ASCII byte, tab, `"`, `\`), (2) list a rename's OLD path (a rename away from a gated surface is a change to it;
 # the one exception is an exact-file "was this document updated" check), (3) list a gitlink that configuration hides, and (4) fail toward
-# running or blocking when git fails, never read a failed diff as "nothing changed".
+# running or blocking when git fails, never read a failed diff as "nothing changed", and (5) read a `--match` no-match as exit 42 only, so a
+# shell-level rc 1 (an unbound variable under `set -u`, in the caller or the helper) is unknown, never no match.
 #
 # THREE SECTIONS, one file (selectable by argument: helper | steps | sentinel; default all).
 #   helper    plugins/soleur/scripts/changed-paths.sh against real scratch repositories.
@@ -346,6 +347,82 @@ precondition_quoted() { # <label> <dir> <range> <raw path>: the PLAIN diff must 
   fi
 }
 
+# Row set 9 (#12809): the `--match` CAPTURE LINES that ship, EXECUTED. A pin certifies a handler's spelling; these rows run each real line
+# under `bash -uc` against the real helper and read the variable it leaves. The handler must say unknown for every helper outcome except a
+# real match or a real no-match (exit 42), so a shell-level rc 1 (an unbound root in the caller, an unbound variable in the helper) fires
+# the gate. Lines are read from $REPO_ROOT directly (never SKILL_ROOT, which the sentinel self-tests repoint), selected by handler shape.
+CALLER_OUT=""
+run_caller() { # <dir> <line> <shell flags: -uc|-c> <env args...>: CALLER_OUT = "[<value of the line's variable>]"
+  local d="$1" line="$2" fl="$3" v; shift 3
+  v="${line%%=*}"
+  assert_fixture_dir "$d"
+  mkdir -p "$WORK_ROOT/io"
+  CALLER_OUT="$(cd "$d" && env "$@" bash "$fl" "$line"'; printf "[%s]" "${'"$v"'}"' 2> "$WORK_ROOT/io/caller.err")"
+}
+caller_rows() {
+  local rx='^[a-z_]+=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match .+\) \|\| \{'
+  local real="$REPO_ROOT/plugins/soleur" lines n v line rc missing="" da db
+  lines="$( { grep -v '^[[:space:]]*#' "$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md"; grep -v '^[[:space:]]*#' "$REPO_ROOT/plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md"; } | LC_ALL=C grep -E -- "$rx" || true)"
+  n="$(grep -c . <<<"$lines" || true)"
+  CALLER_FLOOR=6
+  if [ "$n" -lt "$CALLER_FLOOR" ]; then printf '[FATAL] caller rows: extracted %s --match capture lines, want >=%s\n' "$n" "$CALLER_FLOOR" >&2; exit 1; fi
+  for v in legal_touch ledger_touched gdpr_gate_touch diff_match dpf_match plan_refs; do
+    [ "$(grep -c -- "^$v=" <<<"$lines" || true)" -eq 1 ] || missing="$missing $v"
+  done
+  if [ -z "$missing" ]; then h_ok "caller rows: $n --match capture lines extracted, each of the six named variables exactly once"
+  else h_bad "caller rows: the six named capture lines are not each extracted exactly once:$missing"; fi
+  # Preconditions: without them the RED rows below could pass vacuously.
+  rc=0; env -u CLAUDE_PLUGIN_ROOT bash -uc 'x=$(bash "${CLAUDE_PLUGIN_ROOT}/x") || exit $?' 2>/dev/null || rc=$?
+  if [ "$rc" -eq 1 ]; then h_ok "precondition caller: this bash exits 1 (not 127) for an unbound root inside a command substitution"
+  else h_bad "precondition caller: an unbound root under bash -u exited $rc, want 1 (R1 would not be RED-first)"; fi
+  mkdir -p "$WORK_ROOT/stubroot/scripts" "$WORK_ROOT/stub1root/scripts"
+  sed '/^set -uo pipefail$/a : "$SOLEUR_INJECTED_UNSET"' "$HELPER" > "$WORK_ROOT/stubroot/scripts/changed-paths.sh"
+  printf 'exit 1\n' > "$WORK_ROOT/stub1root/scripts/changed-paths.sh"
+  rc=0; env -u SOLEUR_INJECTED_UNSET bash "$WORK_ROOT/stubroot/scripts/changed-paths.sh" --match '^x' HEAD >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 1 ]; then h_ok "precondition caller: the injected-unset helper copy exits exactly 1"
+  else h_bad "precondition caller: the injected-unset helper copy exited $rc, want 1 (the injection did not land)"; fi
+  # Control A: a change OUTSIDE every gated surface (a real modification, so grep runs: an empty commit takes the empty-list branch).
+  new_row || { h_bad "could not build caller row A"; return; }
+  da="$ROW_DIR"; put_in "$da" docs/other.md "edited"
+  commit_row || { h_bad "could not commit caller row A"; return; }
+  run_helper "$da" origin/main...HEAD
+  if [ "$H_RC" -eq 0 ] && [ -n "$H_OUT" ] && ! LC_ALL=C grep -qE '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/|knowledge-base/operations/expenses\.md$|plugins/soleur/skills/gdpr-gate/|knowledge-base/project/(plans|specs)/|zzz-never/)' <<<"$H_OUT"; then
+    h_ok "precondition caller: control A's list is non-empty and touches no gated surface"
+  else h_bad "precondition caller: control A's list is empty or touches a gated surface (rc=$H_RC '$H_OUT')"; fi
+  # Fixture B: one change on every gated surface (the ledger is ADDED: the template does not seed it, and AMT includes A).
+  new_row || { h_bad "could not build caller row B"; return; }
+  db="$ROW_DIR"
+  put_in "$db" docs/legal/x.md; put_in "$db" knowledge-base/operations/expenses.md; put_in "$db" plugins/soleur/skills/gdpr-gate/x.md
+  put_in "$db" knowledge-base/project/specs/fixture/x.txt; put_in "$db" apps/x/y
+  commit_row || { h_bad "could not commit caller row B"; return; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    v="${line%%=*}"
+    run_caller "$da" "$line" -uc CLAUDE_PLUGIN_ROOT="$real" CANONICAL_REGEX='^zzz-never/' DPF_REGEX='^zzz-never/'
+    if [ "$CALLER_OUT" = "[]" ]; then h_ok "caller $v: control A (real root, no match) leaves it empty"
+    else h_bad "caller $v: control A want [] got $CALLER_OUT ($(head -c 160 "$WORK_ROOT/io/caller.err")); if this is a new capture line, extend fixture A / the runner env"; fi
+    run_caller "$db" "$line" -uc CLAUDE_PLUGIN_ROOT="$real" CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    case "$CALLER_OUT" in
+      "[]"|"[unknown]") h_bad "caller $v: control B (real root, a match) want a path got $CALLER_OUT ($(head -c 160 "$WORK_ROOT/io/caller.err")); if this is a new capture line, extend fixture B / the runner env" ;;
+      *) h_ok "caller $v: control B (real root, a match) holds a path" ;;
+    esac
+    run_caller "$db" "$line" -uc -u CLAUDE_PLUGIN_ROOT CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: an unbound root under bash -u is unknown, never no match"
+    else h_bad "caller $v: an unbound root under bash -u want [unknown] got $CALLER_OUT (rc 1 read as no match)"; fi
+    run_caller "$db" "$line" -uc -u SOLEUR_INJECTED_UNSET CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stubroot" CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: a helper that trips an unbound variable is unknown"
+    else h_bad "caller $v: a helper that trips an unbound variable want [unknown] got $CALLER_OUT"; fi
+    run_caller "$db" "$line" -uc CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root" CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: a helper exit 1 is unknown (only 42 is no match)"
+    else h_bad "caller $v: a helper exit 1 want [unknown] got $CALLER_OUT"; fi
+    run_caller "$db" "$line" -c -u CLAUDE_PLUGIN_ROOT CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: an unset root without set -u (missing helper, rc 127) is unknown"
+    else h_bad "caller $v: an unset root without set -u want [unknown] got $CALLER_OUT"; fi
+  done <<<"$lines"
+  assert_fixture_dir "$da"; rm -rf -- "$da"
+  free_row
+}
+
 section_helper() {
   echo "── helper"
   selftest_helper_verdicts
@@ -377,7 +454,7 @@ section_helper() {
   else h_bad "--match line count: want 6 got $(grep -c . <<<"$H_OUT") ($(printf '%s' "$H_OUT" | tr '\n' '|' | cut -c1-200))"; fi
   if h_has_line "zz-outside/$NAME_E"; then h_bad "--match leaked the control path outside the surface"; else h_ok "--match excludes the control path outside the surface"; fi
   run_helper "$d" --match '^zzz-no-such-prefix/' origin/main...HEAD
-  h_expect_rc "--match with no match exits 1 (not 0)" 1
+  h_expect_rc "--match with no match exits 42 (not 0, not 1)" 42
   if [ -z "$H_OUT" ]; then h_ok "--match with no match prints nothing"; else h_bad "--match with no match printed '$H_OUT'"; fi
   run_helper "$d" --match '[' origin/main...HEAD
   h_expect_rc "--match with an invalid ERE exits 2" 2
@@ -393,7 +470,7 @@ section_helper() {
   h_expect_rc "an injected git failure on a VALID range exits non-zero" 2
   H_RC=0
   (cd "$d" && SHIM_FAIL_VERBS=diff PATH="$SHIM_FAIL_DIR:$PATH" bash "$HELPER" --match '^apps/' origin/main...HEAD) > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
-  h_expect_rc "--match: an injected git failure exits 2, not 1" 2
+  h_expect_rc "--match: an injected git failure exits 2, not 42" 2
   free_row
 
   # Row set 2: a gitlink under a committed ignore=all AND a local diff.ignoreSubmodules=all.
@@ -441,7 +518,7 @@ section_helper() {
   h_expect_rc "an empty diff exits 0" 0
   if [ -z "$H_OUT" ]; then h_ok "an empty diff prints nothing"; else h_bad "an empty diff printed '$H_OUT'"; fi
   run_helper "$d" --match '^apps/' origin/main...HEAD
-  h_expect_rc "--match on an empty diff exits 1" 1
+  h_expect_rc "--match on an empty diff exits 42" 42
   run_helper "$d"
   h_expect_rc "no arguments exits 2" 2
   if grep -qi 'usage' <<<"$H_ERR"; then h_ok "no arguments prints a usage line"; else h_bad "no arguments stderr: '$H_ERR'"; fi
@@ -501,7 +578,7 @@ section_helper() {
   assert_fixture_dir "$dchg"; rm -rf -- "$dchg"
   free_row
 
-  # Row set 8: an unwritable TMPDIR is UNKNOWN (rc 2 with a temp-file message), never "none match" (rc 1).
+  # Row set 8: an unwritable TMPDIR is UNKNOWN (rc 2 with a temp-file message), never "none match" (rc 42).
   new_row || { h_bad "could not build tmpdir row"; return; }
   d="$ROW_DIR"
   put_in "$d" "$P/tmpdir.tf"
@@ -510,7 +587,7 @@ section_helper() {
   h_expect_rc "an unwritable TMPDIR exits 2" 2
   if grep -qF 'temp file' <<<"$H_ERR" && [ -z "$H_OUT" ]; then h_ok "an unwritable TMPDIR says so on stderr and prints no list"; else h_bad "unwritable TMPDIR: out='$H_OUT' err='$H_ERR'"; fi
   run_helper_env "$d" TMPDIR=/nonexistent/changed-paths-fixture --match '^zzz-no-such-prefix/' origin/main...HEAD
-  h_expect_rc "--match with an unwritable TMPDIR exits 2, never 1 (none match)" 2
+  h_expect_rc "--match with an unwritable TMPDIR exits 2, never 42 (none match)" 2
   run_helper_env "$d" TMPDIR=/nonexistent/changed-paths-fixture --match '^apps/' origin/main...HEAD
   h_expect_rc "--match that WOULD match, with an unwritable TMPDIR, still exits 2" 2
   free_row
@@ -612,13 +689,14 @@ section_helper() {
   run_helper_env "$d" TMPDIR="$priv" --match '^apps/' origin/main...HEAD
   if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (a match) leaves no temp file in TMPDIR"; else h_bad "--match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   run_helper_env "$d" TMPDIR="$priv" --match '^zzz-no-such-prefix/' origin/main...HEAD
-  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (no match, rc 1) leaves no temp file in TMPDIR"; else h_bad "--match with no match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (no match, rc 42) leaves no temp file in TMPDIR"; else h_bad "--match with no match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   run_helper_env "$d" TMPDIR="$priv" origin/no-such-ref...HEAD
   if [ -z "$(ls -A "$priv")" ]; then h_ok "a git failure (rc 2) leaves no temp file in TMPDIR"; else h_bad "a git failure left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   free_row
   mkdir -p "$WORK_ROOT/nogit"
   run_helper "$WORK_ROOT/nogit" origin/main...HEAD
   h_expect_rc "outside a git work tree exits 2" 2
+  caller_rows
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1812,7 +1890,7 @@ selftest_pinned() {
 #   spelling   every `changed-paths.sh` is the whole call form `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"` (a bare or doubled
 #              name resolves against the wrong cwd or an unset root);
 #   range      every line naming the helper names `origin/main...HEAD` (the PR's own diff, never a default target);
-#   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 1 ] || VAR=unknown; }` (rc 1 = no match; any other rc is
+#   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 42 ] || VAR=unknown; }` (rc 42 = no match; any other rc is
 #              unknown and the gate runs);
 #   preflight  the Step 0.1 cache line keeps `|| { rm -f <cache>; echo "PREFLIGHT-CACHE-MISSING..." }`, the Cache-missing rule keeps
 #              `cache file absent => RUN`, and the SKIP predicate of Checks 1, 2, 6, 8 and 10 each says `cache file is absent, RUN`;
@@ -1852,11 +1930,11 @@ skill_ship_handler_pin() {
   local body calls good v missing=""
   if ! body="$(skill_body ship)"; then fail "skill pin: ship/SKILL.md is missing"; return; fi
   calls="$(grep -c -E -- "=\\\$\\($RX_CALL --match " <<<"$body" || true)"
-  good="$(grep -c -E -- "^([a-z_]+)=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| \\1=unknown; \\}\$" <<<"$body" || true)"
+  good="$(grep -c -E -- "^([a-z_]+)=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 42 \\] \\|\\| \\1=unknown; \\}\$" <<<"$body" || true)"
   for v in gdpr_gate_touch diff_match dpf_match ledger_touched plan_refs; do
-    grep -q -E -- "^$v=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| $v=unknown; \\}\$" <<<"$body" || missing="$missing $v"
+    grep -q -E -- "^$v=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 42 \\] \\|\\| $v=unknown; \\}\$" <<<"$body" || missing="$missing $v"
   done
-  if [ -z "$missing" ] && [ "$calls" -ge 5 ] && [ "$calls" -eq "$good" ]; then pass "skill pin: the $calls ship --match assignments keep the fail-closed handler (|| { [ \$? -eq 1 ] || VAR=unknown; }) and origin/main...HEAD"
+  if [ -z "$missing" ] && [ "$calls" -ge 5 ] && [ "$calls" -eq "$good" ]; then pass "skill pin: the $calls ship --match assignments keep the fail-closed handler (|| { [ \$? -eq 42 ] || VAR=unknown; }) and origin/main...HEAD"
   else fail "skill pin: ship/SKILL.md --match assignments: $calls found, $good with the fail-closed handler + origin/main...HEAD; missing or malformed:${missing:- none by name}"; fi
 }
 skill_preflight_pin() {
@@ -1881,6 +1959,9 @@ skill_review_pin() {
   if ! body="$(skill_body review)"; then fail "skill pin: review/SKILL.md is missing"; return; fi
   if grep -q -E -- "^[[:space:]]*$RX_CALL origin/main\\.\\.\\.HEAD > \"[^\"]+\" \\|\\| \\{ .*REVIEW-CLASSIFY-UNKNOWN" <<<"$body"; then pass "skill pin: the review classify call keeps its || { ... REVIEW-CLASSIFY-UNKNOWN ... } handler"
   else fail "skill pin: review/SKILL.md lost the classify form: $RX_CALL origin/main...HEAD > \"...\" || { ...REVIEW-CLASSIFY-UNKNOWN..."; fi
+  local trig; trig="$(grep -F -- '--match "$CANONICAL_REGEX"' <<<"$body" | head -n 1)"
+  if grep -q -F -- 'does not exit 42 (no match)' <<<"$trig"; then pass "skill pin: the review gdpr-gate trigger reads only exit 42 as no match"
+  else fail "skill pin: review/SKILL.md lost the gdpr-gate trigger arm 'does not exit 42 (no match)' on its --match \"\$CANONICAL_REGEX\" line"; fi
 }
 # ship gate semantics the handler shape alone cannot say: the vendor-cost ledger match is the EXACT path (anchored, `.` escaped, AMT so a deletion is
 # not an edit) and `unknown` never exempts it; the Closes-after-verification gate tests `unknown` EXPLICITLY (else `grep ... $plan_refs` greps a file
@@ -1891,27 +1972,29 @@ skill_ship_semantics_pin() {
   grep -q -F -- "--match '^knowledge-base/operations/expenses\.md\$' --diff-filter=AMT origin/main...HEAD)" <<<"$body" || missing="$missing ledger-regex-anchored-escaped-AMT"
   grep -q -F -- 'is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate)' <<<"$body" || missing="$missing ledger-exact-equality-rule"
   grep -q -F -- '[[ $plan_refs == unknown ]] && echo' <<<"$body" || missing="$missing plan_refs-explicit-unknown-branch"
-  if [ -z "$missing" ]; then pass "skill pin: ship keeps the exact-path ledger match, the exact-equality exemption rule and the explicit plan_refs unknown branch"
+  local ci_line; ci_line="$(grep -F -- "--match '^\\.github/(workflows|actions)/'" <<<"$body" | head -n 1)"
+  grep -q -F -- 'does not exit 42 (no match)' <<<"$ci_line" || missing="$missing untrusted-ci-notice-no-match-arm"
+  if [ -z "$missing" ]; then pass "skill pin: ship keeps the exact-path ledger match, the exact-equality exemption rule, the explicit plan_refs unknown branch and the UNTRUSTED-CI exit-42 arm"
   else fail "skill pin: ship/SKILL.md lost:$missing"; fi
 }
-# one-shot: its scope check is the plain-mode list (no --match), so it has no `VAR=unknown` handler; the failure arm is prose: exit 2/127 is a breach.
+# one-shot: its scope check is the plain-mode list (no --match), so it has no `VAR=unknown` handler; the failure arm is prose: a non-zero exit is a breach.
 skill_oneshot_pin() {
   local body line
   if ! body="$(skill_body one-shot)"; then fail "skill pin: one-shot/SKILL.md is missing"; return; fi
   line="$(grep -F -- 'changed-paths.sh' <<<"$body" | head -n 1)"
-  if grep -q -F -- 'exit 2/127 = scope unverified: treat as a breach' <<<"$line" && grep -q -F -- '^knowledge-base/project/(plans|specs)/' <<<"$line"; then
-    pass "skill pin: the one-shot scope check keeps 'exit 2/127 = scope unverified: treat as a breach' and the anchored plans|specs containment regex on the helper line"
-  else fail "skill pin: one-shot/SKILL.md lost the scope-check failure arm ('exit 2/127 = scope unverified: treat as a breach') or the ^knowledge-base/project/(plans|specs)/ containment regex on the helper line"; fi
+  if grep -q -F -- 'non-zero exit = scope unverified: treat as a breach' <<<"$line" && grep -q -F -- '^knowledge-base/project/(plans|specs)/' <<<"$line"; then
+    pass "skill pin: the one-shot scope check keeps 'non-zero exit = scope unverified: treat as a breach' and the anchored plans|specs containment regex on the helper line"
+  else fail "skill pin: one-shot/SKILL.md lost the scope-check failure arm ('non-zero exit = scope unverified: treat as a breach') or the ^knowledge-base/project/(plans|specs)/ containment regex on the helper line"; fi
 }
 # Converted references and agents: ONE exact capture shape per file (every mention of the helper is that shape, a trailing `# comment` is
 # stripped first so `|| true # unknown` cannot hide), the failure-arm text is present, and the `:-` plugin-root arm is absent. risk-tier-and-fix-rounds.md
 # spells the root `<plugin-root>` (it carries no plugin-root notice and is not a Read-surface doc), so its shape accepts that spelling.
 # file<TAB>shape ERE (each mention must match it)<TAB>failure-arm fixed string<TAB>fixture line (the compliant tree)
 REF_PINS="$(cat <<'TSV'
-plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	^legal_touch=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match '[^']+' origin/main\.\.\.HEAD\) \|\| \{ \[ \$\? -eq 1 \] \|\| legal_touch=unknown; \}$	|| { [ $? -eq 1 ] || legal_touch=unknown; }	legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^docs/legal/' origin/main...HEAD) || { [ $? -eq 1 ] || legal_touch=unknown; }
+plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	^legal_touch=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match '[^']+' origin/main\.\.\.HEAD\) \|\| \{ \[ \$\? -eq 42 \] \|\| legal_touch=unknown; \}$	|| { [ $? -eq 42 ] || legal_touch=unknown; }	legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^docs/legal/' origin/main...HEAD) || { [ $? -eq 42 ] || legal_touch=unknown; }
 plugins/soleur/skills/ship/references/adr-ordinal-collision.md	^files=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD\) \|\| files=\$\(git ls-files\)$	|| files=$(git ls-files)	   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown: sweep every tracked file
 plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	^files=\$\(bash (<plugin-root>|"\$\{CLAUDE_PLUGIN_ROOT\}")/scripts/changed-paths\.sh "\$PANEL_SHA"\.\.HEAD\) \|\| files=unknown$	|| files=unknown	   files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown: spawn the full class panel
-plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD`	exit 2/127 = inventory unknown	Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list (exit 2/127 = inventory unknown: every category is in scope):
+plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD`	non-zero exit = inventory unknown	Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list (non-zero exit = inventory unknown: every category is in scope):
 TSV
 )"
 skill_ref_pin() { # <repo-relative file> <shape ERE> <failure-arm fixed string>
@@ -1962,16 +2045,17 @@ skill_fixture() { # <root>
   } > "$1/plugins/soleur/skills/preflight/SKILL.md"
   {
     printf '```bash\n'
-    printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/x/'"'"' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }\n' "$call"
-    printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }\n' "$call"
-    printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }\n' "$call"
-    printf 'ledger_touched=$(%s --match %s --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 1 ] || ledger_touched=unknown; }\n' "$call" "'^knowledge-base/operations/expenses\.md\$'"
-    printf 'plan_refs=$(%s --match %s origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }\n' "$call" "'^knowledge-base/project/(plans|specs)/'"
+    printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/x/'"'"' origin/main...HEAD) || { [ $? -eq 42 ] || gdpr_gate_touch=unknown; }\n' "$call"
+    printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || diff_match=unknown; }\n' "$call"
+    printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || dpf_match=unknown; }\n' "$call"
+    printf 'ledger_touched=$(%s --match %s --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || ledger_touched=unknown; }\n' "$call" "'^knowledge-base/operations/expenses\.md\$'"
+    printf 'plan_refs=$(%s --match %s origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }\n' "$call" "'^knowledge-base/project/(plans|specs)/'"
     printf '%s\n' "[[ \$plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || true"
     printf '%s\n' 'Rule. If a signal fires AND `ledger_touched` is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate), the change MUST carry a companion.'
     printf '```\n'
+    printf 'If `%s --match '"'"'^\\.github/(workflows|actions)/'"'"' origin/main...HEAD` does not exit 42 (no match), tell the operator.\n' "$call"
   } > "$1/plugins/soleur/skills/ship/SKILL.md"
-  printf 'After the subagent returns, verify the scope: run `%s origin/main...HEAD` and confirm every listed path matches `^knowledge-base/project/(plans|specs)/`; exit 2/127 = scope unverified: treat as a breach and re-diff, never as in scope. Fallback `<base-sha>..HEAD`.\n' "$call" > "$1/plugins/soleur/skills/one-shot/SKILL.md"
+  printf 'After the subagent returns, verify the scope: run `%s origin/main...HEAD` and confirm every listed path matches `^knowledge-base/project/(plans|specs)/`; non-zero exit = scope unverified: treat as a breach and re-diff, never as in scope. Fallback `<base-sha>..HEAD`.\n' "$call" > "$1/plugins/soleur/skills/one-shot/SKILL.md"
   # The converted references and agents: the compliant fixture line of every REF_PINS row.
   local rrel rline
   while IFS=$'\t' read -r rrel _ _ rline; do
@@ -1979,6 +2063,7 @@ skill_fixture() { # <root>
     mkdir -p "$(dirname "$1/$rrel")" && printf '%s\n' "$rline" > "$1/$rrel" || return 1
   done <<<"$REF_PINS"
   printf '   %s origin/main...HEAD %s "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\n' "$call" '>' > "$1/plugins/soleur/skills/review/SKILL.md"
+  printf -- '- `%s --match "$CANONICAL_REGEX" origin/main...HEAD` does not exit 42 (no match): treat as a match.\n' "$call" >> "$1/plugins/soleur/skills/review/SKILL.md"
 }
 skill_defect() { # <root> <sk> <python old> <python new>: apply ONE defect to the fixture (must apply exactly once)
   local target="$1/plugins/soleur/skills/$2/SKILL.md"
@@ -2025,13 +2110,13 @@ selftest_skill_pins() {
     selftest_skill_tree "$nm" bad "$t"
   done <<'DEFECTS'
 a bare helper name on its own line	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\nsee changed-paths.sh for the details
-the ship fail-closed handler dropped	ship	{ [ $? -eq 1 ] || dpf_match=unknown; }	{ dpf_match=unknown; }
+the ship fail-closed handler dropped	ship	{ [ $? -eq 42 ] || dpf_match=unknown; }	{ dpf_match=unknown; }
 a ship --match not on origin/main...HEAD	ship	--match "$DPF_REGEX" origin/main...HEAD)	--match "$DPF_REGEX" HEAD~1)
 preflight PREFLIGHT-CACHE-MISSING dropped	preflight	echo "PREFLIGHT-CACHE-MISSING: helper failed"	echo "helper failed"
 preflight cache rm -f dropped	preflight	{ rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo	{ echo
 preflight Check 6 cache-absent wording dropped	preflight	For Check 6 the cache file is absent, RUN.	For Check 6 the cache is simply read.
 review REVIEW-CLASSIFY-UNKNOWN dropped	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"	echo "helper rc=$rc"
-the ship ledger handler dropped (unknown would be read as touched)	ship	{ [ $? -eq 1 ] || ledger_touched=unknown; }	{ ledger_touched=unknown; }
+the ship ledger handler dropped (unknown would be read as touched)	ship	{ [ $? -eq 42 ] || ledger_touched=unknown; }	{ ledger_touched=unknown; }
 the ship plan_refs match not on origin/main...HEAD	ship	--match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD)	--match '^knowledge-base/project/(plans|specs)/' HEAD~1)
 the ship ledger rule flipped so that unknown exempts the gate	ship	is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate)	is not empty (`unknown` exempts the gate)
 the ship ledger match loses its escaped dot	ship	expenses\.md$' --diff-filter=AMT	expenses.md$' --diff-filter=AMT
@@ -2039,13 +2124,19 @@ the ship plan_refs unknown branch removed	ship	[[ $plan_refs == unknown ]] && ec
 an uppercase LEDGER_TOUCHED handler (the renamed variable regrown)	ship	ledger_touched=$(bash	LEDGER_TOUCHED=$(bash
 one-shot helper call garbled (bare name)	one-shot	scripts/changed-paths.sh" origin/main...HEAD`	scripts/changed-paths.shchanged-paths.sh" origin/main...HEAD`
 one-shot helper call on a HEAD~1 range	one-shot	changed-paths.sh" origin/main...HEAD`	changed-paths.sh" HEAD~1`
-one-shot scope-check breach arm dropped	one-shot	exit 2/127 = scope unverified: treat as a breach	exit 2/127 is ignored
-a counsel-review capture without its unknown arm	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 1 ] || legal_touch=unknown; }	|| true # unknown
-a counsel-review capture whose unknown arm is hidden behind || true	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 1 ] || legal_touch=unknown; }	|| { [ $? -eq 1 ] || legal_touch=unknown; } || true
+one-shot scope-check breach arm dropped	one-shot	non-zero exit = scope unverified: treat as a breach	non-zero exit is ignored
+a counsel-review capture without its unknown arm	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| true # unknown
+a counsel-review capture whose unknown arm is hidden behind || true	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| { [ $? -eq 42 ] || legal_touch=unknown; } || true
 adr-ordinal-collision capture falling back to an empty list	plugins/soleur/skills/ship/references/adr-ordinal-collision.md	|| files=$(git ls-files)	|| true
 a risk-tier capture without its unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| true
 a second helper call in a reference without the unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| files=unknown\nmore=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD)
-an observability-coverage-reviewer inventory-unknown arm dropped	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	exit 2/127 = inventory unknown	exit 2/127 is ignored
+an observability-coverage-reviewer inventory-unknown arm dropped	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	non-zero exit = inventory unknown	non-zero exit is ignored
+the ship dpf handler back to rc 1 = no match (an unbound root would skip the gate)	ship	{ [ $? -eq 42 ] || dpf_match=unknown; }	{ [ $? -eq 1 ] || dpf_match=unknown; }
+the counsel-review handler back to rc 1 = no match	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| { [ $? -eq 1 ] || legal_touch=unknown; }
+one-shot scope-check arm back to exit 2/127 only	one-shot	non-zero exit = scope unverified: treat as a breach	exit 2/127 = scope unverified: treat as a breach
+observability inventory arm back to exit 2/127 only	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	non-zero exit = inventory unknown	exit 2/127 = inventory unknown
+the ship UNTRUSTED-CI notice back to prints anything or exits 2/127	ship	does not exit 42 (no match)	prints anything or exits 2/127
+the review gdpr-gate trigger back to exits 0 or 2/127	review	does not exit 42 (no match)	exits 0 (a match) or 2/127
 DEFECTS
 }
 
