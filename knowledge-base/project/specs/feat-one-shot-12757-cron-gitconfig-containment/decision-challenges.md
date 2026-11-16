@@ -59,3 +59,19 @@ Technical forks went to the CTO (G1-G7 above). These rows record the classificat
 | Item | Class | Ruling |
 |------|-------|--------|
 | DHH: plan length (about 1,000 lines for about 150 production lines) is ceremony | taste | Kept. The `single-user incident` threshold and the Guard Contract gate require the mutation matrices and provenance. The zero-width row, the count assertions, the census exceptions and the hand-checked assertions were cut as mechanical simplifications. |
+
+## Deepen-plan (2026-11-16)
+
+These rows record the forks raised by the deepen pass and the CTO's rulings. The reviewers were test-design-reviewer,
+user-impact-reviewer, learnings-researcher, and a verify-the-negative/self-audit pass. The security-sentinel seat was
+stopped by model safeguards before it finished; its one partial lead became H6, and the plan's Phase 6 review round
+(AC12) runs security-sentinel on the real diff.
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| H1 Host-dependent identity probe breaks existing suites off-image | technical | Ruled by CTO agent, 2026-11-16: (a) a pure `agentGitConfigReadable(path)` with a partial `@/server/host-git` mock in `test/setup-node.ts`; row 6 uses `vi.importActual` on temp paths, and one substrate row overrides the mock to false and asserts exactly one report filtered by op. The probe runs on every chokepoint call and reports on the ok-to-bad transition, re-arming when it reads ok again - a different channel would lose the error-level Sentry mirror, and existing "healthy run reports nothing" assertions stay untouched. |
+| H2 `bot-fix/attempted` permanent skip after an over-deny | technical | Ruled by CTO agent, 2026-11-16: name it in User-Brand Impact; add a read-only post-deploy check joining labelled issues to the H3 metric; put the label removal in the revert runbook as a separate operator-authorised line naming the issues - it is a GitHub write at revert time, and this PR performs no prod writes. |
+| H3 Deny reason never leaves the host | technical | Ruled by CTO agent, 2026-11-16: export one pure `classifyNewRuleDeny` from the hook and call it from the hook's own deny paths; add `countNewRuleDenials` beside `countPermissionDenials` in `cron-filing-deny-marker.ts`, called in `parseClaudeResultLine`; emit `warnSilentFallback` op `cron-containment-new-rule-deny` (tags cron and rule only, never the command or path, at most one per run per rule); this becomes the primary success metric - `countPermissionDenials` keeps only the tool class. |
+| H4 Pre-merge planted XDG files and the agent-session read-write bind | technical | Ruled by CTO agent, 2026-11-16: report when `$HOME/.config/git/ignore` or `attributes` exists as a file, under a separate op `cron-git-xdg-config-present` on the same latched channel; record the `agent-outer-wrap` read-write `~/.gitconfig` bind for the #9601 follow-up; do not assert that a deploy clears HOME - that is unverified, and the probe is what covers it. |
+| H5 Census name-matching, row 4c breadth, bash-helper envs | technical | Ruled by CTO agent, 2026-11-16: accept all five parts - one-hop binding resolution (an unresolved identifier is a violation), 4c widened to git/gh/bash/sh/env by basename or leading word, synthetic-source FAIL controls, a sweep rejecting post-construction `GIT_CONFIG_*` writes, and pinning the four `spawnScriptCapture` helpers through `withCronGitConfigPin(env)`. A bare last spread would replace a caller's stricter `/dev/null` pin and break F-A. |
+| H6 Guard 1 coverage of unhooked crons | technical | Ruled by CTO agent, 2026-11-16: state Guard 1 as covering every workspace-spawned agent cron; name `cron-daily-triage` and `cron-follow-through-monitor` as unhooked, controlled by `--allowedTools` (gh issue verbs, Read/Glob/Grep, no Write/Edit/git) and pinned through `spawnClaudeEval`; add no hook wiring; record the follow-up trigger "if either gains a file or git verb, move it onto a workspace". |

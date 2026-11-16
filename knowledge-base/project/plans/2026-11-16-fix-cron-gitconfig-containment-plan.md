@@ -21,6 +21,56 @@ reference only. The PR must not close the epic.
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-16.
+**Sections enhanced:** 14. They are Phases 0-3, Guards 1-3, User-Brand Impact, Observability, Acceptance Criteria,
+Test Scenarios, Success Metrics, Dependencies & Risks, and Scope Check.
+
+**Agents used:**
+- Plan review: dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist,
+  spec-flow-analyzer, and the CTO (devex lens).
+- Deepen: test-design-reviewer, user-impact-reviewer, learnings-researcher, and a verify-the-negative/self-audit
+  pass.
+- Rulings: three CTO rounds (G1-G7, H1-H6).
+- The security-sentinel seat was stopped by model safeguards before it reported. Phase 6 (AC12) runs it on the real
+  diff.
+
+**Gates passed:**
+- 4.6 User-Brand Impact
+- 4.7 Observability (the YAML parses; the probe is `node`, a literal, and under 15s)
+- 4.8 PAT check
+- 4.11 Guard Contract (lint rc=0)
+- 4.12 Scope Check
+- Not triggered: 4.9 UI, 4.10 encryption posture and 4.13 task design.
+- Every cited issue, PR, rule ID and ADR was resolved live.
+
+### Key Improvements
+1. **The NBSP-led `git` test rows were wrong.** `splitSegments` trims U+00A0 before tokenising, so those rows would
+   have failed against a correct implementation. They are replaced by between-word NBSP forms, a position-2 gh row,
+   a separator table, and a per-segment anti-vacuity check (Kieran P0).
+2. **The census is now on the TypeScript compiler API** and checks bindings, not names. Its stored maps are keyed on
+   identity and report diffs. Row 4c is widened to git/gh/bash/sh/env, and new row 4d rejects post-construction
+   `GIT_CONFIG_*` writes. It found two missed token-bearing git spawns in `cron-github-cidr-refresh.ts`, which are now
+   Class C. The four bash helpers are pinned through `withCronGitConfigPin`, which keeps a `/dev/null` pin.
+3. **Observability that can fail:**
+   - An identity-file probe and an XDG-residual probe, transition-latched, report to Sentry.
+   - The over-deny metric `cron-containment-new-rule-deny` is built from the hook's own classifier. The deny reason
+     never left the host before.
+   - AC14 is now a falsifiable baseline comparison plus a `bot-fix/attempted` join.
+4. **Residuals stated honestly:**
+   - The pin does not cover XDG `ignore`/`attributes`, so Guard 1 is their barrier.
+   - The founder-workspace git spawns and the agent-session read-write `~/.gitconfig` bind are a #9601 follow-up.
+   - Two unhooked crons are named, controlled by `--allowedTools`.
+   - ADR-287's K2 text gets a cross-reference.
+
+### New Considerations Discovered
+- Real git 2.56 honours `$HOME/.config/git/ignore` with `GIT_CONFIG_GLOBAL=/dev/null` set (architecture-strategist).
+- `bot-fix/attempted` makes an over-denied issue skip permanently, even after a revert. Recovering it needs an
+  operator-authorised label removal.
+- `cron-daily-triage` and `cron-follow-through-monitor` run without the containment hook. That is safe today only
+  because their `--allowedTools` lists admit no Write/Edit/git.
+
 ## Overview
 
 The #12705 verification pass found two linked gaps in the cron containment layer, and this plan closes both.
@@ -40,9 +90,9 @@ The #12705 verification pass found two linked gaps in the cron containment layer
   `help.autocorrect=immediate`, which F2 makes possible. A scratch clone lost `apps/` that way.
 
 The fix has three parts. Write-protect `.gitconfig` and `.config/git`. Pin `GIT_CONFIG_GLOBAL` to the image-owned
-identity file, and set `GIT_CONFIG_NOSYSTEM=1`, in every cron child-process env: at three chokepoints, at 26 env
-literals and at 7 git call sites that inherited the process env. Deny any git or gh command whose command words are irregular (empty, padded,
-quoted with spaces, or containing a no-break space). Then the raw words the deny rules read are always the words the
+identity file, and set `GIT_CONFIG_NOSYSTEM=1`, in every cron child-process env that can run git: at the two runtime chokepoints (`spawnClaudeEval`,
+`spawnSimple`), at 26 env literals and at 7 git call sites that inherited the process env. Deny any git or gh command
+whose command words are irregular (empty, padded, quoted with spaces, or containing a no-break space). Then the raw words the deny rules read are always the words the
 allowlist matched. New census tests make sure a future cron cannot drop the pin.
 
 Reproduced on main during planning. Under `env -i`, the hook binary given a Write to `/home/soleur/.gitconfig`
@@ -194,7 +244,9 @@ the Class B literals. Of the scripts, only `vendor-drift-classify.sh` runs git (
   sweep the tree open-world, and use the file set as an anchor, not as the enumeration.
 - `2026-10-12-the-guards-own-normalizer-is-attack-surface-treat-text-preprocessing-as-fail-open.md` and
   `2026-11-09-a-producer-check-was-true-of-the-system-and-false-of-the-population-the-hook-registered-in.md`: the
-  normalised view is added on top of the raw one and never replaces it, so normalisation can only add denies.
+  the normaliser never replaces the raw tokens the deny rules read. The shape rule only reads the normalised view to
+  decide whether a segment is git or gh, and any disagreement between the views is a deny, so normalisation can only
+  add denies.
 - `2026-11-10-a-redirect-guard-was-widened-one-level-at-a-time-and-reviewed-into-the-class-in-two-rounds.md`: list
   the class of files from the mechanism. Git reads the global config from `$GIT_CONFIG_GLOBAL`, or else from
   `$HOME/.gitconfig` and `$XDG_CONFIG_HOME/git/config` (default `$HOME/.config/git/config`). `include`/`includeIf`
@@ -229,8 +281,24 @@ plugin ships from.
 
 ### Phase 0: RED tests first (`cq-write-failing-tests-before`)
 
-Write every new test row below and run it against the unchanged source. Each row in the "must go RED pre-fix" column
-must fail, and each "must pass pre-fix" control must pass. Record the run in the PR body. Also run
+Write every new test row below and run it against the unchanged source, then run the whole of
+`test/server/inngest/` (not only the named suites). Record the run in the PR body. A RED counts only as an assertion
+failure: a row that fails with a `TypeError` or `undefined` import, because `CRON_GIT_CONFIG_PIN` or
+`agentGitConfigReadable` does not exist yet, is recorded as "fails to load", not as RED. Pre-fix expectations:
+- **Must pass pre-fix (controls):**
+  - row 4b
+  - row 5's control arm and row 5b
+  - every Guard 1 and Guard 2 must-pass row
+  - the allowlist census
+  - the raw-rule P5 rows
+  - the Read-secret regression row
+- **Must go RED pre-fix:**
+  - every Guard 1 deny row
+  - every irregular command-word row, which is allowed or denied with a different reason today. The bug-fixer
+    `switch` rows are tagged "reason-precedence only": `git switch` is already denied there as not allowlisted.
+  - rows 2, 4 and 4c for the unpinned sites
+  - row 5's pinned arm
+  - rows 1, 3 and 6 (which fail to load until the symbols exist) Also run
 `test/server/inngest/cron-bug-fixer.test.ts` straight after adding the `@/server/host-git` import to
 `cron-bug-fixer.ts`: its `node:fs` mock exports only `existsSync`/`readFileSync`, and `host-git.ts` imports
 `lstatSync`/`readdirSync`. If it goes red, switch that mock to an `importOriginal` partial. Seed census row 4c's
@@ -325,16 +393,26 @@ export const CRON_GIT_CONFIG_PIN: Readonly<{ GIT_CONFIG_GLOBAL: string; GIT_CONF
   GIT_CONFIG_NOSYSTEM: "1",
 });
 
-/** #12757 (CTO G2) — git treats a missing/unreadable global as empty, so a broken identity file is silent. Cached per process. */
-let agentGitConfigReadableCache: boolean | undefined;
-export function agentGitConfigReadable(): boolean {
-  if (agentGitConfigReadableCache === undefined) {
-    try { accessSync(AGENT_GIT_GLOBAL_CONFIG, constants.R_OK); agentGitConfigReadableCache = true; }
-    catch { agentGitConfigReadableCache = false; }
-  }
-  return agentGitConfigReadableCache;
+/** #12757 (CTO G2/H1) — git treats a missing/unreadable global as empty, so a broken identity file is silent. Pure, uncached: re-probed per call. */
+export function agentGitConfigReadable(path: string = AGENT_GIT_GLOBAL_CONFIG): boolean {
+  try { accessSync(path, constants.R_OK); return true; } catch { return false; }
+}
+
+/** #12757 (CTO H4) — the XDG ignore/attributes defaults are read whatever GIT_CONFIG_GLOBAL says (residual G3). */
+export function xdgGitResidualPresent(home: string = homedir()): boolean {
+  return ["ignore", "attributes"].some((f) => { try { return statSync(join(home, ".config/git", f)).isFile(); } catch { return false; } });
+}
+
+/** #12757 (CTO H5) — pin an env, but keep a caller's stricter /dev/null global (F-A). */
+export function withCronGitConfigPin(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return env.GIT_CONFIG_GLOBAL === "/dev/null"
+    ? { ...env, GIT_CONFIG_NOSYSTEM: "1" }
+    : { ...env, ...CRON_GIT_CONFIG_PIN };
 }
 ```
+
+The imports grow to `accessSync`, `constants`, `statSync` (`node:fs`), `homedir` (`node:os`) and `join`, which is
+already imported.
 
 The docstring above the constant also says: "Every cron env literal under server/inngest must end with
 ...CRON_GIT_CONFIG_PIN. Enforced by test/server/inngest/cron-spawn-git-config-pin.test.ts." `host-git.ts` stays a
@@ -347,16 +425,24 @@ is added.
 - `_cron-claude-eval-substrate.ts:1555-1558`: `env: { ...buildSpawnEnv(installationToken),
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ...CRON_GIT_CONFIG_PIN }`.
 - `_cron-claude-eval-substrate.ts:299`: `env: { ...(opts.env ?? process.env), ...CRON_GIT_CONFIG_PIN }`.
-- At both chokepoints, before spawning, call `agentGitConfigReadable()`. On the first `false` in a process, call
-  `reportSilentFallback` with op `cron-git-config-pin` and the message "agent git identity file missing or
-  unreadable; cron git commits will fail with Author identity unknown". A module-level once-flag in the
-  substrate, shared by both chokepoints. It never blocks the spawn.
+- At both chokepoints, before spawning, call `agentGitConfigReadable()` and `xdgGitResidualPresent()` on every call.
+  Each result feeds a latch in the substrate that fires on a transition (CTO H1, per learning 2026-10-12: a cached
+  "ok" must expire). The latch is module-level, shared by both chokepoints, and re-armed when the probe reads ok
+  again.
+  - On an ok-to-bad transition of the identity probe, call `reportSilentFallback` with op `cron-git-config-pin` and
+    the message "agent git identity file missing or unreadable; cron git commits will fail with Author identity
+    unknown".
+  - On an absent-to-present transition of the XDG probe, call `reportSilentFallback` with op
+    `cron-git-xdg-config-present` and the message "$HOME/.config/git/ignore or attributes exists; git reads it
+    whatever the pin says".
+  - Neither report blocks the spawn, and neither carries a path or file contents.
 
 2.3 The 26 `HOME:` literals in the census table (rows 3-28): add `...CRON_GIT_CONFIG_PIN` as the **final** entry of
 the literal. In `cron-content-publisher.ts` (`buildPublisherEnv`), the literal is filled by a loop after it is built.
 Fold the loop into the literal as `...Object.fromEntries(PUBLISHER_ENV_KEYS.map((k) => [k, process.env[k]]))`,
-filtering out undefined values exactly as the loop does today, followed by `...CRON_GIT_CONFIG_PIN` as the last
-entry. The census then has no special case.
+keeping undefined values exactly as the loop does today (`env[key] = process.env[key]`, no filter;
+`cron-content-publisher.test.ts` asserts `key in env` for all 12 keys), followed by `...CRON_GIT_CONFIG_PIN` as the
+last entry. The census then has no special case.
 
 2.4 Class C git helpers (rows 29-35): `cron-strategy-review.ts:127` gets `env: { ...process.env,
 ...CRON_GIT_CONFIG_PIN }`. Each of the `spawnGit` helpers in `cron-compound-promote.ts:715`,
@@ -370,9 +456,28 @@ literal) do not change. The `env` is
 built at call time, never as a module-load snapshot (ADR-323 Decision 9, the `cron-content-vendor-drift-env.test.ts`
 precedent).
 
+2.4b The four `spawnScriptCapture` bash helpers (`cron-weekly-analytics.ts`, `cron-content-vendor-drift.ts`,
+`cron-content-publisher.ts`, `cron-rule-prune.ts`) pass `env: opts.env`. Change each to
+`env: withCronGitConfigPin(opts.env)` (CTO H5). This is not a bare last spread, because a bare spread would replace a
+caller's stricter `/dev/null` global with the identity file and break F-A. Their callers already pass a pinned
+Class B literal, so behaviour does not change.
+
 2.5 `cron-content-vendor-drift.ts` `spawnGit`/`spawnGitStdout`: remove `env?` from both opts types and drop
 `...opts?.env`, so `env` is `gitIsolatedEnv()` alone. The `/dev/null` keys then win by construction (CTO F-A note).
 No caller passes an env (seven call sites checked), so behaviour does not change.
+
+2.6b New-rule deny telemetry (CTO H3). The deny reason never leaves the host: `countPermissionDenials`
+(`server/cron-filing-deny-marker.ts`) keeps only the tool class. So:
+- Export one pure `classifyNewRuleDeny(toolName, toolInput)` from `cron-bash-allowlist-hook.mjs`. It returns a
+  closed rule id (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`) or `null`.
+  The hook's own deny paths for the new rules call the same function, so the metric cannot drift from the gate.
+- Add `countNewRuleDenials(denials)` beside `countPermissionDenials` in `cron-filing-deny-marker.ts`, which already
+  imports from the `.mjs`. It reads Bash `tool_input.command` and Write/Edit `tool_input.file_path`.
+- Call it in the substrate's `parseClaudeResultLine`. Emit `warnSilentFallback` with op
+  `cron-containment-new-rule-deny`, tags `cron` and `rule` only, and the count in `extra`. Never include the command
+  or the path, because they can carry tokens. Emit at most one event per run per rule.
+- It sees only denials that reach `permission_denials[]`. That is the measured behaviour recorded in the marker
+  header.
 
 2.6 Import style: `import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";` in each edited inngest file. Never retype
 the path `/usr/local/share/soleur/agent.gitconfig`. The census asserts that the literal path appears nowhere under
@@ -392,10 +497,20 @@ on a red census read the failure message, which names the file and the fix.
 - **Row 2, the `HOME:` literal census.** For every object literal with a `HOME` property (keyed or shorthand), assert
   that its last element is a spread of `CRON_GIT_CONFIG_PIN`. Failure message: `<file:line> HOME: literal does not end
   with ...CRON_GIT_CONFIG_PIN. Add import { CRON_GIT_CONFIG_PIN } from "@/server/host-git" and make it the LAST
-  entry.` The population is then compared with a stored per-file count map `KNOWN_HOME_LITERALS: { [file]: n }`
-  (23 files, 26 sites today). Any difference fails with the diff, not a bare count: `new/removed HOME: literal(s):
-  <file: expected n, found m>. Pin check: OK/FAILED. If you added a cron, update KNOWN_HOME_LITERALS.` This is a set
+  entry.` The population is then compared with a stored identity map
+  `KNOWN_HOME_LITERALS: { [file]: string[] }` that lists each site's enclosing function or step name (23 files, 26
+  sites today). It stores identity, not a count (learning `2026-08-04-a-count-framed-ratchet-cannot-see-a-rename.md`),
+  so a rename that keeps the count still goes red. Any difference fails with the diff: `new/removed HOME:
+  literal(s): <file: +fnA -fnB>. Pin check: OK/FAILED. If you added a cron, update KNOWN_HOME_LITERALS.` This is a set
   diff, never a `>=` floor.
+- **Walk self-test.** Each AST predicate has a positive control on synthetic source strings in the same file:
+  - the `HOME` literal and its last element
+  - the `"git"` first-argument call
+  - row 4c's literal sweep
+
+  The controls prove that the walk finds a planted instance, that `"git"` inside a `//` comment is not a hit, and that
+  `"git"` inside a template literal with substitutions is reported (learning
+  `2026-09-23-my-guards-read-source-through-a-stripper-that-deleted-the-code.md`).
 - **Row 4, the git-spawn census.** For every call expression whose first argument is the string literal `"git"`
   (any callee: `spawn`, `execFileP`, `runProc`, `spawnSimple`), find the enclosing named function, or for an
   anonymous `step.run("<name>", …)` callback the step name. Assert one of:
@@ -418,41 +533,92 @@ on a red census read the failure message, which names the file and the fix.
   - cidr-refresh: `setupEphemeralWorkspace` and `refreshCidr`
 
   Failures print the diff and the fix.
-- **Row 4c, no hidden git-capable spawn (CTO R3, G5).** Every string literal (including a no-substitution template
-  literal) equal to `git`, `gh` or `bash` must be the first argument of a call that carries an explicit `env`. For
-  `git`, that call must also pass row 4. For `gh` and `bash`, the `env` literal must end with the pin, or come from a
-  `HOME:` literal that row 2 checks. Any other occurrence must be in the named list `GIT_CAPABLE_LITERAL_EXCLUSIONS:
+- **Row 4c, no hidden git-capable spawn (CTO R3, G5, H5).** Every string literal, including any template literal,
+  whose basename or leading word is `git`, `gh`, `bash`, `sh` or `env` must be the first argument of a call that
+  carries an explicit `env`. The widened match catches `"/usr/bin/git"`, `execSync("git clone …")` and
+  `spawn("sh", ["-c", "git …"])`. For `git`, that call must also pass row 4. For the other words, the `env` must be
+  one of:
+  - a literal ending with the pin
+  - `withCronGitConfigPin(…)`
+  - an identifier or call that resolves, by one hop in the same file, to a function or const whose value is a row-2
+    `HOME` literal (follow-through-monitor's `ghEnv` and `buildSpawnEnv(...)`) Any other occurrence must be in the named list `GIT_CAPABLE_LITERAL_EXCLUSIONS:
   { file, line-anchor, reason }[]`, and each entry must have a non-empty `reason`. Seed that list by running the sweep
   once in Phase 0 and classifying every hit. Each hit is either an exclusion with a reason, or a site that gets the
   pin. Failure message: `bare "<word>" literal at <file:line> is not the first arg of a pinned spawn. Route it
   through spawnSimple or a helper that spreads CRON_GIT_CONFIG_PIN, or add {file, reason} to
   GIT_CAPABLE_LITERAL_EXCLUSIONS.` The node self-test probes (`_cron-claude-eval-substrate.ts`
-  `execFileSync(nodeBin, …)`) run node, not git, and are listed by name as excluded from the invariant.
+  `execFileSync(nodeBin, …)`) run node, not git, and are listed by name as excluded from the invariant. Each exclusion
+  must match exactly one live hit, keyed on a content anchor rather than a line number. A stale entry fails.
+- **Binding, not name (CTO H5).** In rows 2, 4 and 4c, every accepting identifier must resolve through the
+  TypeScript compiler API to a real definition: `CRON_GIT_CONFIG_PIN`, `withCronGitConfigPin`, `gitIsolatedEnv`,
+  `GIT_HARDENING_ENV` and `spawnSimple` must resolve to an import from `@/server/host-git` or the substrate, or to one
+  named same-file declaration (one hop). An unresolved identifier is a violation, never a pass. A synthetic-source
+  control row must FAIL each of three planted cases: a local `const CRON_GIT_CONFIG_PIN = {}`, a local
+  `function spawnSimple`, and a `"/usr/bin/git"` literal with no env.
+- **Row 4d, no post-construction writes (CTO H5).** The sweep rejects, anywhere under `server/inngest/**`, an
+  assignment, `delete` or computed-key write to a `GIT_CONFIG_*` property. The only exceptions are `spawnGitCapture`
+  and the substrate chokepoints, held in a per-file exception map that must match exactly. Without this row, an
+  `env.GIT_CONFIG_GLOBAL = …` written after the literal would escape every other row.
 - **Row 4b, no retyped path.** No non-test file under `server/inngest/` contains `/usr/local/share/soleur/agent.gitconfig`.
 - **Row 5, real git, the property end to end.** Make a temp dir H and write `H/.gitconfig` with `[user] name =
   planted` and `[alias] probe = !touch <H>/fired`. A shell alias needs no exec bit, so a noexec `/tmp` is fine.
-  Build the env explicitly (never inherit `process.env`), so the vitest git tripwire stays satisfied.
+  Build the env explicitly from `gitCleanEnv()` plus `fixtureCeiling` (from `plugins/soleur/test/lib/`), never from
+  `process.env` and never from `gitFixtureEnv`, which pins `GIT_CONFIG_GLOBAL=/dev/null` and sets `XDG_CONFIG_HOME`
+  and would make both arms identical. Both arms use `cwd: H`, `GIT_CEILING_DIRECTORIES` set to H's parent,
+  `LC_ALL=C`, `GIT_CONFIG_NOSYSTEM=1` and `HOME: H`, so they differ only in `GIT_CONFIG_GLOBAL`. Plant the same keys in
+  `H/.config/git/config` as well (P2 claims both global files). Assert with `git config --global --show-origin --get
+  user.name`, so a failure names the level that answered. A third arm sets `GIT_CONFIG_SYSTEM=H/sys.gitconfig` (holding
+  a planted alias) together with the pin, and asserts that the alias is absent. That proves `NOSYSTEM`
+  behaviourally. Assert `git --version` >= 2.32 first, with its own message, so an old git does not read as a code
+  bug.
   - With `{ PATH, HOME: H, ...CRON_GIT_CONFIG_PIN }`: `git config --get user.name` does not print `planted`, `git probe`
     exits non-zero with "not a git command", and `H/fired` does not exist.
   - With `{ PATH, HOME: H }` (the control): `user.name` is `planted` and `git probe` creates `H/fired`.
-  - No version probe is needed: below git 2.32 the pinned arm reads `planted`, so the test fails loudly.
   - If `AGENT_GIT_GLOBAL_CONFIG` is absent on the test host, git treats it as an empty global, and this row still
     holds.
-- **Row 5b, the XDG residual (CTO G3).** In real git, with the pin set, write `H/.config/git/ignore` holding
-  `secret.txt`, and assert that `git status --porcelain --ignored` still reports `secret.txt` as ignored. This records
-  that the pin does NOT cover the XDG `ignore` and `attributes` defaults. Then assert that the hook denies a Write to
-  `H/.config/git/ignore`: Guard 1 is the barrier for those two files.
-- **Row 6, identity-file probe (CTO G2).** `agentGitConfigReadable()` (3.2 below) returns false for a missing path,
-  and the chokepoint calls `reportSilentFallback` exactly once per process with op `cron-git-config-pin`.
+- **Row 5b, the XDG residual (CTO G3), characterisation only.** In real git with the pin set, write
+  `H/.config/git/ignore` holding `secret.txt`. Assert that `git status --porcelain --ignored` still reports
+  `secret.txt` as ignored. This records that the pin does not cover the XDG `ignore` and `attributes` defaults. The
+  failure message reads "residual closed by git; update ADR-033", so a change in git shows up as news, not as a
+  regression. The hook's deny on that path is the Guard 1 row `/home/soleur/.config/git/ignore` in 3.3, so it is not
+  repeated here.
+- **Row 6, the probes (CTO G2, H1, H4).** Through `vi.importActual("@/server/host-git")`, on temp paths only, never
+  the real constant path:
+  - `agentGitConfigReadable(tmpFile)` is true, and on a missing path it is false
+  - `xdgGitResidualPresent(tmpHome)` is false, true once `tmpHome/.config/git/ignore` is a file, and false when
+    `.config/git` is only a directory
+  - `withCronGitConfigPin` forces the pin on a pin-less env and on an env with `/tmp/evil`, and keeps a caller's
+    `GIT_CONFIG_GLOBAL: "/dev/null"`
+- **Shared test setup (CTO H1).** `test/setup-node.ts`, which runs for both the `unit` and `repo-wide` vitest
+  projects, registers a partial mock:
+  `vi.mock("@/server/host-git", async (orig) => ({ ...(await orig()), agentGitConfigReadable: () => true, xdgGitResidualPresent: () => false }))`.
+  Existing suites therefore keep reporting nothing on a healthy host, and their `reportSilentFallback` assertions
+  (`cron-daily-triage.test.ts` `not.toHaveBeenCalled()` / `toHaveBeenCalledTimes(1)`) stay unchanged. Off-image the
+  identity file is missing, so without this mock those assertions would go red.
 
 3.2 Extend `test/server/inngest/cron-claude-eval-substrate-exit.test.ts`. It already mocks `node:child_process`.
 
+- Rows 1 and 3 pick the spawn call by its command (`claude` or `git`), never by `spawnMock.mock.calls[0]`.
 - **Row 1, the `spawnClaudeEval` chokepoint.** `buildSpawnEnv` returns `GIT_CONFIG_GLOBAL: "/tmp/evil"` and
   `GIT_CONFIG_NOSYSTEM: "0"`, and the spawned `opts.env` has both pin values. That proves both presence and priority.
 - **Row 3, the `spawnSimple` chokepoint.** Two cases: no `env` (inherited `process.env` plus the pin), and an env
   with `GIT_CONFIG_GLOBAL: "/tmp/evil"`. Both spawn with the pin.
-- **Row 6 wiring.** With `agentGitConfigReadable` mocked to false, one `spawnClaudeEval` and one `spawnSimple` lead to
-  one `reportSilentFallback` call in total, and neither spawn is blocked.
+- **Row 6 wiring.** Override the shared mock so `agentGitConfigReadable` returns false. One `spawnClaudeEval` and one
+  `spawnSimple` then lead to exactly one `reportSilentFallback` call with op `cron-git-config-pin`; filter by op, not
+  by total count. Neither spawn is blocked. Flipping the override back to true and then to false again produces a
+  second report, which proves the latch re-arms. The same applies to `xdgGitResidualPresent` with op
+  `cron-git-xdg-config-present`.
+- **Row 7, new-rule deny telemetry (CTO H3).** In the `cron-filing-deny-marker` test (or the substrate result-parse
+  test), feed `countNewRuleDenials` synthetic `permission_denials[]` entries:
+  - a padded `git ' push'` command → `git-gh-shape`
+  - a Write to `~/.gitconfig` → `protected-gitconfig`
+  - a Write to `~/.config/git/ignore` → `protected-xdg-git`
+  - a Write to the trust root → `protected-trust-root`
+  - a plain `git status` → none
+
+  Assert one `warnSilentFallback` per rule, tagged `cron` and `rule` only, with no command or path in the payload. A
+  parity row checks that `classifyNewRuleDeny` returns non-null exactly when `decide()` denies with a new-rule
+  reason, across the 3.3 battery.
 
 3.3 Extend `test/server/inngest/cron-bash-allowlist-hook.test.ts` (Guards 1 and 2):
 
@@ -502,13 +668,19 @@ on a red census read the failure message, which names the file and the fix.
     That is 11 rows. Except for the bare and flag rows, every row asserts
     `/irregular command word in a (git|gh) command \(word #\d/`. Before the fix, each row either passed or was denied
     with a different reason; Phase 0 records which.
+  - **Separator table (one verb, roadmap-review).** `git '<sep>checkout' --no-overlay HEAD:.claude apps` for each
+    of: a quoted `\t`, U+2009, U+3000, U+FEFF and U+2028. Each denies with the shape reason, so a rule that only
+    checks for space and NBSP goes red. In the test source, write every separator, and every NBSP in this section,
+    as a `\u` escape, never as a literal character (`cq-regex-unicode-separators-escape-only`). In this plan,
+    `\u00a0` means that escape.
   - **Anti-vacuity harness assertion.** For each irregular row (the verb table and the first eight single rows), at
     least one segment of `splitSegments(cmd)` has `tokenize(seg).slice(0, 3)` different from
     `normalizeSegmentWhitespace(tokenize(seg).join(" ")).split(" ").slice(0, 3)`. The check is per segment, after
     the hook's own trim, so a row the hook would see as plain cannot pass as irregular.
 - **Allowlist census.** For every distinct `git …`/`gh …` line in every `CRON_BASH_ALLOWLISTS` entry (22 distinct
-  lines today), the plain-spaced command `<line> x` is never denied by the shape rule. The row asserts that at least
-  20 distinct lines were checked. Failure message: `allowlist line "<line>" in <cron> cannot be expressed under the
+  lines today, stored as `KNOWN_ALLOWLIST_GIT_GH_LINES`), the plain-spaced command `<line> x` is never denied by the
+  shape rule. The row asserts exact equality between the derived set of distinct lines and the stored list, so a
+  new line shows up as a diff. It is not a `>=` floor. Failure message: `allowlist line "<line>" in <cron> cannot be expressed under the
   command-word rule (positions git 0-1 / gh 0-2). Extend commandWordShapeReason and its ADR-033 note; don't loosen
   COMMAND_WORD_RE.`
 - **Raw-rule regression rows (P5).** `git push --repo "origin evil"`, `git push --repo="origin evil"` and
@@ -590,14 +762,18 @@ All paths are relative to the repo root.
 - `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts`: 3.3.
 - `apps/web-platform/test/server/inngest/cron-claude-eval-substrate-exit.test.ts`: 3.2.
 - `apps/web-platform/test/server/inngest/cron-gh-output-framing-hook.test.ts`: the K2 comment only (1.3, CTO G1).
+- `apps/web-platform/server/cron-filing-deny-marker.ts`: `countNewRuleDenials` (2.6b, CTO H3), plus its test file for
+  row 7.
+- `apps/web-platform/test/setup-node.ts`: the partial `@/server/host-git` mock (CTO H1).
 - `knowledge-base/engineering/architecture/decisions/ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`:
   Phase 4.
 - `knowledge-base/engineering/architecture/decisions/ADR-287-*.md`: one dated cross-reference line (CTO G1).
 - Possibly `apps/web-platform/test/server/inngest/cron-bug-fixer.test.ts`: the `node:fs` mock, only if Phase 0 shows
   it is needed.
 
-Count: hook 1, host-git 1, substrate 1, 23 `HOME:` files, 2 Class C-only files, 3 extended tests, 2 ADRs. That is 33
-edited files, or 34 with the conditional mock fix.
+Count: hook 1, host-git 1, substrate 1, deny-marker 1, 23 `HOME:` files, 2 Class C-only files, 4 extended tests
+(hook, substrate-exit, framing comment, deny-marker), 1 test setup, 2 ADRs. That is 36 edited files, or 37 with the
+conditional mock fix. The four `spawnScriptCapture` files are already among the 23.
 
 Not edited (OUT): `server/agent-env.ts`, `Dockerfile`, `server/inngest/functions/_git-hardening.ts`,
 `_cron-safe-commit.ts`, any flag or prd setting, any `.c4` file.
@@ -658,11 +834,21 @@ Every way a cron run can get git to read attacker-chosen config, and how this pl
   the cron container. `url.insteadOf` would send a GitHub App installation token that can write to `jikig-ai/soleur`
   to an attacker host. `core.fsmonitor` or `help.autocorrect` would run attacker commands with the cron's env
   (`GH_TOKEN`, `ANTHROPIC_API_KEY`). The plugin is delivered from that repo to every install.
+- **Permanent skip on over-deny (CTO H2):** a bug-fixer run whose step is over-denied ends in the fix-issue failure
+  handler, which labels the issue `bot-fix/attempted`. That label is in `SKIP_LABELS` (`cron-bug-fixer.ts`), so the
+  issue is never retried, even after a revert. Bug-fixer stays green with no PR. Detection is the H3 metric plus
+  AC14(c), and recovery is the revert runbook's label-removal line.
+- **Founder-workspace git (scope-out):** `server/git-config-atomic.ts` and `server/push-branch.ts` spawn git with no
+  env in an authenticated user's workspace, and share the container HOME with crons. Before this PR, a cron agent could
+  plant `~/.gitconfig` with the Write tool. After it, Guard 1 denies that write, so the path from cron to user is
+  closed at the write. The read side stays unpinned: an agent session's read-write bind of `~/.gitconfig` is the
+  remaining writer, and that is the G4 follow-up under #9601. It is not pinned here, because it is a different trust
+  surface with no harness, under the one-PR cap (CTO G4).
 - **Brand-survival threshold:** `single-user incident`.
 - **Threshold decision (challengeable):** one successful exploit compromises the repository every plugin user pulls
   from, so the strictest tier applies. This matches the #9600 and host-side git hardening siblings in this epic. The
   CPO confirmed it at plan time ("approved with conditions"), and the conditions are folded in: the quiet failure mode
-  is named above; the recovery hint is in the deny reason (1.3, 1.5); post-merge verification is below; and the
+  is named above; the recovery hint is in the deny reason (1.2); post-merge verification is below; and the
   revert path is under Dependencies & Risks. `soleur:engineering:review:user-impact-reviewer` runs at review.
 
 ## Observability
@@ -683,6 +869,9 @@ failure_modes:
   - mode: "the pin breaks server-side git (identity file missing or unreadable)"
     detection: "in-surface: git skips a missing or unreadable global config silently, so git's stderr does NOT name the file. Commits then fail with 'Author identity unknown'. The chokepoint probe agentGitConfigReadable() reports op cron-git-config-pin through reportSilentFallback once per process. The image build fails first if the file is absent (Dockerfile:165)"
     alert_route: "Sentry issue (op cron-git-config-pin) + heartbeat ok:false"
+  - mode: "a planted XDG ~/.config/git/ignore or attributes survives the pin (residual G3)"
+    detection: "in-surface: the chokepoint probe xdgGitResidualPresent() reports op cron-git-xdg-config-present through reportSilentFallback on the absent-to-present transition"
+    alert_route: "Sentry issue (op cron-git-xdg-config-present)"
   - mode: "a new cron or spawn site drops the pin"
     detection: "pre-merge: cron-spawn-git-config-pin.test.ts rows 2, 4 and 4c go red on the PR that adds it, with a message naming the file and the fix"
     alert_route: "CI failure on that PR"
@@ -690,7 +879,7 @@ failure_modes:
     detection: "resolveOutputAwareOk for artifact-producing crons; the bot-fix / filing run report"
     alert_route: "the cron's run report and heartbeat"
 logs:
-  where: "pino logger in the web-platform container, shipped to Better Stack by the Vector journald shipper; the hook writes no logs (stdout is the hook protocol)"
+  where: "pino logger in the web-platform container, shipped to Better Stack by the Vector journald shipper; the hook writes no logs (stdout is the hook protocol). New Sentry ops: cron-git-config-pin and cron-git-xdg-config-present (error, reportSilentFallback, transition-latched) and cron-containment-new-rule-deny (warning, warnSilentFallback, tags cron and rule, at most one per run per rule; never the command or path)"
   retention: "Better Stack plan retention; Sentry plan retention for errors; nothing new is retained"
 discoverability_test:
   command: "node -e 'process.stdout.write(require(\"node:child_process\").spawnSync(process.execPath,[\"apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs\",\"/dev/null\"],{input:JSON.stringify({tool_name:\"Write\",tool_input:{file_path:\"/home/soleur/.gitconfig\",content:\"x\"}}),encoding:\"utf8\"}).stdout)'"
@@ -741,7 +930,19 @@ The ADR amendment lands in this PR and describes the state the PR creates. No so
 
 ### Guard 1 — git global config write-protection
 
-**Property.** No Write, Edit or MultiEdit call from a cron agent succeeds on a path that ends in `.gitconfig`, that
+**Coverage (CTO H6).** The hook is registered only by `setupEphemeralWorkspace`, which writes `.claude/settings.json`
+through `buildCronEvalSettings`, writes `cron-allow.txt` and runs `runHookSelfTest`. So Guard 1 covers every
+workspace-spawned agent cron. Two crons spawn in the server cwd with no workspace and are unhooked: `cron-daily-triage.ts`
+(`spawnCwd: process.cwd()`) and `cron-follow-through-monitor.ts`. Their live control is `--allowedTools`, quoted
+from each cron's `CLAUDE_CODE_FLAGS`:
+- daily-triage: `Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Read,Glob,Grep`
+- follow-through-monitor: the same, plus `Bash(gh issue close:*),Bash(gh label create:*)`
+
+Neither list admits Write, Edit or a git verb, and the pin still reaches both through `spawnClaudeEval`. No hook wiring
+is added for them. The follow-up trigger is: if either cron gains a file or git verb, move it onto a workspace. The
+`cron-containment-new-rule-deny` metric never fires for these two crons.
+
+**Property.** No Write, Edit or MultiEdit call from a workspace-spawned cron agent succeeds on a path that ends in `.gitconfig`, that
 lies in or at a `.config/git` directory, or that lies in or at the trust-root directory `/usr/local/share/soleur`
 (which holds `AGENT_GIT_GLOBAL_CONFIG`), whatever the absolute, relative or doubled-slash spelling.
 
@@ -846,11 +1047,17 @@ expression (`spawn(cmdFromConfig, …)`). ADR-033 records it, and the Phase 6 re
 | 9 | Replace the pin value with a fake `GIT_CONFIG_GLOBAL: "/tmp/x"` in `host-git.ts` | RED (row 0) |
 | 10 | Property: drop `GIT_CONFIG_GLOBAL` from the constant (keep NOSYSTEM) | RED (row 0 and real-git row 5: `planted` is read, `H/fired` exists) |
 | 11 | Remove the `agentGitConfigReadable` call from one chokepoint | RED (substrate-exit row 6 wiring) |
+| 12 | Make the latch once-per-process (never re-arm) | RED (row 6 wiring, second-report case) |
+| 13 | In one `spawnScriptCapture` helper, revert to `env: opts.env` | RED (row 4c, `bash` with an unpinned env) |
+| 14 | Make `withCronGitConfigPin` a bare last spread | RED (row 6, the `/dev/null`-kept case) |
+| 15 | Add `const CRON_GIT_CONFIG_PIN = {}` locally in a cron file and spread it | RED (binding check: it resolves to a local, not the import) |
+| 16 | Add `env.GIT_CONFIG_GLOBAL = "/tmp/x"` after a pinned literal | RED (row 4d) |
 
 **Harness rows.** Suite mutation (a): make row 5's pinned arm reuse the control env. RED, because `planted` is read
 and `H/fired` exists. Suite mutation (b): make the AST walk return no object literals. RED, because the
 `KNOWN_HOME_LITERALS` diff then reports all 23 files missing. Must-pass inputs that are not canonical:
 - the `/dev/null` sites (`gitIsolatedEnv`, `spawnGitCapture`, `GIT_HARDENING_ENV`)
+- `withCronGitConfigPin(opts.env)` in the four bash helpers, and the one-hop `ghEnv`/`buildSpawnEnv(...)` resolution
 - the named `_cron-safe-commit` `extraEnv` exception
 - `spawnSimple("git", …)` calls, which pass through the chokepoint
 - the shorthand `{ HOME }` form, if one appears
@@ -936,13 +1143,17 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
 | `agentGitConfigReadable` probe + chokepoint report (2.1, 2.2) | — | inferred — justification: CTO G2; `cq-silent-fallback-must-mirror-to-sentry`. git skips a missing global silently. |
 | ADR-287 cross-reference line, framing-test comment | — | inferred — justification: CTO G1; A1 makes the existing text false. |
 | Census rows 4c (gh/bash), 5b, 6 | — | inferred — justification: CTO G5, G3, G2. |
+| `classifyNewRuleDeny` + `countNewRuleDenials` telemetry (2.6b), row 7 | — | inferred — justification: CTO H3; the deny reason never leaves the host, so without it the over-deny success metric is unmeasurable (`hr-observability-as-plan-quality-gate`). |
+| `xdgGitResidualPresent` probe | — | inferred — justification: CTO H4; a pre-merge planted XDG file survives the pin and Guard 1. |
+| `withCronGitConfigPin` + the four bash-helper pins, binding check, row 4d, `test/setup-node.ts` mock | — | inferred — justification: CTO H5, H1; name-matching censuses and an unseamed host probe were review-found false negatives and red suites. |
+| `bot-fix/attempted` detection and the revert label line | — | inferred — justification: CTO H2; an over-deny's lasting effect outlives a revert. |
 | `cron-bash-allowlist-hook.mjs` 1.1 trust-root entry | — | inferred — justification: CTO A3. The pin makes `AGENT_GIT_GLOBAL_CONFIG` the one file every cron git process reads; P7. |
 | Deny-reason recovery hint (1.2) | — | inferred — justification: CPO sign-off condition (an agent must be able to reword rather than loop) |
 | `host-git.ts` `CRON_GIT_CONFIG_PIN` | asks 2, 8, 9 | asked |
 | `_cron-claude-eval-substrate.ts` chokepoints | asks 2, 6 ("so a new cron cannot drop it") | asked |
 | 23 `HOME:`-literal files | asks 2, 7 | asked |
 | Class C helpers (`cron-strategy-review.ts`, `cron-compound-promote.ts`, and the `spawnGit` edits in 3 others) | asks 2 ("every cron spawn env") | asked — CTO F-B ruled these spawns are cron spawn envs |
-| `cron-content-vendor-drift.ts` ordering (2.5) | — | inferred — justification: CTO F-A note. A caller env must not override a `/dev/null` pin; same property P2. |
+| `cron-content-vendor-drift.ts` `env?` removal (2.5) | — | inferred — justification: CTO F-A note. A caller env must not override a `/dev/null` pin; same property P2. Removing the parameter enforces it by construction. |
 | `cron-spawn-git-config-pin.test.ts` | asks 6 | asked |
 | Real-git row 5 | — | inferred — justification: learning 2026-10-15 (a census that only reads source cannot see an env that never reached the process); it is the only row that tests P2 itself |
 | `cron-claude-eval-substrate-exit.test.ts` rows 1, 3 | asks 6 | asked |
@@ -953,12 +1164,14 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
 ### Split Assessment
 
 - Subsystems touched: 2 (`apps/web-platform`, `knowledge-base`).
-- Planned files: 34 (33 edited, 1 created), plus one conditional mock fix. Estimated changed lines: about 560:
+- Planned files: 37 (36 edited, 1 created), plus one conditional mock fix. Estimated changed lines: about 700:
   - the hook: about 40 lines
   - the pin, the probe and the chokepoints: about 35
   - the 25 cron files: about 70 (an import plus one spread each, the opts-type trims)
   - the hook tests: about 170
-  - the new AST census test: about 230
+  - the new AST census test: about 300
+  - the deny-marker telemetry and its test: about 60
+  - the probes, `withCronGitConfigPin` and the shared mock: about 30
   - the substrate-exit rows: about 50
   - ADR-033 and ADR-287: about 30
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines.
@@ -989,11 +1202,14 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   - The bare-`git` row reports `word #2 missing`, and the two flag-led rows give the flag reason.
   - The `gh ' api'` row's hint names `gh api <path>`.
   - The anti-vacuity and table-coverage harness assertions pass.
-  - Three must-pass groups pass: the allowlist census (at least 20 distinct git/gh lines), the raw-rule regression
+  - Three must-pass groups pass: the allowlist census (exact equality with the 22 stored lines), the raw-rule regression
     rows (`--repo "origin evil"`), and the must-pass rows (including `git commit -m "use -a flag"`).
   - Every irregular row either passed or was denied with a different reason before the fix (Phase 0 log).
-- [ ] AC7: `cron-spawn-git-config-pin.test.ts` rows 0, 2, 4, 4b, 4c, 5, 5b and 6 pass, and
-  `cron-claude-eval-substrate-exit.test.ts` rows 1, 3 and 6 pass.
+- [ ] AC7: these rows pass:
+  - `cron-spawn-git-config-pin.test.ts` rows 0, 2, 4, 4b, 4c, 4d, 5, 5b and 6, plus the binding check, its
+    synthetic-source FAIL controls and the walk self-test
+  - `cron-claude-eval-substrate-exit.test.ts` rows 1, 3 and 6, including the re-arm case
+  - row 7, the new-rule telemetry and the `classifyNewRuleDeny` parity check
   - Row 5's control arm shows the fixture fires: `planted` is read and `H/fired` exists. Its pinned arm shows that
     neither happens.
   - Row 5b shows the XDG `ignore` residual and the hook's deny on that file.
@@ -1026,9 +1242,16 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   (start the window at the deploy, not the merge), two things must hold.
   - (a) Sentry has no `cron-git-config-pin` event. Query it read-only through the Sentry API for op
     `cron-git-config-pin`.
-  - (b) No bug-fixer or roadmap-review run reached its commit step and reported `Author identity unknown` or
-    produced no PR. Use the `gh issue list` self-report query in Success Metrics, filtered to those two crons, and
-    look for that string in the bodies.
+  - (b) For bug-fixer and roadmap-review, compare the Sentry `claude-eval-nonzero-nofix` event count, and the
+    count of runs whose `detect-pr` step found no PR, with the prior two weeks. A rise is a fail to investigate.
+    Bug-fixer stays green when it produces no PR and does not use `resolveOutputAwareOk`, so a self-report search
+    cannot see it.
+
+  - (c) (CTO H2) List issues labelled `bot-fix/attempted` after the deploy time, read-only:
+    `gh issue list --state all --label bot-fix/attempted --search "updated:>=<deploy date>" --json number,title`.
+    Join them to (a)/H3 events for `cron=cron-bug-fixer`. A fix-attempt comment quoting `cron-containment:` is a
+    secondary signal only, because it is unverified that the agent's comment quotes the reason.
+    Every joined issue goes on the revert runbook's operator-authorised label-removal line.
 
   As corroboration only, the next such PR's commits are authored by github-actions[bot]. That alone cannot fail,
   because the HOME global carries the same identity. Safe-commit crons are not evidence: they commit through
@@ -1076,7 +1299,12 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
 ## Success Metrics
 
 - Pre-fix RED and post-fix GREEN for the new rows (the Phase 0 log).
-- Zero new FAILED self-reports attributable to a `cron-containment:` deny in the first week after merge. Check with a
+- **Primary (CTO H3):** count Sentry `cron-containment-new-rule-deny` events by `cron` and `rule` in the first week
+  after the deploy. Any event on a command that a cron prompt prescribes with plain spaces is an over-deny, and it
+  triggers the revert path. The metric cannot see `cron-daily-triage` or `cron-follow-through-monitor`, which are
+  unhooked (Guard 1 coverage). The self-report query below is secondary only: `countPermissionDenials` keeps only the
+  tool class, so a self-report body never carries the reason.
+- Secondary: zero new FAILED self-reports attributable to a containment deny in the first week after merge. Check with a
   read-only `gh issue list --state all --search '"Automated FAILED self-report" in:body created:>=<merge date>' --json number,body`,
   then count the bodies that contain `cron-containment:`. The query was checked on 2026-11-16: it returns the known
   historical self-reports (for example #12466), so a zero count is a real zero, not a broken query. The same query
@@ -1090,7 +1318,11 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   prescribe (scoped `git add`, `git commit -m`, `git push -u origin`, branch create/switch, `gh issue create` with a
   multi-word body). The deny reason tells the agent how to recover.
 - **Risk: a cron depends on a HOME global key other than identity.** Ruled out: nothing at runtime writes
-  `~/.gitconfig` (`git grep "config --global|setup-git"` finds only `Dockerfile:467-468`, which is identity).
+  `~/.gitconfig` from server code (`git grep "config --global\|setup-git"` finds only `Dockerfile:467-468`, which is
+  identity). One qualifier: agent-session sandboxes (not crons) bind `~/.gitconfig` read-write
+  (`server/agent-outer-wrap.ts`, `infra/agent-outer-wrap-argv.json`), so a founder agent session could write it. With
+  the pin, cron git ignores it. That bind is recorded for the G4 follow-up under #9601 (`agent-env.ts`-adjacent, OUT
+  here).
 - **Risk: census brittleness.** Mitigation: the census uses the TypeScript compiler API, not regex plus a brace
   matcher (CTO G6), and the Guard 3 harness rows.
 - **Revert path.**
@@ -1098,9 +1330,14 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
     the sub-command` on a command that a cron prompt prescribes with plain spaces.
   - *First response:* revert only the Phase 1.2 commit. It is kept separate for this. That leaves the pin and the
     write protection in place, because a full revert would reopen #12757.
+  - *Label recovery (CTO H2):* the runbook carries a separate line, `Operator-authorizes: remove bot-fix/attempted
+    from issues <N...>`, which names the exact issues AC14(c) found. It is a GitHub write at revert time, so it is not
+    automatic, and this PR performs no GitHub write.
   - *Full revert:* `git revert <merge-sha>` restores the previous hook and envs in one commit. Nothing is migrated,
-    flagged or persisted. Pair it with a redeploy: HOME lives in the container's writable layer (`useradd -m`), so
-    a fresh container drops any `~/.gitconfig` written meanwhile, which the reverted git would read again.
+    flagged or persisted. Whether a redeploy recreates the container's writable layer, and so drops a
+    `~/.gitconfig` written meanwhile, is unverified (CTO H4). The plan does not rely on it. After a full revert,
+    the `cron-git-xdg-config-present` probe is gone too, so read the HOME state through a read-only route before
+    trusting the reverted git.
 - **Dependency:** none. No operator step and no credential.
 
 ## Sharp Edges

@@ -13,12 +13,22 @@ Rulings: `decision-challenges.md` in this directory. One PR. No flag, prd, Docke
     anti-vacuity and table-coverage harness assertions.
   - [ ] 1.1.3 The allowlist census, the raw-rule regression rows and the must-pass rows (these must pass before the
     fix).
-- [ ] 1.2 Write `test/server/inngest/cron-spawn-git-config-pin.test.ts` on the TypeScript compiler API: rows 0, 2,
-  4, 4b, 4c, 5, 5b, 6, with diff-style failure messages and the stored maps.
+- [ ] 1.2 Write `test/server/inngest/cron-spawn-git-config-pin.test.ts` on the TypeScript compiler API. It covers:
+  - rows 0, 2, 4, 4b, 4c, 4d, 5, 5b and 6
+  - the binding check and its synthetic-source FAIL controls
+  - the walk self-test
+  - diff-style failure messages and identity-keyed stored maps
+
+  Row 5 uses `gitCleanEnv` plus `fixtureCeiling`, never `gitFixtureEnv`.
   - [ ] 1.2.1 Run the sweep once and seed `KNOWN_HOME_LITERALS` (23 files, 26 sites), `KNOWN_GIT_SPAWNS` (15 pairs)
     and `GIT_CAPABLE_LITERAL_EXCLUSIONS`, classifying every hit (each exclusion needs a reason).
-- [ ] 1.3 Extend `cron-claude-eval-substrate-exit.test.ts` with rows 1, 3 and 6 (wiring).
-- [ ] 1.4 Run the suites and capture the RED log for the PR body.
+- [ ] 1.3 Extend `cron-claude-eval-substrate-exit.test.ts` with rows 1, 3 and 6. Row 6 is the wiring row,
+  filtered by op, and includes the re-arm case.
+- [ ] 1.3b Add the partial `@/server/host-git` mock to `test/setup-node.ts` (CTO H1).
+- [ ] 1.3c Add row 7 to the deny-marker test: `countNewRuleDenials`, plus the `classifyNewRuleDeny`/`decide()` parity
+  check (CTO H3).
+- [ ] 1.4 Run the whole of `test/server/inngest/` and capture the RED log for the PR body, using the plan's Phase 0
+  pre-fix expectation list. A load or type error does not count as RED.
 
 ## Phase 2: Core implementation
 
@@ -26,12 +36,22 @@ Rulings: `decision-challenges.md` in this directory. One PR. No flag, prd, Docke
   the XDG note.
 - [ ] 2.2 Hook, commit B on its own, so it can be reverted alone (plan 1.2): `commandWordShapeReason` (position,
   escaped word, `gh api` hint, flag reason), called after `argumentInjectionReason`.
-- [ ] 2.3 `server/host-git.ts`: `CRON_GIT_CONFIG_PIN` (with the docstring pointer to the census) and
-  `agentGitConfigReadable()`.
-- [ ] 2.4 Substrate chokepoints: `spawnClaudeEval` env and `spawnSimple` env both end with the pin. Add the
-  once-per-process probe that calls `reportSilentFallback` (op `cron-git-config-pin`) and never blocks.
+- [ ] 2.3 `server/host-git.ts` gains:
+  - `CRON_GIT_CONFIG_PIN`, with the docstring pointer to the census
+  - `agentGitConfigReadable(path)`, pure and uncached
+  - `xdgGitResidualPresent(home)`
+  - `withCronGitConfigPin(env)`
+- [ ] 2.4 Substrate chokepoints:
+  - `spawnClaudeEval` env and `spawnSimple` env both end with the pin.
+  - Re-probe on every call, with a latch that fires on a transition and re-arms. It reports `cron-git-config-pin`
+    and `cron-git-xdg-config-present` through `reportSilentFallback` and never blocks.
+  - Add `countNewRuleDenials` in `parseClaudeResultLine`, emitting `warnSilentFallback` op
+    `cron-containment-new-rule-deny` (CTO H3).
+- [ ] 2.4b Export `classifyNewRuleDeny` from the hook and use it in the hook's own new-rule deny paths. Add
+  `countNewRuleDenials` to `server/cron-filing-deny-marker.ts`.
 - [ ] 2.5 The 26 `HOME:` literals in 23 files: import from `@/server/host-git` and spread the pin last. Fold the
-  `buildPublisherEnv` loop into its literal.
+  `buildPublisherEnv` loop into its literal, keeping undefined values (no filter).
+  - [ ] 2.5.0 In the four `spawnScriptCapture` helpers, use `env: withCronGitConfigPin(opts.env)` (CTO H5).
   - [ ] 2.5.1 Right after adding the import to `cron-bug-fixer.ts`, run `cron-bug-fixer.test.ts`. If its `node:fs`
     mock breaks, switch it to `importOriginal`.
 - [ ] 2.6 Class C sites:
@@ -64,6 +84,7 @@ Rulings: `decision-challenges.md` in this directory. One PR. No flag, prd, Docke
   - Guard 3 rows #5, #6 and #7e
   - Guard 2 rows #2, #4 and #5
   - Guard 1 rows #6b and #8
+  - Guard 3 rows #12-#16, which cover the latch, the bash helper, the pin function, the binding check and row 4d
 
 ## Phase 5: Review and ship
 
@@ -76,5 +97,9 @@ Rulings: `decision-challenges.md` in this directory. One PR. No flag, prd, Docke
   - "Prod HOME: assumed writable per the Dockerfile and deploy flags; not checked live."
   - the RED log
   - the diffs of the stored maps
-- [ ] 5.4 After the deploy, run the read-only AC14 checks (Sentry `cron-git-config-pin` and the self-report
-  query). No manual cron trigger.
+- [ ] 5.4 After the deploy, run the read-only AC14 checks. No manual cron trigger.
+  - (a) Sentry `cron-git-config-pin` and `cron-git-xdg-config-present`
+  - (b) the `claude-eval-nonzero-nofix` and no-PR baseline comparison
+  - (c) the `bot-fix/attempted` join against `cron-containment-new-rule-deny`
+- [ ] 5.5 Put the H2 operator-authorised label-removal line in the revert runbook section of the PR body. Leave it
+  empty unless AC14(c) finds issues.
