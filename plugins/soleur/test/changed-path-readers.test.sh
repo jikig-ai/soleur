@@ -386,9 +386,9 @@ caller_rows() {
   da="$ROW_DIR"; put_in "$da" docs/other.md "edited"
   commit_row || { h_bad "could not commit caller row A"; return; }
   run_helper "$da" origin/main...HEAD
-  if [ "$H_RC" -eq 0 ] && [ -n "$H_OUT" ] && ! LC_ALL=C grep -qE '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/|knowledge-base/operations/expenses\.md$|plugins/soleur/skills/gdpr-gate/|knowledge-base/project/(plans|specs)/|zzz-never/)' <<<"$H_OUT"; then
-    h_ok "precondition caller: control A's list is non-empty and touches no gated surface"
-  else h_bad "precondition caller: control A's list is empty or touches a gated surface (rc=$H_RC '$H_OUT')"; fi
+  if [ "$H_RC" -eq 0 ] && [ "$H_OUT" = "docs/other.md" ]; then
+    h_ok "precondition caller: control A's list is exactly docs/other.md (non-empty, on no gated surface)"
+  else h_bad "precondition caller: control A's list want exactly docs/other.md got rc=$H_RC '$H_OUT'"; fi
   # Fixture B: one change on every gated surface (the ledger is ADDED: the template does not seed it, and AMT includes A).
   new_row || { h_bad "could not build caller row B"; return; }
   db="$ROW_DIR"
