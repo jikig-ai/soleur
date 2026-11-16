@@ -1577,10 +1577,17 @@ ancestor of the local branch", also holds after every sync push. On a push to th
 moved to `S` (a KB-only turn) or to a merge `M` of HEAD and `S` (agent code held local) by a compare-and-swap
 `update-ref` BEFORE the push, and the tracking ref is set to `S` after it. For the default branch, git-data therefore
 still holds at least what GitHub holds: `S` and `M` are local `refs/heads/*` commits that `replicateToGitData`
-replicates like any other. The protected-branch side commit on `soleur/kb-sync` is built on `T` the same way. After the
-side push the local branch moves onto it by CAS (review round 1, ruling D5c): to the side commit on a KB-only turn, or
-to `M'`, with parents the turn's HEAD commit and the side commit, when code is held. The tracking ref is set to `T`, never to the side
-commit (D11). So the side commit is in the local history, and in git-data, except when that CAS fails (a held reason).
+replicates like any other. The protected-branch side commit on `soleur/kb-sync` is built on `T` the same way. Right
+after the side push succeeds, and before the PR is ensured, the local branch moves onto it by CAS (review round 1,
+ruling D5c; review fix-round 1, ruling D14(2)): to the side commit on a KB-only turn, or to `M'`, with parents the
+turn's HEAD commit and the side commit, when code is held. The tracking ref is set to `T`, never to the side commit
+(D11). So the side commit is in the local history, and in git-data, once its push succeeded, also when the PR call
+then fails (`pr_failed` keeps the link; a later `side_pending` turn retries the PR, D17). The exceptions are a failed
+link CAS (a held reason; the agent committing between the two CASes, `head_moved`, leaves the side branch unlinked
+until the next editing turn) and a fallback that exits before the link (no side delivery, or a failed hand-over): the
+local branch is then rolled back from `S` / `M` to the turn's HEAD commit, best effort (D14(4)), so a failed fallback
+leaves no undelivered Soleur commit on it. A non-protected push error to the default branch is not rolled back: the
+remote state is then unknown, and `S` / `M` descend from what that push would have set.
 A merge-commit merge of the PR fast-forwards a KB-only clone, whose local branch is the side commit. A squash merge,
 or a held-code clone, is reconciled by the session-start pull. A squash-merged KB-only clone may also be reset by the
 reconcile self-heal, which resets only when the local commits' content is already upstream (ADR-309 addendum of this

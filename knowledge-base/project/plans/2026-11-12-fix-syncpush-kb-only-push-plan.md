@@ -865,10 +865,16 @@ other code in that file; this plan does not edit `agent-runner.ts`. No open code
   - **Held code commits.** Nothing in the product says an agent's code commit was not published (#12714, CPO F1; its
     milestone is "Post-MVP / Later", Taste row T1). An agent that tells the user "committed and synced" is now wrong
     about the sync part.
-  - **Local merge commits.** While code commits are held, each KB-changing turn adds one Soleur-authored merge commit
-    (`KB_SYNC_MERGE_MSG`, "Soleur: merge knowledge-base sync") to the local branch. A later `github_push_branch` range
-    therefore shows those merges and the already-published `S` commits next to the member's work. Without held code
-    commits, history stays linear: the local branch is moved to `S`.
+  - **Local merge commits.** (Corrected at review fix-round 2: "each KB-changing turn" was false.) While code commits
+    are held, a turn that DELIVERS a KB change adds one Soleur-authored merge commit to the local branch: `M`
+    (`KB_SYNC_MERGE_MSG`, "Soleur: merge knowledge-base sync"; HEAD and `S`) on an unprotected default branch, or `M'`
+    (HEAD's tree, parents HEAD and the side commit) on a protected one, linked right after the side push. A turn whose
+    protected-branch fallback exits before that link (no side delivery, `side_ahead` when the side tip is absent, a
+    failed hand-over) adds none: the local branch is rolled back to the turn's HEAD commit (CTO ruling D14(4)), which
+    ends the per-turn `M_n` growth the review measured. A later `github_push_branch` range therefore shows those merges
+    and the already-published `S` / side commits next to the member's work. On a protected repo a KB-only turn also takes
+    the merge arm once the side commit is in HEAD's history (D14(3)); only an unprotected KB-only clone stays linear,
+    its local branch moved to `S`.
   - **Non-default branch.** A user whose agent works on a feature branch gets `non_default_branch` on every turn, and
     their KB edits never reach GitHub from that branch. Phase 0 step 4 records what they got before (the bare push from
     a single-branch clone with no upstream most likely failed already; unverified until measured). They will see their
@@ -880,11 +886,40 @@ other code in that file; this plan does not edit `agent-runner.ts`. No open code
   - **Host move after the default branch moved upstream.** If code commits are held and the upstream default branch
     has moved, the ADR-068 overlay check fails on a host move. The held commits are then parked on its rescue branch
     and `git-data-overlay-not-descendant` fires. They are recoverable, but no longer on the branch.
+- **Interim states until Phase 9 (#12718) lands (review fix-round 1, rulings D14-D17; accepted, tracked):**
+  - **KB UI write on a held workspace: saved, workspace pending.** An upload, delete or rename in the KB tree, and a
+    C4 diagram save, commit to GitHub through the REST API and then pull the workspace. When the self-heal refuses
+    with a designed hold (held code commits, an uncommitted tracked edit, or an untracked or ignored file in the
+    reset's way: `held_commits`, `dirty_tracked`, `untracked_collision`), the route answers its normal success
+    (upload 201, delete and rename 200) plus `workspace_sync: "pending"`, and the KB tree shows a non-error status
+    notice on that row: "Saved to GitHub." / "Deleted on GitHub." / "Renamed on GitHub." followed by "Your workspace
+    has local changes that are not on GitHub yet, so it was not updated. You don't need to try again." (one shared
+    constant, `lib/kb-workspace-sync-notice.ts`; interim copy, the #12714 wireframe may refine it). The notice shows
+    only on that response and is dismissible. The KB view keeps the workspace's copy (a deleted file still appears)
+    until the hold clears: the next session-start pull for a legacy-runner user; for a cc-only user nothing clears it
+    until Phase 9's merge. The Concierge's `edit_c4_diagram` returns "Committed to GitHub. The workspace copy was not
+    updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub."
+    The manual Sync button still says "Workspace out of sync" (true). The team-icon upload in Settings now succeeds
+    instead of failing, with no notice. Before this fix the same writes returned 500 "Try refreshing", which invited a
+    duplicate commit or a "File not found" retry (D16).
+  - **Self-heal holds on every upstream push.** The reconcile webhook and the sync-health cron take the same refusals
+    on a held workspace; they warn, debounced per workspace, and never page.
+  - **`side_pending` (silent).** The KB is on `soleur/kb-sync` with a PR awaiting an Owner; nothing in the product says
+    so (#12714). A turn with no new KB edit re-checks the PR with one GET: a missing PR is created then (the retry of a
+    failed PR call, D17), and a failed GET creates nothing.
+  - **`side_declined` (silent).** An Owner closed, without merging, the side PR for this exact content: it is not
+    reopened, and those KB edits reach GitHub only when the next KB edit opens a new PR.
+  - **D5e freezes.** A side tip the workspace lacks (a legacy `soleur/kb-sync` from before the cutover, a re-clone or
+    host move, a second workspace on the same repo) is `side_ahead` on every turn: the KB edits are held, warning
+    debounced, and the local branch no longer grows (D14(4)). Phase 9's pull-side adoption of the side tip closes
+    these.
 - **If this leaks, the user's repository and workflow are exposed via:**
   - a commit an agent authored (any path, including `.github/workflows/*`, any message including `Fixes #N`) published
     to the connected repository with the GitHub App token and no Owner approval;
   - a synthetic commit that reverts a remote knowledge-base edit;
-  - a member's uncommitted code edits erased by a self-heal `reset --hard`.
+  - a member's uncommitted edit (code or knowledge-base), or an untracked or ignored file, erased by the self-heal reset
+    (closed by D6b and D15(a): the reset is `reset --keep` and runs only when it loses no tracked, committed, untracked or
+    ignored file).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one Owner receiving one unapproved member commit is a trust breach on its own
   (CTO ruling H); it does not need to aggregate to matter.
@@ -922,18 +957,18 @@ pre-existing meaning.
 
 ```yaml
 liveness_signal:
-  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead); layer 1 (pino stdout -> Better Stack): one info line per outcome per turn, every reason"
+  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined) included"
   cadence: "per legacy-runner turn that has local commits; Sentry debounced 5 min per workspace per reason, Better Stack line every turn"
   alert_target: "Sentry issue stream for the web-platform project (warning level, no page); Better Stack web-platform source"
   configured_in: "apps/web-platform/server/kb-sync-publish.ts and apps/web-platform/server/session-sync.ts (log.info + mirrorWarnWithDebounce calls)"
 
 error_reporting:
-  destination: "layer 2: Sentry web-platform project via reportSilentFallback (SENTRY_DSN); existing op syncPush with a closed reason tag (KbSyncError) for tip-read, fetch, push and isolation failures; existing op kb-sync.protected-fallback-failed with a fallback_reason tag; new op self-heal-aborted-dirty-nonkb (workspace-sync); op isolated-dir-dispose-failed"
+  destination: "layer 2: Sentry web-platform project via reportSilentFallback (SENTRY_DSN); existing op syncPush with a closed reason tag (KbSyncError) for tip-read, fetch, push and isolation failures; existing op kb-sync.protected-fallback-failed with a fallback_reason tag; the workspace-sync self-heal ops (feature kb-route-helpers, CTO rulings D6-D8, D15, D20): self-heal-aborted-dirty-tracked, self-heal-aborted-held-commits and self-heal-aborted-untracked-collision at warning, self-heal-aborted-dirty and self-heal-aborted-detached-head at error, all debounced per workspace path (in-process key, never emitted), and self-heal-failed at error with extra.errName and extra.frame (the first server/, app/ or lib/ code frame as file:line, never the message); op isolated-dir-dispose-failed"
   fail_loud: "Sentry issue with tag op=syncPush, tag reason=<closed reason>, static message 'Sync push failed — next session will retry'; no URL, owner, repo or sha in the message"
 
 failure_modes:
   - mode: "false refusal: every KB push held (builder or guard bug), KB stops reaching GitHub"
-    detection: "layer 2: kb-sync.push-held reason:guard_failed or reason:hash_mismatch on a workspace with no tampering; layer 1: Better Stack count of synthetic_pushed drops to zero; CI: the battery's must-PASS rows"
+    detection: "layer 2: kb-sync.push-held reason:guard_failed or reason:hash_mismatch on a workspace with no tampering; layer 2 (pino -> Better Stack): Better Stack count of synthetic_pushed drops to zero; CI: the battery's must-PASS rows"
     alert_route: "Sentry issue stream; CI red on the PR"
   - mode: "object tamper detected (forged object bytes)"
     detection: "layer 2: kb-sync.push-held reason:hash_mismatch"
@@ -947,11 +982,26 @@ failure_modes:
   - mode: "protected-branch fallback fails or refuses over unmerged side content"
     detection: "layer 2: existing op kb-sync.protected-fallback-failed with fallback_reason tag; kb-sync.push-held reason:side_ahead"
     alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners); Sentry issue stream"
-  - mode: "self-heal refused because a member has uncommitted code edits on a diverged clone"
-    detection: "layer 2: op self-heal-aborted-dirty-nonkb (warning)"
+  - mode: "self-heal refused because the workspace has an uncommitted tracked edit (code or knowledge-base) on a non-fast-forward clone"
+    detection: "layer 2: op self-heal-aborted-dirty-tracked (warning, debounced per workspace); the KB route answers workspace_sync pending (D16)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal refused because local commits hold content upstream lacks (held code commits, or an unpublished KB commit)"
+    detection: "layer 2: op self-heal-aborted-held-commits (warning), tags held_kind (nonkb | kb) and reason (merge_not_attempted until Phase 9), debounce class self-heal-aborted-held-commits:<held_kind> per workspace; the KB route answers workspace_sync pending (D16)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal refused because an untracked or ignored file sits where the reset would write (D15a)"
+    detection: "layer 2: op self-heal-aborted-untracked-collision (warning), tag arm (phantom | diverged), no paths in tags or extra, debounced per workspace; the KB route answers workspace_sync pending (D16). A reset --keep refusal reaching the catch shows as self-heal-failed and means the precheck missed a shape"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal aborted off the default branch, on a detached HEAD, or with an un-countable local-commit count"
+    detection: "layer 2: op self-heal-aborted-dirty (tag head = non_default | uncountable; the slug is a misnomer kept for continuity) or op self-heal-aborted-detached-head (tag head=detached), error level, debounced per workspace"
     alert_route: "Sentry issue stream"
-  - mode: "KB waits on expected holds (remote_ahead, remote_unknown_tip, held_foreign)"
-    detection: "layer 1: Better Stack info lines op kb-sync.push-held with the reason; a persistent cause surfaces elsewhere (op syncPull error on a failed pull, merge_in_progress warning on a conflicted pull)"
+  - mode: "self-heal threw (a git verb failed, a reset --keep refusal, a code regression)"
+    detection: "layer 2: op self-heal-failed (error), extra.errName and extra.frame locate the throw without the message"
+    alert_route: "Sentry issue stream"
+  - mode: "the workspace HEAD has no knowledge-base while the remote holds one (the KB would be deleted on GitHub)"
+    detection: "layer 2: kb-sync.push-held reason:kb_absent (warning, debounced per workspace)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "KB waits on expected holds (remote_ahead, remote_unknown_tip, held_foreign, side_pending: the side PR is open, or its re-check GET failed; side_declined: the Owner closed the side PR for this exact content, D17)"
+    detection: "layer 2 (pino -> Better Stack): info lines op kb-sync.push-held with the reason; a persistent cause surfaces elsewhere (op syncPull error on a failed pull, merge_in_progress warning on a conflicted pull; a side_pending turn whose PR is missing retries the PR create, and a failed create is kb-sync.protected-fallback-failed fallback_reason pr_failed)"
     alert_route: "Better Stack search (no alert; expected outcomes)"
   - mode: "a non-KB commit reaches the remote (the bug)"
     detection: "CI: the real-git battery asserts the bare remote lacks the foreign commit object; no production signal can see a commit that was wrongly accepted, so the guard is pinned at CI time"
@@ -970,7 +1020,7 @@ discoverability_test:
 
 ```yaml
 liveness_signal:
-  what: "layer 2 (pino -> Sentry via reportSilentFallback): op kb-sync.pull-held (feature session-sync), tags reason, for the anomaly reasons (remote_state, fetch_failed, tip_mismatch, shallow_changed, walk_cap, handover_failed, unresolved_merge, merge_conflict, merge_refused); layer 1 (pino -> Better Stack): one info line per session-start pull with reason up_to_date / merged / non_default_branch"
+  what: "layer 2 (pino -> Sentry via reportSilentFallback): op kb-sync.pull-held (feature session-sync), tags reason, for the anomaly reasons (remote_state, fetch_failed, tip_mismatch, shallow_changed, walk_cap, handover_failed, unresolved_merge, merge_conflict, merge_refused); layer 2 (pino -> Better Stack): one info line per session-start pull with reason up_to_date / merged / non_default_branch"
   cadence: "per legacy-runner session start with a connected repo"
   alert_target: "Sentry issue stream for the web-platform project (no page); Better Stack web-platform source"
   configured_in: "apps/web-platform/server/kb-sync-pull.ts"
@@ -984,13 +1034,13 @@ failure_modes:
     detection: "CI: TX1-f (EVIL logs zero requests; legacy-arm control logs the sentinel); no production signal can see a token sent elsewhere"
     alert_route: "CI red on the PR"
   - mode: "pull never merges (fetch, hand-over or guard bug)"
-    detection: "layer 2: kb-sync.pull-held reason fetch_failed / tip_mismatch / shallow_changed / handover_failed spikes; layer 1: Better Stack count of merged + up_to_date drops"
+    detection: "layer 2: kb-sync.pull-held reason fetch_failed / tip_mismatch / shallow_changed / handover_failed spikes; layer 2 (pino -> Better Stack): Better Stack count of merged + up_to_date drops"
     alert_route: "Sentry issue stream"
   - mode: "half-done merge left by an earlier pull blocks every later pull"
     detection: "layer 2: kb-sync.pull-held reason unresolved_merge (warning), debounced per workspace"
     alert_route: "Sentry issue stream; recovery is #12719"
   - mode: "held-files count not written or wrong"
-    detection: "layer 1: Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) per sync; layer 2: writeRepoColsToWorkspace's existing write-to-workspace mirror on a failed UPDATE"
+    detection: "layer 2 (pino -> Better Stack): Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) per sync; layer 2: writeRepoColsToWorkspace's existing write-to-workspace mirror on a failed UPDATE"
     alert_route: "Better Stack search (display-only value, no alert)"
 
 logs:
