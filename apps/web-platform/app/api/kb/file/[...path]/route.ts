@@ -15,6 +15,7 @@ import {
 import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { WORKSPACE_SYNC_PENDING } from "@/lib/kb-workspace-sync-notice";
 
 export async function DELETE(
   request: Request,
@@ -63,15 +64,20 @@ export async function DELETE(
         },
       );
 
-      // Workspace sync (best-effort — file is deleted from GitHub)
+      // Workspace sync (best-effort — file is deleted from GitHub). A designed
+      // hold (`sync.held`, #12600 D16) is a success: the delete landed, so the
+      // route answers its normal body plus `workspace_sync: "pending"` instead
+      // of a 500 that invites a retry of a write that already happened. Every
+      // non_fast_forward outcome is already emitted, tagged and debounced, by the
+      // self-heal, so only a sync_failed is captured here.
       const sync = await syncWorkspace(
         userData.github_installation_id,
         userData.workspace_path,
         logger,
         { userId: user.id, op: "delete" },
       );
-      if (!sync.ok) {
-        Sentry.captureException(sync.error);
+      if (!sync.ok && !sync.held) {
+        if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);
         return NextResponse.json(
           {
             error:
@@ -89,7 +95,10 @@ export async function DELETE(
       );
 
       return NextResponse.json(
-        { commitSha: result?.commit?.sha ?? null },
+        {
+          commitSha: result?.commit?.sha ?? null,
+          ...(sync.ok ? {} : { workspace_sync: WORKSPACE_SYNC_PENDING }),
+        },
         { status: 200 },
       );
     } catch (deleteErr) {
@@ -324,15 +333,17 @@ export async function PATCH(
       "PATCH",
     );
 
-    // 8. Workspace sync
+    // 8. Workspace sync. A designed hold (`sync.held`, #12600 D16) answers the
+    // normal body plus `workspace_sync: "pending"`; a non_fast_forward outcome is
+    // already emitted by the self-heal, so only a sync_failed is captured here.
     const sync = await syncWorkspace(
       userData.github_installation_id,
       userData.workspace_path,
       logger,
       { userId: user.id, op: "rename" },
     );
-    if (!sync.ok) {
-      Sentry.captureException(sync.error);
+    if (!sync.ok && !sync.held) {
+      if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);
       return NextResponse.json(
         {
           error:
@@ -355,7 +366,12 @@ export async function PATCH(
     );
 
     return NextResponse.json(
-      { oldPath: oldFilePath, newPath: newFilePath, commitSha: newCommit.sha },
+      {
+        oldPath: oldFilePath,
+        newPath: newFilePath,
+        commitSha: newCommit.sha,
+        ...(sync.ok ? {} : { workspace_sync: WORKSPACE_SYNC_PENDING }),
+      },
       { status: 200 },
     );
   } catch (error) {

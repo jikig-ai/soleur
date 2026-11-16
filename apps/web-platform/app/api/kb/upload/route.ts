@@ -14,6 +14,7 @@ import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { WORKSPACE_SYNC_PENDING } from "@/lib/kb-workspace-sync-notice";
 import {
   KB_MAX_FILE_SIZE,
   KB_UPLOAD_EXTENSIONS,
@@ -324,14 +325,17 @@ export async function POST(request: Request) {
     // through the hardened `syncWorkspace` so a diverged clone classifies as
     // non_fast_forward and self-heals (Closes #2244 — the inline pull here
     // carried the identical latent non-fast-forward bug). `syncWorkspace`
-    // already logs + mirrors to Sentry on failure.
+    // already logs + mirrors to Sentry on failure. A designed hold
+    // (`sync.held`, #12600 D16) is a success: the file is on GitHub, so the
+    // route keeps going (attribution included) and answers its normal body plus
+    // `workspace_sync: "pending"` rather than a 500 that invites a duplicate.
     const sync = await syncWorkspace(
       userData.github_installation_id,
       userData.workspace_path,
       logger,
       { userId, op: "upload" },
     );
-    if (!sync.ok) {
+    if (!sync.ok && !sync.held) {
       return NextResponse.json(
         {
           error: "File committed to GitHub but workspace sync failed. Try refreshing.",
@@ -381,6 +385,7 @@ export async function POST(request: Request) {
         path: filePath,
         sha: result!.content.sha,
         commitSha: result!.commit.sha,
+        ...(sync.ok ? {} : { workspace_sync: WORKSPACE_SYNC_PENDING }),
       },
       { status: 201 },
     );

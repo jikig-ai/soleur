@@ -94,6 +94,13 @@ export const C4_PROMPT_ADDENDUM =
   "any other folder you cannot re-render it: tell the " +
   "user to re-run the diagram export for that folder in their repository.";
 
+/**
+ * #12600 (CTO ruling D16): what the model is told when the commit landed on GitHub but the workspace was in a designed
+ * hold (`workspaceSync: "pending"`). Retrying would commit the same content again, so the text says not to.
+ */
+export const C4_WORKSPACE_SYNC_PENDING_TEXT =
+  "Committed to GitHub. The workspace copy was not updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub.";
+
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
   isError?: true;
@@ -162,6 +169,17 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
             { error: result.error, code: result.code, status: result.status },
             true,
           );
+        }
+        // #12600 D16: the workspace copy did not change, so there is nothing for an
+        // open workspace to reload and no `rerendered` verdict to relay.
+        if (result.workspaceSync === "pending") {
+          return textResponse({
+            ok: true,
+            relativePath: args.relativePath,
+            commitSha: result.commitSha,
+            workspaceSync: result.workspaceSync,
+            message: C4_WORKSPACE_SYNC_PENDING_TEXT,
+          });
         }
         // #8739 — notify the open workspace on `.c4` writes. `.md` view-embed
         // saves never re-render, so reporting them `rerendered:true` would let

@@ -284,3 +284,31 @@ describe("FileTree rename UI", () => {
     });
   });
 });
+
+describe("FileTree rename: a workspace hold after the GitHub rename (#12600 D16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRefreshTree.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("workspace_sync pending -> a non-error status notice with the shared copy", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ oldPath: "a", newPath: "b", commitSha: "abc123", workspace_sync: "pending" }),
+    } as unknown as Response);
+    setupKbMock(makeTree([overviewDir]));
+    render(<FileTree />);
+    const fileItem = screen.getByText("screenshot.png").closest("li")!;
+    fireEvent.click(fileItem.querySelector('[aria-label*="ename"]') as HTMLElement);
+    const input = fileItem.querySelector("input[type='text']") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "renamed" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toContain("Renamed on GitHub. Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.");
+    expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
+  });
+});

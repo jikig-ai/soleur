@@ -251,3 +251,47 @@ describe("FileTree delete UI", () => {
     });
   });
 });
+
+describe("FileTree delete: a workspace hold after the GitHub delete (#12600 D16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRefreshTree.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("workspace_sync pending -> a non-error status notice with the shared copy, dismissible; no error banner", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ commitSha: "abc123", workspace_sync: "pending" }),
+    } as unknown as Response);
+    setupKbMock(makeTree([overviewDir]));
+    render(<FileTree />);
+    const fileItem = screen.getByText("screenshot.png").closest("li")!;
+    fireEvent.click(fileItem.querySelector('[aria-label*="elete"]') as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toContain("Deleted on GitHub. Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.");
+    expect(notice.className).not.toMatch(/red/);
+    expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /dismiss notice/i }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a plain success shows no notice", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ commitSha: "abc123" }),
+    } as unknown as Response);
+    setupKbMock(makeTree([overviewDir]));
+    render(<FileTree />);
+    const fileItem = screen.getByText("screenshot.png").closest("li")!;
+    fireEvent.click(fileItem.querySelector('[aria-label*="elete"]') as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    await waitFor(() => expect(mockRefreshTree).toHaveBeenCalled());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});

@@ -303,3 +303,16 @@ describe("FileTree upload", () => {
     });
   });
 });
+
+describe("FileTree upload: a workspace hold after the GitHub commit (#12600 D16)", () => {
+  it("201 + workspace_sync pending -> a non-error status notice with the shared copy, after the tree refresh", async () => {
+    mockXhr(201, { path: "assets/photo.png", sha: "abc", commitSha: "def", workspace_sync: "pending" });
+    renderFileTree();
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["image-data"], "photo.png", { type: "image/png" })] } });
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toContain("Saved to GitHub. Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.");
+    expect(mockRefreshTree).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
+  });
+});

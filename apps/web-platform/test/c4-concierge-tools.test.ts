@@ -288,3 +288,21 @@ describe("buildC4ConciergeTools", () => {
     expect(src).not.toContain("FLAG_C4_EDIT");
   });
 });
+
+describe("edit_c4_diagram: a designed workspace hold (#12600 D16)", () => {
+  it("workspaceSync pending -> the exact do-not-retry text, not an error, no `rerendered`, no diagram-saved notify", async () => {
+    mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending" });
+    const onDiagramSaved = vi.fn();
+    const res = await handlerWith({ onDiagramSaved })({ relativePath: "engineering/architecture/diagrams/model.c4", content: "x" });
+    expect(res.isError).toBeUndefined();
+    const payload = JSON.parse(res.content[0].text) as Record<string, unknown>;
+    expect(payload).toEqual({
+      ok: true,
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      commitSha: "abc123",
+      workspaceSync: "pending",
+      message: "Committed to GitHub. The workspace copy was not updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub.",
+    });
+    expect(onDiagramSaved).not.toHaveBeenCalled();
+  });
+});

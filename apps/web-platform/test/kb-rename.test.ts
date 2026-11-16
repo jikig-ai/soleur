@@ -74,6 +74,12 @@ vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithAuth,
 }));
 
+// #12600 (CTO ruling D16): pass-through spy on the real syncWorkspace, so a row can script a designed hold (`held`).
+vi.mock("@/server/workspace-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/workspace-sync")>();
+  return { ...actual, syncWorkspace: vi.fn(actual.syncWorkspace) };
+});
+
 vi.mock("@/server/sandbox", () => ({
   isPathInWorkspace: mockIsPathInWorkspace,
 }));
@@ -97,6 +103,10 @@ vi.mock("node:fs", () => ({
 
 import { PATCH } from "@/app/api/kb/file/[...path]/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
+import { syncWorkspace } from "@/server/workspace-sync";
+import * as Sentry from "@sentry/nextjs";
+const HELD = { ok: false as const, error: new Error("held"), errorClass: "non_fast_forward" as const, held: "dirty_tracked" as const };
+const NFF_ABORT = { ok: false as const, error: new Error("aborted"), errorClass: "non_fast_forward" as const };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -661,5 +671,49 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       expect.any(Number),
       expect.objectContaining({ timeout: 30_000 }),
     );
+  });
+});
+
+describe("PATCH /api/kb/file/[...path]: a designed workspace hold after the GitHub rename (D16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function scriptRename(): void {
+    setupFullMocks();
+    mockGithubApiGet
+      .mockResolvedValueOnce({ sha: "blobsha123", name: "test.png", path: "knowledge-base/overview/test.png", type: "file" })
+      .mockRejectedValueOnce(
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
+      )
+      .mockResolvedValueOnce({ default_branch: "main" })
+      .mockResolvedValueOnce({ object: { sha: "commitsha000", type: "commit" } })
+      .mockResolvedValueOnce({ sha: "commitsha000", tree: { sha: "treesha000" } });
+  }
+
+  test("held -> 200 with the normal body plus workspace_sync pending, and no route-level Sentry capture", async () => {
+    scriptRename();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce(HELD);
+    const req = createRequest(["overview", "test.png"], { newName: "renamed.png" });
+    const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({
+      oldPath: "knowledge-base/overview/test.png",
+      newPath: "knowledge-base/overview/renamed.png",
+      workspace_sync: "pending",
+    }));
+    expect(typeof body.commitSha).toBe("string");
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  test("a non_fast_forward abort with no hold stays 500 SYNC_FAILED, without a route-level capture", async () => {
+    scriptRename();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce(NFF_ABORT);
+    const req = createRequest(["overview", "test.png"], { newName: "renamed.png" });
+    const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe("SYNC_FAILED");
+    expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 });
