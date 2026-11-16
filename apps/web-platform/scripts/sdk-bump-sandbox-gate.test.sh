@@ -18,8 +18,30 @@ if [[ ! -x "$GATE" ]]; then
   exit 1
 fi
 
-T="$(mktemp -d)"
+export TMPDIR="${TMPDIR:-/var/tmp}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=/dev/null
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+T="$(mktemp -d -t sdkgate.XXXXXXXX)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
+assert_fixture_dir "$T"
 trap 'rm -rf "$T"' EXIT
+# Fixture env (author/committer identity, no developer config) in THIS shell: the mk_* helpers run in command substitutions, so
+# exports made there never reach the parent's later `git commit` calls, which fail on a runner with no global identity.
+git_fixture_env "$T" || { echo "harness: git_fixture_env refused $T" >&2; exit 2; }
 
 PASS=0
 FAIL=0
@@ -299,6 +321,106 @@ if grep -q 'SOLEUR_T15_STDERR_MARKER' "$T/out.txt"; then
   pass "T15 verify stderr reaches the gate output"
 else
   fail "T15 verify stderr was swallowed (a 2>/dev/null on the verdict capture?)"
+fi
+
+# ===========================================================================
+# GIT ARM of the capture-trigger read (D7 remainder). Every row above injects
+# SDK_GATE_CHANGED_FILES, so the `git diff` fallback was never executed. These rows run the gate
+# inside a scratch repo with the override UNSET (or empty, for the precedence row) and an
+# argv_drift verdict: a TRIGGERED gate blocks (non-zero, cites drift), a DORMANT one passes.
+# ===========================================================================
+CANARY_MJS="apps/web-platform/scripts/sandbox-canary.mjs"
+
+# mk_git_fixture <name> — a repo whose `base` branch holds a gated file (the canary script) and an
+# unrelated doc; HEAD starts equal to base. Echoes the repo path.
+mk_git_fixture() {
+  local d="$T/$1"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/apps/web-platform/scripts" "$d/docs" || return 1
+  git_fixture_env "$d" || return 1
+  printf 'canary\n' > "$d/$CANARY_MJS" || return 1
+  printf 'doc\n' > "$d/docs/readme.md" || return 1
+  git -C "$d" init -q -b main || return 1
+  git -C "$d" add -A >/dev/null 2>&1 || return 1
+  git -C "$d" commit -q -m base || return 1
+  git -C "$d" branch base || return 1
+  printf '%s' "$d"
+}
+
+# run_git_gate <repo> <base-ref> [override-mode: unset|empty] — runs the gate with cwd = the scratch repo.
+run_git_gate() {
+  local d="$1" base="$2" mode="${3:-unset}"
+  assert_fixture_dir "$d"
+  write_pkglock "$T/head-pkg.json" "0.3.197" "2.1.197"
+  write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
+  printf '%s\n' '{"verdict":"canary_infra_error","reason":"argv_drift"}' > "$T/verdict.json"
+  local over=()
+  [[ "$mode" == "empty" ]] && over=(SDK_GATE_CHANGED_FILES="")
+  (
+    cd "$d" || exit 99
+    env ANTHROPIC_API_KEY="sk-test" \
+      SANDBOX_CANARY_GATE_ENABLED=1 \
+      SDK_GATE_PKG_LOCK="$T/head-pkg.json" \
+      SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
+      SDK_GATE_BASE_REF="$base" \
+      SDK_GATE_ACK_TEXT="" \
+      SDK_GATE_VERIFY_CMD="cat '$T/verdict.json'" \
+      "${over[@]}" \
+      bash "$GATE"
+  ) >"$T/out.txt" 2>&1
+}
+
+echo "G1: git arm, unresolvable base ref → capture gate TRIGGERED (a git failure is not 'no relevant changes')"
+GD="$(mk_git_fixture gitfail)"
+assert_fixture_dir "$GD"
+if run_git_gate "$GD" "no-such-ref-xyz"; then
+  fail "G1 expected non-zero (triggered by the git failure), got 0 — a failed diff read as nothing changed"
+else
+  if grep -q "argv_drift\|STALE" "$T/out.txt"; then pass "G1 a failing git diff triggers the capture gate"; else fail "G1 wrong message: $(tail -1 "$T/out.txt")"; fi
+fi
+
+echo "G2: git arm, a gated file RENAMED away → capture gate TRIGGERED (old path seen)"
+GD="$(mk_git_fixture renameaway)"
+assert_fixture_dir "$GD"
+git -C "$GD" mv "$GD/$CANARY_MJS" "$GD/docs/moved.mjs"
+git -C "$GD" commit -q -m "move the canary script out of its gated path"
+if run_git_gate "$GD" base; then
+  fail "G2 expected non-zero (rename-away must trigger), got 0"
+else
+  if grep -q "argv_drift\|STALE" "$T/out.txt"; then pass "G2 rename away from a gated file triggers the gate"; else fail "G2 wrong message: $(tail -1 "$T/out.txt")"; fi
+fi
+
+echo "G3: git arm, a gated file edited → TRIGGERED (control for the git arm)"
+GD="$(mk_git_fixture editgated)"
+assert_fixture_dir "$GD"
+printf 'canary v2\n' > "$GD/$CANARY_MJS"
+git -C "$GD" commit -q -am "edit the canary script"
+if run_git_gate "$GD" base; then
+  fail "G3 expected non-zero (gated edit must trigger), got 0"
+else
+  if grep -q "argv_drift\|STALE" "$T/out.txt"; then pass "G3 a gated edit triggers the gate"; else fail "G3 wrong message: $(tail -1 "$T/out.txt")"; fi
+fi
+
+echo "G4: git arm, only an unrelated file changed → DORMANT → pass"
+GD="$(mk_git_fixture unrelated)"
+assert_fixture_dir "$GD"
+printf 'doc v2\n' > "$GD/docs/readme.md"
+git -C "$GD" commit -q -am "doc edit"
+if run_git_gate "$GD" base; then
+  pass "G4 dormant on an unrelated change"
+else
+  fail "G4 expected exit 0, got $? ($(tail -1 "$T/out.txt"))"
+fi
+
+echo "G5: an EMPTY SDK_GATE_CHANGED_FILES wins over a git arm that would trigger (unset-vs-empty precedence)"
+GD="$(mk_git_fixture emptyoverride)"
+assert_fixture_dir "$GD"
+printf 'canary v2\n' > "$GD/$CANARY_MJS"
+git -C "$GD" commit -q -am "edit the canary script"
+if run_git_gate "$GD" base empty; then
+  pass "G5 the empty override suppresses the git arm"
+else
+  fail "G5 expected exit 0 (empty override = no relevant changes), got $? ($(tail -1 "$T/out.txt"))"
 fi
 
 echo ""
