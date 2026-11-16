@@ -6417,12 +6417,12 @@ describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B hand
   const ADDR = "betteruptime_team_member.ops";
   const files = listInfraTfFiles();
 
-  /** Top-level blocks whose opener matches `opener` (anchored at a line start), with their
-   *  brace-matched bodies. Input must already be comment-stripped. */
+  /** Top-level blocks whose opener matches `opener` (a /gm literal anchored at a line start),
+   *  with their brace-matched bodies. Input must already be comment-stripped. */
   function hclBlocks(text: string, opener: RegExp): { head: string; body: string }[] {
+    if (!opener.global || !opener.multiline) throw new Error(`hclBlocks needs a /gm opener: ${opener}`);
     const out: { head: string; body: string }[] = [];
-    const re = new RegExp(opener.source, "gm");
-    for (const m of text.matchAll(re)) {
+    for (const m of text.matchAll(opener)) {
       const open = (m.index ?? 0) + m[0].length - 1; // the matched `{`
       let depth = 0;
       let k = open;
@@ -6444,11 +6444,11 @@ describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B hand
     const uptime = strippedTf().find((t) => t.file.endsWith("/uptime-alerts.tf"));
     expect(uptime).toBeDefined(); // non-vacuity: the resource scan reads this root's alert file
     expect(
-      hclBlocks(uptime!.text, /^[ \t]*resource[ \t]+"betteruptime_heartbeat"[ \t]+"[^"]+"[ \t]*\{/).length,
+      hclBlocks(uptime!.text, /^[ \t]*resource[ \t]+"betteruptime_heartbeat"[ \t]+"[^"]+"[ \t]*\{/gm).length,
     ).toBeGreaterThan(0);
     const offenders: string[] = [];
     for (const { file, text } of strippedTf()) {
-      for (const b of hclBlocks(text, /^[ \t]*resource[ \t]+"betteruptime_team_member"[ \t]+"([^"]+)"[ \t]*\{/)) {
+      for (const b of hclBlocks(text, /^[ \t]*resource[ \t]+"betteruptime_team_member"[ \t]+"([^"]+)"[ \t]*\{/gm)) {
         const label = /"betteruptime_team_member"[ \t]+"([^"]+)"/.exec(b.head)?.[1];
         if (label === "ops" || b.body.includes("ops@jikigai.com")) offenders.push(`${file}: ${b.head.trim()}`);
       }
@@ -6458,7 +6458,7 @@ describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B hand
 
   test("(b) a top-level removed block forgets the address", () => {
     const forgets = strippedTf().flatMap(({ text }) =>
-      hclBlocks(text, /^removed[ \t]*\{/).filter((b) =>
+      hclBlocks(text, /^removed[ \t]*\{/gm).filter((b) =>
         /^[ \t]*from[ \t]*=[ \t]*betteruptime_team_member\.ops[ \t]*$/m.test(b.body),
       ),
     );
