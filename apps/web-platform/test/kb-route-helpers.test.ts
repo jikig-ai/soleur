@@ -685,7 +685,7 @@ describe("syncWorkspace", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
-    expect(calls).toContainEqual(["fetch", "origin", "main"]);
+    expect(calls).toContainEqual(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
     expect(calls.some((a) => a[0] === "reset")).toBe(false);
     expect(mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
       null,
@@ -836,7 +836,7 @@ describe("syncWorkspace", () => {
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
     // fetch origin <default> and reset --keep refs/remotes/origin/<default> must be
     // present, resolved (not literal "main" passed by us — derived from symbolic-ref).
-    expect(calls).toContainEqual(["fetch", "origin", "main"]);
+    expect(calls).toContainEqual(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
     expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/main"]);
     // rev-list guard ran before reset.
     const verbs = calls.map((a) => a[0]);
