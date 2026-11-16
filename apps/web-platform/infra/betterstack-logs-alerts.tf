@@ -2467,3 +2467,103 @@ resource "logtail_exploration_alert" "relay_peer_probe_failed" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #10538: a serving dedicated Inngest host that owns no functions (registry-empty alert) ───────
+# Pages when an hourly SOLEUR_INNGEST_SERVER_PROBE row from a SERVING dedicated host (server_active=active,
+# http_code=200) past the uptime floor (uptime_s > 900: the first probe after a replace is still syncing)
+# reports a registry_fns that is not a positive integer: the public sdk_url poll (#10538) may be failing.
+# Shape from inngest_luks_wrong_volume_sql (emitter anchor, marker at position 1, phone-home leg B on
+# `detail`); every needle is space-delimited on BOTH sides (`detail` starts with a field, hence `(?:^| )`),
+# and the registry test is NEGATED so a missing/renamed/0/__UNREADABLE__ field fires. No volume reference
+# (ADR-282) and no `detail = ''` disjunct (ruling F1: not-serving rows are the probe heartbeat's).
+# LIVE 2026-11-13 17:30 UTC, SELECT count() only, 24 h hot remote() UNION s3Cluster archive: (a) predicate
+# 0; (b) negation dropped 24 (registry_fns=77); (c) emitter+marker+' host_role=dedicated ' 24. Leg B, 7 d:
+# 1 row (not serving), 0 un-negated matches; the `(?:^| )` extract/match forms were checked on constants.
+# Residual: a STALE non-zero registry is invisible (#12742). Runbook: inngest-server.md#registry-empty-alert-10538.
+# Pinned by apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh.
+locals {
+  inngest_registry_empty_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
+        AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+        AND position(JSONExtractString(raw, 'message'), ' host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' server_active=active ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' http_code=200 ') > 0
+        AND toUInt64OrZero(extract(JSONExtractString(raw, 'message'), ' uptime_s=([0-9]+) ')) > 900
+        AND NOT match(JSONExtractString(raw, 'message'), ' registry_fns=[1-9][0-9]* ')
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )host_role=dedicated ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )server_active=active ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )http_code=200 ')
+          AND toUInt64OrZero(extract(JSONExtractString(raw, 'detail'), '(?:^| )uptime_s=([0-9]+) ')) > 900
+          AND NOT match(JSONExtractString(raw, 'detail'), '(?:^| )registry_fns=[1-9][0-9]* ')
+        )
+      )
+    GROUP BY time
+  SQL
+
+  inngest_registry_empty_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#registry-empty-alert-10538"
+}
+
+resource "logtail_exploration" "inngest_registry_empty" {
+  name      = "soleur-inngest-registry-empty-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_registry_empty_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_registry_empty" {
+  exploration_id = logtail_exploration.inngest_registry_empty.id
+  name           = "soleur-inngest-registry-empty-prd"
+
+  # The probe emits hourly; one serving row past the uptime floor with no positive registry pages
+  # within ~5 min. 900 s is the ceiling for an alert created since 2026-10-01; the row stays in the
+  # window for three checks. recovery_period 7200 covers two emissions, so one good row does not
+  # close an incident the next row would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 7200
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A serving dedicated Inngest host (server_active=active, http_code=200, uptime above 900 s) reports registry_fns that is not a positive integer: it owns no functions or cannot read its registry, so no step and no cron is planned. After an inngest-host-replace the public sdk_url poll (https://app.soleur.ai/api/inngest, #10538) may be failing. If Vector was down, the row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down): decode its .detail. This alert does NOT detect a stale non-zero registry (#12742 adds that field). Runbook: ${local.inngest_registry_empty_runbook_url}"
+  metadata = {
+    runbook = local.inngest_registry_empty_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

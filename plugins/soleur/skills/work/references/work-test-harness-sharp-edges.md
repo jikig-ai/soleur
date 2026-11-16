@@ -93,6 +93,8 @@ already carries — see
 
 - **A suite run is evidence for the tree it ran on — re-run the touched suites after the LAST edit of the commit, comment-only edits included.** A comment can trip a strict substring pin: a test-all.sh comment naming an array that contains a refused prefix turned the lint's unit suite red at the pushed head, after the suite had run green one edit earlier. **Why:** #12348/PR #12561 — all 11 escalation seats found it; see `knowledge-base/project/learnings/2026-11-11-each-fix-round-found-the-next-sibling-until-the-test-stated-its-residuals.md`.
 
+- **A mutation copy must assert the mutant's own failure line, not a non-zero rc — and must carry every file the original resolves.** A scratch copy that resolves `REPO` from its own location loses any lib extracted after it was written; it then fails for the missing file and stays green on rc alone. Rewrite `REPO` in the copy, pass each lib path, and grep for the specific line (`[FATAL] assertion floor`) plus the absence of unrelated `[FAIL]` rows. **Why:** #10479/PR #12737 — `mutate_floor_red` measured nothing after `logtail-pair-census.awk` was extracted. See `knowledge-base/project/learnings/2026-11-15-a-gate-on-one-boot-path-and-a-stripper-that-ate-live-claims.md`.
+
 ## `0 issues in 0 files` is a skipped lint, not a clean one
 
 `markdownlint-cli2` never reads a path matched by `.markdownlintignore` (for

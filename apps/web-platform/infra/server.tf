@@ -429,8 +429,9 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
-    # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
+    # The predicate is the keyed `tunnel_connector` field (#9421 Part 2a, ADR-327), validated
+    # exactly-one in variables.tf so a second connector cannot be declared; web-2 holds it. It
+    # replaced an `each.key == "web-2"` literal, and the reasoning below still holds. At the time:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
     # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
@@ -462,7 +463,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-2"
+    web_tunnel_connector = each.value.tunnel_connector
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
@@ -543,10 +544,9 @@ resource "hcloud_server" "web" {
     #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
     #   - Worst case before the seed fatal: ~150 s NIC wait + ~190 s zot login (3 x 60 s + 2 x 5 s),
     #     or ~150 s + a fast login + 180 s pull when zot authenticates but hangs (a timed-out
-    #     attempt stops the retries). soleur-host-bootstrap.sh's
-    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
-    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
-    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #     attempt stops the retries). soleur-host-bootstrap.sh's SOLEUR_FRESH_BOOT_WINDOW_SECONDS
+    #     (1140 since ADR-326's kernel-settle reboot) is derived there, not here.
+    #     fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
     #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
     #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
     zot_pull_user  = local.zot_pull_user

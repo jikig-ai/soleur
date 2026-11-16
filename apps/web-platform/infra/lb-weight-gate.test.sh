@@ -43,6 +43,7 @@ declare -A DEF
 reset_def() {
   DEF=(
     [SOLEUR_WEB2_SERVING_WEIGHT]='1'
+    [SOLEUR_GATED_HOST]='web-2'
     [SOLEUR_SERVING_ROTATION]='web-1,web-2'
     [SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.11'
     [SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11"}'
@@ -50,6 +51,7 @@ reset_def() {
     [GIT_DATA_LUKS_CUTOVER_AT]="$ELAPSED_CUTOVER"
     [GIT_DATA_LUKS_SOAK_DAYS]='3'
     [WORKSPACES_LUKS_CUTOVER_AT]="$ELAPSED_CUTOVER"
+    [WORKSPACES_LUKS_MARKER_HOST]='web-2'
     [WORKSPACES_LUKS_SOAK_DAYS]='3'
   )
 }
@@ -126,6 +128,43 @@ for badw in "0.0" "0x0" "false" "abc" "1.5" "1e0" "+"; do
 done
 
 # 0e. FAIL-CLOSED: negative weight → FAIL.
+# #9421 Part 2a: the gate names no host; the gated key is an input, fail-closed when absent or malformed.
+reset_def; unset 'DEF[SOLEUR_GATED_HOST]'; run_with_def
+assert_rejects_with "absent SOLEUR_GATED_HOST" "TOP_gated_host_absent"
+reset_def; DEF[SOLEUR_GATED_HOST]=''; run_with_def
+assert_rejects_with "empty SOLEUR_GATED_HOST" "TOP_gated_host_absent"
+for badh in 'Web-2' 'web 2' 'web-2;x' '-web' '.'; do
+  reset_def; DEF[SOLEUR_GATED_HOST]="$badh"; run_with_def
+  assert_rejects_with "malformed SOLEUR_GATED_HOST '$badh'" "TOP_gated_host_malformed"
+done
+# Third key: web-3 at weight 0 and out of rotation is the standby branch, whatever web-2 is doing.
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; run_with_def
+assert_zero "third key: web-3 at weight 0, not in rotation -> standby pass"
+assert_stdout_contains "third key: standby branch prints SHAPE-ONLY" "SHAPE-ONLY"
+# web-3 in rotation at weight 0 is pooling -> Conditions A+B, and the roster lacks web-3 -> refused.
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-2,web-3'; run_with_def
+assert_rejects_with "third key: web-3 in rotation, absent from roster -> refused" "A_web2_not_in_roster"
+# web-3 pooled with a roster + allowlist naming it -> the authorized-flip pass, keyed on web-3 not web-2.
+# The workspaces LUKS marker is unkeyed and attests only its writer's host (web-2): web-3 cannot inherit it.
+R13='{"web-1":"10.0.1.10","web-3":"10.0.1.12"}'
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+assert_rejects_with "third key: web-3 pooled on web-2's LUKS marker -> refused" "B_workspaces_luks_marker_other_host"
+reset_def; unset 'DEF[WORKSPACES_LUKS_MARKER_HOST]'; run_with_def
+assert_rejects_with "marker host unset (marker present) -> refused, never assumed" "B_workspaces_luks_marker_other_host"
+# Same web-3 config with a marker that attests web-3 -> the authorized-flip pass, keyed on web-3 not web-2.
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+assert_zero "third key: web-3 pooled, in roster, addr allowlisted, marker attests web-3 -> authorized"
+assert_stdout_contains "third key: authorized branch prints the flip marker" "requires_runtime_bind_probe=true"
+# web-3 pooled, roster has it but its address is not allowlisted (web-2's is) -> refused on web-3's address.
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; run_with_def
+assert_rejects_with "third key: web-3 address not in the allowlist -> refused" "A_web2_addr_not_in_allowlist"
+# The gate's code lines name no host key (comments may cite history).
+TOTAL=$((TOTAL + 1))
+if [[ "$(grep -vE '^[[:space:]]*#' "$GATE" | grep -cE 'web-[0-9]' || true)" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no code line of lb-weight-gate.sh names a web-N key"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: a code line of lb-weight-gate.sh names a web-N key literally"
+fi
 reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='-1'; run_with_def
 assert_rejects_with "negative weight" "TOP_web2_weight_negative"
 
@@ -312,8 +351,13 @@ assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (li
 #       private IPs (deploy./ssh. → web-1's 10.0.1.10, registry. → 10.0.1.30) — it puts no
 #       app.soleur.ai weight on web-2. The predicate's pin matters the other way now: exactly
 #       ONE host registers (ADR-114 I1), and it must be the replaceable one.
-assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2\"" server.tf \
-  'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
+# #9421 Part 2a: the predicate is the keyed field (validated exactly-one in variables.tf), and web-2 holds it.
+assert_grep    "C.2: server.tf tunnel connector predicate is the keyed tunnel_connector field" server.tf \
+  '^[[:space:]]*web_tunnel_connector[[:space:]]*=[[:space:]]*each\.value\.tunnel_connector[[:space:]]*$'
+assert_grep    "C.2b: var.web_hosts gives tunnel_connector = true to web-2" variables.tf \
+  '^[[:space:]]*"web-2"[[:space:]]*=[[:space:]]*\{.*tunnel_connector[[:space:]]*=[[:space:]]*true'
+assert_grep    "C.2c: variables.tf validates exactly one tunnel_connector host" variables.tf \
+  'length\(\[for h in values\(var\.web_hosts\) : h if h\.tunnel_connector\]\)[[:space:]]*==[[:space:]]*1'
 
 # C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence;
 #       pairing/anchoring hardened PR #11766). With web-2 pooled as a GATED member
@@ -400,6 +444,45 @@ c3_scan_file() {
   ' "$f")
   printf '%s %s %s\n' "$bad" "$blocks" "$stray"
 }
+# #9421 Part 2a: the pool's origins are ONE dynamic block over var.web_hosts at local.web_lb_weights, where
+# web-2's gated weight is min(declared lb_weight, var.web2_lb_weight) — so the drain still lands on web-2 and a
+# gate can only lower a weight. c3_dynamic_ok pins that shape; C.3-dyn below mutation-proves it.
+c3_dynamic_ok() { # c3_dynamic_ok <cloudflare-lb.tf> -> 0 iff the dynamic origins + min-gate shape holds
+  local f="$1" nc
+  nc="$(grep -vE '^[[:space:]]*#' "$f" || true)"  # all-comment file: empty, and the checks below refuse
+  [[ "$(grep -cE '^[[:space:]]*dynamic[[:space:]]+"origins"[[:space:]]*\{' <<<"$nc")" -eq 1 ]] || return 1
+  [[ "$(grep -cE '^[[:space:]]*origins[[:space:]]*\{' <<<"$nc")" -eq 0 ]] || return 1
+  grep -qE '^[[:space:]]*for_each[[:space:]]*=[[:space:]]*var\.web_hosts[[:space:]]*$' <<<"$nc" || return 1
+  grep -qE '^[[:space:]]*weight[[:space:]]*=[[:space:]]*local\.web_lb_weights\[origins\.key\][[:space:]]*$' <<<"$nc" || return 1
+  grep -qE '^[[:space:]]*web_lb_gate[[:space:]]*=[[:space:]]*\{[[:space:]]*"web-2"[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*\}[[:space:]]*$' <<<"$nc" || return 1
+  grep -qF 'k => min(h.lb_weight, lookup(local.web_lb_gate, k, h.lb_weight))' <<<"$nc" || return 1
+  return 0
+}
+C3D_TMP="$(mktemp -d)"
+c3d() { # c3d <label> <from> <to> -> mutate a copy; must land and go red
+  python3 - "$SCRIPT_DIR/cloudflare-lb.tf" "$C3D_TMP/m.tf" "$2" "$3" <<'PYM'
+import sys
+src, dst, a, b = sys.argv[1:5]
+s = open(src).read()
+open(dst, "w").write(s.replace(a, b, 1) if a in s else s)
+PYM
+  TOTAL=$((TOTAL + 1))
+  if cmp -s "$SCRIPT_DIR/cloudflare-lb.tf" "$C3D_TMP/m.tf"; then FAIL=$((FAIL + 1)); echo "  FAIL: $1: mutation did not land"
+  elif c3_dynamic_ok "$C3D_TMP/m.tf"; then FAIL=$((FAIL + 1)); echo "  FAIL: $1 stayed GREEN"
+  else PASS=$((PASS + 1)); echo "  PASS: $1 -> RED"; fi
+}
+TOTAL=$((TOTAL + 1))
+if c3_dynamic_ok "$SCRIPT_DIR/cloudflare-lb.tf"; then PASS=$((PASS + 1)); echo "  PASS: C.3-dyn control: dynamic origins over var.web_hosts at the min-gated weight"; else FAIL=$((FAIL + 1)); echo "  FAIL: C.3-dyn control: the dynamic origins / min-gate shape is not intact"; fi
+c3d "C.3-dyn mutant: the gate raises instead of lowering (max)" 'min(h.lb_weight, lookup' 'max(h.lb_weight, lookup'
+c3d "C.3-dyn mutant: the gate is bypassed (declared weight only)" 'k => min(h.lb_weight, lookup(local.web_lb_gate, k, h.lb_weight))' 'k => h.lb_weight'
+c3d "C.3-dyn mutant: the drain var is detached from web-2" '"web-2" = var.web2_lb_weight' '"web-3" = var.web2_lb_weight'
+c3d "C.3-dyn mutant: origins weight hardcoded to 1" 'weight  = local.web_lb_weights[origins.key]' 'weight  = 1'
+c3d "C.3-dyn mutant: a literal origins block is re-added" '  dynamic "origins" {' '  origins {
+    name = "x"
+  }
+  dynamic "origins" {'
+rm -rf "$C3D_TMP"
+
 web2_bad_blocks=0; web2_blocks=0; web2_stray=0; tf_seen=0
 for f in "$SCRIPT_DIR"/*.tf; do
   [[ -f "$f" ]] || continue
@@ -413,8 +496,8 @@ done
 TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no .tf files found under $SCRIPT_DIR (fail-closed — dir moved?)"
-elif [[ "$web2_blocks" -lt 1 ]]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 — the web-2 member is missing (or a resource label was renamed; assertions must not vacuously pass)"
+elif [[ "$web2_blocks" -lt 1 ]] && ! c3_dynamic_ok "$SCRIPT_DIR/cloudflare-lb.tf"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 and the dynamic origins shape (#9421) is not intact — the web-2 member is missing (assertions must not vacuously pass)"
 elif [[ "$web2_bad_blocks" -gt 0 || "$web2_stray" -gt 0 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_bad_blocks web-2 origins block(s) without 'weight = 0' or exactly var.web2_lb_weight + $web2_stray stray web-2 reference(s) outside origins blocks — web-2's weight must stay the literal 0 or the gated variable"
 else
@@ -597,15 +680,18 @@ c4_assert "C.4-V3: web2_lb_weight has a validation admitting ONLY 0 or 1" \
   "$(grep -qE 'validation[[:space:]]*\{' <<<"$V_BLOCK" && grep -qE 'condition[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*0[[:space:]]*\|\|[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf files" \
   "$([[ "$(grep -hE '^variable[[:space:]]+"web2_lb_weight"' "$SCRIPT_DIR"/*.tf | wc -l)" -eq 1 ]] && echo 1 || echo 0)"
-c4_assert "C.4-V5: cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight" \
-  "$(grep -qE '^[[:space:]]*weight[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*$' "$SCRIPT_DIR/cloudflare-lb.tf" && echo 1 || echo 0)"
-c4_assert "C.4-V6: web-1's origin weight stays the literal 1 (no variable on the serving member)" \
-  "$(W1_LINE="$(awk '/name[[:space:]]*=[[:space:]]*"web-1"/ {on=1} on && /weight/ {print; found=1} found {exit}' "$SCRIPT_DIR/cloudflare-lb.tf")"; grep -qE 'weight[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$W1_LINE" && echo 1 || echo 0)"
+c4_assert "C.4-V5: cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight (the web_lb_gate local, #9421)" \
+  "$(grep -qE '^[[:space:]]*web_lb_gate[[:space:]]*=[[:space:]]*\{[[:space:]]*"web-2"[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*\}[[:space:]]*$' "$SCRIPT_DIR/cloudflare-lb.tf" && echo 1 || echo 0)"
+c4_assert "C.4-V6: web-1's declared lb_weight stays the literal 1 and no gate variable names web-1" \
+  "$(grep -qE '^[[:space:]]*"web-1"[[:space:]]*=[[:space:]]*\{.*lb_weight[[:space:]]*=[[:space:]]*1[,[:space:]]' "$SCRIPT_DIR/variables.tf" && ! grep -qE 'web_lb_gate[[:space:]]*=.*"web-1"' "$SCRIPT_DIR/cloudflare-lb.tf" && echo 1 || echo 0)"
 
 # --- F: the feeder census ---------------------------------------------------------------------
 # Every file in the live tree that names the variable, minus this test and the knowledge base.
 FEEDERS="$(cd "$REPO_ROOT" && grep -rIl 'web2_lb_weight' .github apps scripts plugins tests 2>/dev/null \
-  | grep -vE '(^|/)node_modules/' | grep -vE '^apps/web-platform/infra/lb-weight-gate\.test\.sh$' | LC_ALL=C sort | tr '\n' ' ' || true)"
+  | grep -vE '(^|/)node_modules/' | grep -vE '^apps/web-platform/infra/lb-weight-gate\.test\.sh$' \
+  | grep -vE '^apps/web-platform/infra/web-hosts-generic\.test\.sh$' | LC_ALL=C sort | tr '\n' ' ' || true)"
+# (web-hosts-generic.test.sh is exempt: it passes -var web2_lb_weight=0 only to its own isolated console root,
+#  never to a plan of this root, so it feeds no real plan.)
 c4_assert "C.4-F1: only variables.tf, cloudflare-lb.tf and cf-lb-overlay.yml name web2_lb_weight (got: ${FEEDERS})" \
   "$([[ "$FEEDERS" == ".github/workflows/cf-lb-overlay.yml apps/web-platform/infra/cloudflare-lb.tf apps/web-platform/infra/variables.tf " ]] && echo 1 || echo 0)"
 c4_assert "C.4-F2: no tfvars / auto.tfvars / TF_VAR_web2_lb_weight supplies the variable anywhere in the tree" \
@@ -777,7 +863,7 @@ p_guard() { # p_guard <workflow-file> -> 0 iff the serve step injects exactly th
   joined="$(sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' "$P_WORK/gate-nc" | tr -s ' ')"
   # the inner env: everything between `doppler run ... -- env ` and ` bash "` on the wrapper line
   names="$(sed -nE 's/.*doppler run [^|]*-- env (.*) bash "\$\{GITHUB_WORKSPACE\}.*/\1/p' <<<"$joined" | grep -oE '(^| )[A-Z_0-9]+=' | tr -d ' =' | sort | tr '\n' ',' || true)"
-  [[ "$names" == "DOPPLER_BIN,DOPPLER_TOKEN,SOLEUR_SERVING_ROTATION,SOLEUR_WEB2_SERVING_WEIGHT," ]] || return 1
+  [[ "$names" == "DOPPLER_BIN,DOPPLER_TOKEN,SOLEUR_GATED_HOST,SOLEUR_SERVING_ROTATION,SOLEUR_WEB2_SERVING_WEIGHT," ]] || return 1
   # (the names are read from AFTER `doppler run ... -- env`, so the two gate inputs are by construction assigned after the
   # doppler run and override any ambient prd value; C.4-P1m6 proves an input moved before the run is not accepted)
   return 0
@@ -806,6 +892,7 @@ SERVE_W="$(grep -oE 'then WEB2_LB_WEIGHT=[0-9]+' <<<"$PIN_STEP" | head -1 | grep
 arm_env() { # the injected pair, as the workflow sets them in serve mode
   reset_def
   DEF[SOLEUR_WEB2_SERVING_WEIGHT]="${SERVE_W:-}"
+  DEF[SOLEUR_GATED_HOST]="$(grep -oE 'SOLEUR_GATED_HOST="[^"]+"' <<<"$GATE_STEP" | head -1 | sed -E 's/^SOLEUR_GATED_HOST="(.*)"$/\1/' || true)"
   DEF[SOLEUR_SERVING_ROTATION]="$ROT_VAL"
 }
 arm_env; run_with_def
@@ -1120,7 +1207,7 @@ a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unp
 GATE="$GATE_PRISTINE"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=295
+MIN_CASES=330
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
