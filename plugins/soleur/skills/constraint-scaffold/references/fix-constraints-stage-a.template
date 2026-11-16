@@ -157,7 +157,7 @@ jobs:
           # NUL-delimited so any filename survives. Out-of-scope edits are still enumerated
           # here so the allowlist below can ABORT on them (never silently ship a partial fix).
           git add -A
-          mapfile -d '' changed < <(git diff --cached --name-only -z)
+          mapfile -d '' changed < <(git diff --cached --no-renames --ignore-submodules=none --name-only -z)
           if [ "${#changed[@]}" -eq 0 ]; then
             echo "::notice::no changed files — nothing to deliver"; exit 0
           fi

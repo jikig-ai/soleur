@@ -73,6 +73,7 @@ scripts/rule-metrics-aggregate	always-on class: whole-corpus guards, drift check
 scripts/skill-freshness-aggregate	always-on class: whole-corpus guards, drift checks, parity and census gates
 scripts/cron-artifact-age	#8563's Tier-B credential census — a repo-global property census over every workflow + Terraform tier declaration; no diff-scoped edge can reach it.
 scripts/rename-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/allowlist-diff	always-on class: whole-corpus guards, drift checks, parity and census gates
 scripts/assert-dependabot-drain-unit	always-on class: whole-corpus guards, drift checks, parity and census gates
 scripts/expenses-verify-by-check	always-on class: whole-corpus guards, drift checks, parity and census gates
 scripts/ship-incident-pir-gate-mutations	always-on class: whole-corpus guards, drift checks, parity and census gates

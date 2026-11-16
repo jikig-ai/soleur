@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1800
-# generated-at=2026-11-13T03:01:01Z
+# generated-at=2026-11-16T10:42:29Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=b2017fc287d74a23d67c5b25c4e1e6b7302d190ff9bb253afbf807148c86f612
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -327,6 +327,7 @@ plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	163409	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2936	measured
 plugins/soleur/test/ship-prepush-secret-scan.test.sh	43481	measured
 plugins/soleur/test/sole-copy-drift-check.test.sh	68229	measured
+plugins/soleur/test/spec-kit-intake.test.sh	1800	floor
 plugins/soleur/test/sync-pr-behind.test.sh	161367	measured
 plugins/soleur/test/technical-ruling-gate.test.sh	55817	measured
 plugins/soleur/test/technical-ruling-owner-list.test.sh	5190	measured
@@ -362,6 +363,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	416	measured
 scripts/actions-queue-health	2446	measured
 scripts/actions-queue-tail-8450	2034	measured
 scripts/alarm-issue-filing-guard	2162	measured
+scripts/allowlist-diff	1800	floor
 scripts/always-on-ledger	78	measured
 scripts/anthropic-admin-key-6297	1679	measured
 scripts/anthropic-double-bill-8611	85	measured

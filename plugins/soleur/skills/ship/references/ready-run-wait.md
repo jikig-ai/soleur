@@ -14,11 +14,13 @@ When the local battery was deferred or refused (rc 4 or 6) and CI is draft-light
   ```bash
   bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-relative-assert.test.sh"
   bash "${CLAUDE_PLUGIN_ROOT}/test/fixture-env-adoption.test.sh"
-  bash .claude/hooks/grep-q-pipe-guard.test.sh
+  bash "$(git rev-parse --show-toplevel)/.claude/hooks/grep-q-pipe-guard.test.sh"
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" ruff --check
-  (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts)
+  git fetch --no-tags --quiet origin main && python3 "$(git rev-parse --show-toplevel)/scripts/lint-skill-body-budget.py" --base "$(git merge-base origin/main HEAD)"
+  (cd apps/web-platform && bunx tsc --noEmit && bunx vitest run test/repo-wide-containment.test.ts test/plugin-root-anchoring.test.ts)
   ```
 
+- Run the guards above on the head you ready, after the last review-fix commit, even when the battery ran and passed on an earlier head. A pass taken earlier says nothing about a row added since; `grep-q-pipe-guard.test.sh` sweeps every extension in its `SWEEP_EXTS`, not only test files. **Why:** PR #12645 — a review-fix commit the night before ready added a `producer | grep -q` row, and the ready run's CI was the first thing to fail on it (learning `knowledge-base/project/learnings/2026-11-11-a-census-keyed-on-the-client-name-missed-every-call-split-across-lines.md`, error 15).
 - Read CodeQL's open alerts even though it is not a required check: `gh api --paginate 'repos/{owner}/{repo}/code-scanning/alerts?ref=refs/pull/PR_NUMBER/merge&state=open&per_page=100' --jq '.[] | "\(.number) \(.rule.id) \(.most_recent_instance.location.path)"'` (no output: none open).
 
 **Why:** #12518 — eight repo-wide guards fired on a new spike tree, the orphan-suite lint had been red on two draft runs unread, and four red heads followed ready. See `knowledge-base/project/learnings/2026-11-11-a-deferred-battery-and-a-draft-light-ci-left-the-repo-wide-guards-for-the-ready-run.md`.
