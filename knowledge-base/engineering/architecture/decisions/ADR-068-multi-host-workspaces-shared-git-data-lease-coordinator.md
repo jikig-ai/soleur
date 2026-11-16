@@ -1573,9 +1573,16 @@ agent's real commits never land on origin's default branch". Until #12600 that w
 `git push` of the checked-out branch, which published whatever commits the agent had made on it. It now holds by
 construction: the sync pushes only `S`, a commit the server builds on the remote tip `T` with `T`'s root tree and the
 workspace's `knowledge-base` entry (ADR-309 addendum of this date). The overlay's precondition, "the GitHub tip is an
-ancestor of the local branch", also holds after every sync push, because the local branch is moved to `S` (a KB-only
-turn) or to a merge `M` of HEAD and `S` (agent code held local) by a compare-and-swap `update-ref` BEFORE the push, and
-the tracking ref is set to `S` after it. git-data therefore still holds at least what GitHub holds: `S` and `M` are
-local `refs/heads/*` commits that `replicateToGitData` replicates like any other. The protected-branch side commit on
-`soleur/kb-sync` is built on `T` the same way, so a merged PR fast-forwards the clone. Pinned by
-`test/session-sync-kb-only-push-real-git.test.ts` (H7, matrix 14, matrix 20).
+ancestor of the local branch", also holds after every sync push. On a push to the default branch, the local branch is
+moved to `S` (a KB-only turn) or to a merge `M` of HEAD and `S` (agent code held local) by a compare-and-swap
+`update-ref` BEFORE the push, and the tracking ref is set to `S` after it. For the default branch, git-data therefore
+still holds at least what GitHub holds: `S` and `M` are local `refs/heads/*` commits that `replicateToGitData`
+replicates like any other. The protected-branch side commit on `soleur/kb-sync` is built on `T` the same way. After the
+side push the local branch moves onto it by CAS (review round 1, ruling D5c): to the side commit on a KB-only turn, or
+to `M'`, with parents the turn's HEAD commit and the side commit, when code is held. The tracking ref is set to `T`, never to the side
+commit (D11). So the side commit is in the local history, and in git-data, except when that CAS fails (a held reason).
+A merge-commit merge of the PR fast-forwards a KB-only clone, whose local branch is the side commit. A squash merge,
+or a held-code clone, is reconciled by the session-start pull. A squash-merged KB-only clone may also be reset by the
+reconcile self-heal, which resets only when the local commits' content is already upstream (ADR-309 addendum of this
+date, "Self-heal"). Pinned by `test/session-sync-kb-only-push-real-git.test.ts` (H7, matrix 14, matrix 20) and
+`test/workspace-sync-self-heal-real-git.test.ts` (the squash-merged row).

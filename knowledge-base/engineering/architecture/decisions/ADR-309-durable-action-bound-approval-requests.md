@@ -551,8 +551,8 @@ seven tools still fall back to a card the requesting member can answer") on the 
 
 ## Addendum — 2026-11-13 (#12600): the post-session sync push publishes only Soleur-built knowledge-base commits
 
-Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20 in the #12600 decision record,
-`knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
+Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20, and review round 1 D5-D13, in the #12600
+decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
 
 - **What changed.** `syncPush` (`server/session-sync.ts`, push half in `server/kb-sync-publish.ts`) no longer runs a bare
   `git push` of the checked-out branch. Each turn it reads the default branch `D` and its tip `T` from one hardened
@@ -562,8 +562,10 @@ Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20 in the #1
   message "Soleur: sync knowledge-base", author and committer "Soleur Agent" / `agent@soleur.ai`. Guard 1
   (`assertRootDiffersOnlyInKb`) is re-run on the exact sha inside `pushVerifiedKbOnly`, the only push argv of the flow,
   which pushes `<S>:refs/heads/<D>` non-force from the server-created isolated GIT_DIR. Every decision and build runs
-  token-free in that directory (`server/git-isolated-local.ts`); the workspace receives only `unpack-objects -q` and a
-  `--no-deref` CAS `update-ref`, the two guarded verbs added to `runConnectedRepoGit`.
+  token-free in that directory (`server/git-isolated-local.ts`); the workspace receives only `unpack-objects -q` of
+  the server-built objects (an explicit object list, D10) and `update-ref --no-deref` in two shapes: a CAS of
+  `refs/heads/<branch>` with a mandatory old value, and the advisory tracking ref `refs/remotes/origin/<D>`. These are
+  the two guarded verbs added to `runConnectedRepoGit`.
 - **Effect.** An agent-authored commit object, message or author never reaches the remote through the sync, whatever
   the agent did in the workspace (`push.default`, a second branch, `remote.origin.url`, forged tracking refs, forged
   object bytes). Agent code commits on the default branch stay local ("held"); publishing them is `github_push_branch`
@@ -572,14 +574,52 @@ Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20 in the #1
 - **Refusals** (op `kb-sync.push-held`, tags `reason` + `outcome`): `merge_in_progress`, `detached_head`,
   `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`,
   `ref_update_failed`, `unpack_failed` and `side_ahead` warn (debounced per workspace and reason); `remote_ahead`,
-  `remote_unknown_tip`, `held_foreign` and `synthetic_pushed` log only.
-- **Protected default branch.** On GitHub's `GH006` line (line-anchored, stderr only; `GH013` stays unrouted, #12734)
-  the side commit on `soleur/kb-sync` is built the same way on `T` (parents `T`, the side tip `P` when it already
-  descends from `T`, or `(P, T)`), in the isolated directory: no workspace checkout, commit or `reset --hard`. The ops
-  `kb-sync.protected-fallback-failed` (now with a closed `fallback_reason` tag) and `kb-sync.push-protected-fallback`
-  are unchanged.
-- **Self-heal.** `selfHealNonFastForward` no longer resets a diverged default-branch clone that has tracked changes
-  outside `knowledge-base/` (op `self-heal-aborted-dirty-nonkb`), since held commits are now the steady state.
+  `remote_unknown_tip`, `held_foreign`, `synthetic_pushed` and `side_pending` (D5b) log only.
+- **Protected default branch.** A rejection is `protected_branch` when its stderr (CR stripped) has GitHub's
+  `remote: error: GH006:` line or a `remote:` line carrying "Changes must be made through a pull request", the #5426
+  require-PR text that a `GH013` ruleset requiring a PR also prints (D9; line-anchored, stderr only). A `GH013` without
+  that text (secret push protection) stays `other`. On `protected_branch` the side commit on `soleur/kb-sync` is built
+  the same way on `T` (parents `T`, the side tip `P` when it already descends from `T`, or `(P, T)`), in the isolated
+  directory: no workspace checkout, commit or `reset --hard`. A turn whose side tip `P` is present and already carries
+  HEAD's `knowledge-base` entry returns `side_pending` before any push to `D` (D5b). After a successful side push the
+  local branch moves onto the side commit by CAS in both cases (D5c): a KB-only turn from `S` to the side commit; a
+  held-code turn from `M` to `M'`, HEAD's tree with parents `(headSha, side)`. A failed CAS is a held reason, not a
+  fallback failure. The tracking ref `refs/remotes/origin/<D>` is set to `T`, the `ls-remote` value, never to the side
+  commit, so `git status` never says the knowledge base is on `D` while GitHub's `D` is still `T` (D11, amending R17).
+  The push path does not fetch the side branch (D5d): a side tip the workspace lacks cannot be an ancestor of HEAD in
+  the same turn, so it returns `side_ahead`. The ops `kb-sync.protected-fallback-failed` (with a closed
+  `fallback_reason` tag) and `kb-sync.push-protected-fallback` keep their names. The failure op is emitted with a null
+  error and its cause in tags, so its tags survive the Error-path dedup (#8629, D8). It is also debounced per
+  workspace and fallback reason.
+- **Side-tip adoption moves to the pull side** (D5e; Phase 9 of #12718, the X1 module). When `ls-remote` reports a side
+  tip `P` that is not an ancestor of HEAD and whose `knowledge-base` differs from `T`'s, `syncPull` fetches
+  `refs/heads/soleur/kb-sync` with no depth, after it writes server-owned have refs (`T`, `headSha`) in the isolated
+  directory. It refuses exactly as X1 does (tip mismatch, `shallow_changed`, walk cap), then hands the objects over and
+  writes `refs/remotes/origin/soleur/kb-sync`. It merges `P` only while an open `soleur/kb-sync -> D` PR exists. With
+  no open PR, `P` is abandoned: the push path finds `P` present, skips the `side_ahead` throw, builds parents `(P, T)`,
+  and a new PR is opened. This closes the re-clone, other-host and legacy-open-PR freezes. Until that phase lands, a
+  side tip the workspace lacks stays `side_ahead`, which warns once per workspace per debounce window.
+- **Self-heal** (`selfHealNonFastForward`, `server/workspace-sync.ts`; D6 and D7, superseding R18's gate placement and
+  its knowledge-base exemption). Held commits are now the steady state, so the reconcile webhook's `reset --hard`
+  would otherwise run over member work on every upstream push. It now runs only when it loses nothing:
+  - The HEAD branch and the tracked status are read once, before the zero/non-zero commit split, so both arms are
+    gated. A clone off the default branch, or with a detached HEAD, aborts on both arms (the phantom arm included).
+  - Any tracked change refuses, `knowledge-base/` included. The op is `self-heal-aborted-dirty-tracked`.
+  - With local commits, the branch-aside plus reset runs only when
+    `diff --quiet origin/<D>...HEAD -- . ':(exclude)knowledge-base/'` is clean and HEAD's `knowledge-base` tree equals
+    `origin/<D>`'s. This is the squash-merged side-PR case. Otherwise it refuses with op
+    `self-heal-aborted-held-commits` (tags `held_kind` = `nonkb` | `kb`, and `reason`). The Phase 9 hardened
+    pull-merge will be called at that seam. Until then the refusal is the final state, and the next session-start
+    `pull --no-rebase --autostash` resolves it.
+  - Both refusals are designed holds. They warn through `mirrorWarnWithDebounce`, keyed on the workspace.
+    `self-heal-failed` stays at error. Every self-heal emit passes a null error and carries its details in tags and
+    extra (D8).
+  - Every local verb (`rev-parse`, `status`, `rev-list`, `diff`, `branch`, `reset`) runs token-free through
+    `server/workspace-local-git.ts`. Only `pull --ff-only`, `fetch origin` and `symbolic-ref` keep the installation
+    token (X3). A planted `filter.*` helper in the workspace `.git` still runs during `status` and `reset`, but it no
+    longer receives a token.
+  - One residual is not addressed: an untracked file that collides with an incoming tracked path may be overwritten
+    by the phantom-arm reset (D6 residual, `unverified`).
 - **Discharges** the three places this ADR names the sync as a separate path (located by text, left as written):
   decision item 8 ("the post-session sync push is a separate path, #12600"), the 2026-11-05 #11635 addendum ("the
   post-session sync push (`syncPush`) is a separate path, #12600") and the 2026-11-11 addendum ("The post-session sync
@@ -587,7 +627,9 @@ Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20 in the #1
   HEAD and its knowledge-base tree, but it can publish only that tree.
 - **Pins.** `test/session-sync-kb-only-push-real-git.test.ts` (real git against a `file://` bare remote with a real
   `pre-receive` GH006 hook: harness rows H1-H7, the Guard 1 mutation matrix and the push-argv census),
-  `test/server/classify-push-error.test.ts`, `test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`.
+  `test/server/classify-push-error.test.ts`, `test/server/workspace-sync-self-heal-gate.test.ts` and
+  `test/workspace-sync-self-heal-real-git.test.ts` (real git: the dirty-tree, held-commit, squash-merged, feature-branch
+  and planted-filter rows).
 - **Open.** The sync-push disclosure copy (#12713) and the held-files signal (#12714) are separate.
 
 ## Diagram

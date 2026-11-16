@@ -543,9 +543,17 @@ allowed, so there only the env pin and the file-tool guard hold.
 
 Appended; no earlier text is edited. The host-side git consumer list in the 2026-11-09 amendment names
 `session-sync` `runConnectedRepoGit` (add, commit, hooks) and "the legacy `gitWithInstallationAuth` and its callers".
-For `session-sync`'s post-session push that is no longer so: its `ls-remote`, `fetch` and `push` run through the hardened
-arm from a server-created isolated GIT_DIR, and its hash checks, tree and commit builds run token-free there
+For `session-sync`'s post-session push that is no longer so: its `ls-remote` and `push` run through the hardened arm
+from a server-created isolated GIT_DIR (the push-side `--depth 1` side-branch fetch is removed, review round 1 ruling
+D5d), and its hash checks, tree and commit builds run token-free there
 (`server/git-isolated-local.ts`), never in the workspace. `runConnectedRepoGit` gained exactly two write verbs, each
 behind an exact-argv guard: `unpack-objects -q` and `update-ref --no-deref` in two shapes (a CAS of
 `refs/heads/<branch>` with a mandatory old value, and the tracking ref `refs/remotes/origin/<branch>`). `syncPull`
-still uses the legacy arm (#12718). The exposure statement of that amendment is otherwise unchanged.
+still uses the legacy arm (#12718). The reconcile self-heal in `syncWorkspace` (`server/workspace-sync.ts`) now runs
+its local verbs (`rev-parse`, `status`, `rev-list`, `diff`, `branch`, `reset --hard`) through
+`server/workspace-local-git.ts`. That runner is the shared host-git invocation with `GIT_ALLOW_PROTOCOL=none` and no
+auth variable (ruling D6d). Before, they ran on the legacy arm and minted a token per call. Only `pull --ff-only`,
+`fetch origin` and `symbolic-ref` stay on the legacy arm (X3). The `filter.*` residual of that amendment still holds
+for those local verbs: a planted clean or smudge filter still runs, but without a token in its environment
+(`test/workspace-sync-self-heal-real-git.test.ts`, known-positive first through the legacy arm). The exposure statement
+of that amendment is otherwise unchanged.

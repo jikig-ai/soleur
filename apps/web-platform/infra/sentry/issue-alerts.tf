@@ -1402,17 +1402,20 @@ resource "sentry_alert" "kb_db_error" {
 
 # ── KB-sync protected-branch fallback failure (#5426) — APPLY-CREATED ───────
 # server/session-sync.ts `syncPush`: when the user's default branch is
-# protected, the post-session KB commit can't be pushed onto it, so the fallback
-# accretes the latest KB tree onto a durable `soleur/kb-sync` side branch and
-# opens/updates a PR. The fallback is ORDERED so the local default is reset only
-# AFTER the side-branch push + PR succeed — on any failure the un-pushed commit
-# stays on default for next-session retry, and `op=kb-sync.protected-fallback-
-# failed` is emitted (covers side-branch push reject / Octokit error /
-# persistent_other like `shallow update not allowed`). This rule is the
+# protected (a GH006 line, or a `remote:` require-PR line such as a GH013
+# ruleset's), the server-built KB commit can't be pushed onto it, so
+# `runSideFallback` (server/kb-sync-publish.ts, #12600) builds the side commit on
+# `soleur/kb-sync` in the isolated GIT_DIR (no workspace checkout, commit or
+# reset), pushes it and opens/updates a PR. On any failure the workspace keeps
+# its KB commit for the next turn, and `op=kb-sync.protected-fallback-failed` is
+# emitted: tag `reason=fallback_failed` with a closed `fallback_reason` tag naming
+# the step (e.g. side_push_rejected, side_hash_mismatch, pr_failed), or
+# `reason=persistent_other` (e.g. `shallow update not allowed`). This rule is the
 # NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself): without it a
 # user whose KB writes silently fail to deliver (the divergence-treadmill class
-# #5426 fixes) goes unnoticed. The signal already exists (reportSilentFallback →
-# captureException with feature/op tags); no app change beyond the emit.
+# #5426 fixes) goes unnoticed. The emit passes a null error (captureMessage with
+# the feature/op tags; an Error would lose them to the pino-mirror capture,
+# #8629), and the fallback_failed branch is debounced per workspace and reason.
 #
 # op-SCOPED filter (op `in`, NOT feature-only): `feature=session-sync` spans
 # many routine ops (syncPull, syncPush, recordKbSyncHistory, appendKbSyncRow,
