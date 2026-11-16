@@ -389,10 +389,11 @@ locals {
     # inngest-provision-rehearsal root passes its scratch `rehearsal_<runid>` config so a
     # throwaway host never resolves the real prd. Mirroring git-data's doppler_config_name.
     inngest_doppler_config = "prd"
-    # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
-    # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
-    sdk_url = "http://10.0.1.10:3000/api/inngest"
+    # Single stable --sdk-url = the PUBLIC serve URL (= the route's serveOrigin + servePath), polled
+    # every 60 s through the Cloudflare edge to whichever web host the LB steers it to (ADR-100
+    # Decision 1 as amended 2026-11-13, #10538). Live only at the owner's gated inngest-host-replace
+    # (not a push-apply target). Pinned by Guard 4 of exec-placement-forward.test.ts.
+    sdk_url = "https://app.soleur.ai/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download
     # against the matching checksum — the wrong-arch SHA fails verify. The cloud-init passes this
