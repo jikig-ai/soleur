@@ -45,3 +45,8 @@ None
 - Follow-ups to file at ship: (1) "session-sync: run the workspace git writers async with a process-group kill so a filter grandchild cannot block the event loop"; (2) "kb-sync: classify ls-remote, push_transient and ref-update stderr into closed reason tags"; (3) G8 held_foreign memo (D13); (4) X3 legacy syncWorkspace pull P1, including the legacy arm's missing -c maintenance.auto=false (none exists as of 2026-11-16); (5) W6 and C8 per plan.
 - Next: fix round 2 is the LAST targeted round (cap 2); a third round escalates to the full class panel over the cumulative fix diff.
 - Tally note: seats was double-incremented for fix round 1 (incr 12 run twice); the true seat count is 26 (14 panel + 12 fix-round-1), the tally shows 38. Capture at compound as a session error.
+- Fix round 2 (12 seats, range cd57046280..33e6a381c8): 3 blocking (D22 a-c), the rest ruled D23 (inline) and D24 (follow-ups to file at ship, items 1-12). Fixes 33e6a381c8..8027f45f0c (PUBLISH, SELFHEAL/C4, DOCS agents, plus lead commits cfc66b460c, c8c127247a, 8027f45f0c).
+- Verification pass (1 seat): D22 and D23 closed, 0 blocking, 7 deviations accepted; its error-frame P3 was fixed inline (8027f45f0c).
+- Review complete 2026-11-16: trailers f9672b592f (main), 2cffe77877 and 64f21eb17c (fix rounds); Review-Evidence comment posted on #12704. True seat count: 14 + 12 + 12 + 1 = 39; the tally shows 51 (the round-1 double count).
+- Lead-run environment note: 13 c4-render tenant-config tests fail on this host from the local likec4 install (mise shim, "install prefix too shallow to bind"); the PR does not touch c4-render.
+- Next: Phases 9-11 (#12718 pull side, #12714 UI; the D5e/D6c seams; the D21 Phase 9 items). The #12714 wireframe waits on the pen.dev upgrade (W7).
