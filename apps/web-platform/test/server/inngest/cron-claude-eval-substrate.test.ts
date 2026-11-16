@@ -1437,7 +1437,11 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
         { tool_name: "Bash", tool_input: { command: "git status" } },
       ],
     });
-    await runFakeEval(installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`));
+    const cwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
+    // The hook is registered only where its allowlist file exists (setupEphemeralWorkspace writes it).
+    mkdirSync(join(cwd, ".claude"), { recursive: true });
+    writeFileSync(join(cwd, ".claude", "cron-allow.txt"), "git status\n");
+    await runFakeEval(cwd);
     const calls = warnFallbackMock.mock.calls.filter((c) => c[1]?.op === "cron-containment-new-rule-deny");
     const byRule = Object.fromEntries(calls.map((c) => [c[1].tags.rule, c[1].extra.count]));
     expect(byRule).toEqual({
@@ -1449,13 +1453,24 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     for (const c of calls) {
       expect(c[1].feature).toBe("cron-claude-eval");
       expect(c[1].tags).toEqual({ cron: "cron-bug-fixer", rule: c[1].tags.rule });
-      expect(Object.keys(c[1].extra)).toEqual(["count"]);
+      // rule/cron repeat the tags in extra: the Better Stack pino row carries extra, never tags.
+      expect(c[1].extra).toEqual({ count: c[1].extra.count, rule: c[1].tags.rule, cron: "cron-bug-fixer" });
       const payload = JSON.stringify(c);
       expect(payload).not.toContain("evil.example");
       expect(payload).not.toContain(".gitconfig");
       expect(payload).not.toContain("/home/soleur");
       expect(payload).not.toContain("checkout");
     }
+  });
+
+  it("#12757 row 7: no new-rule warn when the spawn cwd has no hook allowlist (a hookless, --allowedTools cron)", async () => {
+    warnFallbackMock.mockReset();
+    const resultLine = JSON.stringify({
+      type: "result", subtype: "success", is_error: false, result: "denied",
+      permission_denials: [{ tool_name: "Write", tool_input: { file_path: "/home/soleur/.gitconfig", content: "x" } }],
+    });
+    await runFakeEval(installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`));
+    expect(warnFallbackMock.mock.calls.filter((c) => c[1]?.op === "cron-containment-new-rule-deny")).toHaveLength(0);
   });
 
   it("#12757 row 7: no new-rule warn when the denials hold no new-rule shape", async () => {

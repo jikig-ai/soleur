@@ -526,6 +526,11 @@ function dangerousMetacharReason(command) {
   if (/[<>]/.test(ctrlScan)) return "redirection";
   if (/(^|[^|])\|([^|]|$)/.test(ctrlScan)) return "pipe";
   if (/(^|[^&])&([^&]|$)/.test(ctrlScan)) return "background &";
+  // #12757 fix round — unquoted brace expansion. Bash expands `{,~/.config/git}` to `~/.config/git` (then `~`) AFTER
+  // the hook has read the raw token, so every raw-token rule (worktree path, `git add .`, `commit -a`) could be
+  // re-spelled past (measured: `git worktree add -b x {,~/.config/git}` planted the ignore file). A comma list or a
+  // `..` sequence is the only form that expands; a quoted `--jq '{…}'` was stripped above, and `{owner}` stays legal.
+  if (/\{[^{}]*(,|\.\.)[^{}]*\}/.test(ctrlScan)) return "brace expansion";
   return null;
 }
 

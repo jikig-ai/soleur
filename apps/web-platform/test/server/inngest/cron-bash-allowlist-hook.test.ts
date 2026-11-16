@@ -1885,6 +1885,24 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     expect(out.permissionDecision).toBe("deny");
     expect(out.permissionDecisionReason).toMatch(/git worktree (add|move) path '.*' denied/);
   });
+  it.each([
+    "git worktree add -b x {,~/.config/git}",
+    "git worktree add -b x {,/home/soleur/.config/git} HEAD",
+    "git worktree add --orphan -b x {,/root/.config/git}",
+    "git add {,.}",
+    "git commit {,-a} -m x",
+    "git commit -m x {,--all}",
+    "git add {a..b}",
+  ])("bug-fixer: unquoted brace expansion %s is denied before any raw-token rule", (cmd) => {
+    expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toBe("cron-containment: metachar: brace expansion");
+  });
+  it.each([
+    "gh api repos/jikig-ai/soleur/issues --jq '{n: .number, t: .title}'",
+    'git commit -m "fix {a,b} in x"',
+    "gh api repos/{owner}/{repo}/labels",
+  ])("a quoted or comma-free brace %s is not a brace-expansion deny", (cmd) => {
+    expect(decideOn(bash(cmd), RR_LINES).permissionDecisionReason ?? "").not.toContain("brace expansion");
+  });
   it("bug-fixer: a $HOME-relative worktree path is denied (the metachar gate refuses it first)", () => {
     expect(decideOn(bash("git worktree add $HOME/.config/git bot-fix/1-x"), BF_LINES).permissionDecision).toBe("deny");
   });

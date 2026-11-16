@@ -1395,3 +1395,7 @@ The 12-seat review changed these points. The sections above are kept as planned.
   and an AST-only `GIT_CONFIG_` check for the safe-commit exception.
 - **Deferred (CTO F1, F4):** the agent-editable-code class (#12824) and the fix-issue `git -c` commit identity
   (#12825). ADR-033 lists the first, plus `safe.bareRepository`/`GIT_CONFIG_COUNT`, as residuals.
+- **Fix round (security seat on e1e750e0f5).** Unquoted brace expansion re-spelled every raw-token rule
+  (`git worktree add -b x {,~/.config/git}` planted the ignore file; `git add {,.}` staged the tree), so it is now a
+  metachar deny. Census row 4e also reports an inline `require(cp).spawn(…)`. The new-rule metric counts only where
+  the hook's allowlist file exists in the spawn cwd, not for the `--allowedTools`-only crons.

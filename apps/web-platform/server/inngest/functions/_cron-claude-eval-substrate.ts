@@ -1535,6 +1535,9 @@ async function spawnClaudeEvalUnguarded(args: {
   let evalAllDenials: ParsedEvalResult["allDenials"] | undefined;
   // #12757 — new-rule deny telemetry fires at most once per rule per run.
   const newRuleDenyReported = new Set<string>();
+  // #12757 fix round — a positive identity, not a list of hookless crons: the file the hook reads its allowlist from.
+  const hookCountsNewRules =
+    existsSync(join(spawnCwd, ".claude", "cron-allow.txt")) && !CRON_NO_FILE_TOOLS.includes(cronName);
   let evalFinalMessage: string | undefined;
   let evalFinalMessageTruncated: boolean | undefined;
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
@@ -1642,9 +1645,10 @@ async function spawnClaudeEvalUnguarded(args: {
             // #12757 (CTO H3) — the deny reason never leaves the host, so report how
             // often each new containment rule fired. One event per rule per run; rule
             // id and count only.
-            // Skipped for the no-file-tools crons: decide() refuses there before any #12757 rule, and
-            // the classifier cannot see that directive (it would credit the wrong rule).
-            for (const [rule, count] of CRON_NO_FILE_TOOLS.includes(cronName) ? [] : Object.entries(parsedResult.newRuleDenials)) {
+            // Counted only where the containment hook really judged the denials: its allowlist file exists in the
+            // spawn cwd (daily-triage / follow-through-monitor spawn in the server cwd, where --allowedTools denies),
+            // and the cron is not no-file-tools (decide() refuses there before any #12757 rule).
+            for (const [rule, count] of hookCountsNewRules ? Object.entries(parsedResult.newRuleDenials) : []) {
               if (newRuleDenyReported.has(rule)) continue;
               newRuleDenyReported.add(rule);
               warnSilentFallback(null, {

@@ -536,15 +536,18 @@ function analyze(file: string, src: string): Analysis {
       if (n.importClause?.name || (nb && ts.isNamespaceImport(nb))) out.nsImports.push(site(n, NO("namespace/default import of child_process")));
     }
     if (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) return;
-    if (ts.isVariableDeclaration(n) && !ts.isObjectBindingPattern(n.name) && n.initializer) {
-      const init = skip(n.initializer);
-      const inner = ts.isAwaitExpression(init) ? skip(init.expression) : init;
-      const isLoader =
-        ts.isCallExpression(inner) &&
-        (inner.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(inner.expression) && inner.expression.text === "require")) &&
-        inner.arguments[0] &&
-        CHILD_PROCESS_MODULES.has(literalText(inner.arguments[0]) ?? "");
-      if (isLoader) out.nsImports.push(site(n, NO("whole-module handle on child_process")));
+    // Any require()/import() of child_process, wherever it sits (a variable, or inline `require(cp).spawn(…)`),
+    // except the destructured named form `const { spawn } = await import(cp)`, which buildCtx tracks as spawners.
+    if (
+      ts.isCallExpression(n) &&
+      (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === "require")) &&
+      n.arguments[0] &&
+      CHILD_PROCESS_MODULES.has(literalText(n.arguments[0]) ?? "")
+    ) {
+      let up: ts.Node = n.parent;
+      while (ts.isAwaitExpression(up) || ts.isParenthesizedExpression(up) || ts.isAsExpression(up)) up = up.parent;
+      const named = ts.isVariableDeclaration(up) && ts.isObjectBindingPattern(up.name);
+      if (!named) out.nsImports.push(site(n, NO("whole-module handle on child_process")));
     }
 
     // Row 2: HOME-keyed object literals (keyed or shorthand).
@@ -890,9 +893,12 @@ describe("Guard 3 — binding, not name (CTO H5): each planted look-alike FAILS"
     const a = analyze(
       "functions/cron-planted.ts",
       `import * as cp from "node:child_process";\nimport cp2 from "child_process";\n` +
-        `async function f() { const m = await import("node:child_process"); const r = require("child_process"); }\n`,
+        `async function f() { const m = await import("node:child_process"); const r = require("child_process"); }\n` +
+        `async function g(cmd: string) { require("node:child_process").spawn(cmd, []); (await import("child_process")).spawn(cmd, []); }\n`,
     );
-    expect(a.nsImports).toHaveLength(4);
+    expect(a.nsImports).toHaveLength(6);
+    // control: the destructured named form is tracked as a spawner, not a handle
+    expect(analyze("functions/x.ts", `async function d() { const { spawn } = await import("node:child_process"); }\n`).nsImports).toEqual([]);
     // control: a named import is not a handle
     expect(analyze("functions/x.ts", HDR).nsImports).toEqual([]);
   });
