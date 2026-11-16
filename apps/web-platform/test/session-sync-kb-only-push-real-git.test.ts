@@ -1235,7 +1235,12 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     // D14(2): the link ran before the PR, so side2 is local lineage even though the PR failed
     expect(localMain(row)).toBe(side2);
     expect(fallbackFailed()).toEqual(["kb-sync-fallback-failed:pr_failed"]);
-    expect(heldLines()).toEqual([]);
+    // D23: a pr_failed exit writes the turn's one outcome line (info only: the paging op already carries it)
+    expect(heldLines()).toEqual(["pr_failed"]);
+    expect(heldInfo("pr_failed").map((c) => (c as unknown[])[0])).toEqual([
+      { op: "kb-sync.push-held", reason: "pr_failed", outcome: "side_pushed", workspaceId: WS_ID },
+    ]);
+    expect(heldWarn("pr_failed")).toEqual([]);
     expect(tracking(row)).toBe(row.T);
     await turn3StacksOn(side2);
   });
@@ -1445,7 +1450,7 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
 // CTO ruling D17: a `side_pending` turn re-checks the side branch's PR with one GET (state=all), so a PR that failed to open
 // is opened, an Owner-closed PR for the same head commit stays closed, and a failed GET creates nothing.
 describe("D17: the side_pending PR re-check (real git)", { timeout: 60_000 }, () => {
-  test("the PR creation fails on turn 1 -> the next no-edit turn creates it (side_pending, commitCount 0)", async () => {
+  test("the PR creation fails on turn 1 -> the next no-edit turn creates it (side_pr_created: info only, no fallback mirror, no bookkeeping)", async () => {
     row = newRow({ protectedMain: true });
     write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
     H.createPullRequest.mockImplementationOnce(async () => {
@@ -1455,17 +1460,22 @@ describe("D17: the side_pending PR re-check (real git)", { timeout: 60_000 }, ()
     const side = remoteSide(row) as string;
     expect(localMain(row)).toBe(side);
     expect(H.prs).toEqual([]);
+    expect(heldLines()).toEqual(["pr_failed"]);
     resetTurn();
+    H.rpc.mockClear();
+    H.writeRepoCols.mockClear();
     await run(row);
     expect(pushesOf()).toEqual([]);
     expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
     expect(H.createPullRequest).toHaveBeenCalledTimes(1);
     expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side]]);
-    expect(heldLines()).toEqual(["side_pending"]);
-    const delivered = H.warnSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "kb-sync.push-protected-fallback");
-    expect((delivered[0]?.[1] as { extra?: Record<string, unknown> }).extra).toEqual(
-      expect.objectContaining({ prUrl: "https://github.com/acme/widget/pull/1", commitCount: 0 }),
-    );
+    // D23: a PR this turn opened is its own info-only reason, never the protected-fallback mirror (nothing was pushed)
+    expect(heldLines()).toEqual(["side_pr_created"]);
+    expect(heldWarn("side_pr_created")).toEqual([]);
+    expect(H.warnSilentFallback).not.toHaveBeenCalled();
+    expect(H.mirrorWithDebounce).not.toHaveBeenCalled();
+    expect(H.rpc).not.toHaveBeenCalled();
+    expect(H.writeRepoCols).not.toHaveBeenCalled();
     // and the turn after that finds the open PR: nothing created again
     resetTurn();
     await run(row);
@@ -1495,7 +1505,7 @@ describe("D17: the side_pending PR re-check (real git)", { timeout: 60_000 }, ()
     expect(heldLines()).toEqual(["synthetic_pushed"]);
   });
 
-  test("the PR re-check GET fails -> side_pending and no PR is created (fail toward no duplicate)", async () => {
+  test("the PR re-check GET fails -> side_pr_unknown (a debounced warning) and no PR is created (fail toward no duplicate)", async () => {
     row = newRow({ protectedMain: true });
     write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
     H.createPullRequest.mockImplementationOnce(async () => {
@@ -1509,8 +1519,37 @@ describe("D17: the side_pending PR re-check (real git)", { timeout: 60_000 }, ()
     await run(row);
     expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
     expect(H.createPullRequest).not.toHaveBeenCalled();
-    expect(heldLines()).toEqual(["side_pending"]);
+    expect(heldLines()).toEqual(["side_pr_unknown"]);
+    expect(heldWarn("side_pr_unknown")).toHaveLength(1);
     expect(H.mirrorWithDebounce).not.toHaveBeenCalled();
+  });
+
+  test("D23: a closed PR on an OLDER side tip is not this content: after a failed create, the no-edit turn opens the PR for the new tip", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 1\n");
+    await run(row);
+    const side1 = remoteSide(row) as string;
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side1]]);
+    // the Owner closes PR #1 (unmerged); the next KB edit delivers side2 but its PR create fails once
+    H.prs[0].state = "closed";
+    resetTurn();
+    H.createPullRequest.mockImplementationOnce(async () => {
+      throw new Error("502");
+    });
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    const side2 = remoteSide(row) as string;
+    expect(parents(row.remote, side2)).toEqual([side1]);
+    expect(heldLines()).toEqual(["pr_failed"]);
+    // the no-edit turn: the only PR is the closed one on side1, so side2 has none and it is created (never side_declined)
+    resetTurn();
+    await run(row);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([
+      ["closed", side1],
+      ["open", side2],
+    ]);
+    expect(heldLines()).toEqual(["side_pr_created"]);
   });
 });
 

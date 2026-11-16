@@ -136,6 +136,9 @@ export type KbPushHeldReason =
   | "side_ahead"
   | "side_pending"
   | "side_declined"
+  | "side_pr_unknown"
+  | "side_pr_created"
+  | "pr_failed"
   | "kb_absent"
   | "held_foreign"
   | "synthetic_pushed";
@@ -156,10 +159,14 @@ const HELD_WARN_MESSAGES: Record<KbPushHeldReason, string | null> = {
   ref_update_failed: "KB sync held: the local branch update failed",
   unpack_failed: "KB sync held: the object hand-over to the workspace failed",
   side_ahead: "KB sync held: the side branch holds knowledge-base content the workspace has not seen",
+  side_pr_unknown: "KB sync held: the side branch's pull request could not be checked",
   remote_unknown_tip: null,
   remote_ahead: null,
   side_pending: null,
   side_declined: null,
+  side_pr_created: null,
+  // the paging `kb-sync.protected-fallback-failed` op already carries a pr_failed exit (D8); this is its per-turn line
+  pr_failed: null,
   held_foreign: null,
   synthetic_pushed: null,
 };
@@ -627,8 +634,9 @@ async function ensureKbSyncPr(installationId: number, owner: string, repo: strin
  * now precedes the PR (D14(2)) and a single REST failure would otherwise leave the KB on a branch no Owner sees:
  *   - an open PR, or a merged one on `P`: `side_pending` (info, nothing to do);
  *   - a closed, unmerged PR whose head is `P`: the Owner declined this exact content, never reopened: `side_declined` (info);
- *   - no PR on `P`: create it (the `pr_failed` retry); a create failure is `fallback_failed pr_failed`;
- *   - the GET fails: `side_pending`, nothing created (fail toward no duplicate PR).
+ *   - no PR on `P`: create it (the `pr_failed` retry): `side_pr_created` (info; nothing was pushed, so no protected-fallback
+ *     mirror and no bookkeeping, D23); a create failure is `fallback_failed pr_failed`;
+ *   - the GET fails (any cause): `side_pr_unknown`, a debounced warning, nothing created (fail toward no duplicate PR, D23).
  */
 async function recheckSidePr(installationId: number, owner: string, repo: string, D: string, P: string, ctx: KbSyncContext): Promise<KbPublishResult> {
   const { createPullRequest, listPullRequestsForHead } = await import("./github-app");
@@ -636,20 +644,19 @@ async function recheckSidePr(installationId: number, owner: string, repo: string
   try {
     prs = await listPullRequestsForHead(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D);
   } catch {
-    throw new KbHeld("side_pending");
+    throw new KbHeld("side_pr_unknown");
   }
   if (prs.some((pr) => pr.state === "open")) throw new KbHeld("side_pending");
   const onP = prs.filter((pr) => pr.headSha === P);
   if (onP.some((pr) => !pr.merged)) throw new KbHeld("side_declined");
   if (onP.length > 0) throw new KbHeld("side_pending");
-  let prUrl: string;
   try {
-    prUrl = (await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D))).htmlUrl;
+    await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D));
   } catch {
+    reportPushHeld("pr_failed", "held", ctx);
     return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: null };
   }
-  reportPushHeld("side_pending", "held", ctx);
-  return { kind: "fallback", prUrl, commitCount: 0 };
+  throw new KbHeld("side_pr_created");
 }
 
 /**
@@ -731,7 +738,8 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
  * Step 6, the protected-branch fallback: deliver and link the side commit, then the tracking ref (D11: `T`, what GitHub's D
  * is, never the side commit), then the never-auto-merged PR. Every exit before the link completes rolls step 4 back
  * (D14(4)); a PR failure after the link keeps it (`pr_failed`, retried by the `side_pending` re-check, D17). The outcome line
- * `synthetic_pushed` / `side_pushed` is written only after the link AND the PR succeed (D14(5)).
+ * `synthetic_pushed` / `side_pushed` is written only after the link AND the PR succeed (D14(5)); a `pr_failed` exit writes
+ * `pr_failed` / `side_pushed` instead (D23), so every turn has its one line.
  */
 async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   let step: SideStep;
@@ -751,6 +759,7 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   try {
     prUrl = await ensureKbSyncPr(f.installationId, f.owner, f.repo, D);
   } catch {
+    reportPushHeld("pr_failed", "side_pushed", f.ctx);
     return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: f.pushErr };
   }
   reportPushHeld("synthetic_pushed", "side_pushed", f.ctx);

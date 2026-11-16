@@ -421,9 +421,12 @@ export function infoSilentFallback(
  *   `kb-sync.push-held`; dedup key is the WORKSPACE id, not a userId, so each workspace gets one slot per reason).
  *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
  *   `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
- *   `side_ahead`. The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`,
- *   `side_pending` (D5b/D17: the side branch already carries HEAD's KB; its PR is open, or was re-created this turn),
- *   `side_declined` (D17: the Owner closed the PR on that exact side tip, never reopened)) never reach this map; the
+ *   `side_ahead`, `side_pr_unknown` (D23: the D17 PR re-check GET failed, any cause; nothing is created). The info-only
+ *   reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`, `side_pending` (D5b/D17: the side
+ *   branch already carries HEAD's KB and its PR is open, or merged on that tip), `side_declined` (D17: the Owner closed the PR
+ *   on that exact side tip, never reopened), `side_pr_created` (D23: the D17 re-check opened the missing PR; nothing was
+ *   pushed), `pr_failed` (D23: the per-turn line of a PR create failure, whose Sentry event is the paging
+ *   `kb-sync-fallback-failed:pr_failed` below)) never reach this map; the
  *   `HELD_WARN_MESSAGES` Record in kb-sync-publish.ts holds an explicit `null` for each. Every reason writes its pino line
  *   (layer 2) before the debounce (`reportPushHeld`). Also `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`,
  *   op `kb-sync.tracking-ref`, workspace-id key): the advisory tracking-ref update failed, so the next turn mints a token
