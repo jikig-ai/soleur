@@ -26,18 +26,21 @@ export type PushErrorClass = "protected_branch" | "persistent_other" | "other";
 
 /** GitHub's protected-branch reject, as the first token of a `remote:` line (R2, R16). */
 const GH006_LINE_RE = /^remote: error: GH006:/m;
+/** GitHub's require-PR text on a `remote:` line (#5426; also a GH013 ruleset that requires a PR; CTO ruling D9). */
+const REQUIRE_PR_LINE_RE = /^remote:[^\n]*Changes must be made through a pull request/m;
 
 /**
- * Classify a failed `git push` error from git's STDERR only (#12600, CTO rulings R2, R16). The protected-branch
- * fallback keys on the line-anchored `remote: error: GH006:` GitHub prints, so neither a ref name inside git's own
- * status line nor `err.message` (which embeds argv: the URL and the pushed refspec) can steer it. `GH013` (rulesets)
- * stays `other` (follow-up #12734). Narrow by design: auth/network rejections fall through to `other`.
+ * Classify a failed `git push` error from git's STDERR only (#12600, CTO rulings R2, R16, re-ruled by D9). The fallback keys
+ * on a line-anchored `remote: error: GH006:` OR a `remote:` line carrying GitHub's require-PR text, so neither a ref name
+ * inside git's own status line (ref names cannot hold spaces) nor `err.message` (which embeds argv: the URL and the pushed
+ * refspec) can steer it. CRLF and a lone CR (progress output) both end a line. GH013 without the require-PR text (secret
+ * push protection) stays `other`. Narrow by design: auth/network rejections fall through to `other`.
  */
 export function classifyPushError(err: unknown): PushErrorClass {
   if (!(err instanceof Error)) return "other";
   const raw = (err as { stderr?: unknown }).stderr;
-  const stderr = Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
-  if (GH006_LINE_RE.test(stderr.replace(/\r/g, ""))) return "protected_branch";
+  const stderr = (Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "").replace(/\r\n?/g, "\n");
+  if (GH006_LINE_RE.test(stderr) || REQUIRE_PR_LINE_RE.test(stderr)) return "protected_branch";
   if (stderr.includes("shallow update not allowed")) return "persistent_other";
   return "other";
 }
