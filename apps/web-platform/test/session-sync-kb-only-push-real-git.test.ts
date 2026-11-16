@@ -1274,6 +1274,38 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     }
   });
 
+  test("D14(1): M' fails to build -> nothing is delivered (it is built before the side push) and step 4 is rolled back", async () => {
+    row = newRow({ protectedMain: true });
+    foreignPlusKb(row);
+    let merges = 0;
+    H.isoFault = (args) =>
+      args.includes("commit-tree") && args.includes(MERGE_MSG) && ++merges === 2 ? { code: -1, stdout: Buffer.alloc(0), stderr: "", timedOut: true } : null;
+    const before = localMain(row);
+    await run(row);
+    expect(merges).toBe(2);
+    expect(remoteSide(row)).toBeNull();
+    expect(pushesOf().map((r) => r.split(":")[1])).toEqual(["refs/heads/main"]);
+    const head = localMain(row);
+    expect(parents(row.ws, head)).toEqual([before]);
+    expect(subjectOf(row.ws, head)).toBe("Auto-commit after session");
+    const outer = H.reportSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "syncPush");
+    expect((outer[0]?.[1] as { tags?: Record<string, string> }).tags?.reason).toBe("local_git_failed");
+    expect(heldLines()).toEqual([]);
+  });
+
+  test("D14(5): the link's hand-over fails after the side push -> one held outcome line (unpack_failed), no synthetic_pushed, rolled back", async () => {
+    const side1 = await kbOnlyTurn1();
+    let packsSeen = 0;
+    H.isoFault = (args) => (args[0] === "pack-objects" && ++packsSeen === 2 ? { code: 1, stdout: Buffer.alloc(0), stderr: "", timedOut: false } : null);
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    expect(remoteSide(row)).not.toBe(side1);
+    expect(heldLines()).toEqual(["unpack_failed"]);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(parents(row.ws, localMain(row))).toEqual([side1]);
+    expect(subjectOf(row.ws, localMain(row))).toBe("Auto-commit after session");
+  });
+
   test("crash after the step-4 CAS and before the push (protected, side1 present) -> the next turn converges", async () => {
     const side1 = await kbOnlyTurn1();
     // A throw from inside the D push call: the push never runs, nothing after it runs (the state a process crash leaves)
