@@ -24,7 +24,8 @@ import {
 import { firstAppFrame } from "./error-frame";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
-import { KB_ROOT, KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
+import { KB_ROOT } from "./kb-root";
+import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
 import { HEX40, readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
@@ -400,7 +401,7 @@ async function recordKbSyncHistory(
 ): Promise<void> {
   // PR-C §2.1 (#3244): tenant-scoped client (authenticated role).
   const tenant = await getFreshTenantClient(userId);
-  const kbPath = join(workspacePath, "knowledge-base");
+  const kbPath = join(workspacePath, KB_ROOT);
   const fileCount = countMdFiles(kbPath);
   const today = new Date().toISOString().slice(0, 10);
 

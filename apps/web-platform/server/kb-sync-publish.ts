@@ -13,6 +13,7 @@ import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
 import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle, type IsolatedPushDirReason } from "./git-isolated-push-dir";
+import { KB_ROOT } from "./kb-root";
 import { createChildLogger } from "./logger";
 import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME, disposeIsolated } from "./push-branch";
 
@@ -113,8 +114,6 @@ function parseOwnerRepo(repoUrl: string | null): {
 // The KB-only publish (#12600, CTO ruling R14): the sync pushes only a commit the server built.
 // ---------------------------------------------------------------------------
 
-/** The knowledge-base root: the one root entry a sync commit may change, and the auto-commit's allowlisted prefix (D21). */
-export const KB_ROOT = "knowledge-base";
 const TREE_MODE = "40000";
 const SIDE_REF = `refs/heads/${KB_SYNC_SIDE_BRANCH}`;
 const LS_REMOTE_TIMEOUT_MS = 30_000;
