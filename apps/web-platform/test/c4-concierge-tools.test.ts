@@ -289,20 +289,56 @@ describe("buildC4ConciergeTools", () => {
   });
 });
 
-describe("edit_c4_diagram: a designed workspace hold (#12600 D16)", () => {
-  it("workspaceSync pending -> the exact do-not-retry text, not an error, no `rerendered`, no diagram-saved notify", async () => {
-    mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending" });
-    const onDiagramSaved = vi.fn();
-    const res = await handlerWith({ onDiagramSaved })({ relativePath: "engineering/architecture/diagrams/model.c4", content: "x" });
+describe("edit_c4_diagram: a designed workspace hold (#12600 D16, D22(c))", () => {
+  const PATH = "engineering/architecture/diagrams/model.c4";
+  const call = async (result: Record<string, unknown>, onDiagramSaved = vi.fn()) => {
+    mocks.writeC4Diagram.mockResolvedValue(result);
+    const res = await handlerWith({ onDiagramSaved })({ relativePath: PATH, content: "x" });
     expect(res.isError).toBeUndefined();
-    const payload = JSON.parse(res.content[0].text) as Record<string, unknown>;
+    return { payload: JSON.parse(res.content[0].text) as Record<string, unknown>, onDiagramSaved };
+  };
+
+  it("held at the save, render failed -> relays `rerendered` and `rerenderDiagnostic`, says do not retry to DELIVER this write; no notify", async () => {
+    const { payload, onDiagramSaved } = await call({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: false,
+      rerenderDiagnostic: "diagram not updated for this save. Save again to retry.",
+      workspaceSync: "pending",
+      workspaceSyncHeld: "save",
+    });
     expect(payload).toEqual({
       ok: true,
-      relativePath: "engineering/architecture/diagrams/model.c4",
+      relativePath: PATH,
       commitSha: "abc123",
+      rerendered: false,
+      rerenderDiagnostic: "diagram not updated for this save. Save again to retry.",
       workspaceSync: "pending",
-      message: "Committed to GitHub. The workspace copy was not updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub.",
+      message:
+        "Committed to GitHub. The workspace copy was not updated because it holds local changes that aren't on the repository's main branch yet. Do not retry to deliver this write: it is already on GitHub. `rerendered` and `rerenderDiagnostic` still describe the diagram render.",
     });
     expect(onDiagramSaved).not.toHaveBeenCalled();
+  });
+
+  it("held only at the post-render resync -> the workspace 'may not show this save yet', and `rerendered:false` is not a supersede", async () => {
+    const { payload } = await call({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending", workspaceSyncHeld: "rerender" });
+    expect(payload).toEqual({
+      ok: true,
+      relativePath: PATH,
+      commitSha: "abc123",
+      rerendered: false,
+      workspaceSync: "pending",
+      message:
+        "Committed to GitHub, and the diagram was re-rendered on GitHub. The workspace may not show this save yet because it holds local changes that aren't on the repository's main branch yet. Do not retry to deliver this write: it is already on GitHub. `rerendered` is false only because the workspace does not show the new diagram yet; no newer change superseded it, so do not offer to save again.",
+    });
+  });
+
+  it("held at the save and at the resync -> not updated, and `rerendered:false` is not a supersede", async () => {
+    const { payload } = await call({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending", workspaceSyncHeld: "save_and_rerender" });
+    expect(payload.message).toBe(
+      "Committed to GitHub, and the diagram was re-rendered on GitHub. The workspace copy was not updated because it holds local changes that aren't on the repository's main branch yet. Do not retry to deliver this write: it is already on GitHub. `rerendered` is false only because the workspace does not show the new diagram yet; no newer change superseded it, so do not offer to save again.",
+    );
+    expect(payload).toEqual(expect.objectContaining({ rerendered: false, workspaceSync: "pending" }));
+    expect(payload).not.toHaveProperty("rerenderDiagnostic");
   });
 });

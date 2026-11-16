@@ -509,8 +509,11 @@ export function C4CodePanel({
       typeof j?.rerenderDiagnostic === "string" ? j.rerenderDiagnostic : null;
     setSaveMsg(
       // #12600 D16: the commit landed but the workspace was held, so the diagram did not re-render here.
+      // D22(c): the render ran on GitHub's copy, so a render diagnostic is still shown after the notice.
       isWorkspaceSyncPending(j)
-        ? kbWorkspaceSyncPendingNotice("save")
+        ? diagnostic
+          ? `${kbWorkspaceSyncPendingNotice("save")} — ${diagnostic}`
+          : kbWorkspaceSyncPendingNotice("save")
         : rerendered
         ? "Saved — diagram updated."
         : diagnostic

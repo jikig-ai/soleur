@@ -19,6 +19,8 @@ import { reportSilentFallback } from "@/server/observability";
 // of cc-dispatcher — otherwise every test that loads the real dispatcher would
 // fail to resolve `server-only` under vitest. The handler runs only at real
 // tool invocation, where server-only is inert.
+// A type-only import is erased at compile time, so it adds no runtime edge.
+import type { C4WorkspaceSyncHeld } from "@/server/c4-writer";
 
 export const EDIT_C4_DIAGRAM_TOOL = "edit_c4_diagram";
 
@@ -95,11 +97,25 @@ export const C4_PROMPT_ADDENDUM =
   "user to re-run the diagram export for that folder in their repository.";
 
 /**
- * #12600 (CTO ruling D16): what the model is told when the commit landed on GitHub but the workspace was in a designed
- * hold (`workspaceSync: "pending"`). Retrying would commit the same content again, so the text says not to.
+ * #12600 (CTO rulings D16, D22(c)): what the model is told when the commit landed on GitHub but a sync found the workspace
+ * in a designed hold (`workspaceSync: "pending"`). Re-sending would commit the same content again, so the text says not to
+ * retry to DELIVER this write; the render outcome is still relayed, because the render reads the commit from GitHub and a
+ * diagnostic stays actionable. A hold on only the post-render resync leaves the saved source in the workspace, so the text
+ * says the workspace "may not show this save yet"; with a held resync the model DID commit, so `rerendered:false` there
+ * is the hold, never a supersede.
  */
-export const C4_WORKSPACE_SYNC_PENDING_TEXT =
-  "Committed to GitHub. The workspace copy was not updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub.";
+export function c4WorkspaceSyncPendingText(held: C4WorkspaceSyncHeld | undefined): string {
+  const rendered = held === "rerender" || held === "save_and_rerender";
+  const hold = "because it holds local changes that aren't on the repository's main branch yet.";
+  return [
+    rendered ? "Committed to GitHub, and the diagram was re-rendered on GitHub." : "Committed to GitHub.",
+    held === "rerender" ? `The workspace may not show this save yet ${hold}` : `The workspace copy was not updated ${hold}`,
+    "Do not retry to deliver this write: it is already on GitHub.",
+    rendered
+      ? "`rerendered` is false only because the workspace does not show the new diagram yet; no newer change superseded it, so do not offer to save again."
+      : "`rerendered` and `rerenderDiagnostic` still describe the diagram render.",
+  ].join(" ");
+}
 
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
@@ -170,15 +186,20 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
             true,
           );
         }
-        // #12600 D16: the workspace copy did not change, so there is nothing for an
-        // open workspace to reload and no `rerendered` verdict to relay.
+        // #12600 D16, D22(c): the workspace was held, so an open workspace has no new
+        // diagram to reload and is not notified; the render outcome is still relayed
+        // (it ran on this commit, fetched from GitHub).
         if (result.workspaceSync === "pending") {
           return textResponse({
             ok: true,
             relativePath: args.relativePath,
             commitSha: result.commitSha,
+            rerendered: result.rerendered,
+            ...(result.rerenderDiagnostic
+              ? { rerenderDiagnostic: result.rerenderDiagnostic }
+              : {}),
             workspaceSync: result.workspaceSync,
-            message: C4_WORKSPACE_SYNC_PENDING_TEXT,
+            message: c4WorkspaceSyncPendingText(result.workspaceSyncHeld),
           });
         }
         // #8739 — notify the open workspace on `.c4` writes. `.md` view-embed

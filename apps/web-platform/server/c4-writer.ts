@@ -62,6 +62,8 @@ export type WriteC4Input = {
   content: string;
 };
 
+export type C4WorkspaceSyncHeld = "save" | "rerender" | "save_and_rerender";
+
 export type WriteC4Result =
   | {
       ok: true;
@@ -72,9 +74,16 @@ export type WriteC4Result =
       // unresolved-reference hint). Absent on success and on `.md` saves.
       rerenderDiagnostic?: string;
       // #12600 (CTO ruling D16): the commit landed on GitHub but a sync found the
-      // workspace in a designed hold (local changes not on GitHub yet), so the
-      // workspace copy was deliberately not updated. Absent otherwise.
+      // workspace in a designed hold (local changes not on the default branch
+      // yet), so the workspace copy was deliberately not updated. Absent otherwise.
       workspaceSync?: "pending";
+      // D22(c): which sync was held, present exactly when `workspaceSync` is.
+      // "save": the first sync, and no render committed a model (a `.md` save, or
+      // a render that failed or was superseded). "rerender": only the post-render
+      // resync, so the saved source IS in the workspace but the model committed on
+      // GitHub is not. "save_and_rerender": both. With a held resync the render
+      // committed, so its `rerendered:false` is the hold, not a supersede.
+      workspaceSyncHeld?: C4WorkspaceSyncHeld;
     }
   | { ok: false; status: number; error: string; code?: string };
 
@@ -143,9 +152,9 @@ export async function writeC4Diagram(
     // GitHub, so answering SYNC_FAILED would invite a retry of a write that
     // already happened. Every non_fast_forward outcome is already emitted,
     // tagged and debounced, by the self-heal, so only a sync_failed is captured.
-    let workspaceSyncPending = false;
+    let saveHeld = false;
     if (!sync.ok && sync.held) {
-      workspaceSyncPending = true;
+      saveHeld = true;
     } else if (!sync.ok) {
       if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);
       return {
@@ -170,6 +179,7 @@ export async function writeC4Diagram(
     // return rerendered:false, degrading to the Layer-1 honest-stale banner.
     let rerendered = true;
     let rerenderDiagnostic: string | undefined;
+    let rerenderHeld = false;
     if (relativePath.endsWith(C4_SOURCE_EXT)) {
       const r = await rerenderAndCommit({
         installationId,
@@ -185,14 +195,21 @@ export async function writeC4Diagram(
       });
       rerendered = r.rerendered;
       rerenderDiagnostic = r.diagnostic;
-      if (r.workspaceSyncPending) workspaceSyncPending = true;
+      rerenderHeld = r.workspaceSyncPending === true;
+      // A full re-render ends with a resync that succeeded, so the workspace is
+      // current even when the first sync was held (the hold cleared in between).
+      if (r.rerendered) saveHeld = false;
     }
+    // The render outcome is returned whether or not a sync was held (D22(c)):
+    // the render reads this commit from GitHub, never the workspace (#8623).
+    const workspaceSyncHeld: C4WorkspaceSyncHeld | null =
+      saveHeld && rerenderHeld ? "save_and_rerender" : saveHeld ? "save" : rerenderHeld ? "rerender" : null;
     return {
       ok: true,
       commitSha: result?.commit?.sha ?? null,
       rerendered,
       ...(rerenderDiagnostic ? { rerenderDiagnostic } : {}),
-      ...(workspaceSyncPending ? { workspaceSync: "pending" as const } : {}),
+      ...(workspaceSyncHeld ? { workspaceSync: "pending" as const, workspaceSyncHeld } : {}),
     };
   } catch (error) {
     Sentry.captureException(error);
@@ -247,7 +264,8 @@ type RerenderOutcome = {
    *  supersedes this render (see rerenderAndCommit): nothing on the page
    *  refreshes on its own, so the banner names the supersede instead. */
   diagnostic?: string;
-  /** The model JSON committed but the re-sync found a designed workspace hold (#12600 D16): not a failure. */
+  /** The model JSON committed but the re-sync found a designed workspace hold (#12600 D16): not a failure, and not a
+   *  supersede, though it reports `rerendered:false` (the workspace does not show the new model). */
   workspaceSyncPending?: true;
 };
 
