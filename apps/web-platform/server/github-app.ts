@@ -1360,6 +1360,62 @@ export async function findOpenPullRequest(
   return { number: pr.number, htmlUrl: pr.html_url, url: pr.url };
 }
 
+/** One pull request of `listPullRequestsForHead`: its state, whether it merged, and the head commit it points at. */
+export interface PullRequestHeadState extends PullRequestResult {
+  state: "open" | "closed";
+  merged: boolean;
+  headSha: string;
+}
+
+/**
+ * Every pull request (open AND closed, `state=all`, first page) matching `head` → `base`, via the GitHub App installation
+ * token. Sibling of `findOpenPullRequest` for the kb-sync `side_pending` re-check (#12600, CTO ruling D17): an Owner-closed
+ * PR for the same head commit must not be reopened, and a missing one must be created. Throws on a non-OK response or a
+ * malformed body, so the caller fails toward creating nothing.
+ */
+export async function listPullRequestsForHead(
+  installationId: number,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+): Promise<PullRequestHeadState[]> {
+  const token = await generateInstallationToken(installationId);
+  const headParam = encodeURIComponent(`${owner}:${head}`);
+  const baseParam = encodeURIComponent(base);
+  const response = await githubFetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/pulls?head=${headParam}&base=${baseParam}&state=all`,
+    {
+      method: "GET",
+      headers: { Authorization: `token ${token}` },
+    },
+  );
+  if (!response.ok) {
+    const { message: errorMessage, body: errorBody } = await parseGitHubError(response, "GitHub list PRs failed");
+    log.error(
+      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
+      "Failed to list pull requests",
+    );
+    throw new Error(errorMessage);
+  }
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) throw new Error("GitHub list PRs returned a non-array body");
+  return data.map((raw) => {
+    const pr = raw as { number?: unknown; html_url?: unknown; url?: unknown; state?: unknown; merged_at?: unknown; head?: { sha?: unknown } };
+    if (typeof pr.number !== "number" || typeof pr.html_url !== "string" || (pr.state !== "open" && pr.state !== "closed")) {
+      throw new Error("GitHub list PRs returned a malformed entry");
+    }
+    return {
+      number: pr.number,
+      htmlUrl: pr.html_url,
+      url: typeof pr.url === "string" ? pr.url : "",
+      state: pr.state,
+      merged: typeof pr.merged_at === "string" && pr.merged_at !== "",
+      headSha: typeof pr.head?.sha === "string" ? pr.head.sha : "",
+    };
+  });
+}
+
 /**
  * Create an issue on a repository using the GitHub App installation token.
  *

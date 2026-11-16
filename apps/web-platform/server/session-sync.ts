@@ -865,7 +865,7 @@ export async function syncPush(
           tags: {
             reason: "fallback_failed",
             fallback_reason: result.fallbackReason,
-            push_class: result.pushErr.pushClass ?? "none",
+            push_class: result.pushErr?.pushClass ?? "none",
           },
           message:
             "KB-sync protected-branch fallback failed — writes preserved on default for retry",

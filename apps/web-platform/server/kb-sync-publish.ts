@@ -125,6 +125,7 @@ export type KbPushHeldReason =
   | "unpack_failed"
   | "side_ahead"
   | "side_pending"
+  | "side_declined"
   | "kb_absent"
   | "held_foreign"
   | "synthetic_pushed";
@@ -567,7 +568,8 @@ export type KbPublishResult =
   | { readonly kind: "held"; readonly reason: KbPushHeldReason }
   | { readonly kind: "noop" }
   | { readonly kind: "fallback"; readonly prUrl: string; readonly commitCount: number }
-  | { readonly kind: "fallback_failed"; readonly fallbackReason: KbFallbackReason; readonly pushErr: KbSyncError };
+  /** `pushErr` is null when no push ran this turn (the `side_pending` PR re-check, D17). */
+  | { readonly kind: "fallback_failed"; readonly fallbackReason: KbFallbackReason; readonly pushErr: KbSyncError | null };
 
 export interface KbPublishInput extends KbSyncContext {
   readonly workspacePath: string;
@@ -607,6 +609,36 @@ async function ensureKbSyncPr(installationId: number, owner: string, repo: strin
   if (existing) return existing.htmlUrl;
   const pr = await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D));
   return pr.htmlUrl;
+}
+
+/**
+ * D17: the side branch already carries HEAD's KB (`side_pending`). One GET (`state=all`) re-checks its PR, because the link
+ * now precedes the PR (D14(2)) and a single REST failure would otherwise leave the KB on a branch no Owner sees:
+ *   - an open PR, or a merged one on `P`: `side_pending` (info, nothing to do);
+ *   - a closed, unmerged PR whose head is `P`: the Owner declined this exact content, never reopened: `side_declined` (info);
+ *   - no PR on `P`: create it (the `pr_failed` retry); a create failure is `fallback_failed pr_failed`;
+ *   - the GET fails: `side_pending`, nothing created (fail toward no duplicate PR).
+ */
+async function recheckSidePr(installationId: number, owner: string, repo: string, D: string, P: string, ctx: KbSyncContext): Promise<KbPublishResult> {
+  const { createPullRequest, listPullRequestsForHead } = await import("./github-app");
+  let prs: Awaited<ReturnType<typeof listPullRequestsForHead>>;
+  try {
+    prs = await listPullRequestsForHead(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D);
+  } catch {
+    throw new KbHeld("side_pending");
+  }
+  if (prs.some((pr) => pr.state === "open")) throw new KbHeld("side_pending");
+  const onP = prs.filter((pr) => pr.headSha === P);
+  if (onP.some((pr) => !pr.merged)) throw new KbHeld("side_declined");
+  if (onP.length > 0) throw new KbHeld("side_pending");
+  let prUrl: string;
+  try {
+    prUrl = (await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D))).htmlUrl;
+  } catch {
+    return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: null };
+  }
+  reportPushHeld("side_pending", "held", ctx);
+  return { kind: "fallback", prUrl, commitCount: 0 };
 }
 
 /**
@@ -754,13 +786,13 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
       return { kind: "noop" };
     }
 
-    // D5b: the side branch already carries HEAD's KB (an open KB PR, nothing new this turn): no push to D, no new local
-    // commit. P must be present (no fetch) and hash-verify; otherwise the turn proceeds.
+    // D5b: the side branch already carries HEAD's KB (nothing new this turn): no push to D, no new local commit, one PR
+    // re-check (D17). P must be present (no fetch) and hash-verify; otherwise the turn proceeds.
     let sideLineage = false;
     if (remote.sideTip !== null && (await isCommitPresent(isolated, remote.sideTip))) {
       const pV = await readVerified(isolated, remote.sideTip);
       const pKb = pV ? kbOf(pV.root) : undefined;
-      if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) throw new KbHeld("side_pending");
+      if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) return await recheckSidePr(installationId, owner, repo, D, remote.sideTip, input);
       // D14(3): a present, hash-verified side tip in HEAD's history must stay in the local branch's history before the push.
       sideLineage = pV !== null && (await isAncestor(isolated, remote.sideTip, headSha));
     }

@@ -55,7 +55,11 @@ const H = vi.hoisted(() => ({
   writeRepoCols: vi.fn(async () => undefined),
   rpc: vi.fn(async () => ({ data: null, error: null })),
   findOpenPullRequest: vi.fn(async () => null as null | { htmlUrl: string }),
+  /** The fake GitHub PR list (D17): `createPullRequest` appends an open PR on the remote's side tip; rows may close one. */
+  prs: [] as Array<{ number: number; htmlUrl: string; url: string; state: "open" | "closed"; merged: boolean; headSha: string }>,
+  sideTipNow: (() => "") as () => string,
   createPullRequest: vi.fn(async () => ({ htmlUrl: "https://github.com/acme/widget/pull/1" })),
+  listPullRequestsForHead: vi.fn(async () => [] as unknown[]),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
@@ -74,6 +78,7 @@ vi.mock("@/server/github-app", () => ({
   generateInstallationToken: async () => ["ghs", "_", "b".repeat(40)].join(""),
   findOpenPullRequest: H.findOpenPullRequest,
   createPullRequest: H.createPullRequest,
+  listPullRequestsForHead: H.listPullRequestsForHead,
 }));
 vi.mock("@/lib/supabase/tenant", () => {
   class RuntimeAuthError extends Error {}
@@ -316,7 +321,7 @@ const resetTurn = (): void => {
   H.calls.length = 0;
   H.iso.length = 0;
   H.verify.length = 0;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.findOpenPullRequest, H.createPullRequest, H.log.info]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.findOpenPullRequest, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
 };
 
 /** A foreign (non-KB) commit the agent made through Bash, plus the KB edit the auto-commit picks up. */
@@ -344,8 +349,17 @@ beforeEach(() => {
   H.verifyFault = null;
   H.beforeCall = null;
   H.afterCall = null;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.listPullRequestsForHead, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
   H.findOpenPullRequest.mockImplementation(async () => null);
+  H.prs.length = 0;
+  H.sideTipNow = () => (row ? (remoteSide(row) ?? "") : "");
+  H.createPullRequest.mockImplementation(async () => {
+    const n = H.prs.length + 1;
+    const pr = { number: n, htmlUrl: `https://github.com/acme/widget/pull/${n}`, url: "", state: "open" as const, merged: false, headSha: H.sideTipNow() };
+    H.prs.push(pr);
+    return pr;
+  });
+  H.listPullRequestsForHead.mockImplementation(async () => H.prs.map((p) => ({ ...p })));
 });
 
 afterEach(() => {
@@ -958,6 +972,9 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
       expect(H.calls.map((c) => c.args[0])).toEqual(["ls-remote"]);
       expect(heldInfo("side_pending")).toHaveLength(1);
       expect(heldWarn("side_pending")).toEqual([]);
+      // D17: one PR re-check (state=all) finds the open PR on the side tip, so nothing is created
+      expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
+      expect(H.listPullRequestsForHead.mock.calls[0]).toEqual([1, "acme", "widget", "soleur/kb-sync", "main"]);
       expect(H.findOpenPullRequest).not.toHaveBeenCalled();
       expect(H.createPullRequest).not.toHaveBeenCalled();
       expect(H.warnSilentFallback).not.toHaveBeenCalled();
@@ -1351,6 +1368,78 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     expect(pushesOf()).toEqual([]);
     expect(H.reportSilentFallback).not.toHaveBeenCalled();
     expect(tracking(row)).toBe(S);
+  });
+});
+
+// CTO ruling D17: a `side_pending` turn re-checks the side branch's PR with one GET (state=all), so a PR that failed to open
+// is opened, an Owner-closed PR for the same head commit stays closed, and a failed GET creates nothing.
+describe("D17: the side_pending PR re-check (real git)", { timeout: 60_000 }, () => {
+  test("the PR creation fails on turn 1 -> the next no-edit turn creates it (side_pending, commitCount 0)", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.createPullRequest.mockImplementationOnce(async () => {
+      throw new Error("502");
+    });
+    await run(row);
+    const side = remoteSide(row) as string;
+    expect(localMain(row)).toBe(side);
+    expect(H.prs).toEqual([]);
+    resetTurn();
+    await run(row);
+    expect(pushesOf()).toEqual([]);
+    expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side]]);
+    expect(heldLines()).toEqual(["side_pending"]);
+    const delivered = H.warnSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "kb-sync.push-protected-fallback");
+    expect((delivered[0]?.[1] as { extra?: Record<string, unknown> }).extra).toEqual(
+      expect.objectContaining({ prUrl: "https://github.com/acme/widget/pull/1", commitCount: 0 }),
+    );
+    // and the turn after that finds the open PR: nothing created again
+    resetTurn();
+    await run(row);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(heldLines()).toEqual(["side_pending"]);
+  });
+
+  test("an Owner-closed (unmerged) PR on the same side tip stays closed: side_declined, info only, nothing created", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    expect(H.prs).toHaveLength(1);
+    H.prs[0].state = "closed";
+    resetTurn();
+    await run(row);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(pushesOf()).toEqual([]);
+    expect(heldLines()).toEqual(["side_declined"]);
+    expect(heldWarn("side_declined")).toEqual([]);
+    expect(H.warnSilentFallback).not.toHaveBeenCalled();
+    expect(H.mirrorWithDebounce).not.toHaveBeenCalled();
+    // the next KB edit opens a new PR as today
+    resetTurn();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb 2\n");
+    await run(row);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+  });
+
+  test("the PR re-check GET fails -> side_pending and no PR is created (fail toward no duplicate)", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.createPullRequest.mockImplementationOnce(async () => {
+      throw new Error("502");
+    });
+    await run(row);
+    resetTurn();
+    H.listPullRequestsForHead.mockImplementationOnce(async () => {
+      throw new Error("503");
+    });
+    await run(row);
+    expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(heldLines()).toEqual(["side_pending"]);
+    expect(H.mirrorWithDebounce).not.toHaveBeenCalled();
   });
 });
 
