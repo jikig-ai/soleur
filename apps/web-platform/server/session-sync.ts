@@ -20,6 +20,7 @@ import {
   reportSilentFallback,
   warnSilentFallback,
 } from "@/server/observability";
+import { firstAppFrame } from "./error-frame";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
@@ -926,14 +927,15 @@ export async function syncPush(
       return;
     }
     log.warn({ err, userId }, "Sync push failed — next session will retry");
-    // D8: null error, the closed reason and push class in tags. A non-KbSyncError carries only its class name: its
-    // message is git's argv (the URL and the refspec, R2), so it never reaches Sentry.
+    // D8: null error, the closed reason and push class in tags. A non-KbSyncError carries only its class name and (D20) its
+    // first app code frame as `file:line`: its message is git's argv (the URL and the refspec, R2), so it never reaches Sentry.
     const kbErr = err instanceof KbSyncError ? err : null;
+    const frame = kbErr ? undefined : firstAppFrame(err);
     reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPush",
       // workspacePath dropped — see syncPull catch for the rationale.
-      extra: kbErr ? { userId } : { userId, errName: err instanceof Error ? err.name : typeof err },
+      extra: kbErr ? { userId } : { userId, errName: err instanceof Error ? err.name : typeof err, ...(frame ? { frame } : {}) },
       tags: { reason: kbErr ? kbErr.reason : "unclassified", push_class: kbErr?.pushClass ?? "none" },
       message: "Sync push failed — next session will retry",
     });

@@ -422,13 +422,28 @@ export function infoSilentFallback(
  *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
  *   `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
  *   `side_ahead`. The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`,
- *   `side_pending` (D5b: the side branch already carries HEAD's KB, an open KB PR with nothing new)) never reach this
- *   map; every reason writes its pino line before the debounce (`reportPushHeld` in kb-sync-publish.ts). Also
- *   `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.tracking-ref`, workspace-id key): the
- *   advisory tracking-ref update failed, so the next turn mints a token again. Also
- *   `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via `mirrorWithDebounce`, op `kb-sync.protected-fallback-failed`,
- *   workspace-id key, null err with tags `reason` / `fallback_reason` / `push_class`; CTO ruling D8): the protected-branch
- *   fallback ran and did not deliver, which can repeat every turn (R16), so one slot per workspace and fallback reason.
+ *   `side_pending` (D5b/D17: the side branch already carries HEAD's KB; its PR is open, or was re-created this turn),
+ *   `side_declined` (D17: the Owner closed the PR on that exact side tip, never reopened)) never reach this map; the
+ *   `HELD_WARN_MESSAGES` Record in kb-sync-publish.ts holds an explicit `null` for each. Every reason writes its pino line
+ *   (layer 2) before the debounce (`reportPushHeld`). Also `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`,
+ *   op `kb-sync.tracking-ref`, workspace-id key): the advisory tracking-ref update failed, so the next turn mints a token
+ *   again. Also `kb-sync-rollback-failed` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.rollback`, workspace-id key,
+ *   tag `reason`; CTO ruling D14(4)): the best-effort rollback of the local branch after a fallback exit failed (usually
+ *   `head_moved`); it never changes the turn's result. Also `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via
+ *   `mirrorWithDebounce`, op `kb-sync.protected-fallback-failed`, workspace-id key, null err with tags `reason` /
+ *   `fallback_reason` / `push_class`; CTO ruling D8): the protected-branch fallback ran and did not deliver, which can repeat
+ *   every turn (R16), so one slot per workspace and fallback reason. Also `kb-sync-side-push-transient` (warn-level via
+ *   `mirrorWarnWithDebounce`, op `kb-sync.side-push-transient`, OFF the paging op; D21): the side push failed on the network,
+ *   retried next turn. Also `kb-sync-persistent-other` (ERROR-level via `mirrorWithDebounce`, op
+ *   `kb-sync.protected-fallback-failed`, workspace-id key, tag `reason=persistent_other`; D21): a non-protection persistent
+ *   reject (`shallow update not allowed`) that the next turn hits again.
+ * - `kb-route-helpers` self-heal family (#12600, CTO rulings D7, D15(e), D20; server/workspace-sync.ts
+ *   `selfHealNonFastForward`). The dedup key is the WORKSPACE PATH, an in-process token only, never emitted. Warn-level via
+ *   `mirrorWarnWithDebounce` (designed holds the next session-start pull resolves): `self-heal-aborted-dirty-tracked`,
+ *   `self-heal-aborted-held-commits:<held_kind>` (the class is `<op>:<held_kind>`, `held_kind` = `nonkb` or `kb`, so a KB
+ *   hold does not mask a code hold for the same workspace), `self-heal-aborted-untracked-collision` (tag `arm`). Error-level
+ *   via `mirrorWithDebounce`: `self-heal-aborted-dirty` (also the un-countable case, tag `head=uncountable`) and
+ *   `self-heal-aborted-detached-head`, which now fire per webhook.
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.

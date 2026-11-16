@@ -193,6 +193,25 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     expect(JSON.stringify(outer)).not.toMatch(/github\.com|Command failed/);
   });
 
+  test("D20: a non-KbSyncError carries extra.frame = its first server/app/lib stack frame as file:line, never the message", async () => {
+    const err = new TypeError("Cannot read properties of undefined (reading 'server/evil.ts:1') https://github.com/acme/widgets.git");
+    err.stack = [
+      `TypeError: ${err.message}`,
+      "    at Object.next (node:internal/streams/x:10:3)",
+      "    at helper (/srv/app/node_modules/pkg/index.js:5:1)",
+      "    at publishKbOnly (/srv/app/apps/web-platform/server/kb-sync-publish.ts:812:17)",
+      "    at syncPush (/srv/app/apps/web-platform/server/session-sync.ts:842:20)",
+    ].join("\n");
+    publishSpy.mockRejectedValue(err);
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    const [, ctx] = outer[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }];
+    expect(ctx.extra).toEqual({ userId: "user-1", errName: "TypeError", frame: "server/kb-sync-publish.ts:812" });
+    expect(ctx.tags).toEqual({ reason: "unclassified", push_class: "none" });
+    expect(JSON.stringify(outer)).not.toMatch(/github\.com|evil|Cannot read/);
+  });
+
   test("held or nothing to sync -> no fallback op, no bookkeeping", async () => {
     for (const result of [{ kind: "held", reason: "side_ahead" }, { kind: "noop" }]) {
       publishSpy.mockResolvedValue(result);
