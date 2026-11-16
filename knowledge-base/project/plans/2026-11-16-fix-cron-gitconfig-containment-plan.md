@@ -1418,3 +1418,7 @@ The 12-seat review changed these points. The sections above are kept as planned.
   `[id]` route paths. Unquoted pathname expansion is now a metachar deny (the hook's own messages already quote
   `-f 'labels[]=…'`; six test rows moved to the quoted spelling), the git-add token check keeps only `*` (git's own
   pathspec glob), and `--pathspec-from-file` prefixes are refused on add and commit.
+- **Fix round 6 (security seat on c4c87ddad9).** Pre-existing: `git add ~+` (bash: `$PWD`) staged the whole tree past
+  the absolute-path rule, and `git commit -m x .` commits every tracked change (a commit pathspec records working-tree
+  content, git-commit(1)). Unquoted word-start `~` is now a metachar deny, and any git-commit pathspec is refused
+  (value-taking options skipped). The `--input` refusal now prescribes the quoted `-f 'labels[]=meta/machinery'`.

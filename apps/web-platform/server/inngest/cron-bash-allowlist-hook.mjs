@@ -278,7 +278,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // gh then sends every -f/-F to the QUERY STRING, so a `labels[]=` token here
   // never reaches the issue. Runs BEFORE exits 0 and 1 for that reason.
   if (isApiIssue && tokens.some((t) => t === "--input" || t.startsWith("--input=")))
-    return "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
+    return "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f 'labels[]=meta/machinery'. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
 
   // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
   // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
@@ -565,6 +565,9 @@ function dangerousMetacharReason(command) {
   // named `-A` or `--all` (measured: a whole-tree stage), and `? ??` into most of the tree, after the hook read the
   // raw word. Quoted text is git's own pathspec matching, checked per verb below.
   if (/[*?[]|[!@+]\(/.test(ctrlScan)) return "pathname expansion -- quote any literal * ? [ text";
+  // Fix round 6 — unquoted tilde expansion at a word start or after `=`/`:` (`~`, `~+` = $PWD, `~-`, `~user`):
+  // `git add ~+` staged the whole tree past the absolute-path rule. A mid-word `~` (`HEAD~1`) is not expanded.
+  if (/(^|[\s=:])~/.test(ctrlScan)) return "tilde expansion -- use a path relative to the clone";
   return null;
 }
 
@@ -780,6 +783,23 @@ function gitVerbReason(tokens) {
         return "git commit --all denied (stages every tracked change, bypassing scoped add) — commit only files you explicitly staged";
       if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
         return `git commit ${t} denied (the -a flag stages every tracked change, bypassing scoped add) — commit only files you explicitly staged`;
+    }
+    // Fix round 6 — a positional pathspec makes git commit record the listed paths' working-tree content and ignore
+    // the index (git-commit(1)), so `git commit -m x .` is `commit -a`. The skill commits only what it staged, so any
+    // pathspec is refused. Skip the value of each value-taking option (git also accepts long-option prefixes).
+    const VALUE_SHORT = "mFCct";
+    const VALUE_LONG = ["--author", "--date", "--message", "--file", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--template", "--cleanup", "--trailer"];
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--" || !t.startsWith("-") || t === "-")
+        return `git commit pathspec '${t.slice(0, 60)}' denied (a commit pathspec commits those paths' working-tree content, bypassing scoped add) — stage with git add <path>, then git commit -m "..."`;
+      if (t.startsWith("--")) {
+        if (!t.includes("=") && t.length >= 4 && VALUE_LONG.some((l) => l.startsWith(t))) i++;
+        continue;
+      }
+      const cluster = t.slice(1);
+      const at = [...cluster].findIndex((c) => VALUE_SHORT.includes(c));
+      if (at === cluster.length - 1) i++;
     }
   }
   return null;

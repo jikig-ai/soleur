@@ -1024,7 +1024,7 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
 // ---------------------------------------------------------------------------
 describe("Bash — the --input filing refusal (#9089)", () => {
   const INPUT_REFUSAL =
-    "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
+    "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f 'labels[]=meta/machinery'. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
   // The .mjs default (`runReportLabel = null`) infers `null`; widen it here.
   const fjrTyped = filingJustificationReason as (
     tokens: string[],
@@ -1875,7 +1875,7 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
   const BF_LINES = CRON_BASH_ALLOWLISTS["cron-bug-fixer"];
   it.each([
     "git worktree add /home/soleur/.config/git bot-fix/1-x",
-    "git worktree add ~/.config/git bot-fix/1-x",
+    "git worktree add '~/.config/git' bot-fix/1-x",
     "git worktree add ../../.config/git bot-fix/1-x",
     "git worktree add -b bot-fix/1-x /tmp/elsewhere origin/main",
     "git worktree add .config/git bot-fix/1-x",
@@ -1915,6 +1915,26 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     (cmd) => {
       for (const cron of VERB_TABLE_CRONS)
         expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason, cron).toMatch(/^cron-containment: metachar: pathname expansion/);
+    },
+  );
+  it.each(["git worktree add ~/.config/git bot-fix/1-x", "git add ~+", "git add ~+/apps", "git add ~-", "git add ~/x", "git add --pathspec-from-file=~/l"])(
+    "both crons: unquoted tilde expansion %s is denied as a metachar",
+    (cmd) => {
+      for (const cron of VERB_TABLE_CRONS)
+        expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason, cron).toMatch(/^cron-containment: metachar: tilde expansion/);
+    },
+  );
+  it.each(["git commit -m x .", "git commit -m x -- .", "git commit -m x :/", "git commit -m x src/a.ts", "git commit -qm x .", "git commit --message x .", "git commit --mess x .", "git commit -F msg.txt ."])(
+    "both crons: git commit with a pathspec %s is denied",
+    (cmd) => {
+      for (const cron of VERB_TABLE_CRONS)
+        expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason, cron).toMatch(/git commit pathspec/);
+    },
+  );
+  it.each(['git commit -m "[bot-fix] Fix #1: x"', "git commit -qm x", "git commit -m x --author 'A <a@b.c>'", "git commit --message=x", "git commit -m.", "git commit -F msg.txt", "git log HEAD~1"])(
+    "bug-fixer: %s (no pathspec, or a mid-word ~) is not caught by the pathspec or tilde rules",
+    (cmd) => {
+      expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason ?? "").not.toMatch(/git commit pathspec|tilde expansion/);
     },
   );
   it.each(["git add 'apps/web-platform/app/(dashboard)/dashboard/approvals/[id]/page.tsx'", 'git add -- "app/[slug]/page.tsx"'])(
