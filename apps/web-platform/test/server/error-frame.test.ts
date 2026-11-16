@@ -40,6 +40,18 @@ describe("firstAppFrame (D20, D23)", () => {
     expect(firstAppFrame(err)).toBe(".next/server/chunks/8123.js:1:40417");
   });
 
+  test("verify-pass P3: a Next ROUTE bundle (.next/server/app/**) keeps its .next prefix, never a fake source app/ path", () => {
+    expect(firstAppFrame(withStack(["    at h (/app/.next/server/app/api/kb/upload/route.js:1:234)"]))).toBe(
+      ".next/server/app/api/kb/upload/route.js:1:234",
+    );
+  });
+
+  test("verify-pass P3: a bracketed dynamic route segment is kept, not skipped", () => {
+    expect(firstAppFrame(withStack(["    at h (/app/.next/server/app/api/kb/c4/[...path]/route.js:1:77)"]))).toBe(
+      ".next/server/app/api/kb/c4/[...path]/route.js:1:77",
+    );
+  });
+
   test("every frame matches the credential-proof shape [\\w./-]+:line(:column)", () => {
     for (const f of [
       "    at x (/srv/app/apps/web-platform/server/a.ts:1:2)",

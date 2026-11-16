@@ -7,7 +7,8 @@ const APP_FRAME_DIRS = ["server", "app", "lib"] as const;
 /** Build output directories kept in front of an app dir, so a bundle frame names the bundle it ran from (D23). */
 const BUNDLE_DIRS = ["dist", ".next"] as const;
 const APP_ROOT_ANCHOR = "apps/web-platform/";
-const FRAME_RE = /^[\w./-]+:\d+(?::\d+)?$/;
+// `[` and `]` admit Next dynamic route segments (`[...path]`); still no space, quote, colon-in-path or URL shape.
+const FRAME_RE = /^[\w./[\]-]+:\d+(?::\d+)?$/;
 const STACK_AT_RE = /^\s*at (?:.*?\()?([^()\s]+?):(\d+)(?::(\d+))?\)?\s*$/;
 
 /** `rel` minus an optional leading bundle dir starts with an app dir. */
@@ -18,7 +19,7 @@ const isAppPath = (rel: string): boolean => {
 
 /**
  * The first stack frame of `err` under the app's `server/`, `app/` or `lib/`, as a repo-relative `file:line:column` (the column
- * when the stack has one) matching `[\w./-]+:\d+(:\d+)?`, or undefined when none matches. Only the stack's `at` lines AFTER the
+ * when the stack has one) matching `[\w./[\]-]+:\d+(:\d+)?`, or undefined when none matches. Only the stack's `at` lines AFTER the
  * `<name>: <message>` header are read, so the message (git argv, stderr) never reaches the frame; `node:` internals and
  * `node_modules` are skipped. A code location carries no argv or user data. It only LOCATES the throw: `extra` is not part of
  * Sentry's grouping, so it splits no issue group. In production the server runs the esbuild bundle with no source maps and the
@@ -40,6 +41,16 @@ export function firstAppFrame(err: unknown): string | undefined {
     if (anchor >= 0) {
       rel = file.slice(anchor + APP_ROOT_ANCHOR.length);
     } else {
+      // A bundle frame is cut at its LAST build dir first, so `.next/server/app/**` (a Next route bundle) keeps `.next/`
+      // instead of matching `/app/` and becoming a source path that does not exist.
+      const bundleIdx = Math.max(...BUNDLE_DIRS.map((b) => file.lastIndexOf(`/${b}/`)));
+      if (bundleIdx >= 0) {
+        rel = file.slice(bundleIdx + 1);
+        if (!isAppPath(rel)) continue;
+        const bframe = `${rel}:${m[2]}${m[3] ? `:${m[3]}` : ""}`;
+        if (FRAME_RE.test(bframe)) return bframe;
+        continue;
+      }
       const idx = Math.max(...APP_FRAME_DIRS.map((d) => file.lastIndexOf(`/${d}/`)));
       if (idx < 0) continue;
       const bundle = BUNDLE_DIRS.find((b) => file.slice(0, idx).endsWith(`/${b}`));
