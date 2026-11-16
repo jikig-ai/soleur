@@ -406,9 +406,11 @@ reaches the remote through the sync, and no decision rests on a history walk ove
    - Delete `resolveDefaultBranchForFallback` and the workspace `checkout -f -B`, overlay `checkout`, `commit` and
      `reset --hard` calls.
 7. **Self-heal gate (R18).** `selfHealNonFastForward` (`server/workspace-sync.ts`), default-branch arm: before the
-   branch-aside + `reset --hard`, run `status --porcelain --untracked-files=no`; when any tracked change lies outside
-   `knowledge-base/`, refuse the reset, emit op `self-heal-aborted-dirty-nonkb` (warning) and return the existing
-   `ERROR_CLASS_NON_FAST_FORWARD`. Held foreign commits are now the steady state, so without this every upstream push
+   branch-aside + reset, run `status --porcelain --untracked-files=no`; when any tracked change exists
+   (`knowledge-base/` included since D6), refuse the reset, emit op `self-heal-aborted-dirty-tracked` (warning; R18's op,
+   renamed and widened by D6/D7/D20) and return the existing `ERROR_CLASS_NON_FAST_FORWARD`.
+   As built, the reset is `reset --keep` and also refuses on held commits (`self-heal-aborted-held-commits`) and on an
+   untracked collision (`self-heal-aborted-untracked-collision`), D6/D15; ADR-309 "Self-heal" is the current shape. Held foreign commits are now the steady state, so without this every upstream push
    to `D` would erase a member's uncommitted code edits; the stall ends at the next session-start
    `pull --no-rebase --autostash`. #5221 keeps the broader recovery-and-lock work.
 8. **All sessions (ruling E).** No role read: Owner and member sessions take the same path.
@@ -584,7 +586,7 @@ Every way a commit an agent authored can reach the connected repository from the
 | History rewrites: replace refs, grafts, `commondir`, alternates | already closed by host-git hardening | unchanged; decisions run in the isolated GIT_DIR (ruling P) |
 | Fallback `checkout -f` + `reset --hard` destroying dirty non-KB edits and non-KB commits | pre-existing loss | closed: no checkout, no reset; `--no-deref` CAS ref moves with equal trees only (R3, R17) |
 | A pushed commit the clone lacks, then `syncWorkspace` self-heal `reset --hard` (reconcile webhook on our own push) | n/a | closed: the local branch is updated before the push (R1, R14) |
-| Upstream moves while a foreign commit sits local, then self-heal `reset --hard` loses dirty non-KB edits | pre-existing, now frequent | closed for dirty non-KB edits: `self-heal-aborted-dirty-nonkb` gate (R18); recovery-and-lock work stays on #5221 |
+| Upstream moves while a foreign commit sits local, then self-heal `reset --hard` loses dirty non-KB edits | pre-existing, now frequent | closed for dirty tracked edits: `self-heal-aborted-dirty-tracked` gate (R18, widened by D6/D7); recovery-and-lock work stays on #5221 |
 | Conflicted session-start pull, then auto-commit commits conflict markers | pre-existing | closed for the push: `merge_in_progress` skip (R11); pull-side abort is #12719 |
 | Session-start `syncPull` token-bearing `pull` on the legacy arm reads workspace `url.*.insteadOf` / `http.*` | pre-existing | residual, P1 issue #12718 (R9) |
 | `update-ref` following a symref swapped in after the HEAD read | n/a | closed: `--no-deref` (R19) |
@@ -695,10 +697,10 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
 ### Phase 5 — Self-heal gate (R18)
 
 - `server/workspace-sync.ts` `selfHealNonFastForward` default-branch arm: `status --porcelain --untracked-files=no`
-  through the existing injected `gitWithInstallationAuth`; any tracked path outside `knowledge-base/` -> op
-  `self-heal-aborted-dirty-nonkb` (warning, `reportSilentFallback` family `kb-route-helpers` as its siblings), return
-  `ERROR_CLASS_NON_FAST_FORWARD`. Test in a new `test/server/workspace-sync-self-heal-dirty-nonkb.test.ts` plus the
-  real-git row of the battery.
+  (token-free through `server/workspace-local-git.ts` since D15(d)); any tracked change, `knowledge-base/` included
+  (D6) -> op `self-heal-aborted-dirty-tracked` (warning through `mirrorWarnWithDebounce`, family `kb-route-helpers`,
+  D7), return `ERROR_CLASS_NON_FAST_FORWARD`. Tests in `test/server/workspace-sync-self-heal-gate.test.ts` (unit) and
+  `test/workspace-sync-self-heal-real-git.test.ts` (real git).
 
 ### Phase 6 — Observability (R7)
 
@@ -766,7 +768,7 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
 - `apps/web-platform/server/push-branch.ts` — export the identity constants and `disposeIsolated`;
   `checkCommitPresent` on `runIsolatedGitLocal`.
 - `apps/web-platform/server/approval/workspace-head.ts` — `readWorkspaceHeadRef` export.
-- `apps/web-platform/server/workspace-sync.ts` — `self-heal-aborted-dirty-nonkb` gate (R18).
+- `apps/web-platform/server/workspace-sync.ts` — `self-heal-aborted-dirty-tracked` gate (R18, widened by D6/D7).
 - `apps/web-platform/server/observability.ts` — errorClass registry comment entry only.
 - `apps/web-platform/test/server/session-sync-protected-fallback.test.ts` — trimmed to the op and alert-contract rows;
   `makeGitMock` follows the new call shapes (the `args.length === 1` main-push key is gone); behaviour rows move to the
@@ -822,7 +824,8 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
   `syncWorkspace` or the legacy arm, widens `hostGitInvocation`'s protocol the way `host-git-consumers-real-git.test.ts`
   does). Fixture helper sets `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1` and increasing `GIT_COMMITTER_DATE`
   values; `beforeEach` calls `__resetMirrorDebounceForTests`; logs `git --version` once; explicit `vi.waitFor` timeouts.
-- `apps/web-platform/test/server/workspace-sync-self-heal-dirty-nonkb.test.ts` — R18 unit rows.
+- `apps/web-platform/test/server/workspace-sync-self-heal-gate.test.ts` — R18 unit rows (with the D6/D15 gate rows).
+- `apps/web-platform/test/workspace-sync-self-heal-real-git.test.ts` — the real-git self-heal rows.
 - `apps/web-platform/test/server/classify-push-error.test.ts` — `GH006` line-anchoring (a `GH006` ref name in the
   status line and in `err.message` does not match), `GH013` stays `other`.
 
@@ -874,7 +877,9 @@ other code in that file; this plan does not edit `agent-runner.ts`. No open code
     ends the per-turn `M_n` growth the review measured. A later `github_push_branch` range therefore shows those merges
     and the already-published `S` / side commits next to the member's work. On a protected repo a KB-only turn also takes
     the merge arm once the side commit is in HEAD's history (D14(3)); only an unprotected KB-only clone stays linear,
-    its local branch moved to `S`.
+    its local branch moved to `S`. When an Owner lifts the protection, the next delivered push to `D` on that merge arm
+    moves the local branch back from `M` to `S` (same tree, D22(a)), so the clone is linear again and a later KB UI write
+    is not held as `held_commits`.
   - **Non-default branch.** A user whose agent works on a feature branch gets `non_default_branch` on every turn, and
     their KB edits never reach GitHub from that branch. Phase 0 step 4 records what they got before (the bare push from
     a single-branch clone with no upstream most likely failed already; unverified until measured). They will see their
@@ -886,40 +891,64 @@ other code in that file; this plan does not edit `agent-runner.ts`. No open code
   - **Host move after the default branch moved upstream.** If code commits are held and the upstream default branch
     has moved, the ADR-068 overlay check fails on a host move. The held commits are then parked on its rescue branch
     and `git-data-overlay-not-descendant` fires. They are recoverable, but no longer on the branch.
-- **Interim states until Phase 9 (#12718) lands (review fix-round 1, rulings D14-D17; accepted, tracked):**
+- **Interim states until Phase 9 (#12718) lands (review fix-rounds 1 and 2, rulings D14-D17 and D22-D24; accepted,
+  tracked):**
   - **KB UI write on a held workspace: saved, workspace pending.** An upload, delete or rename in the KB tree, and a
     C4 diagram save, commit to GitHub through the REST API and then pull the workspace. When the self-heal refuses
     with a designed hold (held code commits, an uncommitted tracked edit, or an untracked or ignored file in the
     reset's way: `held_commits`, `dirty_tracked`, `untracked_collision`), the route answers its normal success
     (upload 201, delete and rename 200) plus `workspace_sync: "pending"`, and the KB tree shows a non-error status
     notice on that row: "Saved to GitHub." / "Deleted on GitHub." / "Renamed on GitHub." followed by "Your workspace
-    has local changes that are not on GitHub yet, so it was not updated. You don't need to try again." (one shared
+    has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try
+    again." (D23 copy; the earlier "not on GitHub yet" was false after a protected KB-only turn, whose local commit is
+    on GitHub in the open side PR; one shared
     constant, `lib/kb-workspace-sync-notice.ts`; interim copy, the #12714 wireframe may refine it). The notice shows
     only on that response and is dismissible. The KB view keeps the workspace's copy (a deleted file still appears)
     until the hold clears: the next session-start pull for a legacy-runner user; for a cc-only user nothing clears it
-    until Phase 9's merge. The Concierge's `edit_c4_diagram` returns "Committed to GitHub. The workspace copy was not
-    updated because it holds local changes that are not on GitHub yet. Do not retry: the write is already on GitHub."
+    until Phase 9's merge. The Concierge's `edit_c4_diagram` says the write is committed to GitHub, the workspace copy
+    was not updated, and "Do not retry to deliver this write". A render failure is no longer hidden by the hold
+    (D22(c)): on a pending c4 save the tool still relays `rerendered` and `rerenderDiagnostic`, and the editor's
+    notice appends the render diagnostic when there is one, so neither the user nor the model mistakes an unrendered
+    diagram for a good one. A hold on only the post-render resync says the workspace "may not show this save yet".
     The manual Sync button still says "Workspace out of sync" (true). The team-icon upload in Settings now succeeds
-    instead of failing, with no notice. Before this fix the same writes returned 500 "Try refreshing", which invited a
+    (201) instead of failing, with no notice: the avatar keeps the old or default icon until the hold clears, because
+    it loads from the workspace, and a retry gets 409 "File already exists". A notice on that Settings row is Phase 11
+    (#12714) scope in this PR (D24). Before this fix the same writes returned 500 "Try refreshing", which invited a
     duplicate commit or a "File not found" retry (D16).
+  - **KB UI write on an unprotected workspace with held code: the agent's later KB edits wait (`remote_ahead`).** The
+    UI write commits to GitHub, so `D` moves ahead of the local branch, and the self-heal holds (`held_commits`).
+    Every later post-turn sync is then `remote_ahead`, an info-only line the user never sees: one UI upload stops all
+    later agent KB delivery for that workspace. The next session-start pull clears it for a legacy-runner user; for a
+    cc-only user only Phase 9's hardened pull-merge (#12718) clears it. No product surface names it until #12714.
   - **Self-heal holds on every upstream push.** The reconcile webhook and the sync-health cron take the same refusals
     on a held workspace; they warn, debounced per workspace, and never page.
   - **`side_pending` (silent).** The KB is on `soleur/kb-sync` with a PR awaiting an Owner; nothing in the product says
     so (#12714). A turn with no new KB edit re-checks the PR with one GET: a missing PR is created then (the retry of a
-    failed PR call, D17), and a failed GET creates nothing.
+    failed PR call, D17; info `side_pr_created`), and a failed GET creates nothing (warning `side_pr_unknown`, D23).
   - **`side_declined` (silent).** An Owner closed, without merging, the side PR for this exact content: it is not
-    reopened, and those KB edits reach GitHub only when the next KB edit opens a new PR.
+    reopened, and those KB edits reach GitHub only when the next KB edit opens a new PR. That new PR re-proposes the
+    declined content too, because the side commit carries HEAD's whole `knowledge-base` subtree. The Owner can refuse
+    it again; nothing reaches `D` without their merge.
+  - **Owner deletes `soleur/kb-sync` after declining (a PR reopens).** Closing the side PR and pressing GitHub's
+    "Delete branch" removes the side tip, so `side_declined` is never reached: the next turn of any kind, even with no
+    new edit, rebuilds `soleur/kb-sync` from `T` and opens a new PR for the same content. Closing without deleting
+    the branch does stick. Matching a closed, unmerged PR by KB tree before creating on an absent side branch is
+    follow-up D24(1). Nothing reaches `D` without an Owner merge.
   - **D5e freezes.** A side tip the workspace lacks (a legacy `soleur/kb-sync` from before the cutover, a re-clone or
     host move, a second workspace on the same repo) is `side_ahead` on every turn: the KB edits are held, warning
-    debounced, and the local branch no longer grows (D14(4)). Phase 9's pull-side adoption of the side tip closes
-    these.
+    debounced, and the local branch no longer grows (D14(4)). The same freeze follows a failed link after a delivered
+    side push: when the agent commits between the side push and the link CAS (`head_moved`), or the process crashes
+    there, the side tip is present but not in HEAD's history. The next no-edit turn creates the PR (D17, possible
+    because the hand-over now runs before the push, D22(b)); an editing turn is held `side_ahead`. Phase 9's
+    pull-side adoption of the side tip closes these.
 - **If this leaks, the user's repository and workflow are exposed via:**
   - a commit an agent authored (any path, including `.github/workflows/*`, any message including `Fixes #N`) published
     to the connected repository with the GitHub App token and no Owner approval;
   - a synthetic commit that reverts a remote knowledge-base edit;
   - a member's uncommitted edit (code or knowledge-base), or an untracked or ignored file, erased by the self-heal reset
     (closed by D6b and D15(a): the reset is `reset --keep` and runs only when it loses no tracked, committed, untracked or
-    ignored file).
+    ignored file). That guarantee is the reset's only: the legacy `pull --ff-only` before it can still overwrite an
+    ignored file at a path upstream added (pre-existing; `--no-overwrite-ignore` is follow-up D24(6)).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one Owner receiving one unapproved member commit is a trust breach on its own
   (CTO ruling H); it does not need to aggregate to matter.
@@ -957,13 +986,13 @@ pre-existing meaning.
 
 ```yaml
 liveness_signal:
-  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined) included"
+  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent, side_pr_unknown); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined, side_pr_created) included"
   cadence: "per legacy-runner turn that has local commits; Sentry debounced 5 min per workspace per reason, Better Stack line every turn"
   alert_target: "Sentry issue stream for the web-platform project (warning level, no page); Better Stack web-platform source"
   configured_in: "apps/web-platform/server/kb-sync-publish.ts and apps/web-platform/server/session-sync.ts (log.info + mirrorWarnWithDebounce calls)"
 
 error_reporting:
-  destination: "layer 2: Sentry web-platform project via reportSilentFallback (SENTRY_DSN); existing op syncPush with a closed reason tag (KbSyncError) for tip-read, fetch, push and isolation failures; existing op kb-sync.protected-fallback-failed with a fallback_reason tag; the workspace-sync self-heal ops (feature kb-route-helpers, CTO rulings D6-D8, D15, D20): self-heal-aborted-dirty-tracked, self-heal-aborted-held-commits and self-heal-aborted-untracked-collision at warning, self-heal-aborted-dirty and self-heal-aborted-detached-head at error, all debounced per workspace path (in-process key, never emitted), and self-heal-failed at error with extra.errName and extra.frame (the first server/, app/ or lib/ code frame as file:line, never the message); op isolated-dir-dispose-failed"
+  destination: "layer 2: Sentry web-platform project via reportSilentFallback (SENTRY_DSN); existing op syncPush with a closed reason tag (KbSyncError) for tip-read, fetch, push and isolation failures; existing op kb-sync.protected-fallback-failed with a fallback_reason tag (debounced per workspace and fallback reason; its persistent_other emit is debounced per workspace, class kb-sync-persistent-other, D21); op kb-sync.side-push-transient at warning, off the paging op (D21); op kb-sync.rollback at warning (D14(4)); the workspace-sync self-heal ops (feature kb-route-helpers, CTO rulings D6-D8, D15, D20): self-heal-aborted-dirty-tracked, self-heal-aborted-held-commits and self-heal-aborted-untracked-collision at warning, self-heal-aborted-dirty and self-heal-aborted-detached-head at error, all debounced per workspace path (in-process key, never emitted), and self-heal-failed at error with extra.errName and extra.frame (the first server/, app/ or lib/ code frame as file:line:column, never the message; in production a release-bundle coordinate, resolvable against the release sha, D23); op isolated-dir-dispose-failed"
   fail_loud: "Sentry issue with tag op=syncPush, tag reason=<closed reason>, static message 'Sync push failed — next session will retry'; no URL, owner, repo or sha in the message"
 
 failure_modes:
@@ -980,8 +1009,23 @@ failure_modes:
     detection: "layer 2: kb-sync.push-held reason:head_moved / ref_update_failed / unpack_failed"
     alert_route: "Sentry issue stream"
   - mode: "protected-branch fallback fails or refuses over unmerged side content"
-    detection: "layer 2: existing op kb-sync.protected-fallback-failed with fallback_reason tag; kb-sync.push-held reason:side_ahead"
+    detection: "layer 2: existing op kb-sync.protected-fallback-failed with fallback_reason tag (side_hash_mismatch, side_guard_failed, side_push_rejected, pr_failed; null error, debounced per workspace and fallback reason, D8); kb-sync.push-held reason:side_ahead. A side push that fails on the network is NOT on this op (next mode)"
     alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners); Sentry issue stream"
+  - mode: "the side push failed on the network (side_push_transient); the next turn retries it (D21)"
+    detection: "layer 2: op kb-sync.side-push-transient (warning, mirrorWarnWithDebounce, class kb-sync-side-push-transient per workspace), tags fallback_reason and push_class; the op-contract test pins it off the paged op"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "a non-protection persistent reject on the push to D (persistent_other, e.g. shallow update not allowed)"
+    detection: "layer 2: op kb-sync.protected-fallback-failed, tag reason=persistent_other, error level, null error, debounced per workspace (class kb-sync-persistent-other, D21), so a reject the next turn hits again emits once per window, not every turn"
+    alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners)"
+  - mode: "the best-effort rollback of the local branch after a fallback exit failed (usually head_moved: the agent committed meanwhile)"
+    detection: "layer 2: op kb-sync.rollback (warning, class kb-sync-rollback-failed per workspace, tag reason); the pino line fires before the debounce; the turn's result is unchanged (D14(4))"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the side PR re-check GET failed (any cause: token mint, network, non-OK, malformed body), so whether a PR exists is unknown"
+    detection: "layer 2: kb-sync.push-held reason:side_pr_unknown (warning, debounced per workspace, registered in HELD_WARN_MESSAGES, D23); nothing is created (fail toward no duplicate PR)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the side PR was missing and the re-check created it (D17 create)"
+    detection: "layer 2 (pino -> Better Stack): info line kb-sync.push-held reason:side_pr_created (D23); no kb-sync.push-protected-fallback mirror and no history or last-synced write, because no push ran this turn; a failed create is kb-sync.protected-fallback-failed fallback_reason pr_failed"
+    alert_route: "Better Stack search (no alert; expected outcome)"
   - mode: "self-heal refused because the workspace has an uncommitted tracked edit (code or knowledge-base) on a non-fast-forward clone"
     detection: "layer 2: op self-heal-aborted-dirty-tracked (warning, debounced per workspace); the KB route answers workspace_sync pending (D16)"
     alert_route: "Sentry issue stream (no page)"
@@ -995,12 +1039,12 @@ failure_modes:
     detection: "layer 2: op self-heal-aborted-dirty (tag head = non_default | uncountable; the slug is a misnomer kept for continuity) or op self-heal-aborted-detached-head (tag head=detached), error level, debounced per workspace"
     alert_route: "Sentry issue stream"
   - mode: "self-heal threw (a git verb failed, a reset --keep refusal, a code regression)"
-    detection: "layer 2: op self-heal-failed (error), extra.errName and extra.frame locate the throw without the message"
+    detection: "layer 2: op self-heal-failed (error), extra.errName and extra.frame (file:line:column of the first app frame; a release-bundle coordinate in production) localise the throw without the message"
     alert_route: "Sentry issue stream"
   - mode: "the workspace HEAD has no knowledge-base while the remote holds one (the KB would be deleted on GitHub)"
     detection: "layer 2: kb-sync.push-held reason:kb_absent (warning, debounced per workspace)"
     alert_route: "Sentry issue stream (no page)"
-  - mode: "KB waits on expected holds (remote_ahead, remote_unknown_tip, held_foreign, side_pending: the side PR is open, or its re-check GET failed; side_declined: the Owner closed the side PR for this exact content, D17)"
+  - mode: "KB waits on expected holds (remote_ahead, remote_unknown_tip, held_foreign, side_pending: the side PR is open; side_declined: the Owner closed the side PR for this exact content, D17)"
     detection: "layer 2 (pino -> Better Stack): info lines op kb-sync.push-held with the reason; a persistent cause surfaces elsewhere (op syncPull error on a failed pull, merge_in_progress warning on a conflicted pull; a side_pending turn whose PR is missing retries the PR create, and a failed create is kb-sync.protected-fallback-failed fallback_reason pr_failed)"
     alert_route: "Better Stack search (no alert; expected outcomes)"
   - mode: "a non-KB commit reaches the remote (the bug)"
@@ -1197,7 +1241,7 @@ applicable beyond that statement.
 | `observability.ts` registry comment, `kb-sync.push-held` op, `KbSyncError` | — | inferred — justification: `hr-observability-as-plan-quality-gate` / `cq-silent-fallback-must-mirror-to-sentry`, R7; raw push errors now embed the repo URL and sha |
 | ADR-309 / ADR-068 / ADR-050 addenda | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable`, CTO rulings G, R5 |
 | Edits to the existing syncPush test files, `classify-push-error.test.ts` | ask 2 | asked |
-| `test/session-sync-kb-only-push-real-git.test.ts`, `workspace-sync-self-heal-dirty-nonkb.test.ts` | ask 2 | asked |
+| `test/session-sync-kb-only-push-real-git.test.ts`, `workspace-sync-self-heal-gate.test.ts` | ask 2 | asked |
 
 ### Split Assessment
 
@@ -1241,15 +1285,16 @@ tests green at every boundary so any phase reverts alone.
 - [ ] AC7: in the real-git battery, no protected-fallback row leaves a dirty tracked non-KB file changed or a foreign
   commit off the local branch (matrix 12, 13), the side commit descends from `T` (matrix 20), and
   `session-sync-protected-fallback.test.ts` keeps its op and alert-contract rows green.
-- [ ] AC8: `selfHealNonFastForward` refuses the reset with op `self-heal-aborted-dirty-nonkb` when a tracked non-KB file
-  is dirty, and still recovers a clone whose only dirty files are under `knowledge-base/` (asserted in
-  `workspace-sync-self-heal-dirty-nonkb.test.ts`; matrix 21);
+- [ ] AC8: `selfHealNonFastForward` refuses the reset with op `self-heal-aborted-dirty-tracked` when any tracked file
+  is dirty, `knowledge-base/` included (D6 removed the KB exemption), and still recovers a clean clone whose local
+  commits' content is already upstream (asserted in `test/server/workspace-sync-self-heal-gate.test.ts` and
+  `test/workspace-sync-self-heal-real-git.test.ts`; matrix 21);
   `test/server/workspace-sync-no-pre-self-heal-error-mirror.test.ts` and `test/kb-route-helpers.test.ts` stay green.
 - [ ] AC9: ADR-309 carries the 2026-11-12 addendum and three forward pointers, ADR-068 carries its addendum; no
   `model.c4` change.
 - [ ] AC10: no file under `docs/`, `knowledge-base/legal/` or the approval-queue flag code is in the diff
   (`git diff --name-only origin/main...HEAD`).
-- [ ] AC11: `cd apps/web-platform && npx vitest run test/session-sync-kb-only-push-real-git.test.ts test/server/session-sync-protected-fallback.test.ts test/server/session-sync-sentry-mirror.test.ts test/server/session-sync-workspace-last-synced.test.ts test/session-sync-path-allowlist.test.ts test/host-git-consumers-real-git.test.ts test/push-branch-isolated-real-git.test.ts test/server/workspace-sync-self-heal-dirty-nonkb.test.ts test/server/workspace-sync-no-pre-self-heal-error-mirror.test.ts test/kb-route-helpers.test.ts test/server/classify-push-error.test.ts test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts` passes, and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [ ] AC11: `cd apps/web-platform && npx vitest run test/session-sync-kb-only-push-real-git.test.ts test/server/session-sync-protected-fallback.test.ts test/server/session-sync-sentry-mirror.test.ts test/server/session-sync-workspace-last-synced.test.ts test/session-sync-path-allowlist.test.ts test/host-git-consumers-real-git.test.ts test/push-branch-isolated-real-git.test.ts test/server/workspace-sync-self-heal-gate.test.ts test/workspace-sync-self-heal-real-git.test.ts test/server/workspace-sync-no-pre-self-heal-error-mirror.test.ts test/kb-route-helpers.test.ts test/server/classify-push-error.test.ts test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts` passes, and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
 - [ ] AC12: the PR body (written by `soleur:ship`) carries `Closes #12600`, links #12713, #12714, #12718, #12719 and
   #12734, quotes the Phase 0 measurements (`git --version` in the runner image and on CI, the hash-check and hand-off
   probes, `ls-remote --symref`, the fallback `fetch`, the non-default-branch "before" behaviour, the battery runtime),
@@ -1353,12 +1398,12 @@ local bare remotes, no network). Fixtures are synthesized (`cq-test-fixtures-syn
 - Given a protected default and a side tip that holds unmerged KB content not in HEAD's history, then nothing is pushed, `reason: side_ahead` (matrix 16); given the PR merged (side KB entry == `T`'s), then the side commit is built.
 - Given `<headSha>:knowledge-base` is a blob (a file named `knowledge-base` replaced the directory), then nothing is pushed, `reason: kb_not_tree`.
 - Given `.git/MERGE_HEAD` present with conflict markers in a KB file, then no auto-commit and no push, `reason: merge_in_progress` (matrix 17).
-- Given a held foreign commit and a dirty tracked non-KB file, when upstream `D` moves and the real `syncWorkspace` runs, then no `reset --hard` happens, op `self-heal-aborted-dirty-nonkb` fires and the dirty edit is intact (matrix 21).
+- Given a held foreign commit and a dirty tracked non-KB file, when upstream `D` moves and the real `syncWorkspace` runs, then no reset happens, op `self-heal-aborted-dirty-tracked` fires and the dirty edit is intact (matrix 21).
 - Given a `ls-remote` that throws, then the isolated dir is disposed (no directory left under its parent) and op `syncPush` fires with `reason: ls_remote_failed` and no URL in the message.
 - Unit (`test/server/session-sync-sentry-mirror.test.ts`): AC5.
 - Unit (`test/session-sync-path-allowlist.test.ts`): `update-ref --no-deref` / `unpack-objects` accept only the guarded argv shapes.
 - Unit (`test/server/classify-push-error.test.ts`): `GH006` line-anchored; `GH013` -> `other`.
-- Unit (`test/server/workspace-sync-self-heal-dirty-nonkb.test.ts`): AC8.
+- Unit (`test/server/workspace-sync-self-heal-gate.test.ts`) and real git (`test/workspace-sync-self-heal-real-git.test.ts`): AC8.
 - Regression: `test/host-git-consumers-real-git.test.ts` carrier rows stay green; `test/push-branch-isolated-real-git.test.ts` stays green with `checkCommitPresent` on the runner.
 
 ### Test Scenarios — #12718 / #12714 extension

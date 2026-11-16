@@ -552,7 +552,7 @@ seven tools still fall back to a card the requesting member can answer") on the 
 ## Addendum — 2026-11-13 (#12600): the post-session sync push publishes only Soleur-built knowledge-base commits
 
 Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20, review round 1 D5-D13 and review fix-round 1
-D14-D21, in the #12600 decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
+D14-D21) and by the review lead (fix-round 2, D22-D24), in the #12600 decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
 
 - **What changed.** `syncPush` (`server/session-sync.ts`, push half in `server/kb-sync-publish.ts`) no longer runs a bare
   `git push` of the checked-out branch. Each turn it reads the default branch `D` and its tip `T` from one hardened
@@ -572,11 +572,16 @@ D14-D21, in the #12600 decision record, `knowledge-base/project/specs/feat-one-s
   and its Owner approval. The local branch moves to `S` (KB-only turn) or to a merge `M` of HEAD and `S` (code held)
   before the push, so the clone stays fast-forwardable. A turn is KB-only only when `S`'s tree equals HEAD's AND no
   present, hash-verified side tip is an ancestor of HEAD (D14(3)); otherwise it takes the `M` arm, so the local branch
-  never drops side-branch lineage before the push.
+  never drops side-branch lineage before the push. After a successful push to `D` on the `M` arm with `S`'s tree equal
+  to HEAD's (a present side tip in HEAD's history, nothing held), the local branch moves back from `M` to `S` by a
+  best-effort CAS (D22(a)). This is lossless: the trees are equal, and `S` carries HEAD's knowledge base, a superset of
+  the side tip's. So when an Owner lifts branch protection, local ends at `S` = remote, not at an unpushed merge that
+  would make the self-heal hold every later KB UI write as `held_commits`.
 - **Refusals** (op `kb-sync.push-held`, tags `reason` + `outcome`): `merge_in_progress`, `detached_head`,
   `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`,
-  `ref_update_failed`, `unpack_failed` and `side_ahead` warn (debounced per workspace and reason); `remote_ahead`,
-  `remote_unknown_tip`, `held_foreign`, `synthetic_pushed`, `side_pending` (D5b) and `side_declined` (D17) log only.
+  `ref_update_failed`, `unpack_failed`, `side_ahead` and `side_pr_unknown` (D23) warn (debounced per workspace and
+  reason); `remote_ahead`, `remote_unknown_tip`, `held_foreign`, `synthetic_pushed`, `side_pending` (D5b),
+  `side_declined` (D17) and `side_pr_created` (D23) log only.
 - **Protected default branch.** A rejection is `protected_branch` when its stderr has GitHub's `remote: error: GH006:`
   line or a `remote:` line whose message STARTS with "Changes must be made through a pull request" (after an optional
   `error:` and `- `), the #5426 require-PR text that a `GH013` ruleset requiring a PR also prints (D9, amended by D18;
@@ -584,31 +589,47 @@ D14-D21, in the #12600 decision record, `knowledge-base/project/specs/feat-one-s
   the text is split on `\n`, and each line is tested with NON-multiline regexes using `[ \t]`, never `\s`. So a
   `remote:   path: ...` echo of an agent-authored KB path cannot match, the text on a bare line after `remote:` cannot
   match, and U+2028 / U+2029 inside a path never form a line. Trailing text after the require-PR phrase stays tolerated
-  (the live `GH013` layout is `unverified`). Residual: a KB path holding a raw newline that GitHub echoes unescaped
-  could still forge a line (`unverified`); the effect is a misroute to an Owner-reviewed PR, no privilege. A `GH013`
+  (the live `GH013` layout is `unverified`). Residual: a KB path holding a raw newline or a raw CR that GitHub echoes
+  unescaped could still forge a line (git's sideband demux ends a line at either, and the classifier turns a CR into a
+  newline) (`unverified`); the effect is a misroute to an Owner-reviewed PR, no privilege. A `GH013`
   without that text (secret push protection) stays `other`. On `protected_branch` the side commit on `soleur/kb-sync` is built
   the same way on `T` (parents `T`, the side tip `P` when it already descends from `T`, or `(P, T)`), in the isolated
   directory: no workspace checkout, commit or `reset --hard`. A turn whose side tip `P` is present and already carries
   HEAD's `knowledge-base` entry returns `side_pending` before any push to `D` (D5b). On a `side_pending` turn one GET
   (`pulls?head=<owner>:soleur/kb-sync&base=<D>&state=all`) re-checks the side PR (D17, amending D5b): an open PR (or a
-  merged one on `P`) stays `side_pending`; no PR whose head is `P` creates it (the `pr_failed` retry), a create failure
-  being `fallback_failed pr_failed`; a closed, unmerged PR whose head is `P` means the Owner declined this exact
-  content, so it is never reopened and the turn is the info-only `side_declined` (the next KB edit opens a new PR); a
-  failed GET stays `side_pending` and creates nothing (fail toward no duplicate PR). The link target is built BEFORE
-  the side push (D14(1): `M'` = HEAD's tree with parents `(headSha, side)`, or the side commit itself on a KB-only
-  turn), so nothing that can throw a non-held error runs after a delivery. Immediately after the side push succeeds,
-  and BEFORE the PR is ensured, the objects are handed over and the local branch moves onto the link target by a
-  `--no-deref` CAS (D5c, D14(2)): a KB-only turn from `S` to the side commit; a held-code turn from `M` to `M'`. So the
-  local link is in place even when the PR call then fails (`pr_failed` keeps the link; the next `side_pending` turn
-  retries the PR, D17). A failed CAS is a held reason, not a fallback failure. Every exit of the fallback before the
-  link completes (`side_ahead`, `side_hash_mismatch`, `side_guard_failed`, a side push failure, a failed `M'` build, a
-  failed hand-over) CASes the local branch back from `S` / `M` to `headSha`, best effort; a failed rollback CAS is
-  swallowed after one debounced warning (op `kb-sync.rollback`) and never changes the turn's result (D14(4)). A
-  non-protected `D` push error (`push_transient`, `other`, `persistent_other`) is NOT rolled back: the remote state is
-  then unknown, and `S` / `M` are both descendants of what the push would have set, so they are the crash-safe value.
-  Exactly one `kb-sync.push-held` outcome line is written per turn: `synthetic_pushed` / `side_pushed` only after the
-  link AND the PR succeed (D14(5)). Residual: the agent committing between the two CASes (`head_moved` on the link)
-  leaves the side branch unlinked until the next editing turn. The tracking ref `refs/remotes/origin/<D>` is set to `T`, the `ls-remote` value, never to the side
+  merged one on `P`) stays `side_pending`; no PR whose head is `P` creates it (the `pr_failed` retry), and the turn
+  reports the info-only `side_pr_created`, with no `kb-sync.push-protected-fallback` mirror and no history or
+  last-synced write, because no push ran (D23); a create failure is `fallback_failed pr_failed`; a closed, unmerged PR
+  whose head is `P` means the Owner declined this exact content, so it is never reopened and the turn is the info-only
+  `side_declined` (the next KB edit opens a new PR); a failed GET, of any cause, is the warning `side_pr_unknown`
+  (debounced, registered) and creates nothing (fail toward no duplicate PR, D23). The link target is built BEFORE
+  the side push (D14(1): `M'` = HEAD's tree with parents `(headSha, side)`, or the side commit itself when HEAD's tree
+  equals the side tree), so nothing that can throw a non-held error runs after a delivery. The objects (`side` and its
+  tree, plus `M'` when built) are handed over to the workspace BEFORE the side push too (D22(b), amending D14(2)):
+  they are inert until the CAS, so a failed hand-over is a pre-delivery exit, and after any later crash or failed CAS
+  the side tip is already present in the workspace. Immediately after the side push succeeds, and BEFORE the PR is
+  ensured, the local branch moves onto the link target by a `--no-deref` CAS (D5c, D14(2)). There are three shapes:
+  - a KB-only turn with no side lineage moves from `S` to the side commit;
+  - a KB-only turn whose present side tip is already in HEAD's history moves from `M` to the side commit (D14(3)
+    sends it to the `M` arm; the trees are equal). This `M -> side` CAS is the steady state of a protected repo from
+    its second KB-only turn on;
+  - a held-code turn moves from `M` to `M'`.
+
+  So the local link is in place even when the PR call then fails (`pr_failed` keeps the link; the next `side_pending`
+  turn retries the PR, D17). A failed CAS is a held reason, not a fallback failure; a held error thrown after a
+  successful side push still ensures the PR, best effort, before it rethrows (D22(b)). Every exit of the fallback
+  before the link completes (`side_ahead`, `side_hash_mismatch`, `side_guard_failed`, a side push failure, a failed
+  `M'` build, a failed hand-over, which now precedes the side push and delivers nothing) CASes the local branch back
+  from `S` / `M` to `headSha`, best effort; a failed rollback CAS is swallowed after one debounced warning (op
+  `kb-sync.rollback`) and never changes the turn's result (D14(4)). A non-protected `D` push error (`push_transient`,
+  `other`, `persistent_other`) is NOT rolled back: the remote state is then unknown, and `S` / `M` are both
+  descendants of what the push would have set, so they are the crash-safe value. Exactly one `kb-sync.push-held`
+  outcome line is written per turn: `synthetic_pushed` / `side_pushed` only after the link AND the PR succeed
+  (D14(5)). Residual: the agent committing between the side push and the link CAS (`head_moved` on the link) leaves
+  the side tip present in the workspace but not in HEAD's history. The next no-edit turn reaches the D17 re-check and
+  creates the PR. An editing turn is held `side_ahead` (`P` is not an ancestor of HEAD) until Phase 9 (#12718) adopts
+  the side tip; a KB-equal link is follow-up D24(9). A crash between the side push and the CAS takes the same path.
+  The tracking ref `refs/remotes/origin/<D>` is set to `T`, the `ls-remote` value, never to the side
   commit, so `git status` never says the knowledge base is on `D` while GitHub's `D` is still `T` (D11, amending R17).
   The push path does not fetch the side branch (D5d): a side tip the workspace lacks cannot be an ancestor of HEAD in
   the same turn, so it returns `side_ahead`. The ops `kb-sync.protected-fallback-failed` (with a closed
@@ -626,7 +647,10 @@ D14-D21, in the #12600 decision record, `knowledge-base/project/specs/feat-one-s
 - **Self-heal** (`selfHealNonFastForward`, `server/workspace-sync.ts`; D6, D7, D15, D16 and D20, superseding R18's gate
   placement and its knowledge-base exemption). Held commits are now the steady state, so the reconcile webhook's reset
   would otherwise run over member work on every upstream push. The reset is now `reset --keep`, the only destructive
-  verb left in the sync path, and it runs only when it loses no tracked, committed, untracked or ignored file:
+  verb left in the sync path, and it runs only when it loses no tracked, committed, untracked or ignored file. That
+  guarantee covers the reset only. The legacy `pull --ff-only` in `syncWorkspace`, which runs before the self-heal, can
+  still overwrite an ignored file at a path upstream added; this predates #12600 (git treats ignored files as
+  expendable), and `--no-overwrite-ignore` is follow-up D24(6). The reset's gate:
   - Every ref the gate reads is the full `refs/remotes/origin/<D>`: the local-commit count is
     `rev-list --count refs/remotes/origin/<D>..HEAD`, never `@{u}` (resolved from the agent-writable `branch.<D>.*`,
     D15(b)), and the rev-list, both content diffs, the precheck and the reset never use a bare `origin/<D>` (DWIM
