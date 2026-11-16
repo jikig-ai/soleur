@@ -194,7 +194,8 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
   });
 
   test("D20: a non-KbSyncError carries extra.frame = its first server/app/lib stack frame as file:line, never the message", async () => {
-    const err = new TypeError("Cannot read properties of undefined (reading 'server/evil.ts:1') https://github.com/acme/widgets.git");
+    // the message itself holds an `at` line naming an app path: only the frames AFTER the header may be read
+    const err = new TypeError("Cannot read https://github.com/acme/widgets.git\n    at forged (/srv/app/apps/web-platform/server/evil.ts:1:1)");
     err.stack = [
       `TypeError: ${err.message}`,
       "    at Object.next (node:internal/streams/x:10:3)",
