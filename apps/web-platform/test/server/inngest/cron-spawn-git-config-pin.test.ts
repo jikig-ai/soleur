@@ -26,7 +26,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { AGENT_GIT_GLOBAL_CONFIG, CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 import { gitCleanEnv } from "../../../../../plugins/soleur/test/lib/git-clean-env";
-import { fixtureCeiling } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const APP = path.resolve(__dirname, "../../..");
 const SWEEP_ROOT = path.join(APP, "server/inngest");
@@ -92,8 +92,8 @@ const DYNAMIC_COMMAND_SPAWNS: Record<string, Record<string, string>> = {
   [SUBSTRATE]: {
     spawnSimple: "pinned",
     spawnClaudeEvalUnguarded: "pinned",
-    exec: "excluded: framing-hook self-test probe; execFileSync(nodeBin, ...) runs node, not git",
-    run: "excluded: containment-hook self-test probe; execFileSync(nodeBin, ...) runs node, not git",
+    exec: "excluded: framing-hook self-test probe; an execFileSync of nodeBin runs node, not git",
+    run: "excluded: containment-hook self-test probe; an execFileSync of nodeBin runs node, not git",
   },
   "functions/cron-github-cidr-refresh.ts": {
     runProc: "excluded: generic runner; every caller passes a literal git/bash command, which rows 4 and 4c check at the call site",
@@ -765,7 +765,9 @@ describe("Guard 3 — walk self-tests (positive controls on synthetic source)", 
       HDR +
         `function c() { spawn("git", ["status"], { env: { ...process.env, ...CRON_GIT_CONFIG_PIN } }); }\n` +
         `// spawn("git", ["status"]);\n` +
-        `function t(u: string) { execSync(\`git clone \${u}\`); }\n`,
+        // A double-quoted host string, so the inner template literal needs no escaped backticks. The
+        // env is present but unpinned, so the sweep must still report it (ok=false).
+        "function t(u: string) { execSync(`git clone ${u}`, { env: process.env }); }\n",
     );
     expect(a.gitSpawns.map((s) => [s.owner, s.ok])).toEqual([["c", true]]);
     expect(a.capable.map((s) => [s.owner, s.word, s.ok])).toEqual([
@@ -884,11 +886,17 @@ describe("Guard 3 — real git (rows 5, 5b)", () => {
     return H;
   }
 
-  /** gitCleanEnv (every inherited GIT_* dropped) + a ceiling, with XDG_CONFIG_HOME removed so git uses $HOME/.config. */
+  /**
+   * The shared fixture env (ceiling, synthesized identity, every inherited GIT_* dropped) with
+   * exactly the keys this row is ABOUT removed: GIT_CONFIG_GLOBAL (the pin under test; the helper
+   * pins /dev/null, which would make both arms identical) and XDG_CONFIG_HOME (so git reads
+   * $HOME/.config). GIT_CONFIG_NOSYSTEM is dropped only for the system-config arm.
+   */
   function baseEnv(H: string, nosystem = true): Record<string, string> {
-    const env = gitCleanEnv({ HOME: H, LC_ALL: "C", GIT_CEILING_DIRECTORIES: fixtureCeiling(H) });
-    if (nosystem) env.GIT_CONFIG_NOSYSTEM = "1";
+    const env = { ...gitFixtureEnv(H), HOME: H, LC_ALL: "C" } as Record<string, string>;
+    delete env.GIT_CONFIG_GLOBAL;
     delete env.XDG_CONFIG_HOME;
+    if (!nosystem) delete env.GIT_CONFIG_NOSYSTEM;
     return env;
   }
 
