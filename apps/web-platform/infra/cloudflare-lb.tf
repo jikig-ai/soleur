@@ -68,9 +68,26 @@ resource "cloudflare_load_balancer_monitor" "web" {
   }
 }
 
-# Origin pool: web-1 serving at weight 1, web-2 gated by var.web2_lb_weight (B2; default 1 =
-# serving). A drained member (weight 0, via the explicit drain act) is health-checked but
-# receives no traffic, so the pool reports truthful per-origin health for BOTH hosts.
+# Origin pool: one origin per var.web_hosts entry, in map-key order (web-1, web-2 — today's order, so the
+# dynamic block plans no diff), at the host's declared lb_weight (#9421 Part 2a, ADR-327). A drained member
+# (weight 0) is health-checked but receives no traffic, so the pool reports truthful per-origin health.
+# local.web_lb_gate carries the gated drain/serve input: a gate can only LOWER a host's declared weight
+# (min), so `-var=web2_lb_weight=0` still drains web-2 and no gate can raise a host declared at 0.
+locals {
+  web_lb_gate = { "web-2" = var.web2_lb_weight }
+  web_lb_weights = {
+    for k, h in var.web_hosts : k => min(h.lb_weight, lookup(local.web_lb_gate, k, h.lb_weight))
+  }
+  # Hosts that serve with no gated drain/serve input (web-1 today). The pool's precondition allows at most
+  # one, so a new key declared at lb_weight = 1 is refused at plan time instead of pooling ungated: it must
+  # enter local.web_lb_gate (and the lb-weight-gate chain) first.
+  web_lb_ungated = [for k, h in var.web_hosts : k if h.lb_weight > 0 && !contains(keys(local.web_lb_gate), k)]
+  # The count alone would pass a swap (the primary declared at 0, a new standby key at 1), so the one
+  # ungated host must also be the luks-monitor primary, which the web_hosts validation holds to one key.
+  # Under that validation the length clause is implied by the alltrue; it stays as defense in depth.
+  web_lb_ungated_ok = length(local.web_lb_ungated) <= 1 && alltrue([for k in local.web_lb_ungated : var.web_hosts[k].luks_monitor_profile == "primary"])
+}
+
 resource "cloudflare_load_balancer_pool" "web_1" {
   account_id    = var.cf_account_id
   name          = "web-1"
@@ -78,24 +95,20 @@ resource "cloudflare_load_balancer_pool" "web_1" {
   # Fallback to itself so a disabled LB degrades to web-1, never NXDOMAIN (B1).
   # (fallback_pool_id is set on the LB resource below.)
 
-  origins {
-    name    = "web-1"
-    address = hcloud_server.web["web-1"].ipv4_address
-    enabled = true
-    weight  = 1
-  }
-
   # B2: gated member — weight 0 means health is still checked but no traffic is routed
   # (provider drained semantic); weight 1 serves. var.web2_lb_weight DEFAULTS to 1
   # (variables.tf) = live, so plans that do not name it are clean; DRAIN is an explicit
   # -var=web2_lb_weight=0 (cf-lb-overlay `ga-pool-update mode=drain`; `ga-overlay` passes it for a fresh create), and the
   # 0→1 flip rode `mode=serve` behind the §(c) gate chain + lb-weight-gate-with-marker.sh.
-  # lb-weight-gate.test.sh C.3/C.4 pin all of this.
-  origins {
-    name    = "web-2"
-    address = hcloud_server.web["web-2"].ipv4_address
-    enabled = true
-    weight  = var.web2_lb_weight
+  # lb-weight-gate.test.sh C.3/C.4 pin all of this (through local.web_lb_gate above).
+  dynamic "origins" {
+    for_each = var.web_hosts
+    content {
+      name    = origins.key
+      address = hcloud_server.web[origins.key].ipv4_address
+      enabled = true
+      weight  = local.web_lb_weights[origins.key]
+    }
   }
 
   # CTO ruling 2026-11-01: origin-level steering is the real knob (LB-level
@@ -111,6 +124,13 @@ resource "cloudflare_load_balancer_pool" "web_1" {
 
   latitude  = 0
   longitude = 0
+
+  lifecycle {
+    precondition {
+      condition     = local.web_lb_ungated_ok
+      error_message = "At most one web host may serve outside the drain gate (local.web_lb_gate), and it must be the luks-monitor primary; drain any other host, or add its key to the gate, before declaring lb_weight = 1."
+    }
+  }
 }
 
 # Page on origin-down: the LB now carries a real health signal (monitor fixed 2026-11-01),

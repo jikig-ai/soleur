@@ -1972,3 +1972,10 @@ frontmatter `status:` now read `accepted`; everything below stays as written.
   re-filed as #6185 (open); nothing rides the ~2026-11-23 window — a failover pair is
   meaningless-or-harmful while queue/run state sits on the sole-copy LUKS volume. #6178 closes
   once this flip merges.
+
+## Addendum — 2026-11-10 (#9421) — Decision 1's private VIP is scheduled
+
+[ADR-327](ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md) puts a private Hetzner load balancer in front
+of the web hosts for the Inngest SDK URL (PR 4 of the #9421 sequence), which is Decision 1's "private VIP when
+active-active-N". Until then the SDK URL is unchanged. The web private IP allowlist on this host is now derived from
+`var.web_hosts` and renders the same string.
