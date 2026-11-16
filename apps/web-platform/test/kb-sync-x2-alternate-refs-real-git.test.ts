@@ -49,7 +49,7 @@ const git = (cwd: string, ...args: string[]): string =>
 
 /** Objects in the isolated directory's OWN store (loose + packed), alternates excluded. */
 function ownObjectCount(iso: IsolatedPushDirHandle): number {
-  const out = execFileSync("git", ["count-objects", "-v"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", GIT_DIR: iso.gitDir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+  const out = execFileSync("git", ["count-objects", "-v"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", GIT_DIR: iso.gitDir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } as unknown as NodeJS.ProcessEnv });
   const field = (k: string): number => Number(out.match(new RegExp(`^${k}: (\\d+)$`, "m"))?.[1] ?? "0");
   return field("count") + field("in-pack");
 }
