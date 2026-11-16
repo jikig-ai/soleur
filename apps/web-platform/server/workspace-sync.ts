@@ -7,12 +7,15 @@
 //
 // Deliberately imports NOTHING from `@/lib/supabase/server` (next/headers).
 // Deps: observability (clean), a type-only KbSyncErrorClass, pino's Logger
-// type, and a LAZY `@/server/git-auth` import inside syncWorkspace.
+// type, the token-free local runner (a host-git leaf), and a LAZY
+// `@/server/git-auth` import inside syncWorkspace.
 import {
+  mirrorWarnWithDebounce,
   reportSilentFallback,
   warnSilentFallback,
 } from "@/server/observability";
 import type { KbSyncErrorClass } from "@/server/session-sync";
+import { runWorkspaceLocalGit, type WorkspaceLocalGitRunner } from "@/server/workspace-local-git";
 import type { Logger } from "pino";
 
 // Re-declared as local constants typed by the shared union (the union is the
@@ -47,20 +50,27 @@ function classifyGitSyncError(err: unknown): KbSyncErrorClass {
 }
 
 /**
- * `git status --porcelain -z --untracked-files=no` output names a tracked path outside `knowledge-base/` (#12600, R18).
- * Entries are `XY <path>\0`; a rename or copy (`R`/`C` in either column) is followed by its source path as its own NUL
- * entry, and both paths count.
+ * `git status --porcelain -z --untracked-files=no` output names at least one tracked change, `knowledge-base/` included
+ * (#12600, CTO ruling D6b: the R18 KB exemption is gone, since a `reset --hard` erases an in-flight KB edit exactly as it
+ * erases a code edit). Untracked files are not listed, and survive a reset unless an incoming tracked path collides.
  */
-function hasTrackedNonKbChange(out: Buffer | string): boolean {
-  const entries = out.toString().split("\0");
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (entry.length < 4) continue;
-    const paths = [entry.slice(3)];
-    if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < entries.length) paths.push(entries[++i]);
-    if (paths.some((p) => !p.startsWith("knowledge-base/"))) return true;
+function hasTrackedChange(out: Buffer | string): boolean {
+  return out.toString().split("\0").some((entry) => entry.length >= 4);
+}
+
+/** Exit status of a `diff --quiet` (0 = no difference, 1 = difference); any other outcome throws (fail closed). */
+async function diffQuietExit(
+  runLocal: WorkspaceLocalGitRunner,
+  args: string[],
+  opts: { cwd: string; timeout: number },
+): Promise<0 | 1> {
+  try {
+    await runLocal(args, opts);
+    return 0;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return 1;
+    throw err;
   }
-  return false;
 }
 
 /**
@@ -94,18 +104,19 @@ async function resolveDefaultBranch(
 /**
  * Pull the workspace to sync local files with the remote repo after a
  * successful GitHub mutation. On a `non_fast_forward` (diverged clone OR dirty
- * working tree) it attempts a GATED, OBSERVABLE self-heal: it resets to
- * `origin/<default>` when the clone holds ZERO un-pushed local commits, and —
- * for un-pushable auto-sync orphan commits stranded on the default branch —
- * branches them aside first (preserving them on a durable ref) before the
- * reset, never destroying agent-session work (feature-branch / detached-HEAD
- * divergence still aborts). Returns a {@link SyncWorkspaceResult}.
+ * working tree) it attempts a GATED, OBSERVABLE self-heal on the default
+ * branch: a `reset --hard origin/<default>` that runs only when it can lose
+ * nothing (a clean tracked tree, and local commits whose content is already
+ * upstream, which are first branched aside to a durable ref). Anything else
+ * refuses (see {@link selfHealNonFastForward}). Returns a
+ * {@link SyncWorkspaceResult}.
  *
  * Reporting is split by recoverability so a self-healed abort does NOT page the
  * operator: the self-healable `non_fast_forward` class logs only an info
  * breadcrumb here and lets the self-heal branches own Sentry escalation
- * (op:self-heal-aborted-dirty / op:self-heal-failed on a real freeze,
- * op:self-heal-reset warn on recovery); only the non-self-healable `sync_failed`
+ * (op:self-heal-aborted-dirty / -detached-head / op:self-heal-failed at error,
+ * the designed holds op:self-heal-aborted-dirty-tracked / -held-commits at
+ * warning, op:self-heal-reset warn on recovery); only the non-self-healable `sync_failed`
  * class emits the error-level `log.error`+`reportSilentFallback` mirror. See
  * Sentry 9ccf1d86… — the unconditional pre-self-heal `log.error({ err })`
  * pino-mirrored to Sentry on every push for a benign, recovered dirty-tree
@@ -146,15 +157,18 @@ export async function syncWorkspace(
       // captured) and let selfHealNonFastForward own escalation: it mirrors
       // op:self-heal-aborted-dirty (feature-branch) /
       // op:self-heal-aborted-detached-head (detached) / op:self-heal-failed
-      // when recovery does NOT happen, and warns op:self-heal-reset (phantom
-      // zero-commit reset) / op:self-heal-recovered-diverged (un-pushed
-      // default-branch commits branched aside + reset) on success.
+      // at error and op:self-heal-aborted-dirty-tracked /
+      // op:self-heal-aborted-held-commits at warning when recovery does NOT
+      // happen, and warns op:self-heal-reset (phantom zero-commit reset) /
+      // op:self-heal-recovered-diverged (upstream-equivalent default-branch
+      // commits branched aside + reset) on success.
       log.info(
         { userId: context.userId, op: context.op, errorClass },
         `kb/${context.op}: ff-only pull blocked — attempting gated self-heal`,
       );
       return await selfHealNonFastForward(
         gitWithInstallationAuth,
+        runWorkspaceLocalGit,
         installationId,
         workspacePath,
         log,
@@ -180,24 +194,29 @@ export async function syncWorkspace(
   }
 }
 
+/** Interim `reason` of `self-heal-aborted-held-commits` until the Phase 9 hardened pull-merge (#12718) is called here. */
+const HELD_COMMITS_REASON_INTERIM = "merge_not_attempted";
+
 /**
- * Gated self-heal for a `non_fast_forward` clone. Fetches the default branch,
- * counts un-pushed local commits (`rev-list --count @{u}..HEAD`), and recovers
- * by branch (one of):
- *  - ZERO un-pushed commits (phantom divergence) → `reset --hard origin/<default>`
- *    (op:self-heal-reset).
- *  - un-pushed commits AND HEAD is the DEFAULT branch → these are un-pushable
- *    auto-sync orphans (session-sync auto-commits `knowledge-base/**` onto the
- *    checked-out default branch; a protected-branch push rejection strands
- *    them). Branch them aside FIRST (`git branch <recovery> HEAD`, preserving
- *    the commit objects on a durable ref), THEN `reset --hard`
- *    (op:self-heal-recovered-diverged). Provably non-destructive: the branch
- *    ref is a gc-root, so the reset discards nothing.
- *  - un-pushed commits on a FEATURE branch (genuine agent work) → abort,
- *    protect (op:self-heal-aborted-dirty).
- *  - detached HEAD (`--abbrev-ref` → literal "HEAD") or an un-countable
- *    rev-list → abort with a distinct op:self-heal-aborted-detached-head slug.
- * Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above.
+ * Gated self-heal for a `non_fast_forward` clone (#12600, CTO rulings D6-D8). A `reset --hard` runs only when it can
+ * lose nothing. In order:
+ *  1. `fetch origin <default>` (token-bearing, X3), then read `rev-parse --abbrev-ref HEAD` and
+ *     `status --porcelain -z --untracked-files=no` ONCE, above the zero/non-zero commit split, so both arms are gated.
+ *  2. HEAD not on the default branch -> abort: detached (op:self-heal-aborted-detached-head) or a feature branch / an
+ *     un-countable rev-list (op:self-heal-aborted-dirty). Both arms, the phantom one included (D6f).
+ *  3. ANY tracked change, `knowledge-base/` included -> refuse (op:self-heal-aborted-dirty-tracked, warning, D6b).
+ *  4. `rev-list --count @{u}..HEAD`:
+ *     - 0 (phantom divergence: HEAD is already in origin's history) -> `reset --hard origin/<default>`
+ *       (op:self-heal-reset);
+ *     - > 0 -> reset (with the branch-aside to `soleur/recovered-kb-sync-*`, op:self-heal-recovered-diverged) ONLY when
+ *       the local commits carry no content upstream lacks: `diff --quiet origin/D...HEAD -- . ':(exclude)knowledge-base/'`
+ *       exits 0 AND the `knowledge-base` trees of HEAD and origin/D are equal (the squash-merged side-PR case);
+ *       otherwise refuse (op:self-heal-aborted-held-commits, warning, tags `held_kind` = nonkb | kb and `reason`).
+ * Every local verb runs token-free through `runLocal` (D6d); only `fetch origin` and `resolveDefaultBranch` carry the
+ * token. Every emit passes a null error and carries its details in tags / extra (D8, the #8629 Error-path tag loss).
+ * The two refusals are designed holds the next session-start pull resolves, so they warn, debounced per workspace (D7,
+ * D6e); `self-heal-failed` stays error. Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above; the
+ * debounce key is in-process only.
  */
 async function selfHealNonFastForward(
   gitWithInstallationAuth: (
@@ -205,12 +224,19 @@ async function selfHealNonFastForward(
     installationId: number,
     opts: { cwd: string; timeout: number },
   ) => Promise<Buffer | string>,
+  runLocal: WorkspaceLocalGitRunner,
   installationId: number,
   workspacePath: string,
   log: Logger,
   context: { userId: string; op: string },
 ): Promise<SyncWorkspaceResult> {
   const gitOpts = { cwd: workspacePath, timeout: 30_000 };
+  const extra = { userId: context.userId };
+  const refuse = (reason: string): SyncWorkspaceResult => ({
+    ok: false,
+    error: new Error(reason),
+    errorClass: ERROR_CLASS_NON_FAST_FORWARD,
+  });
   try {
     const defaultBranch = await resolveDefaultBranch(
       gitWithInstallationAuth,
@@ -224,183 +250,136 @@ async function selfHealNonFastForward(
       gitOpts,
     );
 
-    // Local-commit guard — mirrors session-sync.ts:200-208.
-    const revListOut = await gitWithInstallationAuth(
-      ["rev-list", "--count", "@{u}..HEAD"],
-      installationId,
-      gitOpts,
-    );
-    const localCommits = parseInt(revListOut.toString().trim(), 10);
+    // D6a: both reads hoisted above the zero/non-zero commit split. `--abbrev-ref HEAD` emits the branch's short name,
+    // or the literal "HEAD" when detached. A failing read throws into the catch below (fail closed: no reset).
+    const headRef = (await runLocal(["rev-parse", "--abbrev-ref", "HEAD"], gitOpts)).toString().trim();
+    const statusOut = await runLocal(["status", "--porcelain", "-z", "--untracked-files=no"], gitOpts);
 
-    // `recoveryBranch` is set ONLY when we branch un-pushed commits aside on a
-    // diverged default-branch clone; it distinguishes the recovered-diverged
-    // path from the benign phantom (zero-commit) reset for observability below.
-    let recoveryBranch: string | null = null;
-
-    if (Number.isNaN(localCommits) || localCommits > 0) {
-      // The clone holds un-pushed local commits (or an un-countable count).
-      // Decide by which branch HEAD is on. `--abbrev-ref HEAD` emits the
-      // branch's short name, or the literal "HEAD" when detached. Issued
-      // through the injected wrapper (NOT a direct shell-out) so the seam
-      // stays scriptable; trim the trailing newline before comparing.
-      const headRef = (
-        await gitWithInstallationAuth(
-          ["rev-parse", "--abbrev-ref", "HEAD"],
-          installationId,
-          gitOpts,
-        )
-      )
-        .toString()
-        .trim();
-
-      // Recover ONLY a countable divergence whose HEAD is the default branch:
-      // session-sync auto-commits knowledge-base/** onto the checked-out
-      // default branch, and a protected-branch push rejection strands those
-      // commits as un-pushable orphans — the permanent dead-end this fixes.
-      const onDefaultBranch =
-        !Number.isNaN(localCommits) && headRef === defaultBranch;
-
-      if (!onDefaultBranch) {
-        // Feature branch (genuine agent work targeting a PR), detached HEAD, or
-        // an un-countable rev-list — fail safe and do NOT destroy work. A
-        // detached HEAD gets a DISTINCT, queryable slug so it is never silently
-        // bucketed into the dirty abort (a misclassified detached HEAD would
-        // re-trap the very dead-end this fix removes).
-        const detached = headRef === "HEAD";
-        const abortOp = detached
-          ? "self-heal-aborted-detached-head"
-          : "self-heal-aborted-dirty";
-        log.error(
-          { userId: context.userId, op: context.op, localCommits },
-          `kb/${context.op}: self-heal aborted — ${
-            detached ? "detached HEAD" : "feature-branch"
-          } clone holds un-pushed local commits`,
-        );
-        reportSilentFallback(
-          new Error(
-            detached
-              ? "self-heal aborted: detached HEAD with un-pushed local commits"
-              : "self-heal aborted: un-pushed local commits present",
-          ),
-          {
-            feature: "kb-route-helpers",
-            op: abortOp,
-            extra: { userId: context.userId },
-            message: `kb/${context.op}: self-heal aborted (${
-              detached ? "detached HEAD" : "un-pushed local commits"
-            })`,
-          },
-        );
-        return {
-          ok: false,
-          error: new Error("non-fast-forward with un-pushed local commits"),
-          errorClass: ERROR_CLASS_NON_FAST_FORWARD,
-        };
-      }
-
-      // #12600 (CTO ruling R18): held foreign commits are the steady state
-      // since the sync pushes only Soleur's KB commit, so this arm now runs on
-      // every upstream push to the default branch. `reset --hard` would erase
-      // a member's uncommitted code edits: refuse when any TRACKED change lies
-      // outside knowledge-base/ (untracked files survive a reset). The stall
-      // ends at the next session-start `pull --no-rebase --autostash`; #5221
-      // keeps the broader recovery-and-lock work. A failing status read throws
-      // into the catch below (fail closed: no reset).
-      if (hasTrackedNonKbChange(
-        await gitWithInstallationAuth(
-          ["status", "--porcelain", "-z", "--untracked-files=no"],
-          installationId,
-          gitOpts,
-        ),
-      )) {
-        log.warn(
-          { userId: context.userId, op: context.op, localCommits },
-          `kb/${context.op}: self-heal aborted — tracked changes outside knowledge-base/`,
-        );
-        reportSilentFallback(
-          new Error("self-heal aborted: tracked changes outside knowledge-base"),
-          {
-            feature: "kb-route-helpers",
-            op: "self-heal-aborted-dirty-nonkb",
-            extra: { userId: context.userId },
-            message: `kb/${context.op}: self-heal aborted (tracked changes outside knowledge-base/)`,
-          },
-        );
-        return {
-          ok: false,
-          error: new Error("non-fast-forward with tracked changes outside knowledge-base"),
-          errorClass: ERROR_CLASS_NON_FAST_FORWARD,
-        };
-      }
-
-      // Diverged on the default branch: branch the un-pushed commits aside
-      // BEFORE the reset so the commit objects live on a durable named ref
-      // (recoverable without SSH) and the subsequent `reset --hard` discards
-      // NOTHING. The timestamp avoids clobbering a prior recovery branch.
-      recoveryBranch = `soleur/recovered-kb-sync-${Date.now()}`;
-      await gitWithInstallationAuth(
-        ["branch", recoveryBranch, "HEAD"],
-        installationId,
-        gitOpts,
-      );
+    // Local-commit count. Read before the branch check so an un-countable count (NaN) aborts like a feature branch.
+    let localCommits = Number.NaN;
+    if (headRef !== "HEAD") {
+      localCommits = parseInt((await runLocal(["rev-list", "--count", "@{u}..HEAD"], gitOpts)).toString().trim(), 10);
     }
 
-    // Reset the default branch to origin. Reached either by the phantom
-    // (zero-commit) divergence OR after the branch-aside above (un-pushed
-    // commits already preserved on `recoveryBranch`).
-    await gitWithInstallationAuth(
-      ["reset", "--hard", `origin/${defaultBranch}`],
-      installationId,
-      gitOpts,
-    );
+    // D6f: recover ONLY on the default branch, on BOTH arms. A phantom `reset --hard origin/<D>` on a feature branch
+    // would move that branch onto the default branch. A detached HEAD gets a DISTINCT, queryable slug so it is never
+    // bucketed into the feature-branch abort.
+    if (Number.isNaN(localCommits) || headRef !== defaultBranch) {
+      const detached = headRef === "HEAD";
+      const abortOp = detached ? "self-heal-aborted-detached-head" : "self-heal-aborted-dirty";
+      const what = detached ? "detached HEAD" : "not on the default branch";
+      log.error({ userId: context.userId, op: context.op, localCommits }, `kb/${context.op}: self-heal aborted — ${what}`);
+      reportSilentFallback(null, {
+        feature: "kb-route-helpers",
+        op: abortOp,
+        tags: { head: detached ? "detached" : "non_default" },
+        extra,
+        message: `kb/${context.op}: self-heal aborted (${what})`,
+      });
+      return refuse(`non-fast-forward clone ${what}`);
+    }
+
+    // D6b: any tracked change refuses, knowledge-base/ included. The stall ends at the next session-start
+    // `pull --no-rebase --autostash`; #5221 keeps the broader recovery-and-lock work.
+    if (hasTrackedChange(statusOut)) {
+      const op = "self-heal-aborted-dirty-tracked";
+      log.warn({ userId: context.userId, op: context.op, localCommits }, `kb/${context.op}: self-heal aborted — tracked changes in the working tree`);
+      mirrorWarnWithDebounce(
+        null,
+        { feature: "kb-route-helpers", op, extra, message: `kb/${context.op}: self-heal aborted (tracked changes in the working tree)` },
+        workspacePath,
+        op,
+      );
+      return refuse("non-fast-forward with tracked changes in the working tree");
+    }
+
+    // `recoveryBranch` is set ONLY when un-pushed commits are branched aside; it distinguishes the recovered-diverged
+    // path from the phantom (zero-commit) reset for observability below.
+    let recoveryBranch: string | null = null;
+
+    if (localCommits > 0) {
+      // D6c: reset only when the local commits' content is already upstream. Tree-to-tree diffs: no worktree read, no
+      // clean/smudge filter; `--no-ext-diff --no-textconv` keep any configured diff helper out. The KB check compares
+      // the two `knowledge-base` trees (equal trees <=> no diff under that pathspec, both-absent included).
+      const nonKbHeld =
+        (await diffQuietExit(
+          runLocal,
+          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `origin/${defaultBranch}...HEAD`, "--", ".", ":(exclude)knowledge-base/"],
+          gitOpts,
+        )) === 1;
+      const kbHeld =
+        !nonKbHeld &&
+        (await diffQuietExit(
+          runLocal,
+          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `origin/${defaultBranch}`, "HEAD", "--", "knowledge-base/"],
+          gitOpts,
+        )) === 1;
+      if (nonKbHeld || kbHeld) {
+        // Phase 9 (D6c): call the hardened pull-merge routine (X1) here; on any X1 refusal emit this op with its reason.
+        const op = "self-heal-aborted-held-commits";
+        const heldKind = nonKbHeld ? "nonkb" : "kb";
+        log.warn(
+          { userId: context.userId, op: context.op, localCommits, heldKind },
+          `kb/${context.op}: self-heal aborted — local commits hold content upstream lacks`,
+        );
+        mirrorWarnWithDebounce(
+          null,
+          {
+            feature: "kb-route-helpers",
+            op,
+            tags: { held_kind: heldKind, reason: HELD_COMMITS_REASON_INTERIM },
+            extra: { ...extra, localCommits },
+            message: `kb/${context.op}: self-heal aborted (held ${heldKind} commits)`,
+          },
+          workspacePath,
+          op,
+        );
+        return refuse("non-fast-forward with held local commits");
+      }
+
+      // The local commits' content is upstream (a squash-merged side PR): keep the commit objects on a durable named
+      // ref (recoverable without SSH), then reset. The timestamp avoids clobbering a prior recovery branch.
+      recoveryBranch = `soleur/recovered-kb-sync-${Date.now()}`;
+      await runLocal(["branch", recoveryBranch, "HEAD"], gitOpts);
+    }
+
+    // Reached by the phantom (zero-commit) divergence OR after the branch-aside above, on a clean tracked tree.
+    await runLocal(["reset", "--hard", `origin/${defaultBranch}`], gitOpts);
 
     if (recoveryBranch) {
-      // Recovered a real divergence — record a distinct, queryable WARN op
-      // (recovery rate vs. aborts) that does NOT page.
       log.warn(
-        {
-          userId: context.userId,
-          op: context.op,
-          defaultBranch,
-          localCommits,
-          recoveryBranch,
-        },
-        `kb/${context.op}: self-heal recovered diverged default-branch clone — branched ${localCommits} un-pushed commit(s) aside to ${recoveryBranch}, reset to origin/${defaultBranch}`,
+        { userId: context.userId, op: context.op, defaultBranch, localCommits, recoveryBranch },
+        `kb/${context.op}: self-heal recovered diverged default-branch clone — branched ${localCommits} commit(s) aside to ${recoveryBranch}, reset to origin/${defaultBranch}`,
       );
-      warnSilentFallback(
-        new Error("workspace self-healed via branch-aside + reset --hard"),
-        {
-          feature: "kb-route-helpers",
-          op: "self-heal-recovered-diverged",
-          extra: { userId: context.userId },
-          message: `kb/${context.op}: diverged clone recovered (branched ${localCommits} un-pushed commit(s) to ${recoveryBranch}, reset to origin/${defaultBranch})`,
-        },
-      );
+      warnSilentFallback(null, {
+        feature: "kb-route-helpers",
+        op: "self-heal-recovered-diverged",
+        extra: { ...extra, localCommits },
+        message: `kb/${context.op}: diverged clone recovered (branched ${localCommits} commit(s) aside, reset to origin/${defaultBranch})`,
+      });
       return { ok: true, recovered: true };
     }
 
-    // Phantom divergence (upstream force-push / corrupted ref). Safe reset, no
-    // commits were stranded.
+    // Phantom divergence (upstream force-push / corrupted ref). Safe reset, no commits were stranded.
     log.warn(
       { userId: context.userId, op: context.op, defaultBranch },
       `kb/${context.op}: self-heal reset clone to origin/${defaultBranch}`,
     );
-    warnSilentFallback(new Error("workspace self-healed via reset --hard"), {
+    warnSilentFallback(null, {
       feature: "kb-route-helpers",
       op: "self-heal-reset",
-      extra: { userId: context.userId },
+      extra,
       message: `kb/${context.op}: workspace clone self-healed (reset to origin/${defaultBranch})`,
     });
     return { ok: true, recovered: true };
   } catch (healError) {
-    log.error(
-      { err: healError, userId: context.userId, op: context.op },
-      `kb/${context.op}: self-heal failed`,
-    );
-    reportSilentFallback(healError, {
+    // No `err` key (the pino error mirror would capture it untagged first, #8629) and no message (argv); the name only.
+    const errName = healError instanceof Error ? healError.name : typeof healError;
+    log.error({ userId: context.userId, op: context.op, errName }, `kb/${context.op}: self-heal failed`);
+    reportSilentFallback(null, {
       feature: "kb-route-helpers",
       op: "self-heal-failed",
-      extra: { userId: context.userId },
+      extra: { ...extra, errName },
       message: `kb/${context.op}: self-heal failed`,
     });
     return {

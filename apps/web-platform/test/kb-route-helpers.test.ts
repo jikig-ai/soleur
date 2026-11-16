@@ -50,13 +50,15 @@ vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspaceRepoMeta: mockResolveRepoMeta,
 }));
 
-const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockWarnSilentFallback, mockMirrorWarnWithDebounce } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
+  mockMirrorWarnWithDebounce: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: mockWarnSilentFallback,
+  mirrorWarnWithDebounce: mockMirrorWarnWithDebounce,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -66,6 +68,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 
 vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithAuth,
+}));
+// #12600 D6d: the self-heal's local verbs run token-free through this runner. Routed into the same scripted mock so
+// every row below sees one ordered argv list; test/server/workspace-sync-self-heal-gate.test.ts pins the split.
+vi.mock("@/server/workspace-local-git", () => ({
+  runWorkspaceLocalGit: (args: string[], opts: unknown) => mockGitWithAuth(args, 0, opts),
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -564,6 +571,9 @@ describe("syncWorkspace", () => {
     // `git branch <recovery> HEAD` — the branch-aside that preserves un-pushed
     // commits before the reset.
     branch?: () => Promise<unknown>;
+    // `git status --porcelain -z --untracked-files=no` (#12600 D6a/b gate).
+    // Defaults to a clean tracked tree.
+    status?: () => Promise<unknown>;
   }) {
     mockGitWithAuth.mockImplementation((args: string[]) => {
       const verb = args[0];
@@ -602,6 +612,12 @@ describe("syncWorkspace", () => {
           ? handlers.reset()
           : Promise.resolve(Buffer.from(""));
       }
+      if (verb === "status") {
+        return handlers.status
+          ? handlers.status()
+          : Promise.resolve(Buffer.from(""));
+      }
+      // `diff --quiet` (#12600 D6c) resolves = exit 0: the held commits' content is upstream.
       return Promise.resolve(Buffer.from(""));
     });
   }
@@ -616,6 +632,12 @@ describe("syncWorkspace", () => {
     "error: Your local changes to the following files would be overwritten by merge:\n" +
     "\t.claude/settings.json\n" +
     "Please commit your changes or stash them before you merge.\nAborting";
+  // An untracked file colliding with an incoming tracked path: the same
+  // non_fast_forward class, but a clean TRACKED tree, so the self-heal resets.
+  const UNTRACKED_COLLISION_STDERR =
+    "error: The following untracked working tree files would be overwritten by merge:\n" +
+    "\tnew.txt\n" +
+    "Please move or remove them before you merge.\nAborting";
 
   test("classifies a non-fast-forward stderr as non_fast_forward", async () => {
     // Diverged with ZERO local commits → safe self-heal path resets and recovers.
@@ -637,15 +659,17 @@ describe("syncWorkspace", () => {
     if (result.ok) expect(result.recovered).toBe(true);
   });
 
-  test("#4886-followup: dirty-working-tree abort self-heals (reset --hard) → {ok:true, recovered:true}", async () => {
+  test("#4886-followup: dirty-working-tree abort routes to the gated self-heal, which refuses over a tracked edit (#12600 D6b)", async () => {
     // The KB-mirror clone had an uncommitted `.claude/settings.json` edit; the
     // dirty-tree abort must route to the SAME gated self-heal as non_fast_forward
-    // (reset --hard discards the spurious edit; the un-pushed-commit gate protects
-    // real session work). Before this fix it classified as sync_failed → froze.
+    // (before #4886 it classified as sync_failed → froze). Since #12600 (CTO
+    // ruling D6b) the gate refuses to `reset --hard` over ANY tracked change: the
+    // edit is kept and the next session-start autostash pull resolves the stall.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
+      status: () => Promise.resolve(Buffer.from(" M .claude/settings.json\0")),
     });
 
     const result = await syncWorkspace(
@@ -655,10 +679,17 @@ describe("syncWorkspace", () => {
       { userId: TEST_USER_ID, op: "push" },
     );
 
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.recovered).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    expect(calls).toContainEqual(["fetch", "origin", "main"]);
+    expect(calls.some((a) => a[0] === "reset")).toBe(false);
+    expect(mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "self-heal-aborted-dirty-tracked" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-dirty-tracked",
+    );
   });
 
   // De-noise (Sentry 9ccf1d86…): a self-HEALED ff-only abort must NOT emit an
@@ -666,9 +697,9 @@ describe("syncWorkspace", () => {
   // `log.error({ err })` (pino-mirrored to Sentry as feature:"pino-mirror",
   // level error) + `reportSilentFallback` UNCONDITIONALLY before the self-heal,
   // so a benign, recovered dirty-tree abort paged the operator on every push.
-  test("de-noise: dirty-tree abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
+  test("de-noise: untracked-collision abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
-      pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
+      pull: () => Promise.reject(new Error(UNTRACKED_COLLISION_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
@@ -703,7 +734,7 @@ describe("syncWorkspace", () => {
     expect(infoCtx).not.toHaveProperty("err");
     // Recovery stays observable via the warning-level self-heal-reset mirror.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
@@ -734,7 +765,7 @@ describe("syncWorkspace", () => {
       expect.stringMatching(/ff-only pull blocked/i),
     );
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
@@ -837,7 +868,7 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("branch");
     // Dirty-abort is observable + fail_loud.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
     );
   });
@@ -893,7 +924,7 @@ describe("syncWorkspace", () => {
     // Recovery is observable as a distinct WARN op (queryable recovery rate,
     // does not page) and NOT bucketed into the abort/phantom-reset slugs.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
     // It is a recovery, not a failure — no error-level mirror.
@@ -926,11 +957,11 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("reset");
     // Distinct, queryable slug — never silently bucketed into aborted-dirty.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-detached-head" }),
     );
     expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
     );
   });
@@ -998,11 +1029,11 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("branch");
     // It stays the phantom-reset slug, NOT the diverged-recovery one.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
     expect(mockWarnSilentFallback).not.toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
   });
@@ -1033,7 +1064,7 @@ describe("syncWorkspace", () => {
     expect(calls.some((a) => a[0] === "branch")).toBe(true);
     expect(calls).toContainEqual(["reset", "--hard", "origin/trunk"]);
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
   });
@@ -1083,9 +1114,10 @@ describe("syncWorkspace", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+    // #12600 D8: null error (the #8629 Error-path tag loss), the cause's name in extra only (never its message).
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      resetErr,
-      expect.objectContaining({ op: "self-heal-failed" }),
+      null,
+      expect.objectContaining({ op: "self-heal-failed", extra: expect.objectContaining({ errName: "Error" }) }),
     );
   });
 
@@ -1101,7 +1133,7 @@ describe("syncWorkspace", () => {
     });
 
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
