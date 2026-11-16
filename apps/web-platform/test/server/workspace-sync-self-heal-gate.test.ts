@@ -175,7 +175,7 @@ describe("selfHealNonFastForward: dirty tracked tree refuses on both arms (D6a/b
     expect((failed[0][1] as { extra: Record<string, unknown> }).extra).toEqual({
       userId: "u-1",
       errName: "Error",
-      frame: expect.stringMatching(/^server\/workspace-sync\.ts:\d+$/),
+      frame: expect.stringMatching(/^server\/workspace-sync\.ts:\d+:\d+$/),
     });
   });
 });
@@ -368,8 +368,8 @@ describe("selfHealNonFastForward: self-heal-failed carries a code frame, never t
     const failed = reportSpy.mock.calls.filter((c) => opOf(c) === "self-heal-failed");
     expect(failed).toHaveLength(1);
     const ctx = failed[0][1] as { extra: Record<string, unknown>; message: string };
-    expect(ctx.extra).toEqual({ userId: "u-1", errName: "Error", frame: "server/workspace-sync.ts:347" });
-    expect(String(ctx.extra.frame)).toMatch(/^[\w./-]+:\d+$/);
+    expect(ctx.extra).toEqual({ userId: "u-1", errName: "Error", frame: "server/workspace-sync.ts:347:11" });
+    expect(String(ctx.extra.frame)).toMatch(/^[\w./-]+:\d+:\d+$/);
     expect(JSON.stringify(failed[0])).not.toContain("secret-looking");
   });
 

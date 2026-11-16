@@ -986,7 +986,7 @@ pre-existing meaning.
 
 ```yaml
 liveness_signal:
-  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent, side_pr_unknown); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined, side_pr_created) included"
+  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent, side_pr_unknown); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined, side_pr_created, and pr_failed as the outcome line of a fallback or re-check whose PR call failed, alongside the unchanged error-level kb-sync-fallback-failed:pr_failed page) included"
   cadence: "per legacy-runner turn that has local commits; Sentry debounced 5 min per workspace per reason, Better Stack line every turn"
   alert_target: "Sentry issue stream for the web-platform project (warning level, no page); Better Stack web-platform source"
   configured_in: "apps/web-platform/server/kb-sync-publish.ts and apps/web-platform/server/session-sync.ts (log.info + mirrorWarnWithDebounce calls)"
@@ -1019,6 +1019,9 @@ failure_modes:
     alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners)"
   - mode: "the best-effort rollback of the local branch after a fallback exit failed (usually head_moved: the agent committed meanwhile)"
     detection: "layer 2: op kb-sync.rollback (warning, class kb-sync-rollback-failed per workspace, tag reason); the pino line fires before the debounce; the turn's result is unchanged (D14(4))"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "protection was lifted while a side branch existed; the M arm's default-branch push landed, but moving the local branch from M back to S (same tree) failed (D22(a))"
+    detection: "layer 2: op kb-sync.relink (warning, class kb-sync-relink-failed per workspace, debounced); the turn stays pushed"
     alert_route: "Sentry issue stream (no page)"
   - mode: "the side PR re-check GET failed (any cause: token mint, network, non-OK, malformed body), so whether a PR exists is unknown"
     detection: "layer 2: kb-sync.push-held reason:side_pr_unknown (warning, debounced per workspace, registered in HELD_WARN_MESSAGES, D23); nothing is created (fail toward no duplicate PR)"

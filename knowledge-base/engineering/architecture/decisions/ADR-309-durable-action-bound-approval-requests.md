@@ -581,7 +581,7 @@ D14-D21) and by the review lead (fix-round 2, D22-D24), in the #12600 decision r
   `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`,
   `ref_update_failed`, `unpack_failed`, `side_ahead` and `side_pr_unknown` (D23) warn (debounced per workspace and
   reason); `remote_ahead`, `remote_unknown_tip`, `held_foreign`, `synthetic_pushed`, `side_pending` (D5b),
-  `side_declined` (D17) and `side_pr_created` (D23) log only.
+  `side_declined` (D17) and `side_pr_created` (D23) log only. A `pr_failed` turn writes an info outcome line too; its error-level page is unchanged. A failed M-to-S relink after a lifted protection (D22(a)) is one debounced `kb-sync.relink` warning and the turn stays pushed.
 - **Protected default branch.** A rejection is `protected_branch` when its stderr has GitHub's `remote: error: GH006:`
   line or a `remote:` line whose message STARTS with "Changes must be made through a pull request" (after an optional
   `error:` and `- `), the #5426 require-PR text that a `GH013` ruleset requiring a PR also prints (D9, amended by D18;
