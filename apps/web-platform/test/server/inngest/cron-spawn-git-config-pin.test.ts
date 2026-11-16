@@ -273,7 +273,7 @@ function buildCtx(file: string, src: string): Ctx {
       if (
         inner &&
         ts.isCallExpression(inner) &&
-        inner.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        (inner.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(inner.expression) && inner.expression.text === "require")) &&
         inner.arguments[0] &&
         CHILD_PROCESS_MODULES.has(literalText(inner.arguments[0]) ?? "") &&
         ts.isObjectBindingPattern(n.name)
@@ -546,7 +546,16 @@ function analyze(file: string, src: string): Analysis {
     ) {
       let up: ts.Node = n.parent;
       while (ts.isAwaitExpression(up) || ts.isParenthesizedExpression(up) || ts.isAsExpression(up)) up = up.parent;
-      const named = ts.isVariableDeclaration(up) && ts.isObjectBindingPattern(up.name);
+      // Named only when every element is a plain `{ spawn }` / `{ spawn: s }` name: no `...rest`, no `default:` key.
+      const named =
+        ts.isVariableDeclaration(up) &&
+        ts.isObjectBindingPattern(up.name) &&
+        up.name.elements.every(
+          (el) =>
+            !el.dotDotDotToken &&
+            ts.isIdentifier(el.name) &&
+            (!el.propertyName || (ts.isIdentifier(el.propertyName) && el.propertyName.text !== "default")),
+        );
       if (!named) out.nsImports.push(site(n, NO("whole-module handle on child_process")));
     }
 
@@ -899,6 +908,15 @@ describe("Guard 3 — binding, not name (CTO H5): each planted look-alike FAILS"
     expect(a.nsImports).toHaveLength(6);
     // control: the destructured named form is tracked as a spawner, not a handle
     expect(analyze("functions/x.ts", `async function d() { const { spawn } = await import("node:child_process"); }\n`).nsImports).toEqual([]);
+    // but a `default:` key or a rest element is a whole-module handle
+    const b = analyze(
+      "functions/cron-planted.ts",
+      `async function e() { const { default: cp } = await import("node:child_process"); const { ...r } = require("child_process"); }\n`,
+    );
+    expect(b.nsImports).toHaveLength(2);
+    // and a require() destructure is tracked as a spawner, so a non-literal command is a dynamic spawn
+    const c = analyze("functions/cron-planted.ts", `function f(cmd: string) { const { spawn } = require("node:child_process"); spawn(cmd, []); }\n`);
+    expect(c.dynamic.map((s) => [s.owner, s.ok])).toEqual([["f", false]]);
     // control: a named import is not a handle
     expect(analyze("functions/x.ts", HDR).nsImports).toEqual([]);
   });

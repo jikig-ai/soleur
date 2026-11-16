@@ -1399,3 +1399,8 @@ The 12-seat review changed these points. The sections above are kept as planned.
   (`git worktree add -b x {,~/.config/git}` planted the ignore file; `git add {,.}` staged the tree), so it is now a
   metachar deny. Census row 4e also reports an inline `require(cp).spawn(…)`. The new-rule metric counts only where
   the hook's allowlist file exists in the spawn cwd, not for the `--allowedTools`-only crons.
+- **Fix round 2 (security seat on 5ec8ced614).** An escaped brace (`{~/.config/git,HEAD@\{0\}}`) and an escaped quote
+  outside quotes (`\' {-a,-m} \'`, which `stripQuoted` read as a quoted span) both got past the brace rule; the escaped
+  quote could hide any metachar. A backslash outside single quotes is now a metachar deny, so the hook's quote tracking
+  matches bash's. Census row 4e counts a destructure as the named form only with plain names (no `...rest`, no
+  `default:`), and tracks `require()` destructures as spawners.

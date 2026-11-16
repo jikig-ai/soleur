@@ -504,8 +504,27 @@ function stripQuoted(command, { stripDouble }) {
 // (`gh issue list && cat /proc/self/environ`, `"$(...)"`, `> /dev/tcp/...`).
 // `&&` / `||` / `;` are chain operators handled by segment-splitting.
 // Returns a deny reason string, or null if clean.
+// #12757 fix round 2 — a backslash outside single quotes. Bash treats `\'`, `\"`, `\{` and `\}` as literal characters,
+// but stripQuoted() and the brace check read them as quote or group boundaries, so an escaped quote could hide a
+// `{,-a}` (or anything else) inside a span the hook thought was quoted. With no backslash outside single quotes, the
+// hook's quote tracking is the same as bash's. Inside single quotes a backslash is literal in bash, so a quoted
+// `--jq '"\(.number)"'` stays allowed.
+function backslashOutsideSingleQuotes(command) {
+  let q = null;
+  for (const c of command) {
+    if (q === "'") {
+      if (c === "'") q = null;
+    } else if (c === "\\") return true;
+    else if (q === '"') {
+      if (c === '"') q = null;
+    } else if (c === "'" || c === '"') q = c;
+  }
+  return false;
+}
+
 function dangerousMetacharReason(command) {
   if (/[\n\r]/.test(command)) return "multiline command";
+  if (backslashOutsideSingleQuotes(command)) return "backslash escape outside single quotes -- put literal text in '...' instead";
   // substitution: active even inside double quotes → strip only single quotes
   const substScan = stripQuoted(command, { stripDouble: false });
   if (substScan === null) return "unbalanced quote";

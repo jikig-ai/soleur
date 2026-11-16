@@ -496,7 +496,7 @@ run's token-bearing clone. Three changes close it.
    because the agent commits. `test/server/inngest/cron-spawn-git-config-pin.test.ts` enforces it for what its AST walk
    can see: every `HOME`-keyed literal, every call whose command is a git/gh/bash/sh/env literal, and every
    named-import `child_process` call, in non-test `*.ts` under `server/inngest`; a namespace, default or whole-module
-   handle on `child_process` there (an import, or any `require`/`import()` of it other than the destructured named form) fails the census (row 4e) instead of passing unseen. Unquoted brace expansion is refused as a metachar, so no raw-token rule can be re-spelled past. A missing or unreadable identity
+   handle on `child_process` there (an import, or any `require`/`import()` of it other than the destructured named form) fails the census (row 4e) instead of passing unseen. Unquoted brace expansion and any backslash outside single quotes are refused as metachars, so the hook's quote tracking matches bash's and no raw-token rule can be re-spelled past (an escaped quote or brace was read as a boundary bash does not see). A missing or unreadable identity
    file is reported once per transition per process (`cron-git-config-pin`), because git treats it as an empty global
    and commits then fail with "Author identity unknown".
 3. **Command-word shape rule.** For a `git` or `gh` segment, the raw command words at the allowlist's fixed positions

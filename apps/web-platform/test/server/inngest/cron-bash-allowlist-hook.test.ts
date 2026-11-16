@@ -1897,11 +1897,24 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toBe("cron-containment: metachar: brace expansion");
   });
   it.each([
+    "git worktree add -b x {~/.config/git,HEAD@\\{0\\}}",
+    "git commit {-a,-m\\{}",
+    "git commit {a\\},-a} -m x",
+    "git add {.,\\{}",
+    "git commit -m \\' {-a,-m} \\'",
+    'git commit -m x \\" {-a,-m} \\"',
+    "git status \\' | sh \\'",
+    'git commit -m "x\\" " | sh " "',
+  ])("bug-fixer: a backslash outside single quotes %s is denied (escaped quotes and braces)", (cmd) => {
+    expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toMatch(/^cron-containment: metachar: backslash escape outside single quotes/);
+  });
+  it.each([
     "gh api repos/jikig-ai/soleur/issues --jq '{n: .number, t: .title}'",
+    "gh api repos/jikig-ai/soleur/issues --jq '.[] | \"\\(.number)\"'",
     'git commit -m "fix {a,b} in x"',
-    "gh api repos/{owner}/{repo}/labels",
-  ])("a quoted or comma-free brace %s is not a brace-expansion deny", (cmd) => {
-    expect(decideOn(bash(cmd), RR_LINES).permissionDecisionReason ?? "").not.toContain("brace expansion");
+    "gh api repos/jikig-ai/soleur/labels/{x}",
+  ])("roadmap-review: %s (quoted, single-quoted backslash, or comma-free brace) stays allowed", (cmd) => {
+    expect(decideOn(bash(cmd), RR_LINES).permissionDecision).toBe("allow");
   });
   it("bug-fixer: a $HOME-relative worktree path is denied (the metachar gate refuses it first)", () => {
     expect(decideOn(bash("git worktree add $HOME/.config/git bot-fix/1-x"), BF_LINES).permissionDecision).toBe("deny");
