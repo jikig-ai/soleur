@@ -140,7 +140,9 @@ const IN_PROCESS_ROWS: InProcessRow[] = [
   { name: "frame: mid-word # is not a comment", raw: payload("gh issue view 1#x"), frames: true },
   { name: "frame: gh search issues", raw: payload("gh search issues foo"), frames: true },
   // Review K2 / C2': containment matches the whitespace-normalised join of the tokens, so these
-  // are admitted under a `gh pr view` / `gh issue view` line and must frame.
+  // were admitted under a `gh pr view` / `gh issue view` line and had to frame. Since 2026-11-16
+  // (#12757) containment's command-word shape rule denies all four before they run; framing them
+  // is now redundant but harmless, and the rows stay as the framing hook's own spec.
   { name: "frame, K2: an empty token before the noun", raw: payload('gh "" pr view 1'), frames: true },
   { name: "frame, K2: noun and verb inside one quoted token", raw: payload('gh issue "view 1"'), frames: true },
   { name: "frame, K2: a no-break space inside a token", raw: payload("gh issue\u00a0view 1"), frames: true },

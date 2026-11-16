@@ -45,7 +45,7 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
@@ -411,6 +411,16 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
 
+// #12757 F2 — the git global config and the trust root that holds the pinned identity file.
+// Named so the gate (WRITE_PROTECTED_PATTERNS) and the off-host metric (classifyNewRuleDeny)
+// read the same three objects. This file is plain .mjs and cannot import
+// AGENT_GIT_GLOBAL_CONFIG from host-git.ts; the hook test imports it and asserts the
+// trust-root pattern matches it.
+const GITCONFIG_FILE_RE = /(^|\/)\.gitconfig$/;
+// Assumes XDG_CONFIG_HOME is unset (git then reads $HOME/.config/git/*); nothing under server/ sets it.
+const XDG_GIT_DIR_RE = /(^|\/)\.config\/git(\/|$)/;
+const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
+
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
 // settings file would neuter containment on the NEXT tool call (D-new-2).
 const WRITE_PROTECTED_PATTERNS = [
@@ -423,7 +433,35 @@ const WRITE_PROTECTED_PATTERNS = [
   /(^|\/)settings\.json$/,
   /(^|\/)\.git(\/|$)/,
   /\.env(\.[\w-]+)?$/,
+  GITCONFIG_FILE_RE, // #12757 — ~/.gitconfig: a planted alias/hook/autocorrect runs on the next git call
+  XDG_GIT_DIR_RE, // #12757 — $HOME/.config/git/{config,ignore,attributes}: read whatever the pin says
+  TRUST_ROOT_DIR_RE, // #12757 — /usr/local/share/soleur holds AGENT_GIT_GLOBAL_CONFIG, the pinned identity
 ];
+
+// #12757 — the closed rule ids of the new write rules, keyed by the pattern object itself.
+const NEW_WRITE_RULES = new Map([
+  [GITCONFIG_FILE_RE, "protected-gitconfig"],
+  [XDG_GIT_DIR_RE, "protected-xdg-git"],
+  [TRUST_ROOT_DIR_RE, "protected-trust-root"],
+]);
+
+// The WRITE_PROTECTED_PATTERNS entries a write target hits, testing the raw path AND its
+// posix.normalize form. Normalising can only add denies: it closes `.config//git/config`,
+// `.config/./git/config` and `/usr/local//share/soleur/…`, which the unanchored-at-end patterns
+// miss on the raw string (#12757). One function for the gate and the metric.
+function protectedWriteMatches(p) {
+  if (typeof p !== "string" || !p) return [];
+  const targets = [p, posix.normalize(p)];
+  return WRITE_PROTECTED_PATTERNS.filter((re) => targets.some((t) => re.test(t)));
+}
+
+// The #12757 rule a write deny is attributable to: only when every pattern the target hit is a
+// new one (a path an older rule already denied is not a new-rule deny). Gated on membership in
+// WRITE_PROTECTED_PATTERNS, so removing an entry from the gate removes it from the metric too.
+function newWriteRule(matches) {
+  if (!matches.length || !matches.every((re) => NEW_WRITE_RULES.has(re))) return null;
+  return NEW_WRITE_RULES.get(matches[0]);
+}
 
 // Quote-stripping helpers for metachar detection. Shell semantics:
 //   - single-quoted spans are fully literal → strip for ALL metachar checks
@@ -676,6 +714,35 @@ function gitVerbReason(tokens) {
       if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
         return `git commit ${t} denied (the -a flag stages every tracked change, bypassing scoped add) — commit only files you explicitly staged`;
     }
+  }
+  return null;
+}
+
+// #12757 F1. The allowlist matches normalizeSegmentWhitespace(tokens.join(" ")), but every git/gh
+// rule here (gitVerbReason, the gh api dot-segment branch, the filing gate) reads RAW tokens at
+// fixed positions. Every git/gh allowlist line is a plain `git <sub>`, `gh <group> <verb>` or
+// `gh api <path>` (CRON_BASH_ALLOWLISTS; the hook test's allowlist census keeps that true), so
+// requiring the raw command words at those positions to be plain makes the two views agree on
+// every word a rule keys on. Fail closed. An NBSP is invisible to the agent that typed it, so the
+// reason names the word's position and shows it with non-printing characters escaped.
+const COMMAND_WORD_RE = /^[A-Za-z0-9-]+$/;
+const visibleWord = (w) =>
+  w === undefined
+    ? "missing"
+    : JSON.stringify(w).replace(/[^\x20-\x7e]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+function commandWordShapeReason(tokens) {
+  const norm = normalizeSegmentWhitespace(tokens.join(" ")).split(" ");
+  const verb = norm[0];
+  if (verb !== "git" && verb !== "gh") return null;
+  const isApi = verb === "gh" && norm[1] === "api";
+  const n = verb === "git" || isApi ? 2 : 3;
+  const form = verb === "git" ? "git <sub>" : isApi ? "gh api <path>" : "gh <group> <verb>";
+  for (let i = 0; i < n; i++) {
+    const w = tokens[i];
+    if (i > 0 && typeof w === "string" && w.startsWith("-"))
+      return `flag before the sub-command in a ${verb} command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` first, then flags`;
+    if (typeof w !== "string" || (i === 0 ? w !== verb : !COMMAND_WORD_RE.test(w)))
+      return `irregular command word in a ${verb} command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` with plain spaces and no quotes around the command words`;
   }
   return null;
 }
@@ -987,6 +1054,9 @@ export function decide(input, allowPrefixes) {
         if (!tokens.length) return denyDecision("empty segment");
         const argReason = argumentInjectionReason(tokens);
         if (argReason) return denyDecision(argReason);
+        // #12757 F1 — ahead of every raw-position reader below (classifyNewRuleDeny mirrors this order).
+        const shapeReason = commandWordShapeReason(tokens);
+        if (shapeReason) return denyDecision(shapeReason);
         const gitReason = gitVerbReason(tokens);
         if (gitReason) return denyDecision(gitReason);
         // A measured GET of repos/jikig-ai/soleur/labels/../issues returned
@@ -1036,7 +1106,7 @@ export function decide(input, allowPrefixes) {
     case "Edit":
     case "MultiEdit": {
       const p = ti.file_path || ti.path || "";
-      if (WRITE_PROTECTED_PATTERNS.some((re) => re.test(p)))
+      if (protectedWriteMatches(p).length)
         return denyDecision(`protected-path write: ${p.slice(0, 60)}`);
       return allowDecision();
     }
@@ -1082,6 +1152,43 @@ export function decide(input, allowPrefixes) {
       // hook remains the secret-in-context severance per the threat model).
       return denyDecision(`tool class not permitted: ${tool || "<unknown>"}`);
     }
+  }
+}
+
+// #12757 (CTO H3) — which new containment rule a denied tool call hit, as a closed id
+// (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`), or null.
+// The deny reason never leaves the host (permission_denials[] carries only the tool input), so
+// the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
+// function, which runs the same predicates decide() gates on (commandWordShapeReason,
+// protectedWriteMatches), so the metric cannot drift from the gate. Pure; never throws; never
+// returns any part of the command or path.
+//
+// Bash mirrors decide()'s allowlist-independent order: a command decide() refuses earlier
+// (length, metachar, unbalanced quote, argument injection, or a git-verb / dot-segment deny on
+// an earlier segment) is not a shape deny. RESIDUAL: the allowlist and the filing gate of an
+// earlier segment are unknown here, so a command whose earlier segment was refused for those
+// reasons, and whose later segment is irregular, is still counted as git-gh-shape.
+export function classifyNewRuleDeny(toolName, toolInput) {
+  try {
+    const ti = toolInput && typeof toolInput === "object" ? toolInput : {};
+    if (toolName === "Bash") {
+      const command = typeof ti.command === "string" ? ti.command : "";
+      if (!command.trim() || command.length > MAX_BASH_COMMAND_CHARS) return null;
+      if (dangerousMetacharReason(command)) return null;
+      for (const seg of splitSegments(command)) {
+        const tokens = tokenize(seg);
+        if (tokens === null || !tokens.length || argumentInjectionReason(tokens)) return null;
+        if (commandWordShapeReason(tokens)) return "git-gh-shape";
+        if (gitVerbReason(tokens)) return null;
+        if (tokens[0] === "gh" && tokens[1] === "api" && tokens.some(hasDotSegment)) return null;
+      }
+      return null;
+    }
+    if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit")
+      return newWriteRule(protectedWriteMatches(ti.file_path || ti.path || ""));
+    return null;
+  } catch {
+    return null;
   }
 }
 
