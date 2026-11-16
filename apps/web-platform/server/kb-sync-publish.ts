@@ -592,10 +592,9 @@ interface SideFallbackInput {
   /** HEAD's verified root tree (the tree of `M` and `M'`). */
   readonly headTree: string;
   readonly headKb: TreeEntry;
-  /** `S` and the value step 4 moved the local branch to (`S`, or `M`). */
-  readonly S: string;
   /** Guard 1's token for `S` (a side commit identical to `S` reuses it: Guard 1 once per sha, D13). */
   readonly guardedS: GuardedSha;
+  /** The value step 4 moved the local branch to (`S`, or `M`): the link's CAS old value and the rollback's. */
   readonly localNext: string;
   readonly pushErr: KbSyncError;
 }
@@ -611,19 +610,44 @@ async function ensureKbSyncPr(installationId: number, owner: string, repo: strin
 }
 
 /**
- * Step 6, the protected-branch fallback (rulings F, R3, R4, R15, R17, D5, D11), entirely in the isolated directory: no
- * checkout, no reset, no workspace commit. Side parent `P` = the side tip `ls-remote` returned, hash-verified, and present in
- * the workspace object store; it is never fetched here (D5d: an absent P is absent from the workspace too, so it can never
- * pass the ancestry check this turn) and never a workspace ref. Idempotent first (D5a): a side branch that already carries
- * HEAD's KB keeps its PR and pushes nothing. Ruling I extended: build only when the side branch is absent, `P` is an
- * ancestor of `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s
- * with HEAD's KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push
- * stays a fast-forward) or `(P, T)`. After the push the local branch moves onto the side commit (D5c) and the tracking ref
- * says `T` (D11). A post-success workspace failure is a held reason, never a fallback failure.
+ * D14(4), the scoped rollback: move the local branch back from `localNext` to `headSha`, best effort. Runs on every exit of the
+ * fallback before its link completes; never after a non-protected D push error (the remote state is then unknown, and
+ * `localNext` is the crash-safe value). A failed rollback (`head_moved`: the agent committed meanwhile) never changes the
+ * turn's result: one debounced warning, no outcome line.
  */
-async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
+function rollbackBestEffort(f: SideFallbackInput): void {
+  try {
+    casLocalBranch(f.writer, f.remote.defaultBranch, f.headSha, f.localNext);
+  } catch (err) {
+    const reason = err instanceof KbHeld ? err.reason : "ref_update_failed";
+    log.warn({ op: "kb-sync.rollback", reason, workspaceId: f.ctx.workspaceId }, "KB sync: the local branch rollback failed");
+    mirrorWarnWithDebounce(
+      null,
+      { feature: "session-sync", op: "kb-sync.rollback", message: "KB sync: the local branch rollback failed", tags: { reason }, extra: { userId: f.ctx.userId } },
+      f.ctx.workspaceId,
+      "kb-sync-rollback-failed",
+    );
+  }
+}
+
+/** The side delivery up to and including the local link; `linked` once the local branch names the delivered side commit. */
+type SideStep = { readonly kind: "linked" } | Extract<KbPublishResult, { kind: "fallback_failed" }>;
+
+/**
+ * Steps 6a-6d of the fallback (rulings F, R3, R4, R15, R17, D5, D11, D14), entirely in the isolated directory: no checkout,
+ * no reset, no workspace commit. Side parent `P` = the side tip `ls-remote` returned, hash-verified, and present in the
+ * workspace object store; it is never fetched here (D5d: an absent P is absent from the workspace too, so it can never pass
+ * the ancestry check this turn) and never a workspace ref. A side branch that already carries HEAD's KB never gets here
+ * (`side_pending`, in `publishKbOnly`). Ruling I extended: build only when the side branch is absent, `P` is an ancestor of
+ * `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s with HEAD's
+ * KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push stays a
+ * fast-forward) or `(P, T)`. The link target is built BEFORE the side push (D14(1)), so nothing that can throw a non-held
+ * error runs after a delivery, and the link runs right after it (D14(2)): the side commit itself when HEAD's tree is the side's
+ * tree (no non-KB content to keep), else `M'` = merge(headSha, side) with HEAD's tree.
+ */
+async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   const { isolated, installationId, url, remote, tV, headSha, headKb } = f;
-  const fail = (fallbackReason: KbFallbackReason): KbPublishResult => ({ kind: "fallback_failed", fallbackReason, pushErr: f.pushErr });
+  const fail = (fallbackReason: KbFallbackReason): SideStep => ({ kind: "fallback_failed", fallbackReason, pushErr: f.pushErr });
   const D = remote.defaultBranch;
   const T = remote.tip;
   const P = remote.sideTip;
@@ -635,15 +659,6 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
     const pV = await readVerified(isolated, P);
     if (!pV) return fail("side_hash_mismatch");
     const pKb = kbOf(pV.root);
-    if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) {
-      // The side branch already carries this KB: nothing to push, keep the PR (idempotent re-entry, before the ancestry
-      // check, D5a).
-      try {
-        return { kind: "fallback", prUrl: await ensureKbSyncPr(installationId, f.owner, f.repo, D), commitCount: 0 };
-      } catch {
-        return fail("pr_failed");
-      }
-    }
     const tKb = kbOf(tV.root);
     const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
     // Phase 9 (D5e/D6c): with no open PR, an abandoned P becomes a parent instead of a hold; here it is the interim refusal.
@@ -654,37 +669,46 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   const { sha: side, tree: sideTree } = await buildKbOverlay(isolated, tV.root, headKb, parents);
   const guarded = side === f.guardedS.sha ? f.guardedS : await guardKbOnly(isolated, side, tV.root);
   if (!guarded) return fail("side_guard_failed");
+  const linkTo = sideTree === f.headTree ? side : await commitTree(isolated, f.headTree, [headSha, side], KB_SYNC_MERGE_MSG);
   try {
     await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D });
   } catch (err) {
     return fail(err instanceof KbHeld ? "side_guard_failed" : "side_push_rejected");
   }
+  // D5c/D14(2): the next turn finds the side commit local and an ancestor of HEAD, so (with no new edit) it is
+  // `side_pending`: no push to D, no new merge commit. A failure here is a held reason, never a fallback failure.
+  await handOver(isolated, f.writer, linkTo === side ? [side, sideTree] : [side, sideTree, linkTo]);
+  casLocalBranch(f.writer, D, linkTo, f.localNext);
+  return { kind: "linked" };
+}
+
+/**
+ * Step 6, the protected-branch fallback: deliver and link the side commit, then the tracking ref (D11: `T`, what GitHub's D
+ * is, never the side commit), then the never-auto-merged PR. Every exit before the link completes rolls step 4 back
+ * (D14(4)); a PR failure after the link keeps it (`pr_failed`, retried by the `side_pending` re-check, D17). The outcome line
+ * `synthetic_pushed` / `side_pushed` is written only after the link AND the PR succeed (D14(5)).
+ */
+async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
+  let step: SideStep;
+  try {
+    step = await deliverAndLinkSide(f);
+  } catch (err) {
+    rollbackBestEffort(f);
+    throw err;
+  }
+  if (step.kind !== "linked") {
+    rollbackBestEffort(f);
+    return step;
+  }
+  const D = f.remote.defaultBranch;
+  setTrackingBestEffort(f.writer, D, f.remote.tip, f.ctx);
   let prUrl: string;
   try {
-    prUrl = await ensureKbSyncPr(installationId, f.owner, f.repo, D);
+    prUrl = await ensureKbSyncPr(f.installationId, f.owner, f.repo, D);
   } catch {
-    return fail("pr_failed");
+    return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: f.pushErr };
   }
   reportPushHeld("synthetic_pushed", "side_pushed", f.ctx);
-
-  // D5c: link the side commit into local history in BOTH arms, so the next turn finds P local, an ancestor of HEAD and
-  // (with no new edit) carrying HEAD's KB: `side_pending`, no push to D, no new merge commit. KB-only (local = S, whose
-  // tree is the side's): the branch moves S -> side. Held code (local = M): M -> M' = merge(headSha, side) with HEAD's tree.
-  try {
-    if (f.localNext === f.S) {
-      await handOver(isolated, f.writer, [side, sideTree]);
-      casLocalBranch(f.writer, D, side, f.S);
-    } else {
-      const mPrime = await commitTree(isolated, f.headTree, [headSha, side], KB_SYNC_MERGE_MSG);
-      await handOver(isolated, f.writer, [side, sideTree, mPrime]);
-      casLocalBranch(f.writer, D, mPrime, f.localNext);
-    }
-  } catch (err) {
-    if (!(err instanceof KbHeld)) throw err;
-    reportPushHeld(err.reason, "held", f.ctx);
-  }
-  // D11: the tracking ref names what GitHub's D is (`T`, from `ls-remote`), never the side commit.
-  setTrackingBestEffort(f.writer, D, T, f.ctx);
   return { kind: "fallback", prUrl, commitCount: 1 };
 }
 
@@ -730,11 +754,15 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
       return { kind: "noop" };
     }
 
-    // D5b: the side branch already carries HEAD's KB (an open KB PR, nothing new this turn): no push to D, no REST call,
-    // no new local commit. P must be present (no fetch) and hash-verify; otherwise the turn proceeds.
+    // D5b: the side branch already carries HEAD's KB (an open KB PR, nothing new this turn): no push to D, no new local
+    // commit. P must be present (no fetch) and hash-verify; otherwise the turn proceeds.
+    let sideLineage = false;
     if (remote.sideTip !== null && (await isCommitPresent(isolated, remote.sideTip))) {
-      const pKb = kbOf((await readVerified(isolated, remote.sideTip))?.root ?? []);
+      const pV = await readVerified(isolated, remote.sideTip);
+      const pKb = pV ? kbOf(pV.root) : undefined;
       if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) throw new KbHeld("side_pending");
+      // D14(3): a present, hash-verified side tip in HEAD's history must stay in the local branch's history before the push.
+      sideLineage = pV !== null && (await isAncestor(isolated, remote.sideTip, headSha));
     }
 
     const { sha: S, tree: sTree } = await buildKbOverlay(isolated, tV.root, headKb, [T]);
@@ -742,9 +770,10 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     if (!guardedS) throw new KbHeld("guard_failed");
 
     // Step 4 (R1, R14; P7): keep the clone fast-forwardable BEFORE the push. KB-only local changes: the branch moves to
-    // `S` itself (same tree, linear history). Held non-KB changes: the branch moves to `M` = merge(headSha, S), which keeps
-    // them. Either way the next turn's `T` (= `S`) is an ancestor of the local branch.
-    const kbOnly = sTree === hV.commit.tree;
+    // `S` itself (same tree, linear history). Held non-KB changes, or a side tip in HEAD's history (D14(3): `S` has parent
+    // `T` only, so it would drop that lineage): the branch moves to `M` = merge(headSha, S), which keeps them. Either way the
+    // next turn's `T` (= `S`) is an ancestor of the local branch, and a crash anywhere after this CAS loses nothing.
+    const kbOnly = sTree === hV.commit.tree && !sideLineage;
     const localNext = kbOnly ? S : await commitTree(isolated, hV.commit.tree, [headSha, S], KB_SYNC_MERGE_MSG);
     await handOver(isolated, writer, kbOnly ? [S, sTree] : [S, sTree, localNext]);
     casLocalBranch(writer, D, localNext, headSha);
@@ -754,7 +783,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     } catch (err) {
       if (!(err instanceof KbSyncError) || err.pushClass !== "protected_branch") throw err;
       return await runSideFallback({
-        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headTree: hV.commit.tree, headKb, S,
+        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headTree: hV.commit.tree, headKb,
         guardedS, localNext, pushErr: err,
       });
     }

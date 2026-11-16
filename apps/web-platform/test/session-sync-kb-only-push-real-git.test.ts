@@ -37,6 +37,8 @@ const H = vi.hoisted(() => ({
   calls: [] as Array<{ args: string[]; hardened: boolean; cwd: string | undefined }>,
   remoteUrl: "",
   beforeCall: null as null | ((args: string[]) => void),
+  /** Runs after a token-bearing call SUCCEEDED (a push that lands at the remote while the client sees an error, D14). */
+  afterCall: null as null | ((args: string[]) => void),
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
   mirrorWithDebounce: vi.fn(),
@@ -90,7 +92,9 @@ vi.mock("@/server/git-auth", async (importOriginal) => {
       H.calls.push({ args: [...args], hardened: opts.hardened !== undefined, cwd: opts.cwd });
       H.beforeCall?.(args);
       const rewritten = args.map((a) => (a === "https://github.com/acme/widget.git" ? H.remoteUrl : a));
-      return actual.gitWithInstallationAuth(rewritten, id, opts);
+      const out = await actual.gitWithInstallationAuth(rewritten, id, opts);
+      H.afterCall?.(args);
+      return out;
     },
   };
 });
@@ -270,6 +274,18 @@ const heldInfo = (reason: string): unknown[] =>
 const heldWarn = (reason: string): unknown[] =>
   H.mirrorWarnWithDebounce.mock.calls.filter(([, , , cls]) => cls === `kb-sync-push-held:${reason}`);
 const pushesOf = (): string[] => H.calls.filter((c) => c.args[0] === "push").map((c) => c.args[c.args.length - 1]);
+/** Every `kb-sync.push-held` outcome line of the turn, in order (D14(5): never more than one). */
+const heldLines = (): string[] =>
+  H.log.info.mock.calls.filter(([o]) => (o as { op?: string })?.op === "kb-sync.push-held").map(([o]) => (o as { reason: string }).reason);
+/** The `kb-sync-fallback-failed:<reason>` debounce classes the turn emitted (error and warning helpers alike). */
+const fallbackFailed = (): string[] =>
+  [...H.mirrorWithDebounce.mock.calls, ...H.mirrorWarnWithDebounce.mock.calls]
+    .map(([, , , cls]) => cls as string)
+    .filter((cls) => cls.startsWith("kb-sync-fallback-failed:"));
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+const subjectOf = (dir: string, sha: string): string => git(dir, "log", "-1", "--format=%s", sha);
 /** The hand-over packs of the turn: the object list on stdin, the argv and the object count in the pack header. */
 const packs = (): Array<{ args: string[]; objects: string[]; count: number }> =>
   H.iso
@@ -327,6 +343,7 @@ beforeEach(() => {
   H.isoFault = null;
   H.verifyFault = null;
   H.beforeCall = null;
+  H.afterCall = null;
   for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
   H.findOpenPullRequest.mockImplementation(async () => null);
 });
@@ -1081,6 +1098,227 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     expect(side).not.toBe(P);
     expect(gitOk(row.remote, "merge-base", "--is-ancestor", P, side)).toBe(true);
     expect(git(row.remote, "show", `${side}:knowledge-base/a.md`)).toBe("a\nkb");
+  });
+});
+
+// CTO ruling D14: the fallback converges on EVERY exit, not only on success. The local branch keeps side lineage before the
+// push (the M arm whenever a present side tip is an ancestor of HEAD), the link runs right after the side push and before the
+// PR, and every exit before the link moves the local branch back to the turn's HEAD (never after a non-protected D push error).
+describe("D14: the protected-branch fallback converges on every exit (real git)", { timeout: 60_000 }, () => {
+  const setHook = (r: Row, body: string): void => {
+    writeFileSync(join(r.remote, "hooks", "pre-receive"), body);
+    chmodSync(join(r.remote, "hooks", "pre-receive"), 0o755);
+  };
+  const SIDE_TOO_HOOK = GH006_HOOK.replace(
+    'if [ "$ref" = "refs/heads/main" ]; then',
+    'if [ "$ref" = "refs/heads/main" ] || [ "$ref" = "refs/heads/soleur/kb-sync" ]; then',
+  );
+  const isAnc = (r: Row, a: string, b = "refs/heads/main"): boolean => gitOk(r.ws, "merge-base", "--is-ancestor", a, b);
+  /** A KB-only protected workspace after turn 1: the local branch IS side1 (S -> side link). */
+  const kbOnlyTurn1 = async (): Promise<string> => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 1\n");
+    await run(row);
+    const side1 = remoteSide(row) as string;
+    expect(side1).toBeTruthy();
+    expect(localMain(row)).toBe(side1);
+    resetTurn();
+    return side1;
+  };
+  /** Turn 3 after a failed turn 2: a new KB edit stacks on `prev` (no side_ahead) and is linked locally. */
+  const turn3StacksOn = async (prev: string): Promise<void> => {
+    resetTurn();
+    H.beforeCall = null;
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 3\n");
+    await run(row);
+    const side3 = remoteSide(row) as string;
+    expect(side3).not.toBe(prev);
+    expect(parents(row.remote, side3)).toEqual([prev]);
+    expect(heldWarn("side_ahead")).toEqual([]);
+    expect(isAnc(row, side3)).toBe(true);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+  };
+
+  test("A1: KB-only, turn-2 PR creation fails after the side push -> the link is kept (pr_failed), turn 3 stacks on side2", async () => {
+    const side1 = await kbOnlyTurn1();
+    H.createPullRequest.mockImplementationOnce(async () => {
+      throw new Error("502");
+    });
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    const side2 = remoteSide(row) as string;
+    expect(parents(row.remote, side2)).toEqual([side1]);
+    // D14(2): the link ran before the PR, so side2 is local lineage even though the PR failed
+    expect(localMain(row)).toBe(side2);
+    expect(fallbackFailed()).toEqual(["kb-sync-fallback-failed:pr_failed"]);
+    expect(heldLines()).toEqual([]);
+    expect(tracking(row)).toBe(row.T);
+    await turn3StacksOn(side2);
+  });
+
+  test("A2: KB-only, a transient side push failure on turn 2 -> rolled back to the turn's HEAD (side1 kept), turn 3 stacks on side1", async () => {
+    const side1 = await kbOnlyTurn1();
+    H.beforeCall = (args) => {
+      if (args[0] === "push" && args.some((a) => a.endsWith(":refs/heads/soleur/kb-sync"))) {
+        throw Object.assign(new Error("transient"), { stderr: "fatal: unable to access: Could not resolve host: github.com\n" });
+      }
+    };
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    expect(remoteSide(row)).toBe(side1);
+    // D14(4): the scoped rollback put the local branch back on the turn's HEAD, the auto-commit on side1
+    const head2 = localMain(row);
+    expect(parents(row.ws, head2)).toEqual([side1]);
+    expect(subjectOf(row.ws, head2)).toBe("Auto-commit after session");
+    expect(fallbackFailed()).toHaveLength(1);
+    await turn3StacksOn(side1);
+  });
+
+  test("KB-only, side1 present and the side push REJECTED on turn 2 -> the local branch keeps side1, turn 3 side parent = side1", async () => {
+    const side1 = await kbOnlyTurn1();
+    setHook(row, SIDE_TOO_HOOK);
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    expect(remoteSide(row)).toBe(side1);
+    expect(isAnc(row, side1)).toBe(true);
+    expect(parents(row.ws, localMain(row))).toEqual([side1]);
+    expect(fallbackFailed()).toEqual(["kb-sync-fallback-failed:side_push_rejected"]);
+    setHook(row, GH006_HOOK);
+    await turn3StacksOn(side1);
+  });
+
+  test("PG: protected + held code, the side tip ABSENT from the workspace (re-clone), 3 no-edit turns -> no local growth", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    const side1 = remoteSide(row) as string;
+    const ws2 = join(row.root, "ws2");
+    execFileSync("git", ["clone", "-q", "--depth", "1", `file://${row.remote}`, ws2], { env: fixtureEnv(row.root), stdio: "pipe" });
+    git(ws2, "config", "user.name", "Seeded Local");
+    git(ws2, "config", "user.email", "local@example.test");
+    row = { ...row, ws: ws2 };
+    foreignPlusKb(row, { dirtyCode: false });
+    let head = "";
+    for (const turn of [1, 2, 3]) {
+      resetTurn();
+      await run(row);
+      if (turn === 1) head = localMain(row);
+      expect(subjectOf(row.ws, head)).toBe("Auto-commit after session");
+      // D14(4): side_ahead rolls step 4 back, so the local branch is the turn's HEAD every turn (no M_n growth)
+      expect(localMain(row), `turn ${turn}: local`).toBe(head);
+      expect(remoteSide(row)).toBe(side1);
+      expect(heldLines(), `turn ${turn}: outcome`).toEqual(["side_ahead"]);
+    }
+  });
+
+  test("CQFIX1: protected + held code, three EDITING turns with a 1.1 s clock gap -> the side stacks, no side_ahead", async () => {
+    row = newRow({ protectedMain: true });
+    const foreign = foreignPlusKb(row);
+    const gapBeforeFirstPush = (): void => {
+      let delayed = false;
+      H.beforeCall = (args) => {
+        if (args[0] === "push" && !delayed) {
+          delayed = true;
+          sleepSync(1100); // S and the side commit fall in different seconds
+        }
+      };
+    };
+    gapBeforeFirstPush();
+    await run(row);
+    const sides = [remoteSide(row) as string];
+    expect(sides[0]).toBeTruthy();
+    for (const turn of [2, 3]) {
+      resetTurn();
+      gapBeforeFirstPush();
+      write(join(row.ws, "knowledge-base", `t${turn}.md`), `turn ${turn}\n`);
+      await run(row);
+      const s = remoteSide(row) as string;
+      expect(heldWarn("side_ahead"), `turn ${turn}: side_ahead`).toEqual([]);
+      expect(s, `turn ${turn}: new side`).not.toBe(sides[sides.length - 1]);
+      expect(parents(row.remote, s), `turn ${turn}: side parent`).toEqual([sides[sides.length - 1]]);
+      expect(isAnc(row, s), `turn ${turn}: side local`).toBe(true);
+      expect(isAnc(row, foreign)).toBe(true);
+      expect(onRemote(row, foreign)).toBe(false);
+      expect(tracking(row)).toBe(row.T);
+      sides.push(s);
+    }
+    resetTurn();
+    H.beforeCall = null;
+    await run(row);
+    expect(pushesOf()).toEqual([]);
+    expect(heldLines()).toEqual(["side_pending"]);
+  });
+
+  test("A3: protected + held code, KB edits on turns 2 and 3 with a gap before the main push -> each turn's local is M' = (HEAD, side)", async () => {
+    row = newRow({ protectedMain: true });
+    const foreign = foreignPlusKb(row);
+    H.beforeCall = (args) => {
+      if (args[0] === "push" && args.some((a) => a.endsWith(":refs/heads/main"))) sleepSync(1100);
+    };
+    await run(row);
+    let prev = remoteSide(row) as string;
+    for (const turn of [2, 3]) {
+      resetTurn();
+      write(join(row.ws, "knowledge-base", "nested", "b.md"), `b\nturn ${turn}\n`);
+      await run(row);
+      const side = remoteSide(row) as string;
+      expect(parents(row.remote, side), `turn ${turn}`).toEqual([prev]);
+      const mPrime = localMain(row);
+      const [head, second] = parents(row.ws, mPrime);
+      expect(second, `turn ${turn}: M' second parent`).toBe(side);
+      expect(subjectOf(row.ws, head)).toBe("Auto-commit after session");
+      expect(git(row.ws, "rev-parse", `${mPrime}^{tree}`)).toBe(git(row.ws, "rev-parse", `${head}^{tree}`));
+      expect(isAnc(row, foreign)).toBe(true);
+      expect(heldLines()).toEqual(["synthetic_pushed"]);
+      prev = side;
+    }
+  });
+
+  test("crash after the step-4 CAS and before the push (protected, side1 present) -> the next turn converges", async () => {
+    const side1 = await kbOnlyTurn1();
+    // A throw from inside the D push call: the push never runs, nothing after it runs (the state a process crash leaves)
+    H.beforeCall = (args) => {
+      if (args[0] === "push") throw new Error("crash");
+    };
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(remoteSide(row)).toBe(side1);
+    // D14(3): side1 is an ancestor of HEAD, so step 4 took the M arm and the crash state keeps the side lineage
+    const m = localMain(row);
+    expect(subjectOf(row.ws, m)).toBe(MERGE_MSG);
+    expect(isAnc(row, side1)).toBe(true);
+    // the next turn, with no new edit, delivers turn 2's KB and links it
+    resetTurn();
+    H.beforeCall = null;
+    await run(row);
+    const side2 = remoteSide(row) as string;
+    expect(parents(row.remote, side2)).toEqual([side1]);
+    expect(git(row.remote, "show", `${side2}:knowledge-base/nested/b.md`)).toBe("b\nturn 2");
+    expect(localMain(row)).toBe(side2);
+    expect(heldWarn("side_ahead")).toEqual([]);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+  });
+
+  test("ambiguous transient: the D push lands but the client sees an error -> no rollback, the next turn is a noop", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.afterCall = (args) => {
+      if (args[0] === "push") throw Object.assign(new Error("reset"), { stderr: "fatal: the remote end hung up unexpectedly\n" });
+    };
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    // D14(4): a non-protected D push error leaves localNext (here S itself), never a rollback to HEAD
+    expect(localMain(row)).toBe(S);
+    const outer = H.reportSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "syncPush");
+    expect((outer[0]?.[1] as { tags?: Record<string, string> }).tags?.reason).toBe("push_transient");
+    resetTurn();
+    H.afterCall = null;
+    await run(row);
+    expect(pushesOf()).toEqual([]);
+    expect(H.reportSilentFallback).not.toHaveBeenCalled();
+    expect(tracking(row)).toBe(S);
   });
 });
 
