@@ -269,7 +269,9 @@ function buildCtx(file: string, src: string): Ctx {
       visitBinding(n.name, n);
       // `const { execFile } = await import("node:child_process")`
       const init = n.initializer ? skip(n.initializer) : undefined;
-      const inner = init && ts.isAwaitExpression(init) ? skip(init.expression) : init;
+      // Same unwrap as row 4e: any chain of await / parentheses / `as` (`await (await import(cp))`).
+      let inner = init;
+      while (inner && (ts.isAwaitExpression(inner) || ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner))) inner = skip(inner.expression);
       if (
         inner &&
         ts.isCallExpression(inner) &&
@@ -917,6 +919,12 @@ describe("Guard 3 — binding, not name (CTO H5): each planted look-alike FAILS"
     // and a require() destructure is tracked as a spawner, so a non-literal command is a dynamic spawn
     const c = analyze("functions/cron-planted.ts", `function f(cmd: string) { const { spawn } = require("node:child_process"); spawn(cmd, []); }\n`);
     expect(c.dynamic.map((s) => [s.owner, s.ok])).toEqual([["f", false]]);
+    // two awaits or a parenthesised await still register the destructured spawner
+    const d = analyze(
+      "functions/cron-planted.ts",
+      `async function g(cmd: string) { const { spawn } = await (await import("node:child_process")); spawn(cmd, []); }\n`,
+    );
+    expect(d.dynamic.map((s) => [s.owner, s.ok])).toEqual([["g", false]]);
     // control: a named import is not a handle
     expect(analyze("functions/x.ts", HDR).nsImports).toEqual([]);
   });

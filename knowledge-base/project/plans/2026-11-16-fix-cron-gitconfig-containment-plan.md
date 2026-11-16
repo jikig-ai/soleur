@@ -1404,3 +1404,7 @@ The 12-seat review changed these points. The sections above are kept as planned.
   quote could hide any metachar. A backslash outside single quotes is now a metachar deny, so the hook's quote tracking
   matches bash's. Census row 4e counts a destructure as the named form only with plain names (no `...rest`, no
   `default:`), and tracks `require()` destructures as spawners.
+- **Fix round 3 (security seat on f89d6299a4).** Pre-existing: the hook did not model bash's `$'…'` (ANSI-C) quoting,
+  so `gh issue view 1 $'\'' $(cmd) #'` ran a command substitution and `git add $'-A'` reopened blanket staging on both
+  git-carrying crons (also allowed by `origin/main`). An unquoted `$'` or `$"` is now a metachar deny. The census unwraps
+  any await/paren chain before reading a destructure.

@@ -508,23 +508,29 @@ function stripQuoted(command, { stripDouble }) {
 // but stripQuoted() and the brace check read them as quote or group boundaries, so an escaped quote could hide a
 // `{,-a}` (or anything else) inside a span the hook thought was quoted. With no backslash outside single quotes, the
 // hook's quote tracking is the same as bash's. Inside single quotes a backslash is literal in bash, so a quoted
-// `--jq '"\(.number)"'` stays allowed.
-function backslashOutsideSingleQuotes(command) {
+// `--jq '"\(.number)"'` stays allowed. Fix round 3: an unquoted `$'…'` (ANSI-C) or `$"…"` (locale) quote is refused
+// too. Inside `$'…'` bash reads `\'` as a literal quote, so `$'\'' $(cmd) #'` looked like two closed single-quoted
+// spans to the hook while bash ran `$(cmd)`; and `$'-a'` reached git as `-a` past the raw-token rules.
+function shellQuotingReason(command) {
   let q = null;
-  for (const c of command) {
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
     if (q === "'") {
       if (c === "'") q = null;
-    } else if (c === "\\") return true;
+    } else if (c === "\\") return "backslash escape outside single quotes -- put literal text in '...' instead";
     else if (q === '"') {
       if (c === '"') q = null;
-    } else if (c === "'" || c === '"') q = c;
+    } else if (c === "$" && (command[i + 1] === "'" || command[i + 1] === '"'))
+      return "$'...' or $\"...\" quoting -- use plain '...' quotes";
+    else if (c === "'" || c === '"') q = c;
   }
-  return false;
+  return null;
 }
 
 function dangerousMetacharReason(command) {
   if (/[\n\r]/.test(command)) return "multiline command";
-  if (backslashOutsideSingleQuotes(command)) return "backslash escape outside single quotes -- put literal text in '...' instead";
+  const quotingReason = shellQuotingReason(command);
+  if (quotingReason) return quotingReason;
   // substitution: active even inside double quotes → strip only single quotes
   const substScan = stripQuoted(command, { stripDouble: false });
   if (substScan === null) return "unbalanced quote";

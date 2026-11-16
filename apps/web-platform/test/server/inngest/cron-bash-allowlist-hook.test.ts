@@ -1908,9 +1908,29 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
   ])("bug-fixer: a backslash outside single quotes %s is denied (escaped quotes and braces)", (cmd) => {
     expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toMatch(/^cron-containment: metachar: backslash escape outside single quotes/);
   });
+  const ansiRows = [
+    "gh issue view 1 $'\\'' $(echo PWNED) #'",
+    "git status $'\\'' $(echo PWNED-SUBST) #'",
+    "gh issue list $'\\'' > /tmp/x #'",
+    "gh issue list $'\\'' | echo PWNED-PIPE #'",
+    "git commit -m x $'-a'",
+    "git add $'-A'",
+    "git add $':/'",
+    "git commit -m x $'--all'",
+    'git add $"-A"',
+  ];
+  it.each(VERB_TABLE_CRONS.flatMap((cron) => ansiRows.map((cmd) => ({ cron, cmd }))))(
+    "$cron: ANSI-C / locale quoting $cmd is denied before any token rule",
+    ({ cron, cmd }) => {
+      expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason).toMatch(
+        /^cron-containment: metachar: (\$'\.\.\.' or \$"\.\.\." quoting|backslash escape outside single quotes)/,
+      );
+    },
+  );
   it.each([
     "gh api repos/jikig-ai/soleur/issues --jq '{n: .number, t: .title}'",
     "gh api repos/jikig-ai/soleur/issues --jq '.[] | \"\\(.number)\"'",
+    `gh issue list --search "costs $ 5"`,
     'git commit -m "fix {a,b} in x"',
     "gh api repos/jikig-ai/soleur/labels/{x}",
   ])("roadmap-review: %s (quoted, single-quoted backslash, or comma-free brace) stays allowed", (cmd) => {
