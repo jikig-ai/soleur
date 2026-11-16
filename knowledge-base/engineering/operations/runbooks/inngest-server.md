@@ -290,6 +290,16 @@ replacement exists. The single follow-up tracker is #12158: the replacement writ
 rollback/resume (the Tier-B move before the arm revoke, optionally a canary) and removal of the arm
 `-target` lines in the revoke PR.
 
+*Dated note, 2026-11-13 (#9927 step D2-2):* the replacement exists. `op=rollback` and `op=resume`
+now write with `DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE`, an `inngest-cutover` **environment** secret
+(main-only + required-reviewer) relayed from `doppler_service_token.inngest_cutover_write` by the
+staged script `knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh`.
+The first credential step of both ops refuses `verdict=write_token_stale` when the secret is unset
+or no longer authenticates — a `-replace` of the token mints a new key and strands the environment
+secret, so the recovery order is **replace, then re-run the relay script, then re-dispatch**. The
+arm token stays minted and exported until the step-4 revoke change; there is never a fallback to it
+inside the ops.
+
 **Host-side log text.** The on-host `SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED` line still says
 `op=reflush writes both`. That verb is retired. The text is part of the sha256-compared
 config-bundle content (`inngest-cutover-flip.sh`), so it is left as is and changes with the next
