@@ -34,8 +34,8 @@ Stop listing forms; refuse each class outright in `dangerousMetacharReason`, whe
 
 - any backslash outside single quotes (then `stripQuoted` tracks quotes the way bash does);
 - `$'…'` and `$"…"`;
-- any `$` not followed by whitespace;
-- any unquoted `{`, glob character (`*`, `?`, `[`, extglob) or word-start `~`.
+- any `$` not followed by whitespace, a `"`, or the end of the command;
+- any unquoted `{`, glob character (`*`, `?`, `[`, extglob), or `~` at a word start or after `=` or `:`.
 
 For git's own argument parsing (not the shell): any unambiguous long-option prefix counts (`--al` is `--all`),
 `--pathspec-from-file` is a whole-tree stage, a `git commit` pathspec records working-tree content and ignores the
