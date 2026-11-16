@@ -70,7 +70,7 @@ gh pr merge PR_NUMBER --squash --auto --match-head-commit "${H:?run the arm chec
 EOF
 )
 # Defined before SETTLE_HEAD and spliced in: a fetch written as a heredoc line reads as a live command to the
-# battery tag-authorship census (scripts/battery-tag-authorship.test.sh); a quoted literal does not.
+# battery tag-authorship census; a quoted literal does not.
 SETTLE_FETCH_LINE='git fetch -q origin "pull/<N>/head" || { echo "ADMIN-MERGE ABORTED: could not fetch the PR head"; exit 1; }'
 SETTLE_HEAD=$(cat <<'EOF'
 _top=$(git rev-parse --show-toplevel 2>/dev/null); [[ "${CLAUDE_PLUGIN_ROOT}" == /* && -r "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" && ( -z "$_top" || "$(realpath "${CLAUDE_PLUGIN_ROOT}")/" != "$_top/"* ) ]] || { echo "ADMIN-MERGE ABORTED: plugin root unresolved or inside this checkout"; exit 5; }
@@ -82,8 +82,12 @@ EOF
 )
 SETTLE_HEAD=${SETTLE_HEAD/@SETTLE_FETCH_LINE@/"$SETTLE_FETCH_LINE"}
 [[ $SETTLE_HEAD == *"$SETTLE_FETCH_LINE"* && $SETTLE_HEAD != *@SETTLE_FETCH_LINE@* ]] || { printf '[FATAL] SETTLE_HEAD splice failed\n' >&2; exit 2; }
-SETTLE_FENCE_1="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600'
-SETTLE_FENCE_2="$SETTLE_HEAD"$'\n''bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"'
+# The <N> token is spliced in: fixture-scan.py reads a literal `<N> "$SHA"` as a redirect to $SHA.
+_ntok='<N>'
+SETTLE_TAIL_1='bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" '"$_ntok"' "$SHA" --wait --timeout 3600'
+SETTLE_TAIL_2='bash "${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" '"$_ntok"' "$SHA" --green-sha "$G"'
+SETTLE_FENCE_1=$(printf '%s\n%s' "$SETTLE_HEAD" "$SETTLE_TAIL_1")
+SETTLE_FENCE_2=$(printf '%s\n%s' "$SETTLE_HEAD" "$SETTLE_TAIL_2")
 CANON_ARM='--match-head-commit "${H:?run the arm check in this call}"'
 # A3: the check's load-bearing fragments, each a literal that must appear in the canonical file.
 CANON_BODY=(
@@ -460,7 +464,7 @@ row() {
   elif (( rc >= 2 )); then fail "$id instrument failure rc=$rc: $(grep INSTRUMENT <<<"$out" | head -2 | tr '\n' '|')"
   else
     [[ -n "$why" ]] || { echo "[FATAL] row $id names no reason" >&2; exit 2; }
-    (( rc == 1 )) && grep -F "FAIL[$want]" <<<"$out" | grep -qF -- "$why" && pass "$id caught by $want ($why)" \
+    (( rc == 1 )) && grep -qF -- "$why" < <(grep -F "FAIL[$want]" <<<"$out") && pass "$id caught by $want ($why)" \
       || fail "$id want FAIL[$want] naming '$why', rc=$rc: $(grep -E '^FAIL' <<<"$out" | head -3 | tr '\n' '|')"
   fi
 }
