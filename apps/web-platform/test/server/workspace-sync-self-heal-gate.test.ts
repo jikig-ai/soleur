@@ -9,8 +9,10 @@
 // Synthesized data only.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy } = vi.hoisted(() => ({
+const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy, lstatSpy } = vi.hoisted(() => ({
   gitSpy: vi.fn<(args: string[]) => Promise<Buffer>>(),
+  /** The D15(a) precheck's on-disk probe; nothing is on disk unless a row says so. */
+  lstatSpy: vi.fn<(path: Buffer) => Promise<{ isDirectory: () => boolean }>>(),
   localSpy: vi.fn<(args: string[], opts: { cwd: string; timeout: number }) => Promise<Buffer>>(),
   reportSpy: vi.fn(),
   warnSpy: vi.fn(),
@@ -20,6 +22,10 @@ const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy } = vi.ho
 
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: gitSpy }));
 vi.mock("@/server/workspace-local-git", () => ({ runWorkspaceLocalGit: localSpy }));
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  lstat: lstatSpy,
+}));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSpy,
   warnSilentFallback: warnSpy,
@@ -49,6 +55,8 @@ interface Shape {
   symbolicRef?: string;
   /** the error `reset` rejects with */
   resetThrows?: Error;
+  /** stdout of the D15(a) precheck's `diff --name-status -z` (default: nothing added or deleted) */
+  precheck?: string;
 }
 
 function isNonKbDiff(args: string[]): boolean {
@@ -81,7 +89,7 @@ function script(s: Shape = {}): void {
         if (s.statusThrows) throw new Error("status broke");
         return Buffer.from(status);
       case "diff": {
-        if (isPrecheckDiff(args)) return Buffer.from("");
+        if (isPrecheckDiff(args)) return Buffer.from(s.precheck ?? "", "latin1");
         const code = isNonKbDiff(args) ? nonKbDiff : kbDiff;
         if (code !== 0) throw exit(code);
         return Buffer.from("");
@@ -98,9 +106,15 @@ const tokenVerbs = (): string[] => gitSpy.mock.calls.map(([a]) => a[0]);
 const opOf = (call: unknown[]): string => (call[1] as { op?: string }).op ?? "";
 const allEmits = (): unknown[][] => [...reportSpy.mock.calls, ...warnSpy.mock.calls, ...mirrorSpy.mock.calls, ...mirrorWarnSpy.mock.calls];
 const ALL_SPIES = [gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy];
+const ENOENT = (): Error => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+const DIR = { isDirectory: () => true };
 
 beforeEach(() => {
   for (const f of ALL_SPIES) f.mockReset();
+  lstatSpy.mockReset();
+  lstatSpy.mockImplementation(async () => {
+    throw ENOENT();
+  });
 });
 
 describe("selfHealNonFastForward: dirty tracked tree refuses on both arms (D6a/b)", () => {
@@ -295,8 +309,27 @@ describe("selfHealNonFastForward: token-free local verbs (D6d) and null-first em
     const result = await run();
     expect(result).toEqual({ ok: true, recovered: true });
     expect(localSpy.mock.calls.find(([a]) => a[0] === "symbolic-ref")?.[0]).toEqual(["symbolic-ref", "refs/remotes/origin/HEAD"]);
-    expect(gitSpy.mock.calls.find(([a]) => a[0] === "fetch")?.[0]).toEqual(["fetch", "origin", "trunk"]);
+    // D23: an explicit refspec, so D is never a bare argv word git could parse as an option. Forced (`+`), as the clone's
+    // configured `+refs/heads/*:refs/remotes/origin/*` was: measured on git 2.56, a non-forced refspec exits 1
+    // (`! [rejected] ... (non-fast-forward)`) after an upstream force-push, the phantom divergence this self-heal resets.
+    expect(gitSpy.mock.calls.find(([a]) => a[0] === "fetch")?.[0]).toEqual(["fetch", "origin", "+refs/heads/trunk:refs/remotes/origin/trunk"]);
     expect(localSpy.mock.calls.find(([a]) => a[0] === "reset")?.[0]).toEqual(["reset", "--keep", "refs/remotes/origin/trunk"]);
+  });
+
+  test.each([
+    ["starts with '-' (an option in fetch's argv)", "refs/remotes/origin/--upload-pack=x\n"],
+    ["starts with '-' (a CLI override of a config pin)", "refs/remotes/origin/--recurse-submodules=yes\n"],
+    ["fails validateBranchFormat ('..')", "refs/remotes/origin/a..b\n"],
+    ["fails validateBranchFormat ('.lock')", "refs/remotes/origin/x.lock\n"],
+  ])("D23: a default branch from origin/HEAD that %s is unresolvable: the fail-closed `main` fallback, never in argv", async (_why, symbolicRef) => {
+    script({ symbolicRef, revList: "0\n" });
+    const result = await run();
+    expect(result).toEqual({ ok: true, recovered: true });
+    const fetch = gitSpy.mock.calls.find(([a]) => a[0] === "fetch")?.[0];
+    expect(fetch).toEqual(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+    const bad = symbolicRef.trim().slice("refs/remotes/origin/".length);
+    for (const [args] of [...gitSpy.mock.calls, ...localSpy.mock.calls]) for (const a of args) expect(a).not.toContain(bad);
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "reset")?.[0]).toEqual(["reset", "--keep", "refs/remotes/origin/main"]);
   });
 
   test("every self-heal emit passes a null error", async () => {
@@ -361,5 +394,47 @@ describe("selfHealNonFastForward: self-heal-failed carries a code frame, never t
     await run();
     const ctx = reportSpy.mock.calls.find((c) => opOf(c) === "self-heal-failed")?.[1] as { extra: Record<string, unknown> };
     expect(ctx.extra).not.toHaveProperty("frame");
+  });
+});
+
+describe("selfHealNonFastForward: the D15(a) precheck's cost (D23)", () => {
+  const z = (...fields: string[]): string => fields.map((f) => `${f}\0`).join("");
+
+  test("leading directories shared by many added paths are lstat'ed once per call (memoised)", async () => {
+    script({ revList: "0\n", precheck: z("A", "d/a/x.md", "A", "d/a/y.md", "A", "d/a/z.md", "A", "d/b.md") });
+    lstatSpy.mockImplementation(async (p) => {
+      const rel = p.toString("latin1").slice(`${WS}/`.length);
+      if (rel === "d" || rel === "d/a") return DIR;
+      throw ENOENT();
+    });
+    const result = await run();
+    expect(result).toEqual({ ok: true, recovered: true });
+    const probes = lstatSpy.mock.calls.map(([p]) => p.toString("latin1").slice(`${WS}/`.length));
+    expect(probes.filter((p) => p === "d")).toHaveLength(1);
+    expect(probes.filter((p) => p === "d/a")).toHaveLength(1);
+    // every added path itself is still probed (shape 1)
+    for (const p of ["d/a/x.md", "d/a/y.md", "d/a/z.md", "d/b.md"]) expect(probes).toContain(p);
+  });
+
+  test("the memo still refuses: a non-directory at a shared leading directory refuses on the first added path under it", async () => {
+    script({ revList: "0\n", precheck: z("A", "docs/a.md", "A", "docs/b.md") });
+    lstatSpy.mockImplementation(async (p) => {
+      if (p.toString("latin1") === `${WS}/docs`) return { isDirectory: () => false };
+      throw ENOENT();
+    });
+    const result = await run();
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "untracked_collision" }));
+    expect(localVerbs()).not.toContain("reset");
+  });
+
+  test("shape 3 lists a wholly-untracked subdirectory as ONE entry: `ls-files --others --directory`", async () => {
+    script({ revList: "0\n", precheck: z("A", "src", "D", "src/s.ts") });
+    lstatSpy.mockImplementation(async (p) => {
+      if (p.toString("latin1") === `${WS}/src`) return DIR;
+      throw ENOENT();
+    });
+    const result = await run();
+    expect(result).toEqual({ ok: true, recovered: true });
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "ls-files")?.[0]).toEqual(["ls-files", "-z", "--others", "--directory", "--", ":(literal)src/"]);
   });
 });

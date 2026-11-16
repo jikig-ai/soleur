@@ -363,6 +363,23 @@ describe("self-heal: an untracked or ignored file in the reset's way is never re
     expectCollisionRefusal(r, result, "diverged", before);
   });
 
+  test("D23 pin for `ls-files --directory`: a NESTED ignored file under a directory an added path turns into a file still refuses", async () => {
+    const r = newRow();
+    squashedDiverged(r, (d) => {
+      rmSync(join(d, "src"), { recursive: true, force: true });
+      write(join(d, "src"), "src is now a file upstream\n");
+    });
+    // src/build/ holds ONLY ignored content, two levels down: `--directory` collapses it to one `src/build/` entry,
+    // which is still non-empty output (ls-files applies no exclude without --exclude-standard)
+    write(join(r.ws, ".git", "info", "exclude"), "build/\n");
+    write(join(r.ws, "src", "build", "deep", "out.o"), "member build output, ignored\n");
+    expect(git(r.ws, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    const before = localMain(r);
+    const result = await heal(r);
+    expect(read(join(r.ws, "src", "build", "deep", "out.o"))).toBe("member build output, ignored\n");
+    expectCollisionRefusal(r, result, "diverged", before);
+  });
+
   test("control: an untracked file the reset does not touch survives a recovered reset, and a deleted tracked leading path is not a collision", async () => {
     const r = newRow();
     // upstream turns the tracked FILE a.txt into a directory: the leading `a.txt` on disk is a deleted tracked path

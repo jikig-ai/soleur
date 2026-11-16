@@ -7,8 +7,9 @@
 //
 // Deliberately imports NOTHING from `@/lib/supabase/server` (next/headers).
 // Deps: observability (clean), a type-only KbSyncErrorClass, pino's Logger
-// type, the token-free local runner (a host-git leaf), node:fs/promises and
-// node:path, and a LAZY `@/server/git-auth` import inside syncWorkspace.
+// type, the token-free local runner (a host-git leaf), node:fs/promises, two
+// import-free leaves (branch-validation, kb-root), and a LAZY `@/server/git-auth`
+// import inside syncWorkspace.
 import { lstat } from "node:fs/promises";
 import {
   mirrorWarnWithDebounce,
@@ -20,6 +21,8 @@ import type { KbSyncErrorClass } from "@/server/session-sync";
 import { runWorkspaceLocalGit, type WorkspaceLocalGitRunner } from "@/server/workspace-local-git";
 import type { Logger } from "pino";
 import { firstAppFrame } from "@/server/error-frame";
+import { validateBranchFormat } from "@/server/branch-validation";
+import { KB_ROOT } from "./kb-root";
 
 // Re-declared as local constants typed by the shared union (the union is the
 // source of truth; these are the literal members, NOT a new union). Kept local
@@ -88,14 +91,20 @@ async function diffQuietExit(
  * Resolve the workspace clone's default branch (e.g. `main`) from `git symbolic-ref refs/remotes/origin/HEAD`, a LOCAL
  * read, so it runs token-free through `runLocal` (#12600, CTO ruling D15(d), amending D6(d)). The FULL target refname is
  * parsed, never `--short`: an agent-made `refs/heads/origin/main` makes `origin/main` ambiguous and `--short` then prints
- * `remotes/origin/main`. Falls back to `main` when the symbolic ref is missing or names something else.
+ * `remotes/origin/main`. Falls back to `main` when the symbolic ref is missing or names something else, and (D23) when the
+ * name is unresolvable: it starts with `-` (a full refname may, and the agent can write this symref) or fails
+ * {@link validateBranchFormat}. That fallback is the existing fail-closed path: a clone not on `main` then aborts at the
+ * branch check, and a missing `refs/remotes/origin/main` fails the count read.
  */
 async function resolveDefaultBranch(runLocal: WorkspaceLocalGitRunner, workspacePath: string): Promise<string> {
   try {
     const out = await runLocal(["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd: workspacePath, timeout: 30_000 });
     const ref = out.toString().trim(); // e.g. "refs/remotes/origin/main"
     const prefix = "refs/remotes/origin/";
-    return (ref.startsWith(prefix) && ref.slice(prefix.length)) || "main";
+    const name = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
+    if (!name || name.startsWith("-")) return "main";
+    validateBranchFormat(name);
+    return name;
   } catch {
     return "main";
   }
@@ -257,10 +266,14 @@ function leadingDirs(p: Buffer): Buffer[] {
  *     into a file, which is shape 3;
  *  2. an existing non-directory at a leading directory of an added path that is not itself a deleted tracked path;
  *  3. an untracked OR IGNORED entry under a tracked directory an added path turns into a file:
- *     `ls-files -z --others -- :(literal)<p>/` with no `--exclude-standard`, so ignored files are listed too.
+ *     `ls-files -z --others --directory -- :(literal)<p>/` with no `--exclude-standard`, so ignored files are listed
+ *     too; `--directory` (D23) lists a wholly-untracked subdirectory as one entry instead of every file under it (an
+ *     ignored build tree would otherwise overflow the runner's buffer), and still lists empty directories.
  * `reset --keep` refuses shapes 1-2 for untracked files by itself but overwrites an IGNORED file (measured, git 2.56),
  * which is why this precheck, not `--keep`, is the guard; a `--keep` refusal reaching the catch means a missed shape.
  * A path that is not valid UTF-8 cannot be passed as an argv pathspec, so shape 3 on such a path refuses (fail closed).
+ * Leading-directory lstats are memoised per call (D23): added paths share prefixes, and an import of N files at depth d
+ * would otherwise cost N x d sequential lstats inside a user's KB write.
  */
 async function hasUntrackedCollision(
   runLocal: WorkspaceLocalGitRunner,
@@ -277,6 +290,12 @@ async function hasUntrackedCollision(
   const deletedPaths = new Set(deleted.map((p) => p.toString("latin1")));
   const deletedDirs = new Set(deleted.flatMap((p) => leadingDirs(p).map((d) => d.toString("latin1"))));
   const onDisk = (rel: Buffer): Buffer => Buffer.concat([Buffer.from(`${workspacePath}/`), rel]);
+  const dirStats = new Map<string, Awaited<ReturnType<typeof lstatOrNull>>>();
+  const lstatDir = async (dir: Buffer): Promise<Awaited<ReturnType<typeof lstatOrNull>>> => {
+    const key = dir.toString("latin1");
+    if (!dirStats.has(key)) dirStats.set(key, await lstatOrNull(onDisk(dir)));
+    return dirStats.get(key) ?? null;
+  };
 
   for (const p of added) {
     const at = await lstatOrNull(onDisk(p));
@@ -284,12 +303,12 @@ async function hasUntrackedCollision(
       if (!(at.isDirectory() && deletedDirs.has(p.toString("latin1")))) return true; // shape 1
       const name = p.toString("utf8");
       if (!Buffer.from(name, "utf8").equals(p)) return true;
-      const others = await runLocal(["ls-files", "-z", "--others", "--", `:(literal)${name}/`], gitOpts);
+      const others = await runLocal(["ls-files", "-z", "--others", "--directory", "--", `:(literal)${name}/`], gitOpts);
       if (others.length > 0) return true; // shape 3
       continue;
     }
     for (const dir of leadingDirs(p)) {
-      const lead = await lstatOrNull(onDisk(dir));
+      const lead = await lstatDir(dir);
       if (!lead) break;
       if (lead.isDirectory()) continue;
       if (deletedPaths.has(dir.toString("latin1"))) break; // a tracked file the reset removes first
@@ -302,7 +321,8 @@ async function hasUntrackedCollision(
 /**
  * Gated self-heal for a `non_fast_forward` clone (#12600, CTO rulings D6-D8, D15, D16, D20). The `reset --keep` runs only
  * when it loses no tracked, committed, untracked or ignored file. In order:
- *  1. `symbolic-ref` (token-free, D15d), `fetch origin <default>` (token-bearing, X3), then `rev-parse --abbrev-ref HEAD`
+ *  1. `symbolic-ref` (token-free, D15d), `fetch origin +refs/heads/<D>:refs/remotes/origin/<D>` (token-bearing, X3;
+ *     an explicit refspec so D is never a bare argv word, D23), then `rev-parse --abbrev-ref HEAD`
  *     and `status --porcelain -z --untracked-files=no` ONCE, above the zero/non-zero commit split, so both arms are gated.
  *  2. `rev-list --count refs/remotes/origin/<D>..HEAD` (D15b), then the branch check, on both arms (D6f): a detached
  *     HEAD aborts as op:self-heal-aborted-detached-head; a feature branch (tag head=non_default) or an un-countable count
@@ -349,8 +369,11 @@ async function selfHealNonFastForward(
     const defaultBranch = await resolveDefaultBranch(runLocal, workspacePath);
     const target = remoteTrackingRef(defaultBranch);
 
+    // D23: an explicit refspec, so the agent-writable D never sits in argv where git parses an option. Forced (`+`) as
+    // the clone's configured `+refs/heads/*:refs/remotes/origin/*` is: a non-forced refspec exits 1 (`! [rejected]`)
+    // after an upstream force-push (measured, git 2.56), which is the phantom divergence this self-heal resets.
     await gitWithInstallationAuth(
-      ["fetch", "origin", defaultBranch],
+      ["fetch", "origin", `+refs/heads/${defaultBranch}:${target}`],
       installationId,
       gitOpts,
     );
@@ -406,14 +429,14 @@ async function selfHealNonFastForward(
       const nonKbHeld =
         (await diffQuietExit(
           runLocal,
-          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `${target}...HEAD`, "--", ".", ":(exclude)knowledge-base/"],
+          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `${target}...HEAD`, "--", ".", `:(exclude)${KB_ROOT}/`],
           gitOpts,
         )) === 1;
       const kbHeld =
         !nonKbHeld &&
         (await diffQuietExit(
           runLocal,
-          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", target, "HEAD", "--", "knowledge-base/"],
+          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", target, "HEAD", "--", `${KB_ROOT}/`],
           gitOpts,
         )) === 1;
       if (nonKbHeld || kbHeld) {
