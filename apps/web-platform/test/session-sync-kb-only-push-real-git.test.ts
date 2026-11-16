@@ -1399,6 +1399,34 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     expect(subjectOf(row.ws, localMain(row))).toBe("Auto-commit after session");
   });
 
+  test("D22(a): protection lifted after side1 was linked -> the M arm's D push lands and the local branch moves to S (local == remote; a UI upload fast-forwards)", async () => {
+    const side1 = await kbOnlyTurn1();
+    rmSync(join(row.remote, "hooks", "pre-receive"));
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    const S = remoteMain(row);
+    expect(S).not.toBe(row.T);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+    // same tree as HEAD, and HEAD's KB is a superset of side1's: the unpushed merge M is replaced by S itself
+    expect(localMain(row)).toBe(S);
+    expect(tracking(row)).toBe(S);
+    expect(git(row.ws, "show", `${S}:knowledge-base/a.md`)).toBe("a\nturn 1");
+    expect(isAnc(row, side1)).toBe(false);
+    expect(status(row)).toBe("");
+    // a KB UI upload lands upstream: the workspace fast-forwards (no held_commits refusal)
+    upstreamCommit(row, (d) => write(join(d, "knowledge-base", "upload.md"), "uploaded via UI\n"), "Upload via KB UI");
+    resetTurn();
+    expect(await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" })).toEqual({ ok: true });
+    expect(readFileSync(join(row.ws, "knowledge-base", "upload.md"), "utf8")).toBe("uploaded via UI\n");
+    // and the next KB edit publishes again (never remote_ahead)
+    resetTurn();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 3\n");
+    await run(row);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+    expect(localMain(row)).toBe(remoteMain(row));
+  });
+
   test("crash after the step-4 CAS and before the push (protected, side1 present) -> the next turn converges", async () => {
     const side1 = await kbOnlyTurn1();
     // A throw from inside the D push call: the push never runs, nothing after it runs (the state a process crash leaves)

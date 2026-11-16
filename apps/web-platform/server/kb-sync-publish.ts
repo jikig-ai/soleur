@@ -680,6 +680,25 @@ function rollbackBestEffort(f: SideFallbackInput): void {
   }
 }
 
+/**
+ * D22(a): the best-effort CAS of the local branch from the merge `M` to `S` after `S` landed on D. A failure (`head_moved`: the
+ * agent committed meanwhile) leaves `M`, which loses nothing: one debounced warning, no outcome line, the turn stays `pushed`.
+ */
+function relinkBestEffort(writer: KbWorkspaceWriter, branch: string, S: string, M: string, ctx: KbSyncContext): void {
+  try {
+    casLocalBranch(writer, branch, S, M);
+  } catch (err) {
+    const reason = err instanceof KbHeld ? err.reason : "ref_update_failed";
+    log.warn({ op: "kb-sync.relink", reason, workspaceId: ctx.workspaceId }, "KB sync: the local branch relink to the pushed commit failed");
+    mirrorWarnWithDebounce(
+      null,
+      { feature: "session-sync", op: "kb-sync.relink", message: "KB sync: the local branch relink to the pushed commit failed", tags: { reason }, extra: { userId: ctx.userId } },
+      ctx.workspaceId,
+      "kb-sync-relink-failed",
+    );
+  }
+}
+
 /** The side delivery up to and including the local link; `linked` once the local branch names the delivered side commit. */
 type SideStep = { readonly kind: "linked" } | Extract<KbPublishResult, { kind: "fallback_failed" }>;
 
@@ -842,6 +861,10 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
       });
     }
     setTrackingBestEffort(writer, D, S, input);
+    // D22(a): the M arm taken only for side lineage (HEAD's tree is S's tree) is replaced by S once S is on D. Lossless (same
+    // tree; S carries HEAD's KB, a superset of the side tip's), so a lifted protection leaves local = S = remote, never an
+    // unpushed merge that holds every later KB UI write as `held_commits`.
+    if (localNext !== S && sTree === hV.commit.tree) relinkBestEffort(writer, D, S, localNext, input);
     reportPushHeld("synthetic_pushed", "pushed", input);
     return { kind: "pushed" };
   } catch (err) {

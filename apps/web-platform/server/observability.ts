@@ -432,7 +432,10 @@ export function infoSilentFallback(
  *   op `kb-sync.tracking-ref`, workspace-id key): the advisory tracking-ref update failed, so the next turn mints a token
  *   again. Also `kb-sync-rollback-failed` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.rollback`, workspace-id key,
  *   tag `reason`; CTO ruling D14(4)): the best-effort rollback of the local branch after a fallback exit failed (usually
- *   `head_moved`); it never changes the turn's result. Also `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via
+ *   `head_moved`); it never changes the turn's result. Also `kb-sync-relink-failed` (warn-level via `mirrorWarnWithDebounce`,
+ *   op `kb-sync.relink`, workspace-id key, tag `reason`; D22(a)): after `S` landed on the default branch, the best-effort move
+ *   of the local branch from the merge `M` to `S` failed (usually `head_moved`); `M` loses nothing and the turn stays `pushed`.
+ *   Also `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via
  *   `mirrorWithDebounce`, op `kb-sync.protected-fallback-failed`, workspace-id key, null err with tags `reason` /
  *   `fallback_reason` / `push_class`; CTO ruling D8): the protected-branch fallback ran and did not deliver, which can repeat
  *   every turn (R16), so one slot per workspace and fallback reason. Also `kb-sync-side-push-transient` (warn-level via
