@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import { mirrorWarnWithDebounce } from "@/server/observability";
+import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
@@ -104,7 +105,6 @@ function parseOwnerRepo(repoUrl: string | null): {
 
 const KB_ENTRY = "knowledge-base";
 const TREE_MODE = "40000";
-const HEX40_RE = /^[0-9a-f]{40}$/;
 const SIDE_REF = `refs/heads/${KB_SYNC_SIDE_BRANCH}`;
 const LS_REMOTE_TIMEOUT_MS = 30_000;
 const PUSH_TIMEOUT_MS = 60_000;
@@ -124,6 +124,8 @@ export type KbPushHeldReason =
   | "ref_update_failed"
   | "unpack_failed"
   | "side_ahead"
+  | "side_pending"
+  | "kb_absent"
   | "held_foreign"
   | "synthetic_pushed";
 
@@ -136,6 +138,7 @@ const HELD_WARN_MESSAGES: Partial<Record<KbPushHeldReason, string>> = {
   remote_branch_absent: "KB sync held: the remote has no default branch",
   hash_mismatch: "KB sync held: a git object failed its hash check",
   kb_not_tree: "KB sync held: knowledge-base is not a directory",
+  kb_absent: "KB sync held: the workspace HEAD has no knowledge-base the remote holds",
   guard_failed: "KB sync held: the built commit failed the KB-only guard",
   head_moved: "KB sync held: the local branch moved during the sync",
   ref_update_failed: "KB sync held: the local branch update failed",
@@ -230,7 +233,7 @@ export function parseRemoteState(out: string): RemoteState | null {
       defaultBranch = branch;
       continue;
     }
-    if (!HEX40_RE.test(left)) throw new KbSyncError("remote_state_invalid");
+    if (!HEX40.test(left)) throw new KbSyncError("remote_state_invalid");
     if (name === "HEAD") {
       if (tip !== null) throw new KbSyncError("remote_state_invalid");
       tip = left;
@@ -308,7 +311,7 @@ function parseCommit(bytes: Buffer): CommitHeader | null {
     else if (line.startsWith("author ")) author = line.slice(7);
     else if (line.startsWith("committer ")) committer = line.slice(10);
   }
-  if (!HEX40_RE.test(tree) || !parents.every((p) => HEX40_RE.test(p))) return null;
+  if (!HEX40.test(tree) || !parents.every((p) => HEX40.test(p))) return null;
   return { tree, parents, author, committer, message: text.slice(end + 2) };
 }
 
@@ -319,12 +322,19 @@ interface VerifiedCommit {
   readonly root: readonly TreeEntry[];
 }
 
+/** `verifyObject`'s verified bytes, `null` when unverified; a child that could not run is `local_git_failed` (D13). */
+async function verifiedBytes(isolated: IsolatedPushDirHandle, type: "commit" | "tree", id: string): Promise<Buffer | null> {
+  const v = await verifyObject(isolated, type, id);
+  if (v.kind === "failed") throw new KbSyncError("local_git_failed");
+  return v.kind === "verified" ? v.bytes : null;
+}
+
 /** Hash-verify a commit and its root tree (R14, R15); the parse reads exactly the verified bytes. */
 async function readVerified(isolated: IsolatedPushDirHandle, id: string): Promise<VerifiedCommit | null> {
-  const commitBytes = await verifyObject(isolated, "commit", id);
+  const commitBytes = await verifiedBytes(isolated, "commit", id);
   const commit = commitBytes ? parseCommit(commitBytes) : null;
   if (!commit) return null;
-  const treeBytes = await verifyObject(isolated, "tree", commit.tree);
+  const treeBytes = await verifiedBytes(isolated, "tree", commit.tree);
   const root = treeBytes ? parseTree(treeBytes) : null;
   return root ? { id, commit, root } : null;
 }
@@ -332,9 +342,13 @@ async function readVerified(isolated: IsolatedPushDirHandle, id: string): Promis
 const kbOf = (root: readonly TreeEntry[]): TreeEntry | undefined => root.find((e) => e.name === KB_ENTRY);
 const entryKey = (e: TreeEntry): string => `${e.mode} ${e.id}\t${e.name}`;
 
-/** `cat-file -t` says `commit`: the object is present (its bytes are verified separately). */
+/**
+ * `cat-file -t` says `commit`: the object is present (its bytes are verified separately). Tri-state (D13): a child that
+ * could not run (code -1: spawn failure, timeout, kill) is `local_git_failed`, never "absent".
+ */
 async function isCommitPresent(isolated: IsolatedPushDirHandle, id: string): Promise<boolean> {
   const r = await runIsolatedGitLocal(isolated, ["cat-file", "-t", id]);
+  if (r.code === -1) throw new KbSyncError("local_git_failed");
   return r.code === 0 && r.stdout.toString("utf8").trim() === "commit";
 }
 
@@ -373,15 +387,16 @@ async function commitTree(
     message,
   ]);
   const sha = r.stdout.toString("utf8").trim();
-  if (r.code !== 0 || !HEX40_RE.test(sha)) throw new KbSyncError("local_git_failed");
+  if (r.code !== 0 || !HEX40.test(sha)) throw new KbSyncError("local_git_failed");
   return sha;
 }
 
 /**
  * The ONLY builder of a commit the sync pushes (R14): `baseRoot` (a verified root) with the `knowledge-base` entry
  * replaced by `kb`, the fixed message and the Soleur identity, parents as given. Built token-free in the isolated dir.
+ * Module-private (D12): `baseRoot` is trusted, so only this module's verified roots may reach it.
  */
-export async function buildKbOverlay(
+async function buildKbOverlay(
   isolated: IsolatedPushDirHandle,
   baseRoot: readonly TreeEntry[],
   kb: TreeEntry,
@@ -390,15 +405,15 @@ export async function buildKbOverlay(
   const entries = [...baseRoot.filter((e) => e.name !== KB_ENTRY), { mode: TREE_MODE, name: KB_ENTRY, id: kb.id }];
   const mk = await runIsolatedGitLocal(isolated, ["mktree", "-z"], { input: mktreeInput(entries) });
   const tree = mk.stdout.toString("utf8").trim();
-  if (mk.code !== 0 || !HEX40_RE.test(tree)) throw new KbSyncError("local_git_failed");
+  if (mk.code !== 0 || !HEX40.test(tree)) throw new KbSyncError("local_git_failed");
   return { sha: await commitTree(isolated, tree, parents, KB_SYNC_SIDE_COMMIT_MSG), tree };
 }
 
 /**
  * Guard 1: `sha`'s verified root equals `baseRoot` in every entry except `knowledge-base` (present, a tree), and its
- * message and identity are Soleur's. Compared on the parsed entry lists; no history walk.
+ * message and identity are Soleur's. Compared on the parsed entry lists; no history walk. Module-private (D12).
  */
-export async function assertRootDiffersOnlyInKb(
+async function assertRootDiffersOnlyInKb(
   isolated: IsolatedPushDirHandle,
   sha: string,
   baseRoot: readonly TreeEntry[],
@@ -415,29 +430,45 @@ export async function assertRootDiffersOnlyInKb(
   return a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
-export interface VerifiedPush {
+/** A sha that passed Guard 1 in `isolated`: only `guardKbOnly` creates one, so the one push can only send a guarded sha. */
+interface GuardedSha {
   readonly isolated: IsolatedPushDirHandle;
+  readonly sha: string;
+}
+const GUARDED = new WeakSet<GuardedSha>();
+
+/** Run Guard 1 ONCE for `sha` (D13): the token it returns is what the push takes, so the push never re-reads the commit. */
+async function guardKbOnly(
+  isolated: IsolatedPushDirHandle,
+  sha: string,
+  baseRoot: readonly TreeEntry[],
+): Promise<GuardedSha | null> {
+  if (!HEX40.test(sha) || !(await assertRootDiffersOnlyInKb(isolated, sha, baseRoot))) return null;
+  const guarded: GuardedSha = Object.freeze({ isolated, sha });
+  GUARDED.add(guarded);
+  return guarded;
+}
+
+interface VerifiedPush {
   readonly installationId: number;
   readonly url: string;
-  readonly baseRoot: readonly TreeEntry[];
-  readonly sha: string;
+  readonly guarded: GuardedSha;
   /** `refs/heads/<D>` or `refs/heads/soleur/kb-sync`, nothing else. */
   readonly ref: string;
   readonly defaultBranch: string;
 }
 
 /**
- * The ONE push of the post-session sync (R6): re-runs Guard 1 on the exact sha against its verified base, then pushes
- * `<sha>:<ref>` non-force from the isolated directory through the hardened arm. Throws `KbHeld("guard_failed")` or a
- * `KbSyncError` carrying the stderr class.
+ * The ONE push of the post-session sync (R6): `<sha>:<ref>` non-force from the isolated directory through the hardened
+ * arm, for a sha Guard 1 passed in this turn (the `GuardedSha` token). Throws `KbHeld("guard_failed")` for anything else, or
+ * a `KbSyncError` carrying the stderr class. Module-private (D12).
  */
-export async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
+async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
   if (p.ref !== `refs/heads/${p.defaultBranch}` && p.ref !== SIDE_REF) throw new KbSyncError("remote_state_invalid");
-  if (!HEX40_RE.test(p.sha)) throw new KbSyncError("remote_state_invalid");
-  if (!(await assertRootDiffersOnlyInKb(p.isolated, p.sha, p.baseRoot))) throw new KbHeld("guard_failed");
+  if (!GUARDED.has(p.guarded)) throw new KbHeld("guard_failed");
   try {
-    await gitWithInstallationAuth(["push", p.url, `${p.sha}:${p.ref}`], p.installationId, {
-      hardened: p.isolated,
+    await gitWithInstallationAuth(["push", p.url, `${p.guarded.sha}:${p.ref}`], p.installationId, {
+      hardened: p.guarded.isolated,
       timeout: PUSH_TIMEOUT_MS,
     });
   } catch (err) {
@@ -468,15 +499,17 @@ const stderrOf = (err: unknown): string => {
   return Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
 };
 
-/** Hand the objects of `tips` not reachable from `exclude` to the workspace: `pack-objects --revs` | `unpack-objects -q`. */
-async function handOver(
-  isolated: IsolatedPushDirHandle,
-  writer: KbWorkspaceWriter,
-  tips: readonly string[],
-  exclude: readonly string[],
-): Promise<void> {
-  const revs = `${[...tips, ...exclude.map((e) => `^${e}`)].join("\n")}\n`;
-  const pack = await runIsolatedGitLocal(isolated, ["pack-objects", "--revs", "--stdout", "-q"], { input: revs });
+/**
+ * Hand the server-built objects to the workspace (CTO ruling D10): `pack-objects --stdout -q` over an EXPLICIT object list
+ * (no `--revs`), piped to `unpack-objects -q`. Every parent of a server-built commit is already in the workspace (T,
+ * headSha, a present side tip P, or a commit this function handed over earlier), and the KB subtree is HEAD's, so the only
+ * missing objects are the new commit and its new root tree:
+ *   S -> S + S^{tree};  M -> S + S^{tree} + M (M's tree is headSha's);  side -> side + side^{tree};  M' -> side + side^{tree} + M'.
+ * A `--revs` walk re-sent the KB change set (`^headSha` is not an edge of S) and hit the stdout cap above 64 MB.
+ */
+async function handOver(isolated: IsolatedPushDirHandle, writer: KbWorkspaceWriter, objects: readonly string[]): Promise<void> {
+  if (!objects.every((o) => HEX40.test(o))) throw new KbHeld("unpack_failed");
+  const pack = await runIsolatedGitLocal(isolated, ["pack-objects", "--stdout", "-q"], { input: `${objects.join("\n")}\n` });
   if (pack.code !== 0) throw new KbHeld("unpack_failed");
   try {
     writer.unpack(pack.stdout);
@@ -527,7 +560,7 @@ async function resolvePushUrl(userId: string, workspaceId: string): Promise<{ ur
 }
 
 /** Why the protected-branch fallback did not deliver (the `fallback_reason` tag, closed). */
-export type KbFallbackReason = "side_fetch_failed" | "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "pr_failed";
+export type KbFallbackReason = "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "pr_failed";
 
 export type KbPublishResult =
   | { readonly kind: "pushed" }
@@ -556,9 +589,13 @@ interface SideFallbackInput {
   readonly remote: RemoteState;
   readonly tV: VerifiedCommit;
   readonly headSha: string;
+  /** HEAD's verified root tree (the tree of `M` and `M'`). */
+  readonly headTree: string;
   readonly headKb: TreeEntry;
   /** `S` and the value step 4 moved the local branch to (`S`, or `M`). */
   readonly S: string;
+  /** Guard 1's token for `S` (a side commit identical to `S` reuses it: Guard 1 once per sha, D13). */
+  readonly guardedS: GuardedSha;
   readonly localNext: string;
   readonly pushErr: KbSyncError;
 }
@@ -574,12 +611,15 @@ async function ensureKbSyncPr(installationId: number, owner: string, repo: strin
 }
 
 /**
- * Step 6, the protected-branch fallback (rulings F, R3, R4, R15, R17), entirely in the isolated directory: no checkout, no
- * reset, no workspace commit. Side parent `P` = the side tip `ls-remote` returned (fetched `--depth 1` when not local,
- * hash-verified), never a workspace ref. Ruling I extended: build only when the side branch is absent, `P` is an ancestor
- * of `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s with
- * HEAD's KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push stays a
- * fast-forward) or `(P, T)`. A post-success workspace failure is a held reason, never a fallback failure.
+ * Step 6, the protected-branch fallback (rulings F, R3, R4, R15, R17, D5, D11), entirely in the isolated directory: no
+ * checkout, no reset, no workspace commit. Side parent `P` = the side tip `ls-remote` returned, hash-verified, and present in
+ * the workspace object store; it is never fetched here (D5d: an absent P is absent from the workspace too, so it can never
+ * pass the ancestry check this turn) and never a workspace ref. Idempotent first (D5a): a side branch that already carries
+ * HEAD's KB keeps its PR and pushes nothing. Ruling I extended: build only when the side branch is absent, `P` is an
+ * ancestor of `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s
+ * with HEAD's KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push
+ * stays a fast-forward) or `(P, T)`. After the push the local branch moves onto the side commit (D5c) and the tracking ref
+ * says `T` (D11). A post-success workspace failure is a held reason, never a fallback failure.
  */
 async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   const { isolated, installationId, url, remote, tV, headSha, headKb } = f;
@@ -588,41 +628,34 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   const T = remote.tip;
   const P = remote.sideTip;
   let parents: string[] = [T];
-  let fetched = false;
   if (P !== null) {
-    if (!(await isCommitPresent(isolated, P))) {
-      try {
-        await gitWithInstallationAuth(["fetch", "--depth", "1", "--no-tags", url, SIDE_REF], installationId, {
-          hardened: isolated,
-          timeout: PUSH_TIMEOUT_MS,
-        });
-      } catch {
-        return fail("side_fetch_failed");
-      }
-      fetched = true;
-      if (!(await isCommitPresent(isolated, P))) return fail("side_fetch_failed");
-    }
+    // Phase 9 (D5e/D6c): a side tip absent from the workspace is adopted on the PULL side (fetched with server-owned have
+    // refs, handed over, merged while its PR is open). Until then the push side holds the turn: `side_ahead`.
+    if (!(await isCommitPresent(isolated, P))) throw new KbHeld("side_ahead");
     const pV = await readVerified(isolated, P);
     if (!pV) return fail("side_hash_mismatch");
     const pKb = kbOf(pV.root);
-    const tKb = kbOf(tV.root);
-    const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
-    if (!prMerged && !(await isAncestor(isolated, P, headSha))) throw new KbHeld("side_ahead");
     if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) {
-      // The side branch already carries this KB: nothing to push, keep the PR (idempotent re-entry).
+      // The side branch already carries this KB: nothing to push, keep the PR (idempotent re-entry, before the ancestry
+      // check, D5a).
       try {
         return { kind: "fallback", prUrl: await ensureKbSyncPr(installationId, f.owner, f.repo, D), commitCount: 0 };
       } catch {
         return fail("pr_failed");
       }
     }
+    const tKb = kbOf(tV.root);
+    const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
+    // Phase 9 (D5e/D6c): with no open PR, an abandoned P becomes a parent instead of a hold; here it is the interim refusal.
+    if (!prMerged && !(await isAncestor(isolated, P, headSha))) throw new KbHeld("side_ahead");
     parents = pV.commit.parents.includes(T) || (await isAncestor(isolated, T, P)) ? [P] : [P, T];
   }
 
-  const { sha: side } = await buildKbOverlay(isolated, tV.root, headKb, parents);
-  if (!(await assertRootDiffersOnlyInKb(isolated, side, tV.root))) return fail("side_guard_failed");
+  const { sha: side, tree: sideTree } = await buildKbOverlay(isolated, tV.root, headKb, parents);
+  const guarded = side === f.guardedS.sha ? f.guardedS : await guardKbOnly(isolated, side, tV.root);
+  if (!guarded) return fail("side_guard_failed");
   try {
-    await pushVerifiedKbOnly({ isolated, installationId, url, baseRoot: tV.root, sha: side, ref: SIDE_REF, defaultBranch: D });
+    await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D });
   } catch (err) {
     return fail(err instanceof KbHeld ? "side_guard_failed" : "side_push_rejected");
   }
@@ -634,19 +667,24 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   }
   reportPushHeld("synthetic_pushed", "side_pushed", f.ctx);
 
-  // KB-only case (the local branch is `S`, whose tree is the side's) with every parent already local: move the branch to
-  // the side commit and the tracking ref with it (R17: no token mint every turn while the PR is open). Otherwise the
-  // workspace stays as step 4 left it.
-  if (f.localNext === f.S && !fetched) {
-    try {
-      await handOver(isolated, f.writer, [side], [f.S, T, headSha]);
+  // D5c: link the side commit into local history in BOTH arms, so the next turn finds P local, an ancestor of HEAD and
+  // (with no new edit) carrying HEAD's KB: `side_pending`, no push to D, no new merge commit. KB-only (local = S, whose
+  // tree is the side's): the branch moves S -> side. Held code (local = M): M -> M' = merge(headSha, side) with HEAD's tree.
+  try {
+    if (f.localNext === f.S) {
+      await handOver(isolated, f.writer, [side, sideTree]);
       casLocalBranch(f.writer, D, side, f.S);
-      setTrackingBestEffort(f.writer, D, side, f.ctx);
-    } catch (err) {
-      if (!(err instanceof KbHeld)) throw err;
-      reportPushHeld(err.reason, "held", f.ctx);
+    } else {
+      const mPrime = await commitTree(isolated, f.headTree, [headSha, side], KB_SYNC_MERGE_MSG);
+      await handOver(isolated, f.writer, [side, sideTree, mPrime]);
+      casLocalBranch(f.writer, D, mPrime, f.localNext);
     }
+  } catch (err) {
+    if (!(err instanceof KbHeld)) throw err;
+    reportPushHeld(err.reason, "held", f.ctx);
   }
+  // D11: the tracking ref names what GitHub's D is (`T`, from `ls-remote`), never the side commit.
+  setTrackingBestEffort(f.writer, D, T, f.ctx);
   return { kind: "fallback", prUrl, commitCount: 1 };
 }
 
@@ -682,30 +720,42 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const hV = await readVerified(isolated, headSha);
     if (!tV || !hV) throw new KbHeld("hash_mismatch");
     const headKb = kbOf(hV.root);
-    if (!headKb || headKb.mode !== TREE_MODE) throw new KbHeld("kb_not_tree");
     const tKb = kbOf(tV.root);
-    if (tKb && tKb.mode === TREE_MODE && tKb.id === headKb.id) {
+    if (headKb && headKb.mode !== TREE_MODE) throw new KbHeld("kb_not_tree");
+    // No KB in HEAD: nothing a KB-only commit can carry. A remote KB the workspace dropped wholesale is held (an overlay
+    // cannot express it); no KB on either side is a code-only change like any other held one.
+    if (!headKb && tKb) throw new KbHeld("kb_absent");
+    if (!headKb || (tKb && tKb.mode === TREE_MODE && tKb.id === headKb.id)) {
       if (hV.commit.tree !== tV.commit.tree) throw new KbHeld("held_foreign");
       return { kind: "noop" };
     }
 
+    // D5b: the side branch already carries HEAD's KB (an open KB PR, nothing new this turn): no push to D, no REST call,
+    // no new local commit. P must be present (no fetch) and hash-verify; otherwise the turn proceeds.
+    if (remote.sideTip !== null && (await isCommitPresent(isolated, remote.sideTip))) {
+      const pKb = kbOf((await readVerified(isolated, remote.sideTip))?.root ?? []);
+      if (pKb && pKb.mode === TREE_MODE && pKb.id === headKb.id) throw new KbHeld("side_pending");
+    }
+
     const { sha: S, tree: sTree } = await buildKbOverlay(isolated, tV.root, headKb, [T]);
-    if (!(await assertRootDiffersOnlyInKb(isolated, S, tV.root))) throw new KbHeld("guard_failed");
+    const guardedS = await guardKbOnly(isolated, S, tV.root);
+    if (!guardedS) throw new KbHeld("guard_failed");
 
     // Step 4 (R1, R14; P7): keep the clone fast-forwardable BEFORE the push. KB-only local changes: the branch moves to
     // `S` itself (same tree, linear history). Held non-KB changes: the branch moves to `M` = merge(headSha, S), which keeps
     // them. Either way the next turn's `T` (= `S`) is an ancestor of the local branch.
-    const localNext =
-      sTree === hV.commit.tree ? S : await commitTree(isolated, hV.commit.tree, [headSha, S], KB_SYNC_MERGE_MSG);
-    await handOver(isolated, writer, [localNext], [T, headSha]);
+    const kbOnly = sTree === hV.commit.tree;
+    const localNext = kbOnly ? S : await commitTree(isolated, hV.commit.tree, [headSha, S], KB_SYNC_MERGE_MSG);
+    await handOver(isolated, writer, kbOnly ? [S, sTree] : [S, sTree, localNext]);
     casLocalBranch(writer, D, localNext, headSha);
 
     try {
-      await pushVerifiedKbOnly({ isolated, installationId, url, baseRoot: tV.root, sha: S, ref: `refs/heads/${D}`, defaultBranch: D });
+      await pushVerifiedKbOnly({ installationId, url, guarded: guardedS, ref: `refs/heads/${D}`, defaultBranch: D });
     } catch (err) {
       if (!(err instanceof KbSyncError) || err.pushClass !== "protected_branch") throw err;
       return await runSideFallback({
-        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headKb, S, localNext, pushErr: err,
+        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headTree: hV.commit.tree, headKb, S,
+        guardedS, localNext, pushErr: err,
       });
     }
     setTrackingBestEffort(writer, D, S, input);

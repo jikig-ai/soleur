@@ -65,6 +65,10 @@ export const HARDENED_ENV_ALLOWLIST: readonly string[] = [
  * and refs in a token-bearing child, and agent-planted refs would become `have` lines. `true` replaces that child with one
  * that prints nothing. An EMPTY value does not: git treats it as unset and spawns the default child. `push` spawns no such
  * child, so the shared constant changes nothing there.
+ *
+ * `maintenance.auto=false` (#12600, CTO ruling D13): a `commit-tree`, `fetch` or `push` may otherwise start `git maintenance
+ * run --auto` (gc, repack) as a detached child after the turn's work, in a directory the server disposes in `finally`, and
+ * for a token-bearing call with the askpass environment still set.
  */
 export const HARDENED_GIT_ARGS: readonly string[] = [
   ...GIT_HARDENING_ARGS,
@@ -78,6 +82,8 @@ export const HARDENED_GIT_ARGS: readonly string[] = [
   "push.followTags=false",
   "-c",
   "core.alternateRefsCommand=true",
+  "-c",
+  "maintenance.auto=false",
 ];
 
 /** The only transport a hardened push may use. An environment variable beats every repo-level `protocol.*.allow`. */

@@ -420,8 +420,9 @@ export function infoSilentFallback(
  * - `session-sync` family (#12600): `kb-sync-push-held:<reason>` (warn-level via `mirrorWarnWithDebounce`, op
  *   `kb-sync.push-held`; dedup key is the WORKSPACE id, not a userId, so each workspace gets one slot per reason).
  *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
- *   `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`, `side_ahead`.
- *   The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`) never reach this
+ *   `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
+ *   `side_ahead`. The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`,
+ *   `side_pending` (D5b: the side branch already carries HEAD's KB, an open KB PR with nothing new)) never reach this
  *   map; every reason writes its pino line before the debounce (`reportPushHeld` in kb-sync-publish.ts). Also
  *   `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.tracking-ref`, workspace-id key): the
  *   advisory tracking-ref update failed, so the next turn mints a token again. Also

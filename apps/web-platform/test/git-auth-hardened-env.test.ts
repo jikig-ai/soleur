@@ -332,7 +332,7 @@ describe("gitWithInstallationAuth child env and argv", () => {
     const { args } = calls[0] as Call;
     expect(args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
     expect(args.slice(2, 2 + GIT_HARDENING_ARGS.length)).toEqual([...GIT_HARDENING_ARGS]);
-    for (const c of ["http.proxy=", "http.https://github.com/.proxy=", "http.extraHeader=", "push.followTags=false"]) {
+    for (const c of ["http.proxy=", "http.https://github.com/.proxy=", "http.extraHeader=", "push.followTags=false", "maintenance.auto=false"]) {
       const i = args.indexOf(c);
       expect(i, c).toBeGreaterThan(0);
       expect(args[i - 1]).toBe("-c");

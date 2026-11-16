@@ -64,7 +64,8 @@ vi.mock("@/server/observability", () => ({
 vi.mock("../../server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
 vi.mock("../../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
 vi.mock("../../server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: writeRepoColsSpy }));
-vi.mock("../../server/approval/workspace-head", () => ({
+vi.mock("../../server/approval/workspace-head", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server/approval/workspace-head")>()),
   readWorkspaceHeadRef: () => ({ sha: "a".repeat(40), refName: "refs/heads/main" }),
 }));
 vi.mock("../../server/kb-sync-publish", async (importOriginal) => ({
@@ -99,6 +100,24 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
       expect.objectContaining({ userId: "user-1", workspaceId: "ws-1", installationId: 42, headSha: "a".repeat(40), refName: "refs/heads/main" }),
     );
     expect(Object.keys(input.writer as object).sort()).toEqual(["casBranch", "setTracking", "unpack"]);
+  });
+
+  test("D13: the injected workspace writers run their git child with a timeout (a stalled .lock cannot wedge the turn)", async () => {
+    publishSpy.mockResolvedValue({ kind: "noop" });
+    await run();
+    const writer = publishSpy.mock.calls[0][0].writer as { unpack(b: Buffer): void; casBranch(b: string, n: string, p: string): void; setTracking(b: string, s: string): void };
+    const { execFileSync } = await import("child_process");
+    const spy = vi.mocked(execFileSync);
+    spy.mockClear();
+    writer.unpack(Buffer.from("PACK"));
+    writer.casBranch("main", "a".repeat(40), "b".repeat(40));
+    writer.setTracking("main", "c".repeat(40));
+    expect(spy).toHaveBeenCalledTimes(3);
+    for (const call of spy.mock.calls) {
+      const opts = call[2] as { timeout?: number };
+      expect(opts.timeout).toBeGreaterThan(0);
+      expect(opts.timeout).toBeLessThanOrEqual(60_000);
+    }
   });
 
   test("fallback delivered -> warn kb-sync.push-protected-fallback with PR url + commit count, bookkeeping runs", async () => {

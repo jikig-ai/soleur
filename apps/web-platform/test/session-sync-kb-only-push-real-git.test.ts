@@ -39,7 +39,17 @@ const H = vi.hoisted(() => ({
   beforeCall: null as null | ((args: string[]) => void),
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
+  mirrorWithDebounce: vi.fn(),
   mirrorWarnWithDebounce: vi.fn(),
+  /** Every direct `runIsolatedGitLocal` call kb-sync-publish makes (args, stdin, stdout, exit code). */
+  iso: [] as Array<{ args: string[]; input: string; stdout: Buffer; code: number }>,
+  /** Every `verifyObject` call (type, id). */
+  verify: [] as Array<{ type: string; id: string }>,
+  /** When > 0, every direct isolated call runs with this stdout cap (the D10 scaled row). */
+  isoMaxBuffer: 0,
+  /** Returns a fake runner result for an isolated call (tri-state rows); null runs the real child. */
+  isoFault: null as null | ((args: string[]) => { code: number; stdout: Buffer; stderr: string; timedOut: boolean } | null),
+  verifyFault: null as null | ((type: string, id: string) => unknown),
   writeRepoCols: vi.fn(async () => undefined),
   rpc: vi.fn(async () => ({ data: null, error: null })),
   findOpenPullRequest: vi.fn(async () => null as null | { htmlUrl: string }),
@@ -50,6 +60,7 @@ const H = vi.hoisted(() => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: H.reportSilentFallback,
   warnSilentFallback: H.warnSilentFallback,
+  mirrorWithDebounce: H.mirrorWithDebounce,
   mirrorWarnWithDebounce: H.mirrorWarnWithDebounce,
   hashUserId: (x: string) => `h-${x}`,
 }));
@@ -92,6 +103,29 @@ vi.mock("@/server/git-hardened-env", async (importOriginal) => {
       ...actual.buildIsolatedGitEnv(dir, extra),
       GIT_ALLOW_PROTOCOL: "https:file",
     }),
+  };
+});
+// Records the token-free isolated calls (pack shape, Guard 1 count) and injects the tri-state faults. `verifyObject`'s own
+// child is internal to the module, so `verifyObject` is wrapped as a whole.
+vi.mock("@/server/git-isolated-local", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/git-isolated-local")>();
+  return {
+    ...actual,
+    runIsolatedGitLocal: async (
+      iso: import("@/server/git-hardened-env").IsolatedPushDir,
+      args: readonly string[],
+      opts: import("@/server/git-isolated-local").IsolatedGitLocalOptions = {},
+    ) => {
+      const faked = H.isoFault?.([...args]) ?? null;
+      const r = faked ?? (await actual.runIsolatedGitLocal(iso, args, H.isoMaxBuffer > 0 ? { ...opts, maxBufferBytes: H.isoMaxBuffer } : opts));
+      H.iso.push({ args: [...args], input: opts.input === undefined ? "" : opts.input.toString(), stdout: r.stdout, code: r.code });
+      return r;
+    },
+    verifyObject: async (iso: import("@/server/git-hardened-env").IsolatedPushDir, type: import("@/server/git-isolated-local").GitObjectType, id: string) => {
+      H.verify.push({ type, id });
+      const faked = H.verifyFault?.(type, id);
+      return faked !== undefined && faked !== null ? faked : actual.verifyObject(iso, type, id);
+    },
   };
 });
 // The syncWorkspace rows and the legacy-arm mutation rows run host-side git against the file:// origin.
@@ -177,10 +211,11 @@ afterAll(() => {
 const savedEnv: Record<string, string | undefined> = {};
 let row: Row;
 
-function newRow(opts: { protectedMain?: boolean } = {}): Row {
+function newRow(opts: { protectedMain?: boolean; prep?: (r: { root: string; remote: string }) => void } = {}): Row {
   const root = realpathSync(mkdtempSync(join(base, "row-")));
   const remote = join(root, "remote.git");
   cpSync(template, remote, { recursive: true });
+  opts.prep?.({ root, remote });
   if (opts.protectedMain) {
     writeFileSync(join(remote, "hooks", "pre-receive"), GH006_HOOK);
     chmodSync(join(remote, "hooks", "pre-receive"), 0o755);
@@ -198,11 +233,11 @@ function newRow(opts: { protectedMain?: boolean } = {}): Row {
 }
 
 /** A commit on the remote main made by "someone else" (a scratch clone pushing past any hook via update-ref). */
-function upstreamCommit(r: Row, edit: (dir: string) => void, msg = "upstream"): string {
+function upstreamCommit(r: { root: string; remote: string }, edit: (dir: string) => void, msg = "upstream", addAll = true): string {
   const dir = mkdtempSync(join(r.root, "up-"));
   execFileSync("git", ["clone", "-q", `file://${r.remote}`, dir], { env: fixtureEnv(r.root), stdio: "pipe" });
   edit(dir);
-  git(dir, "add", "-A");
+  if (addAll) git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", msg);
   const sha = git(dir, "rev-parse", "HEAD");
   git(dir, "push", "-q", "origin", `HEAD:refs/heads/tmp-up-${sha.slice(0, 8)}`);
@@ -234,6 +269,39 @@ const heldInfo = (reason: string): unknown[] =>
   H.log.info.mock.calls.filter(([o]) => (o as { op?: string; reason?: string })?.op === "kb-sync.push-held" && (o as { reason?: string }).reason === reason);
 const heldWarn = (reason: string): unknown[] =>
   H.mirrorWarnWithDebounce.mock.calls.filter(([, , , cls]) => cls === `kb-sync-push-held:${reason}`);
+const pushesOf = (): string[] => H.calls.filter((c) => c.args[0] === "push").map((c) => c.args[c.args.length - 1]);
+/** The hand-over packs of the turn: the object list on stdin, the argv and the object count in the pack header. */
+const packs = (): Array<{ args: string[]; objects: string[]; count: number }> =>
+  H.iso
+    .filter((c) => c.args[0] === "pack-objects")
+    .map((c) => ({ args: c.args, objects: c.input.split("\n").filter(Boolean), count: c.stdout.length >= 12 ? c.stdout.readUInt32BE(8) : -1 }));
+const guardReads = (sha: string): number => H.verify.filter((v) => v.type === "commit" && v.id === sha).length;
+/** Make every workspace object loose (so a row can overwrite one object's file). */
+function loosenObjects(r: Row): string {
+  const objects = join(r.ws, ".git", "objects");
+  for (const p of readdirSync(join(objects, "pack")).filter((f) => f.endsWith(".pack"))) {
+    const packPath = join(objects, "pack", p);
+    const moved = join(r.root, p);
+    cpSync(packPath, moved);
+    rmSync(packPath);
+    rmSync(packPath.replace(/\.pack$/, ".idx"), { force: true });
+    execFileSync("git", ["unpack-objects", "-q"], { cwd: r.ws, input: readFileSync(moved), env: fixtureEnv(r.ws) });
+  }
+  return objects;
+}
+/** Overwrite the loose object file of `victim` with the bytes of `donor` (a forged object under a genuine id). */
+function forgeObject(r: Row, victim: string, donor: string): void {
+  const objects = join(r.ws, ".git", "objects");
+  const dst = join(objects, victim.slice(0, 2), victim.slice(2));
+  chmodSync(dst, 0o644);
+  cpSync(join(objects, donor.slice(0, 2), donor.slice(2)), dst);
+}
+const resetTurn = (): void => {
+  H.calls.length = 0;
+  H.iso.length = 0;
+  H.verify.length = 0;
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.findOpenPullRequest, H.createPullRequest, H.log.info]) f.mockClear();
+};
 
 /** A foreign (non-KB) commit the agent made through Bash, plus the KB edit the auto-commit picks up. */
 function foreignPlusKb(r: Row, { kb = true, dirtyCode = true } = {}): string {
@@ -250,9 +318,16 @@ const run = (r: Row): Promise<void> => syncPush(USER, r.ws, {} as never, WS_ID);
 
 beforeEach(() => {
   for (const k of ["HOME", "TMPDIR"]) savedEnv[k] = process.env[k];
+  // a row that never sets `row` (the census) must not assert on the previous row's directory
+  row = undefined as unknown as Row;
   H.calls.length = 0;
+  H.iso.length = 0;
+  H.verify.length = 0;
+  H.isoMaxBuffer = 0;
+  H.isoFault = null;
+  H.verifyFault = null;
   H.beforeCall = null;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
   H.findOpenPullRequest.mockImplementation(async () => null);
 });
 
@@ -282,6 +357,11 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(status(row)).toBe("");
     expect(heldInfo("synthetic_pushed")).toHaveLength(1);
     expect(H.writeRepoCols).toHaveBeenCalledTimes(1);
+    // D10: the hand-over packs exactly S and its root tree, from an explicit object list (no --revs walk)
+    const sTree = git(row.remote, "rev-parse", `${S}^{tree}`);
+    expect(packs()).toEqual([{ args: ["pack-objects", "--stdout", "-q"], objects: [S, sTree], count: 2 }]);
+    // D13: Guard 1 reads S once
+    expect(guardReads(S)).toBe(1);
   });
 
   test("H1c: a failing tracking-ref update still publishes S and mirrors one debounced kb-sync.tracking-ref warning", async () => {
@@ -339,6 +419,28 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(tracking(row)).toBe(S);
     expect(status(row)).toBe(" M src/s.ts");
     expect(heldInfo("synthetic_pushed")).toHaveLength(1);
+    // D10: S, its root tree and M (M's tree is HEAD's, already local)
+    expect(packs()).toEqual([{ args: ["pack-objects", "--stdout", "-q"], objects: [S, git(row.remote, "rev-parse", `${S}^{tree}`), M], count: 3 }]);
+    expect(guardReads(S)).toBe(1);
+  });
+
+  test("D10: a KB change set larger than the isolated stdout cap still syncs (the pack carries only the server-built objects)", async () => {
+    row = newRow();
+    // Scaled: production caps the isolated stdout at 64 MiB; this row lowers the cap to 1 MiB through the runner's
+    // injectable maxBufferBytes and writes 3 MiB of incompressible KB content, the same "change set > cap" property at
+    // a size that keeps the row fast (a 64 MiB fixture would cost ~10 s and ~200 MB of disk per run).
+    H.isoMaxBuffer = 1024 * 1024;
+    const { createHash } = await import("node:crypto");
+    const chunks: Buffer[] = [];
+    for (let i = 0; chunks.length * 32 < 3 * 1024 * 1024; i++) chunks.push(createHash("sha256").update(`kb-fixture-${i}`).digest());
+    write(join(row.ws, "knowledge-base", "big.bin"), "");
+    writeFileSync(join(row.ws, "knowledge-base", "big.bin"), Buffer.concat(chunks));
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(localMain(row)).toBe(S);
+    expect(heldInfo("unpack_failed")).toHaveLength(0);
+    expect(packs().map((p) => p.count)).toEqual([2]);
   });
 
   test("H3: foreign commit and no KB change -> remote unchanged, one held_foreign info line, no Sentry event", async () => {
@@ -404,23 +506,37 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     git(row.ws, "add", "-A");
     git(row.ws, "commit", "-q", "-m", "kb");
     // make every object loose, then overwrite T's root tree file with the foreign root tree's bytes (probe7 shape)
-    const objects = join(row.ws, ".git", "objects");
-    for (const p of readdirSync(join(objects, "pack")).filter((f) => f.endsWith(".pack"))) {
-      const packPath = join(objects, "pack", p);
-      const moved = join(row.root, p);
-      cpSync(packPath, moved);
-      rmSync(packPath);
-      rmSync(packPath.replace(/\.pack$/, ".idx"), { force: true });
-      execFileSync("git", ["unpack-objects", "-q"], { cwd: row.ws, input: readFileSync(moved), env: fixtureEnv(row.ws) });
-    }
-    const tRoot = git(row.ws, "rev-parse", `${row.T}^{tree}`);
-    const fRoot = git(row.ws, "rev-parse", `${foreign}^{tree}`);
-    const dst = join(objects, tRoot.slice(0, 2), tRoot.slice(2));
-    chmodSync(dst, 0o644);
-    cpSync(join(objects, fRoot.slice(0, 2), fRoot.slice(2)), dst);
+    loosenObjects(row);
+    forgeObject(row, git(row.ws, "rev-parse", `${row.T}^{tree}`), git(row.ws, "rev-parse", `${foreign}^{tree}`));
     await run(row);
     expect(remoteMain(row)).toBe(row.T);
     expect(onRemote(row, foreign)).toBe(false);
+    expect(heldWarn("hash_mismatch")).toHaveLength(1);
+  });
+
+  test("matrix 2b (TD-forge): forged bytes for T's COMMIT object (tree pointer swapped to the foreign root) -> nothing pushed", async () => {
+    row = newRow();
+    // the same .github subtree already exists on the remote, on a non-default branch, so connectivity alone cannot stop it
+    {
+      const d = mkdtempSync(join(row.root, "ci-"));
+      execFileSync("git", ["clone", "-q", `file://${row.remote}`, d], { env: fixtureEnv(row.root), stdio: "pipe" });
+      write(join(d, ".github", "workflows", "x.yml"), "on: push\njobs: {}\n");
+      git(d, "add", "-A");
+      git(d, "commit", "-q", "-m", "ci branch");
+      git(d, "push", "-q", "origin", "HEAD:refs/heads/ci-branch");
+    }
+    const foreign = foreignPlusKb(row, { dirtyCode: false });
+    git(row.ws, "add", "-A");
+    git(row.ws, "commit", "-q", "-m", "kb");
+    loosenObjects(row);
+    const fRoot = git(row.ws, "rev-parse", `${foreign}^{tree}`);
+    const forged = git(row.ws, "commit-tree", fRoot, "-m", "T0");
+    forgeObject(row, row.T, forged);
+    // instrument check: the workspace now serves the forged bytes under T's id
+    expect(git(row.ws, "cat-file", "commit", row.T)).toContain(`tree ${fRoot}`);
+    await run(row);
+    expect(gitOk(row.remote, "cat-file", "-e", "refs/heads/main:.github/workflows/x.yml")).toBe(false);
+    expect(remoteMain(row)).toBe(row.T);
     expect(heldWarn("hash_mismatch")).toHaveLength(1);
   });
 
@@ -568,6 +684,146 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(git(row.ws, "rev-parse", "refs/heads/x")).toBe(x);
   });
 
+  test("matrix 19b (setTracking twin): refs/remotes/origin/main swapped to a symref during the turn -> its target is untouched", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    let y = "";
+    H.beforeCall = (args) => {
+      if (args[0] !== "ls-remote" || y) return;
+      y = git(row.ws, "rev-parse", "HEAD");
+      git(row.ws, "update-ref", "refs/heads/y", y);
+      mkdirSync(join(row.ws, ".git", "refs", "remotes", "origin"), { recursive: true });
+      writeFileSync(join(row.ws, ".git", "refs", "remotes", "origin", "main"), "ref: refs/heads/y\n");
+    };
+    await run(row);
+    const S = remoteMain(row);
+    expect(S).not.toBe(row.T);
+    expect(y).not.toBe("");
+    // --no-deref: the symref itself is replaced, the branch it pointed at never moves
+    expect(git(row.ws, "rev-parse", "refs/heads/y")).toBe(y);
+    expect(git(row.ws, "rev-parse", "refs/remotes/origin/main")).toBe(S);
+  });
+
+  test("D13 tri-state: a failing cat-file -t child is local_git_failed (outer catch), never remote_unknown_tip", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.isoFault = (args) => (args[0] === "cat-file" && args[1] === "-t" ? { code: -1, stdout: Buffer.alloc(0), stderr: "", timedOut: true } : null);
+    await run(row);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(heldInfo("remote_unknown_tip")).toHaveLength(0);
+    const outer = H.reportSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "syncPush");
+    expect(outer).toHaveLength(1);
+    expect((outer[0][1] as { tags?: Record<string, string> }).tags?.reason).toBe("local_git_failed");
+  });
+
+  test("D13 tri-state: a failing object read is local_git_failed (outer catch), never hash_mismatch", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.verifyFault = (type) => (type === "commit" ? { kind: "failed" } : null);
+    await run(row);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(heldWarn("hash_mismatch")).toHaveLength(0);
+    const outer = H.reportSilentFallback.mock.calls.filter(([, o]) => (o as { op?: string }).op === "syncPush");
+    expect(outer).toHaveLength(1);
+    expect((outer[0][1] as { tags?: Record<string, string> }).tags?.reason).toBe("local_git_failed");
+  });
+
+  test("D13: unmerged index entries without MERGE_HEAD (a conflicted stash pop / cherry-pick shape) -> no auto-commit, no push, merge_in_progress", async () => {
+    row = newRow();
+    const before = localMain(row);
+    const blob = (body: string): string =>
+      execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: row.ws, input: body, encoding: "utf8", env: fixtureEnv(row.ws) }).trim();
+    const [b1, b2, b3] = [blob("a\n"), blob("a\nours\n"), blob("a\ntheirs\n")];
+    execFileSync("git", ["update-index", "--index-info"], {
+      cwd: row.ws,
+      input: `0 ${"0".repeat(40)}\tknowledge-base/a.md\n100644 ${b1} 1\tknowledge-base/a.md\n100644 ${b2} 2\tknowledge-base/a.md\n100644 ${b3} 3\tknowledge-base/a.md\n`,
+      env: fixtureEnv(row.ws),
+    });
+    write(join(row.ws, "knowledge-base", "a.md"), "<<<<<<< ours\na\nours\n=======\na\ntheirs\n>>>>>>> theirs\n");
+    expect(existsSync(join(row.ws, ".git", "MERGE_HEAD"))).toBe(false);
+    await run(row);
+    expect(localMain(row)).toBe(before);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(H.calls).toEqual([]);
+    expect(heldWarn("merge_in_progress")).toHaveLength(1);
+  });
+
+  test("fixture: a root-level submodule (gitlink) survives S unchanged", async () => {
+    const SUB = "1".repeat(40);
+    row = newRow({
+      prep: (r) =>
+        upstreamCommit(
+          r,
+          (d) => {
+            git(d, "update-index", "--add", "--cacheinfo", `160000,${SUB},vendor-sub`);
+          },
+          "gitlink",
+          false,
+        ),
+    });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(rootEntries(row.remote, S)).toContain(`160000 commit ${SUB}\tvendor-sub`);
+    expect(nonKb(rootEntries(row.remote, S))).toEqual(nonKb(rootEntries(row.remote, row.T)));
+    expect(localMain(row)).toBe(S);
+  });
+
+  test("fixture: a non-ASCII root entry name round-trips byte-exact into S", async () => {
+    row = newRow({ prep: (r) => upstreamCommit(r, (d) => write(join(d, "caf\u00e9-\u00fcber.md"), "accents\n"), "non-ascii") });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(git(row.remote, "rev-parse", `${S}^{tree}`)).toBe(git(row.ws, "rev-parse", "HEAD^{tree}"));
+    expect(nonKb(rootEntries(row.remote, S))).toEqual(nonKb(rootEntries(row.remote, row.T)));
+    expect(localMain(row)).toBe(S);
+  });
+
+  test("fixture: the first-ever sync (T has no knowledge-base) publishes S = T's root plus HEAD's knowledge-base", async () => {
+    row = newRow({ prep: (r) => upstreamCommit(r, (d) => rmSync(join(d, "knowledge-base"), { recursive: true }), "no kb yet") });
+    expect(gitOk(row.remote, "cat-file", "-e", `${row.T}:knowledge-base`)).toBe(false);
+    write(join(row.ws, "knowledge-base", "first.md"), "first\n");
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    expect(git(row.remote, "show", `${S}:knowledge-base/first.md`)).toBe("first");
+    expect(nonKb(rootEntries(row.remote, S))).toEqual(nonKb(rootEntries(row.remote, row.T)));
+    expect(localMain(row)).toBe(S);
+  });
+
+  test("fixture: HEAD deleted the whole knowledge-base the remote holds -> nothing pushed, kb_absent (not kb_not_tree)", async () => {
+    row = newRow();
+    git(row.ws, "rm", "-q", "-r", "knowledge-base");
+    git(row.ws, "commit", "-q", "-m", "drop kb");
+    await run(row);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(heldWarn("kb_absent")).toHaveLength(1);
+    expect(heldWarn("kb_not_tree")).toHaveLength(0);
+  });
+
+  test("fixture: no knowledge-base on either side and a code-only commit -> held_foreign info, no warning", async () => {
+    row = newRow({ prep: (r) => upstreamCommit(r, (d) => rmSync(join(d, "knowledge-base"), { recursive: true }), "no kb") });
+    foreignPlusKb(row, { kb: false, dirtyCode: false });
+    await run(row);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(heldInfo("held_foreign")).toHaveLength(1);
+    expect(H.mirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
+  test("fixture: a binary KB file (NUL bytes) is published byte-exact", async () => {
+    row = newRow();
+    const bin = Buffer.from([0, 1, 2, 255, 0, 10, 13, 0x80, 0xfe, 0]);
+    mkdirSync(join(row.ws, "knowledge-base", "assets"), { recursive: true });
+    writeFileSync(join(row.ws, "knowledge-base", "assets", "x.bin"), bin);
+    await run(row);
+    const S = remoteMain(row);
+    expect(parents(row.remote, S)).toEqual([row.T]);
+    const onRemoteBytes = execFileSync("git", ["cat-file", "blob", `${S}:knowledge-base/assets/x.bin`], { cwd: row.remote, env: fixtureEnv(row.remote) });
+    expect(Buffer.compare(onRemoteBytes, bin)).toBe(0);
+  });
+
   test("matrix 14: after H2 the real syncWorkspace (reconcile webhook shape) fast-forwards with no recovery branch", async () => {
     row = newRow();
     foreignPlusKb(row);
@@ -586,17 +842,22 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(result.ok).toBe(false);
     expect(readFileSync(join(row.ws, "src", "s.ts"), "utf8")).toBe("export const s = 2; // dirty, uncommitted\n");
     expect(localMain(row)).toBe(foreign);
-    const ops = H.reportSilentFallback.mock.calls.map(([, o]) => (o as { op?: string }).op);
-    expect(ops).toContain("self-heal-aborted-dirty-nonkb");
+    // D6(b)/(e): the designed hold is a debounced, null-first warning with op self-heal-aborted-dirty-tracked
+    const ops = H.mirrorWarnWithDebounce.mock.calls.map(([err, o]) => ({ err, op: (o as { op?: string }).op }));
+    expect(ops).toContainEqual({ err: null, op: "self-heal-aborted-dirty-tracked" });
   });
 
-  test("R18 positive control: only KB files dirty -> syncWorkspace still recovers (branch-aside + reset)", async () => {
+  test("D6(b) (was the R18 positive control): only KB files dirty -> syncWorkspace refuses too and keeps the KB edit", async () => {
     row = newRow();
-    foreignPlusKb(row, { kb: false, dirtyCode: false });
+    const foreign = foreignPlusKb(row, { kb: false, dirtyCode: false });
     write(join(row.ws, "knowledge-base", "a.md"), "a\ndirty kb\n");
     upstreamCommit(row, (d) => write(join(d, "README.md"), "readme 2\n"));
     const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" });
-    expect(result).toEqual({ ok: true, recovered: true });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(row.ws, "knowledge-base", "a.md"), "utf8")).toBe("a\ndirty kb\n");
+    expect(localMain(row)).toBe(foreign);
+    const ops = H.mirrorWarnWithDebounce.mock.calls.map(([err, o]) => ({ err, op: (o as { op?: string }).op }));
+    expect(ops).toContainEqual({ err: null, op: "self-heal-aborted-dirty-tracked" });
   });
 
   test("a failing ls-remote -> the isolated dir is disposed and op syncPush carries reason ls_remote_failed, no URL", async () => {
@@ -615,7 +876,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
 });
 
 describe("protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook)", { timeout: 30_000 }, () => {
-  test("matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept", async () => {
+  test("matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == side, tracking == T, dirty file kept", async () => {
     row = newRow({ protectedMain: true });
     write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
     write(join(row.ws, "src", "s.ts"), "export const s = 2; // dirty\n");
@@ -629,9 +890,18 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     expect(H.createPullRequest).toHaveBeenCalledTimes(1);
     expect(H.createPullRequest.mock.calls[0]).toEqual(expect.arrayContaining(["acme", "widget", "soleur/kb-sync", "main"]));
     expect(localMain(row)).toBe(side);
-    expect(tracking(row)).toBe(side);
+    // D11: the tracking ref says what GitHub's main is (T), never the side commit
+    expect(tracking(row)).toBe(row.T);
     expect(status(row)).toBe(" M src/s.ts");
     expect(readFileSync(join(row.ws, "src", "s.ts"), "utf8")).toBe("export const s = 2; // dirty\n");
+    // one rejected push to main, one side push; no fetch on the push side (D5d)
+    expect(pushesOf().map((r) => r.split(":")[1])).toEqual(["refs/heads/main", "refs/heads/soleur/kb-sync"]);
+    expect(H.calls.filter((c) => c.args[0] === "fetch")).toEqual([]);
+    // D10: step 4 packs S + root tree, the side hand-over packs side + root tree
+    const tree = git(row.remote, "rev-parse", `${side}^{tree}`);
+    const S = packs()[0]?.objects[0];
+    expect(packs().map((p) => p.objects)).toEqual([[S, tree], [side, tree]]);
+    expect(guardReads(side as string)).toBe(1);
   });
 
   test("matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file", async () => {
@@ -645,6 +915,78 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     expect(gitOk(row.ws, "merge-base", "--is-ancestor", foreign, M)).toBe(true);
     expect(git(row.ws, "log", "-1", "--format=%s", M)).toBe(MERGE_MSG);
     expect(status(row)).toBe(" M src/s.ts");
+    // D5c: the local merge links the SIDE commit (M' = merge(headSha, side)), so the next turn sees the side as local
+    expect(parents(row.ws, M)[1]).toBe(side);
+    expect(gitOk(row.ws, "merge-base", "--is-ancestor", side, M)).toBe(true);
+    expect(git(row.ws, "rev-parse", `${M}^{tree}`)).toBe(git(row.ws, "rev-parse", `${parents(row.ws, M)[0]}^{tree}`));
+    expect(tracking(row)).toBe(row.T);
+    // D10: the side hand-over packs side, its root tree and M'
+    expect(packs()[1]?.objects).toEqual([side, git(row.remote, "rev-parse", `${side}^{tree}`), M]);
+  });
+
+  test("D5: protected + held code, three turns (edit, no edit, no edit) -> no M growth and no repeated push to main", async () => {
+    row = newRow({ protectedMain: true });
+    foreignPlusKb(row);
+    await run(row);
+    const side = remoteSide(row) as string;
+    const M1 = localMain(row);
+    expect(parents(row.ws, M1)[1]).toBe(side);
+    expect(pushesOf()).toHaveLength(2);
+    for (const turn of [2, 3]) {
+      resetTurn();
+      await run(row);
+      expect(localMain(row), `turn ${turn}: local branch`).toBe(M1);
+      expect(pushesOf(), `turn ${turn}: pushes`).toEqual([]);
+      expect(remoteSide(row)).toBe(side);
+      expect(H.calls.map((c) => c.args[0])).toEqual(["ls-remote"]);
+      expect(heldInfo("side_pending")).toHaveLength(1);
+      expect(heldWarn("side_pending")).toEqual([]);
+      expect(H.findOpenPullRequest).not.toHaveBeenCalled();
+      expect(H.createPullRequest).not.toHaveBeenCalled();
+      expect(H.warnSilentFallback).not.toHaveBeenCalled();
+      expect(H.mirrorWithDebounce).not.toHaveBeenCalled();
+    }
+    expect(git(row.ws, "rev-list", "--count", `${row.T}..${M1}`)).toBe(git(row.ws, "rev-list", "--count", `${row.T}..refs/heads/main`));
+  });
+
+  test("D5: protected + KB-only, two editing turns -> the second side commit stacks on the first; local follows the side", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 1\n");
+    await run(row);
+    const side1 = remoteSide(row) as string;
+    expect(localMain(row)).toBe(side1);
+    resetTurn();
+    write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
+    await run(row);
+    const side2 = remoteSide(row) as string;
+    expect(side2).not.toBe(side1);
+    expect(parents(row.remote, side2)).toEqual([side1]);
+    expect(localMain(row)).toBe(side2);
+    expect(tracking(row)).toBe(row.T);
+    expect(git(row.remote, "show", `${side2}:knowledge-base/a.md`)).toBe("a\nturn 1");
+    expect(git(row.remote, "show", `${side2}:knowledge-base/nested/b.md`)).toBe("b\nturn 2");
+    // a no-edit turn after that: side_pending, nothing pushed
+    resetTurn();
+    await run(row);
+    expect(pushesOf()).toEqual([]);
+    expect(localMain(row)).toBe(side2);
+    expect(heldInfo("side_pending")).toHaveLength(1);
+  });
+
+  test("D5d interim: a side tip absent from the workspace -> side_ahead with no fetch (Phase 9 adopts it on the pull side)", async () => {
+    row = newRow({ protectedMain: true });
+    const dir = mkdtempSync(join(row.root, "pr-"));
+    execFileSync("git", ["clone", "-q", `file://${row.remote}`, dir], { env: fixtureEnv(row.root), stdio: "pipe" });
+    write(join(dir, "README.md"), "side-only readme\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "older side");
+    git(dir, "push", "-q", "origin", "HEAD:refs/heads/soleur/kb-sync");
+    const P = remoteSide(row) as string;
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    expect(remoteSide(row)).toBe(P);
+    expect(H.calls.filter((c) => c.args[0] === "fetch")).toEqual([]);
+    expect(heldWarn("side_ahead")).toHaveLength(1);
   });
 
   test("matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent", async () => {
@@ -695,6 +1037,31 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     expect(remoteSide(row)).toBe(P);
     expect(git(row.remote, "show", "refs/heads/soleur/kb-sync:knowledge-base/pr-only.md")).toBe("unmerged PR content");
     expect(heldWarn("side_ahead")).toHaveLength(1);
+    expect(H.calls.filter((c) => c.args[0] === "fetch")).toEqual([]);
+  });
+
+  test("matrix 16 forge twin: a forged side tip P (KB equal to T's, parent T) never makes the fallback drop the PR's content", async () => {
+    row = newRow({ protectedMain: true });
+    const dir = mkdtempSync(join(row.root, "pr-"));
+    execFileSync("git", ["clone", "-q", `file://${row.remote}`, dir], { env: fixtureEnv(row.root), stdio: "pipe" });
+    write(join(dir, "knowledge-base", "pr-only.md"), "unmerged PR content\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "side content");
+    git(dir, "push", "-q", "origin", "HEAD:refs/heads/soleur/kb-sync");
+    const P = remoteSide(row) as string;
+    // the workspace holds P's objects (a fetch of the side branch), then the agent forges P's commit bytes: same id, a
+    // commit whose tree is T's (so its KB equals T's: "the PR merged") and whose parent is T
+    git(row.ws, "fetch", "-q", "origin", "refs/heads/soleur/kb-sync");
+    loosenObjects(row);
+    const forged = git(row.ws, "commit-tree", `${row.T}^{tree}`, "-p", row.T, "-m", "side content");
+    forgeObject(row, P, forged);
+    expect(git(row.ws, "cat-file", "commit", P)).toContain(`tree ${git(row.ws, "rev-parse", `${row.T}^{tree}`)}`);
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    expect(remoteSide(row)).toBe(P);
+    expect(git(row.remote, "show", "refs/heads/soleur/kb-sync:knowledge-base/pr-only.md")).toBe("unmerged PR content");
+    const failed = H.mirrorWithDebounce.mock.calls.filter(([, , , cls]) => cls === "kb-sync-fallback-failed:side_hash_mismatch");
+    expect(failed).toHaveLength(1);
   });
 
   test("matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built", async () => {
@@ -706,6 +1073,8 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     git(dir, "commit", "-q", "-m", "older side");
     git(dir, "push", "-q", "origin", "HEAD:refs/heads/soleur/kb-sync");
     const P = remoteSide(row) as string;
+    // P present in the workspace (D5d: the push side never fetches it)
+    git(row.ws, "fetch", "-q", "origin", "refs/heads/soleur/kb-sync");
     write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
     await run(row);
     const side = remoteSide(row) as string;
@@ -715,15 +1084,11 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
   });
 });
 
-describe("census (AC3, AC4)", () => {
+// The push / gitWithInstallationAuth census (AC3, D12) is the AST census in test/census-git-push-sites.test.ts.
+describe("census (AC4)", () => {
   const SERVER = join(__dirname, "..", "server");
   const code = (p: string): string =>
     existsSync(p) ? readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "") : "";
-  test("the push argv appears exactly once in kb-sync-publish.ts and never in session-sync.ts", () => {
-    const PUSH = /\[\s*["']push["']/g;
-    expect((code(join(SERVER, "kb-sync-publish.ts")).match(PUSH) ?? []).length).toBe(1);
-    expect((code(join(SERVER, "session-sync.ts")).match(PUSH) ?? []).length).toBe(0);
-  });
   test("no history walk, no agent-writable base, no legacy resolver", () => {
     const publish = code(join(SERVER, "kb-sync-publish.ts"));
     expect(publish).not.toBe("");

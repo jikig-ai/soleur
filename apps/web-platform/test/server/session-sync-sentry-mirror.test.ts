@@ -82,7 +82,8 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 // The KB sync reaches its isolated directory only through a resolvable repo URL and a readable HEAD.
 vi.mock("../../server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("../../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
-vi.mock("../../server/approval/workspace-head", () => ({
+vi.mock("../../server/approval/workspace-head", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server/approval/workspace-head")>()),
   readWorkspaceHeadRef: () => ({ sha: "d".repeat(40), refName: "refs/heads/main" }),
 }));
 

@@ -311,7 +311,6 @@ describe("connected-repo argv guard: update-ref --no-deref and unpack-objects -q
     expect(() => assertConnectedRepoArgv(argv)).not.toThrow();
   });
   test.each([
-    [["update-ref", "refs/heads/main", A, B]], // no --no-deref (R19)
     [["update-ref", "--no-deref", "refs/heads/main", A]], // CAS old value mandatory on refs/heads
     [["update-ref", "--no-deref", "refs/remotes/origin/main", A, B]],
     [["update-ref", "--no-deref", "refs/heads/main", A, B, "extra"]],
@@ -325,12 +324,22 @@ describe("connected-repo argv guard: update-ref --no-deref and unpack-objects -q
     [["update-ref", "--no-deref", "-m", "x", "refs/heads/main", A, B]],
     [["update-ref", "--no-deref", "refs/remotes/upstream/main", A]],
     [["update-ref", "--no-deref", "HEAD", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", "0".repeat(40), B]], // all-zero new value (D13)
+    [["update-ref", "--no-deref", "refs/heads/main", A, "0".repeat(40)]], // all-zero old value ("must not exist")
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", "0".repeat(40)]],
     [["unpack-objects"]],
     [["unpack-objects", "-q", "--strict"]],
     [["unpack-objects", "-n"]],
     [["update-ref", "--no-deref", "refs/heads/main", A, B, "--force"]],
   ])("refuses %j", (argv) => {
     expect(() => assertConnectedRepoArgv(argv)).toThrow();
+  });
+  test.each([
+    [["update-ref", "refs/heads/main", A, B]],
+    [["update-ref", "refs/remotes/origin/main", A]],
+    [["update-ref", "-m", "x", "--no-deref", "refs/heads/main", A, B]],
+  ])("refuses %j for the missing --no-deref (R19), not for another shape reason", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow(/--no-deref/);
   });
   test("other verbs keep their existing checks (destructive verbs and forbidden flags still refuse)", () => {
     expect(() => assertConnectedRepoArgv(["reset", "--hard"])).toThrow();

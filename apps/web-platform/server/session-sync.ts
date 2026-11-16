@@ -23,7 +23,7 @@ import {
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
-import { readWorkspaceHeadRef } from "./approval/workspace-head";
+import { HEX40, readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
@@ -59,7 +59,10 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   "unpack-objects",
 ]);
 
-const HEX40_RE = /^[0-9a-f]{40}$/;
+/** An object id the guarded `update-ref` shapes accept: 40 lowercase hex, never all-zero (git reads it as "delete" / "must not exist"). */
+function guardedSha(sha: string | undefined): boolean {
+  return typeof sha === "string" && HEX40.test(sha) && !/^0+$/.test(sha);
+}
 
 /** A branch name the guarded `update-ref` shapes accept (git's ref-format rules; throws a static error otherwise). */
 function guardedBranch(name: string): boolean {
@@ -87,16 +90,17 @@ function assertGuardedWriteArgv(argv: readonly string[]): void {
     return;
   }
   if (argv[0] !== "update-ref") return;
-  if (argv[1] !== "--no-deref") refuse();
+  // R19: a symref planted at the ref must be replaced, never followed to the branch it names.
+  if (argv[1] !== "--no-deref") throw new Error("connected-repo git: 'update-ref' requires --no-deref");
   const ref = argv[2] ?? "";
   if (ref.startsWith("refs/heads/")) {
     if (argv.length !== 5 || !guardedBranch(ref.slice("refs/heads/".length))) refuse();
-    if (!HEX40_RE.test(argv[3]) || !HEX40_RE.test(argv[4])) refuse();
+    if (!guardedSha(argv[3]) || !guardedSha(argv[4])) refuse();
     return;
   }
   if (ref.startsWith("refs/remotes/origin/")) {
     if (argv.length !== 4 || !guardedBranch(ref.slice("refs/remotes/origin/".length))) refuse();
-    if (!HEX40_RE.test(argv[3])) refuse();
+    if (!guardedSha(argv[3])) refuse();
     return;
   }
   refuse();
@@ -170,6 +174,9 @@ export function assertConnectedRepoArgv(argv: readonly string[]): void {
  * Throws a descriptive Error on rejection so the caller's try/catch logs
  * a meaningful warning rather than silently swallowing the violation.
  */
+/** Upper bound of one connected-repo git child (D13): a stalled `.lock` or a wedged filesystem costs at most this long. */
+export const CONNECTED_REPO_GIT_TIMEOUT_MS = 60_000;
+
 function runConnectedRepoGit(
   argv: string[],
   // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
@@ -179,7 +186,7 @@ function runConnectedRepoGit(
   // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
   // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
   const h = hostGitInvocation(argv, { cwd: opts.cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
-  return execFileSync("git", h.args, { ...opts, env: h.env }) as Buffer;
+  return execFileSync("git", h.args, { timeout: CONNECTED_REPO_GIT_TIMEOUT_MS, ...opts, env: h.env }) as Buffer;
 }
 
 /**
@@ -711,15 +718,38 @@ function kbWorkspaceWriter(workspacePath: string): KbWorkspaceWriter {
   };
 }
 
-/** `.git/MERGE_HEAD` present (any type, or unreadable): a merge is in progress, so neither commit nor push (R11). */
+/** `git status --porcelain=v1` XY codes of an unmerged (conflicted) index entry. */
+const UNMERGED_XY = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+/**
+ * A merge is in progress, so neither commit nor push (R11): `.git/MERGE_HEAD` present (any type, or unreadable), OR the
+ * index holds an unmerged entry without one (a conflicted `stash pop`, `cherry-pick` or `rebase`; D13), which an auto-commit
+ * `add` would resolve by committing the conflict markers. A status that cannot run is not a merge (the auto-commit's own
+ * status then fails the same way).
+ */
 function mergeInProgress(workspacePath: string): boolean {
   try {
     lstatSync(join(workspacePath, ".git", "MERGE_HEAD"));
     return true;
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
-    return code !== "ENOENT" && code !== "ENOTDIR";
+    if (code !== "ENOENT" && code !== "ENOTDIR") return true;
   }
+  let out: string;
+  try {
+    out = runConnectedRepoGit(["status", "--porcelain=v1", "-z", "--untracked-files=no"], { cwd: workspacePath, stdio: "pipe" }).toString();
+  } catch (err) {
+    mirrorGitRefusal(err, "mergeInProgress");
+    return false;
+  }
+  const tokens = out.split("\0");
+  for (let i = 0; i < tokens.length; i++) {
+    const entry = tokens[i];
+    if (entry.length < 4) continue;
+    if (UNMERGED_XY.has(entry.slice(0, 2))) return true;
+    if (entry[0] === "R" || entry[0] === "C") i++; // the source path of a rename / copy
+  }
+  return false;
 }
 
 /**
