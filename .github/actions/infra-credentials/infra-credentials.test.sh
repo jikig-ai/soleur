@@ -784,11 +784,14 @@ env_has "TF_STATE_AWS_ACCESS_KEY_ID" && pass "dc4: the TF_STATE pair still expor
 # when the rows above would go red on it.
 # ======================================================================
 dc_green() { # the whole narrow-mode property, judged on the last run_loader result
-  [[ "$LOADER_RC" -eq 0 ]] \
+  if [[ "$LOADER_RC" -eq 0 ]] \
     && [[ "$(out_get source)" == "tier_b_deploy_channel" ]] \
     && grep -qxF "doppler secrets download --no-file --format json -p soleur-deploy-channel -c prd" "$LOADER_DIR/calls" \
     && ! grep -qE 'prd_terraform|soleur-infra-privileged' "$LOADER_DIR/calls" \
-    && env_has "$dc_n1" && env_has "$(dc_tf "$dc_n3")"
+    && env_has "$dc_n1" && env_has "$(dc_tf "$dc_n3")"; then
+    return 0
+  fi
+  return 1
 }
 dc_mutant() { # <sed-expr> <label> <project> <token>
   local label="$2" mut="$WORK/action.dcmut.yml" msh="$WORK/loader.dcmut.sh"
