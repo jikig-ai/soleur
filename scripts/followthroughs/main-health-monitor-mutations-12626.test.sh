@@ -107,7 +107,6 @@ row() {
   if [ "$got" -eq "$want" ]; then pass "$name -> rc $want"
   else fail "$name -> rc $got (want $want): $(tail -c 400 "$fx/last.out")"; fi
 }
-expected_rc() { echo "${WANT[$1]:-9}"; }
 
 T0="2026-11-12T19:46:34Z"   # merge instant; fixture runs sit after it
 
@@ -243,6 +242,14 @@ jobs_body 3 0 > "$TMP/fx-timedout/jobs-1000.json"
 row r-timedout 1 "$TMP/fx-timedout"
 grep -q 'conclusion=timed_out' "$TMP/fx-timedout/last.out" && pass 'r-timedout names the conclusion' || fail 'r-timedout missing evidence'
 
+# 18. jobs body is valid JSON but .jobs is not an array -> CANNOT ESTABLISH via
+# the shape guard (without it .jobs[] yields zero values -> mut_total=0 -> a
+# run-level FAIL, the wrong verdict class for a malformed read)
+mkfx "$TMP/fx-jobs-noshape"
+runs_body "$(run 1000 'soleur-ai[bot]' success '2026-11-13T00:00:29Z')" > "$TMP/fx-jobs-noshape/runs.json"
+printf '{"jobs":{}}' > "$TMP/fx-jobs-noshape/jobs-1000.json"
+row r-jobs-noshape 3 "$TMP/fx-jobs-noshape"
+
 # --------------------------- mutation rows ------------------------------------------------------
 # Mutated COPIES of the probe (never the probe itself). A mutant that produces
 # the contract rc on its rows is a SURVIVOR and the suite reds.
@@ -261,10 +268,13 @@ PY
   chmod +x "$TMP/mut-$name.sh"
   local caught=0 r
   for r in "$@"; do
+    if [ -z "${WANT[$r]+x}" ]; then
+      fail "mutant $name references unregistered row id: $r"
+      continue
+    fi
     local fx="$TMP/fx-${r#r-}"
     run_probe "$fx" "$TMP/mut-$name.sh"; local got=$?
-    local want; want="$(expected_rc "$r")"
-    if [ "$got" -ne "$want" ]; then caught=$((caught + 1)); fi
+    if [ "$got" -ne "${WANT[$r]}" ]; then caught=$((caught + 1)); fi
   done
   if [ "$caught" -gt 0 ]; then
     MUT_CAUGHT=$((MUT_CAUGHT + 1)); MUT_REDS=$((MUT_REDS + caught))
@@ -292,22 +302,28 @@ mutant m-premerge '   | select(.created_at >= $since)' '' r-premerge
 mutant m-api-quiet 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }' 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 0; }' r-runs-fail r-jobs-fail r-malformed
 # a probe that accepts a non-main scheduled run
 mutant m-branch '   | select(.head_branch == "main")' '' r-nonmain
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -eq 8 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"
+# a probe without the jobs body-shape guard turns a malformed .jobs into a
+# leg-shortfall FAIL instead of CANNOT ESTABLISH
+mutant m-jobs-guard '  printf '"'"'%s'"'"' "$jobs_json" | jq -e '"'"'.jobs | type == "array"'"'"' >/dev/null 2>&1 \
+    || fail_api "jobs listing unparseable for run $id"
+' '' r-jobs-noshape
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -eq 9 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
 
 # harness row: an always-PASS probe must turn the red-expectation rows red
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 _harness_reds=0
-for r in r-red-latest r-missing-leg r-later-red r-red-leg r-tail-red r-timedout r-manual-only r-one-green r-malformed; do
+for r in r-red-latest r-missing-leg r-later-red r-red-leg r-tail-red r-timedout r-manual-only r-one-green r-malformed r-jobs-noshape; do
+  if [ -z "${WANT[$r]+x}" ]; then fail "harness references unregistered row id: $r"; continue; fi
   run_probe "$TMP/fx-${r#r-}" "$TMP/always-pass.sh"; _rc=$?
-  [ "$_rc" -ne "$(expected_rc "$r")" ] && _harness_reds=$((_harness_reds + 1))
+  [ "$_rc" -ne "${WANT[$r]}" ] && _harness_reds=$((_harness_reds + 1))
 done
-[ "$_harness_reds" -eq 9 ] && pass "HARNESS: an always-PASS probe turns $_harness_reds rows red" \
+[ "$_harness_reds" -eq 10 ] && pass "HARNESS: an always-PASS probe turns $_harness_reds rows red" \
   || fail "HARNESS: an always-PASS probe turned only $_harness_reds rows red"
 
 printf 'main-health-monitor-mutations-12626: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 _total=$((passes + fails))
-_FLOOR=29
+_FLOOR=30
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1
