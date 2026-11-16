@@ -1307,59 +1307,6 @@ export async function createPullRequest(
   };
 }
 
-/**
- * Find the first OPEN pull request matching `head` → `base` on a repository,
- * via the GitHub App installation token. Returns `null` when none is open.
- *
- * For same-repo PRs the `head` filter qualifier is `{owner}:{branch}` (GitHub's
- * `GET /pulls?head=` expects the user/org-qualified ref). Mirrors
- * `createPullRequest`'s auth + error surface so the kb-sync protected-fallback
- * (#5426) can create-or-update a single durable `soleur/kb-sync` PR without
- * recreating it every session. Throws on a non-OK response (so the caller's
- * try/catch preserves writes-on-default for retry rather than silently
- * recreating).
- */
-export async function findOpenPullRequest(
-  installationId: number,
-  owner: string,
-  repo: string,
-  head: string,
-  base: string,
-): Promise<PullRequestResult | null> {
-  const token = await generateInstallationToken(installationId);
-
-  const headParam = encodeURIComponent(`${owner}:${head}`);
-  const baseParam = encodeURIComponent(base);
-  const response = await githubFetch(
-    `${GITHUB_API}/repos/${owner}/${repo}/pulls?head=${headParam}&base=${baseParam}&state=open`,
-    {
-      method: "GET",
-      headers: { Authorization: `token ${token}` },
-    },
-  );
-
-  if (!response.ok) {
-    const { message: errorMessage, body: errorBody } = await parseGitHubError(
-      response,
-      "GitHub list PRs failed",
-    );
-    log.error(
-      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
-      "Failed to list pull requests",
-    );
-    throw new Error(errorMessage);
-  }
-
-  const data = (await response.json()) as Array<{
-    number: number;
-    html_url: string;
-    url: string;
-  }>;
-  if (!Array.isArray(data) || data.length === 0) return null;
-  const pr = data[0];
-  return { number: pr.number, htmlUrl: pr.html_url, url: pr.url };
-}
-
 /** One pull request of `listPullRequestsForHead`: its state, whether it merged, and the head commit it points at. */
 export interface PullRequestHeadState extends PullRequestResult {
   state: "open" | "closed";
@@ -1367,24 +1314,28 @@ export interface PullRequestHeadState extends PullRequestResult {
   headSha: string;
 }
 
+const PR_HEAD_SHA_RE = /^[0-9a-f]{40}$/;
+
 /**
- * Every pull request (open AND closed, `state=all`, first page) matching `head` → `base`, via the GitHub App installation
- * token. Sibling of `findOpenPullRequest` for the kb-sync `side_pending` re-check (#12600, CTO ruling D17): an Owner-closed
- * PR for the same head commit must not be reopened, and a missing one must be created. Throws on a non-OK response or a
- * malformed body, so the caller fails toward creating nothing.
+ * The ONE pull-request list GET behind `findOpenPullRequest` and `listPullRequestsForHead` (#12600, CTO ruling D23): `head` is
+ * owner-qualified (`{owner}:{branch}`, what `GET /pulls?head=` expects for a same-repo PR), one page of the 10 most recently
+ * updated PRs. Every entry is validated (number, html_url, state, a 40-hex `head.sha`), so a malformed body throws instead of
+ * dropping an entry a caller decides on; a non-OK reply logs `helper` (the caller's name) and throws.
  */
-export async function listPullRequestsForHead(
+async function listPullRequests(
+  helper: "findOpenPullRequest" | "listPullRequestsForHead",
   installationId: number,
   owner: string,
   repo: string,
   head: string,
   base: string,
+  state: "open" | "all",
 ): Promise<PullRequestHeadState[]> {
   const token = await generateInstallationToken(installationId);
   const headParam = encodeURIComponent(`${owner}:${head}`);
   const baseParam = encodeURIComponent(base);
   const response = await githubFetch(
-    `${GITHUB_API}/repos/${owner}/${repo}/pulls?head=${headParam}&base=${baseParam}&state=all`,
+    `${GITHUB_API}/repos/${owner}/${repo}/pulls?head=${headParam}&base=${baseParam}&state=${state}&sort=updated&direction=desc&per_page=10`,
     {
       method: "GET",
       headers: { Authorization: `token ${token}` },
@@ -1393,7 +1344,7 @@ export async function listPullRequestsForHead(
   if (!response.ok) {
     const { message: errorMessage, body: errorBody } = await parseGitHubError(response, "GitHub list PRs failed");
     log.error(
-      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
+      { helper, status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
       "Failed to list pull requests",
     );
     throw new Error(errorMessage);
@@ -1402,7 +1353,14 @@ export async function listPullRequestsForHead(
   if (!Array.isArray(data)) throw new Error("GitHub list PRs returned a non-array body");
   return data.map((raw) => {
     const pr = raw as { number?: unknown; html_url?: unknown; url?: unknown; state?: unknown; merged_at?: unknown; head?: { sha?: unknown } };
-    if (typeof pr.number !== "number" || typeof pr.html_url !== "string" || (pr.state !== "open" && pr.state !== "closed")) {
+    const headSha = pr.head?.sha;
+    if (
+      typeof pr.number !== "number" ||
+      typeof pr.html_url !== "string" ||
+      (pr.state !== "open" && pr.state !== "closed") ||
+      typeof headSha !== "string" ||
+      !PR_HEAD_SHA_RE.test(headSha)
+    ) {
       throw new Error("GitHub list PRs returned a malformed entry");
     }
     return {
@@ -1411,9 +1369,43 @@ export async function listPullRequestsForHead(
       url: typeof pr.url === "string" ? pr.url : "",
       state: pr.state,
       merged: typeof pr.merged_at === "string" && pr.merged_at !== "",
-      headSha: typeof pr.head?.sha === "string" ? pr.head.sha : "",
+      headSha,
     };
   });
+}
+
+/**
+ * Find the first OPEN pull request matching `head` → `base` on a repository, via the GitHub App installation token; `null`
+ * when none is open. A filter over the shared lister (D23). Lets the kb-sync protected-fallback (#5426) create-or-update a
+ * single durable `soleur/kb-sync` PR without recreating it every session. Throws on a non-OK response or a malformed body (so
+ * the caller's try/catch preserves writes-on-default for retry rather than silently recreating).
+ */
+export async function findOpenPullRequest(
+  installationId: number,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+): Promise<PullRequestResult | null> {
+  const prs = await listPullRequests("findOpenPullRequest", installationId, owner, repo, head, base, "open");
+  const pr = prs.find((p) => p.state === "open");
+  return pr ? { number: pr.number, htmlUrl: pr.htmlUrl, url: pr.url } : null;
+}
+
+/**
+ * Every pull request (open AND closed, `state=all`, the 10 most recently updated) matching `head` → `base`, via the GitHub App
+ * installation token, for the kb-sync `side_pending` re-check (#12600, CTO ruling D17): an Owner-closed PR for the same head
+ * commit must not be reopened, and a missing one must be created. Throws on a non-OK response or a malformed body (including
+ * a `head.sha` that is not 40-hex, D23), so the caller fails toward creating nothing.
+ */
+export async function listPullRequestsForHead(
+  installationId: number,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+): Promise<PullRequestHeadState[]> {
+  return listPullRequests("listPullRequestsForHead", installationId, owner, repo, head, base, "all");
 }
 
 /**
