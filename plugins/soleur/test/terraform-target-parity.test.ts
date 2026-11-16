@@ -124,7 +124,10 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 367 -> 376 (#12363 A-0, +9): main declared 372 against this floor of 367 (5 rows of slack, absorbed here so it is exact again) and this change adds
 // 4 rows for the relay hello-signing pair (count gate, saved-plan membership, shape and no-output pin, two-mutant battery).
 // Exact: grep -cE '^\s*test\(' = 376.
-const TEST_FLOOR = 376;
+// 376 -> 397 (FIX B handed to the vendor, 2026-11-16, +21): main declared 395 against this floor of 376 (19 rows of slack,
+// absorbed here so it is exact again) and the one-row FIX B describe becomes the three-row forget pin (a/b/c).
+// Exact: grep -cE '^\s*test\(' = 397.
+const TEST_FLOOR = 397;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -253,7 +256,7 @@ function extractTargets(workflowText: string): Set<string> {
 
 function listInfraTfFiles(): string[] {
   return readdirSync(INFRA_DIR)
-    .filter((f) => f.endsWith(".tf"))
+    .filter((f) => f.endsWith(".tf") && !f.startsWith(".")) // Terraform ignores dotfiles; so must every guard reading this list
     .map((f) => resolve(INFRA_DIR, f))
     .sort();
 }
@@ -4185,26 +4188,6 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
   });
 });
 
-// ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────
-describe("betteruptime_team_member.ops is a per-merge -targeted managed resource (FIX B)", () => {
-  test("the resource exists in uptime-alerts.tf and is covered by a per-merge -target", () => {
-    const resources = listInfraTfFiles().flatMap((f) =>
-      extractAllResources(stripComments(readFileSync(f, "utf8"))),
-    );
-    expect(resources).toContain("betteruptime_team_member.ops");
-    // It auto-applies on merge, so its -target lives in the NON-stripped apply job — the
-    // stripped coverage set (what the #5566 guard uses) must still see it.
-    const strippedTargets = extractAllTargets(
-      stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
-    );
-    expect(strippedTargets.has("betteruptime_team_member.ops")).toBe(true);
-    // It is NOT an operator-applied exclusion (it is auto-appliable).
-    expect(OPERATOR_APPLIED_EXCLUSIONS.has("betteruptime_team_member.ops")).toBe(
-      false,
-    );
-  });
-});
-
 // ─── DP-11 F8 guard: every github_repository_environment must gate on a NON-EMPTY
 //     required-reviewer set. A zero-reviewer environment auto-approves, silently
 //     defeating the human ack these environments exist to enforce on irreversible
@@ -6538,6 +6521,89 @@ describe("#8754 inngest firewall attachment forget rides the per-merge saved pla
     expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * FIX B handed to the vendor (2026-11-16). ops@jikigai.com is the org's sole Better Stack Admin, set in
+ * the web app; the provider manages non-admin members only and deletes by email, so no Terraform root in
+ * this repo may declare a betteruptime_team_member again, and the old address must be FORGOTTEN. Rationale
+ * lives on the removed block in uptime-alerts.tf.
+ */
+describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B handed to the vendor, 2026-11-16)", () => {
+  const ADDR = "betteruptime_team_member.ops";
+  const FROM_LINE = /^[ \t]*from[ \t]*=[ \t]*betteruptime_team_member\.ops[ \t]*$/;
+  const UPTIME = resolve(INFRA_DIR, "uptime-alerts.tf");
+
+  /** Every tracked .tf / .tf.json in the repo: every root, every module, every rehearsal root. */
+  function repoTfFiles(): string[] {
+    const r = spawnSync("git", ["ls-files", "-z", "--", "*.tf", "*.tf.json"], { cwd: REPO_ROOT, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
+    const rel = r.stdout.split("\0").filter(Boolean);
+    // git ls-files emits repo-relative paths with no `..` segment; assert it rather than rely on it.
+    const escaping = rel.filter((f) => f.startsWith("/") || f.split("/").includes(".."));
+    if (escaping.length) throw new Error(`git ls-files returned non-relative paths: ${escaping.join(", ")}`);
+    return rel.map((f) => `${REPO_ROOT}/${f}`);
+  }
+
+  /** [start, end) line ranges of every heredoc in RAW text. Quotes are deliberately ignored, so a
+   *  quote-confused stripper cannot hide a heredoc opener from this scan. */
+  function rawHeredocLines(raw: string): Array<[number, number]> {
+    const lines = raw.replace(/\r\n/g, "\n").split("\n");
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = /<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*$/.exec(lines[i]);
+      if (!m) continue;
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() !== m[1]) j++;
+      out.push([i + 1, j]);
+      i = j;
+    }
+    return out;
+  }
+
+  test("(a) closed set: no tracked .tf/.tf.json anywhere names betteruptime_team_member except the forget's from", () => {
+    const files = repoTfFiles();
+    expect(files).toContain(UPTIME); // non-vacuity: the scan reads the root that held the member
+    expect(files.length).toBeGreaterThan(listInfraTfFiles().length); // non-vacuity: wider than one root
+    const offenders: string[] = [];
+    for (const f of files) {
+      // Strings are KEPT (a .tf.json key or an import id is a string); comments and heredocs are not code.
+      g2eStrip(readFileSync(f, "utf8")).split("\n").forEach((line, i) => {
+        if (!/betteruptime_team_member/.test(line)) return;
+        if (f === UPTIME && FROM_LINE.test(line)) return;
+        offenders.push(`${relative(REPO_ROOT, f)}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("(b) uptime-alerts.tf holds exactly one live removed block forgetting the address with destroy = false", () => {
+    const raw = readFileSync(UPTIME, "utf8").replace(/\r\n/g, "\n");
+    const code = g2eStrip(raw);
+    const heredocs = rawHeredocLines(raw);
+    const live = (line: number) => !heredocs.some(([a, b]) => line >= a && line < b);
+    const blocks: string[] = [];
+    for (const m of code.matchAll(/^removed[ \t]*\{/gm)) {
+      const line = code.slice(0, m.index).split("\n").length - 1;
+      const close = g2eClose(code, m.index! + m[0].length - 1);
+      expect(close).toBeGreaterThan(0);
+      const body = code.slice(m.index!, close);
+      if (live(line) && body.split("\n").some((l) => FROM_LINE.test(l))) blocks.push(body);
+    }
+    expect(blocks.length).toBe(1);
+    expect(blocks[0]).toMatch(/\blifecycle[ \t]*\{[^}]*^[ \t]*destroy[ \t]*=[ \t]*false[ \t]*$/m);
+    expect(readdirSync(INFRA_DIR).filter((f) => f.startsWith(".") && f.endsWith(".tf"))).toEqual([]); // nothing Terraform ignores
+  });
+
+  test("(c) the forget's exact -target rides the saved plan, not the post-bridge apply", () => {
+    const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+    const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+    const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(savedPlan).toMatch(/-target=betteruptime_team_member\.ops(?=[ \t\\]|$)/m); // exact operand, no [key]
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
   });
 });
 
