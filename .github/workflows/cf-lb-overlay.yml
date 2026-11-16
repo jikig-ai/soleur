@@ -85,6 +85,7 @@ env:
   PROBE_LOG: /tmp/lb-staging-continuity.log
 
 jobs:
+  # Staging arms after #10479 get HTTP 526 on lb-staging.soleur.ai: see "EDGE TLS FOR THIS HOST" in apps/web-platform/infra/lb-staging/main.tf.
   staging_record:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
     runs-on: ubuntu-24.04
