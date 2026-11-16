@@ -5,24 +5,24 @@ Issue: #9294 (G1 of ADR-241 D10 residual; gates #8609)
 
 ## Phase 1 — PR-A: carrier + loader + census constants
 
-- [ ] 1.1 Create `apps/web-platform/infra/deploy-channel-environment.tf`
-  - [ ] 1.1.1 `doppler_project.deploy_channel` (`soleur-deploy-channel`, `prevent_destroy`, <=255-char description; header carries the D11 no-secret/no-token/no-data-source warning)
-  - [ ] 1.1.2 `doppler_environment.deploy_channel_prd` (`slug = "prd"`, `prevent_destroy`)
-  - [ ] 1.1.3 `github_repository_environment.deploy_channel` — `deployment_branch_policy { protected_branches = false; custom_branch_policies = true }`, NO reviewers
-  - [ ] 1.1.4 `github_repository_environment_deployment_policy.deploy_channel_main` (`branch_pattern = "main"`)
-  - [ ] 1.1.5 Add all four resources to the `-target=` allow-list in `.github/workflows/apply-web-platform-infra.yml`
-- [ ] 1.2 Loader narrow mode in `.github/actions/infra-credentials/action.yml`
-  - [ ] 1.2.1 `doppler-project` input (default `soleur-infra-privileged`; allowlist `{soleur-infra-privileged, soleur-deploy-channel}`; fail closed otherwise)
-  - [ ] 1.2.2 `doppler-token-deploy-channel` input; narrow + empty token fails closed with named verdict
-  - [ ] 1.2.3 Narrow arm: whole-project `doppler secrets download -p soleur-deploy-channel -c prd`, exports plain names + `TF_VAR_` spellings; skips legacy arm, App-runtime opt-in, state-bucket aliasing; names no trio stem literally
-  - [ ] 1.2.4 `outputs.source` narrow marker (`tier_b_deploy_channel`)
-  - [ ] 1.2.5 Loader test fixtures covering allowlist refusal, empty-token refusal, narrow export shape
-- [ ] 1.3 Census constants in `tests/scripts/test-infra-privileged-tier-census.sh`
-  - [ ] 1.3.1 `TIER_B_ENVIRONMENTS` += `deploy-channel` (`.tf`-parseable policy)
-  - [ ] 1.3.2 `ENV_SECRETS` += `DOPPLER_TOKEN_DEPLOY_CHANNEL`
-  - [ ] 1.3.3 Guard 7 assembly covers `soleur-deploy-channel`
-  - [ ] 1.3.4 Narrow-mode guard rows + mutation fixtures (allowlist, empty token, never reads `prd_terraform`)
-- [ ] 1.4 C4 `model.c4` `github -> doppler` edge: add `deploy-channel` + `soleur-deploy-channel` + `DOPPLER_TOKEN_DEPLOY_CHANNEL` clause (D11-clause shape); verify `views.c4`/`spec.c4` need no include change
+- [x] 1.1 Create `apps/web-platform/infra/deploy-channel-environment.tf`
+  - [x] 1.1.1 `doppler_project.deploy_channel` (`soleur-deploy-channel`, `prevent_destroy`, <=255-char description; header carries the D11 no-secret/no-token/no-data-source warning)
+  - [x] 1.1.2 `doppler_environment.deploy_channel_prd` (`slug = "prd"`, `prevent_destroy`)
+  - [x] 1.1.3 `github_repository_environment.deploy_channel` — `deployment_branch_policy { protected_branches = false; custom_branch_policies = true }`, NO reviewers
+  - [x] 1.1.4 `github_repository_environment_deployment_policy.deploy_channel_main` (`branch_pattern = "main"`)
+  - [x] 1.1.5 Add all four resources to the `-target=` allow-list in `.github/workflows/apply-web-platform-infra.yml`
+- [x] 1.2 Loader narrow mode in `.github/actions/infra-credentials/action.yml`
+  - [x] 1.2.1 `doppler-project` input (default `soleur-infra-privileged`; allowlist `{soleur-infra-privileged, soleur-deploy-channel}`; fail closed otherwise)
+  - [x] 1.2.2 `doppler-token-deploy-channel` input; narrow + empty token fails closed with named verdict
+  - [x] 1.2.3 Narrow arm: whole-project `doppler secrets download -p soleur-deploy-channel -c prd`, exports plain names + `TF_VAR_` spellings; skips legacy arm, App-runtime opt-in, state-bucket aliasing; names no trio stem literally
+  - [x] 1.2.4 `outputs.source` narrow marker (`tier_b_deploy_channel`)
+  - [x] 1.2.5 Loader test fixtures covering allowlist refusal, empty-token refusal, narrow export shape
+- [x] 1.3 Census constants in `tests/scripts/test-infra-privileged-tier-census.sh`
+  - [x] 1.3.1 `TIER_B_ENVIRONMENTS` += `deploy-channel` (`.tf`-parseable policy)
+  - [x] 1.3.2 `ENV_SECRETS` += `DOPPLER_TOKEN_DEPLOY_CHANNEL`
+  - [x] 1.3.3 Guard 7 assembly covers `soleur-deploy-channel`
+  - [x] 1.3.4 Narrow-mode guard rows + mutation fixtures (allowlist, empty token, never reads `prd_terraform`)
+- [x] 1.4 C4 `model.c4` `github -> doppler` edge: add `deploy-channel` + `soleur-deploy-channel` + `DOPPLER_TOKEN_DEPLOY_CHANNEL` clause (D11-clause shape); verify `views.c4`/`spec.c4` need no include change
 - [ ] 1.5 PR-A green; merge; apply-on-merge creates the carriers
 - [ ] 1.6 OWNER-NAMED seed (operator-authorized, recorded in PR body): verify live `protection_rules` main-only; hash-equal copy trio `soleur-infra-privileged/prd` -> `soleur-deploy-channel/prd`; mint read token; `gh secret set DOPPLER_TOKEN_DEPLOY_CHANNEL` on `deploy-channel` + `inngest-cutover`
 
