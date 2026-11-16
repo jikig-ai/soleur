@@ -1,6 +1,8 @@
 // #12600 (CTO ruling D16): the interim answer of a KB write (upload, delete, rename) that landed on GitHub while the
-// workspace clone was deliberately NOT updated, because it holds local changes that are not on GitHub yet (a designed
-// hold of the self-heal: held commits, a dirty tracked file, or an untracked file in the reset's way). The route answers
+// workspace clone was deliberately NOT updated, because it holds local changes that are not on the repository's default
+// branch yet (a designed hold of the self-heal: held commits, a dirty tracked file, or an untracked file in the reset's
+// way). "Not on GitHub" would be false after a protected KB-only turn: the held commit is then the side commit, which IS
+// on GitHub in the open `soleur/kb-sync` PR (#12600 D23). The route answers
 // its normal success body plus `workspace_sync: "pending"` and the KB UI shows this notice as a non-error status.
 //
 // ONE shared constant (client-safe: no server import) for the wire value and the user-facing copy. No timing promise:
@@ -20,7 +22,7 @@ export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
     save: "Saved to GitHub.",
   } satisfies Record<KbWriteOp, string>,
   /** The shared second clause. */
-  detail: "Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.",
+  detail: "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try again.",
 } as const;
 
 /** The full notice for `op`. */

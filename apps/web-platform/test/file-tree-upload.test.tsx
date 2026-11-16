@@ -311,7 +311,7 @@ describe("FileTree upload: a workspace hold after the GitHub commit (#12600 D16)
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(["image-data"], "photo.png", { type: "image/png" })] } });
     const notice = await screen.findByRole("status");
-    expect(notice.textContent).toContain("Saved to GitHub. Your workspace has local changes that are not on GitHub yet, so it was not updated. You don't need to try again.");
+    expect(notice.textContent).toContain("Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try again.");
     expect(mockRefreshTree).toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
   });
