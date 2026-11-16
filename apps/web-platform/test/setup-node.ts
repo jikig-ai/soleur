@@ -15,7 +15,20 @@
 // per-test delete restores the unset state for its own scenarios.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { vi } from "vitest";
 import { installViWaitForFloor } from "./helpers/install-vi-waitfor-floor";
+
+// #12757 (CTO H1) — the cron chokepoints probe the image-owned identity file and the XDG ignore/attributes residual on
+// every spawn and report a transition to Sentry. Off-image the identity file is missing, so without this partial mock
+// every suite that drives a cron would see an extra `cron-git-config-pin` report (and the `reportSilentFallback` count
+// assertions would go red). Both probes read "healthy" here; everything else in host-git is the real module. The real
+// probes are covered by cron-spawn-git-config-pin.test.ts (vi.importActual), and substrate-exit overrides this mock to
+// drive the report wiring.
+vi.mock("@/server/host-git", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/host-git")>()),
+  agentGitConfigReadable: () => true,
+  xdgGitResidualPresent: () => false,
+}));
 
 process.env.WORKSPACES_ROOT ||= join(tmpdir(), "soleur-vitest-workspaces");
 

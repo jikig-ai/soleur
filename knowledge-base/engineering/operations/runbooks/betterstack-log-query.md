@@ -928,6 +928,27 @@ outcomes by joining the marker's `run_id` to the Sentry tag `inngest.run_id`
 The marker is the deny-side half of that join; the Sentry event is the
 outcome-side half. Neither alone is the answer.
 
+### `cron-containment-new-rule-deny` — a #12757 containment rule refused a cron tool call
+
+Emitted by `_cron-claude-eval-substrate.ts` through `warnSilentFallback` (pino WARN plus a Sentry warning) once per
+rule per run, from the result event's `permission_denials[]` re-classified by the hook's `classifyNewRuleDeny`. Fields:
+`op` = `cron-containment-new-rule-deny`, `rule` (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`,
+`protected-trust-root`), `cron`, `count`. No command or path text is ever carried. Skipped for the `no-file-tools`
+crons. It is an attribution metric: a `git -C dir status` that was never allowlisted now counts as `git-gh-shape`, so
+read the run before calling a non-zero count an over-deny.
+
+Sentry: search `op:cron-containment-new-rule-deny` and group by the `rule` tag (or `cron`). Better Stack (the pino row
+carries `rule`/`cron`/`count` as fields; tags are Sentry-only):
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep cron-containment-new-rule-deny \
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .op == "cron-containment-new-rule-deny") | [.cron, .rule, .count] | @tsv'
+```
+
+A sustained `git-gh-shape` count on `cron-bug-fixer` with no bot-fix PR is the over-deny signature (plan
+`## User-Brand Impact`); check for a `bot-fix/attempted` label on the issue and remove it after a revert.
+
 ### `SOLEUR_COMPOUND_PROMOTE_OUTCOME` — what the weekly self-improvement run DID
 
 Emitted by `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`

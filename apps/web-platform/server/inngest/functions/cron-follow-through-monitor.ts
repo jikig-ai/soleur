@@ -96,6 +96,7 @@ import {
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -348,6 +349,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     // load-bearing at-source fix for this inline-spawn cron (it makes no MCP
     // dial). Keep-blocked, not allowlisted (ADR-052 2026-06-29 amendment).
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 

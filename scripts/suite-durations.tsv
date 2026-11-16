@@ -1,10 +1,10 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
-# default-weight-ms=1800
-# generated-at=2026-11-16T14:48:29Z
+# default-weight-ms=1802
+# generated-at=2026-11-16T18:40:11Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=b2017fc287d74a23d67c5b25c4e1e6b7302d190ff9bb253afbf807148c86f612
+# growth-acked=d5d218bb023bbf79c4b169c9809c73e7f3538fd20b9d4ad21f82de48f1cbc83d
 .claude/hooks/agent-token-tee.test.sh	7099	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	851	measured
 .claude/hooks/bare-head-self-heal.test.sh	3891	measured
@@ -177,6 +177,7 @@ plugins/soleur/test/admin-merge-ready-wiring.test.sh	17729	measured
 plugins/soleur/test/affected-tests-pool-default.test.sh	1692	measured
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	52540	measured
 plugins/soleur/test/approval-card-wording.test.sh	77	measured
+plugins/soleur/test/arm-check-sites.test.sh	22847	measured
 plugins/soleur/test/audit-flag-flip.test.sh	137	measured
 plugins/soleur/test/auto-close-scanner.test.sh	284	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	698	measured

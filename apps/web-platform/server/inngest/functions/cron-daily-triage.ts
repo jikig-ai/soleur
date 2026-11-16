@@ -53,6 +53,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { sweepableRunReports } from "./_cron-run-reports";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -217,6 +218,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     // load-bearing at-source fix for this inline-spawn cron (it makes no MCP
     // dial). Keep-blocked, not allowlisted (ADR-052 2026-06-29 amendment).
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
