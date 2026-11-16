@@ -361,7 +361,7 @@ describe("gitWithInstallationAuth child env and argv", () => {
     expect(i).toBeGreaterThan(0);
     expect(args[i - 1]).toBe("-c");
     expect(i).toBeLessThan(args.indexOf("push"));
-    // the empty value is NOT enough: git treats an empty alternateRefsCommand as unset and still spawns the child
+    // not the empty value: git runs the empty command '' and it fails (`error: cannot run`) on every fetch; `true` is the no-op
     expect(args).not.toContain("core.alternateRefsCommand=");
   });
 

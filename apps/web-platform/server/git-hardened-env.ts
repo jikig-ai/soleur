@@ -63,8 +63,9 @@ export const HARDENED_ENV_ALLOWLIST: readonly string[] = [
  * refs by spawning `git --git-dir=<workspace>/.git for-each-ref --format=%(objectname)` with the caller's environment (the
  * token and the askpass included), so a fetch from the isolated directory would read the agent-writable workspace config
  * and refs in a token-bearing child, and agent-planted refs would become `have` lines. `true` replaces that child with one
- * that prints nothing. An EMPTY value does not: git treats it as unset and spawns the default child. `push` spawns no such
- * child, so the shared constant changes nothing there.
+ * that prints nothing. An EMPTY value is not the same: git runs the empty command `''`, which fails (`error: cannot run`),
+ * so it spawns no default child but logs an error on every fetch (measured, D21). `push` spawns no such child, so the shared
+ * constant changes nothing there.
  *
  * `maintenance.auto=false` (#12600, CTO ruling D13): a `commit-tree`, `fetch` or `push` may otherwise start `git maintenance
  * run --auto` (gc, repack) as a detached child after the turn's work, in a directory the server disposes in `finally`, and
