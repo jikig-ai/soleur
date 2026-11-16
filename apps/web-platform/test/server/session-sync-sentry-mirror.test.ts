@@ -161,10 +161,11 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
     const outer = reportSilentFallbackSpy.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === "syncPush");
     expect(outer).toHaveLength(1);
     const [outerErr, outerCtx] = outer[0] as [unknown, { tags?: Record<string, string>; message?: string }];
-    // the fake workspace has no .git, so the isolated directory refuses: a closed reason, never "unclassified"
+    // the fake workspace is not on disk, so the isolated directory refuses: a closed reason, never "unclassified"
     expect(outerCtx.tags?.reason).toBe("isolated_refused");
-    // D21: the refusal's closed reason rides along as a tag (a snake_case discriminator, never a path)
-    expect(outerCtx.tags?.isolated_reason).toMatch(/^[a-z]+(_[a-z]+)*$/);
+    // D21: the refusal's closed reason rides along as a tag, never a path. D23: the exact value (the workspace root does not
+    // exist on disk, which createIsolatedPushDir reports as the server's own state)
+    expect(outerCtx.tags?.isolated_reason).toBe("setup_failed");
     for (const text of [String((outerErr as Error)?.message ?? outerErr), outerCtx.message ?? ""]) {
       expect(text).not.toMatch(/github\.com|https?:\/\/|[0-9a-f]{40}/);
     }
