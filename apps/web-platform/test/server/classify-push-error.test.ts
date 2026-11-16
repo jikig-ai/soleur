@@ -2,7 +2,9 @@
 // fallback on a line-anchored `remote: error: GH006:` OR a `remote:` line carrying GitHub's require-PR text (the #5426 tail,
 // which also covers a GH013 ruleset that requires a PR). A ref name in git's own status line, a mid-line occurrence, or text in
 // `err.message` (which embeds argv) cannot steer it. GH013 without the require-PR text (secret push protection) stays `other`.
-// Line endings: CRLF and a lone CR both end a line. Synthesized stderr shapes.
+// Line endings: CRLF and a lone CR both end a line. D18: each line is tested on its own with non-multiline regexes, and the
+// require-PR text must START the line's message (after an optional `error:` and `- `), so a `remote:   path: ...` echo of an
+// agent-authored KB path cannot match; U+2028 / U+2029 never form a line. Synthesized stderr shapes.
 import { describe, expect, test } from "vitest";
 import { classifyPushError } from "../../server/kb-sync-publish";
 
@@ -24,7 +26,7 @@ describe("classifyPushError (#12600)", () => {
     ).toBe("protected_branch");
   });
 
-  test("a GH006 line after a CRLF-ended line still matches (the anchor needs the CR gone)", () => {
+  test("a GH006 line after a CRLF-ended line still matches (each line is tested on its own)", () => {
     expect(classifyPushError(err("Enumerating objects: 3, done.\r\nremote: error: GH006: Protected branch update failed.\r\n"))).toBe(
       "protected_branch",
     );
@@ -91,6 +93,33 @@ describe("classifyPushError (#12600)", () => {
         ),
       ),
     ).toBe("other");
+  });
+
+  test("D18: the require-PR text inside a GH013 `path:` echo (an agent-authored KB path) -> other", () => {
+    expect(
+      classifyPushError(
+        err(
+          [
+            "remote: error: GH013: Repository rule violations found for refs/heads/main.",
+            "remote:   path: knowledge-base/Changes must be made through a pull request.md",
+          ].join("\n"),
+        ),
+      ),
+    ).toBe("other");
+  });
+
+  test("D18: the require-PR text after a U+2028 inside a path line -> other (U+2028 never starts a line)", () => {
+    expect(classifyPushError(err("remote:   path: knowledge-base/x\u2028remote: Changes must be made through a pull request.\n"))).toBe("other");
+    expect(classifyPushError(err("remote:   path: knowledge-base/x\u2029remote: error: GH006: x\n"))).toBe("other");
+  });
+
+  test("D18: `remote:` alone, then the require-PR text on the next bare line -> other", () => {
+    expect(classifyPushError(err("remote:\nChanges must be made through a pull request.\n"))).toBe("other");
+    expect(classifyPushError(err("remote: \t\n - Changes must be made through a pull request.\n"))).toBe("other");
+  });
+
+  test("D18: a lone CR between two remote: lines still ends a line (the CR normalisation is load-bearing)", () => {
+    expect(classifyPushError(err("remote: hi\rremote: - Changes must be made through a pull request."))).toBe("protected_branch");
   });
 
   test("shallow update not allowed in stderr -> persistent_other", () => {

@@ -25,23 +25,33 @@ const log = createChildLogger("session-sync");
 // existing best-effort retry-next-session behaviour (auth/network/transient).
 export type PushErrorClass = "protected_branch" | "persistent_other" | "other";
 
-/** GitHub's protected-branch reject, as the first token of a `remote:` line (R2, R16). */
-const GH006_LINE_RE = /^remote: error: GH006:/m;
-/** GitHub's require-PR text on a `remote:` line (#5426; also a GH013 ruleset that requires a PR; CTO ruling D9). */
-const REQUIRE_PR_LINE_RE = /^remote:[^\n]*Changes must be made through a pull request/m;
+/** git's stderr on a failed child (a Buffer or a string), never `err.message` (which embeds argv). */
+const stderrOf = (err: unknown): string => {
+  const raw = (err as { stderr?: unknown } | null)?.stderr;
+  return Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
+};
+
+/** GitHub's protected-branch reject, as the first token of a `remote:` line (R2, R16). Tested per line, never multiline. */
+const GH006_LINE_RE = /^remote: error: GH006:/;
+/**
+ * GitHub's require-PR text STARTING a `remote:` line's message, after an optional `error:` and `- ` (#5426; also a GH013 ruleset
+ * that requires a PR; CTO rulings D9, D18). `[ \t]`, never `\s`: the text must sit on the `remote:` line itself.
+ */
+const REQUIRE_PR_LINE_RE = /^remote:(?: error:)?[ \t]*(?:-[ \t]*)?Changes must be made through a pull request/;
 
 /**
- * Classify a failed `git push` error from git's STDERR only (#12600, CTO rulings R2, R16, re-ruled by D9). The fallback keys
- * on a line-anchored `remote: error: GH006:` OR a `remote:` line carrying GitHub's require-PR text, so neither a ref name
- * inside git's own status line (ref names cannot hold spaces) nor `err.message` (which embeds argv: the URL and the pushed
- * refspec) can steer it. CRLF and a lone CR (progress output) both end a line. GH013 without the require-PR text (secret
- * push protection) stays `other`. Narrow by design: auth/network rejections fall through to `other`.
+ * Classify a failed `git push` error from git's STDERR only (#12600, CTO rulings R2, R16, re-ruled by D9 and D18). CR is
+ * normalised (`\r\n?` -> `\n`, so CRLF and a lone CR of progress output both end a line), the text is split on `\n`, and
+ * each line is tested with NON-multiline regexes: a line-anchored `remote: error: GH006:`, or a `remote:` line whose message
+ * starts with GitHub's require-PR text. So neither a ref name in git's own status line (ref names cannot hold spaces), nor a
+ * `remote:   path: ...` echo of an agent-authored KB path, nor U+2028 / U+2029 (never a line here), nor `err.message` (argv: the
+ * URL and the refspec) can steer it. GH013 without the require-PR text (secret push protection) stays `other`. Narrow by
+ * design: auth/network rejections fall through to `other`.
  */
 export function classifyPushError(err: unknown): PushErrorClass {
   if (!(err instanceof Error)) return "other";
-  const raw = (err as { stderr?: unknown }).stderr;
-  const stderr = (Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "").replace(/\r\n?/g, "\n");
-  if (GH006_LINE_RE.test(stderr) || REQUIRE_PR_LINE_RE.test(stderr)) return "protected_branch";
+  const stderr = stderrOf(err).replace(/\r\n?/g, "\n");
+  if (stderr.split("\n").some((line) => GH006_LINE_RE.test(line) || REQUIRE_PR_LINE_RE.test(line))) return "protected_branch";
   if (stderr.includes("shallow update not allowed")) return "persistent_other";
   return "other";
 }
@@ -474,9 +484,7 @@ async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
     });
   } catch (err) {
     const pushClass = classifyPushError(err);
-    const raw = (err as { stderr?: unknown } | null)?.stderr;
-    const stderr = Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
-    const rejected = pushClass !== "other" || /^\s*! \[(rejected|remote rejected)\]/m.test(stderr);
+    const rejected = pushClass !== "other" || /^\s*! \[(rejected|remote rejected)\]/m.test(stderrOf(err));
     throw new KbSyncError(rejected ? "push_rejected" : "push_transient", pushClass);
   }
 }
@@ -494,11 +502,6 @@ export interface KbWorkspaceWriter {
   casBranch(branch: string, next: string, prev: string): void;
   setTracking(branch: string, sha: string): void;
 }
-
-const stderrOf = (err: unknown): string => {
-  const raw = (err as { stderr?: unknown } | null)?.stderr;
-  return Buffer.isBuffer(raw) ? raw.toString("utf8") : typeof raw === "string" ? raw : "";
-};
 
 /**
  * Hand the server-built objects to the workspace (CTO ruling D10): `pack-objects --stdout -q` over an EXPLICIT object list
