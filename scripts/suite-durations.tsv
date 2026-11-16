@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-16T20:55:11Z
+# generated-at=2026-11-16T22:24:55Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -481,6 +481,7 @@ scripts/inngest-restart-age-gate	79	measured
 scripts/inngest-restart-poll-classify	133	measured
 scripts/inngest-soak-6178	22450	measured
 scripts/inngest-tls-soak-10136	10156	measured
+scripts/inngest-write-token-revisit-12738	1802	floor
 scripts/inngest-zot-boot-7462	390	measured
 scripts/inngest-zot-client-authz-6500	637	measured
 scripts/jobs1-stopgap-7432	60670	measured
@@ -725,6 +726,7 @@ tests/scripts/registry-pull-path-health	2273	measured
 tests/scripts/registry-region-migrate-gate	600	measured
 tests/scripts/registry-replace-preflight	6475	measured
 tests/scripts/registry-restore-from-ghcr	20158	measured
+tests/scripts/relay-inngest-write-token-12158	1802	floor
 tests/scripts/rule-id-regex-parity	100	measured
 tests/scripts/rule-metrics-aggregate	2215	measured
 tests/scripts/scratch-residue	64154	measured

@@ -194,7 +194,11 @@ CHECK_GIT = (os.path.abspath(GHDIR) == os.path.abspath(os.path.join(REPO, ".gith
              and os.path.exists(os.path.join(REPO, ".git")))
 
 # ── constants (plan Phase 1 item 1) ────────────────────────────────────────────────
-ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_APP"]
+ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_APP",
+               # #9927 D2-2 / #12158 — the inngest write-path replacement. ENVIRONMENT-scoped on
+               # `inngest-cutover` (main-only + required-reviewer), so any job naming it is Tier-B
+               # classified and must declare a Tier-B `environment:` (the G1b/G1c rows).
+               "DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE"]
 TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
                 "GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_INSTALLATION_ID", "GITHUB_INFRA_APP_PRIVATE_KEY",
                 "TF_STATE_AWS_ACCESS_KEY_ID", "TF_STATE_AWS_SECRET_ACCESS_KEY",
@@ -762,6 +766,31 @@ check("G1j: every job that calls the infra-credentials loader declares a Tier-B 
       % (len(g1j_jobs), g1j_steps, g1j_raw),
       len(g1j_jobs) > 0 and g1j_steps == g1j_raw and not g1j_bad,
       "bad=%s jobs=%d steps=%d raw=%d" % (g1j_bad[:8], len(g1j_jobs), g1j_steps, g1j_raw))
+
+# (#9927 D2-2 / #12158, CTO D1b/D1c build pins) — the environment-scoped-name clause. The new
+# write token reaches CI ONLY as the `inngest-cutover` environment secret
+# DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE: its name may appear ONLY in cutover-inngest.yml, ONLY on
+# steps gated to rollback or resume, and NEVER in the shared Tier-B loader (a loader carriage
+# or a second file would re-widen delivery beyond the gated environment). Case-insensitive:
+# the secrets context resolves `secrets.doppler_token_inngest_cutover_write` too.
+NEW_WRITE_SECRET_RE = re.compile(r"(?<![A-Za-z0-9_])doppler_token_inngest_cutover_write(?![A-Za-z0-9_])", re.I)
+g1k_bad = []
+for rel, (doc, text) in docs.items():
+    if not NEW_WRITE_SECRET_RE.search(text):
+        continue
+    if rel != os.path.join("workflows", "cutover-inngest.yml"):
+        g1k_bad.append("%s names DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE outside cutover-inngest.yml" % rel)
+        continue
+    for jj in [x for x in jobs if x.rel == rel]:
+        for st in jj.steps:
+            if NEW_WRITE_SECRET_RE.search(jdump(st)):
+                cond = str(st.get("if") or "")
+                if not ("rollback" in cond and "resume" in cond):
+                    g1k_bad.append("%s::%s step names DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE without a rollback/resume `if:`"
+                                   % (rel, st.get("name") or "<unnamed>"))
+check("G1k: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE appears only in cutover-inngest.yml, only on "
+      "rollback/resume-gated steps, never in the Tier-B loader (D2-2 env-scoped-name clause)",
+      not g1k_bad, g1k_bad[:8])
 
 # AC7b limb 2 — every writer of the shared state bucket is Tier B
 writers = []
