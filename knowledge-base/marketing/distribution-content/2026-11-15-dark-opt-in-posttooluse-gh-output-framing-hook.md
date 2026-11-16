@@ -1,9 +1,9 @@
 ---
 title: "Groundwork for scheduled agents that read GitHub text as data"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-12-01
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#12705"
 ---
 
