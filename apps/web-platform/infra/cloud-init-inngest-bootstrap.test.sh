@@ -826,9 +826,12 @@ PY
   # The render cannot see WHICH host maps to which toggle value — and that mapping is the
   # risk that darkens the connector host (AC5's inverted-predicate catastrophe). Pin it at
   # the source: the connector lives on web-2, the replaceable cattle standby — web-1 is
-  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix.
-  assert "server.tf pins the connector predicate to web-2 (each.key == \"web-2\")" \
-    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-2\"' '$SCRIPT_DIR/server.tf'"
+  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix. Since
+  # #9421 Part 2a the predicate is the keyed tunnel_connector field (exactly one, validated).
+  assert "server.tf reads the connector predicate from the keyed tunnel_connector field" \
+    "grep -qE '^[[:space:]]*web_tunnel_connector[[:space:]]*=[[:space:]]*each\.value\.tunnel_connector[[:space:]]*\$' '$SCRIPT_DIR/server.tf'"
+  assert "var.web_hosts gives the connector to web-2" \
+    "grep -qE '^[[:space:]]*\"web-2\"[[:space:]]*=[[:space:]]*\{.*tunnel_connector[[:space:]]*=[[:space:]]*true' '$SCRIPT_DIR/variables.tf'"
 
   rm -rf "$RENDER_SCRATCH"
 else

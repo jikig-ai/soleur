@@ -60,6 +60,7 @@
 .claude/hooks/skill-context-queries.test.sh	knowledge-base
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/project/specs
@@ -130,6 +131,8 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/specs
 plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base
 plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	knowledge-base/project/plans
+plugins/soleur/test/cloudflare-readonly.test.sh	knowledge-base/legal/article-30-register.md
+plugins/soleur/test/cloudflare-readonly.test.sh	knowledge-base/legal/data-processing-agreement-template.md
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/plans
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/specs
 plugins/soleur/test/domain-model-headless-append.test.sh	knowledge-base/engineering/architecture/domain-model.md
@@ -348,6 +351,7 @@ tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/ru
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
 tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md
+tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks
 tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs/archive

@@ -411,7 +411,9 @@ Preconditions (read-only, before the owner's go):
 1. Both hosts logged `origin-tls: listening` after their last start (`scripts/betterstack-query.sh --since 6h --grep 'origin-tls: listening'`, decoded
    per ADR-321; one line each from `soleur-web-platform` and `soleur-web-2`). No `feature:origin_tls` Sentry events.
 2. Pool health is green for BOTH origins under the current http/:80 probe (the arm also refuses to plan otherwise).
-3. `ORIGIN_TLS_REQUIRED` is not required for this step; the edge hop is unchanged (`flexible`), so users see nothing.
+3. `ORIGIN_TLS_REQUIRED` is not required for this step; the edge hop is unchanged by it, so users see nothing. (When this step was
+   written the edge hop was `flexible`; since the ADR-321 item 13 cleanup, #10479, 2026-11-13, the adopted rule is `strict` for
+   app.soleur.ai, so the https/443 monitor and the traffic hop now validate the same certificate.)
 
 Dispatch (owner's go, per command):
 

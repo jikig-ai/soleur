@@ -73,6 +73,7 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -5192,6 +5193,124 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume.inngest_redis")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
+  });
+
+  // #10538 CTO D2 + fix-round F1: BOTH jobs that boot hcloud_server.inngest from the public-sdk_url user_data (the
+  // replace and the birth) must type a distinct token before any credential loads, until #12742 item 1 replaces the
+  // gate with a live-mode preflight. B10 pins the PROPERTY, not the text: the step is the one right after checkout,
+  // ahead of every credential step, cannot be tolerated (no continue-on-error / shell override at step, job or
+  // workflow level), runs the shared script with the job's own token, and the script refuses every wrong input.
+  const CONFIRM_LIB = "tests/scripts/lib/inngest-public-sdk-url-confirm.sh";
+  test.each([
+    ["inngest_host_replace", "PUBLIC-SDK-URL"],
+    ["inngest_host", "PUBLIC-SDK-URL-BIRTH"],
+  ])("B10: %s gates on its own %s confirm token right after checkout (#10538, #12742)", (job, token) => {
+    const parsed = parseYaml(wf) as {
+      defaults?: unknown;
+      jobs: Record<string, { steps: Array<Record<string, unknown>>; defaults?: unknown } & Record<string, unknown>>;
+    };
+    const j = parsed.jobs[job];
+    const steps = j.steps;
+    expect(String(steps[0].uses)).toMatch(/^actions\/checkout@/);
+    const gate = steps[1];
+    expect(String(gate.name)).toContain(`${token} confirm token`);
+    for (const k of ["if", "continue-on-error", "shell", "working-directory"]) expect(k in gate, `step key ${k}`).toBe(false);
+    expect((gate.env as Record<string, string>).CONFIRM_RAW).toBe("${{ inputs.confirm }}");
+    expect(String(gate.run).trim()).toBe(`bash ${CONFIRM_LIB} ${token}`);
+    expect("continue-on-error" in j, `${job} job-level continue-on-error`).toBe(false);
+    expect(j.defaults, `${job} job-level defaults`).toBeUndefined();
+    expect(parsed.defaults, "workflow-level defaults").toBeUndefined();
+    const firstCred = steps.findIndex((s) => /credential|doppler/i.test(`${s.name ?? ""} ${s.uses ?? ""}`));
+    expect(firstCred, `${job} has a credential step`).toBeGreaterThan(1);
+    // Verifier round: nothing may run past a refused gate or pre-arm it. No later step re-opens on a failed job
+    // (a status function in `if:`) unless it is secret-free and touches no credential, terraform or Doppler; the job
+    // carries no env (a job-level secret would reach the gate step); checkout takes no `with` (a `ref` input would
+    // swap the script the gate runs).
+    for (const [i, st] of steps.entries()) {
+      if (i < 2 || !/always\(|failure\(|cancelled\(/.test(String(st.if ?? ""))) continue;
+      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused gate`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
+    }
+    expect(j.env, `${job} job-level env`).toBeUndefined();
+    expect(steps[0].with, `${job} checkout with`).toBeUndefined();
+  });
+
+  test("B10: the birth and replace tokens are distinct, and the confirm description does not print either", () => {
+    expect("PUBLIC-SDK-URL").not.toBe("PUBLIC-SDK-URL-BIRTH");
+    const parsed = parseYaml(wf) as { on: { workflow_dispatch: { inputs: { confirm: { description: string } } } } };
+    expect(parsed.on.workflow_dispatch.inputs.confirm.description).not.toContain("PUBLIC-SDK-URL");
+  });
+
+  // Fix-round sweep (data-integrity / agent-native / user-impact seats): a recovery command that tells an operator or
+  // agent to dispatch either job without its token is refused at step 2, mid-incident. Every copy-paste recipe
+  // (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`, bare or quoted) in scripts, skills,
+  // workflows and runbooks carries its own token. Exempt: a recipe that sits inside the same backtick span as a
+  // `**done YYYY-MM-DD` marker earlier on its line (a past run), and prose that only NAMES the selector (the flag
+  // closed by a backtick right after the target, e.g. "selected by `-f apply_target=inngest-host-replace`").
+  test("B10: every live dispatch recipe for the two public-sdk_url jobs carries its confirm token", () => {
+    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github/workflows", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
+      encoding: "utf8",
+      env: gitCleanEnv(),
+    });
+    expect(ls.status).toBe(0);
+    const files = ls.stdout.split("\0").filter((f) => /\.(sh|ya?ml|md|tf)$/.test(f));
+    expect(files.length).toBeGreaterThan(100);
+    const offenders: string[] = [];
+    let recipes = 0;
+    for (const f of files) {
+      readFileSync(join(REPO_ROOT, f), "utf-8").split("\n").forEach((line, i) => {
+        const FLAG = String.raw`(?:-f|-F|--field|--raw-field)[ =]`;
+        const re = new RegExp(String.raw`(?<flag>${FLAG})(?<q>["']?)apply_target=(?<q2>["']?)(?<t>inngest-host-replace|inngest-host)(?![-\w])\k<q2>\k<q>`, "g");
+        for (const m of line.matchAll(re)) {
+          const t = m.groups!.t;
+          const want = t === "inngest-host" ? "PUBLIC-SDK-URL-BIRTH" : "PUBLIC-SDK-URL";
+          const tail = line.slice(m.index! + m[0].length);
+          if (tail.startsWith("`") && line[m.index! - 1] === "`") continue;
+          const head = line.slice(0, m.index!);
+          // A past-run record: a `**done YYYY-MM-DD` marker before the recipe on its line (a table row's status cell).
+          if (/\*\*done \d{4}-\d{2}-\d{2}/.test(head)) continue;
+          recipes++;
+          if (!new RegExp(String.raw`^\s+${FLAG}["']?confirm=["']?${want}(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1}`);
+        }
+      });
+    }
+    expect(recipes, "non-vacuity: the sweep found recipes").toBeGreaterThanOrEqual(6);
+    expect(offenders).toEqual([]);
+  });
+
+  test("B10: the shared confirm script refuses every input but the exact token, and never echoes the input", () => {
+    const lib = join(REPO_ROOT, CONFIRM_LIB);
+    const run = (args: string[], confirm: string | undefined) =>
+      spawnSync("bash", [lib, ...args], {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...ciEnv, ...(confirm === undefined ? {} : { CONFIRM_RAW: confirm }) },
+        encoding: "utf8",
+      });
+    const table: Array<[string[], string | undefined, number]> = [
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL", 0],
+      [["PUBLIC-SDK-URL"], undefined, 1],
+      [["PUBLIC-SDK-URL"], "", 1],
+      [["PUBLIC-SDK-URL"], "public-sdk-url", 1],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL ", 1],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL-BIRTH", 1],
+      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL", 1],
+      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL-BIRTH", 0],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL*", 1],
+      [[], "PUBLIC-SDK-URL", 64],
+      [[""], "", 64],
+    ];
+    // Run the table twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
+    let ciEnv: Record<string, string> = {};
+    for (const env of [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }]) {
+    ciEnv = env;
+    for (const [args, confirm, rc] of table) {
+      const r = run(args, confirm);
+      expect(`${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${r.status}`).toBe(
+        `${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${rc}`,
+      );
+      if (rc === 1) expect(r.stdout).toContain("#12742");
+    }
+    }
+    const echoed = run(["PUBLIC-SDK-URL"], "canary-7f3e");
+    expect(echoed.stdout + echoed.stderr).not.toContain("canary-7f3e");
   });
 
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {

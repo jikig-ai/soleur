@@ -339,11 +339,20 @@ t_ruleset_rule_addition_passes() {
   fi
 }
 
-# T65 (ADR-321 item 10, #10479): the origin-TLS rules are ALWAYS PRESENT and only `enabled` toggles, because the documented
-# rollback is a workflow_dispatch apply and `github.event.head_commit.message` is EMPTY there, so a rule REMOVAL (nested_deletes
-# >= 1) can never be acked on that path. These fixtures are REAL `terraform plan` + `terraform show -json` documents (provider
-# config stripped), planned against a prior state built from the "before" configuration's own planned values (no live apply, no
-# credentials); the filter under test is the real one. Empty head message = a dispatch.
+# T65 (ADR-321 items 10 and 13, #10479): the origin-TLS rules were ALWAYS PRESENT until the cleanup, and only `enabled` toggled,
+# because the documented rollback was a workflow_dispatch apply and `github.event.head_commit.message` is EMPTY there, so a rule
+# REMOVAL (nested_deletes >= 1) can never be acked on that path. These fixtures are REAL `terraform plan` + `terraform show -json`
+# documents (provider config stripped), planned against a prior state built from the "before" configuration's own planned values
+# (no live apply, no credentials); the filter under test is the real one. Empty head message = a dispatch. The five toggle
+# fixtures and the dynamic-block hazard are kept as historical filter regressions after the cleanup.
+#
+# tfplan-origin-tls-cleanup.json was REGENERATED 2026-11-13 for the cleanup PR as an offline real plan: Terraform 1.9.8 with
+# cloudflare/cloudflare 4.52.7 from the local plugin cache (`init -plugin-dir`, no registry), a scratch root holding only
+# cloudflare_ruleset.seo_config_settings with a dummy token and zone id. "before" = the pre-cleanup 5-rule list with both
+# ORIGIN-TLS rules enabled, planned from empty state; the prior state is that plan's `after` with synthetic rule ids filled
+# in; "after" = this PR's 3-rule list, planned against it with -refresh=false; only format_version, terraform_version and
+# resource_changes are kept. The filter reads counts only, so T65 also asserts the fixture's `after` shape (3 rules, the
+# dcb85b75 rule strict on the app host): that row anchors Guard 1 of the cleanup plan to the plan Terraform actually produced.
 t_origin_tls_rules_toggle_not_remove() {
   local n out want
   for spec in \
@@ -365,6 +374,14 @@ t_origin_tls_rules_toggle_not_remove() {
   out=$(_run_gate "$FIXTURES/tfplan-origin-tls-cleanup.json" $'chore: cleanup\n\n[ack-destroy]\n')
   if [[ "$out" == "0:2:0:2:0" ]]; then _report "T65 origin-TLS cleanup passes with an [ack-destroy] line on a push (0:2:0:2:0)" ok
   else _report "T65 origin-TLS cleanup acked" fail "got '$out' want '0:2:0:2:0'"; fi
+  out=$(jq -r '.resource_changes[] | select(.address == "cloudflare_ruleset.seo_config_settings") | .change
+    | [(.after.rules | length),
+       ([.after.rules[] | select(.ref == "dcb85b75bc3c4f4aa2a8c13a080bf854")
+         | "\(.action_parameters[0].ssl)|\(.expression)|\(.enabled)"] | join(","))] | map(tostring) | join(":")' \
+    "$FIXTURES/tfplan-origin-tls-cleanup.json" 2>/dev/null)
+  want='3:strict|(http.host eq "app.soleur.ai")|true'
+  if [[ "$out" == "$want" ]]; then _report "T65 origin-TLS cleanup fixture: after = 3 rules, the dcb85b75 rule strict on (http.host eq \"app.soleur.ai\")" ok
+  else _report "T65 origin-TLS cleanup fixture after-shape" fail "got '$out' want '$want'"; fi
   # The hazard the always-present shape avoids: the first design (dynamic blocks) rolled back by REMOVING a rule.
   out=$(_run_gate "$FIXTURES/tfplan-origin-tls-old-dynamic-rollback.json" "")
   if [[ "$out" == "0:1:0:1:1" ]]; then _report "T65 origin-TLS dynamic-block rollback (-1 rule) is REFUSED on a dispatch (0:1:0:1:1): the hazard" ok
@@ -2628,15 +2645,15 @@ _ran=$((pass + fail))
 # T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 15 relay hello-key counter rows (PR A of #8211 / #12167, F1: T66a-T66o, one
 # _report call per id: a-j behaviour, k-n the four mutant rows, o the executed HALT segment) = 136, + 8 coalesced-feed rows (#12403:
 # T67a-c feed pins + T67d-g executed kill-switch span + T67h apply-side feed pin; renumbered from T66 on the
-# hello-key merge collision) = 144. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 143 assertions ran, floor is 144". The floor sits at the
+# hello-key merge collision) = 144, + 1 T65 cleanup-fixture after-shape row (ADR-321 item 13, #10479) = 145. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 144 assertions ran, floor is 145". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 144 ]]; then
+if [[ "$_ran" -lt 145 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 144. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 145. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 144)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 145)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="
