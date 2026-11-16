@@ -1886,23 +1886,41 @@ check("G7c: each narrow D11 project is declared (soleur-infra-app, soleur-deploy
       % (len(g6_tf), sorted(g7_declared), len(g7_tainted)),
       len(g6_tf) >= 1 and g7_declared == set(G7_PROJECTS) and not g7_bad_c, "tf=%d bad=%s" % (len(g6_tf), g7_bad_c[:5]))
 
-# G7c2 (#9294 review round 1, ADR-241 D11) -- a file that DECLARES a narrow D11 project is
-# the carrier's own manifest. A github_actions_* secret/variable resource there would
-# TF-write a plaintext value into Tier-A-readable state or TF-seed the env secret,
-# bypassing the operator mint the tier move routes DOPPLER_TOKEN_DEPLOY_CHANNEL through
-# (the settled decision puts it on the environment via `gh secret set --env`, never .tf).
-G7_GHA = re.compile(r"^github_actions_(?:environment_)?(?:secret|variable)$")
+# G7c2 (#9294 review round 1 + fix round, ADR-241 D11) -- two limbs around the same hazard:
+# a TF-written GitHub secret lands its plaintext in Tier-A-readable state, or TF-seeds the
+# env secret the tier move routes DOPPLER_TOKEN_DEPLOY_CHANNEL through (the settled decision
+# puts it on the environment via `gh secret set --env`, never .tf).
+#   narrow-file    a file that DECLARES a narrow D11 project is the carrier's own manifest:
+#                  NO github_actions_* / github_dependabot_* secret or variable resource may
+#                  be declared there at ANY scope -- repo, environment or organization (the
+#                  first draft named only the repo/environment spellings and left the
+#                  `organization_` types unmatched).
+#   seed-anywhere  in ANY scanned .tf file, a member of the same family whose body names the
+#                  deploy-channel surface (the `deploy-channel` environment literal, a
+#                  `...deploy_channel...` label reference, or DOPPLER_TOKEN_DEPLOY_CHANNEL)
+#                  TF-seeds the env secret from a sibling file the narrow-file limb never
+#                  inspects. This is deliberately NOT a blanket repo ban: repo-level
+#                  `github_actions_secret` is the legitimate publication shape elsewhere
+#                  (anthropic-ci-key.tf, cf-pages.tf, doppler-write-token.tf,
+#                  inngest-arm-write-token.tf).
+G7_GHA = re.compile(r"^github_(?:actions|dependabot)_(?:(?:environment|organization)_)?(?:secret|variable)$")
+G7_DC_SEED = re.compile(r"deploy[-_]channel|DOPPLER_TOKEN_DEPLOY_CHANNEL", re.I)
 g7_narrow_files = {rel for rel, kind, typ, _nm, b in g7_blocks
                    if kind == "resource" and typ == "doppler_project"
                    and re.search(r'^\s*name\s*=\s*"(?:%s)"\s*(?:(?:#|//).*)?$' % "|".join(G7_PROJECTS), b, re.M)}
-g7_bad_gha = ["%s resource %s.%s" % (rel, typ, nm)
+g7_bad_gha = ["%s resource %s.%s (declared in a narrow-project file)" % (rel, typ, nm)
               for rel, kind, typ, nm, _b in g7_blocks
               if kind == "resource" and rel in g7_narrow_files and G7_GHA.match(typ)]
+g7_bad_gha += ["%s resource %s.%s (references the deploy-channel surface)" % (rel, typ, nm)
+               for rel, kind, typ, nm, b in g7_blocks
+               if kind == "resource" and rel not in g7_narrow_files
+               and G7_GHA.match(typ) and G7_DC_SEED.search(b)]
 check("G7c2: no .tf file declaring a narrow D11 project (soleur-infra-app, soleur-deploy-channel) "
-      "also declares a github_actions_secret / github_actions_environment_secret / "
-      "github_actions_variable / github_actions_environment_variable resource -- a TF-written "
-      "secret lands in Tier-A-readable state and bypasses the operator mint [%d narrow files]"
-      % len(g7_narrow_files),
+      "also declares a github_actions_* / github_dependabot_* secret or variable resource at any "
+      "scope (repo, environment, organization), and no such resource in ANY scanned .tf file names "
+      "the deploy-channel surface (deploy-channel / deploy_channel / DOPPLER_TOKEN_DEPLOY_CHANNEL) "
+      "-- a TF-written secret lands in Tier-A-readable state and bypasses the operator mint "
+      "[%d narrow files]" % len(g7_narrow_files),
       bool(g7_narrow_files) and not g7_bad_gha,
       "files=%s bad=%s" % (sorted(g7_narrow_files), g7_bad_gha[:5]))
 
@@ -2152,7 +2170,13 @@ check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-proj
 #   read-shape       that read names `-p soleur-deploy-channel -c prd` explicitly;
 #   argv-totality    EVERY `doppler` invocation inside the arm names
 #                    `-p soleur-deploy-channel -c prd` -- a second call pointed at another project
-#                    or config is a reach the presence check alone would never see;
+#                    or config is a reach the presence check alone would never see. The site
+#                    regex is `doppler` + whitespace, ANY subcommand: a verb-less
+#                    `doppler secrets -p <other> -c <other>` is still a real read the old
+#                    verb-anchored pattern never counted. The `doppler-project` /
+#                    `doppler-token-*` input names cannot false-match -- a hyphen is not
+#                    whitespace, and cmd_sites' command-position plus print/echo carve-outs
+#                    keep prose and printed instructions out;
 #   no-prd_terraform the arm names no prd_terraform at all -- a read there is the reach the
 #                    move removes;
 #   arm-totality     the arm keeps its terminal `emit source "tier_b_deploy_channel"`. The
@@ -2164,7 +2188,7 @@ check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-proj
 # The loader's own suite (infra-credentials.test.sh rows dc1-dc9) drives these behaviourally; this row
 # pins the STRUCTURE so a refactor cannot drop a limb silently. `if`/`fi` depth counting delimits the
 # arm; comments are stripped first, so a mention in prose cannot satisfy or trip a clause.
-G7I_DOPPLER = re.compile(r"\bdoppler\s+[^\n]*?\b(?:secrets\s+(?:get|download|set)\b|run\b)")
+G7I_DOPPLER = re.compile(r"\bdoppler\s")
 g7i_bad = []
 _ld2 = docs.get(LOADER_REL)
 if _ld2 is None:
@@ -2230,9 +2254,9 @@ else:
                            "or heredoc truncated it, or the emit itself was dropped")
 check("G7i: the loader's narrow arm admits exactly {soleur-infra-privileged, soleur-deploy-channel} "
       "before any Doppler call, refuses an empty deploy-channel token with the named "
-      "no_credential_source verdict first, points EVERY doppler invocation inside the arm at "
-      "soleur-deploy-channel/prd, and never reads prd_terraform "
-      "(behavioural proof: infra-credentials.test.sh dc1-dc9)",
+      "no_credential_source verdict first, points EVERY `doppler` invocation inside the arm "
+      "(any subcommand, verb-less forms included) at soleur-deploy-channel/prd, and never "
+      "reads prd_terraform (behavioural proof: infra-credentials.test.sh dc1-dc9)",
       not g7i_bad, "clauses=%s" % sorted({b[1:b.index("]")] for b in g7i_bad}))
 
 # G6l -- the provider fact the state-residency argument rests on.
@@ -5019,6 +5043,17 @@ if mutate g7i-arm-truncated-by-heredoc-fi "$MUTDIR/tree/.github/actions/infra-cr
   mutant_red g7i-arm-truncated-by-heredoc-fi wf_clause "$T/mut/g7i-trunc.tsv" "G7i:" arm-totality no-download
 fi
 
+# Fix round (structural-enum seat): a `doppler` invocation WITHOUT a verb the old
+# site regex named -- `doppler secrets -p soleur -c stg` is a real read the
+# `secrets get|download|set|run` alternation skipped. argv-totality must still fire
+# (no-prd_terraform must not: stg is not prd_terraform).
+MUTDIR="$(fixcopy g7i-argvnv)"; assert_fixture_dir "$MUTDIR"
+if mutate g7i-argv-verbless-read "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 1 \
+   '/-p soleur-deploy-channel -c prd\)/a\          doppler secrets -p soleur -c stg > \/dev\/null'; then
+  fixcensus "$MUTDIR" "$T/mut/g7i-argvnv.tsv" ""
+  mutant_red g7i-argv-verbless-read wf_clause "$T/mut/g7i-argvnv.tsv" "G7i:" argv-totality no-prd_terraform
+fi
+
 # G7c2: a github_actions_* secret resource INSIDE the file that declares the narrow
 # project -- the TF-seeded bypass the new row exists to ban. Sibling narrow-project
 # files stay clean, so G7c2 alone reds.
@@ -5027,6 +5062,26 @@ printf 'resource "github_actions_secret" "dc_seed" {\n  repository      = "soleu
 if fixture_written g7c2-gha-secret-in-narrow-file "$MUTDIR/tree/apps/web-platform/infra/deploy-channel-environment.tf"; then
   fixcensus "$MUTDIR" "$T/mut/g7c2-gha.tsv" ""
   mutant_red g7c2-gha-secret-in-narrow-file wf_row "$T/mut/g7c2-gha.tsv" "G7c2:"
+fi
+
+# Fix round: the same seed in a SIBLING .tf that declares no narrow project -- the
+# narrow-file limb alone never saw it; the seed-anywhere limb is the only row that
+# can red it.
+MUTDIR="$(fixcopy g7c2-sib)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "github_actions_environment_secret" "dc_seed" {\n  repository      = "soleur"\n  environment     = "deploy-channel"\n  secret_name     = "DOPPLER_TOKEN_DEPLOY_CHANNEL"\n  plaintext_value = "seed"\n}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-gha-seed.tf"
+if fixture_written g7c2-gha-env-secret-sibling-file "$MUTDIR/tree/apps/web-platform/infra/zz-gha-seed.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-sib.tsv" ""
+  mutant_red g7c2-gha-env-secret-sibling-file wf_row "$T/mut/g7c2-sib.tsv" "G7c2:"
+fi
+
+# Fix round: the ORGANIZATION spelling the first G7_GHA draft never named, inside the
+# narrow-declaring file. The body names no deploy-channel surface, so only the widened
+# type set can red it.
+MUTDIR="$(fixcopy g7c2-org)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "github_actions_organization_secret" "dc_org" {\n  secret_name     = "ORG_SEED"\n  plaintext_value = "seed"\n  visibility      = "all"\n}\n' >> "$MUTDIR/tree/apps/web-platform/infra/deploy-channel-environment.tf"
+if fixture_written g7c2-gha-org-secret-in-narrow-file "$MUTDIR/tree/apps/web-platform/infra/deploy-channel-environment.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-org.tsv" ""
+  mutant_red g7c2-gha-org-secret-in-narrow-file wf_row "$T/mut/g7c2-org.tsv" "G7c2:"
 fi
 
 # G1d-bis: drop ONLY the `deployment_branch_policy { custom_branch_policies = true }`
@@ -5180,7 +5235,12 @@ fi
 # 170 -> 174 (#9294 review round 1): g7i-argv-second-read (1 landing), g7i-arm-truncated-by-heredoc-fi
 #   (3-line landing), g7c2-gha-secret-in-narrow-file (fixture-written), g1d-bis-custom-policies-dropped
 #   (4-line landing). Measured: 174 ran.
-MUTANT_FLOOR=174
+# 174 -> 177 (#9294 fix round, structural-enum seat): g7i-argv-verbless-read (1 landing — a verb-less
+#   `doppler secrets -p soleur -c stg` in the arm evaded the verb-anchored site regex),
+#   g7c2-gha-env-secret-sibling-file (fixture-written: a deploy-channel TF-seed in a sibling .tf
+#   declaring no narrow project), g7c2-gha-org-secret-in-narrow-file (fixture-written: the
+#   `organization_` spelling the first G7_GHA draft never named). Measured: 177 ran.
+MUTANT_FLOOR=177
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5241,7 +5301,12 @@ _ran=$((passes + fails))
 # 435 -> 445 (#9294 review round 1): live G7c2 and G1d-bis (2 census rows = 2 assertions), four new
 #   mutants (4 landings + 4 verdicts). The g7-must-pass fixture gains an inngest-cutover store line
 #   inside its one verdict (0). Measured: 445 ran.
-FLOOR=445
+# 445 -> 451 (#9294 fix round): three new mutants (3 landings + 3 verdicts). G7c2 widened in place
+#   (organization + dependabot spellings, plus a second limb over every scanned .tf naming the
+#   deploy-channel surface) and G7i's argv-totality now counts every `doppler` site, verb-less
+#   included — same row ids, no new rows, so CENSUS_ROWS and G7_ROW_IDS are unchanged.
+#   Measured: 451 ran.
+FLOOR=451
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
