@@ -803,3 +803,7 @@ infra, ledger and docs change, so the tier is NONE.
 - The pre-commit hook `c4-model-regenerate` may regenerate `model.likec4.json` by itself. Either
   way, commit the regenerated file, and confirm `c4-model-freshness.test.sh` is green.
 - Until the forget applies, `scheduled-terraform-drift.yml` (a full plan with no `-target`) shows the forget and exits 2. The per-merge apply on the merge push closes that window, so a drift issue opened in between can be closed as expected.
+
+## Addendum — 2026-11-16 (ship, #12813)
+
+> **Superseded 2026-11-16 (#12813):** two predictions above were wrong. "A 404 drops the entry (no change)" is false: apply run 43870657893 shows the provider Read still succeeds for ops@ as Admin, so the merge plans a `["forget"]`. The post-merge check's "It concludes `success`" is also false while #12823 is open. In that run, the `Terraform apply` step (non-SSH resources, which includes this forget) succeeded, and the run then failed later at `SSH forward to web-2 through the web-1 bastion`. Verify the forget from the `Terraform apply` step log (`will no longer be managed by Terraform`, `0 to destroy`), not from the run's conclusion.
