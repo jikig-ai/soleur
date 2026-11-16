@@ -13,6 +13,24 @@ requires_cpo_signoff: false
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-16 (proportionate pass for a ~35-line, 5-file fix; no fan-out beyond the plan-phase reviews already recorded).
+**Sections enhanced:** 4 (Implementation Phases 3.2, Alternative Approaches, Acceptance Criteria AC8, Risks and Sharp Edges).
+**Gates run:** 4.6 User-Brand Impact (pass, `aggregate pattern`), 4.7 Observability (5 fields present, `grep` verb, literal `expected_output`), 4.8 PAT sweep (0 hits), 4.11 Guard Contract (`lint-guard-contract.py` green), 4.12 Scope Check (1 live section, 3 subsections, Recommendation present, no `unmapped`). 4.5, 4.55, 4.9, 4.10 and 4.13 do not trigger (no network, downtime, UI, store or autonomous-task surface).
+
+### Key Improvements
+
+1. **Wrong test path fixed.** `plugin-root-anchoring.test.ts` lives at `apps/web-platform/test/`, and it is a vitest test, not `bun test plugins/soleur/test/...`. Phase 3.2, AC8 and tasks.md 3.7 now run `(cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts)`, measured 47/47 green on today's tree.
+2. **Attribution corrected.** The `${CLAUDE_PLUGIN_ROOT:-}` fallbacks were removed from skills by #8727 (ADR-179 A18-A20). #12494 only *added* the `:-`-absent pin (`git show 53efc49758` has 0 removed and 2 added lines containing `CLAUDE_PLUGIN_ROOT:-`, both in the ban/pin).
+3. **Precedent diff added** against `battery-owed.sh` (deepen-plan 4.4). It includes one divergence: in this helper, 2 is a deliberate code, so the "accidental codes" list in the new header must not include it.
+
+### New Considerations Discovered
+
+- Verify-the-negative pass (inline): the consumer census holds. Outside `plugins/soleur` and `knowledge-base`, only `scripts/lib/test-affected-paths.sh` names the helper, and it maps paths only. The preflight sites are plain mode and treat any non-zero exit as failure. `grok-pre-push-gate.sh` reads `battery-owed.sh`'s 42, never this helper's. Plain mode exits only 0 or 2 (`changed-paths.sh` plain-mode block), so it can never collide with 42.
+- Post-edit self-audit: the dropped `plan_refs=unknown` wording (CTO Q2b) has 0 residual hits in the plan, and the old `bun test plugins/soleur/test/plugin-root-anchoring` command has 0 residual hits in the plan and tasks.md.
+- Citations resolved live: #12246 (MERGED PR), #12332 (CLOSED issue), #12494 (MERGED), #12809 (OPEN draft), #8727 (MERGED), and 53efc4975872 is an ancestor of `origin/main`.
+
 ## Overview
 
 The `--match` mode of `plugins/soleur/scripts/changed-paths.sh` reports "none of the changed paths match" as exit 1. Bash returns the same code when the caller's own line dies on an unbound variable under `set -u` (for example an unsubstituted `${CLAUDE_PLUGIN_ROOT}`), and when the helper itself trips an unbound variable. Every `--match` caller reads rc 1 as "no match", so those failures silently skip the gate they guard. The counsel-review `legal_touch` check is the sharpest instance: a failed diff skips CLO counsel review instead of firing it.
@@ -66,7 +84,7 @@ Give "no match" an exit code that bash never produces by itself, and make every 
      exit "${st[1]}"
      ```
 
-   - Header CONTRACT: `--match ERE  0 = at least one path matches (printed), 42 = none match, 2 = git or usage failure.` Add one sentence on why it is 42 and not grep's 1 (bash exits 1 on an unbound variable, in the caller or here), and that callers test `[ $? -eq 42 ]` and treat every other non-zero rc as unknown. In the same edit, fix two stale helper comments (named by text, not line): the comment above the final pipe, "an unwritable TMPDIR would skip grep entirely and read as rc 1", becomes "... read as 42"; and the WHY paragraph's "then grep reads a here-string" becomes "then grep reads it through a pipe from printf", which is what the code does. (The "row 8" comment is in the test file and is covered by Phase 1.1.)
+   - Header CONTRACT: `--match ERE  0 = at least one path matches (printed), 42 = none match, 2 = git or usage failure.` Add one sentence on why it is 42 and not grep's 1 (bash exits 1 on an unbound variable, in the caller or here), and that callers test `[ $? -eq 42 ]` and treat every other non-zero rc as unknown. In the same edit, fix two stale helper comments (named by text, not line): the comment above the final pipe, "an unwritable TMPDIR would skip grep entirely and read as rc 1", becomes "... read as 42" (deepen check: correct, since a failed here-string redirect exits 1, which the 1 -> 42 mapping cannot tell apart from grep's own 1, so it would be a false no match; that is why the pipe stays); and the WHY paragraph's "then grep reads a here-string" becomes "then grep reads it through a pipe from printf", which is what the code does. (The "row 8" comment is in the test file and is covered by Phase 1.1.)
    - Plain mode is unchanged: 0 = list, any non-zero = not a list.
 2. **Six capture lines**: `[ $? -eq 1 ]` becomes `[ $? -eq 42 ]` (counsel `legal_touch`; ship `ledger_touched`, `gdpr_gate_touch`, `diff_match`, `dpf_match`, `plan_refs`).
 3. **Direct `--match` prose consumers**:
@@ -119,7 +137,7 @@ one-shot/SKILL.md: +3 bytes, about 51971 against 52000. review/SKILL.md: about +
 
 **Cut List.**
 
-- `${CLAUDE_PLUGIN_ROOT:-}` (unset root -> rc 127). Buys P1 for case 1 only. Already removed by #12494 and forbidden by `plugin-root-anchoring.test.ts` and the `skill_ref_pin` `:-`-absent check, and it leaves case 2 (unbound variable inside the helper, rc 1) open. Cut.
+- `${CLAUDE_PLUGIN_ROOT:-}` (unset root -> rc 127). Buys P1 for case 1 only. Already removed from skills by #8727 (ADR-179 A18-A20), forbidden by `apps/web-platform/test/plugin-root-anchoring.test.ts`, and pinned absent by the `skill_ref_pin` `:-`-absent check that #12494 added, and it leaves case 2 (unbound variable inside the helper, rc 1) open. Cut.
 - A resolve-root preamble in each reference file. The counsel reference already carries the plugin-root notice; adding more prose buys nothing P1-P4 need. Cut.
 
 **Value-proposition measurement.** Not applicable: the plan's case is correctness (fail closed), not a cost saving.
@@ -236,7 +254,7 @@ No files to create, apart from this feature's own `knowledge-base/project/specs/
 
 3.2 Re-run `... helper` and `... sentinel`: all green. Then run the two neighbouring guards that read the same prose:
 
-- `bun test plugins/soleur/test/plugin-root-anchoring.test.ts` (the `:-` ban)
+- `(cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts)` (the `:-` ban; it is a vitest test, measured 47/47 green on today's tree)
 - `python3 scripts/lint-skill-body-budget.py --base origin/main`
 
 3.3 Census check (residual zero):
@@ -263,7 +281,7 @@ No files to create, apart from this feature's own `knowledge-base/project/specs/
 
 | Approach | Why not |
 |---|---|
-| `${CLAUDE_PLUGIN_ROOT:-}` at every call site (unset -> 127) | Removed by #12494 and banned by `plugin-root-anchoring.test.ts` and the `:-`-absent pin. Covers only the caller-side unset root, not an unbound variable inside the helper (rc 1). |
+| `${CLAUDE_PLUGIN_ROOT:-}` at every call site (unset -> 127) | Removed by #8727 (ADR-179), banned by `apps/web-platform/test/plugin-root-anchoring.test.ts`, and pinned absent by the `:-` check #12494 added. Covers only the caller-side unset root, not an unbound variable inside the helper (rc 1). |
 | Callers test `[ $? -eq 1 ] && [ -z "$out" ]` | An unset root also leaves stdout empty, so it does not discriminate. |
 | A new exit code other than 42 | 42 is the established "deliberate non-failure verdict" code in ship (battery-owed.sh). Reusing it costs no new vocabulary. Ruled by the CTO. |
 | Counsel-only executed row | Ruled out by CTO Q4: the defect is per call site, and five ship handlers would stay unexecuted. |
@@ -437,7 +455,7 @@ The `>= 6` floor is paired with six-name set identity.
 - [ ] AC6: The executed caller rows extract >= 6 lines with all six names exactly once; both preconditions (host bash rc 1; stub rc 1) pass; controls A and B pass.
 - [ ] AC6b: The full single-suite run `bash plugins/soleur/test/changed-path-readers.test.sh` exits 0 with `MIN_HELPER_ROWS`, `MIN_TOTAL` and the `SELFTESTS` equality re-derived to the new exact counts, and `bash scripts/guard-vacuity-floor.test.sh` passes with the new extraction floor covered, not UNCLASSIFIED.
 - [ ] AC7: `python3 scripts/lint-skill-body-budget.py --base origin/main` prints OK. `wc -c` reports ship/SKILL.md <= 273955 and one-shot/SKILL.md <= 52000.
-- [ ] AC8: `bun test plugins/soleur/test/plugin-root-anchoring.test.ts` is green (no `${CLAUDE_PLUGIN_ROOT:-}` introduced).
+- [ ] AC8: `(cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts)` is green (no `${CLAUDE_PLUGIN_ROOT:-}` introduced).
 - [ ] AC9: In the archived remainder plan, the `PR body:` and `Required checks green` lines are `- [x]`, and the `Every site in the final convert set` line is still `- [ ]`. In the archived remainder tasks.md, line `- [x] 5.4 Push (real exit code), ...` is present. No other line in either file changes (`git diff --stat` shows 2 insertions and 2 deletions in the plan, 1 and 1 in tasks.md).
 - [ ] AC10: The diff is a subset of the 11 files in Files to Edit plus this feature's pipeline-written artifacts: `knowledge-base/project/plans/2026-11-16-fix-changed-paths-no-match-exit-42-plan.md`, `knowledge-base/project/specs/feat-one-shot-changed-paths-exit-42-unset-root/{tasks.md,decision-challenges.md,session-state.md}`, and any generated `knowledge-base/INDEX.md`.
 - [ ] AC11: Repo meta-guards pass before push; push exit code checked.
@@ -482,6 +500,21 @@ All rows are `unit`: shell, against scratch git repos.
 - Moving a static pin and its prose in the same commit proves consistency only. The executed rows are what prove behaviour, so do not drop them as redundant with the pins.
 - Do not compress ship prose beyond the planned deletions. The ruled Q1 wording keeps "(no match)" deliberately.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6. This plan fills it (`aggregate pattern`).
+
+### Precedent diff: `battery-owed.sh` exit 42 (deepen-plan 4.4)
+
+The pattern has a live precedent, so it is not novel. Side by side:
+
+| Aspect | Precedent: `plugins/soleur/skills/ship/scripts/battery-owed.sh` | This plan: `changed-paths.sh --match` |
+|---|---|---|
+| Code with the non-gated meaning | `VERDICT_SKIPPABLE=42`: CI already verified the tree, skip the battery | 42: no path matches, skip the gate |
+| Caller rule | `if [[ "$rc" -eq 42 ]]` skips, anything else runs (ship Phase 4) | `[ $? -eq 42 ] \|\| VAR=unknown`: only 42 is "no match", anything else is unknown |
+| Distinct failure code | 2 = the check could not run | 2 = git or usage failure (unchanged) |
+| Why not 1 | The header records the same bug: an earlier revision used 1 for SKIPPABLE, and a typo'd variable under `set -u` exited 1 and would have skipped the battery | An unset `CLAUDE_PLUGIN_ROOT` (caller) or an unbound variable (helper) exits 1 and reads as no match |
+
+- **Divergence to keep.** The precedent's header lists what bash produces by accident: "1 (set -u / generic failure), 2 (syntax), 126 (not executable), 127 (not found), 128+N (signal)". In `changed-paths.sh`, 2 is a *deliberate* code, so the helper's one-sentence rationale should name only 1 / 126 / 127 / 128+N as the accidental codes 42 avoids, not 2.
+- **Adoptable wording.** The helper's header sentence on "why 42 and not grep's 1" (Proposed Solution 1) can borrow the precedent's phrasing ("`set -u` exists to catch that typo; routing it into the no-match branch inverts it"). It is a comment-only sentence: keep it short, because the script is outside the skill byte budgets but the sentence is read by every caller author.
+- **No shared constant.** A named constant (`NONE_MATCH=42`) is optional. The discoverability probe and AC2 grep the header literal `42 = none match`, not a variable, so a constant adds nothing a reader or a guard consumes.
 
 ## References
 

@@ -28,7 +28,7 @@ Plan: `knowledge-base/project/plans/2026-11-16-fix-changed-paths-no-match-exit-4
 - [ ] 3.4 one-shot/SKILL.md:179 and observability-coverage-reviewer.md:29: "non-zero exit = ...".
 - [ ] 3.5 risk-tier-and-fix-rounds.md:57 and adr-ordinal-collision.md:37: trailing comments drop "(exit 2/127)".
 - [ ] 3.6 Re-run `... helper` and `... sentinel` green. Re-derive `MIN_HELPER_ROWS`, `MIN_TOTAL` (and its breakdown comment) and the `SELFTESTS` equality from a full single-suite run of this file.
-- [ ] 3.7 Test-file scope grep `grep -n -E '2/127|-eq 1 \]' plugins/soleur/test/changed-path-readers.test.sh` (only DEFECTS new-strings and generic self-tests), `bash scripts/guard-vacuity-floor.test.sh`, `bun test plugins/soleur/test/plugin-root-anchoring.test.ts`, `python3 scripts/lint-skill-body-budget.py --base origin/main`, and the census greps (plan Phase 3.3).
+- [ ] 3.7 Test-file scope grep `grep -n -E '2/127|-eq 1 \]' plugins/soleur/test/changed-path-readers.test.sh` (only DEFECTS new-strings and generic self-tests), `bash scripts/guard-vacuity-floor.test.sh`, `(cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts)`, `python3 scripts/lint-skill-body-budget.py --base origin/main`, and the census greps (plan Phase 3.3).
 - [ ] 3.8 One-off mutation run of Guard Contract rows 1-12 and H1-H2 on scratch copies; record the results for the PR body.
 
 ## Phase 4 - Ride-along KB ticks
