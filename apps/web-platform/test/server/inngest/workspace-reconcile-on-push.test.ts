@@ -650,6 +650,34 @@ describe("reconcile — sync failure", () => {
     );
   });
 
+  it("D23: a designed hold (`held` set) keeps the ok:false audit row but skips the op=sync capture (the self-heal already emitted it, debounced)", async () => {
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("non-fast-forward with held local commits"),
+      errorClass: "non_fast_forward",
+      held: "held_commits",
+    });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error_class: "non_fast_forward",
+        workspace_id: "77777777-7777-4777-8777-777777777777",
+      }),
+    );
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "sync" }),
+    );
+  });
+
   it("records recovered:true ok-row when syncWorkspace self-healed a diverged clone (AC-B4)", async () => {
     WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
     OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");

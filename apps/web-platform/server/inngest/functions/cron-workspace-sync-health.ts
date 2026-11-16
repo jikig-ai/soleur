@@ -358,12 +358,16 @@ export async function cronWorkspaceSyncHealthHandler({
                 });
                 didSync = true;
               } else {
-                reportSilentFallback(syncResult.error, {
-                  feature: SENTRY_FEATURE,
-                  op: "reconcile-backfill-sync",
-                  extra: { workspaceId: f.workspaceId },
-                  message: "Immediate re-sync after backfill failed",
-                });
+                // #12600 D23: a designed hold (`held`) is already emitted, tagged and debounced by the self-heal;
+                // skip the duplicate capture and keep the audit row.
+                if (!syncResult.held) {
+                  reportSilentFallback(syncResult.error, {
+                    feature: SENTRY_FEATURE,
+                    op: "reconcile-backfill-sync",
+                    extra: { workspaceId: f.workspaceId },
+                    message: "Immediate re-sync after backfill failed",
+                  });
+                }
                 await appendKbSyncRowForWorkspace(service, f.workspaceId, {
                   ...auditBase,
                   ok: false,
