@@ -810,7 +810,7 @@ Every way a cron run can get git to read attacker-chosen config, and how this pl
 | Path | Today | After |
 |---|---|---|
 | Agent `Write`/`Edit`/`MultiEdit` to `$HOME/.gitconfig` or `$HOME/.config/git/*` | allowed | denied (Guard 1) |
-| Agent `Bash` writes to those files (`>`, `tee`, `cp`, `git config --global`) | `>` and substitution are metachar-denied; `git config` is denied by `gitVerbReason`; `cp`/`tee`/`mv` are not on the roadmap-review or bug-fixer allowlists | unchanged, and the pin (Guard 3) keeps git from reading a written `.gitconfig`/`.config/git/config` even if a future allowlist admits a write verb. The exception is the XDG `ignore`/`attributes` defaults, which git reads whatever the pin says; Guard 1 is their only barrier (CTO G3) |
+| Agent `Bash` writes to those files (`>`, `tee`, `cp`, `git config --global`) | `>` and substitution are metachar-denied; `git config` is denied by `gitVerbReason`; `cp`/`tee`/`mv` are not on the roadmap-review or bug-fixer allowlists | unchanged, and the pin (Guard 3) keeps git from reading a written `.gitconfig`/`.config/git/config` even if a future allowlist admits a write verb. The exception is the XDG `ignore`/`attributes` defaults, which git reads whatever the pin says; Guard 1 is their only barrier (CTO G3), and it covers the file tools and `git worktree add` only, not an edited script the cron then runs (review round, CTO F1) |
 | `NotebookEdit` | falls to the catch-all deny | unchanged |
 | A symlink created elsewhere that points at `~/.gitconfig`, then a Write through it | needs `ln`, which no allowlist admits | unchanged. The path regex cannot see symlinks (the same limit as every existing `WRITE_PROTECTED_PATTERNS` entry), and the pin covers it |
 | Agent-run git reads `$HOME`'s gitconfig | yes | no (`spawnClaudeEval` chokepoint and Class A literals) |
@@ -840,8 +840,9 @@ Every way a cron run can get git to read attacker-chosen config, and how this pl
   AC14(c), and recovery is the revert runbook's label-removal line.
 - **Founder-workspace git (scope-out):** `server/git-config-atomic.ts` and `server/push-branch.ts` spawn git with no
   env in an authenticated user's workspace, and share the container HOME with crons. Before this PR, a cron agent could
-  plant `~/.gitconfig` with the Write tool. After it, Guard 1 denies that write, so the path from cron to user is
-  closed at the write. The read side stays unpinned: an agent session's read-write bind of `~/.gitconfig` is the
+  plant `~/.gitconfig` with the Write tool. After it, Guard 1 denies that Write/Edit path only; an agent that edits and
+  then runs an allowlisted script still reaches the file (review round, CTO F1; tracked in #12824). The
+  read side stays unpinned: an agent session's read-write bind of `~/.gitconfig` is the
   remaining writer, and that is the G4 follow-up under #9601. It is not pinned here, because it is a different trust
   surface with no harness, under the one-PR cap (CTO G4).
 - **Brand-survival threshold:** `single-user incident`.
@@ -1371,3 +1372,26 @@ it. The brief wins, so the pin is the two keys the issue names explicitly.
   ADR-278 (`:106`).
 - Learnings: see Research Insights.
 - Decisions: `knowledge-base/project/specs/feat-one-shot-12757-cron-gitconfig-containment/decision-challenges.md`.
+
+## Addendum — 2026-11-16 (review round, PR #12806)
+
+The 12-seat review changed these points. The sections above are kept as planned.
+
+- **Git flag reason.** The section 3 sketch said a flag-led git word should be moved after the verb. Moving changes
+  the meaning (`git log -C`, `git commit -c`), so the git reason is now "not permitted -- drop it". The gh reason still
+  says move.
+- **`gh api` path.** A space or tab inside the quoted path hid a `..` segment from `hasDotSegment` and an issues
+  collection from the filing gate, so the shape rule also refuses whitespace in the path word.
+- **`git worktree add|move`** to an absolute, `~`, `$`, `..` or protected path is refused (CTO F2; measured: it planted
+  `~/.config/git/ignore`).
+- **Paths.** A non-string `file_path` is refused, not coerced. The read gate matches on the `posix.normalize`d path too.
+  The deny text for a #12757 path says not to retry under another path.
+- **Metric.** `classifyNewRuleDeny` calls the same predicates as `decide()`, but `decide()` does not call it; a parity
+  suite pins them, and `HOOK_NEW_RULE_IDS` pins the id list. The metric is skipped for the `no-file-tools` crons and is
+  an attribution count, not an over-deny count. `rule`/`cron` ride in `extra` for the Better Stack row; the runbook
+  section is in `betterstack-log-query.md`.
+- **Pin.** `spawnSimple` uses `withCronGitConfigPin` (keeps a caller's `/dev/null`); the claude spawn still forces the
+  identity file. The census gains row 4e (no namespace/default `child_process` handle under `server/inngest`, CTO F5)
+  and an AST-only `GIT_CONFIG_` check for the safe-commit exception.
+- **Deferred (CTO F1, F4):** the agent-editable-code class (#12824) and the fix-issue `git -c` commit identity
+  (#12825). ADR-033 lists the first, plus `safe.bareRepository`/`GIT_CONFIG_COUNT`, as residuals.

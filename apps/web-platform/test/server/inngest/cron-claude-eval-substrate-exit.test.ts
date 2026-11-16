@@ -48,7 +48,7 @@ vi.mock("@/server/host-git", async (importOriginal) => ({
 }));
 
 import { AGENT_GIT_GLOBAL_CONFIG } from "@/server/host-git";
-import { spawnClaudeEval, spawnSimple } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { resetCronGitProbeLatchesForTest, spawnClaudeEval, spawnSimple } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 const FAKE_PID = 4_242_424;
 const TOKEN = "ghs_FAKEtoken0123456789ABCDEFghijklmnop";
@@ -345,6 +345,7 @@ describe("chokepoints pin the git global config (#12757 Guard 3)", () => {
     reportFallbackMock.mockReset();
     identityReadableMock.mockReset().mockReturnValue(true);
     xdgPresentMock.mockReset().mockReturnValue(false);
+    resetCronGitProbeLatchesForTest();
     process.env.CLAUDE_BIN = process.execPath;
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     // Every spawn gets a fresh child that exits cleanly on the next tick.
@@ -401,6 +402,13 @@ describe("chokepoints pin the git global config (#12757 Guard 3)", () => {
     expect(env.PATH).toBe("/bin");
   });
 
+  it("row 3b: spawnSimple keeps a caller's stricter GIT_CONFIG_GLOBAL=/dev/null and still sets NOSYSTEM", async () => {
+    await spawnSimple("git", ["status"], { env: { PATH: "/bin", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "0" } as unknown as NodeJS.ProcessEnv });
+    const env = envOf("git");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
   it("row 6: an unreadable identity file reports once (op cron-git-config-pin) across both chokepoints, blocks neither, and re-arms", async () => {
     identityReadableMock.mockReturnValue(false);
     const res = await runClaude();
@@ -437,6 +445,17 @@ describe("chokepoints pin the git global config (#12757 Guard 3)", () => {
     await spawnSimple("git", ["status"]);
     expect(reportsFor("cron-git-xdg-config-present")).toHaveLength(2);
     expect(reportsFor("cron-git-config-pin")).toHaveLength(0);
+  });
+
+  // The claude chokepoint on its own: most cron sites only ever spawn claude, so its probe must report without spawnSimple.
+  it.each([
+    ["cron-git-config-pin", () => identityReadableMock.mockReturnValue(false)],
+    ["cron-git-xdg-config-present", () => xdgPresentMock.mockReturnValue(true)],
+  ] as const)("row 6c: the claude chokepoint alone reports %s", async (op, arm) => {
+    arm();
+    await runClaude();
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === "git")).toHaveLength(0);
+    expect(reportsFor(op)).toHaveLength(1);
   });
 
   it("row 6 control: healthy probes report neither op", async () => {

@@ -17,7 +17,9 @@ import {
   countPermissionDenials,
   emitCronFilingDenyMarker,
   MAX_DENIED_TOOLS,
+  NEW_RULE_IDS,
 } from "@/server/cron-filing-deny-marker";
+import { HOOK_NEW_RULE_IDS } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 
 afterEach(() => {
   warnMock.mockReset();
@@ -200,6 +202,10 @@ describe("countPermissionDenials (#7122)", () => {
 // new containment rules is counted here from the same closed classification the hook gates on
 // (`classifyNewRuleDeny`). Rule ids only: no command, no path (both can carry tokens).
 describe("countNewRuleDenials (#12757)", () => {
+  it("NEW_RULE_IDS is exactly the set of ids the hook's classifier can return (a new hook id cannot be dropped)", () => {
+    expect([...NEW_RULE_IDS].sort()).toEqual([...HOOK_NEW_RULE_IDS].sort());
+  });
+
   const d = (tool_name: unknown, tool_input: unknown = {}) => ({ tool_name, tool_input });
 
   it("names each new rule once per denial and nothing for a plain command", () => {

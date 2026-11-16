@@ -491,12 +491,19 @@ run's token-bearing clone. Three changes close it.
 2. **The git-config pin (new sub-invariant).** Every cron child process that can run git (`git`, `gh`, `bash`,
    `claude`) carries `CRON_GIT_CONFIG_PIN` from `server/host-git.ts` (`GIT_CONFIG_GLOBAL` = the identity-only
    `AGENT_GIT_GLOBAL_CONFIG`, `GIT_CONFIG_NOSYSTEM=1`), spread last, or a stricter `/dev/null` global. It is applied at the
-   `spawnClaudeEval` and `spawnSimple` chokepoints and in every cron env literal and git helper, and enforced by
-   `test/server/inngest/cron-spawn-git-config-pin.test.ts`. A missing or unreadable identity file is reported once per
-   transition (`cron-git-config-pin`), because git treats it as an empty global and commits then fail with "Author
-   identity unknown".
+   `spawnClaudeEval` and `spawnSimple` chokepoints and in every cron env literal and git helper. `spawnSimple` and the
+   script helpers keep a caller's `/dev/null` (`withCronGitConfigPin`); the claude spawn always forces the identity file,
+   because the agent commits. `test/server/inngest/cron-spawn-git-config-pin.test.ts` enforces it for what its AST walk
+   can see: every `HOME`-keyed literal, every call whose command is a git/gh/bash/sh/env literal, and every
+   named-import `child_process` call, in non-test `*.ts` under `server/inngest`; a namespace, default or whole-module
+   handle on `child_process` there fails the census (row 4e) instead of passing unseen. A missing or unreadable identity
+   file is reported once per transition per process (`cron-git-config-pin`), because git treats it as an empty global
+   and commits then fail with "Author identity unknown".
 3. **Command-word shape rule.** For a `git` or `gh` segment, the raw command words at the allowlist's fixed positions
-   (`git <sub>`, `gh <group> <verb>`, `gh api <path>`) must be plain (`^[A-Za-z0-9-]+$`, no leading flag). The allowlist
+   (`git <sub>`, `gh <group> <verb>`, `gh api <path>`) must be plain (`^[A-Za-z0-9-]+$`, no leading flag), and the
+   `gh api` path word must hold no whitespace. A git global option before the sub-command is refused with "drop it",
+   never "move it" (`git log -C` and `git commit -c` mean something else after the verb). `git worktree add|move` is
+   refused for an absolute, `~`, `$`, `..` or write-protected path, since it writes a whole tree there. The allowlist
    matches the whitespace-normalised join of the tokens while the verb rules read raw token positions, so an empty,
    padded or no-break-space token made the two views disagree. Requiring plain command words makes them agree. Arguments
    after the command words are not shape-checked.
@@ -506,9 +513,19 @@ Residuals, stated plainly:
 - A flag-led git or gh allowlist line (`git -c …`, `gh -R …`) cannot be expressed under the shape rule; adding one means
   extending `commandWordShapeReason` and this amendment, not loosening the regex.
 - The pin does not cover `$HOME/.config/git/ignore` or `attributes`, whose defaults git reads from XDG whatever
-  `GIT_CONFIG_GLOBAL` says. Write-protection (item 1) is the only barrier for them, and an `XDG_CONFIG_HOME` pin waits
+  `GIT_CONFIG_GLOBAL` says. Write-protection (item 1, with the agent-editable-code residual below) is the only barrier for them, and an `XDG_CONFIG_HOME` pin waits
   until the Dockerfile is in scope. Their presence is reported (`cron-git-xdg-config-present`).
 - The node self-test probes in the substrate (`execFileSync(nodeBin, …)`) run node, not git, and are excluded.
 - Founder-workspace git spawns outside `server/inngest/` (`git-config-atomic.ts`, `push-branch.ts`) inherit the
   container `HOME` and are not covered; tracked under #9601.
+- Write-protection covers the Write/Edit/MultiEdit tools and `git worktree add|move` only. A cron that keeps file
+  tools (bug-fixer) can edit a script or test it is allowed to run (`bash …/worktree-manager.sh`, `vitest run`), a
+  plugin hook loaded via `--plugin-dir`, or `~/.bashrc`, and that code runs with the spawn's secrets and can write any
+  path. Under the pin a `~/.gitconfig` written that way is no longer read by cron git; the remaining reader is
+  founder-workspace git (above). The agent-editable-code class is tracked in #12824 (CTO F1).
+- `safe.bareRepository` and `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` pins are out of scope for crons (CTO ruling);
+  a config carried by a committed bare repo, or by `GIT_CONFIG_PARAMETERS` in a host env, is not closed here. No cron
+  env or Dockerfile line sets either variable today.
+- `server/compound-promote-create-gates.ts` `spawnRepoScript` (outside `server/inngest`, `HOME=/tmp`) carries no pin;
+  its scripts run no git today.
 - Prod `HOME` is assumed writable per the Dockerfile and deploy flags; not checked live.

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
-import { CRON_GIT_CONFIG_PIN, agentGitConfigReadable, xdgGitResidualPresent } from "@/server/host-git";
+import { CRON_GIT_CONFIG_PIN, agentGitConfigReadable, withCronGitConfigPin, xdgGitResidualPresent } from "@/server/host-git";
 import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
@@ -290,6 +290,11 @@ export function resolveClaudeBin(): string {
 // never outlives the file (learning 2026-10-12). Module-level: one report per transition per process, not per spawn.
 let cronGitIdentityBad = false;
 let cronGitXdgPresent = false;
+/** Test seam: a vitest retry or a failed row must not inherit a latch left set by an earlier row. */
+export function resetCronGitProbeLatchesForTest(): void {
+  cronGitIdentityBad = false;
+  cronGitXdgPresent = false;
+}
 
 /**
  * Probe the identity file and the XDG residual before a cron spawn; report a transition to Sentry. Never blocks the
@@ -339,8 +344,8 @@ export function spawnSimple(
     const child = spawn(cmd, args, {
       stdio: ["ignore", "ignore", "pipe"],
       cwd: opts.cwd,
-      // #12757 — the pin is spread LAST so no caller env can name another global gitconfig.
-      env: { ...(opts.env ?? process.env), ...CRON_GIT_CONFIG_PIN },
+      // #12757 — no caller env can name another global gitconfig; a caller's stricter /dev/null is kept (F-A).
+      env: withCronGitConfigPin(opts.env ?? process.env),
     });
     let stderr = "";
     if (child.stderr) {
@@ -1603,7 +1608,8 @@ async function spawnClaudeEvalUnguarded(args: {
         env: {
           ...buildSpawnEnv(installationToken),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-          // #12757 — LAST, so a cron's buildSpawnEnv cannot replace it.
+          // #12757 — LAST, so a cron's buildSpawnEnv cannot replace it. Unlike spawnSimple this keeps no /dev/null:
+          // the agent commits, and needs the identity the pinned file carries.
           ...CRON_GIT_CONFIG_PIN,
         },
       });
@@ -1636,7 +1642,9 @@ async function spawnClaudeEvalUnguarded(args: {
             // #12757 (CTO H3) — the deny reason never leaves the host, so report how
             // often each new containment rule fired. One event per rule per run; rule
             // id and count only.
-            for (const [rule, count] of Object.entries(parsedResult.newRuleDenials)) {
+            // Skipped for the no-file-tools crons: decide() refuses there before any #12757 rule, and
+            // the classifier cannot see that directive (it would credit the wrong rule).
+            for (const [rule, count] of CRON_NO_FILE_TOOLS.includes(cronName) ? [] : Object.entries(parsedResult.newRuleDenials)) {
               if (newRuleDenyReported.has(rule)) continue;
               newRuleDenyReported.add(rule);
               warnSilentFallback(null, {
@@ -1644,7 +1652,7 @@ async function spawnClaudeEvalUnguarded(args: {
                 op: "cron-containment-new-rule-deny",
                 message: "cron containment denied a tool call under a #12757 rule",
                 tags: { cron: cronName, rule },
-                extra: { count },
+                extra: { count, rule, cron: cronName }, // tags do not reach the Better Stack mirror
               });
             }
             // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut

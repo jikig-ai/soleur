@@ -167,8 +167,8 @@ export function countPermissionDenials(
 
 // #12757 (CTO H3) — the new containment rules' over-deny metric. The deny REASON never reaches
 // this process (the result event's `permission_denials[]` carries the tool input only), so each
-// entry is re-classified with the hook's own `classifyNewRuleDeny`, the function the hook's
-// deny paths share, so the count cannot drift from the gate. It sees only denials that reach
+// entry is re-classified with the hook's own `classifyNewRuleDeny`, which calls the same predicates
+// decide() gates on (decide() does not call it; a parity suite in the hook test pins the two). It sees only denials that reach
 // `permission_denials[]` (the measured channel described in this file's header).
 export const NEW_RULE_IDS = [
   "git-gh-shape",

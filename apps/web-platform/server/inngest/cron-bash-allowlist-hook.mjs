@@ -379,6 +379,16 @@ export function denyDecision(reason) {
   };
 }
 
+// #12757 F2 — the git global config and the trust root that holds the pinned identity file.
+// Named so the gate (WRITE_PROTECTED_PATTERNS) and the off-host metric (classifyNewRuleDeny)
+// read the same three objects. This file is plain .mjs and cannot import
+// AGENT_GIT_GLOBAL_CONFIG from host-git.ts; the hook test imports it and asserts the
+// trust-root pattern matches it.
+const GITCONFIG_FILE_RE = /(^|\/)\.gitconfig$/;
+// Assumes XDG_CONFIG_HOME is unset (git then reads $HOME/.config/git/*); nothing under server/ sets it.
+const XDG_GIT_DIR_RE = /(^|\/)\.config\/git(\/|$)/;
+const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
+
 // Secret / credential paths that must never be read by ANY tool (Bash cat,
 // Read, Glob, Grep). Matched as substrings against the resolved path argument.
 // `.git` is load-bearing: `buildAuthenticatedCloneUrl` writes the GH_TOKEN into
@@ -393,7 +403,7 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)\.netrc$/,
   /(^|\/)\.docker(\/|$)/,
   /(^|\/)\.config(\/|$)/, // ~/.config/gh/hosts.yml (gh cred store)
-  /(^|\/)\.gitconfig$/,
+  GITCONFIG_FILE_RE,
   /(^|\/)\.git-credentials$/, // git credential-store plaintext (defense-in-depth)
   /(^|\/)\.claude(\/|$)/, // the spawn settings + this hook's allowlist file
   /(^|\/)settings\.json$/,
@@ -410,16 +420,6 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)tmp\/ux-audit(\/|$)/,
   /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
-
-// #12757 F2 — the git global config and the trust root that holds the pinned identity file.
-// Named so the gate (WRITE_PROTECTED_PATTERNS) and the off-host metric (classifyNewRuleDeny)
-// read the same three objects. This file is plain .mjs and cannot import
-// AGENT_GIT_GLOBAL_CONFIG from host-git.ts; the hook test imports it and asserts the
-// trust-root pattern matches it.
-const GITCONFIG_FILE_RE = /(^|\/)\.gitconfig$/;
-// Assumes XDG_CONFIG_HOME is unset (git then reads $HOME/.config/git/*); nothing under server/ sets it.
-const XDG_GIT_DIR_RE = /(^|\/)\.config\/git(\/|$)/;
-const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
 
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
 // settings file would neuter containment on the NEXT tool call (D-new-2).
@@ -444,16 +444,24 @@ const NEW_WRITE_RULES = new Map([
   [XDG_GIT_DIR_RE, "protected-xdg-git"],
   [TRUST_ROOT_DIR_RE, "protected-trust-root"],
 ]);
+// Every id classifyNewRuleDeny can return. cron-filing-deny-marker.test.ts asserts the TS-side
+// NEW_RULE_IDS equals this list, so a new hook id cannot be dropped silently by that filter.
+export const HOOK_NEW_RULE_IDS = Object.freeze(["git-gh-shape", ...NEW_WRITE_RULES.values()]);
 
-// The WRITE_PROTECTED_PATTERNS entries a write target hits, testing the raw path AND its
-// posix.normalize form. Normalising can only add denies: it closes `.config//git/config`,
-// `.config/./git/config` and `/usr/local//share/soleur/…`, which the unanchored-at-end patterns
-// miss on the raw string (#12757). One function for the gate and the metric.
-function protectedWriteMatches(p) {
+// The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
+// Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
+// `/run/./secrets/x`, `/usr/local//share/soleur/…`) defeats a pattern that needs two segments to be
+// adjacent on the raw string (#12757). Used by the read gate, the write gate and the metric.
+function pathPatternMatches(patterns, p) {
   if (typeof p !== "string" || !p) return [];
   const targets = [p, posix.normalize(p)];
-  return WRITE_PROTECTED_PATTERNS.filter((re) => targets.some((t) => re.test(t)));
+  return patterns.filter((re) => targets.some((t) => re.test(t)));
 }
+const protectedWriteMatches = (p) => pathPatternMatches(WRITE_PROTECTED_PATTERNS, p);
+
+// A path argument that is present but not a string is refused, not coerced: the pattern gates
+// above only see strings, and before #12757 `re.test([path])` coerced an array and denied it.
+const nonStringPath = (p) => p !== undefined && p !== null && p !== "" && typeof p !== "string";
 
 // The #12757 rule a write deny is attributable to: only when every pattern the target hit is a
 // new one (a path an older rule already denied is not a new-rule deny). Gated on membership in
@@ -684,6 +692,17 @@ function gitVerbReason(tokens) {
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
     }
   }
+  // #12757 (CTO F2) — `git worktree add|move <path>` writes a whole tree at <path>, so it is a
+  // write and must not land outside the clone or on a protected path (`git worktree add
+  // ~/.config/git <branch>` plants a committed ignore/attributes file, measured). The skill's
+  // form is relative (`.worktrees/bot-fix-<N>-<slug>`); a branch or commit-ish never trips this.
+  if (sub === "worktree" && (tokens[2] === "add" || tokens[2] === "move")) {
+    for (const t of tokens.slice(3)) {
+      if (t.startsWith("-")) continue;
+      if (t.startsWith("/") || t.startsWith("~") || t.startsWith("$") || t.split("/").includes("..") || protectedWriteMatches(t).length)
+        return `git worktree ${tokens[2]} path '${t.slice(0, 60)}' denied (outside the clone or protected) -- use a relative path under .worktrees/`;
+    }
+  }
   // #11076 review (CTO K1') — an allow-list, not a deny-list. In the depth-1 clone the hooks
   // run from tracked files, and checkout/switch/restore can delete or revert them (`--orphan`,
   // `--no-overlay <tree> <dir>`, globs, parent folders, abbreviated long options such as
@@ -729,7 +748,7 @@ const COMMAND_WORD_RE = /^[A-Za-z0-9-]+$/;
 const visibleWord = (w) =>
   w === undefined
     ? "missing"
-    : JSON.stringify(w).replace(/[^\x20-\x7e]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+    : JSON.stringify(w.slice(0, 60)).replace(/[^\x20-\x7e]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
 function commandWordShapeReason(tokens) {
   const norm = normalizeSegmentWhitespace(tokens.join(" ")).split(" ");
   const verb = norm[0];
@@ -739,11 +758,21 @@ function commandWordShapeReason(tokens) {
   const form = verb === "git" ? "git <sub>" : isApi ? "gh api <path>" : "gh <group> <verb>";
   for (let i = 0; i < n; i++) {
     const w = tokens[i];
-    if (i > 0 && typeof w === "string" && w.startsWith("-"))
-      return `flag before the sub-command in a ${verb} command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` first, then flags`;
-    if (typeof w !== "string" || (i === 0 ? w !== verb : !COMMAND_WORD_RE.test(w)))
+    if (w === undefined)
+      return `incomplete ${verb} command (word #${i + 1} missing) -- write the whole \`${form}\``;
+    // Moving a git global option after the sub-command changes its meaning (`git log -C` is copy
+    // detection, `git commit -c` reuses a message), so the git reason says drop, not move.
+    if (i > 0 && w.startsWith("-"))
+      return verb === "git"
+        ? `git global option before the sub-command (word #${i + 1} ${visibleWord(w)}) is not permitted -- drop it: git already runs in the repo, and identity and config are platform-managed; if git fails without it, report the failure instead of retrying`
+        : `flag before the sub-command in a gh command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` first, then flags`;
+    if (i === 0 ? w !== verb : !COMMAND_WORD_RE.test(w))
       return `irregular command word in a ${verb} command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` with plain spaces and no quotes around the command words`;
   }
+  // The gh api path is the word the dot-segment check and the filing gate read; both split it on
+  // whitespace, so a space inside a quoted path would hide a `..` segment or an issues collection.
+  if (isApi && typeof tokens[2] === "string" && /\s/.test(tokens[2]))
+    return `whitespace inside the gh api path (word #3 ${visibleWord(tokens[2])}) -- write the path with no spaces`;
   return null;
 }
 
@@ -1097,7 +1126,8 @@ export function decide(input, allowPrefixes) {
       const p = ti.file_path || ti.path || ti.pattern || "";
       const grepPath = ti.path || "";
       for (const target of [p, grepPath]) {
-        if (target && SECRET_PATH_PATTERNS.some((re) => re.test(target)))
+        if (nonStringPath(target)) return denyDecision("non-string path argument");
+        if (pathPatternMatches(SECRET_PATH_PATTERNS, target).length)
           return denyDecision(`secret-path read: ${target.slice(0, 60)}`);
       }
       return allowDecision();
@@ -1106,8 +1136,15 @@ export function decide(input, allowPrefixes) {
     case "Edit":
     case "MultiEdit": {
       const p = ti.file_path || ti.path || "";
-      if (protectedWriteMatches(p).length)
-        return denyDecision(`protected-path write: ${p.slice(0, 60)}`);
+      if (nonStringPath(p)) return denyDecision("non-string path argument");
+      const matches = protectedWriteMatches(p);
+      if (matches.length)
+        return denyDecision(
+          `protected-path write: ${p.slice(0, 60)}` +
+            (newWriteRule(matches)
+              ? " -- git config and identity are platform-managed; do not write them under any path, report the failure instead"
+              : ""),
+        );
       return allowDecision();
     }
     case "ToolSearch":
@@ -1167,7 +1204,11 @@ export function decide(input, allowPrefixes) {
 // (length, metachar, unbalanced quote, argument injection, or a git-verb / dot-segment deny on
 // an earlier segment) is not a shape deny. RESIDUAL: the allowlist and the filing gate of an
 // earlier segment are unknown here, so a command whose earlier segment was refused for those
-// reasons, and whose later segment is irregular, is still counted as git-gh-shape.
+// reasons, and whose later segment is irregular, is still counted as git-gh-shape. It also has no
+// view of the per-cron `no-file-tools` directive, which decide() checks first; the substrate
+// therefore skips this metric for the CRON_NO_FILE_TOOLS crons. It is an attribution metric: a
+// command that was never allowlisted (`git -C dir status`) and is now refused by the shape rule
+// first counts as git-gh-shape, so a non-zero count is a pointer to read, not proof of an over-deny.
 export function classifyNewRuleDeny(toolName, toolInput) {
   try {
     const ti = toolInput && typeof toolInput === "object" ? toolInput : {};

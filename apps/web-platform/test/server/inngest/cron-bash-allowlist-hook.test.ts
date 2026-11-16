@@ -1559,7 +1559,8 @@ const decideOn = (input: unknown, lines: string[]) => decide(input, lines).hookS
 const NBSP = "\u00a0";
 const PROTECTED_REASON = /^cron-containment: protected-path write: /;
 const IRREGULAR_REASON = /^cron-containment: irregular command word in a (git|gh) command \(word #\d/;
-const SHAPE_REASON = /^cron-containment: (irregular command word|flag before the sub-command) in a (git|gh) command \(word #\d/;
+const SHAPE_REASON =
+  /^cron-containment: ((irregular command word|flag before the sub-command|incomplete) (in a )?(git|gh) command \(word #\d|git global option before the sub-command \(word #\d|whitespace inside the gh api path \(word #3)/;
 const WRITE_TOOLS = ["Write", "Edit", "MultiEdit"] as const;
 const writeCall = (tool: string, path: string) => ({ tool_name: tool, tool_input: { file_path: path } });
 
@@ -1661,13 +1662,20 @@ const SINGLE_IRREGULAR: ReadonlyArray<{ name: string; cmd: string; contains?: st
   { name: "NBSP after gh", cmd: `gh${NBSP}issue list` },
 ];
 const SINGLE_SPECIAL: ReadonlyArray<{ name: string; cmd: string; re: RegExp }> = [
-  { name: "bare git", cmd: "git", re: /irregular command word in a git command \(word #2 missing\)/ },
+  { name: "bare git", cmd: "git", re: /incomplete git command \(word #2 missing\) -- write the whole `git <sub>`/ },
+  { name: "bare gh group", cmd: "gh issue", re: /incomplete gh command \(word #3 missing\)/ },
+  // Pins COMMAND_WORD_RE's character class, not only its whitespace behaviour (both views agree here).
+  { name: "punctuation inside the sub-command", cmd: "git che.ckout -b x", re: /irregular command word in a git command \(word #2 "che\.ckout"\)/ },
   { name: "flag-led gh", cmd: "gh -R o/r issue list", re: /flag before the sub-command in a gh command \(word #2 "-R"\)/ },
   {
     name: "flag-led git",
     cmd: "git -c core.fsmonitor=x status",
-    re: /flag before the sub-command in a git command \(word #2 "-c"\) -- write `git <sub>` first, then flags/,
+    // Drop, never move: `git commit -c x` / `git log -C dir` mean something else after the verb.
+    re: /git global option before the sub-command \(word #2 "-c"\) is not permitted -- drop it/,
   },
+  { name: "git -C before the verb", cmd: "git -C /tmp status", re: /git global option .*"-C".* -- drop it/ },
+  { name: "space inside a gh api path", cmd: "gh api 'repos/jikig-ai/soleur/ x/../../../user'", re: /whitespace inside the gh api path \(word #3/ },
+  { name: "tab inside a gh api filing path", cmd: "gh api 'repos/jikig-ai/soleur/\tx/../issues' -X POST -f title=t", re: /whitespace inside the gh api path/ },
 ];
 const SEPARATORS: ReadonlyArray<readonly [string, string]> = [
   ["quoted tab", "\t"],
@@ -1823,7 +1831,7 @@ describe("classifyNewRuleDeny — parity with decide() across the #12757 battery
       expect(rule, JSON.stringify(cmd)).toBe(gateSaysShape ? "git-gh-shape" : null);
       if (gateSaysShape) shaped++;
     }
-    expect(shaped).toBe(40 + 8 + 3 + 5);
+    expect(shaped).toBe(40 + 8 + 8 + 5);
   });
 
   it("Write/Edit/MultiEdit: the named rule exactly on the Guard 1 deny rows, null on the must-pass rows", () => {
@@ -1847,9 +1855,83 @@ describe("classifyNewRuleDeny — parity with decide() across the #12757 battery
     expect(classifyNewRuleDeny("Read", { file_path: "/home/soleur/.gitconfig" })).toBeNull();
     // A metachar deny comes first in decide(), so an irregular word behind it is not the cause.
     expect(classifyNewRuleDeny("Bash", { command: "git ' push' x | cat" })).toBeNull();
+    // An earlier segment denied by gitVerbReason or by argument injection is the cause, not a later irregular word.
+    expect(decideOn(bash("git push evil main ; git ' push' x"), RR_LINES).permissionDecisionReason).toMatch(/non-origin remote/);
+    expect(classifyNewRuleDeny("Bash", { command: "git push evil main ; git ' push' x" })).toBeNull();
+    expect(decideOn(bash("gh issue list --body-file=x ; git ' push' x"), RR_LINES).permissionDecisionReason).toMatch(/file-as-arg/);
+    expect(classifyNewRuleDeny("Bash", { command: "gh issue list --body-file=x ; git ' push' x" })).toBeNull();
+    // A path that also hits an older pattern is attributed to the older rule, not a new one.
+    expect(decideOn(writeCall("Write", "/x/repo/.claude/.gitconfig"), RR_LINES).permissionDecision).toBe("deny");
+    expect(classifyNewRuleDeny("Write", { file_path: "/x/repo/.claude/.gitconfig" })).toBeNull();
     // Malformed input never throws.
     expect(classifyNewRuleDeny("Bash", undefined)).toBeNull();
     expect(classifyNewRuleDeny("Write", { file_path: 42 })).toBeNull();
     expect(classifyNewRuleDeny(undefined, null)).toBeNull();
+  });
+});
+
+// #12757 review round — the residual paths the panel measured past the first cut.
+describe("#12757 review: worktree paths, non-string paths, normalised reads, reason text", () => {
+  const BF_LINES = CRON_BASH_ALLOWLISTS["cron-bug-fixer"];
+  it.each([
+    "git worktree add /home/soleur/.config/git bot-fix/1-x",
+    "git worktree add ~/.config/git bot-fix/1-x",
+    "git worktree add ../../.config/git bot-fix/1-x",
+    "git worktree add -b bot-fix/1-x /tmp/elsewhere origin/main",
+    "git worktree add .config/git bot-fix/1-x",
+    "git worktree move .worktrees/a /home/soleur/.config/git",
+  ])("bug-fixer: %s is denied as a worktree path outside the clone or protected", (cmd) => {
+    const out = decideOn(bash(cmd), BF_LINES);
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(/git worktree (add|move) path '.*' denied/);
+  });
+  it("bug-fixer: a $HOME-relative worktree path is denied (the metachar gate refuses it first)", () => {
+    expect(decideOn(bash("git worktree add $HOME/.config/git bot-fix/1-x"), BF_LINES).permissionDecision).toBe("deny");
+  });
+  it.each([
+    "git worktree add .worktrees/bot-fix-12-x -b bot-fix/12-x origin/main",
+    "git worktree remove .worktrees/bot-fix-12-x --force",
+    "git branch -D bot-fix/12-x",
+    'git commit -m "fix: x (#12)"',
+    "git push -u origin bot-fix/12-x",
+  ])("bug-fixer: the skill's own form %s stays allowed", (cmd) => {
+    expect(decideOn(bash(cmd), BF_LINES).permissionDecision).toBe("allow");
+  });
+
+  it.each(WRITE_TOOLS)("%s with a non-string file_path is denied, not coerced", (tool) => {
+    for (const fp of [["/x/.claude/settings.json"], { p: "/home/u/.gitconfig" }, 42]) {
+      const out = decideOn({ tool_name: tool, tool_input: { file_path: fp } }, RR_LINES);
+      expect(out.permissionDecision, JSON.stringify(fp)).toBe("deny");
+      expect(out.permissionDecisionReason).toBe("cron-containment: non-string path argument");
+    }
+  });
+  it("Read with a non-string file_path is denied", () => {
+    const out = decideOn({ tool_name: "Read", tool_input: { file_path: ["/run/secrets/x"] } }, RR_LINES);
+    expect(out.permissionDecisionReason).toBe("cron-containment: non-string path argument");
+  });
+  it.each(["/run//secrets/x", "/run/./secrets/x", "/w/tmp//ux-audit/a", "/w/a/../.git/config"])(
+    "Read of %s is denied on its normalised form",
+    (path) => {
+      const out = decideOn({ tool_name: "Read", tool_input: { file_path: path } }, RR_LINES);
+      expect(out.permissionDecision).toBe("deny");
+      expect(out.permissionDecisionReason).toMatch(/^cron-containment: secret-path read: /);
+    },
+  );
+  it("Read of an ordinary repo path stays allowed", () => {
+    expect(decideOn({ tool_name: "Read", tool_input: { file_path: "/w/repo/./apps/x.ts" } }, RR_LINES).permissionDecision).toBe("allow");
+  });
+
+  it("a #12757 write deny tells the agent not to retry under another path; an older protected path does not", () => {
+    const gc = decideOn(writeCall("Write", "/home/soleur/.gitconfig"), RR_LINES).permissionDecisionReason ?? "";
+    expect(gc).toContain("platform-managed; do not write them under any path");
+    const old = decideOn(writeCall("Write", "/x/repo/.claude/settings.json"), RR_LINES).permissionDecisionReason ?? "";
+    expect(old).toMatch(PROTECTED_REASON);
+    expect(old).not.toContain("platform-managed");
+  });
+
+  it("the shape reason echoes at most 60 characters of the word, escaped", () => {
+    const out = decideOn(bash(`git '${NBSP.repeat(20000)}' status`), RR_LINES);
+    expect(out.permissionDecision).toBe("deny");
+    expect((out.permissionDecisionReason ?? "").length).toBeLessThan(600);
   });
 });

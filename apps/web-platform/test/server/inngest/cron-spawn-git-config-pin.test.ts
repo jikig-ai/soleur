@@ -153,6 +153,8 @@ interface Analysis {
   dynamic: Site[];
   otherLiteral: Site[];
   configWrites: Site[];
+  /** `import * as cp` / `import cp from` / `const cp = await import(…)` / `require(…)` of child_process (row 4e). */
+  nsImports: Site[];
 }
 
 interface Ctx {
@@ -471,9 +473,21 @@ function envOfCall(call: ts.CallExpression): { env: ts.Expression | null; orderB
   return { env: null, orderBad: false };
 }
 
+/** Any identifier or string literal (never a comment) naming a GIT_CONFIG_* key. */
+function mentionsGitConfigKey(sf: ts.SourceFile): boolean {
+  let hit = false;
+  const visit = (n: ts.Node) => {
+    if (hit) return;
+    if ((ts.isIdentifier(n) || ts.isStringLiteralLike(n)) && n.text.startsWith("GIT_CONFIG_")) hit = true;
+    else ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return hit;
+}
+
 function safeCommitException(ctx: Ctx, call: ts.CallExpression, owner: string, env: ts.Expression): boolean {
   if (ctx.file !== SAFE_COMMIT || !["runGit", "gitObjectBytes"].includes(owner)) return false;
-  if (ctx.src.includes("GIT_CONFIG_")) return false; // exactModeEnv (the only extraEnv) must carry no GIT_CONFIG_* key
+  if (mentionsGitConfigKey(ctx.sf)) return false; // exactModeEnv (the only extraEnv) must carry no GIT_CONFIG_* key
   const lit = skip(env);
   if (!ts.isObjectLiteralExpression(lit) || lit.properties.length !== 3) return false;
   const [a, b, c] = lit.properties;
@@ -503,7 +517,7 @@ function callVerdict(ctx: Ctx, call: ts.CallExpression): Verdict {
 
 function analyze(file: string, src: string): Analysis {
   const ctx = buildCtx(file, src);
-  const out: Analysis = { home: [], gitSpawns: [], capable: [], dynamic: [], otherLiteral: [], configWrites: [] };
+  const out: Analysis = { home: [], gitSpawns: [], capable: [], dynamic: [], otherLiteral: [], configWrites: [], nsImports: [] };
   const site = (n: ts.Node, v: Verdict): Site => ({ file, line: lineOf(ctx.sf, n), owner: ownerOf(n), ok: v.ok, why: v.why, text: lineText(ctx, n) });
   const configKey = (n: ts.Expression): string | null => {
     if (ts.isPropertyAccessExpression(n)) return n.name.text.startsWith("GIT_CONFIG") ? n.name.text : null;
@@ -515,7 +529,23 @@ function analyze(file: string, src: string): Analysis {
   };
 
   const visit = (n: ts.Node) => {
+    // Row 4e: the walker tracks spawners by NAMED import only, so a namespace or default handle on child_process
+    // (`cp.spawn(…)`) would be invisible to rows 4/4c. Any such handle is reported instead of silently passing.
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && CHILD_PROCESS_MODULES.has(n.moduleSpecifier.text)) {
+      const nb = n.importClause?.namedBindings;
+      if (n.importClause?.name || (nb && ts.isNamespaceImport(nb))) out.nsImports.push(site(n, NO("namespace/default import of child_process")));
+    }
     if (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) return;
+    if (ts.isVariableDeclaration(n) && !ts.isObjectBindingPattern(n.name) && n.initializer) {
+      const init = skip(n.initializer);
+      const inner = ts.isAwaitExpression(init) ? skip(init.expression) : init;
+      const isLoader =
+        ts.isCallExpression(inner) &&
+        (inner.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(inner.expression) && inner.expression.text === "require")) &&
+        inner.arguments[0] &&
+        CHILD_PROCESS_MODULES.has(literalText(inner.arguments[0]) ?? "");
+      if (isLoader) out.nsImports.push(site(n, NO("whole-module handle on child_process")));
+    }
 
     // Row 2: HOME-keyed object literals (keyed or shorthand).
     if (ts.isObjectLiteralExpression(n) && n.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && propName(p) === "HOME")) {
@@ -608,7 +638,7 @@ function sweepFiles(root = SWEEP_ROOT): string[] {
 function sweep(root = SWEEP_ROOT): Analysis & { files: string[]; sources: Map<string, string> } {
   const files = sweepFiles(root);
   const sources = new Map<string, string>();
-  const all: Analysis = { home: [], gitSpawns: [], capable: [], dynamic: [], otherLiteral: [], configWrites: [] };
+  const all: Analysis = { home: [], gitSpawns: [], capable: [], dynamic: [], otherLiteral: [], configWrites: [], nsImports: [] };
   for (const f of files) {
     const src = readFileSync(path.join(root, f), "utf8");
     sources.set(f, src);
@@ -729,6 +759,13 @@ describe("Guard 3 — cron spawn env git-config pin census (#12757)", () => {
     expect(diffs, `GIT_CONFIG_* write(s) changed: ${diffs.join("; ")}. Pin by spreading CRON_GIT_CONFIG_PIN last; never assign GIT_CONFIG_* after the literal.`).toEqual([]);
   });
 
+  it("row 4e: no namespace, default or whole-module handle on child_process under server/inngest (rows 4/4c track named imports only)", () => {
+    expect(
+      S.nsImports.map((x) => `${at(x)} ${x.text}`),
+      "import the spawner by name (`import { spawn } from \"node:child_process\"`) so rows 4/4c can see the call; do not extend this test to allow a handle",
+    ).toEqual([]);
+  });
+
   it("row 4b: no non-test file under server/inngest retypes the identity-file path (import it instead)", () => {
     const bad = [...S.sources].filter(([, src]) => src.includes(RETYPED_PATH)).map(([f]) => `server/inngest/${f}`);
     expect(bad, `retyped identity-file path in: ${bad.join(", ")}. import { CRON_GIT_CONFIG_PIN } from "@/server/host-git".`).toEqual([]);
@@ -847,6 +884,54 @@ describe("Guard 3 — binding, not name (CTO H5): each planted look-alike FAILS"
     const a = analyze("functions/cron-planted.ts", `import { spawn } from "node:child_process";\nfunction f() { spawn("/usr/bin/git", ["status"]); }\n`);
     expect(a.gitSpawns.map((s) => s.ok)).toEqual([false]);
     expect(a.capable.map((s) => [s.word, s.ok])).toEqual([["git", false]]);
+  });
+
+  it("row 4e: a namespace import, a default import, a dynamic whole-module import and a require are each reported", () => {
+    const a = analyze(
+      "functions/cron-planted.ts",
+      `import * as cp from "node:child_process";\nimport cp2 from "child_process";\n` +
+        `async function f() { const m = await import("node:child_process"); const r = require("child_process"); }\n`,
+    );
+    expect(a.nsImports).toHaveLength(4);
+    // control: a named import is not a handle
+    expect(analyze("functions/x.ts", HDR).nsImports).toEqual([]);
+  });
+
+  it("an import of CRON_GIT_CONFIG_PIN from a look-alike module is a violation", () => {
+    const a = analyze(
+      "functions/cron-planted.ts",
+      `import { CRON_GIT_CONFIG_PIN } from "@/server/host-git-lookalike";\nfunction buildSpawnEnv() { return { HOME: process.env.HOME, ...CRON_GIT_CONFIG_PIN }; }\n`,
+    );
+    expect(a.home.map((s) => s.ok)).toEqual([false]);
+  });
+
+  it("promisify(execFile) and a destructured await import() are both tracked as spawners", () => {
+    const a = analyze(
+      "functions/cron-planted.ts",
+      `import { execFile } from "node:child_process";\nimport { promisify } from "node:util";\nconst run = promisify(execFile);\n` +
+        `async function p(cmd: string) { await run(cmd, []); }\n` +
+        `async function d(cmd: string) { const { spawn } = await import("node:child_process"); spawn(cmd, []); }\n`,
+    );
+    expect(a.dynamic.map((s) => [s.owner, s.ok])).toEqual([
+      ["p", false],
+      ["d", false],
+    ]);
+  });
+
+  it("a post-construction GIT_CONFIG_GLOBAL write to a value other than /dev/null does not count as a pin", () => {
+    const a = analyze(
+      "functions/cron-planted.ts",
+      HDR + `function f() { const env = { ...process.env }; env.GIT_CONFIG_GLOBAL = "/tmp/x"; env.GIT_CONFIG_NOSYSTEM = "1"; spawn("git", [], { env }); }\n`,
+    );
+    expect(a.gitSpawns.map((s) => s.ok)).toEqual([false]);
+  });
+
+  it("a same-file gitIsolatedEnv that does not pin /dev/null is not accepted", () => {
+    const a = analyze(
+      "functions/cron-planted.ts",
+      HDR + `function gitIsolatedEnv() { return { ...process.env, GIT_CONFIG_NOSYSTEM: "1" }; }\nfunction f() { spawn("git", [], { env: gitIsolatedEnv() }); }\n`,
+    );
+    expect(a.gitSpawns.map((s) => s.ok)).toEqual([false]);
   });
 
   it("controls: the real import and the substrate's own spawnSimple are accepted", () => {

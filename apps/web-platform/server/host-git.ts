@@ -32,8 +32,8 @@ export const AGENT_GIT_GLOBAL_CONFIG = "/usr/local/share/soleur/agent.gitconfig"
 
 /**
  * #12757 — every cron child-process env (agent, script, server-side git) carries this, spread LAST, so HOME's
- * writable ~/.gitconfig (and ~/.config/git/config) and the system gitconfig are never read. Identity-only file, same
- * identity as today. Identity-only: no command-scope config pairs here (out of scope; command-scope config beats local
+ * writable ~/.gitconfig (and ~/.config/git/config) and the system gitconfig are never read. The file holds the same
+ * identity as today and nothing else: no command-scope config pairs (out of scope; command-scope config beats local
  * identity).
  *
  * Every cron env literal under server/inngest must end with ...CRON_GIT_CONFIG_PIN. Enforced by
@@ -46,7 +46,7 @@ export const CRON_GIT_CONFIG_PIN: Readonly<{ GIT_CONFIG_GLOBAL: string; GIT_CONF
 
 /**
  * #12757 (CTO G2/H1) — git treats a missing/unreadable global as empty, so a broken identity file is silent (cron
- * commits then fail "Author identity unknown"). Pure, uncached: re-probed per call.
+ * commits then fail "Author identity unknown"). Reads the filesystem; uncached on purpose: re-probed per call.
  */
 export function agentGitConfigReadable(path: string = AGENT_GIT_GLOBAL_CONFIG): boolean {
   try {
