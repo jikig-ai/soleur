@@ -544,6 +544,10 @@ function dangerousMetacharReason(command) {
   // (`$name`, `$1`, `$?`, `$$`, `$@`, `$*`, `$#`, `$!`, `$-`); a literal `$`
   // inside single quotes was stripped above and stays allowed.
   if (/\$[A-Za-z_0-9?$@*#!-]/.test(substScan)) return "$VAR expansion";
+  // #12757 fix round 4 — any other `$` that is not followed by whitespace or the end is refused too: `$[expr]` is
+  // bash's legacy arithmetic expansion, and `git status $[GIT_CONFIG_GLOBAL=0]` reassigned the exported pin (measured:
+  // core.fsmonitor code execution). A deny-list of `$` forms kept missing one, so this closes the class.
+  if (/\$(?![\s"]|$)/.test(substScan)) return "$ expansion";
   if (/<\(|>\(/.test(substScan)) return "process substitution";
   // control metachars: literal inside any quote → strip single AND double
   const ctrlScan = stripQuoted(command, { stripDouble: true });
@@ -551,11 +555,12 @@ function dangerousMetacharReason(command) {
   if (/[<>]/.test(ctrlScan)) return "redirection";
   if (/(^|[^|])\|([^|]|$)/.test(ctrlScan)) return "pipe";
   if (/(^|[^&])&([^&]|$)/.test(ctrlScan)) return "background &";
-  // #12757 fix round — unquoted brace expansion. Bash expands `{,~/.config/git}` to `~/.config/git` (then `~`) AFTER
+  // #12757 fix rounds — unquoted brace expansion. Bash expands `{,~/.config/git}` to `~/.config/git` (then `~`) AFTER
   // the hook has read the raw token, so every raw-token rule (worktree path, `git add .`, `commit -a`) could be
-  // re-spelled past (measured: `git worktree add -b x {,~/.config/git}` planted the ignore file). A comma list or a
-  // `..` sequence is the only form that expands; a quoted `--jq '{…}'` was stripped above, and `{owner}` stays legal.
-  if (/\{[^{}]*(,|\.\.)[^{}]*\}/.test(ctrlScan)) return "brace expansion";
+  // re-spelled past (measured: `git worktree add -b x {,~/.config/git}` planted the ignore file). A regex for the
+  // expanding forms missed nested lists (`{-a,-m{}}`), so ANY unquoted `{` is refused; a quoted `--jq '{…}'` was
+  // stripped above and stays allowed.
+  if (/\{/.test(ctrlScan)) return "brace expansion -- quote any literal { } text";
   return null;
 }
 
@@ -701,7 +706,9 @@ function gitVerbReason(tokens) {
       const t = tokens[i];
       if (t === "--") continue;
       if (t.startsWith("--")) {
-        if (t === "--all" || t === "--update")
+        // git accepts any unambiguous prefix of a long option (`--al` is `--all`), and --no-ignore-removal is --all.
+        const isPrefix = (long) => t.length >= 3 && long.startsWith(t.split("=")[0]);
+        if (isPrefix("--all") || isPrefix("--update") || isPrefix("--no-ignore-removal"))
           return `blanket git-add flag ${t} denied — ${scoped}`;
         continue;
       }
@@ -711,7 +718,10 @@ function gitVerbReason(tokens) {
         continue;
       }
       const path = t.replace(/^\.\//, "");
-      if (t === "." || t === "./" || path.startsWith(":") || t.includes("*"))
+      // `./.`, `.//`, `./././` all resolve to the tree root; `?`, `[` and extglob are pathname expansion bash runs on
+      // the raw word after the hook has read it (`git add ? ?? ???` stages almost every file).
+      const rootish = t.replace(/\/+$/, "").replace(/^(\.\/+)+/, "").replace(/\/+$/, "");
+      if (rootish === "." || rootish === "" || path.startsWith(":") || /[*?[]|[!@+]\(/.test(t))
         return `git-add pathspec '${t}' denied (stages the whole tree) — ${scoped}`;
       // Absolute paths resolve back into the clone (`git add /abs/cwd` ===
       // `git add .`) and dodge every relative-form check above — no
@@ -758,7 +768,7 @@ function gitVerbReason(tokens) {
   if (sub === "commit") {
     for (let i = 2; i < tokens.length; i++) {
       const t = tokens[i];
-      if (t === "--all")
+      if (t.length >= 4 && "--all".startsWith(t.split("=")[0]))
         return "git commit --all denied (stages every tracked change, bypassing scoped add) — commit only files you explicitly staged";
       if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
         return `git commit ${t} denied (the -a flag stages every tracked change, bypassing scoped add) — commit only files you explicitly staged`;

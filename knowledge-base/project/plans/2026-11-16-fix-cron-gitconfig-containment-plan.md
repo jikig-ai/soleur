@@ -1408,3 +1408,8 @@ The 12-seat review changed these points. The sections above are kept as planned.
   so `gh issue view 1 $'\'' $(cmd) #'` ran a command substitution and `git add $'-A'` reopened blanket staging on both
   git-carrying crons (also allowed by `origin/main`). An unquoted `$'` or `$"` is now a metachar deny. The census unwraps
   any await/paren chain before reading a destructure.
+- **Fix round 4 (systematic quoting sweep on dad1c0a146).** Two more hook/bash disagreements: `$[expr]` arithmetic
+  (`git status $[GIT_CONFIG_GLOBAL=0]` reset the pin; measured fsmonitor code execution) and nested braces
+  (`{-a,-m{}}`). Deny-listing forms kept missing one, so the classes are closed outright: any `$` not followed by
+  whitespace, and any unquoted `{`. `git add` also refuses root-equivalent paths (`./.`), `?`/`[`/extglob, and long-option
+  prefixes of `--all`/`--update`/`--no-ignore-removal`; `git commit` refuses `--al`.

@@ -1893,9 +1893,35 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     "git commit {,-a} -m x",
     "git commit -m x {,--all}",
     "git add {a..b}",
-  ])("bug-fixer: unquoted brace expansion %s is denied before any raw-token rule", (cmd) => {
-    expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toBe("cron-containment: metachar: brace expansion");
+    // nested lists, which a regex for the expanding forms missed (fix round 4)
+    "git commit {-a,-m{}}",
+    "git worktree add -b x --lock {~/.config/git,--reason={}}",
+    "git add {-A,{}}",
+    "gh api repos/jikig-ai/soleur/labels/{x}",
+  ])("bug-fixer: unquoted brace %s is denied before any raw-token rule", (cmd) => {
+    expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toMatch(/^cron-containment: metachar: brace expansion/);
   });
+  it.each([
+    "git status $[GIT_CONFIG_GLOBAL=0]",
+    'gh issue create --title t --body "$[ANTHROPIC_API_KEY]"',
+    "git status $%",
+  ])("both crons: a $ that is not followed by whitespace (%s) is denied", (cmd) => {
+    for (const cron of VERB_TABLE_CRONS)
+      expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecision, cron).toBe("deny");
+    expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toMatch(/^cron-containment: metachar: \$/);
+  });
+  it.each(["git add ./.", "git add .//", "git add ./././", "git add --al", "git add --no-ignore-removal", "git add --upd", "git add ? ?? ???", "git add [a-z]*", "git add @(x)", "git commit --al -m x"])(
+    "bug-fixer: whole-tree git spelling %s is denied",
+    (cmd) => {
+      expect(decideOn(bash(cmd), BF_LINES).permissionDecision).toBe("deny");
+    },
+  );
+  it.each(["git add apps/web-platform/x.ts", "git add ./apps/x.ts", "git commit --amend --no-edit"])(
+    "bug-fixer: scoped %s is not caught by the whole-tree spellings",
+    (cmd) => {
+      expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason ?? "").not.toMatch(/whole tree|--all denied|blanket/);
+    },
+  );
   it.each([
     "git worktree add -b x {~/.config/git,HEAD@\\{0\\}}",
     "git commit {-a,-m\\{}",
@@ -1932,8 +1958,7 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     "gh api repos/jikig-ai/soleur/issues --jq '.[] | \"\\(.number)\"'",
     `gh issue list --search "costs $ 5"`,
     'git commit -m "fix {a,b} in x"',
-    "gh api repos/jikig-ai/soleur/labels/{x}",
-  ])("roadmap-review: %s (quoted, single-quoted backslash, or comma-free brace) stays allowed", (cmd) => {
+  ])("roadmap-review: %s (quoted, or a single-quoted backslash) stays allowed", (cmd) => {
     expect(decideOn(bash(cmd), RR_LINES).permissionDecision).toBe("allow");
   });
   it("bug-fixer: a $HOME-relative worktree path is denied (the metachar gate refuses it first)", () => {
