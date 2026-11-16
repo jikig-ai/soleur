@@ -19,6 +19,7 @@ const TOKEN = ["ghs", "_", "c".repeat(36)].join("");
 const H = vi.hoisted(() => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
+  mirrorWithDebounce: vi.fn(),
   mirrorWarnWithDebounce: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   /** Known-positive switch: route the self-heal's LOCAL verbs through the token-bearing legacy arm (the pre-D6d shape). */
@@ -31,6 +32,7 @@ const H = vi.hoisted(() => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: H.reportSilentFallback,
   warnSilentFallback: H.warnSilentFallback,
+  mirrorWithDebounce: H.mirrorWithDebounce,
   mirrorWarnWithDebounce: H.mirrorWarnWithDebounce,
   hashUserId: (x: string) => `h-${x}`,
 }));
@@ -158,7 +160,7 @@ const recoveryBranches = (r: Row): string => git(r.ws, "for-each-ref", "--format
 const warnOps = (): Array<{ op?: string; tags?: Record<string, string> }> =>
   H.mirrorWarnWithDebounce.mock.calls.map(([, ctx]) => ctx as { op?: string; tags?: Record<string, string> });
 const allOps = (): string[] =>
-  [...H.reportSilentFallback.mock.calls, ...H.warnSilentFallback.mock.calls, ...H.mirrorWarnWithDebounce.mock.calls].map(
+  [...H.reportSilentFallback.mock.calls, ...H.warnSilentFallback.mock.calls, ...H.mirrorWithDebounce.mock.calls, ...H.mirrorWarnWithDebounce.mock.calls].map(
     ([, ctx]) => (ctx as { op?: string }).op ?? "",
   );
 
@@ -167,7 +169,7 @@ beforeEach(() => {
   H.localViaTokenArm = false;
   H.afterTokenCall = null;
   H.tokenVerbs.length = 0;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWarnWithDebounce, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
 });
 
 afterEach(() => {
@@ -281,7 +283,133 @@ describe("self-heal: phantom arm branch check (D6f, real git)", { timeout: 30_00
     expect(result.ok).toBe(false);
     expect(git(r.ws, "rev-parse", "refs/heads/feat")).toBe(before);
     expect(read(join(r.ws, "new.txt"))).toBe("member untracked\n");
-    expect(H.reportSilentFallback.mock.calls.map(([, c]) => (c as { op: string }).op)).toEqual(["self-heal-aborted-dirty"]);
+    // D15(e): debounced per workspace, still error level
+    expect(H.mirrorWithDebounce.mock.calls.map(([, c, key, cls]) => [(c as { op: string }).op, key, cls])).toEqual([["self-heal-aborted-dirty", r.ws, "self-heal-aborted-dirty"]]);
+    expect(H.reportSilentFallback).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A diverged default-branch clone whose one local commit is already upstream (the squash-merged side-PR shape), so every
+ * D6 gate passes and only the D15(a) precheck stands between the reset and the paths `upstreamEdit` adds. Untracked
+ * files must be written AFTER this call (`localCommit` stages with `add -A`).
+ */
+function squashedDiverged(r: Row, upstreamEdit: (dir: string) => void): void {
+  localCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nkb via side PR\n"), "Soleur: sync knowledge-base");
+  upstreamCommit(r, (d) => {
+    write(join(d, "knowledge-base", "a.md"), "a\nkb via side PR\n");
+    upstreamEdit(d);
+  }, "Soleur: sync knowledge-base (#7)");
+}
+
+/** The one untracked-collision refusal of the turn (D15a): warning, debounced on the workspace, `arm` the only tag. */
+function expectCollisionRefusal(r: Row, result: Awaited<ReturnType<typeof heal>>, arm: "phantom" | "diverged", mainBefore: string): void {
+  expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward", held: "untracked_collision" }));
+  expect(localMain(r)).toBe(mainBefore);
+  expect(recoveryBranches(r)).toBe("");
+  expect(H.mirrorWarnWithDebounce.mock.calls).toHaveLength(1);
+  const [err, ctx, key, cls] = H.mirrorWarnWithDebounce.mock.calls[0] as [unknown, { op: string; tags: Record<string, string>; extra: Record<string, unknown>; message: string }, string, string];
+  expect(err).toBeNull();
+  expect(ctx.op).toBe("self-heal-aborted-untracked-collision");
+  expect(ctx.tags).toEqual({ arm });
+  expect(ctx.extra).toEqual({ userId: USER });
+  expect([key, cls]).toEqual([r.ws, "self-heal-aborted-untracked-collision"]);
+  expect(allOps()).toEqual(["self-heal-aborted-untracked-collision"]);
+}
+
+describe("self-heal: an untracked or ignored file in the reset's way is never replaced (D15a, real git)", { timeout: 30_000 }, () => {
+  test("data-integrity PC repro: untracked KB file at a path upstream adds, 0 local commits -> refused, the agent's bytes survive", async () => {
+    const r = newRow();
+    write(join(r.ws, "knowledge-base", "new.md"), "agent in-flight work\n");
+    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "new.md"), "uploaded via UI\n"));
+    const before = localMain(r);
+    const result = await heal(r);
+    expect(read(join(r.ws, "knowledge-base", "new.md"))).toBe("agent in-flight work\n");
+    expectCollisionRefusal(r, result, "phantom", before);
+  });
+
+  test("untracked FILE at a leading directory of an added path (docs vs docs/guide.md) -> refused, file survives", async () => {
+    const r = newRow();
+    squashedDiverged(r, (d) => write(join(d, "docs", "guide.md"), "upstream guide\n"));
+    write(join(r.ws, "docs"), "member notes, a plain file\n");
+    const before = localMain(r);
+    const result = await heal(r);
+    expect(read(join(r.ws, "docs"))).toBe("member notes, a plain file\n");
+    expectCollisionRefusal(r, result, "diverged", before);
+  });
+
+  test("untracked file inside a directory that an added path turns into a file (src/ -> src) -> refused, file survives", async () => {
+    const r = newRow();
+    squashedDiverged(r, (d) => {
+      rmSync(join(d, "src"), { recursive: true, force: true });
+      write(join(d, "src"), "src is now a file upstream\n");
+    });
+    write(join(r.ws, "src", "local-notes.txt"), "member untracked notes\n");
+    const before = localMain(r);
+    const result = await heal(r);
+    expect(read(join(r.ws, "src", "local-notes.txt"))).toBe("member untracked notes\n");
+    expectCollisionRefusal(r, result, "diverged", before);
+  });
+
+  test("IGNORED file at an added path (reset --keep alone overwrites it) -> refused, file survives", async () => {
+    const r = newRow();
+    squashedDiverged(r, (d) => write(join(d, "settings.local"), "upstream settings\n"));
+    write(join(r.ws, ".git", "info", "exclude"), "*.local\n");
+    write(join(r.ws, "settings.local"), "member settings, ignored\n");
+    expect(git(r.ws, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    const before = localMain(r);
+    const result = await heal(r);
+    expect(read(join(r.ws, "settings.local"))).toBe("member settings, ignored\n");
+    expectCollisionRefusal(r, result, "diverged", before);
+  });
+
+  test("control: an untracked file the reset does not touch survives a recovered reset, and a deleted tracked leading path is not a collision", async () => {
+    const r = newRow();
+    // upstream turns the tracked FILE a.txt into a directory: the leading `a.txt` on disk is a deleted tracked path
+    squashedDiverged(r, (d) => {
+      rmSync(join(d, "a.txt"));
+      write(join(d, "a.txt", "inner.md"), "now a directory\n");
+    });
+    write(join(r.ws, "scratch.txt"), "unrelated untracked\n");
+    const result = await heal(r);
+    expect(result).toEqual({ ok: true, recovered: true });
+    expect(read(join(r.ws, "scratch.txt"))).toBe("unrelated untracked\n");
+    expect(read(join(r.ws, "a.txt", "inner.md"))).toBe("now a directory\n");
+    expect(allOps()).toEqual(["self-heal-recovered-diverged"]);
+  });
+});
+
+describe("self-heal: the gate reads the remote-tracking ref, never an agent-writable alias (D15b/c, real git)", { timeout: 30_000 }, () => {
+  test("branch.main.remote=. (so @{u} is a local decoy branch HEAD is behind) does not hide a held commit", async () => {
+    const r = newRow();
+    const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 2\n"));
+    // decoy = held + new.txt; with an untracked new.txt on disk the ff-only pull from `.` fails (a non_fast_forward
+    // class), so the self-heal runs while `@{u}..HEAD` counts 0 (HEAD is an ancestor of the decoy)
+    localCommit(r, (d) => write(join(d, "new.txt"), "decoy\n"), "decoy");
+    git(r.ws, "branch", "decoy");
+    git(r.ws, "reset", "-q", "--hard", held);
+    write(join(r.ws, "new.txt"), "member untracked\n");
+    git(r.ws, "config", "branch.main.remote", ".");
+    git(r.ws, "config", "branch.main.merge", "refs/heads/decoy");
+    expect(git(r.ws, "rev-list", "--count", "@{u}..HEAD")).toBe("0");
+    const result = await heal(r);
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "held_commits" }));
+    expect(localMain(r)).toBe(held);
+    expect(read(join(r.ws, "src", "s.ts"))).toBe("export const s = 2; // held code\n");
+    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "nonkb", reason: "merge_not_attempted" } })]);
+  });
+
+  test("a local branch named origin/main (refs/heads/origin/main, which DWIM prefers) does not stand in for the remote", async () => {
+    const r = newRow();
+    const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 3; // held code\n"));
+    upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 3\n"));
+    git(r.ws, "update-ref", "refs/heads/origin/main", held);
+    const result = await heal(r);
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "held_commits" }));
+    expect(localMain(r)).toBe(held);
+    expect(git(r.ws, "for-each-ref", "--format=%(refname)", "refs/heads/soleur/")).toBe("");
+    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: expect.objectContaining({ held_kind: "nonkb" }) })]);
   });
 });
 
@@ -327,6 +455,7 @@ describe("self-heal: no token reaches a planted clean/smudge filter (D6d, real g
     expect(leak).toMatch(/RAN:none/);
     expect(leak).not.toContain(TOKEN);
     expect(leak).not.toContain("ghs_");
-    expect(new Set(H.tokenVerbs)).toEqual(new Set(["pull", "symbolic-ref", "fetch"]));
+    // D15(d): `symbolic-ref` is a local verb and runs token-free; only `pull` and `fetch origin` carry the token
+    expect(new Set(H.tokenVerbs)).toEqual(new Set(["pull", "fetch"]));
   });
 });

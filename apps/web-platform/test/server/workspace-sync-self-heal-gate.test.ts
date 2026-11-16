@@ -1,17 +1,20 @@
 // #12600 (CTO rulings D6, D7, D8; supersede R18's KB exemption and gate placement): `selfHealNonFastForward` runs a
-// `reset --hard` only when nothing would be lost - a clean tracked tree (knowledge-base/ included) AND, with local commits
-// on the default branch, local commits whose content is already upstream. Every local verb runs token-free (D6d); only
-// `pull`, `fetch origin` and `symbolic-ref` reach the token-bearing `gitWithInstallationAuth`. The two refusals emit at
-// warning level through `mirrorWarnWithDebounce(null, ...)` keyed on the workspace (D6e, D7); every emit passes a null
-// error and carries its details in tags / extra (D8). Real-git rows: test/workspace-sync-self-heal-real-git.test.ts.
+// `reset --keep` only when nothing would be lost - a clean tracked tree (knowledge-base/ included), local commits whose
+// content is already upstream, and no untracked or ignored entry in the reset's way (D15a). Every local verb, the
+// `symbolic-ref` read included (D15d), runs token-free (D6d); only `pull` and `fetch origin` reach the token-bearing
+// `gitWithInstallationAuth`. The three designed holds warn through `mirrorWarnWithDebounce(null, ...)` and the two branch
+// aborts stay error through `mirrorWithDebounce(null, ...)`, all keyed on the workspace (D6e, D7, D15e); every emit
+// passes a null error and carries its details in tags / extra (D8). The three holds set `held` (D16). Real-git rows:
+// test/workspace-sync-self-heal-real-git.test.ts.
 // Synthesized data only.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const { gitSpy, localSpy, reportSpy, warnSpy, mirrorWarnSpy } = vi.hoisted(() => ({
+const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy } = vi.hoisted(() => ({
   gitSpy: vi.fn<(args: string[]) => Promise<Buffer>>(),
   localSpy: vi.fn<(args: string[], opts: { cwd: string; timeout: number }) => Promise<Buffer>>(),
   reportSpy: vi.fn(),
   warnSpy: vi.fn(),
+  mirrorSpy: vi.fn(),
   mirrorWarnSpy: vi.fn(),
 }));
 
@@ -20,6 +23,7 @@ vi.mock("@/server/workspace-local-git", () => ({ runWorkspaceLocalGit: localSpy 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSpy,
   warnSilentFallback: warnSpy,
+  mirrorWithDebounce: mirrorSpy,
   mirrorWarnWithDebounce: mirrorWarnSpy,
 }));
 
@@ -41,10 +45,18 @@ interface Shape {
   /** exit status of `diff --quiet origin/D HEAD -- knowledge-base/` */
   kbDiff?: number;
   statusThrows?: boolean;
+  /** stdout of `symbolic-ref refs/remotes/origin/HEAD` */
+  symbolicRef?: string;
+  /** the error `reset` rejects with */
+  resetThrows?: Error;
 }
 
 function isNonKbDiff(args: string[]): boolean {
   return args[0] === "diff" && args.includes(":(exclude)knowledge-base/");
+}
+/** The D15(a) collision precheck's path listing. */
+function isPrecheckDiff(args: string[]): boolean {
+  return args[0] === "diff" && args.includes("--name-status");
 }
 
 /** A non-fast-forward default-branch clone; local verbs answer from `s`. */
@@ -52,11 +64,15 @@ function script(s: Shape = {}): void {
   const { status = "", revList = "2\n", headRef = "main\n", nonKbDiff = 0, kbDiff = 0 } = s;
   gitSpy.mockImplementation(async (args) => {
     if (args[0] === "pull") throw NON_FF;
-    if (args[0] === "symbolic-ref") return Buffer.from("origin/main\n");
     return Buffer.from("");
   });
   localSpy.mockImplementation(async (args) => {
     switch (args[0]) {
+      case "symbolic-ref":
+        return Buffer.from(s.symbolicRef ?? "refs/remotes/origin/main\n");
+      case "reset":
+        if (s.resetThrows) throw s.resetThrows;
+        return Buffer.from("");
       case "rev-list":
         return Buffer.from(revList);
       case "rev-parse":
@@ -65,6 +81,7 @@ function script(s: Shape = {}): void {
         if (s.statusThrows) throw new Error("status broke");
         return Buffer.from(status);
       case "diff": {
+        if (isPrecheckDiff(args)) return Buffer.from("");
         const code = isNonKbDiff(args) ? nonKbDiff : kbDiff;
         if (code !== 0) throw exit(code);
         return Buffer.from("");
@@ -79,17 +96,18 @@ const run = () => syncWorkspace(1, WS, log, { userId: "u-1", op: "push" });
 const localVerbs = (): string[] => localSpy.mock.calls.map(([a]) => a[0]);
 const tokenVerbs = (): string[] => gitSpy.mock.calls.map(([a]) => a[0]);
 const opOf = (call: unknown[]): string => (call[1] as { op?: string }).op ?? "";
-const allEmits = (): unknown[][] => [...reportSpy.mock.calls, ...warnSpy.mock.calls, ...mirrorWarnSpy.mock.calls];
+const allEmits = (): unknown[][] => [...reportSpy.mock.calls, ...warnSpy.mock.calls, ...mirrorSpy.mock.calls, ...mirrorWarnSpy.mock.calls];
+const ALL_SPIES = [gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy];
 
 beforeEach(() => {
-  for (const f of [gitSpy, localSpy, reportSpy, warnSpy, mirrorWarnSpy]) f.mockReset();
+  for (const f of ALL_SPIES) f.mockReset();
 });
 
 describe("selfHealNonFastForward: dirty tracked tree refuses on both arms (D6a/b)", () => {
   test("a tracked change outside knowledge-base/ with held commits -> no branch-aside, no reset, op self-heal-aborted-dirty-tracked at warning", async () => {
     script({ status: " M src/s.ts\0" });
     const result = await run();
-    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward" }));
+    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward", held: "dirty_tracked" }));
     expect(localVerbs()).not.toContain("reset");
     expect(localVerbs()).not.toContain("branch");
     expect(reportSpy).not.toHaveBeenCalled();
@@ -134,11 +152,17 @@ describe("selfHealNonFastForward: dirty tracked tree refuses on both arms (D6a/b
     script({ statusThrows: true });
     const result = await run();
     expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("held");
     expect(localVerbs()).not.toContain("reset");
     const failed = reportSpy.mock.calls.filter((c) => opOf(c) === "self-heal-failed");
     expect(failed).toHaveLength(1);
     expect(failed[0][0]).toBeNull();
-    expect((failed[0][1] as { extra: Record<string, unknown> }).extra).toEqual({ userId: "u-1", errName: "Error" });
+    // the scripted throw is called synchronously from the self-heal, so its stack's first app frame is the call site (D20)
+    expect((failed[0][1] as { extra: Record<string, unknown> }).extra).toEqual({
+      userId: "u-1",
+      errName: "Error",
+      frame: expect.stringMatching(/^server\/workspace-sync\.ts:\d+$/),
+    });
   });
 });
 
@@ -151,15 +175,29 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     expect(localVerbs().indexOf("branch")).toBeLessThan(localVerbs().indexOf("reset"));
     expect(warnSpy.mock.calls.map(opOf)).toEqual(["self-heal-recovered-diverged"]);
     const nonKb = localSpy.mock.calls.find(([a]) => isNonKbDiff(a))?.[0];
-    expect(nonKb).toEqual(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "origin/main...HEAD", "--", ".", ":(exclude)knowledge-base/"]);
-    const kb = localSpy.mock.calls.find(([a]) => a[0] === "diff" && !isNonKbDiff(a))?.[0];
-    expect(kb).toEqual(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "origin/main", "HEAD", "--", "knowledge-base/"]);
+    // D15(c): the full remote-tracking refname everywhere (a bare `origin/main` DWIMs to refs/heads/origin/main first)
+    expect(nonKb).toEqual(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/main...HEAD", "--", ".", ":(exclude)knowledge-base/"]);
+    const kb = localSpy.mock.calls.find(([a]) => a[0] === "diff" && !isNonKbDiff(a) && !isPrecheckDiff(a))?.[0];
+    expect(kb).toEqual(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/main", "HEAD", "--", "knowledge-base/"]);
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "rev-list")?.[0]).toEqual(["rev-list", "--count", "refs/remotes/origin/main..HEAD"]);
+    // D15(a): the precheck lists A/D paths HEAD -> target, then `reset --keep` (the structural backstop), never --hard
+    expect(localSpy.mock.calls.find(([a]) => isPrecheckDiff(a))?.[0]).toEqual(["diff", "--name-status", "-z", "--no-renames", "--diff-filter=AD", "HEAD", "refs/remotes/origin/main", "--"]);
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "reset")?.[0]).toEqual(["reset", "--keep", "refs/remotes/origin/main"]);
+  });
+
+  test("the precheck runs before the branch-aside, so a refusal never leaves a recovery branch", async () => {
+    script({ nonKbDiff: 0, kbDiff: 0 });
+    await run();
+    const precheckAt = localSpy.mock.calls.findIndex(([a]) => isPrecheckDiff(a));
+    const branchAt = localSpy.mock.calls.findIndex(([a]) => a[0] === "branch");
+    expect(precheckAt).toBeGreaterThan(-1);
+    expect(precheckAt).toBeLessThan(branchAt);
   });
 
   test("held non-KB commits -> refused, op self-heal-aborted-held-commits, held_kind nonkb, no branch-aside, no reset", async () => {
     script({ nonKbDiff: 1 });
     const result = await run();
-    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward" }));
+    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward", held: "held_commits" }));
     expect(localVerbs()).not.toContain("reset");
     expect(localVerbs()).not.toContain("branch");
     expect(reportSpy).not.toHaveBeenCalled();
@@ -168,7 +206,8 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     expect(ctx.op).toBe("self-heal-aborted-held-commits");
     expect(ctx.tags).toEqual({ held_kind: "nonkb", reason: "merge_not_attempted" });
     expect(key).toBe(WS);
-    expect(errorClass).toBe("self-heal-aborted-held-commits");
+    // D20: keyed `<op>:<held_kind>`, so a kb hold and a nonkb hold on one workspace are separate debounce classes
+    expect(errorClass).toBe("self-heal-aborted-held-commits:nonkb");
   });
 
   test("held KB-only commits upstream lacks -> refused with held_kind kb (not stranded on a recovery branch)", async () => {
@@ -180,6 +219,8 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     const ctx = mirrorWarnSpy.mock.calls[0][1] as { op: string; tags: Record<string, string> };
     expect(ctx.op).toBe("self-heal-aborted-held-commits");
     expect(ctx.tags.held_kind).toBe("kb");
+    expect(mirrorWarnSpy.mock.calls[0][3]).toBe("self-heal-aborted-held-commits:kb");
+    expect(result).toEqual(expect.objectContaining({ held: "held_commits" }));
   });
 
   test("a diff that exits neither 0 nor 1 fails closed (self-heal-failed, no reset)", async () => {
@@ -192,21 +233,41 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
 });
 
 describe("selfHealNonFastForward: branch checks on both arms (D6f)", () => {
-  test("phantom arm on a feature branch -> abort with self-heal-aborted-dirty, no reset", async () => {
+  test("phantom arm on a feature branch -> abort with self-heal-aborted-dirty at error, debounced per workspace (D15e), no reset", async () => {
     script({ revList: "0\n", headRef: "feat\n" });
     const result = await run();
     expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("held");
     expect(localVerbs()).not.toContain("reset");
-    expect(reportSpy.mock.calls.map(opOf)).toEqual(["self-heal-aborted-dirty"]);
-    expect(reportSpy.mock.calls[0][0]).toBeNull();
+    expect(reportSpy).not.toHaveBeenCalled();
+    expect(mirrorSpy).toHaveBeenCalledTimes(1);
+    const [err, ctx, key, cls] = mirrorSpy.mock.calls[0] as [unknown, { op: string; tags: Record<string, string> }, string, string];
+    expect(err).toBeNull();
+    expect([ctx.op, ctx.tags, key, cls]).toEqual(["self-heal-aborted-dirty", { head: "non_default" }, WS, "self-heal-aborted-dirty"]);
   });
 
-  test("phantom arm on a detached HEAD -> abort with self-heal-aborted-detached-head, no reset", async () => {
+  test("phantom arm on a detached HEAD -> abort with self-heal-aborted-detached-head at error, debounced per workspace, no reset", async () => {
     script({ revList: "0\n", headRef: "HEAD\n" });
     const result = await run();
     expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("held");
     expect(localVerbs()).not.toContain("reset");
-    expect(reportSpy.mock.calls.map(opOf)).toEqual(["self-heal-aborted-detached-head"]);
+    expect(reportSpy).not.toHaveBeenCalled();
+    const [err, ctx, key, cls] = mirrorSpy.mock.calls[0] as [unknown, { op: string; tags: Record<string, string> }, string, string];
+    expect(err).toBeNull();
+    expect([ctx.op, ctx.tags, key, cls]).toEqual(["self-heal-aborted-detached-head", { head: "detached" }, WS, "self-heal-aborted-detached-head"]);
+  });
+
+  test("an un-countable rev-list on the default branch -> the -dirty slug with tag head=uncountable and its own message", async () => {
+    script({ revList: "\n" });
+    const result = await run();
+    expect(result.ok).toBe(false);
+    expect(localVerbs()).not.toContain("reset");
+    const [, ctx] = mirrorSpy.mock.calls[0] as [unknown, { op: string; tags: Record<string, string>; message: string }];
+    expect(ctx.op).toBe("self-heal-aborted-dirty");
+    expect(ctx.tags).toEqual({ head: "uncountable" });
+    expect(ctx.message).toMatch(/local-commit count/);
+    expect(ctx.message).not.toMatch(/not on the default branch/);
   });
 
   test("phantom arm on the default branch with a clean tree still resets (op self-heal-reset, null error)", async () => {
@@ -221,12 +282,21 @@ describe("selfHealNonFastForward: branch checks on both arms (D6f)", () => {
 });
 
 describe("selfHealNonFastForward: token-free local verbs (D6d) and null-first emits (D8)", () => {
-  test("only pull, symbolic-ref and fetch reach the token-bearing runner; every local verb runs token-free", async () => {
+  test("only pull and fetch reach the token-bearing runner; every local verb, symbolic-ref included (D15d), runs token-free", async () => {
     script({ nonKbDiff: 0, kbDiff: 0 });
     await run();
-    expect(new Set(tokenVerbs())).toEqual(new Set(["pull", "symbolic-ref", "fetch"]));
-    expect(new Set(localVerbs())).toEqual(new Set(["rev-parse", "status", "rev-list", "diff", "branch", "reset"]));
+    expect(new Set(tokenVerbs())).toEqual(new Set(["pull", "fetch"]));
+    expect(new Set(localVerbs())).toEqual(new Set(["symbolic-ref", "rev-parse", "status", "rev-list", "diff", "branch", "reset"]));
     for (const [, opts] of localSpy.mock.calls) expect(opts.cwd).toBe(WS);
+  });
+
+  test("the default branch comes from the FULL symbolic-ref target, read token-free (D15d)", async () => {
+    script({ symbolicRef: "refs/remotes/origin/trunk\n", headRef: "trunk\n", revList: "0\n" });
+    const result = await run();
+    expect(result).toEqual({ ok: true, recovered: true });
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "symbolic-ref")?.[0]).toEqual(["symbolic-ref", "refs/remotes/origin/HEAD"]);
+    expect(gitSpy.mock.calls.find(([a]) => a[0] === "fetch")?.[0]).toEqual(["fetch", "origin", "trunk"]);
+    expect(localSpy.mock.calls.find(([a]) => a[0] === "reset")?.[0]).toEqual(["reset", "--keep", "refs/remotes/origin/trunk"]);
   });
 
   test("every self-heal emit passes a null error", async () => {
@@ -238,13 +308,58 @@ describe("selfHealNonFastForward: token-free local verbs (D6d) and null-first em
       { revList: "0\n" },
       {},
       { statusThrows: true },
+      { revList: "\n" },
     ];
     for (const s of shapes) {
-      for (const f of [gitSpy, localSpy, reportSpy, warnSpy, mirrorWarnSpy]) f.mockReset();
+      for (const f of ALL_SPIES) f.mockReset();
       script(s);
       await run();
       expect(allEmits().length).toBeGreaterThan(0);
       for (const call of allEmits()) expect(call[0]).toBeNull();
     }
+  });
+});
+
+describe("selfHealNonFastForward: self-heal-failed carries a code frame, never the message (D20)", () => {
+  test("a throw whose stack runs through server/ gets extra.frame = the first repo-relative server|app|lib file:line", async () => {
+    const boom = new Error("fatal: secret-looking /workspaces/u-1 argv");
+    boom.stack = [
+      "Error: fatal: secret-looking /workspaces/u-1 argv",
+      "    at ChildProcess.exithandler (node:child_process:422:12)",
+      "    at Object.<anonymous> (/srv/app/node_modules/pkg/index.js:9:3)",
+      "    at selfHealNonFastForward (/srv/app/apps/web-platform/server/workspace-sync.ts:347:11)",
+      "    at syncWorkspace (/srv/app/apps/web-platform/server/workspace-sync.ts:169:14)",
+    ].join("\n");
+    script({ revList: "0\n", resetThrows: boom });
+    await run();
+    const failed = reportSpy.mock.calls.filter((c) => opOf(c) === "self-heal-failed");
+    expect(failed).toHaveLength(1);
+    const ctx = failed[0][1] as { extra: Record<string, unknown>; message: string };
+    expect(ctx.extra).toEqual({ userId: "u-1", errName: "Error", frame: "server/workspace-sync.ts:347" });
+    expect(String(ctx.extra.frame)).toMatch(/^[\w./-]+:\d+$/);
+    expect(JSON.stringify(failed[0])).not.toContain("secret-looking");
+  });
+
+  test("a stack with no server|app|lib frame (node internals, node_modules, tests) omits extra.frame", async () => {
+    const boom = new Error("reset broke");
+    boom.stack = [
+      "Error: reset broke",
+      "    at ChildProcess.exithandler (node:child_process:422:12)",
+      "    at run (/srv/app/node_modules/vitest/dist/index.js:1:1)",
+      "    at fixture (/srv/app/apps/web-platform/test/server/x.test.ts:9:3)",
+    ].join("\n");
+    script({ revList: "0\n", resetThrows: boom });
+    await run();
+    const ctx = reportSpy.mock.calls.find((c) => opOf(c) === "self-heal-failed")?.[1] as { extra: Record<string, unknown> };
+    expect(ctx.extra).toEqual({ userId: "u-1", errName: "Error" });
+  });
+
+  test("a forged `at` line inside the MESSAGE never becomes the frame", async () => {
+    const boom = new Error("stderr:\n    at evil (/x/apps/web-platform/server/forged.ts:1:1)");
+    boom.stack = `${boom.name}: ${boom.message}\n    at ChildProcess.exithandler (node:child_process:422:12)`;
+    script({ revList: "0\n", resetThrows: boom });
+    await run();
+    const ctx = reportSpy.mock.calls.find((c) => opOf(c) === "self-heal-failed")?.[1] as { extra: Record<string, unknown> };
+    expect(ctx.extra).not.toHaveProperty("frame");
   });
 });

@@ -50,14 +50,17 @@ vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspaceRepoMeta: mockResolveRepoMeta,
 }));
 
-const { mockReportSilentFallback, mockWarnSilentFallback, mockMirrorWarnWithDebounce } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockWarnSilentFallback, mockMirrorWithDebounce, mockMirrorWarnWithDebounce } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
+  mockMirrorWithDebounce: vi.fn(),
   mockMirrorWarnWithDebounce: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: mockWarnSilentFallback,
+  // #12600 D15(e): the two branch aborts stay error level, debounced per workspace
+  mirrorWithDebounce: mockMirrorWithDebounce,
   mirrorWarnWithDebounce: mockMirrorWarnWithDebounce,
 }));
 
@@ -585,7 +588,7 @@ describe("syncWorkspace", () => {
       if (verb === "symbolic-ref") {
         return handlers.symbolicRef
           ? handlers.symbolicRef()
-          : Promise.resolve(Buffer.from("origin/main\n"));
+          : Promise.resolve(Buffer.from("refs/remotes/origin/main\n"));
       }
       if (verb === "rev-parse") {
         return handlers.revParse
@@ -667,7 +670,7 @@ describe("syncWorkspace", () => {
     // edit is kept and the next session-start autostash pull resolves the stall.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
       status: () => Promise.resolve(Buffer.from(" M .claude/settings.json\0")),
     });
@@ -700,7 +703,7 @@ describe("syncWorkspace", () => {
   test("de-noise: untracked-collision abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(UNTRACKED_COLLISION_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -742,7 +745,7 @@ describe("syncWorkspace", () => {
   test("de-noise: diverged (non-FF) abort that self-heals also emits NO error mirror, only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -776,7 +779,7 @@ describe("syncWorkspace", () => {
     // feature branch must keep aborting to protect un-pushed work.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("feat-session-work\n")),
       revList: () => Promise.resolve(Buffer.from("2\n")),
     });
@@ -816,7 +819,7 @@ describe("syncWorkspace", () => {
   test("self-heal: non-FF + ZERO local commits → fetch + reset to resolved default branch, returns {ok:true, recovered:true}", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -831,10 +834,10 @@ describe("syncWorkspace", () => {
     if (result.ok) expect(result.recovered).toBe(true);
 
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
-    // fetch origin <default> and reset --hard origin/<default> must be present,
-    // resolved (not literal "main" passed by us — derived from symbolic-ref).
+    // fetch origin <default> and reset --keep refs/remotes/origin/<default> must be
+    // present, resolved (not literal "main" passed by us — derived from symbolic-ref).
     expect(calls).toContainEqual(["fetch", "origin", "main"]);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/main"]);
     // rev-list guard ran before reset.
     const verbs = calls.map((a) => a[0]);
     expect(verbs.indexOf("rev-list")).toBeLessThan(verbs.indexOf("reset"));
@@ -846,7 +849,7 @@ describe("syncWorkspace", () => {
     // fall-through (Kieran P1-3).
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("feat-something\n")),
       revList: () => Promise.resolve(Buffer.from("3\n")), // un-pushed agent work
     });
@@ -866,10 +869,12 @@ describe("syncWorkspace", () => {
     );
     expect(verbs).not.toContain("reset");
     expect(verbs).not.toContain("branch");
-    // Dirty-abort is observable + fail_loud.
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+    // Dirty-abort is observable + fail_loud (error level, debounced per workspace since #12600 D15e).
+    expect(mockMirrorWithDebounce).toHaveBeenCalledWith(
       null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-dirty",
     );
   });
 
@@ -883,8 +888,8 @@ describe("syncWorkspace", () => {
   test("AC1/AC2 recovery: non-FF + un-pushed commits on the DEFAULT branch → branch-aside BEFORE reset, returns {ok:true, recovered:true}", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      // resolved default branch (symbolic-ref → origin/main → "main")
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      // resolved default branch (symbolic-ref → refs/remotes/origin/main → "main")
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       // HEAD is ON the default branch — compared against the RESOLVED default,
       // not a hardcoded literal, so the test passes for the right reason.
       revParse: () => Promise.resolve(Buffer.from("main\n")),
@@ -913,7 +918,7 @@ describe("syncWorkspace", () => {
     // `git branch <recovery> HEAD` — preserves the un-pushed commits on a ref.
     expect(branchCall?.[2]).toBe("HEAD");
     expect(branchCall?.[1]).toMatch(/^soleur\/recovered-kb-sync-\d+$/);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/main"]);
 
     // AC2 — non-destructive ordering: branch-aside is issued BEFORE the reset
     // so the commit objects live on a named ref before the default ref moves.
@@ -934,7 +939,7 @@ describe("syncWorkspace", () => {
   test("AC4 detached HEAD: rev-parse → literal \"HEAD\" + un-pushed commits → abort with DISTINCT op, no branch/reset", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       // `git rev-parse --abbrev-ref HEAD` emits the literal "HEAD" when detached.
       revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
@@ -956,20 +961,24 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("branch");
     expect(verbs).not.toContain("reset");
     // Distinct, queryable slug — never silently bucketed into aborted-dirty.
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+    expect(mockMirrorWithDebounce).toHaveBeenCalledWith(
       null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-detached-head" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-detached-head",
     );
-    expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
+    expect(mockMirrorWithDebounce).not.toHaveBeenCalledWith(
       null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
   test("AC5a observability: recovery payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("main\n")),
       revList: () => Promise.resolve(Buffer.from("2\n")),
     });
@@ -988,7 +997,7 @@ describe("syncWorkspace", () => {
   test("AC5b observability: detached-abort payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
     });
@@ -996,8 +1005,8 @@ describe("syncWorkspace", () => {
       userId: TEST_USER_ID,
       op: "push",
     });
-    expect(mockReportSilentFallback.mock.calls.length).toBeGreaterThan(0);
-    for (const call of mockReportSilentFallback.mock.calls) {
+    expect(mockMirrorWithDebounce.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockMirrorWithDebounce.mock.calls) {
       const opts = call[1] as { extra?: Record<string, unknown> };
       expect(opts.extra).not.toHaveProperty("workspacePath");
       expect(opts.extra?.userId).toBe(TEST_USER_ID);
@@ -1007,7 +1016,7 @@ describe("syncWorkspace", () => {
   test("AC6 phantom path unchanged: ZERO local commits → self-heal-reset, issues NO branch", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -1044,7 +1053,7 @@ describe("syncWorkspace", () => {
     // buggy `headRef === "main"` impl would abort here instead of recovering.
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/trunk\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/trunk\n")),
       revParse: () => Promise.resolve(Buffer.from("trunk\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
     });
@@ -1062,7 +1071,7 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => c[0] as string[],
     );
     expect(calls.some((a) => a[0] === "branch")).toBe(true);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/trunk"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/trunk"]);
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
       null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
@@ -1075,7 +1084,7 @@ describe("syncWorkspace", () => {
     // output → parseInt(...) === NaN → abort, preserve work.
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("main\n")),
       revList: () => Promise.resolve(Buffer.from("")), // unparseable → NaN
     });
@@ -1100,7 +1109,7 @@ describe("syncWorkspace", () => {
     const resetErr = new Error("fatal: reset failed");
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
       reset: () => Promise.reject(resetErr),
     });
