@@ -41,3 +41,7 @@ None
 - 14/14 seats at PANEL_SHA 3b7ff59635; synthesis G1-G9 (scratchpad review-12704-synthesis.md).
 - CTO rulings D5-D13 committed at 2266c7480d. Follow-up to file at ship: "kb-sync: memoize the held_foreign outcome per headSha to skip the per-turn ls-remote" (D13/G8). Post-merge: close #12792 and #12734 with a comment (not in the Closes set).
 - Fixes in progress in two disjoint-file agents (PUBLISH: kb-sync-publish/session-sync/git-isolated-local/git-hardened-env; SELFHEAL: workspace-sync + ADR prose). Interim seams for D5(e)/D6(c) land with Phase 9.
+- Fix round 1 (12 seats, range 3b7ff59635..cd57046280): synthesis F1-F9 in scratchpad review-12704-fix1-synthesis.md. CTO rulings D14-D21 committed at 45c1667591. Round-2 fixes in two disjoint-file agents (fix2-12704-brief.md).
+- Follow-ups to file at ship: (1) "session-sync: run the workspace git writers async with a process-group kill so a filter grandchild cannot block the event loop"; (2) "kb-sync: classify ls-remote, push_transient and ref-update stderr into closed reason tags"; (3) G8 held_foreign memo (D13); (4) X3 legacy syncWorkspace pull P1, including the legacy arm's missing -c maintenance.auto=false (none exists as of 2026-11-16); (5) W6 and C8 per plan.
+- Next: fix round 2 is the LAST targeted round (cap 2); a third round escalates to the full class panel over the cumulative fix diff.
+- Tally note: seats was double-incremented for fix round 1 (incr 12 run twice); the true seat count is 26 (14 panel + 12 fix-round-1), the tally shows 38. Capture at compound as a session error.
