@@ -34,8 +34,10 @@ no ci-is-the-gate token written (silent brief)
 
 - Phase-1 implementation (tasks 1.1-1.4) complete + pushed. Review: 13-seat panel (class=code, tier=aggregate pattern, design-risk=yes, PANEL_SHA=f668e1e42e). Scan gate ok. Shellcheck -S error clean.
 - Fix round 1 `c0e2bed95b`: all panel findings (P1 trio-stem de-shape, github_actions_* ban, G7i argv-totality+if/fi invariant, DOPPLER_API_HOST/VERIFY_TLS refusal, G7d inngest-cutover, G1d-bis custom_branch_policies, dc7/dc8/dc9 rows, PENDING_ENVS, doc nits). 11-seat fix-round: all RESOLVED/PASS.
-- Fix round 2 `4e84bf12cb`: argv-totality verb gap + sibling-file/org-type TF-seed limbs. Verification pass found 2 more paths (codespaces family + .tf.json seed) → fix round 3 in flight.
-- Post-fix `test-all.sh --affected` (352/764 selected) queued behind sibling worktree lock — result pending.
-- Remaining pipeline: fix-round-3 verify → lead gate green → QA → compound → ship (PR, CI, merge, release poll, post-merge verify `postmerge verification complete!`) → `<promise>DONE</promise>`.
+- Fix round 2 `4e84bf12cb`: argv-totality verb gap + sibling-file/org-type TF-seed limbs. Verification pass found 2 more paths (codespaces family + .tf.json seed).
+- Fix round 3 `a8fe5ee439`: codespaces family + `.tf.json` co-mention limb. Final verification found the `\b` anchor on `G7_DC_SEED` missed prefixed labels (`prd_deploy_channel`; `_` is a word character).
+- Fix round 4 `c3b3d0610d` (final): `G7_DC_SEED` → `(?<![A-Za-z0-9])deploy[-_]channel` lookbehind; landed mutants pin both directions (`g7c2-prefixed-label-seed` reds; `g7c2-redeploy-exclusion` must-pass stays green). Census **459 passed, 0 failed** (MUTANT_FLOOR=181, FLOOR=459). Branch pushed through `c3b3d0610d`.
+- Post-fix `test-all.sh --affected` (352/764 selected) now running — acquired the advisory lock after sibling worktree finished; log `/tmp/9294-affected-gate.log`, result pending.
+- Remaining pipeline: affected-gate green → QA → compound → ship (PR, CI, merge, release poll, post-merge verify `postmerge verification complete!`) → `<promise>DONE</promise>`.
 - This run ships PR-A ONLY (carrier). PR-B (consumers, sweeper partition, #6178 deletion) waits on operator seed (tasks 1.6/2.0 precondition) — a separate one-shot after operator acts.
 - Operator-reserved, unchanged: seed/mint DOPPLER_TOKEN_DEPLOY_CHANNEL on deploy-channel + inngest-cutover; trio rotation; prd_terraform deletions; drill dispatch; signing-key rotation; CF Terraform-state reconcile.
