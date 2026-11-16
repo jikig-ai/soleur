@@ -26,8 +26,8 @@
 #
 # ROUTING. The free tier has no escalation policy (every `betteruptime_policy` is
 # `count = var.betterstack_paid_tier ? 1 : 0`), so this alert emails the same team surface every
-# sibling monitor and heartbeat uses (account owner + betteruptime_team_member.ops) and escalates
-# to betteruptime_policy.uptime when the paid tier is enabled — the same ternary as
+# sibling monitor and heartbeat uses (the team's responder ops@jikigai.com, the org Admin managed
+# by the vendor since 2026-11-16) and escalates to betteruptime_policy.uptime when the paid tier is enabled — the same ternary as
 # uptime-alerts.tf, in the alert's escalation_target shape.
 #
 # CHANGED THE SQL? BUMP THE REV. `monitor_send_failed_probe_rev` is the ONLY trigger of

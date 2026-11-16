@@ -123,6 +123,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 367 -> 376 (#12363 A-0, +9): main declared 372 against this floor of 367 (5 rows of slack, absorbed here so it is exact again) and this change adds
 // 4 rows for the relay hello-signing pair (count gate, saved-plan membership, shape and no-output pin, two-mutant battery).
 // Exact: grep -cE '^\s*test\(' = 376.
+// 395 -> 397 (FIX B handed to the vendor, 2026-11-16, +2): the one-row FIX B "managed resource" describe is replaced by the
+// three-row forget pin (a/b/c). Declared grep -cE '^\s*test\(' = 397; the floor stays 376 (slack is pre-existing on main).
 const TEST_FLOOR = 376;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
@@ -4184,26 +4186,6 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
   });
 });
 
-// ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────
-describe("betteruptime_team_member.ops is a per-merge -targeted managed resource (FIX B)", () => {
-  test("the resource exists in uptime-alerts.tf and is covered by a per-merge -target", () => {
-    const resources = listInfraTfFiles().flatMap((f) =>
-      extractAllResources(stripComments(readFileSync(f, "utf8"))),
-    );
-    expect(resources).toContain("betteruptime_team_member.ops");
-    // It auto-applies on merge, so its -target lives in the NON-stripped apply job — the
-    // stripped coverage set (what the #5566 guard uses) must still see it.
-    const strippedTargets = extractAllTargets(
-      stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
-    );
-    expect(strippedTargets.has("betteruptime_team_member.ops")).toBe(true);
-    // It is NOT an operator-applied exclusion (it is auto-appliable).
-    expect(OPERATOR_APPLIED_EXCLUSIONS.has("betteruptime_team_member.ops")).toBe(
-      false,
-    );
-  });
-});
-
 // ─── DP-11 F8 guard: every github_repository_environment must gate on a NON-EMPTY
 //     required-reviewer set. A zero-reviewer environment auto-approves, silently
 //     defeating the human ack these environments exist to enforce on irreversible
@@ -6419,6 +6401,78 @@ describe("#8754 inngest firewall attachment forget rides the per-merge saved pla
     expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * FIX B handed to the vendor (2026-11-16). ops@jikigai.com is the org's sole Better Stack Admin,
+ * set in the web app; BetterStackHQ/better-uptime manages NON-ADMIN members only and its Delete
+ * calls DELETE /api/v2/team-members?email=…, so Terraform must never manage that member again and
+ * must FORGET the old address rather than delete it. The removed block's `destroy = false` shape is
+ * census Guard G4a's (test-infra-privileged-tier-census.sh); this describe pins that the resource is
+ * gone, that a forget for the address exists, and that the forget rides the per-merge SAVED plan
+ * (a -targeted removed block is planned only when its address is targeted, as in #8754 above).
+ */
+describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B handed to the vendor, 2026-11-16)", () => {
+  const ADDR = "betteruptime_team_member.ops";
+  const files = listInfraTfFiles();
+
+  /** Top-level blocks whose opener matches `opener` (anchored at a line start), with their
+   *  brace-matched bodies. Input must already be comment-stripped. */
+  function hclBlocks(text: string, opener: RegExp): { head: string; body: string }[] {
+    const out: { head: string; body: string }[] = [];
+    const re = new RegExp(opener.source, "gm");
+    for (const m of text.matchAll(re)) {
+      const open = (m.index ?? 0) + m[0].length - 1; // the matched `{`
+      let depth = 0;
+      let k = open;
+      for (; k < text.length; k++) {
+        if (text[k] === "{") depth++;
+        else if (text[k] === "}" && --depth === 0) break;
+      }
+      out.push({ head: m[0], body: text.slice(open + 1, k) });
+    }
+    return out;
+  }
+
+  function strippedTf(): { file: string; text: string }[] {
+    return files.map((f) => ({ file: f, text: g2eStrip(readFileSync(f, "utf8")) }));
+  }
+
+  test("(a) no betteruptime_team_member is labelled ops or names ops@jikigai.com", () => {
+    expect(files.length).toBeGreaterThan(0); // non-vacuity
+    const uptime = strippedTf().find((t) => t.file.endsWith("/uptime-alerts.tf"));
+    expect(uptime).toBeDefined(); // non-vacuity: the resource scan reads this root's alert file
+    expect(
+      hclBlocks(uptime!.text, /^[ \t]*resource[ \t]+"betteruptime_heartbeat"[ \t]+"[^"]+"[ \t]*\{/).length,
+    ).toBeGreaterThan(0);
+    const offenders: string[] = [];
+    for (const { file, text } of strippedTf()) {
+      for (const b of hclBlocks(text, /^[ \t]*resource[ \t]+"betteruptime_team_member"[ \t]+"([^"]+)"[ \t]*\{/)) {
+        const label = /"betteruptime_team_member"[ \t]+"([^"]+)"/.exec(b.head)?.[1];
+        if (label === "ops" || b.body.includes("ops@jikigai.com")) offenders.push(`${file}: ${b.head.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("(b) a top-level removed block forgets the address", () => {
+    const forgets = strippedTf().flatMap(({ text }) =>
+      hclBlocks(text, /^removed[ \t]*\{/).filter((b) =>
+        /^[ \t]*from[ \t]*=[ \t]*betteruptime_team_member\.ops[ \t]*$/m.test(b.body),
+      ),
+    );
+    expect(forgets.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("(c) the forget's -target rides the saved plan, not the post-bridge apply", () => {
+    const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+    const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+    const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
   });
 });
 

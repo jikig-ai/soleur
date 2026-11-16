@@ -38,10 +38,12 @@
 # destroy = false } }` blocks) will trip nested_deletes against this filter
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
-# is null → positive count. The `removed` blocks in apps/web-platform/infra/
-# today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
-# forget, web-host-birth-environment.tf's #8754 phantom deployment-policy forget) are
-# non-Cloudflare types, which the nested_deletes clauses do not match.
+# is null → positive count. Do not keep a hand-written inventory of the root's
+# `removed` blocks here (one went stale): list them with
+#   grep -n '^removed' apps/web-platform/infra/*.tf
+# and check each "from" type against the nested_deletes clauses below. tunnel.tf's
+# cloudflare_zero_trust_access_service_token forget IS a Cloudflare type (already
+# applied); betteruptime_team_member.ops (uptime-alerts.tf, 2026-11-16) is not.
 # A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
