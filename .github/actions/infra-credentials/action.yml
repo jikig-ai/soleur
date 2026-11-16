@@ -3,7 +3,9 @@ description: >-
   #8209 / ADR-241. Loads the Tier-B privileged credential set from the
   soleur-infra-privileged Doppler project and exports it as TF_VAR_* plus the plain
   names, falling back to the legacy prd_terraform path while the operator sequence is
-  still in flight. Replaces the bare DopplerHQ/cli-action step in every Tier-B job.
+  still in flight. A third arm (`source=tier_b_deploy_channel`, #9294) serves the
+  narrow soleur-deploy-channel project. Replaces the bare DopplerHQ/cli-action step in
+  every Tier-B job.
 
 # WHY THIS ACTION EXISTS, and why it REPLACES the Doppler install step rather than
 # sitting beside it.
@@ -108,7 +110,8 @@ outputs:
       The R2 bucket the git-data-root-key root must `terraform init
       -backend-config=bucket=…` against: `soleur-terraform-state-privileged` once the
       Tier-B state key pair is present, and the legacy `soleur-terraform-state` before
-      that. Empty string when the loader REFUSED (see `git_data_root_state_legacy_after_migration`).
+      that. Empty string when the loader REFUSED (see `git_data_root_state_legacy_after_migration`),
+      and empty when the narrow `soleur-deploy-channel` arm ran — that arm owns no state bucket.
     value: ${{ steps.load.outputs.git_data_root_state_bucket }}
 
 runs:
@@ -163,6 +166,14 @@ runs:
 
         emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
 
+        # A caller-side DOPPLER_API_HOST or DOPPLER_VERIFY_TLS would steer EVERY authenticated
+        # Doppler call this step makes — a token-exfil channel, not configuration. The job may
+        # set neither; presence is a named refusal, never a warning.
+        if [[ -n "${DOPPLER_API_HOST:-}" || -n "${DOPPLER_VERIFY_TLS:-}" ]]; then
+          echo "::error title=infra-privileged::verdict=doppler_cli_env_refused — DOPPLER_API_HOST/DOPPLER_VERIFY_TLS set by the job would steer every authenticated call. Refused."
+          exit 1
+        fi
+
         # ---- #9294 / ADR-241: the project allowlist ----------------------------
         #
         # BEFORE any Doppler call and before the arm split. Exactly two project names
@@ -170,7 +181,10 @@ runs:
         # refused by name rather than aimed at a project no caller audited. An empty
         # input is the composite default, not a third value. (`mint-infra-app` pins
         # the same case-dispatch shape for its two names.)
-        case "${DP_PROJECT:-soleur-infra-privileged}" in
+        # The default is normalized ONCE here so the allowlist and the arm selection
+        # cannot disagree about which input they read.
+        PROJECT="${DP_PROJECT:-soleur-infra-privileged}"
+        case "$PROJECT" in
           soleur-infra-privileged|soleur-deploy-channel) ;;
           *)
             echo "::error title=infra-privileged::verdict=doppler_project_refused — doppler-project must be soleur-infra-privileged or soleur-deploy-channel; got '${DP_PROJECT}'. Refused before any Doppler call."
@@ -224,8 +238,16 @@ runs:
         #   NO prd_terraform READ AT ALL, for the same reason.
         #   NO state-bucket aliasing and NO App-runtime opt-in. Those pairs live in the
         #   BROAD project; the narrow project holds only the deploy-channel family, so
-        #   an absent pair here is not a half-set pair -- it is the design.
-        if [[ "${DP_PROJECT:-soleur-infra-privileged}" == "soleur-deploy-channel" ]]; then
+        #   an absent pair here is not a half-set pair -- it is the design. The pre-split
+        #   TF_VAR_github_app_runtime_token_delivered flag is forced back to false inside
+        #   the arm (below), so an opted-in caller still cannot deliver the name.
+        if [[ "$PROJECT" == "soleur-deploy-channel" ]]; then
+          # Broad-mode inputs set alongside the narrow project are IGNORED, not merged:
+          # a job that passed doppler-token-infra-privileged must not believe its
+          # privileged token served. Say so, then refuse nothing -- the arm stands alone.
+          if [[ -n "${DP_INFRA:-}" || -n "${DP_LEGACY:-}" ]]; then
+            echo "::notice title=infra-privileged::doppler-project=soleur-deploy-channel selects the narrow arm; doppler-token-infra-privileged and doppler-token-legacy are set but ignored."
+          fi
           if [[ -z "${DP_DEPLOY_CHANNEL:-}" ]]; then
             # The shared verdict word: the job has no credential source, and the fix is
             # an environment secret, not a retry.
@@ -235,9 +257,12 @@ runs:
           # The explicit -p/-c pair is the ADR-168 property again: a service token
           # errors LOUDLY on a project/config mismatch, so a mis-bound token becomes
           # the named failure below instead of a silent read of a config it can reach.
+          # stderr goes to a file, never the log -- a Doppler auth error can quote the
+          # token prefix (the legacy arm's err-file precedent).
           rc=0
           payload="$(DOPPLER_TOKEN="$DP_DEPLOY_CHANNEL" doppler secrets download \
-            --no-file --format json -p soleur-deploy-channel -c prd)" || rc=$?
+            --no-file --format json -p soleur-deploy-channel -c prd \
+            2>"${RUNNER_TEMP:-/tmp}/deploy-channel-download.err")" || rc=$?
           if [[ "$rc" -ne 0 || -z "$payload" ]]; then
             echo "::error title=infra-privileged::verdict=deploy_channel_read_failed rc=${rc} — the deploy-channel token could not read soleur-deploy-channel/prd. The token is bound to a project and config; a mismatch fails closed here rather than serving another config."
             exit 1
@@ -260,9 +285,10 @@ runs:
             [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
           done < <(printf '%s' "$payload" | jq -r '.[] | select(type == "string")' | sed 's/\r$//')
 
-          # The same plain + TF_VAR_ pairing loop as the broad arm, so the two arms
-          # cannot drift in export shape. The GAR_NAME skip is kept for uniformity
-          # even though the narrow project never holds that name.
+          # The same plain + TF_VAR_ pairing loop as the broad arm, kept byte-similar
+          # so the two arms share one export shape (the mechanism is copy-parity,
+          # pinned by the dc3/dc4 loader rows). The GAR_NAME skip is kept for
+          # uniformity even though the narrow project never holds that name.
           n=0
           while IFS= read -r k; do
             [[ -n "$k" ]] || continue
@@ -289,6 +315,9 @@ runs:
             exit 1
           fi
 
+          # Later $GITHUB_ENV lines win: the narrow arm NEVER delivers the App-runtime
+          # token, so the pre-split delivered flag is pinned back to false.
+          printf 'TF_VAR_github_app_runtime_token_delivered=false\n' >> "$GITHUB_ENV"
           echo "::notice title=infra-privileged::source=tier_b_deploy_channel exported=${n}"
           emit source "tier_b_deploy_channel"
           emit git_data_root_state_bucket ""

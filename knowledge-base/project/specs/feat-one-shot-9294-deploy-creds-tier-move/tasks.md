@@ -22,12 +22,18 @@ Issue: #9294 (G1 of ADR-241 D10 residual; gates #8609)
   - [x] 1.3.2 `ENV_SECRETS` += `DOPPLER_TOKEN_DEPLOY_CHANNEL`
   - [x] 1.3.3 Guard 7 assembly covers `soleur-deploy-channel`
   - [x] 1.3.4 Narrow-mode guard rows + mutation fixtures (allowlist, empty token, never reads `prd_terraform`)
-- [x] 1.4 C4 `model.c4` `github -> doppler` edge: add `deploy-channel` + `soleur-deploy-channel` + `DOPPLER_TOKEN_DEPLOY_CHANNEL` clause (D11-clause shape); verify `views.c4`/`spec.c4` need no include change
+- [x] 1.4 C4 `model.c4` `github -> doppler` edge: add `deploy-channel` + `soleur-deploy-channel` + `DOPPLER_TOKEN_DEPLOY_CHANNEL` clause (D11-clause shape); verify `views.c4`/`spec.c4` need no include change. The separate edge is deliberate: the existing `github -> doppler` edge's environment list names `DOPPLER_TOKEN_INFRA_PRIVILEGED` holders, not deploy-channel holders, so folding the clause into it would mis-attribute the token's holders
 - [ ] 1.5 PR-A green; merge; apply-on-merge creates the carriers
 - [ ] 1.6 OWNER-NAMED seed (operator-authorized, recorded in PR body): verify live `protection_rules` main-only; hash-equal copy trio `soleur-infra-privileged/prd` -> `soleur-deploy-channel/prd`; mint read token; `gh secret set DOPPLER_TOKEN_DEPLOY_CHANNEL` on `deploy-channel` + `inngest-cutover`
 
 ## Phase 2 — PR-B: consumer migration + boundary proofs
 
+- [ ] 2.0 PR-B PRECONDITION (verified before any 2.1.x bind lands): the live
+  `deploy-channel` GitHub environment exists; `DOPPLER_TOKEN_DEPLOY_CHANNEL` is
+  seeded on it (and on `inngest-cutover`); the `protection_rules` read-back
+  shows `custom_branch_policies: true` with exactly one branch-type `main`
+  policy and no tag-type policy; and a canary run on main reports
+  `source=tier_b_deploy_channel` (the narrow arm actually served a job)
 - [ ] 2.1 Workflow env binds + narrow loader wiring (remove every `secrets.<trio>` reference)
   - [ ] 2.1.1 `web-platform-release.yml` — `deploy`, `verify-peer-deploy` -> `deploy-channel`
   - [ ] 2.1.2 `canary-status.yml` -> `deploy-channel`
@@ -38,7 +44,7 @@ Issue: #9294 (G1 of ADR-241 D10 residual; gates #8609)
   - [ ] 2.1.7 `key-rotate.yml` `redeploy` -> `deploy-channel`
   - [ ] 2.1.8 `restart-inngest-server.yml` -> `deploy-channel`
   - [ ] 2.1.9 `scheduled-inngest-health.yml` `probe` -> `deploy-channel`
-  - [ ] 2.1.10 `apply-deploy-pipeline-fix.yml` — remove residual `secrets.<trio>` binds
+  - [ ] 2.1.10 `apply-deploy-pipeline-fix.yml` — NO-OP: git grep shows zero `secrets.<trio>` binds (the file reads the trio only from loader-exported env); verify and close without edit
 - [ ] 2.2 Sweeper partition
   - [ ] 2.2.1 `scripts/followthroughs/sweep-followthroughs.sh`: `FT_ONLY_SECRETS` / `FT_EXCLUDE_SECRETS` parse + skip-summary lines + zero-trio-probes coverage refusal
   - [ ] 2.2.2 `scheduled-followthrough-sweeper.yml`: `sweep` gets `FT_EXCLUDE_SECRETS=<trio>`; new `sweep-deploy-channel` job (`environment: deploy-channel` + narrow loader + `FT_ONLY_SECRETS=<trio>,GH_TOKEN`)

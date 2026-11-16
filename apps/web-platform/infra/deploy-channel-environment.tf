@@ -6,7 +6,8 @@
 #
 # Everything this root creates lands in `web-platform/terraform.tfstate`, and the
 # `prd_terraform` backend keys READ that object (ADR-241 D3/D4 — the same measurement
-# infra-privileged-environment.tf and infra-app-project.tf cite). A `doppler_secret`, a
+# infra-app-project.tf cites literally and infra-privileged-environment.tf reaches as
+# "measured, M7"). A `doppler_secret`, a
 # `doppler_service_token` or a `data "doppler_secret(s)"` on this project would put the
 # values, or a token that reads them, straight back into the tier this move exists to
 # evict them from. The project and the environment are the CARRIERS; the operator-run
@@ -48,6 +49,8 @@ resource "github_repository_environment" "deploy_channel" {
     protected_branches     = false
     custom_branch_policies = true
   }
+
+  # Deliberately no `prevent_destroy` here or on the policy below: environment secrets die with the environment.
 }
 
 # The named list the block above declares. `custom_branch_policies = true` says "this

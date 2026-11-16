@@ -106,11 +106,14 @@ ADR-241 D11 (`infra-app-project.tf`, Census Guard 7).
      refusal, narrow mode never reads `prd_terraform`) with mutation fixtures.
 4. Operator-named seed steps (post-merge, recorded in the PR body — NOT
    implemented by the agent; these are production mutations gated on the
-   owner's per-command go): verify the live env's `protection_rules` shows the
-   main-only policy (an unseeded auto-created env has NO policy — the exact
-   hazard `infra-privileged-environment.tf` documents); copy the trio
+   owner's per-command go): verify the live env's `protection_rules` read-back
+   shows `custom_branch_policies: true` with exactly one branch-type `main`
+   entry and no tag-type policy (an unseeded auto-created env has NO policy —
+   the exact hazard `infra-privileged-environment.tf` documents); copy the trio
    hash-equal from `soleur-infra-privileged/prd` into
-   `soleur-deploy-channel/prd`; mint a read service token on
+   `soleur-deploy-channel/prd`; post-seed, `doppler secrets -p
+   soleur-deploy-channel -c prd --only-names` must list exactly the deploy-trio
+   names (exact membership, not a superset); mint a read service token on
    `soleur-deploy-channel/prd`; `gh secret set DOPPLER_TOKEN_DEPLOY_CHANNEL`
    `--env deploy-channel` and `--env inngest-cutover` (gated cutover ops keep
    their reviewer-gated environment). Mirror the D11 operator-run staged
@@ -137,7 +140,7 @@ is what lets the file's baseline rows be *deleted* rather than reclassed.
 | restart-inngest-server.yml | restart job | `deploy-channel` + narrow loader |
 | scheduled-inngest-health.yml | `probe` | `deploy-channel` + narrow loader |
 | scheduled-followthrough-sweeper.yml | `sweep` (existing) + NEW `sweep-deploy-channel` | `sweep` keeps no env and gets `FT_EXCLUDE_SECRETS=<trio>`; the new job binds `deploy-channel` + narrow loader + `FT_ONLY_SECRETS=<trio>,GH_TOKEN` |
-| apply-deploy-pipeline-fix.yml | any job still naming the trio post-PR-2 | reads via the existing privileged export; remove residual `secrets.<trio>` binds |
+| apply-deploy-pipeline-fix.yml | — | reads the trio only via the existing privileged export; zero `secrets.<trio>` binds — no-op (task 2.1.10) |
 
 Scripts and docs: the trio consumers keep reading process env (they must never
 take credentials on argv — ADR-280, `bc_curl` stdin-config transport). Where a
@@ -578,7 +581,7 @@ Premise validation (authoritative `gh`/git output, 2026-11-16):
 | Prior partials #10376, #10458, #10928, #12330 MERGED | confirmed (`gh pr view`); rotation PR-B #12445 also merged — `local.deploy_service_token_ids` carries only the new id `d9204def…`, so the Access-token rotation tail the issue names is already done |
 | No `deploy-channel-environment.tf`, `webhook_deploy_secret_next`, or `or` render exists | confirmed by grep — the carrier was never built; PR-1's remaining rungs are this slice |
 | Trio already in `soleur-infra-privileged/prd` (Tier B) post-PR-2 | confirmed — `tunnel.tf` comment + loader whole-project export already serve Terraform-fed consumers |
-| 11 workflows bind `secrets.<trio>` today | confirmed by git grep: web-platform-release, canary-status, cutover-inngest, deploy-inngest-image, inngest-key-rotate, inngest-link-flip, key-rotate, restart-inngest-server, scheduled-followthrough-sweeper, scheduled-inngest-health (+ residual binds in apply-deploy-pipeline-fix) |
+| 10 workflows bind `secrets.<trio>` today | confirmed by git grep: web-platform-release, canary-status, cutover-inngest, deploy-inngest-image, inngest-key-rotate, inngest-link-flip, key-rotate, restart-inngest-server, scheduled-followthrough-sweeper, scheduled-inngest-health (apply-deploy-pipeline-fix names the trio only via loader-exported env reads — zero `secrets.<trio>` binds, so task 2.1.10 is a no-op) |
 
 Measured facts the design rests on:
 

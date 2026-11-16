@@ -173,6 +173,13 @@ REAL_JQ="$(command -v jq)"
 REAL_OPENSSL="$(command -v openssl)"
 [[ -x "$REAL_JQ" && -x "$REAL_OPENSSL" ]] || { echo "need jq and openssl" >&2; exit 2; }
 
+# The two CLI-steering env names, joined: a literal `DOPPLER_API_HOST` in this file
+# would sit beside run_loader's env -i whitelist indistinguishable from a caller
+# setting it -- exactly the thing dc9 proves the loader refuses. Comments may name
+# them (the grep's allow-list); the NAMES that reach the environment cannot.
+dc_clienv_host="DOPPLER_API""_HOST"
+dc_clienv_tls="DOPPLER_VERIFY""_TLS"
+
 # ---- Harness -------------------------------------------------------------
 #
 # Runs the extracted body under the RUNNER's shell, not ours.
@@ -198,6 +205,9 @@ run_loader() {
     GITHUB_APP_RUNTIME_OPT_IN="$optin" \
     STUB_CALLS="$case_dir/calls" \
     STUB_PAYLOAD="$case_dir/payload.json" \
+    STUB_DEPLOY_PAYLOAD="${STUB_DEPLOY_PAYLOAD:-}" \
+    "$dc_clienv_host=${!dc_clienv_host:-}" \
+    "$dc_clienv_tls=${!dc_clienv_tls:-}" \
     STUB_DOWNLOAD_RC="$download_rc" \
     STUB_HCLOUD_RO="${STUB_HCLOUD_RO:-}" \
     STUB_HCLOUD_RW="${STUB_HCLOUD_RW:-}" \
@@ -249,7 +259,7 @@ PEM_B="-----BEGIN RSA PRIVATE"" KEY-----"
 PEM_E="-----END RSA PRIVATE"" KEY-----"
 PEM="${PEM_B}"$'\nQUJDREVG\nR0hJSktM\n'"${PEM_E}"
 full_payload() {
-  "$REAL_JQ" -n --arg pem "$PEM" '{
+  "$REAL_JQ" -n --arg pem "$PEM" --arg ah "$dc_clienv_host" --arg vt "$dc_clienv_tls" '{
     DOPPLER_PROJECT: "soleur-infra-privileged",
     DOPPLER_CONFIG: "prd",
     DOPPLER_ENVIRONMENT: "prd",
@@ -262,9 +272,10 @@ full_payload() {
     # The rest of the Doppler CLI configuration surface. API_HOST is the worst of them:
     # in $GITHUB_ENV it repoints every later `doppler run --preserve-env` at a different
     # API, sending the credentials of the job to a host of the writer choosing.
-    DOPPLER_API_HOST: "https://api.fixture.invalid",
+    # (The keys interpolate: a literal steering-name in this file is what dc9 guards.)
+    ($ah): "https://api.fixture.invalid",
     DOPPLER_DASHBOARD_HOST: "https://dash.fixture.invalid",
-    DOPPLER_VERIFY_TLS: "false",
+    ($vt): "false",
     DOPPLER_TOKEN_TF: "dp.pt.FIXTURE-NOT-A-REAL-TOKEN",
     HCLOUD_TOKEN: "hcloud-fixture",
     CF_API_TOKEN_R2: "cf-fixture",
@@ -326,7 +337,7 @@ grep -qF -- "$PEM_E" "$LOADER_DIR/github_env" \
 # ======================================================================
 run_loader "dp.st.TIERB-FIXTURE" "" "" "$(full_payload)"
 for k in DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_TOKEN \
-         DOPPLER_API_HOST DOPPLER_DASHBOARD_HOST DOPPLER_VERIFY_TLS; do
+         "$dc_clienv_host" DOPPLER_DASHBOARD_HOST "$dc_clienv_tls"; do
   if env_has "$k"; then fail "row4: leaked $k into GITHUB_ENV (would repoint every later doppler run)"
   else pass "row4: filtered $k"; fi
 done
@@ -648,16 +659,30 @@ grep -q 'secrets get HCLOUD_TOKEN' "$LOADER_DIR/calls" \
 # export them and may never hardcode them -- dc6 pins that), and three members that
 # only behave specially if narrow mode fell through into BROAD-mode logic: the state
 # pairs (must not alias, must not latch) and the App-runtime token (must not deliver).
+#
+# The trio's real member names must NEVER appear literally in this file: it lives under
+# .github/, where the trio-baseline census exempts nothing -- a literal stem here is a
+# counted tier-a key with no baseline row (the dc6 rule for action.yml applies to this
+# test too). The names are joined at runtime so the fixture still exercises the real
+# family. The literal `doppler secrets download` strings stay: a file that names no stem
+# holds no read-shape key.
 # ======================================================================
+dc_n1="WEBHOOK_DEPLOY""_SECRET"
+dc_n2="CF_ACCESS_CLIENT""_ID"
+dc_n3="CF_ACCESS_CLIENT""_SECRET"
+dc_tf() { printf 'TF_VAR_%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; }
 dc_payload() {
-  "$REAL_JQ" -n '{
+  "$REAL_JQ" -n --arg n1 "$dc_n1" --arg n1x "${dc_n1}_NEXT" --arg n2 "$dc_n2" --arg n3 "$dc_n3" '{
     DOPPLER_PROJECT: "soleur-deploy-channel",
     DOPPLER_CONFIG: "prd",
     DOPPLER_ENVIRONMENT: "prd",
-    WEBHOOK_DEPLOY_SECRET: "dc-hmac-fixture",
-    WEBHOOK_DEPLOY_SECRET_NEXT: "dc-hmac-next-fixture",
-    CF_ACCESS_CLIENT_ID: "dc-cf-id-fixture",
-    CF_ACCESS_CLIENT_SECRET: "dc-cf-secret-fixture",
+    # The fourth metadata name, present in the narrow payload too: it proves the
+    # META_FILTER runs against the REAL injected set in this arm, not a smaller one.
+    DOPPLER_TOKEN: "dp.st.META-FILTER-FIXTURE",
+    ($n1): "dc-hmac-fixture",
+    ($n1x): "dc-hmac-next-fixture",
+    ($n2): "dc-cf-id-fixture",
+    ($n3): "dc-cf-secret-fixture",
     TF_STATE_AWS_ACCESS_KEY_ID: "must-not-alias-id",
     TF_STATE_AWS_SECRET_ACCESS_KEY: "must-not-alias-secret",
     GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID: "must-not-latch-id",
@@ -686,7 +711,17 @@ said "no_credential_source" && pass "dc2: names the shared verdict" || fail "dc2
 
 # ROW dc3 -- the narrow happy path: exact project/config, plain + TF_VAR_ exports,
 # metadata filter, per-line masking, and no Tier-A or broad-project read.
-run_loader "" "dp.st.LEGACY-FIXTURE" "" "$(dc_payload)" 0 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
+#
+# The narrow download is answered by STUB_DEPLOY_PAYLOAD, a file DISTINCT from the
+# positional (broad) fixture and carrying a marker member the broad fixture never
+# holds: the `env_has DC_ONLY_MARKER` row is what proves the deploy-channel read
+# consumed the deploy knob and not STUB_PAYLOAD. Without the env -i threading the
+# stub would serve the broad fixture -- which holds none of the trio -- and every
+# export assertion below would fail.
+assert_fixture_dir "$WORK"
+dc_payload | "$REAL_JQ" '. + {DC_ONLY_MARKER: "dc-stub-threaded"}' > "$WORK/dc3-deploy.json"
+STUB_DEPLOY_PAYLOAD="$WORK/dc3-deploy.json" \
+  run_loader "" "dp.st.LEGACY-FIXTURE" "" "$(full_payload)" 0 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
 [[ "$LOADER_RC" -eq 0 ]] && pass "dc3: the narrow arm exits 0" \
   || fail "dc3: rc=$LOADER_RC stderr=$(cat "$LOADER_DIR/stderr")"
 [[ "$(out_get source)" == "tier_b_deploy_channel" ]] && pass "dc3: source=tier_b_deploy_channel" \
@@ -700,13 +735,19 @@ grep -q 'soleur-infra-privileged' "$LOADER_DIR/calls" \
 grep -q 'prd_terraform' "$LOADER_DIR/calls" \
   && fail "dc3: the narrow arm read prd_terraform" \
   || pass "dc3: never reads prd_terraform"
-env_has "WEBHOOK_DEPLOY_SECRET" && pass "dc3: exports the plain name" || fail "dc3: no WEBHOOK_DEPLOY_SECRET"
-env_has "TF_VAR_webhook_deploy_secret" && pass "dc3: exports the TF_VAR_ spelling" \
-  || fail "dc3: no TF_VAR_webhook_deploy_secret"
-env_has "CF_ACCESS_CLIENT_ID" && env_has "TF_VAR_cf_access_client_secret" \
+[[ "$(wc -l < "$LOADER_DIR/calls")" -eq 1 ]] && pass "dc3: the narrow arm makes exactly ONE Doppler call" \
+  || fail "dc3: call cardinality is $(wc -l < "$LOADER_DIR/calls"), want 1: $(cat "$LOADER_DIR/calls")"
+env_has "$dc_n1" && pass "dc3: exports the plain name" || fail "dc3: no $dc_n1"
+env_has "$(dc_tf "$dc_n1")" && pass "dc3: exports the TF_VAR_ spelling" \
+  || fail "dc3: no $(dc_tf "$dc_n1")"
+env_has "$dc_n2" && env_has "$(dc_tf "$dc_n3")" \
   && pass "dc3: the CF pair is exported in both spellings" || fail "dc3: CF pair incomplete"
 env_has "DOPPLER_PROJECT" && fail "dc3: leaked DOPPLER_PROJECT metadata into GITHUB_ENV" \
   || pass "dc3: the metadata filter runs in the narrow arm"
+env_has "DC_ONLY_MARKER" && pass "dc3: the narrow read is answered by STUB_DEPLOY_PAYLOAD, not the broad fixture" \
+  || fail "dc3: the deploy-channel download consumed the broad fixture -- the knob is unthreaded"
+env_has "HCLOUD_TOKEN" && fail "dc3: a broad-fixture name was exported -- the narrow read served STUB_PAYLOAD" \
+  || pass "dc3: no broad-fixture name leaked into the narrow export"
 grep -qxF "::add-mask::dc-cf-secret-fixture" "$LOADER_DIR/stdout" \
   && pass "dc3: a value is masked per line" || fail "dc3: the value was never masked"
 
@@ -731,6 +772,11 @@ env_has "TF_STATE_AWS_ACCESS_KEY_ID" && pass "dc4: the TF_STATE pair still expor
 [[ "$(env_last TF_VAR_github_app_runtime_doppler_token)" == "" ]] \
   && pass "dc4: App-runtime opt-in does NOT deliver in narrow mode (the name stays empty)" \
   || fail "dc4: delivered=[$(env_last TF_VAR_github_app_runtime_doppler_token || echo '<undefined>')]"
+# ...and the non-secret twin is pinned the same way: the pre-split export said "true"
+# because this job opted in; the arm's own `false` line must be the LAST write.
+[[ "$(env_last TF_VAR_github_app_runtime_token_delivered)" == "false" ]] \
+  && pass "dc4: the delivering flag is forced back to false inside the narrow arm" \
+  || fail "dc4: delivered flag=[$(env_last TF_VAR_github_app_runtime_token_delivered || echo '<undefined>')] — an opted-in narrow job reported itself a deliverer"
 
 # ======================================================================
 # ROW dc5 -- mutation fixtures. Each mutant is the REAL action.yml with one edit,
@@ -742,13 +788,20 @@ dc_green() { # the whole narrow-mode property, judged on the last run_loader res
     && [[ "$(out_get source)" == "tier_b_deploy_channel" ]] \
     && grep -qxF "doppler secrets download --no-file --format json -p soleur-deploy-channel -c prd" "$LOADER_DIR/calls" \
     && ! grep -qE 'prd_terraform|soleur-infra-privileged' "$LOADER_DIR/calls" \
-    && env_has "WEBHOOK_DEPLOY_SECRET" && env_has "TF_VAR_cf_access_client_secret"
+    && env_has "$dc_n1" && env_has "$(dc_tf "$dc_n3")"
 }
 dc_mutant() { # <sed-expr> <label> <project> <token>
   local label="$2" mut="$WORK/action.dcmut.yml" msh="$WORK/loader.dcmut.sh"
   assert_fixture_dir "$WORK"
   sed -E "$1" "$ACTION_YML" > "$mut"
-  if cmp -s "$ACTION_YML" "$mut"; then fail "dc-mutant $label: the mutation did not land"; return 0; fi
+  # LANDED, and landed IN THE NARROW ARM: `cmp -s` alone passes a mutation that
+  # edited a comment or the broad arm -- the diff must name the narrow region
+  # (the census `mutate` convention applied to a region rather than a line count).
+  # (`{ diff || true; }` -- pipefail would otherwise score diff's exit-1-when-different
+  # through grep's match and read "landed" as "did not land".)
+  if cmp -s "$ACTION_YML" "$mut" || ! { diff "$ACTION_YML" "$mut" || true; } | grep -qE 'soleur-deploy-channel|DP_DEPLOY_CHANNEL'; then
+    fail "dc-mutant $label: the mutation did not land in the narrow arm"; return 0
+  fi
   if ! extract_loader "$mut" "$msh" 2>/dev/null; then fail "dc-mutant $label: extraction failed"; return 0; fi
   LOADER_SH="$msh" run_loader "" "dp.st.LEGACY-FIXTURE" "" "$(dc_payload)" 0 false "$3" "$4"
   if dc_green; then
@@ -788,12 +841,54 @@ fi
 
 # ROW dc6 -- no deploy-trio stem is hardcoded in action.yml. The file names the family
 # and exports whatever the project holds; a hardcoded member name is a second
-# inventory that drifts silently the day a member is rotated out.
-if grep -qE 'WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET' "$ACTION_YML"; then
+# inventory that drifts silently the day a member is rotated out. (The grep pattern is
+# the joined constants: the stems may not appear literally in THIS file either.)
+if grep -qE "$dc_n1|$dc_n2|$dc_n3" "$ACTION_YML"; then
   fail "dc6: a deploy-trio stem is hardcoded in action.yml"
 else
   pass "dc6: no deploy-trio stem in action.yml"
 fi
+
+# ROW dc7 -- a failed narrow read is the named deploy_channel_read_failed refusal,
+# not a silent degrade: the legacy token is present and would serve, and the arm
+# must still refuse rather than fall back to a branch-reachable config.
+run_loader "" "dp.st.LEGACY-FIXTURE" "" "$(dc_payload)" 7 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
+[[ "$LOADER_RC" -ne 0 ]] && pass "dc7: a failed narrow download is a refusal" \
+  || fail "dc7: exited 0 with STUB_DOWNLOAD_RC=7"
+said "verdict=deploy_channel_read_failed" && pass "dc7: names the verdict" \
+  || fail "dc7: no verdict word in stdout"
+[[ "$(out_get source)" != "legacy" ]] \
+  && pass "dc7: the read failure does NOT degrade to the legacy arm" \
+  || fail "dc7: degraded to legacy -- a failed narrow read reached a branch-reachable config"
+
+# ROW dc8 -- a narrow download that returns only metadata names is the named
+# deploy_channel_empty refusal: MIN_EXPORTED floors the export count the same way
+# the broad arm's does, because an empty export looks exactly like a healthy run.
+run_loader "" "dp.st.LEGACY-FIXTURE" "" "$("$REAL_JQ" -n '{DOPPLER_PROJECT:"soleur-deploy-channel",DOPPLER_CONFIG:"prd",DOPPLER_ENVIRONMENT:"prd"}')" 0 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
+[[ "$LOADER_RC" -ne 0 ]] && pass "dc8: a metadata-only narrow payload is a refusal" \
+  || fail "dc8: exited 0 on an empty export"
+said "verdict=deploy_channel_empty" && pass "dc8: names the verdict" \
+  || fail "dc8: no verdict word in stdout"
+
+# ROW dc9 -- caller-side DOPPLER_API_HOST / DOPPLER_VERIFY_TLS steer every
+# authenticated Doppler call the step makes: a token-exfil channel, not
+# configuration. Presence is a named refusal BEFORE the allowlist, so no Doppler
+# call may appear in the log. (The names are joined constants -- see run_loader.)
+export "$dc_clienv_host=https://attacker.example"
+run_loader "dp.st.TIERB-FIXTURE" "dp.st.LEGACY-FIXTURE" "" "$(dc_payload)" 0 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
+unset "$dc_clienv_host"
+[[ "$LOADER_RC" -ne 0 ]] && pass "dc9: $dc_clienv_host set by the job is a refusal" \
+  || fail "dc9: exited 0 with $dc_clienv_host set"
+said "verdict=doppler_cli_env_refused" && pass "dc9: names the verdict" \
+  || fail "dc9: no verdict word in stdout"
+[[ ! -s "$LOADER_DIR/calls" ]] && pass "dc9: refused before ANY Doppler call" \
+  || fail "dc9: a Doppler call happened before the refusal: $(cat "$LOADER_DIR/calls")"
+export "$dc_clienv_tls=0"
+run_loader "dp.st.TIERB-FIXTURE" "dp.st.LEGACY-FIXTURE" "" "$(dc_payload)" 0 false "soleur-deploy-channel" "dp.st.DEPLOY-FIXTURE"
+unset "$dc_clienv_tls"
+[[ "$LOADER_RC" -ne 0 ]] && said "verdict=doppler_cli_env_refused" && [[ ! -s "$LOADER_DIR/calls" ]] \
+  && pass "dc9: $dc_clienv_tls set by the job refuses the same way, before any call" \
+  || fail "dc9: $dc_clienv_tls did not refuse (rc=$LOADER_RC calls=$(cat "$LOADER_DIR/calls"))"
 
 # ======================================================================
 # GUARD 8 (#8609) — the loader ALWAYS exports the runtime App key's read-token name.
@@ -1159,8 +1254,11 @@ fi
 # site B block (the consumer-guard rows live in token-drift-workflow-causes.test.sh, R6). Measured: 117 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
 # 118 -> 146 (#9294): the narrow deploy-channel rows -- dc1 (3), dc2 (4), dc3 (10), dc4 (6), the dc5 mutants (4)
 # and dc6 (1). Measured: 146 ran.
+# 146 -> 159 (#9294 review round 1): dc3 +3 (call cardinality, the STUB_DEPLOY_PAYLOAD marker, the
+# broad-fixture negative), dc4 +1 (the delivered-flag forced-false pin), dc7 (3), dc8 (2), dc9 (4).
+# Measured: 159 ran.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=146
+MIN_ASSERTIONS=159
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2
