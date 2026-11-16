@@ -11,6 +11,10 @@
 // planted filter from running (host-git's header lists `filter.*` as not closed); it stops the filter from receiving a
 // token. `runConnectedRepoGit` is not used: its `FORBIDDEN_GIT_FLAGS` refuses `--hard`, which the reset needs.
 //
+// The ONE local-git runner for agent-authored workspaces (#12600, CTO ruling D21): server/ensure-workspace-repo.ts's
+// session-start overlay uses it too (its twin is merged here). A timed-out git is killed with SIGKILL, so a planted
+// filter that traps SIGTERM cannot outlive the bound.
+//
 // A leaf: `node:child_process`, `node:util` and host-git only.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -30,6 +34,7 @@ export const runWorkspaceLocalGit: WorkspaceLocalGitRunner = async (args, { cwd,
     cwd,
     env: h.env,
     timeout,
+    killSignal: "SIGKILL",
     encoding: "buffer",
     maxBuffer: 10 * 1024 * 1024,
   });

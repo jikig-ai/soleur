@@ -861,7 +861,9 @@ describe("census: every host-side git exec site is classified (consistency with 
   // The census proves the classification table agrees with the source IN THE SAME COMMIT; a diff can edit both. The
   // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
   const SERVER = join(__dirname, "..", "server");
-  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts", "workspace-local-git.ts"];
+  // ensure-workspace-repo.ts left this list with #12600 D21: it now reaches host git only through workspace-local-git.ts
+  // (the runner twin is merged), pinned by the row below.
+  const IN_SCOPE = ["session-sync.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts", "workspace-local-git.ts"];
   const CENSUS_ONLY: Record<string, string> = {
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
     "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",
@@ -929,6 +931,15 @@ describe("census: every host-side git exec site is classified (consistency with 
         expect(call, `${rel}: a git exec passes the server environment: ${call.slice(0, 80)}`).not.toMatch(/process\.env/);
       }
     }
+  });
+
+  it("ensure-workspace-repo.ts runs its overlay git through runWorkspaceLocalGit, with no exec site of its own (D21)", () => {
+    const src = code(join(SERVER, "ensure-workspace-repo.ts"));
+    expect(src.match(GIT_EXEC) ?? []).toEqual([]);
+    expect(src).not.toMatch(/\bexecFile\b/);
+    expect(src).toMatch(/import \{[^}]*\brunWorkspaceLocalGit\b[^}]*\} from "@\/server\/workspace-local-git"/);
+    // the default overlay runner is the shared one (the test seam replaces it only in tests)
+    expect(src).toMatch(/const realLocalGit: LocalGitFn = async \(args, cwd\) => \(\{\s*stdout: \(await runWorkspaceLocalGit\(args, \{ cwd, timeout: 30_000 \}\)\)\.toString\(\),?\s*\}\);/);
   });
 
   it("production call sites pass only the three allowProtocol constants, each with its pinned value", () => {
