@@ -261,6 +261,33 @@ the same ADR-241 amendment) or a per-row `Re-class:` ruling; do not decide
 silently (see `decision-challenges.md`). Terminal assertion: zero `tier-a`,
 `FALLBACK:*`, `ALIAS:*` rows; every `tier-b` row proven.
 
+## Downtime & Cutover
+
+The gate's trigger classes (host reboot/replace, lock-taking DDL, dropped
+in-flight requests) do not apply — no serving surface is restructured. The
+change *is* a credential-source cutover, so the zero-downtime property is
+proved here explicitly rather than left implicit:
+
+- **Mechanism (expand-contract, not a hard cut):** the trio exists in BOTH
+  stores during the migration — `prd_terraform`/repo secrets stay live until
+  PR-B is green on main canaries (the owner-named tail deletes them last).
+  The `soleur-deploy-channel` copy is hash-equal, so a consumer reading either
+  store receives byte-identical values; there is no window in which a correct
+  caller fails because the value moved.
+- **Per-stage verification:** after PR-A, the operator read-back verifies
+  `protection_rules` before any secret is seeded; after the seed, the first
+  `scheduled-inngest-health` run reporting `source=tier_b_deploy_channel` is
+  the live proof; after PR-B, the census suites + the deletion postcondition
+  close the loop.
+- **Rollback at every stage:** PR-A is inert (nothing references the new env);
+  post-seed pre-PR-B a consumer PR can be reverted with no credential change;
+  post-PR-B a revert restores `secrets.*` binds against still-live Tier-A
+  copies. Rollback becomes impossible only after the owner-named deletion —
+  which is exactly why it is gated on green canaries.
+- **Residual window:** between PR-B's merge and the deletion step the trio is
+  double-homed (bounded by the same-day owner step); between PR-A's merge and
+  the seed, no job binds `deploy-channel`, so the empty carrier fails nothing.
+
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** deploys silently stop —
@@ -307,8 +334,8 @@ logs:
   retention: GitHub Actions log retention (90d)
 
 discoverability_test:
-  command: bash -c 'grep -q "deploy-channel" tests/scripts/test-infra-privileged-tier-census.sh && printf "deploy-channel-boundary-pinned\n"'
-  expected_output: deploy-channel-boundary-pinned
+  command: bash -c 'git grep -q soleur-deploy-channel .github/actions/infra-credentials/action.yml && printf "narrow-mode-present\n"'
+  expected_output: narrow-mode-present
 ```
 
 ## Encryption Posture
@@ -535,6 +562,48 @@ Mutation-driven (each maps to a Guard matrix row):
 - A scanner class-rule refinement, if needed, changes a guard suite itself —
   it lands only with the ADR-241 amendment recording it.
 
+## Research Insights
+
+Premise validation (authoritative `gh`/git output, 2026-11-16):
+
+| Premise | Verdict |
+|---|---|
+| #9294 OPEN; #10390 epic; #8609 gated; #7103/#10382 open; #10548 open; #6178 CLOSED | confirmed |
+| Prior partials #10376, #10458, #10928, #12330 MERGED | confirmed (`gh pr view`); rotation PR-B #12445 also merged — `local.deploy_service_token_ids` carries only the new id `d9204def…`, so the Access-token rotation tail the issue names is already done |
+| No `deploy-channel-environment.tf`, `webhook_deploy_secret_next`, or `or` render exists | confirmed by grep — the carrier was never built; PR-1's remaining rungs are this slice |
+| Trio already in `soleur-infra-privileged/prd` (Tier B) post-PR-2 | confirmed — `tunnel.tf` comment + loader whole-project export already serve Terraform-fed consumers |
+| 11 workflows bind `secrets.<trio>` today | confirmed by git grep: web-platform-release, canary-status, cutover-inngest, deploy-inngest-image, inngest-key-rotate, inngest-link-flip, key-rotate, restart-inngest-server, scheduled-followthrough-sweeper, scheduled-inngest-health (+ residual binds in apply-deploy-pipeline-fix) |
+
+Measured facts the design rests on:
+
+- `infra-privileged-environment.tf` header (lines 41-49): a referenced-but-missing
+  environment is auto-created with NO protection — the load-bearing reason for
+  the two-PR sequence.
+- `infra-app-project.tf` (lines 1-17): the D11 narrow-project precedent —
+  Terraform declares the bare project + `prd` env; the operator-run script
+  populates values and mints the read token; Census Guard 7 enforces
+  no-secret/no-token/no-data-source.
+- `trio-baseline` scanner classes: `tier-a` = file naming the family WITH a
+  counted read shape (`doppler run|secrets get|download` command,
+  `${{ secrets.<NAME> }}`, `${!var}` family indirection, `terraform output
+  -raw`, composite action, FALLBACK/ALIAS); `tier-b` = workflow whose naming
+  jobs all declare literal Tier-B envs; `sink` = non-workflow with no read
+  shape. Rows are deleted when the file stops naming the family; classes are
+  computed, never asserted.
+- `bc_curl`/`bc_hmac_sha256_hex` transport keeps the trio off argv (ADR-280);
+  scripts' `${VAR:?}` env reads are not counted shapes — that is what makes
+  "de-shape to explicit env reads" a legitimate `tier-a -> sink` move.
+- `cutover-inngest.yml:96` env expr `(rollback|resume|backup) ? 'inngest-cutover' : ''`
+  — the only consumer with a conditional environment; its `op == 'backup'`
+  privileged-loader step stays HCLOUD-only.
+- `model.c4` `github -> doppler` edge (~line 816) enumerates Tier-B
+  environments and loader consumers exhaustively — it must name
+  `deploy-channel` + `soleur-deploy-channel` or it lies.
+- No subagent consults ran (no spawn mechanism on this tool surface); the
+  gates, fork rulings and adversarial checks were applied inline and every
+  open technical fork is recorded `pending - assumed` in
+  `decision-challenges.md` — no independent review is claimed.
+
 ## References & Research
 
 - Issue #9294 (OPEN), epic #10390; gates #8609 (ADR-241 D10/G1).
@@ -550,3 +619,49 @@ Mutation-driven (each maps to a Guard matrix row):
   never argv).
 - Stale-state hold: #7103 B5 (`cloudflare_zero_trust_access_service_token.deploy`
   `removed{destroy=false}` block in `tunnel.tf`).
+
+## Enhancement Summary
+
+deepen-plan run 2026-11-16 (sequential-fallback: no subagent spawn mechanism on
+this tool surface; all gates evaluated inline, no independent review claimed).
+
+### Gate verdicts
+
+| Gate | Verdict |
+|---|---|
+| §4.4 Precedent-Diff | pass — carrier mirrors `infra-app-project.tf`/`infra-privileged-environment.tf` byte-for-byte in shape; divergences (no reviewers, narrow allowlist) are the CTO-ruled point |
+| §4.45 Implementation-Realism | pass — every referenced file/env/constant read from the live tree; loader internals, census constants and scanner class rules verified against source |
+| §4.55 Downtime & Cutover | pass — zero-downtime expand-contract proven in the new `## Downtime & Cutover` section |
+| §4.6 User-Brand Impact | pass — threshold `aggregate pattern` with concrete artifacts |
+| §4.7 Observability | pass after fix — probe was suite-shaped (`tests/` path tripped the 15s-cap heuristic); replaced with a `git grep` probe on the loader file |
+| §4.8 PAT-shaped variables | pass — no `var.*_token`/`TF_VAR_(GITHUB|GH)_*`/literal token shapes; `GH_TOKEN` mentions are the sweeper's existing mechanism name |
+| §4.9 UI wireframe | n/a — no UI surface |
+| §4.10 Encryption Posture | pass — new Doppler project + env-secret connection declared; `does_not_defend` fields non-boilerplate |
+| §4.11 Guard Contract | pass — `lint-guard-contract.py` RC 0, 3 guard entries, mutation matrices >=3 rows, assemblies structural |
+| §4.12 Scope Check | pass — one unfenced section, all asks mapped, inferred rows justified |
+| §4.13 Task Design | pass — `sweep-deploy-channel` answers all six questions; dedupe = exclusive partition |
+
+### Key Improvements
+
+- Two-PR sequence replaces a single-shot cutover after discovering GitHub
+  auto-creates an unprotected environment for a job that references a missing
+  one (`infra-privileged-environment.tf:41-49`) — a single-PR shape would have
+  shipped a branch-reachable carrier worse than the repo secrets it replaces.
+- Sweeper partition design (`FT_ONLY_SECRETS`/`FT_EXCLUDE_SECRETS` + coverage
+  refusal) replaces the naive "drop the env binding", which would have made
+  Guard 3 red every open trio tracker daily.
+- Baseline end-state rule made explicit: rows are deleted/forward-classed per
+  the scanner's own computation, with ADR-241 `Allow:`/`Reclass:`/`Re-date:`
+  lines only where the ratchet demands — no silent reclass.
+- Loader constraint added: narrow mode must name no trio stem literally, or
+  the composite-action class would pin a permanent `tier-a` row.
+- Rotation PR-B (#12445) discovered merged — the Access-token rotation the
+  brief flags as a future tail is already done; only the HMAC machinery +
+  stale-state reconciliation remain operator-reserved.
+
+### New Considerations Discovered
+
+- #6178 is CLOSED (was OPEN at the earlier G1 plan) — its followthrough probe
+  retires in this slice rather than migrating.
+- `DOPPLER_TOKEN_DEPLOY_CHANNEL` must be seeded on BOTH `deploy-channel` and
+  `inngest-cutover` (gated cutover ops keep their reviewer-gated env).
