@@ -2364,7 +2364,7 @@ if [ "$SECTION" != all ]; then
   [ "$FAIL" -eq 0 ]
   exit
 fi
-MIN_HELPER_ROWS=109
+MIN_HELPER_ROWS=149
 if [ "$HELPER_ROWS" -lt "$MIN_HELPER_ROWS" ]; then
   printf '[FATAL] helper floor: only %s helper rows ran, want >=%s\n' "$HELPER_ROWS" "$MIN_HELPER_ROWS" >&2
   exit 1
@@ -2380,14 +2380,14 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1
 fi
-# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 187 + sentinel 119.
-MIN_TOTAL=415
+# Exact current total (the floor is the full count, not a margin below it): helper 149 + steps 187 + sentinel 120.
+MIN_TOTAL=456
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
 fi
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-if [ "$SELFTESTS" -ne 68 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 68\n' "$SELFTESTS" >&2; exit 1; fi
+if [ "$SELFTESTS" -ne 74 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 74\n' "$SELFTESTS" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
 echo "Guard: $PASS passed, $FAIL failed"

@@ -11,8 +11,10 @@
 # CONTRACT
 #   Plain mode   exit 0 = the list (possibly empty) is on stdout; exit 2 = git failed or usage was wrong. On a
 #                non-zero exit stdout is NOT a list and must not be read as "nothing changed".
-#   --match ERE  grep exit semantics: 0 = at least one path matches (the matches are printed), 1 = none match,
-#                2 = git or usage failure. A git failure is NEVER folded into "none match".
+#   --match ERE  0 = at least one path matches (the matches are printed), 42 = none match, 2 = git or usage failure.
+#                A git failure is NEVER folded into "none match". Not grep's 1: bash exits 1 on an unbound variable under
+#                `set -u` (in the caller's line or in here), and routing that into "none match" would skip the gate. Callers
+#                test `[ $? -eq 42 ]` and read every other non-zero rc (1, 126, 127, 128+N) as unknown.
 #   No arguments, or a flag this helper owns but does not support, exits 2 with a usage line on stderr; the helper never
 #   defaults to a diff target of its own.
 #
@@ -23,7 +25,7 @@
 # or a committed `ignore=all` is not listed; (4) a bare `$(git diff | tr)` pipe turns a git failure into an empty list.
 # So: NUL-delimited (`-z`), `--no-renames`, `--ignore-submodules=none`, `git -C <top>` (so `diff.relative=true` cannot
 # make the names cwd-relative), and `set -o pipefail` so a git failure is a failure. In `--match` mode git runs FIRST and
-# its status is checked, then grep reads a here-string: never `grep -q` on a pipe (SIGPIPE 141 would read as failure).
+# its status is checked, then grep reads it through a pipe from printf: never `grep -q` (SIGPIPE 141 would read as failure).
 #
 # A name holding a newline cannot be one line of a one-name-per-line list (it would split into extra "paths", and a
 # gate that ALLOWS on a match can be satisfied by a fragment), so such a diff exits 2: callers treat 2 as unknown and
@@ -97,8 +99,12 @@ if [ "$have_match" -eq 0 ]; then
   exit 0
 fi
 
-[ -n "$out" ] || exit 1
+[ -n "$out" ] || exit 42
 # printf into grep (no -q, so grep reads everything and never SIGPIPEs the writer); a here-string would spill to a
-# temp file for a large list and an unwritable TMPDIR would skip grep entirely and read as rc 1.
+# temp file for a large list and an unwritable TMPDIR would skip grep entirely and read as 42. A printf failure is
+# unknown (2); only grep's own 1 is "none match" (42); every other grep status (2 = bad ERE, 128+N) passes through.
 printf '%s\n' "$out" | LC_ALL=C grep -E -e "$match"
-exit $?
+st=("${PIPESTATUS[@]}")
+[ "${st[0]}" -eq 0 ] || exit 2
+[ "${st[1]}" -ne 1 ] || exit 42
+exit "${st[1]}"

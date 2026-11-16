@@ -893,8 +893,8 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-record-recurring-vendor-expense-before-ready n
 **Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
-# (a) Ledger edited in this change? Exact path only; `unknown` (exit 2/127) is NOT an edit.
-ledger_touched=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/operations/expenses\.md$' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 1 ] || ledger_touched=unknown; }
+# (a) Ledger edited in this change? Exact path only; `unknown` is NOT an edit.
+ledger_touched=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/operations/expenses\.md$' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || ledger_touched=unknown; }
 
 # (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
 # unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
@@ -936,7 +936,7 @@ SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 **Detection:**
 
 ```bash
-gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }
+gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' origin/main...HEAD) || { [ $? -eq 42 ] || gdpr_gate_touch=unknown; }
 sui_plan=$(gh pr view --json body --jq .body \
   | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
 sui_threshold=""
@@ -960,7 +960,7 @@ fi
 
 ```bash
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
-diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }
+diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || diff_match=unknown; }
 crit_refs=$(gh pr view --json body --jq .body | grep -oE '(Closes|Ref) #[0-9]+' | head -n 5)
 ```
 
@@ -1044,10 +1044,10 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
 )
 DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
-dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }
+dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || dpf_match=unknown; }
 ```
 
-If `dpf_match` is non-empty, the gate fires; `unknown` (rc 2/127) also fires it (fail closed). Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
+If `dpf_match` is non-empty, the gate fires; `unknown` also fires it (fail closed). Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
 
 **If triggered:**
 
@@ -1304,7 +1304,7 @@ esac
      `plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`,
      `plugins/soleur/test/ship-pir-action-items-gate.test.sh`, or
      `plugins/soleur/test/fixtures/ship-pir-action-items/`.
-  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. Exit 2/127 from the helper = unknown = not contained: take the PIR path above. If this file is also
+  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. A non-zero exit from the helper = unknown = not contained: take the PIR path above. If this file is also
      changed, **every hunk** of `git diff -U0 origin/main...HEAD -- plugins/soleur/skills/ship/SKILL.md`
      must land inside this Phase 5.5 section — a section is not a path, so without that check
      conjunct 2 cannot tell a Phase 5.5 edit from a rewrite of the merge gate below it.
@@ -1656,11 +1656,11 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 # matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
 # A \b here makes this gate catch zero lines while reading as if it works.
 CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
-plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }
+plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }
 [[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && tr '\n' '\0' <<<"$plan_refs" | xargs -0 grep -inE -e "$CLOSE_DEFER_RE" -- | head -5; }
 ```
 
-Any hit or `unverifiable` (exit 2/127) ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
+Any hit or `unverifiable` ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
 
 Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. The grep is wider than [work/SKILL.md](../work/SKILL.md)'s prose list ("Closes-after-apply", "manual close after", …) because a plan rarely uses those exact words — it writes *"close #N only **after** Phase 4.5 passes"*, where the markdown bold also defeats any regex that expects `after` to be followed by a space.
 
@@ -2168,7 +2168,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 
 Arm through the arm check ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
-If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` prints anything or exits 2/127, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` does not exit 42 (no match), tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 

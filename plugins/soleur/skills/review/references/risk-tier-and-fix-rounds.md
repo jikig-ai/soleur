@@ -54,7 +54,7 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
 2. **Seat set per fix round:** `{seats that reported the findings these commits close} ∪ {path-mapped seats} ∪ {conditional seats}`, resolved mechanically:
 
    ```bash
-   files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown (exit 2/127): skip the script, spawn the full class panel
+   files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown: skip the script, spawn the full class panel
    if [ "$files" = unknown ]; then echo 'fix diff unverifiable: spawn the full class panel'; else
      bash <plugin-root>/skills/review/scripts/fix-round-seats.sh \
        --files "$files" \

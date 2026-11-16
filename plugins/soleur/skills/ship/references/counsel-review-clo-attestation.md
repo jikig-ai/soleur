@@ -9,7 +9,7 @@ Moved verbatim out of `ship/SKILL.md` Phase 5.5 to stay under the SKILL.md body 
 **Trigger:** the PR diff touches a legal-doc directory AND the change is legal-attestation-bearing:
 
 ```bash
-legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)' origin/main...HEAD) || { [ $? -eq 1 ] || legal_touch=unknown; }
+legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)' origin/main...HEAD) || { [ $? -eq 42 ] || legal_touch=unknown; }
 # Scope the marker grep to legal-doc dirs ONLY — otherwise it self-fires on
 # this gate's own prose in ship/SKILL.md or on spec/tasks.md that quotes the
 # literal descriptively (false positive).
@@ -22,7 +22,7 @@ if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
   sui_threshold=$(grep -E '^brand_survival_threshold:\s*single-user incident' "$sui_plan" || true)
 fi
 # Gate fires when legal docs changed AND (single-user-incident OR a DRAFT marker is present)
-# legal_touch=unknown (helper exit 2/127: diff unverifiable) counts as touched, so the gate fires; it never skips.
+# legal_touch=unknown (diff unverifiable) counts as touched, so the gate fires; it never skips.
 ```
 
 **If triggered (`legal_touch` non-empty AND (`sui_threshold` OR `draft_marker` non-empty)):**
