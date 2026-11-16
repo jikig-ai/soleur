@@ -18,7 +18,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
-.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/legal		false-positive: one hop into changed-path-readers.test.sh, which holds the counsel-gate ERE as a string it pins against the skill text; no knowledge-base/legal file is read
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/legal
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/legal/compliance-posture.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/operations
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/operations/expenses.md
@@ -106,7 +106,7 @@ plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/engineering/arch
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/engineering/operations/runbooks
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/engineering/operations/runbooks/recover-userid-from-pino-stdout.md
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/engineering/security/skill-overrides
-plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal		false-positive: the CENSUS_ERES table, the REF_PINS counsel fixture line and one DEFECTS row hold the counsel-gate ERE as a string pinned against the skill text; the suite reads no knowledge-base/legal file
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal/art30-reverification-triggers.yml
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal/article-30-register.md
 plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal/compliance-posture.md

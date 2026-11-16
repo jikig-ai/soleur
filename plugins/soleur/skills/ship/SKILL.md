@@ -978,7 +978,7 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 
 ### Counsel-Review CLO-Attestation Gate
 
-**Trigger:** the diff touches `docs/legal/`, `plugins/soleur/docs/pages/legal/` or `knowledge-base/legal/`, AND the referenced plan declares `brand_survival_threshold: single-user incident` or an added line in those directories carries a `[DRAFT — pending CLO/counsel review` marker. The reviewing authority is the `soleur:legal:clo` agent, not the operator. If it triggers, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) now and follow it; otherwise skip silently.
+**Trigger:** on every ship, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) and run its block; follow it only when the block prints `COUNSEL_GATE=fire`. The reviewing authority is the `soleur:legal:clo` agent, not the operator.
 
 ### Deploy Pipeline Fix Drift Gate
 
@@ -1656,8 +1656,8 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 # matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
 # A \b here makes this gate catch zero lines while reading as if it works.
 CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
-plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }
-[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && tr '\n' '\0' <<<"$plan_refs" | xargs -0 grep -inE -e "$CLOSE_DEFER_RE" -- | head -5; }
+plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }
+[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && { IFS=$'\n' read -r -d '' -a f <<<"$plan_refs"; h=$(grep -inE -e "$CLOSE_DEFER_RE" -- "${f[@]}"); r=$?; [ $r -gt 1 ] && echo 'unverifiable: use Ref #N' || grep -m 5 . <<<"$h"; }; }
 ```
 
 Any hit or `unverifiable` ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
