@@ -710,9 +710,9 @@ type SideStep = { readonly kind: "linked" } | Extract<KbPublishResult, { kind: "
  * (`side_pending`, in `publishKbOnly`). Ruling I extended: build only when the side branch is absent, `P` is an ancestor of
  * `headSha`, or `P`'s KB entry equals `T`'s (the PR merged); else `side_ahead`. The side commit's root is `T`'s with HEAD's
  * KB entry; parents `T` (no side branch), `P` (when `P` already descends from `T`, so the non-force side push stays a
- * fast-forward) or `(P, T)`. The link target is built BEFORE the side push (D14(1)), so nothing that can throw a non-held
- * error runs after a delivery, and the link runs right after it (D14(2)): the side commit itself when HEAD's tree is the side's
- * tree (no non-KB content to keep), else `M'` = merge(headSha, side) with HEAD's tree.
+ * fast-forward) or `(P, T)`. The link target is built and handed over BEFORE the side push (D14(1), D22(b)), so nothing that
+ * can throw a non-held error runs after a delivery, and the link CAS runs right after it (D14(2)): the side commit itself when
+ * HEAD's tree is the side's tree (no non-KB content to keep), else `M'` = merge(headSha, side) with HEAD's tree.
  */
 async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   const { isolated, installationId, url, remote, tV, headSha, headKb } = f;
@@ -739,6 +739,10 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   const guarded = side === f.guardedS.sha ? f.guardedS : await guardKbOnly(isolated, side, tV.root);
   if (!guarded) return fail("side_guard_failed");
   const linkTo = sideTree === f.headTree ? side : await commitTree(isolated, f.headTree, [headSha, side], KB_SYNC_MERGE_MSG);
+  // D22(b), amending D14(2): the hand-over runs BEFORE the side push. The objects are inert until the CAS, so a failed
+  // hand-over is a pre-delivery exit (rolled back, nothing on GitHub), and after the push the side tip is always present in
+  // the workspace: a crash or a `head_moved` after it leaves a no-edit turn that reaches the D17 re-check (`side_pending`).
+  await handOver(isolated, f.writer, linkTo === side ? [side, sideTree] : [side, sideTree, linkTo]);
   try {
     await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D });
   } catch (err) {
@@ -746,10 +750,15 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
     // D21: a network failure of the side push is retried next turn (warning, off the paging op); a reject is a failure.
     return fail(err instanceof KbSyncError && err.reason === "push_transient" ? "side_push_transient" : "side_push_rejected");
   }
-  // D5c/D14(2): the next turn finds the side commit local and an ancestor of HEAD, so (with no new edit) it is
-  // `side_pending`: no push to D, no new merge commit. A failure here is a held reason, never a fallback failure.
-  await handOver(isolated, f.writer, linkTo === side ? [side, sideTree] : [side, sideTree, linkTo]);
-  casLocalBranch(f.writer, D, linkTo, f.localNext);
+  // D5c: the next turn finds the side commit local and an ancestor of HEAD, so (with no new edit) it is `side_pending`: no
+  // push to D, no new merge commit. A failure here is a held reason, never a fallback failure; the side commit is delivered,
+  // so its PR is still ensured, best effort (D22(b)), before the held reason propagates.
+  try {
+    casLocalBranch(f.writer, D, linkTo, f.localNext);
+  } catch (err) {
+    await ensureKbSyncPr(installationId, f.owner, f.repo, D).catch(() => undefined); // a miss is retried by the D17 re-check
+    throw err;
+  }
   return { kind: "linked" };
 }
 

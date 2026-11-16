@@ -1386,17 +1386,104 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     expect(heldLines()).toEqual([]);
   });
 
-  test("D14(5): the link's hand-over fails after the side push -> one held outcome line (unpack_failed), no synthetic_pushed, rolled back", async () => {
+  test("D14(5)/D22(b): the link's hand-over fails -> it runs BEFORE the side push, so nothing is delivered; one held line (unpack_failed), rolled back; turn 3 delivers and links", async () => {
     const side1 = await kbOnlyTurn1();
     let packsSeen = 0;
     H.isoFault = (args) => (args[0] === "pack-objects" && ++packsSeen === 2 ? { code: 1, stdout: Buffer.alloc(0), stderr: "", timedOut: false } : null);
     write(join(row.ws, "knowledge-base", "nested", "b.md"), "b\nturn 2\n");
     await run(row);
-    expect(remoteSide(row)).not.toBe(side1);
+    // instrument: the fault hit the second pack of the turn, the side hand-over (the first is step 4's)
+    expect(packsSeen).toBe(2);
+    expect(remoteSide(row)).toBe(side1);
+    expect(pushesOf().map((r) => r.split(":")[1])).toEqual(["refs/heads/main"]);
     expect(heldLines()).toEqual(["unpack_failed"]);
     expect(H.createPullRequest).not.toHaveBeenCalled();
     expect(parents(row.ws, localMain(row))).toEqual([side1]);
     expect(subjectOf(row.ws, localMain(row))).toBe("Auto-commit after session");
+    // turn 3, no new edit and no fault: turn 2's KB is delivered on side1 and linked (never side_ahead)
+    resetTurn();
+    H.isoFault = null;
+    await run(row);
+    const side2 = remoteSide(row) as string;
+    expect(side2).not.toBe(side1);
+    expect(parents(row.remote, side2)).toEqual([side1]);
+    expect(git(row.remote, "show", `${side2}:knowledge-base/nested/b.md`)).toBe("b\nturn 2");
+    expect(isAnc(row, side2)).toBe(true);
+    expect(heldWarn("side_ahead")).toEqual([]);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+  });
+
+  test("D22(b) first push: the hand-over fails on the FIRST side delivery -> nothing delivered; the next turn delivers it and opens the PR", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nturn 1\n");
+    let packsSeen = 0;
+    H.isoFault = (args) => (args[0] === "pack-objects" && ++packsSeen === 2 ? { code: 1, stdout: Buffer.alloc(0), stderr: "", timedOut: false } : null);
+    await run(row);
+    expect(packsSeen).toBe(2);
+    expect(remoteSide(row)).toBeNull();
+    expect(heldLines()).toEqual(["unpack_failed"]);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    resetTurn();
+    H.isoFault = null;
+    await run(row);
+    const side = remoteSide(row) as string;
+    expect(side).toBeTruthy();
+    expect(localMain(row)).toBe(side);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side]]);
+    expect(heldLines()).toEqual(["synthetic_pushed"]);
+  });
+
+  test("D22(b): the side push lands but the client sees an error (the crash window before the link) -> the side tip is local, so the next no-edit turn opens its PR (D17)", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    let delayed = false;
+    // a gap before the main push puts S and the side commit in different seconds, so the side commit is not S itself
+    H.beforeCall = (args) => {
+      if (args[0] === "push" && !delayed) {
+        delayed = true;
+        sleepSync(1100);
+      }
+    };
+    H.afterCall = (args) => {
+      if (args[0] === "push" && args.some((a) => a.endsWith(":refs/heads/soleur/kb-sync"))) {
+        throw Object.assign(new Error("reset"), { stderr: "fatal: the remote end hung up unexpectedly\n" });
+      }
+    };
+    await run(row);
+    const side = remoteSide(row) as string;
+    expect(side).toBeTruthy();
+    expect(side).not.toBe(packs()[0]?.objects[0]);
+    expect(gitOk(row.ws, "cat-file", "-e", `${side}^{commit}`)).toBe(true);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    resetTurn();
+    H.beforeCall = null;
+    H.afterCall = null;
+    await run(row);
+    expect(pushesOf()).toEqual([]);
+    expect(H.listPullRequestsForHead).toHaveBeenCalledTimes(1);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side]]);
+    expect(heldLines()).toEqual(["side_pr_created"]);
+    expect(heldWarn("side_ahead")).toEqual([]);
+  });
+
+  test("D22(b): the agent commits between the side push and the link (head_moved) -> the PR is still opened this turn, best effort", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    H.afterCall = (args) => {
+      if (args[0] === "push" && args.some((a) => a.endsWith(":refs/heads/soleur/kb-sync"))) {
+        write(join(row.ws, "src", "s.ts"), "export const s = 3;\n");
+        git(row.ws, "commit", "-q", "-am", "agent commit mid-sync");
+      }
+    };
+    await run(row);
+    const side = remoteSide(row) as string;
+    expect(side).toBeTruthy();
+    expect(subjectOf(row.ws, localMain(row))).toBe("agent commit mid-sync");
+    expect(heldLines()).toEqual(["head_moved"]);
+    expect(H.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(H.prs.map((p) => [p.state, p.headSha])).toEqual([["open", side]]);
   });
 
   test("D22(a): protection lifted after side1 was linked -> the M arm's D push lands and the local branch moves to S (local == remote; a UI upload fast-forwards)", async () => {
