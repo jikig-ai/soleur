@@ -2168,7 +2168,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 
 Arm through the arm check ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
-If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` does not exit 42 (no match), tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` does not exit 42 (42 = no match), tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 

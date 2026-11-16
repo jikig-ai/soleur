@@ -13,16 +13,20 @@ legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(d
 # Scope the marker grep to legal-doc dirs ONLY — otherwise it self-fires on
 # this gate's own prose in ship/SKILL.md or on spec/tasks.md that quotes the
 # literal descriptively (false positive).
-draft_marker=$(git diff main...HEAD -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/ \
-  | grep -E '^\+.*\[DRAFT — pending CLO/counsel review' | head -n 1 || true)
-sui_plan=$(gh pr view --json body --jq .body \
-  | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
+# Each read keeps its own exit status: a failed read is `unknown`, never an empty "nothing found".
+if legal_diff=$(git diff origin/main...HEAD -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/); then
+  draft_marker=$(printf '%s\n' "$legal_diff" | grep -E '^\+.*\[DRAFT — pending CLO/counsel review' | head -n 1 || true)
+else draft_marker=unknown; fi
 sui_threshold=""
-if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
-  sui_threshold=$(grep -E '^brand_survival_threshold:\s*single-user incident' "$sui_plan" || true)
-fi
-# Gate fires when legal docs changed AND (single-user-incident OR a DRAFT marker is present)
-# legal_touch=unknown (diff unverifiable) counts as touched, so the gate fires; it never skips.
+if pr_body=$(gh pr view --json body --jq .body); then
+  sui_plan=$(printf '%s\n' "$pr_body" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
+  if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
+    sui_threshold=$(grep -E '^brand_survival_threshold:\s*single-user incident' "$sui_plan" || true)
+  fi
+else sui_threshold=unknown; fi
+# Gate fires when legal docs changed AND (single-user-incident OR a DRAFT marker is present).
+# Fail closed: legal_touch=unknown counts as touched, and a failed diff or PR-body read sets draft_marker or
+# sui_threshold to unknown, which counts as present.
 ```
 
 **If triggered (`legal_touch` non-empty AND (`sui_threshold` OR `draft_marker` non-empty)):**

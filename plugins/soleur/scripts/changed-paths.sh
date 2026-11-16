@@ -11,7 +11,8 @@
 # CONTRACT
 #   Plain mode   exit 0 = the list (possibly empty) is on stdout; exit 2 = git failed or usage was wrong. On a
 #                non-zero exit stdout is NOT a list and must not be read as "nothing changed".
-#   --match ERE  0 = at least one path matches (the matches are printed), 42 = none match, 2 = git or usage failure.
+#   --match ERE  0 = at least one path matches (the matches are printed), 42 = none match, 2 = git, usage, read or
+#                write failure.
 #                A git failure is NEVER folded into "none match". Not grep's 1: bash exits 1 on an unbound variable under
 #                `set -u` (in the caller's line or in here), and routing that into "none match" would skip the gate. Callers
 #                test `[ $? -eq 42 ]` and read every other non-zero rc (1, 126, 127, 128+N) as unknown.
@@ -87,11 +88,13 @@ fi
 
 # Byte locale throughout: the list is raw bytes now, and under a UTF-8 locale GNU grep reports a name holding an
 # invalid UTF-8 byte as "binary file matches" instead of printing it.
-if [ "$(LC_ALL=C tr -dc '\n' <"$tmp" | wc -c)" -gt 0 ]; then
+# Every read of the temp file is checked: a failed read is an empty list, which would read as 42 ("none match").
+nl="$(LC_ALL=C tr -dc '\n' <"$tmp" | wc -c)" || { printf 'changed-paths: cannot read the diff list\n' >&2; exit 2; }
+if [ "$nl" -gt 0 ]; then
   printf 'changed-paths: a changed path contains a newline; it cannot be listed one per line\n' >&2
   exit 2
 fi
-out="$(LC_ALL=C tr '\0' '\n' <"$tmp")"
+out="$(LC_ALL=C tr '\0' '\n' <"$tmp")" || { printf 'changed-paths: cannot read the diff list\n' >&2; exit 2; }
 
 if [ "$have_match" -eq 0 ]; then
   # A failed write (full disk, closed pipe) is a failure: a truncated list at rc 0 reads as a shorter diff.
@@ -102,7 +105,8 @@ fi
 [ -n "$out" ] || exit 42
 # printf into grep (no -q, so grep reads everything and never SIGPIPEs the writer); a here-string would spill to a
 # temp file for a large list and an unwritable TMPDIR would skip grep entirely and read as 42. A printf failure is
-# unknown (2); only grep's own 1 is "none match" (42); every other grep status (2 = bad ERE, 128+N) passes through.
+# unknown (2), including the SIGPIPE a grep that dies early (bad ERE, signal) can send it on a large list; only grep's
+# own 1 is "none match" (42); after a clean printf every other grep status (2 = bad ERE, 128+N) passes through.
 printf '%s\n' "$out" | LC_ALL=C grep -E -e "$match"
 st=("${PIPESTATUS[@]}")
 [ "${st[0]}" -eq 0 ] || exit 2

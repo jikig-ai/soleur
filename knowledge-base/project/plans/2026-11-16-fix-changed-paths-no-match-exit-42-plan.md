@@ -296,6 +296,12 @@ None. 96 open `code-review` issues were checked against every planned path (and 
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a ship run on their repository that silently skips a gate it should have fired: CLO counsel review on a legal-document change, gdpr-gate, the data-processing-flow gate, the vendor-expense ledger check, or the `Closes` -> `Ref` downgrade. A regression in the other direction (exit 42 misread) would fire those gates on every PR and spend extra review cost.
+- **Version skew (added 2026-11-16 from review, CTO R3):** if the skill text and the helper come from different installs, every no-match reads `unknown` and the gates run. That happens when new `-eq 42` text runs against a stale `${CLAUDE_PLUGIN_ROOT}` helper that exits 1, and also in the reverse pairing. They never skip, but on every ship four things happen:
+  - gdpr-gate adds a lasting `compliance/critical` label.
+  - The DPF gate offers its production `terraform apply -target=...` fallback.
+  - A broad vendor-cost signal aborts headless runs at the ledger check.
+  - `plan_refs` rewrites `Closes` to `Ref`.
+  The counsel gate is noisy only on `single-user incident` plans, but review-time gdpr-gate runs on every review. Recovery: update the plugin and start a fresh session, so the skill text and the helper come from the same install.
 - **If this leaks, the user's workflow is exposed via:** a legal document or regulated-data change merged without the attestation step that `soleur:ship` promises. No data leaves the user's machine: the helper is local, layer 7.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the failure needs a specific shell condition (`set -u` with an unsubstituted root, or a helper defect) to coincide with a gated change, and it yields a skipped review rather than a data exposure. That is a pattern-level trust erosion, not a single-user breach. It matches the threshold the rest of the changed-path-readers arc used.
@@ -325,6 +331,12 @@ failure_modes:
   - mode: a caller regresses to [ $? -eq 1 ]
     detection: "CI: skill_ship_handler_pin / REF_PINS counsel row RED, plus DEFECTS rows (a)/(b) prove the pins reject it"
     alert_route: CI test check on the PR
+  - mode: version skew between the skill text and the helper (a stale plugin root, or text loaded before an in-place update)
+    detection: "layer 7: every gate fires on every ship (VAR=unknown); not distinguishable in-session from a real helper failure, by decision (CTO R3)"
+    alert_route: in-session; recovery is a plugin update plus a fresh session
+  - mode: a failed read of the diff list inside the helper (tr or the temp-file redirect)
+    detection: "layer 7: changed-paths: cannot read the diff list on stderr, rc 2, VAR=unknown; CI: the failed-read helper rows"
+    alert_route: in-session; CI test check on regression
   - mode: helper returns 42 for a non-no-match outcome (e.g. bad ERE)
     detection: "CI: helper row '--match with an invalid ERE exits 2'"
     alert_route: CI test check on the PR
