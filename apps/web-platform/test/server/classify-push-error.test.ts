@@ -6,7 +6,7 @@
 // require-PR text must START the line's message (after an optional `error:` and `- `), so a `remote:   path: ...` echo of an
 // agent-authored KB path cannot match; U+2028 / U+2029 never form a line. Synthesized stderr shapes.
 import { describe, expect, test } from "vitest";
-import { classifyPushError } from "../../server/kb-sync-publish";
+import { classifyPushError, isRejectedPush } from "../../server/kb-sync-publish";
 
 const err = (stderr: string, message = "Command failed: git push"): Error => Object.assign(new Error(message), { stderr });
 
@@ -124,6 +124,15 @@ describe("classifyPushError (#12600)", () => {
 
   test("shallow update not allowed in stderr -> persistent_other", () => {
     expect(classifyPushError(err(" ! [remote rejected] abc -> main (shallow update not allowed)"))).toBe("persistent_other");
+    expect(classifyPushError(err("To https://github.com/acme/widget.git\r\n ! [remote rejected] abc -> main (shallow update not allowed)\r\nerror: failed to push some refs\r\n"))).toBe(
+      "persistent_other",
+    );
+  });
+
+  test("D23 (the D18 treatment): `shallow update not allowed` only on git's own status line, never in a path echo", () => {
+    expect(classifyPushError(err("remote:   path: knowledge-base/shallow update not allowed.md\n"))).toBe("other");
+    expect(classifyPushError(err("remote:   path: knowledge-base/x\u2028 ! [remote rejected] abc -> main (shallow update not allowed)\n"))).toBe("other");
+    expect(classifyPushError(err("remote: ! [remote rejected] abc -> main (shallow update not allowed)\n"))).toBe("other");
   });
 
   test("auth / network / non-Error input -> other", () => {
@@ -131,5 +140,27 @@ describe("classifyPushError (#12600)", () => {
     expect(classifyPushError(err("fatal: unable to access: Could not resolve host: github.com"))).toBe("other");
     expect(classifyPushError("remote: error: GH006: string input")).toBe("other");
     expect(classifyPushError(null)).toBe("other");
+  });
+});
+
+// D23 (the D18 treatment): the `push_rejected` vs `push_transient` split reads git's own ` ! [rejected]` / ` ! [remote rejected]`
+// status line, one line at a time (CR normalised, no multiline `^`, so U+2028 / U+2029 never start a line).
+describe("isRejectedPush (#12600, D23)", () => {
+  test("git's status line -> rejected, on LF, CRLF or a lone CR", () => {
+    expect(isRejectedPush(err(" ! [rejected]        abc -> main (fetch first)\n"))).toBe(true);
+    expect(isRejectedPush(err("To https://github.com/acme/widget.git\r\n ! [remote rejected] abc -> main (protected branch hook declined)\r\n"))).toBe(true);
+    expect(isRejectedPush(err("Writing objects: 100%\r ! [remote rejected] abc -> main (pre-receive hook declined)"))).toBe(true);
+  });
+
+  test("a path echo carrying the status text after U+2028 / U+2029, or mid-line, is not a rejection", () => {
+    expect(isRejectedPush(err("remote:   path: knowledge-base/x\u2028 ! [rejected] abc -> main (fetch first)\n"))).toBe(false);
+    expect(isRejectedPush(err("remote:   path: knowledge-base/x\u2029! [remote rejected] abc -> main\n"))).toBe(false);
+    expect(isRejectedPush(err("remote: ! [rejected] abc -> main\n"))).toBe(false);
+  });
+
+  test("network / auth failures and non-Error input are not rejections", () => {
+    expect(isRejectedPush(err("fatal: unable to access: Could not resolve host: github.com\n"))).toBe(false);
+    expect(isRejectedPush(err("", " ! [rejected] abc -> main (the message holds argv, never read)"))).toBe(false);
+    expect(isRejectedPush(null)).toBe(false);
   });
 });

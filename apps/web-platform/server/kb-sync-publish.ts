@@ -39,6 +39,13 @@ const GH006_LINE_RE = /^remote: error: GH006:/;
  * that requires a PR; CTO rulings D9, D18). `[ \t]`, never `\s`: the text must sit on the `remote:` line itself.
  */
 const REQUIRE_PR_LINE_RE = /^remote:(?: error:)?[ \t]*(?:-[ \t]*)?Changes must be made through a pull request/;
+/** git's own status line for a shallow reject (D23, the D18 treatment): `<src> -> <dst>` cannot hold a space or tab. */
+const SHALLOW_LINE_RE = /^[ \t]*! \[remote rejected\] [^ \t]+ -> [^ \t]+ \(shallow update not allowed\)[ \t]*$/;
+/** git's own status line for a rejected ref update (D23): it starts the line, so a `remote:` echo cannot forge it. */
+const REJECTED_LINE_RE = /^[ \t]*! \[(?:rejected|remote rejected)\]/;
+
+/** git's stderr lines: CR normalised (`\r\n?` -> `\n`), split on `\n` only, so U+2028 / U+2029 never start a line (D18). */
+const stderrLines = (err: unknown): string[] => stderrOf(err).replace(/\r\n?/g, "\n").split("\n");
 
 /**
  * Classify a failed `git push` error from git's STDERR only (#12600, CTO rulings R2, R16, re-ruled by D9 and D18). CR is
@@ -46,15 +53,24 @@ const REQUIRE_PR_LINE_RE = /^remote:(?: error:)?[ \t]*(?:-[ \t]*)?Changes must b
  * each line is tested with NON-multiline regexes: a line-anchored `remote: error: GH006:`, or a `remote:` line whose message
  * starts with GitHub's require-PR text. So neither a ref name in git's own status line (ref names cannot hold spaces), nor a
  * `remote:   path: ...` echo of an agent-authored KB path, nor U+2028 / U+2029 (never a line here), nor `err.message` (argv: the
- * URL and the refspec) can steer it. GH013 without the require-PR text (secret push protection) stays `other`. Narrow by
- * design: auth/network rejections fall through to `other`.
+ * URL and the refspec) can steer it. GH013 without the require-PR text (secret push protection) stays `other`. A shallow
+ * reject is `persistent_other` only on git's own ` ! [remote rejected] <src> -> <dst> (shallow update not allowed)` line (D23).
+ * Narrow by design: auth/network rejections fall through to `other`.
  */
 export function classifyPushError(err: unknown): PushErrorClass {
   if (!(err instanceof Error)) return "other";
-  const stderr = stderrOf(err).replace(/\r\n?/g, "\n");
-  if (stderr.split("\n").some((line) => GH006_LINE_RE.test(line) || REQUIRE_PR_LINE_RE.test(line))) return "protected_branch";
-  if (stderr.includes("shallow update not allowed")) return "persistent_other";
+  const lines = stderrLines(err);
+  if (lines.some((line) => GH006_LINE_RE.test(line) || REQUIRE_PR_LINE_RE.test(line))) return "protected_branch";
+  if (lines.some((line) => SHALLOW_LINE_RE.test(line))) return "persistent_other";
   return "other";
+}
+
+/**
+ * A failed push that the remote answered (git's ` ! [rejected]` / ` ! [remote rejected]` status line), as opposed to one that
+ * never reached it (`push_transient`). Per line from stderr only, with the same normalisation as `classifyPushError` (D23).
+ */
+export function isRejectedPush(err: unknown): boolean {
+  return stderrLines(err).some((line) => REJECTED_LINE_RE.test(line));
 }
 
 // #5426 — protected-branch fallback. When the user's default branch is
@@ -499,7 +515,7 @@ async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
     });
   } catch (err) {
     const pushClass = classifyPushError(err);
-    const rejected = pushClass !== "other" || /^\s*! \[(rejected|remote rejected)\]/m.test(stderrOf(err));
+    const rejected = pushClass !== "other" || isRejectedPush(err);
     throw new KbSyncError(rejected ? "push_rejected" : "push_transient", pushClass);
   }
 }
