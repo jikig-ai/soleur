@@ -56,7 +56,8 @@ if [[ -z "$STAGES" ]]; then
   echo "TRANSIENT: no private_nic_* emission in 30d — the helper is not on the host yet." >&2
   echo "           #8539's code merging does not deliver it. It reaches the host only via:" >&2
   echo "             gh workflow run apply-web-platform-infra.yml \\" >&2
-  echo "               -f apply_target=inngest-host-replace -f reason='deliver the #8539 NIC converge'" >&2
+  echo "               -f apply_target=inngest-host-replace -f confirm=PUBLIC-SDK-URL -f reason='deliver the #8539 NIC converge'" >&2
+  echo "               (the confirm token acknowledges the public sdk_url risks: read #12742 first)" >&2
   echo "           followed by a human-approved: gh workflow run cutover-inngest.yml -f op=resume" >&2
   exit 2
 fi

@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1800
-# generated-at=2026-11-16T10:42:29Z
+# generated-at=2026-11-16T14:48:29Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=b2017fc287d74a23d67c5b25c4e1e6b7302d190ff9bb253afbf807148c86f612
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -590,6 +590,7 @@ scripts/registry-htpasswd-stdin-10119	1622	measured
 scripts/registry-luks-live-8386	2821	measured
 scripts/rename-guard	2934	measured
 scripts/review-reminder-liveness	119	measured
+scripts/rotate-sentry-actions-ro-token	1800	floor
 scripts/rotate-supabase-db-credential	622	measured
 scripts/rule-metrics-aggregate	2799	measured
 scripts/rules-loader-stamp-probe	153	measured

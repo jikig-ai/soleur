@@ -68,7 +68,8 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # public SERVER_IP).
     ingress_rule {
       hostname = "ssh.${var.app_domain_base}"
-      service  = "ssh://${var.web_hosts["web-1"].private_ip}:22"
+      # The jump host is the keyed `jump` field (exactly one, variables.tf; web-1 today).
+      service = "ssh://${one([for h in values(var.web_hosts) : h.private_ip if h.jump])}:22"
     }
     # #6122 (ADR-096) — registry PUSH ingress. A web-host cloudflared connector proxies to
     # the private-net zot host, so the registry host needs NO cloudflared of its own. CI runs
@@ -79,7 +80,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # connector replicas CF selects per edge colo, and it load-balances across them. So this
     # rule is correct only while EVERY connector host is a 10.0.1.0/24 member (ADR-114
     # invariant I1). That holds today: the single live connector is web-2
-    # (server.tf `web_tunnel_connector = each.key == "web-2"`, 10.0.1.11 — moved off the
+    # (the var.web_hosts key with `tunnel_connector = true`, 10.0.1.11 — moved off the
     # LUKS-pinned, non-replaceable web-1 for the cloudflared >= 2026.10.2 eMudhra fix), and
     # web-1 is 10.0.1.10 regardless.
     # It is nonetheless the RIGHT pattern and the one to generalize — its service is
@@ -208,9 +209,9 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 # GitHub Actions runs `cloudflared access tcp --hostname ssh.${app_domain_base}`
 # carrying TUNNEL_SERVICE_TOKEN_ID + TUNNEL_SERVICE_TOKEN_SECRET. CF Access
 # validates the headers and bridges the raw TCP forward into the tunnel,
-# where the answering cloudflared connector delivers to web-1's sshd at
-# `${var.web_hosts["web-1"].private_ip}:22` — origin-relative since #6594, so the
-# bridge lands on web-1 no matter which connector replica CF selects.
+# where the answering cloudflared connector delivers to the jump host's sshd (the
+# var.web_hosts key with `jump = true`, web-1 today) — origin-relative since #6594, so the
+# bridge lands on the jump host no matter which connector replica CF selects.
 
 resource "cloudflare_zero_trust_access_application" "ssh" {
   zone_id = var.cf_zone_id

@@ -3,8 +3,10 @@
 //
 // The placement-aware Inngest forwarder (server/inngest/exec-placement.ts)
 // needs each web host to self-identify as the step-executing host — the host
-// carrying the ADR-119 workspaces LUKS volume and the Inngest `--sdk-url`
-// registration poll. ci-deploy.sh injects the host's `10.0.1.x` NIC address as
+// carrying the ADR-119 workspaces LUKS volume. (The Inngest `--sdk-url` is no
+// longer a 10.0.1.10 address: it is the public serve URL, live at the owner's
+// inngest-host-replace; ADR-100 Decision 1, #10538.) ci-deploy.sh injects the
+// host's `10.0.1.x` NIC address as
 // `-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND"` into the prod container (empty for
 // the deploy canary — an empty value must refuse pinned work, which is correct
 // because the canary serves no step traffic).
