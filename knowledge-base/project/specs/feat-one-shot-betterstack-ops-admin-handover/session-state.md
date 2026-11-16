@@ -29,5 +29,14 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: cto, learnings-rese
 - AC4 note: local Terraform is 1.9.8 (removed{} needs >= 1.7); fmt -check and validate pass there; CI pins 1.10.5.
 - AC8 note: the only non-new figures on the rewritten rows are quoted history ($29 assumed seat price, #7577's "Nano ($30 EU)", $0 Slack path / Team member).
 - AC13: monitors probe 200. GET team-members?email=ops@ returns 404 (ops@ is Admin now) -> the forget's refresh drops the entry: expected plan shows no change / 0 to destroy for that address.
+- AC13 correction (review, 2026-11-16): the 404 above was not what the provider's Read sees. Apply run 43870657893 (main, 12:54Z) refreshed `betteruptime_team_member.ops` and planned no create, so the Read still succeeds for ops@ as Admin. Expect a `["forget"]` row for the address at merge, not "no change"; it trips no destroy-guard counter (security seat fed a synthetic forget through the pinned filter: resource_deletes 0).
 - Gates: parity 402/0, census 422/0 (G4a 10 blocks), c4 parity+freshness green, vitest c4 35/35, encryption-posture PASS, markdownlint 0.
 - Affected gate: NOT run locally (operator call 2026-11-16: machine contended — SIBLING_RUN_DETECTED, queued 355 s, selected 332 of 762; stopped before any suite verdict). CI's required `test` context is the gate for this PR; the touched-file suites above were run directly.
+
+## Review Phase
+
+- Panel: 9 seats at 5ea87e06d0 (security, architecture, git-history, pattern, code-quality, test-design, semgrep-sast, structural enumeration, simplicity). No P1 from the 8 judgement seats except test-design (2 surviving destroy mutations).
+- Fixed inline: FIX B rewritten as a repo-wide closed set (a), a live-block pin in uptime-alerts.tf with destroy=false and a raw heredoc scan (b), the exact -target operand (c); listInfraTfFiles and census tf_files skip dotfiles; TEST_FLOOR exact at 397. 13/13 mutations RED (dotfile, heredoc, destroy=true, dropped block, re-add, import+indirect email, uppercase email, unquoted labels, module, .tf.json, other root, brace-in-string, keyed -target).
+- Docs: cost-model COGS split into Responder 68.00 + Better Stack 20.60, subtotal 359.47 -> 380.07; ADR-096 free-tier premise falsified; runbook invite step replaced; model.c4 stale phrases rewritten; jq/logs-alerts comments corrected; invoice number removed (public repo).
+- Operator holds filed: #12827 (Responder licenses 2 -> 1), #12828 (ops@ password and 2FA recovery-code location).
+- Decision (reviewer-driven, overrides plan mutation row H2): (a) now forbids ANY betteruptime_team_member in any tracked .tf/.tf.json, not just ops@. The provider deletes by email, so a label/literal check cannot express the property; a future legitimate non-admin member edits this test.

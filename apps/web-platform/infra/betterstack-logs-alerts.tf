@@ -24,11 +24,11 @@
 # also PRIORITY 2) is deliberately outside the operator's stated scope — decision-challenges
 # UC-1 and ADR-218 record the exclusion; opting in is one more needle.
 #
-# ROUTING. The free tier has no escalation policy (every `betteruptime_policy` is
+# ROUTING. Escalation policies are gated off (every `betteruptime_policy` is
 # `count = var.betterstack_paid_tier ? 1 : 0`), so this alert emails the same team surface every
-# sibling monitor and heartbeat uses (the team's responder ops@jikigai.com, the org Admin managed
-# by the vendor since 2026-11-16) and escalates to betteruptime_policy.uptime when the paid tier is enabled — the same ternary as
-# uptime-alerts.tf, in the alert's escalation_target shape.
+# sibling monitor and heartbeat uses (ops@jikigai.com, the vendor-managed org Admin; see the
+# removed block in uptime-alerts.tf) and escalates to betteruptime_policy.uptime when the paid
+# tier is enabled — the same ternary as uptime-alerts.tf, in the alert's escalation_target shape.
 #
 # CHANGED THE SQL? BUMP THE REV. `monitor_send_failed_probe_rev` is the ONLY trigger of
 # terraform_data.send_failed_alert_probe (server.tf): the SSH apply runs on every push to main

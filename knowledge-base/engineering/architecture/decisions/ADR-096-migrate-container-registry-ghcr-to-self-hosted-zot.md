@@ -675,9 +675,13 @@ mitigations un-live. Both are structural, not one-off:
   is a `betteruptime_outgoing_webhook` forward or a Responder-tier upgrade (expense-gated, out of
   scope). Status stays **Adopting**.
 
-  *2026-11-16: `betteruptime_team_member.ops` is forgotten (`removed { destroy = false }`). ops@ is
-  now the org Admin, managed by the vendor, because the provider manages non-admin members only.
-  The `-target` stays as a tombstone.*
+  *2026-11-16: the free-tier premise above did not hold: `role = "responder"` consumed a billed
+  Responder license (the 2026-11-14 invoice bills 2 at $34; see `expenses.md`). The operator then
+  made ops@ the org Admin in the vendor UI. Terraform cannot manage an Admin (the provider manages
+  non-admin members only), so `betteruptime_team_member.ops` is forgotten
+  (`removed { destroy = false }`). The kept `-target` triggers the forget on the merge's apply and
+  is inert afterwards. Recipient membership is vendor-UI state again; Slack (ADR-260) and the
+  incident mirror (ADR-298) do not depend on it.*
 
 ### Disk-full root cause + blind-host observability (amendment 2026-07-08, #6240/#6244)
 

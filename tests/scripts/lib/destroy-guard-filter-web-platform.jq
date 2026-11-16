@@ -39,12 +39,11 @@
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
 # is null → positive count. Do not keep a hand-written inventory of the root's
-# `removed` blocks here (one went stale): list them with
+# `removed` blocks here: list them with
 #   grep -n '^removed' apps/web-platform/infra/*.tf
-# and check each "from" type against the nested_deletes clauses below. tunnel.tf's
-# cloudflare_zero_trust_access_service_token forget IS a Cloudflare type (already
-# applied); betteruptime_team_member.ops (uptime-alerts.tf, 2026-11-16) is not.
-# A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
+# and check each "from" type against the six types the nested_deletes clauses
+# below select on. Only a forget of one of THOSE types trips it; the remedy
+# DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
 #     path with no ack token to type past), so the

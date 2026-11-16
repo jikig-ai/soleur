@@ -640,14 +640,16 @@ resource "betteruptime_heartbeat" "inngest_luks_key_probe_deadman" {
   }
 }
 
-# ── Better Stack alert recipient ops@jikigai.com: managed by the vendor, not Terraform ──
+# ── Better Stack alert recipient ops@jikigai.com (vendor-managed) ─────────────
 #
 # FORGOTTEN, NOT DESTROYED (2026-11-16). ops@jikigai.com is now the org's sole Admin, set
 # through the Better Stack web app; the account owner was moved to Billing admin, so only one
 # Responder seat is used. ops@ forwards to the Soleur inbox. BetterStackHQ/better-uptime
 # manages NON-ADMIN members only, and its Delete calls DELETE /api/v2/team-members?email=… —
 # deleting the resource block WITHOUT this removed block would delete the org's only Admin.
-# ops@'s Admin membership is drift outside IaC, recorded only by the vendor.
+# ops@'s Admin membership is drift outside IaC, recorded only by the vendor. No Terraform root
+# in this repo may declare a betteruptime_team_member again (FIX B (a) in
+# terraform-target-parity.test.ts pins that across every tracked .tf/.tf.json).
 #
 # Under -target a removed block is planned only when its address is targeted, so keep
 # `-target=betteruptime_team_member.ops` in the apply job's saved plan. Once the forget has

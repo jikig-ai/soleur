@@ -379,25 +379,29 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Anthropic API (cron-ux-audit) | 15.00 [expenses.md@2026-07-30] | `expenses.md` (one cron; figure unverified since 2026-04-19 — see the Anthropic note below this table) |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
 | Sentry Team (error tracking + cron monitors, $29 base + $44.56 PAYG: 52 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 73.56 [expenses.md@2026-08-03] | `expenses.md` (live-verified — see note) |
-| Better Stack | 68.00 [expenses.md@2026-08-16] | expenses.md@2026-11-16 (see the 2026-11-16 note) |
+| Better Stack Responder (2 licenses × $34) | 68.00 [expenses.md@2026-11-16] | `expenses.md` (invoice-read; 34.00 after the pending 2→1 cut, #12827) |
+| Better Stack (heartbeats $20.00 + Logs Europe PAYG $0.60) | 20.60 [expenses.md@2026-11-16] | `expenses.md` (invoice-read; logs vary month to month) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
 | Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
 | Flagsmith | 45.00 [expenses.md@2026-09-22] | `expenses.md` (active monthly subscription; upgraded after reaching the prior account limit) |
-| **Subtotal Product COGS** | **359.47 [expenses.md@2026-09-29]** | |
+| **Subtotal Product COGS** | **380.07 [expenses.md@2026-11-16]** | |
 
 > **2026-11-16 Better Stack correction.** `expenses.md` now splits Better Stack by invoice line
-> (invoice BS-408456-20261114-335): **Better Stack Responder 68.00** (2 Responder licenses at $34)
-> and **Better Stack 20.60** (heartbeats $20.00 + Logs Europe PAYG $0.60). The vendor total is
-> **88.60**, or about **54.60** after the pending 2→1 license cut. Both §4.1 line-and-anchor
-> conditions hold, so the next monthly review re-derives the subtotals rather than this note:
-> (i) the subtotal moves less than 10% (+$20.60 on 359.47 of Product COGS, about 5.7%); (ii) no
-> `⌈burn ÷ price⌉` boundary is crossed: COGS of 380.07 stays at **8** users at both $49 and $48,
-> and the all-in floor of ≥1,319.92 stays at **27** users at $49 and **28** at $48. Unpausing the 4
-> paused heartbeats (+$20) **would** cross boundaries: COGS 400.07 means **9** users at both
-> prices, and the all-in ≥1,339.92 goes from 27 to **28** users at $49, so that change requires a
-> full re-derivation. This supersedes the 2026-09-28 review note's "the seat was **still declined** … the
-> deferred row stands" and the earlier review note's "Better Stack's paid observability plan
-> (**+$68/month**, active since 2026-08-16)": that $68 was the Responder licenses, not a plan.
+> (the 2026-11-14 invoice): **Better Stack Responder 68.00** (2 Responder licenses at $34) and
+> **Better Stack 20.60** (heartbeats $20.00 + Logs Europe PAYG $0.60). The vendor total is **88.60**,
+> or about **54.60** after the pending 2→1 license cut (#12827). Line-and-anchor update, as on
+> 2026-09-29: the table gains the 20.60 line and Product COGS moves **359.47 → 380.07** (+5.7%), all-in
+> floor **≥1,299.32 → ≥1,319.92**. The Per-User Summary, Break-Even, margin and Gate #4 figures below
+> still read 359.47 / 1,299.32 and are re-derived at the next monthly review; their user counts do not
+> change: COGS 380.07 is **8** users at both $49 and $48, all-in ≥1,319.92 is **27** at $49 and **28**
+> at $48. Two pending changes each cross a boundary, so whichever lands first requires a full
+> re-derivation: (1) the 2→1 cut (all-in ≥1,285.92 is **27** at $48, down from 28); (2) unpausing the 4
+> paused heartbeats (+$20; with 2 licenses COGS 400.07 is **9** users at both prices and all-in
+> ≥1,339.92 is **28** at $49; after the cut it is COGS 366.07, 8 users, and all-in ≥1,305.92, 27 at $49
+> and 28 at $48). This supersedes the 2026-09-28 review note's "the seat was **still declined** … the
+> deferred row stands". The earlier review note's "Better Stack's paid observability plan
+> (**+$68/month**, active since 2026-08-16)" equals the 2-license Responder line on this invoice;
+> whether the 2026-08-16 charge was that same line is not verified (see `expenses.md`).
 
 > **Proton Mail is COGS, not overhead (#6538, 2026-07-16).** The row is easy to read as
 > G&A — it is not. Proton delivers `ops@soleur.ai`, the company operational address that

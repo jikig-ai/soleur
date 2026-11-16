@@ -122,8 +122,8 @@ and `"Better Stack expenses"` both return nothing, and draft PR #12813 is this b
   change any decision.
 
 **Value proposition (0.6c).** Not applicable: this is not a cost-saving mechanism. The ledger
-correction moves Better Stack from $68.00 booked to $88.60 billed (+$20.60/mo), taken from invoice
-BS-408456-20261114-335.
+correction moves Better Stack from $68.00 booked to $88.60 billed (+$20.60/mo), taken from the
+2026-11-14 invoice (number withheld: public repo).
 
 **Relevant files and anchors.**
 
@@ -293,7 +293,7 @@ BS-408456-20261114-335.
    - **The "Better Stack Responder (DEFERRED)" row** becomes
      `| Better Stack Responder | Better Stack | observability | 68.00 | active | 2026-12-14 | … |`.
      Its Notes cell, in order:
-     - The billed fact: "Responders (PAYG), 2 licenses × $34.00, invoice BS-408456-20261114-335,
+     - The billed fact: "Responders (PAYG), 2 licenses × $34.00, the 2026-11-14 invoice,
        paid 2026-11-14, period 2026-11-14 to 2026-12-13."
      - A dated note headed **[2026-11-16 — supersedes the DEFERRED status and the 2026-09-28 "STILL
        DECLINED" line]**:
@@ -318,7 +318,7 @@ BS-408456-20261114-335.
        - Logs Europe PAYG: 4 GB (3 included, 1 extra), 90-day retention, $0.60. This line is
          usage-based and varies from month to month.
      - A dated note headed **[2026-11-16 — invoice read]**:
-       - The 68.00 moved to "Better Stack Responder" per invoice BS-408456-20261114-335. It is a
+       - The 68.00 moved to "Better Stack Responder" per the 2026-11-14 invoice. It is a
          move, not a saving. The vendor total is 88.60.
        - The invoice has no logs-plan line, because logs bill PAYG. #7577's "Nano ($30 EU)
          downgrade" therefore has no plan to downgrade from.
