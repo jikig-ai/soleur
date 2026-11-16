@@ -222,7 +222,7 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     expect(JSON.stringify(outer)).not.toMatch(/github\.com|Command failed/);
   });
 
-  test("D20: a non-KbSyncError carries extra.frame = its first server/app/lib stack frame as file:line, never the message", async () => {
+  test("D20/D23: a non-KbSyncError carries extra.frame = its first server/app/lib stack frame as file:line:column, never the message", async () => {
     // the message itself holds an `at` line naming an app path: only the frames AFTER the header may be read
     const err = new TypeError("Cannot read https://github.com/acme/widgets.git\n    at forged (/srv/app/apps/web-platform/server/evil.ts:1:1)");
     err.stack = [
@@ -237,7 +237,7 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     const outer = opsOf(reportSilentFallbackSpy, "syncPush");
     expect(outer).toHaveLength(1);
     const [, ctx] = outer[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }];
-    expect(ctx.extra).toEqual({ userId: "user-1", errName: "TypeError", frame: "server/kb-sync-publish.ts:812" });
+    expect(ctx.extra).toEqual({ userId: "user-1", errName: "TypeError", frame: "server/kb-sync-publish.ts:812:17" });
     expect(ctx.tags).toEqual({ reason: "unclassified", push_class: "none" });
     expect(JSON.stringify(outer)).not.toMatch(/github\.com|evil|Cannot read/);
   });
