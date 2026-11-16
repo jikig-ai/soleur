@@ -180,6 +180,20 @@ describe("gitWithInstallationAuth child env and argv", () => {
     }
   });
 
+  test("D19(1): a PRESENT `hardened` key whose value is undefined is refused before the mint (a falsy handle never runs the legacy arm)", async () => {
+    calls.length = 0;
+    mint.mockClear();
+    await expect(gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { hardened: undefined, cwd: "/ws/parent/work" })).rejects.toThrow(
+      /hardened/,
+    );
+    expect(mint).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    // the key ABSENT is the legacy form, unchanged
+    await gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { cwd: "/ws/parent/work" });
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+  });
+
   test("hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring", async () => {
     const saved = new Map<string, string | undefined>();
     for (const k of HARDENED_ENV_ALLOWLIST) {

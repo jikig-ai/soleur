@@ -472,6 +472,22 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(localMain(row)).toBe(S);
     expect(heldInfo("unpack_failed")).toHaveLength(0);
     expect(packs().map((p) => p.count)).toEqual([2]);
+    // Instrument control (D19(4)): the injected 1 MiB cap bites. The same runner on an output above it returns -1, and the
+    // same read with the cap lifted succeeds, so the row above passed because the pack is small, not because no cap applied.
+    const { createIsolatedPushDir } = await import("@/server/git-isolated-push-dir");
+    const { runIsolatedGitLocal } = await import("@/server/git-isolated-local");
+    const { disposeIsolated } = await import("@/server/push-branch");
+    const iso = createIsolatedPushDir(row.ws);
+    try {
+      const blob = git(row.ws, "rev-parse", `${S}:knowledge-base/big.bin`);
+      expect((await runIsolatedGitLocal(iso, ["cat-file", "blob", blob])).code).toBe(-1);
+      H.isoMaxBuffer = 0;
+      const full = await runIsolatedGitLocal(iso, ["cat-file", "blob", blob]);
+      expect(full.code).toBe(0);
+      expect(full.stdout.length).toBeGreaterThan(1024 * 1024);
+    } finally {
+      disposeIsolated(iso);
+    }
   });
 
   test("H3: foreign commit and no KB change -> remote unchanged, one held_foreign info line, no Sentry event", async () => {

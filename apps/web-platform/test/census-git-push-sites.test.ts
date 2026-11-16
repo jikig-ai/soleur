@@ -1,22 +1,30 @@
-// AST census of the token-bearing git surface (#12600, CTO ruling D12(1)), over EVERY apps/web-platform/server/**/*.ts(x),
+// AST census of the token-bearing git surface (#12600, CTO rulings D12(1), D19), over EVERY apps/web-platform/server/** source
+// file (`.ts`, `.tsx`, `.mts`, `.mjs`),
 // built on test/approval/source-scan.ts (`parseSource` = `ts.createSourceFile`, `censusSource`, `callSites`). It replaces
 // the 2-file / 1-spelling regex census: a backtick literal, a variable, a spread, a `-c` prefix, an alias import or a
 // function passed as a value are each seen by the grammar, not by a pattern.
 //
 //   1. Every `gitWithInstallationAuth` reference is an import, a call or its definition (an alias is followed; a value use,
 //      namespace member, re-export or dynamic import is red). Every call is recorded as (file, first verb or `dynamic`,
-//      arm = `hardened` when the options object carries `hardened:`, else `legacy`) and the multiset must equal
-//      GIT_AUTH_SITES below.
+//      arm = `hardened` when the options object carries `hardened:` with a value that is not `undefined`, `void 0` or
+//      `null`; such a value is `legacy-suspect`, which no table row may hold (D19(1); git-auth.ts also throws on a present
+//      undefined key at runtime); else `legacy`) and the multiset must equal GIT_AUTH_SITES below.
 //   2. Every string / no-substitution template literal (and template head) equal to `push`, `send-pack` or `receive-pack`
 //      is recorded with its syntactic context (an argv array and the call or variable it feeds, a call argument, a
 //      property, a variable, a comparison) and the multiset must equal PUSH_TOKEN_SITES. A token in a git argv position
 //      (`argv@...` or `var:...`) may sit only in kb-sync-publish.ts (the ONE KB sync push) and push-branch.ts (the
 //      approved cc push), plus the named non-workspace pushes and classifier word lists below.
+//   3. No non-test file OUTSIDE server/ can reach `gitWithInstallationAuth`: none names it, and every edge into server/git-auth
+//      is a plain named import of another export (no namespace import, re-export, dynamic import or require), pinned in
+//      OUTSIDE_SERVER_GIT_AUTH_EDGES (D19(2)).
+//
+// PUSH_TOKEN_SITES churns with HUMAN-TEXT `push` tokens too (an op slug, a message, a word list): a new row there is reviewed
+// like any other, it is not proof of a new git push. The known-positive plants its shapes through an in-memory override of
+// one file, so only that file is re-parsed (D19(3)).
 //
 // Out of the census by design: REST writes (the Contents API) are user-initiated KB UI writes, not git pushes. A
 // computed name (`"pu" + "sh"`, `R["gitWith" + "InstallationAuth"]`) is invisible to a static scan (named residual).
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
@@ -35,7 +43,6 @@ const GIT_AUTH_SITES = [
   "server/session-sync.ts pull legacy",
   "server/workspace-sync.ts fetch opts-dynamic", // an options variable built from the injected runner's caller
   "server/workspace-sync.ts pull legacy",
-  "server/workspace-sync.ts symbolic-ref legacy",
   "server/workspace.ts clone legacy",
 ];
 
@@ -45,8 +52,6 @@ const GIT_AUTH_SITES = [
  */
 const STRAY_ALLOWED = [
   "server/workspace-sync.ts edge:dynamic-import",
-  "server/workspace-sync.ts other",
-  "server/workspace-sync.ts other",
   "server/workspace-sync.ts other",
   "server/workspace-sync.ts other",
   "server/workspace-sync.ts other",
@@ -71,6 +76,7 @@ const PUSH_TOKEN_SITES = [
   "server/destroy-ask-classifier.ts receive-pack argv@var:GIT_PUSH_VALUE_LONG",
   "server/git-data-replication.ts push argv@var:pushArgs",
   "server/git-data-replication.ts push argv@var:rescuePushArgs",
+  "server/inngest/cron-bash-allowlist-hook.mjs push cmp", // a Bash allowlist hook comparing the agent's git subcommand
   "server/inngest/functions/_cron-safe-commit.ts push arg:failure",
   "server/inngest/functions/_cron-safe-commit.ts push argv@call:git",
   "server/inngest/functions/workspace-reconcile-on-push.ts push prop:op",
@@ -80,11 +86,20 @@ const PUSH_TOKEN_SITES = [
   "server/session-sync.ts push arg:autoCommitFailure",
 ];
 
-const walk = (dir: string): string[] =>
+/** Edges into server/git-auth from non-test files outside server/: (file role). Each is a named import of another export. */
+const OUTSIDE_SERVER_GIT_AUTH_EDGES = [
+  "app/api/repo/setup/route.ts import", // GitOperationError, sanitizeGitStderr
+  "app/api/repo/status/route.ts import", // parseErrorPayload
+  "components/connect-repo/failed-state.tsx type-import", // GitErrorCode
+];
+
+const SOURCE_RE = /\.(tsx?|mts|mjs)$/;
+const SKIP_DIRS = new Set(["node_modules", ".next", "test", "tests", "e2e", "__tests__", "coverage", "dist", "public", ".git"]);
+const walk = (dir: string, skip: ReadonlySet<string> = new Set()): string[] =>
   readdirSync(dir).flatMap((f) => {
     const p = join(dir, f);
-    if (statSync(p).isDirectory()) return walk(p);
-    return /\.tsx?$/.test(f) && !f.endsWith(".d.ts") ? [p] : [];
+    if (statSync(p).isDirectory()) return skip.has(f) ? [] : walk(p, skip);
+    return SOURCE_RE.test(f) && !f.endsWith(".d.ts") && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(f) ? [p] : [];
   });
 
 const calleeName = (e: ts.Expression): string =>
@@ -133,6 +148,13 @@ function contextOf(node: ts.Node): string | null {
   return ts.SyntaxKind[p.kind];
 }
 
+/** `undefined`, `void <x>` or `null`, through parentheses, `as`, `satisfies` and `!`: a `hardened:` value that hardens nothing. */
+function nullish(e: ts.Expression): boolean {
+  let x: ts.Expression = e;
+  while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isSatisfiesExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+  return (ts.isIdentifier(x) && x.text === "undefined") || ts.isVoidExpression(x) || x.kind === ts.SyntaxKind.NullKeyword;
+}
+
 interface Census {
   gitAuth: string[];
   pushTokens: string[];
@@ -140,11 +162,10 @@ interface Census {
   strayRefs: string[];
 }
 
-function census(root: string): Census {
+/** The census of ONE server file. */
+function censusFile(file: string, src: string): Census {
   const out: Census = { gitAuth: [], pushTokens: [], strayRefs: [] };
-  for (const abs of walk(join(root, "server"))) {
-    const file = relative(root, abs);
-    const src = readFileSync(abs, "utf8");
+  {
     for (const h of censusSource(src, file, IDENT, ["server/git-auth"])) {
       if (h.kind === "edge" && h.role !== "import" && h.role !== "type-import") out.strayRefs.push(`${file} edge:${h.role}`);
       if (h.kind === "id" && !["import", "call", "definition"].includes(h.role)) out.strayRefs.push(`${file} ${h.role}`);
@@ -164,12 +185,15 @@ function census(root: string): Census {
         calls++;
         const opts = n.arguments[2];
         const named = (p: ts.ObjectLiteralElementLike) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText(sf) === "hardened";
+        const prop = opts && ts.isObjectLiteralExpression(opts) ? opts.properties.find(named) : undefined;
         const arm = !opts
           ? "legacy"
           : !ts.isObjectLiteralExpression(opts)
             ? "opts-dynamic"
-            : opts.properties.some(named)
-              ? "hardened"
+            : prop
+              ? ts.isPropertyAssignment(prop) && nullish(prop.initializer)
+                ? "legacy-suspect"
+                : "hardened"
               : opts.properties.some((p) => ts.isSpreadAssignment(p) && /\bhardened\s*:/.test(p.expression.getText(sf)))
                 ? "conditional"
                 : "legacy";
@@ -189,13 +213,34 @@ function census(root: string): Census {
       if (shared !== calls) out.strayRefs.push(`${file} callSites=${shared} ast=${calls}`);
     }
   }
+  return out;
+}
+
+/** Every server file's census, parsed once from disk; the known-positive re-parses only the file it overrides. */
+const SERVER_FILES = walk(join(APP, "server")).map((abs) => relative(APP, abs));
+const BASE = new Map(SERVER_FILES.map((f) => [f, censusFile(f, readFileSync(join(APP, f), "utf8"))] as const));
+
+function census(overrides: ReadonlyMap<string, string> = new Map()): Census {
+  const out: Census = { gitAuth: [], pushTokens: [], strayRefs: [] };
+  for (const f of SERVER_FILES) {
+    const src = overrides.get(f);
+    const c = src === undefined ? (BASE.get(f) as Census) : censusFile(f, src);
+    out.gitAuth.push(...c.gitAuth);
+    out.pushTokens.push(...c.pushTokens);
+    out.strayRefs.push(...c.strayRefs);
+  }
   out.gitAuth.sort();
   out.pushTokens.sort();
   return out;
 }
 
-describe("census: the token-bearing git surface of server/ (D12)", () => {
-  const c = census(APP);
+describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
+  const c = census();
+
+  test("the walk covers .mts and .mjs server files too (D19(2))", () => {
+    expect(SERVER_FILES.some((f) => f.endsWith(".mjs"))).toBe(true);
+    expect(SERVER_FILES).toContain("server/kb-sync-publish.ts");
+  });
 
   test("gitWithInstallationAuth: every reference is an import, a call or its definition (or a listed injection)", () => {
     expect([...c.strayRefs].sort()).toEqual([...STRAY_ALLOWED].sort());
@@ -203,6 +248,7 @@ describe("census: the token-bearing git surface of server/ (D12)", () => {
 
   test("gitWithInstallationAuth: the call sites by file, first verb and arm equal the checked-in table", () => {
     expect(c.gitAuth).toEqual([...GIT_AUTH_SITES].sort());
+    expect(c.gitAuth.filter((s) => s.endsWith(" legacy-suspect"))).toEqual([]);
     // the KB sync's token-bearing calls are all hardened (H5)
     for (const s of c.gitAuth.filter((x) => x.startsWith("server/kb-sync-publish.ts "))) expect(s).toMatch(/ hardened$/);
   });
@@ -218,44 +264,57 @@ describe("census: the token-bearing git surface of server/ (D12)", () => {
     expect(argv.filter((s) => s.startsWith("server/session-sync.ts "))).toEqual([]);
   });
 
-  test("known-positive: planted pushes in a temp copy (backtick, variable, spread with a -c prefix, alias) all turn the census red", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "census-"));
-    try {
-      cpSync(join(APP, "server"), join(tmp, "server"), { recursive: true });
-      const target = join(tmp, "server", "session-sync.ts");
-      const src = readFileSync(target, "utf8");
-      const planted = [
-        src.replace(
-          'import { gitWithInstallationAuth } from "./git-auth";',
-          'import { gitWithInstallationAuth, gitWithInstallationAuth as gAuth } from "./git-auth";',
-        ),
-        "export async function __plantedA(p: string): Promise<void> {",
-        "  await gitWithInstallationAuth([`push`, \"u\", \"HEAD:refs/heads/x\"], 1, { cwd: p });",
-        "}",
-        "const PLANTED_VERB = \"send-pack\";",
-        "export async function __plantedB(p: string): Promise<void> {",
-        "  await gAuth([...[\"-c\", \"x=y\"], PLANTED_VERB, `receive-pack`], 1, { cwd: p });",
-        "}",
-      ].join("\n");
-      writeFileSync(target, planted);
-      const red = census(tmp);
-      // the backtick push and the spread-prefixed call are new git-auth sites; the alias is followed
-      expect(red.gitAuth).toContain("server/session-sync.ts push legacy");
-      expect([...red.strayRefs].sort()).toEqual([...STRAY_ALLOWED].sort()); // the alias import is followed, not stray
-      expect(red.gitAuth).toContain("server/session-sync.ts dynamic legacy");
-      expect(red.gitAuth).not.toEqual([...GIT_AUTH_SITES].sort());
-      // every spelling of the push verbs is seen
-      expect(red.pushTokens).toContain("server/session-sync.ts push argv@call:gitWithInstallationAuth");
-      expect(red.pushTokens).toContain("server/session-sync.ts send-pack var:PLANTED_VERB");
-      expect(red.pushTokens).toContain("server/session-sync.ts receive-pack argv@call:gAuth");
-      expect(red.pushTokens).not.toEqual([...PUSH_TOKEN_SITES].sort());
-      // and the known-negative: the unmodified copy is green
-      writeFileSync(target, src);
-      const green = census(tmp);
-      expect(green.gitAuth).toEqual([...GIT_AUTH_SITES].sort());
-      expect(green.pushTokens).toEqual([...PUSH_TOKEN_SITES].sort());
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
+  test("no non-test file outside server/ can reach gitWithInstallationAuth (D19(2))", () => {
+    const edges: string[] = [];
+    for (const abs of walk(APP, new Set([...SKIP_DIRS, "server"]))) {
+      const file = relative(APP, abs);
+      const src = readFileSync(abs, "utf8");
+      if (!src.includes("git-auth") && !src.includes(IDENT)) continue; // the AST below decides; this only skips the parse
+      for (const h of censusSource(src, file, IDENT, ["server/git-auth"])) {
+        if (h.kind === "id") edges.push(`${file} id:${h.role}`);
+        else edges.push(`${file} ${h.role}`);
+      }
     }
-  }, 60_000);
+    expect(edges.sort()).toEqual([...OUTSIDE_SERVER_GIT_AUTH_EDGES].sort());
+  });
+
+  test("known-positive: planted pushes (backtick, variable, spread with a -c prefix, alias) and falsy hardened values all turn the census red", () => {
+    const target = "server/session-sync.ts";
+    const src = readFileSync(join(APP, target), "utf8");
+    const planted = [
+      src.replace(
+        'import { gitWithInstallationAuth } from "./git-auth";',
+        'import { gitWithInstallationAuth, gitWithInstallationAuth as gAuth } from "./git-auth";',
+      ),
+      "export async function __plantedA(p: string): Promise<void> {",
+      "  await gitWithInstallationAuth([`push`, \"u\", \"HEAD:refs/heads/x\"], 1, { cwd: p });",
+      "}",
+      "const PLANTED_VERB = \"send-pack\";",
+      "export async function __plantedB(p: string): Promise<void> {",
+      "  await gAuth([...[\"-c\", \"x=y\"], PLANTED_VERB, `receive-pack`], 1, { cwd: p });",
+      "}",
+      "export async function __plantedC(): Promise<void> {",
+      "  await gitWithInstallationAuth([\"ls-remote\", \"u\"], 1, { hardened: undefined });",
+      "  await gitWithInstallationAuth([\"ls-remote\", \"u\"], 1, { hardened: void 0 });",
+      "  await gitWithInstallationAuth([\"ls-remote\", \"u\"], 1, { hardened: (null as never) });",
+      "}",
+    ].join("\n");
+    const red = census(new Map([[target, planted]]));
+    // the backtick push and the spread-prefixed call are new git-auth sites; the alias is followed
+    expect(red.gitAuth).toContain("server/session-sync.ts push legacy");
+    expect([...red.strayRefs].sort()).toEqual([...STRAY_ALLOWED].sort()); // the alias import is followed, not stray
+    expect(red.gitAuth).toContain("server/session-sync.ts dynamic legacy");
+    // D19(1): `hardened:` is classified by value, so a falsy handle is not "hardened"
+    expect(red.gitAuth.filter((x) => x === "server/session-sync.ts ls-remote legacy-suspect")).toHaveLength(3);
+    expect(red.gitAuth).not.toEqual([...GIT_AUTH_SITES].sort());
+    // every spelling of the push verbs is seen
+    expect(red.pushTokens).toContain("server/session-sync.ts push argv@call:gitWithInstallationAuth");
+    expect(red.pushTokens).toContain("server/session-sync.ts send-pack var:PLANTED_VERB");
+    expect(red.pushTokens).toContain("server/session-sync.ts receive-pack argv@call:gAuth");
+    expect(red.pushTokens).not.toEqual([...PUSH_TOKEN_SITES].sort());
+    // and the known-negative: the unmodified file through the same override path is green
+    const green = census(new Map([[target, src]]));
+    expect(green.gitAuth).toEqual([...GIT_AUTH_SITES].sort());
+    expect(green.pushTokens).toEqual([...PUSH_TOKEN_SITES].sort());
+  });
 });
