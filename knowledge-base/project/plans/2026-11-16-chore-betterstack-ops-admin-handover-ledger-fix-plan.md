@@ -638,30 +638,30 @@ one-line tally in the PR body. Only the final assertions are committed.
 
 ## Acceptance Criteria
 
-- [ ] **AC1.** No team-member resource remains, and exactly one `removed` block with
+- [x] **AC1.** No team-member resource remains, and exactly one `removed` block with
   `destroy = false` names the address:
   - `grep -hcE '^[[:space:]]*resource[[:space:]]+"betteruptime_team_member"' apps/web-platform/infra/*.tf | awk '{s+=$1} END{print s+0}'`
     prints `0`.
   - `awk '/^removed[[:space:]]*\{/{f=1} f{print} f&&/^\}/{f=0}' apps/web-platform/infra/uptime-alerts.tf | grep -cE 'from = betteruptime_team_member\.ops|destroy = false'`
     prints `2`.
-- [ ] **AC2.** `git diff --quiet origin/main...HEAD -- .github/workflows/apply-web-platform-infra.yml`
+- [x] **AC2.** `git diff --quiet origin/main...HEAD -- .github/workflows/apply-web-platform-infra.yml`
   exits 0, and `grep -c -- '-target=betteruptime_team_member.ops' .github/workflows/apply-web-platform-infra.yml`
   prints `1`.
-- [ ] **AC3.** The old header is gone and the new comment carries the required facts:
+- [x] **AC3.** The old header is gone and the new comment carries the required facts:
   - `grep -c 'Better Stack managed alert recipient' apps/web-platform/infra/uptime-alerts.tf`
     prints `0`.
   - The new comment contains "sole Admin", "Billing admin", "forwards to the Soleur inbox", the
     DELETE hazard and the `-target` tombstone.
-- [ ] **AC4.** On TF 1.10.5, `terraform -chdir=apps/web-platform/infra fmt -check` passes, and
+- [x] **AC4.** On TF 1.10.5, `terraform -chdir=apps/web-platform/infra fmt -check` passes, and
   `terraform validate` passes after `init -backend=false`.
-- [ ] **AC5.** The ops forget is pinned by both guards:
+- [x] **AC5.** The ops forget is pinned by both guards:
   - `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes, with assertions (a), (b),
     (c) and the non-vacuity anchors.
   - `bash tests/scripts/test-infra-privileged-tier-census.sh` passes, and its G4a line counts one
     more `removed` block than on the merge-base (9 → 10 today).
   - Mutation rows 1–7 and harness rows H1–H2 are each observed as tabled, and a one-line tally is
     recorded in the PR body.
-- [ ] **AC6.** Run the ledger lint on the merge-base copy and on the HEAD copy:
+- [x] **AC6.** Run the ledger lint on the merge-base copy and on the HEAD copy:
 
   ```sh
   T=$(mktemp -d)
@@ -674,7 +674,7 @@ one-line tally in the PR body. Only the final assertions are committed.
   - On HEAD, `candidates` and `parsed_ok` are each exactly 1 lower than on base.
   - On HEAD, `anomalies=0`.
   - No EXPIRED line names "Better Stack" or "Better Stack Responder".
-- [ ] **AC7.** Both rows are rewritten:
+- [x] **AC7.** Both rows are rewritten:
   - In `expenses.md` the two rows read `Better Stack Responder | … | 68.00 | active | 2026-12-14`
     and `Better Stack | … | 20.60 | active | 2026-12-14`.
   - `awk -F'|' '/^\| Better Stack/{n++; if(NF!=9)b++} END{print n, b+0}' knowledge-base/operations/expenses.md`
@@ -682,32 +682,32 @@ one-line tally in the PR body. Only the final assertions are committed.
   - 68.00 + 20.60 = 88.60, which equals the invoice total.
   - Neither row carries an estimate marker.
   - `last_updated: 2026-11-16`.
-- [ ] **AC8.** In `git diff origin/main...HEAD -- knowledge-base/operations/expenses.md knowledge-base/finance/cost-model.md`,
+- [x] **AC8.** In `git diff origin/main...HEAD -- knowledge-base/operations/expenses.md knowledge-base/finance/cost-model.md`,
   every new dollar figure is one of these:
   - from the invoice: $68.00, $20.00, $0.60, $88.60;
   - from the pricing page: $34, $20;
   - derived: ~$54.60, 380.07, 400.07, 1,319.92 and 1,339.92, plus the break-even counts.
-- [ ] **AC9.** The ADR notes add text and remove nothing:
+- [x] **AC9.** The ADR notes add text and remove nothing:
   - `git diff -U0 origin/main...HEAD -- <ADR-260> <ADR-096> <ADR-276> <ADR-298> | grep -c '^-[^-]'`
     prints `0`, because every ADR note is additive.
   - `grep -c '2026-11-16'` is at least 1 in each of ADR-260, ADR-298, ADR-096, ADR-276,
     `cost-model.md` and `model.c4`.
-- [ ] **AC10.** `grep -c 'account owner + betteruptime_team_member.ops' apps/web-platform/infra/betterstack-logs-alerts.tf`
+- [x] **AC10.** `grep -c 'account owner + betteruptime_team_member.ops' apps/web-platform/infra/betterstack-logs-alerts.tf`
   prints `0`, and the destroy-guard jq comment no longer claims that every `removed` block is a
   non-Cloudflare type.
-- [ ] **AC11.** Local gates pass before push, to save CI cycles:
+- [x] **AC11.** Local gates pass before push, to save CI cycles:
   - `bash plugins/soleur/test/c4-count-parity.test.sh`
   - `bash plugins/soleur/test/c4-model-freshness.test.sh`
   - `cd apps/web-platform && npx vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`
   - `python3 scripts/lint-encryption-posture.py --repo-sweep`
-- [ ] **AC12.** `decision-challenges.md` holds two operator rows:
+- [x] **AC12.** `decision-challenges.md` holds two operator rows:
   - `operator (money)`: cut Better Stack Responder licenses 2 → 1, then verify 34.00 on the next
     invoice and update only `expenses.md` and `cost-model.md`.
   - `operator (irreversible)`: record where ops@'s Better Stack credentials and 2FA recovery codes
     live.
 
   `ship` files both as action-required issues.
-- [ ] **AC13.** Before the PR is marked ready, this read-only probe prints `200`:
+- [x] **AC13.** Before the PR is marked ready, this read-only probe prints `200`:
 
   ```sh
   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- bash -c 'curl -s --max-time 15 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TF_VAR_betterstack_api_token" "https://uptime.betterstack.com/api/v2/monitors?per_page=1"'
