@@ -66,6 +66,11 @@ Escalation policies stay gated off (`var.betterstack_paid_tier` unset) —
 they require the Responder tier that was not purchased. The unsigned Better
 Stack DPA is flagged, not blocking: #7529.
 
+> **2026-11-16:** the 2026-11-14 invoice shows Responder licenses are billed, and ops@ holds the one
+> needed seat as org Admin (figures: `expenses.md` "Better Stack Responder"). The Slack path
+> remains the paging route, and escalation policies stay gated off (#12817). "Not purchased" no
+> longer describes billing.
+
 ### 2. Recovery: pre-authorized bounded auto-restart (a deviation, recorded)
 
 A scheduled GitHub Actions watchdog

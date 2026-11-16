@@ -22,6 +22,7 @@
 // line 1d also counts. Runbook: betterstack-log-query.md.
 import pino from "pino";
 import {
+  classifyNewRuleDeny,
   issuesEndpointToken,
   filingShape,
   splitSegments,
@@ -162,6 +163,40 @@ export function countPermissionDenials(
     if (!deniedTools.includes(name) && deniedTools.length < MAX_DENIED_TOOLS) deniedTools.push(name);
   }
   return { permissionDenialCount, deniedTools };
+}
+
+// #12757 (CTO H3) — the new containment rules' over-deny metric. The deny REASON never reaches
+// this process (the result event's `permission_denials[]` carries the tool input only), so each
+// entry is re-classified with the hook's own `classifyNewRuleDeny`, which calls the same predicates
+// decide() gates on (decide() does not call it; a parity suite in the hook test pins the two). It sees only denials that reach
+// `permission_denials[]` (the measured channel described in this file's header).
+export const NEW_RULE_IDS = [
+  "git-gh-shape",
+  "protected-gitconfig",
+  "protected-xdg-git",
+  "protected-trust-root",
+] as const;
+export type NewRuleId = (typeof NEW_RULE_IDS)[number];
+
+/**
+ * Count the `permission_denials[]` entries a #12757 rule caused, per rule id. Reads Bash
+ * `tool_input.command` and Write/Edit/MultiEdit `tool_input.file_path`. Pure; tolerant of a
+ * missing/malformed array (→ `{}`); only rules with a non-zero count appear. Carries rule ids and
+ * counts only, never the command or the path (both can carry tokens).
+ */
+export function countNewRuleDenials(denials: unknown): Partial<Record<NewRuleId, number>> {
+  const counts: Partial<Record<NewRuleId, number>> = {};
+  if (!Array.isArray(denials)) return counts;
+  for (const d of denials) {
+    if (!d || typeof d !== "object") continue;
+    const entry = d as { tool_name?: unknown; tool_input?: unknown };
+    const rule = classifyNewRuleDeny(entry.tool_name, entry.tool_input) as string | null;
+    // Closed vocabulary: anything else the classifier could ever return is dropped, not echoed.
+    if (rule === null || !(NEW_RULE_IDS as readonly string[]).includes(rule)) continue;
+    const id = rule as NewRuleId;
+    counts[id] = (counts[id] ?? 0) + 1;
+  }
+  return counts;
 }
 
 /**

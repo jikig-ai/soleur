@@ -42,6 +42,7 @@ import {
 } from "@/server/compound-promote-marker";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/server/observability";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 import {
   REPO_OWNER,
   REPO_NAME,
@@ -712,7 +713,8 @@ function spawnGit(
   opts?: { cwd?: string },
 ): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { stdio: "ignore", ...opts });
+    // #12757 — env after ...opts, built at call time (never a module-load snapshot).
+    const child = spawn("git", args, { stdio: "ignore", ...opts, env: { ...process.env, ...CRON_GIT_CONFIG_PIN } });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
   });

@@ -103,7 +103,7 @@ depth="$(jq -r '.n' <<<"$FIRST")"
 [[ "$merged" == "true" ]] && { note "PR #$PR is already merged — nothing to jump."; exit 0; }
 [[ "$state" == "OPEN" ]] || die "PR #$PR is $state — only open PRs can join the queue"
 if [[ "$armed" != "true" && "$inq" != "true" ]]; then
-  die "PR #$PR is not in the merge queue and has no auto-merge armed — 'gh pr merge $PR --squash --auto' first"
+  die "PR #$PR is not in the merge queue and has no auto-merge armed: arm it first through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check"
 fi
 [[ "$depth" =~ ^[0-9]+$ ]] || die "queue depth read failed"
 [[ "$(jq -r '.base' <<<"$FIRST")" == "main" ]] || die "PR #$PR does not target main — the jump path is the main merge queue"

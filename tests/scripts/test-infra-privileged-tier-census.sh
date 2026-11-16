@@ -480,7 +480,7 @@ def tf_files(root):
     d = os.path.join(REPO, root)
     if os.path.isdir(d):
         for f in sorted(os.listdir(d)):
-            if f.endswith(".tf"):
+            if f.endswith(".tf") and not f.startswith("."):  # Terraform ignores dotfiles
                 res.append(os.path.join(d, f))
     return res
 

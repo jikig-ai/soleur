@@ -2641,17 +2641,6 @@
 "id": "33oelk4lvl3u7",
 "title": "Git operations"
 },
-"34wi5wsojzgx9": {
-"technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
-"source": {
-"model": "betterstack"
-},
-"target": {
-"model": "founder"
-},
-"id": "34wi5wsojzgx9",
-"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
-},
 "351viohfkymya": {
 "technology": "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)",
 "source": {
@@ -3405,6 +3394,17 @@
 },
 "id": "mej2q3j6su6b",
 "title": "Reads release notes for the in-app Releases page. In an entitled web-egress session whose repository was verified public at registration, the Concierge cc dispatcher in the web app also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)"
+},
+"mmbildxide7t": {
+"technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
+"source": {
+"model": "betterstack"
+},
+"target": {
+"model": "founder"
+},
+"id": "mmbildxide7t",
+"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to ops@jikigai.com (the org Admin, managed in the vendor UI since 2026-11-16, not Terraform) still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (a Responder seat is billed per expenses.md; enabling policies is #12817). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
 },
 "nph1p3hmvtkx": {
 "technology": "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)",
@@ -6415,7 +6415,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"mmbildxide7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15987,7 +15987,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"mmbildxide7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26742,7 +26742,7 @@
 },
 "parent": null,
 "relations": [
-"34wi5wsojzgx9"
+"mmbildxide7t"
 ],
 "color": "gray",
 "line": "dashed",

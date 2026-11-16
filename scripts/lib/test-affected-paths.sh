@@ -3284,6 +3284,18 @@ AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
 
+# plugins/soleur/test/arm-check-sites.test.sh — corpus walk is SCOPED to
+# plugins/soleur/skills/ (A2b single-copy and A6 tombstone greps), plus the three scripts
+# whose re-arm or not-armed messages A5 reads (#12656).
+AFFECTED_PLUGINS_SOLEUR_TEST_ARM_CHECK_SITES_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/monitor-pr-checks.sh"
+  "plugins/soleur/scripts/sync-pr-behind.sh"
+  "scripts/merge-queue-jump.sh"
+  "plugins/soleur/skills/"
+  "plugins/soleur/test/arm-check-sites.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/admin-merge-ready-wiring.test.sh — corpus walk is SCOPED
 # to plugins/soleur/ (any file there gaining `gh pr merge --admin` must carry
 # the ready-gate), plus its SUT script and the skills that must reference it.
@@ -3775,8 +3787,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # on any dir-less corpus member no declared edge covers.
 # Declared edge (#11631): luks-monitor-install.test.sh is a PROMOTED_FILES member, so this suite builds and runs mutants of
 # it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
+# Same for web-hosts-generic.test.sh (#9421, promoted): it reads the web-host bound-state census.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
+  "knowledge-base/engineering/operations/web-host-bound-state-census.md"
   "apps/"
   ".claude/"
   ".github/"

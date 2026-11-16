@@ -1,8 +1,10 @@
 import { RUN_REPORT_CRONS } from "./_cron-run-reports";
 import {
   countFilingDenials,
+  countNewRuleDenials,
   countPermissionDenials,
   emitCronFilingDenyMarker,
+  type NewRuleId,
 } from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -11,6 +13,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CRON_GIT_CONFIG_PIN, agentGitConfigReadable, withCronGitConfigPin, xdgGitResidualPresent } from "@/server/host-git";
 import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
@@ -139,6 +142,9 @@ export interface ParsedEvalResult {
   filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
   // #7122 — all denials, by closed tool class (see SpawnResult.permissionDenialCount).
   allDenials: { permissionDenialCount: number; deniedTools: string[] };
+  // #12757 — denials by the rules #12757 added (closed rule ids and counts only; never
+  // the command or the path, which can carry tokens). Only rules with a count appear.
+  newRuleDenials: Partial<Record<NewRuleId, number>>;
   // #7122 — the `result` text ONLY when the event carried a string; `resultText`
   // above stands in `""` (two characters) for an absent one, which a strict consumer
   // must not mistake for a message.
@@ -188,6 +194,7 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
       fieldPresent: Array.isArray(r.permission_denials),
     },
     allDenials: countPermissionDenials(r.permission_denials),
+    newRuleDenials: countNewRuleDenials(r.permission_denials),
     finalMessage: typeof r.result === "string" ? r.result : undefined,
     cost: {
       costUsd:
@@ -278,6 +285,46 @@ export function resolveClaudeBin(): string {
   );
 }
 
+// #12757 (CTO H1/H4) — transition latches for the two git-config probes, shared by both chokepoints (spawnSimple and
+// the spawnClaudeEval env). A latch fires once on ok→bad and re-arms when the probe reads ok again, so a cached "ok"
+// never outlives the file (learning 2026-10-12). Module-level: one report per transition per process, not per spawn.
+let cronGitIdentityBad = false;
+let cronGitXdgPresent = false;
+/** Test seam: a vitest retry or a failed row must not inherit a latch left set by an earlier row. */
+export function resetCronGitProbeLatchesForTest(): void {
+  cronGitIdentityBad = false;
+  cronGitXdgPresent = false;
+}
+
+/**
+ * Probe the identity file and the XDG residual before a cron spawn; report a transition to Sentry. Never blocks the
+ * spawn and never throws. The payload carries no path and no file contents.
+ */
+function probeCronGitConfig(): void {
+  try {
+    const readable = agentGitConfigReadable();
+    if (!readable && !cronGitIdentityBad) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "cron-git-config-pin",
+        message: "agent git identity file missing or unreadable; cron git commits will fail with Author identity unknown",
+      });
+    }
+    cronGitIdentityBad = !readable;
+    const xdg = xdgGitResidualPresent();
+    if (xdg && !cronGitXdgPresent) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "cron-git-xdg-config-present",
+        message: "$HOME/.config/git/ignore or attributes exists; git reads it whatever the pin says",
+      });
+    }
+    cronGitXdgPresent = xdg;
+  } catch {
+    // A probe must never block a spawn (both probes catch internally; this guards the report path).
+  }
+}
+
 export function spawnSimple(
   cmd: string,
   args: string[],
@@ -287,6 +334,7 @@ export function spawnSimple(
   signal: NodeJS.Signals | null;
   stderr: string;
 }> {
+  probeCronGitConfig();
   return new Promise((resolve) => {
     // Capture stderr (stdin/stdout stay ignored). Without this, a non-zero
     // exit — e.g. `git clone` exit 128 — discarded the only line that says
@@ -296,7 +344,8 @@ export function spawnSimple(
     const child = spawn(cmd, args, {
       stdio: ["ignore", "ignore", "pipe"],
       cwd: opts.cwd,
-      env: opts.env ?? process.env,
+      // #12757 — no caller env can name another global gitconfig; a caller's stricter /dev/null is kept (F-A).
+      env: withCronGitConfigPin(opts.env ?? process.env),
     });
     let stderr = "";
     if (child.stderr) {
@@ -1484,6 +1533,11 @@ async function spawnClaudeEvalUnguarded(args: {
   // #7122 — all denials (not only filings) and the run's final message, from the same
   // result event. Both stay undefined until a `result` event parses.
   let evalAllDenials: ParsedEvalResult["allDenials"] | undefined;
+  // #12757 — new-rule deny telemetry fires at most once per rule per run.
+  const newRuleDenyReported = new Set<string>();
+  // #12757 fix round — a positive identity, not a list of hookless crons: the file the hook reads its allowlist from.
+  const hookCountsNewRules =
+    existsSync(join(spawnCwd, ".claude", "cron-allow.txt")) && !CRON_NO_FILE_TOOLS.includes(cronName);
   let evalFinalMessage: string | undefined;
   let evalFinalMessageTruncated: boolean | undefined;
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
@@ -1533,6 +1587,7 @@ async function spawnClaudeEvalUnguarded(args: {
       const outputFormatFlags = flags.some((f) => f === "--output-format")
         ? []
         : ["--output-format", "json"];
+      probeCronGitConfig();
       const child = spawn(
         claudeBin,
         [
@@ -1556,6 +1611,9 @@ async function spawnClaudeEvalUnguarded(args: {
         env: {
           ...buildSpawnEnv(installationToken),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+          // #12757 — LAST, so a cron's buildSpawnEnv cannot replace it. Unlike spawnSimple this keeps no /dev/null:
+          // the agent commits, and needs the identity the pinned file carries.
+          ...CRON_GIT_CONFIG_PIN,
         },
       });
 
@@ -1584,6 +1642,23 @@ async function spawnClaudeEvalUnguarded(args: {
             evalCost = parsedResult.cost;
             evalFilingDenials = parsedResult.filingDenials;
             evalAllDenials = parsedResult.allDenials;
+            // #12757 (CTO H3) — the deny reason never leaves the host, so report how
+            // often each new containment rule fired. One event per rule per run; rule
+            // id and count only.
+            // Counted only where the containment hook really judged the denials: its allowlist file exists in the
+            // spawn cwd (daily-triage / follow-through-monitor spawn in the server cwd, where --allowedTools denies),
+            // and the cron is not no-file-tools (decide() refuses there before any #12757 rule).
+            for (const [rule, count] of hookCountsNewRules ? Object.entries(parsedResult.newRuleDenials) : []) {
+              if (newRuleDenyReported.has(rule)) continue;
+              newRuleDenyReported.add(rule);
+              warnSilentFallback(null, {
+                feature: "cron-claude-eval",
+                op: "cron-containment-new-rule-deny",
+                message: "cron containment denied a tool call under a #12757 rule",
+                tags: { cron: cronName, rule },
+                extra: { count, rule, cron: cronName }, // tags do not reach the Better Stack mirror
+              });
+            }
             // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut
             // must not survive as a partial prefix, and a front-cut tail is not parseable.
             if (!captureFinalMessage || parsedResult.finalMessage === undefined) {
