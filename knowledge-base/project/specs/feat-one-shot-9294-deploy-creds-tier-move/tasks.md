@@ -42,7 +42,7 @@ Issue: #9294 (G1 of ADR-241 D10 residual; gates #8609)
 - [ ] 2.2 Sweeper partition
   - [ ] 2.2.1 `scripts/followthroughs/sweep-followthroughs.sh`: `FT_ONLY_SECRETS` / `FT_EXCLUDE_SECRETS` parse + skip-summary lines + zero-trio-probes coverage refusal
   - [ ] 2.2.2 `scheduled-followthrough-sweeper.yml`: `sweep` gets `FT_EXCLUDE_SECRETS=<trio>`; new `sweep-deploy-channel` job (`environment: deploy-channel` + narrow loader + `FT_ONLY_SECRETS=<trio>,GH_TOKEN`)
-  - [ ] 2.2.3 Delete `scripts/followthroughs/inngest-soak-6178.sh` + its test (#6178 CLOSED)
+  - [ ] 2.2.3 Delete the full #6178 artifact set: `scripts/followthroughs/inngest-soak-6178.sh`, `inngest-soak-6178.test.sh`, `inngest-soak-6178.function-ids.txt`, and the `run_suite "scripts/inngest-soak-6178"` line in `scripts/test-all.sh` (#6178 CLOSED; early delete ≤2026-11-21 costs a daily stderr line only)
 - [ ] 2.3 Script/doc de-shaping (counted read shape -> explicit named env reads)
   - [ ] 2.3.1 `apps/web-platform/scripts/github-app-key-status.sh` (recipe + `${!v}` loop)
   - [ ] 2.3.2 `scripts/ensure-doppler.sh` (comment)

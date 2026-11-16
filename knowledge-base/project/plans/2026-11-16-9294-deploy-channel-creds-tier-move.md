@@ -159,8 +159,14 @@ env reads (`${VAR:?…}`), which the scanner does not count:
   homeless is a red, not silence). Tier-A Guard-3 "required secret missing"
   noise is eliminated by the exclusion flag, and skip decisions print summary
   lines on both sides.
-- `scripts/followthroughs/inngest-soak-6178.sh` + its test: DELETE — #6178 is
-  CLOSED, so its probe's `secrets=` retire directive executes.
+- `scripts/followthroughs/inngest-soak-6178.sh` + its full artifact set:
+  DELETE — probe, `inngest-soak-6178.test.sh`,
+  `inngest-soak-6178.function-ids.txt`, and the
+  `run_suite "scripts/inngest-soak-6178"` line in `scripts/test-all.sh` — #6178 is
+  CLOSED, so its probe's `secrets=` retire directive executes. Early deletion
+  before close+14d (2026-11-21) costs at most a daily `missing in repo HEAD`
+  stderr line in the sweeper (fail→`return 0`, no reopen, no comment —
+  `sweep-followthroughs.sh`).
 - `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`: stays (#10548 OPEN);
   its sink rows persist; it is served by the new `sweep-deploy-channel` job.
 - `scripts/key-rotate.sh`, `scripts/inngest-link-flip.sh`,
@@ -200,7 +206,7 @@ rotation render and `WEBHOOK_DEPLOY_SECRET_NEXT` machinery stay absent (their
 
 ### Sequencing — why two PRs, not one
 
-`apply-deploy-platform-infra.yml` must create `deploy-channel` and its main-only
+`apply-web-platform-infra.yml` must create `deploy-channel` and its main-only
 policy **before** any workflow references `environment: deploy-channel`: GitHub
 auto-creates a referenced-but-missing environment with NO protection — a
 branch-reachable carrier worse than the repo secret it replaces. Additionally,
