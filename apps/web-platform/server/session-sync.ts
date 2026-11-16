@@ -16,6 +16,7 @@ import {
 } from "@/lib/supabase/tenant";
 import {
   hashUserId,
+  mirrorWarnWithDebounce,
   mirrorWithDebounce,
   reportSilentFallback,
   warnSilentFallback,
@@ -23,7 +24,7 @@ import {
 import { firstAppFrame } from "./error-frame";
 import { gitWithInstallationAuth } from "./git-auth";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
-import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
+import { KB_ROOT, KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
 import { HEX40, readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
@@ -32,11 +33,11 @@ import { createChildLogger } from "./logger";
 const log = createChildLogger("session-sync");
 
 // Path-allowlist for the auto-commit sweep. Only paths under
-// `knowledge-base/` are eligible for automatic staging during syncPull/syncPush.
+// `knowledge-base/` (`KB_ROOT`) are eligible for automatic staging during syncPull/syncPush.
 // Everything else (`.claude/`, `.github/`, `apps/`, root config files, ...)
 // is left dirty in the working tree so it never lands in PRs the loop did
 // not explicitly author. See #2905 for the failure modes this prevents.
-const ALLOWED_AUTOCOMMIT_PATHS = [/^knowledge-base\//];
+const isAllowlistedPath = (path: string): boolean => path.startsWith(`${KB_ROOT}/`);
 
 // Auto-commit headlines used by syncPull / syncPush. Exported as named
 // constants so .github/scripts/check-auto-commit-density.sh can stay in
@@ -118,8 +119,6 @@ const FORBIDDEN_GIT_FLAGS = new Set([
   "--no-verify",
 ]);
 
-export { classifyPushError, type PushErrorClass } from "./kb-sync-publish";
-
 /**
  * What a failed auto-commit may carry to Sentry: the stage, the exit status and a CLOSED stderr bucket, never the
  * raw error (its message is the full argv, which names tenant file paths, plus git's stderr). The raw error stays in
@@ -175,8 +174,12 @@ export function assertConnectedRepoArgv(argv: readonly string[]): void {
  * Throws a descriptive Error on rejection so the caller's try/catch logs
  * a meaningful warning rather than silently swallowing the violation.
  */
-/** Upper bound of one connected-repo git child (D13): a stalled `.lock` or a wedged filesystem costs at most this long. */
-export const CONNECTED_REPO_GIT_TIMEOUT_MS = 60_000;
+/**
+ * Upper bound of one connected-repo git child (D13; lowered to 30 s by D21): a stalled `.lock` or a wedged filesystem costs at
+ * most this long. The child is synchronous, so the bound is also how long it can block the event loop; running the workspace
+ * writers async with a process-group kill (a filter grandchild) is the follow-up.
+ */
+export const CONNECTED_REPO_GIT_TIMEOUT_MS = 30_000;
 
 function runConnectedRepoGit(
   argv: string[],
@@ -190,9 +193,14 @@ function runConnectedRepoGit(
   return execFileSync("git", h.args, { timeout: CONNECTED_REPO_GIT_TIMEOUT_MS, ...opts, env: h.env }) as Buffer;
 }
 
+/** One `git status --porcelain=v1 -z` entry: the two XY status columns and the (destination) path. */
+export interface PorcelainEntry {
+  readonly xy: string;
+  readonly path: string;
+}
+
 /**
- * Parse `git status --porcelain=v1 -z` output and return the subset of
- * paths matching ALLOWED_AUTOCOMMIT_PATHS.
+ * Parse `git status --porcelain=v1 -z` output (D21: the ONE parser, shared by the unmerged scan and the allowlist).
  *
  * The `-z` flag emits NUL-separated entries with no C-quoting, so paths
  * containing tabs, newlines, quotes, or non-ASCII characters round-trip
@@ -200,35 +208,34 @@ function runConnectedRepoGit(
  * destination path first, then the source path as a separate NUL entry —
  * this parser skips the source.
  */
-export function getAllowlistedChanges(workspacePath: string): string[] {
-  let output: string;
-  try {
-    output = runConnectedRepoGit(
-      ["status", "--porcelain=v1", "-z"],
-      { cwd: workspacePath, stdio: "pipe" },
-    ).toString();
-  } catch (err) {
-    mirrorGitRefusal(err, "getAllowlistedChanges");
-    return [];
-  }
-
-  const paths: string[] = [];
+export function parsePorcelainZ(output: string): PorcelainEntry[] {
+  const entries: PorcelainEntry[] = [];
   const tokens = output.split("\0");
   for (let i = 0; i < tokens.length; i++) {
     const entry = tokens[i];
     if (entry.length < 4) continue; // status (2 chars) + space + path
-    const status = entry.slice(0, 2);
-    const path = entry.slice(3);
-    if (ALLOWED_AUTOCOMMIT_PATHS.some((re) => re.test(path))) {
-      paths.push(path);
-    }
-    // R (rename) and C (copy) are followed by an extra NUL-separated
-    // entry containing the SOURCE path — skip it.
-    if (status[0] === "R" || status[0] === "C") {
-      i++;
-    }
+    entries.push({ xy: entry.slice(0, 2), path: entry.slice(3) });
+    if (entry[0] === "R" || entry[0] === "C") i++; // the SOURCE path of a rename / copy
   }
-  return paths;
+  return entries;
+}
+
+/** The working tree's status, ONE run in the mode the auto-commit needs (untracked files included); null when it could not run. */
+function readStatus(workspacePath: string, gate: string): PorcelainEntry[] | null {
+  try {
+    return parsePorcelainZ(runConnectedRepoGit(["status", "--porcelain=v1", "-z"], { cwd: workspacePath, stdio: "pipe" }).toString());
+  } catch (err) {
+    mirrorGitRefusal(err, gate);
+    return null;
+  }
+}
+
+const allowlisted = (entries: readonly PorcelainEntry[] | null): string[] =>
+  (entries ?? []).filter((e) => isAllowlistedPath(e.path)).map((e) => e.path);
+
+/** The changed paths under `knowledge-base/`, from one status run (the auto-commit's allowlist, #2905). */
+export function getAllowlistedChanges(workspacePath: string): string[] {
+  return allowlisted(readStatus(workspacePath, "getAllowlistedChanges"));
 }
 
 // PR-C §2.1 (#3244): all four `.from("users")` sites in this file migrate
@@ -647,7 +654,7 @@ export async function syncPull(
     }
 
     // Auto-commit any uncommitted changes before pulling to avoid conflicts.
-    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
+    // Path-scoped to `knowledge-base/` — see #2905.
     try {
       const allowed = getAllowlistedChanges(workspacePath);
       if (allowed.length === 0) {
@@ -725,10 +732,10 @@ const UNMERGED_XY = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 /**
  * A merge is in progress, so neither commit nor push (R11): `.git/MERGE_HEAD` present (any type, or unreadable), OR the
  * index holds an unmerged entry without one (a conflicted `stash pop`, `cherry-pick` or `rebase`; D13), which an auto-commit
- * `add` would resolve by committing the conflict markers. A status that cannot run is not a merge (the auto-commit's own
- * status then fails the same way).
+ * `add` would resolve by committing the conflict markers. `entries` is the turn's one status run (D21); a status that could
+ * not run (`null`) is not a merge (the auto-commit then has nothing to stage).
  */
-function mergeInProgress(workspacePath: string): boolean {
+function mergeInProgress(workspacePath: string, entries: readonly PorcelainEntry[] | null): boolean {
   try {
     lstatSync(join(workspacePath, ".git", "MERGE_HEAD"));
     return true;
@@ -736,21 +743,7 @@ function mergeInProgress(workspacePath: string): boolean {
     const code = (err as { code?: unknown } | null)?.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") return true;
   }
-  let out: string;
-  try {
-    out = runConnectedRepoGit(["status", "--porcelain=v1", "-z", "--untracked-files=no"], { cwd: workspacePath, stdio: "pipe" }).toString();
-  } catch (err) {
-    mirrorGitRefusal(err, "mergeInProgress");
-    return false;
-  }
-  const tokens = out.split("\0");
-  for (let i = 0; i < tokens.length; i++) {
-    const entry = tokens[i];
-    if (entry.length < 4) continue;
-    if (UNMERGED_XY.has(entry.slice(0, 2))) return true;
-    if (entry[0] === "R" || entry[0] === "C") i++; // the source path of a rename / copy
-  }
-  return false;
+  return (entries ?? []).some((e) => UNMERGED_XY.has(e.xy));
 }
 
 /**
@@ -779,16 +772,18 @@ export async function syncPush(
 
   const ctx = { userId, workspaceId };
   try {
+    // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
+    const status = readStatus(workspacePath, "syncPush");
     // A conflicted session-start merge: committing would publish conflict markers (matrix 17).
-    if (mergeInProgress(workspacePath)) {
+    if (mergeInProgress(workspacePath, status)) {
       reportPushHeld("merge_in_progress", "held", ctx);
       return;
     }
 
     // Auto-commit any uncommitted changes before pushing.
-    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
+    // Path-scoped to `knowledge-base/` — see #2905.
     try {
-      const allowed = getAllowlistedChanges(workspacePath);
+      const allowed = allowlisted(status);
       if (allowed.length === 0) {
         log.info(
           { userId },
@@ -849,6 +844,22 @@ export async function syncPush(
       writer: kbWorkspaceWriter(workspacePath),
     });
 
+    if (result.kind === "fallback_failed" && result.fallbackReason === "side_push_transient") {
+      // D21: the side push failed on the network; the next turn retries it. A warning OFF the paging op, debounced per workspace.
+      mirrorWarnWithDebounce(
+        null,
+        {
+          feature: "session-sync",
+          op: "kb-sync.side-push-transient",
+          extra: { userId },
+          tags: { fallback_reason: result.fallbackReason, push_class: result.pushErr?.pushClass ?? "none" },
+          message: "KB-sync side push failed transiently — retried next session",
+        },
+        workspaceId,
+        "kb-sync-side-push-transient",
+      );
+      return;
+    }
     if (result.kind === "fallback_failed") {
       // `reason` discriminates "the fallback ran and failed" from the
       // persistent_other branch below (which never entered the fallback)
@@ -913,17 +924,22 @@ export async function syncPush(
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     if (err instanceof KbSyncError && err.pushClass === "persistent_other") {
-      // Non-protection persistent reject (e.g. shallow update not allowed) —
-      // retrying would loop forever. Emit a distinct op and stop here.
+      // Non-protection persistent reject (e.g. shallow update not allowed): the next turn hits it again, so the emit is
+      // debounced per workspace (D21) on the same op (the issue alert keys on it).
       // D8: null error, the cause in tags (the Error path's tags are lost to the pino-mirror capture, #8629).
-      reportSilentFallback(null, {
-        feature: "session-sync",
-        op: "kb-sync.protected-fallback-failed",
-        extra: { userId, reason: "persistent_other" },
-        tags: { reason: "persistent_other", push_class: "persistent_other" },
-        message:
-          "KB-sync push persistently rejected (non-protection) — not retried",
-      });
+      mirrorWithDebounce(
+        null,
+        {
+          feature: "session-sync",
+          op: "kb-sync.protected-fallback-failed",
+          extra: { userId, reason: "persistent_other" },
+          tags: { reason: "persistent_other", push_class: "persistent_other" },
+          message:
+            "KB-sync push persistently rejected (non-protection) — not retried",
+        },
+        workspaceId,
+        "kb-sync-persistent-other",
+      );
       return;
     }
     log.warn({ err, userId }, "Sync push failed — next session will retry");
@@ -936,7 +952,12 @@ export async function syncPush(
       op: "syncPush",
       // workspacePath dropped — see syncPull catch for the rationale.
       extra: kbErr ? { userId } : { userId, errName: err instanceof Error ? err.name : typeof err, ...(frame ? { frame } : {}) },
-      tags: { reason: kbErr ? kbErr.reason : "unclassified", push_class: kbErr?.pushClass ?? "none" },
+      tags: {
+        reason: kbErr ? kbErr.reason : "unclassified",
+        push_class: kbErr?.pushClass ?? "none",
+        // D21: the closed refusal reason of an isolated_refused, never a path
+        ...(kbErr?.isolatedReason ? { isolated_reason: kbErr.isolatedReason } : {}),
+      },
       message: "Sync push failed — next session will retry",
     });
   }

@@ -161,11 +161,8 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
     const outer = reportSilentFallbackSpy.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === "syncPush");
     expect(outer).toHaveLength(1);
     const [outerErr, outerCtx] = outer[0] as [unknown, { tags?: Record<string, string>; message?: string }];
-    expect([
-      "ls_remote_failed", "fetch_failed", "push_rejected", "push_transient", "isolated_refused",
-      "remote_state_invalid", "local_git_failed", "head_unreadable", "unclassified",
-    ]).toContain(outerCtx.tags?.reason);
-    expect(outerCtx.tags?.reason).not.toBe("unclassified");
+    // the fake workspace has no .git, so the isolated directory refuses: a closed reason, never "unclassified"
+    expect(outerCtx.tags?.reason).toBe("isolated_refused");
     for (const text of [String((outerErr as Error)?.message ?? outerErr), outerCtx.message ?? ""]) {
       expect(text).not.toMatch(/github\.com|https?:\/\/|[0-9a-f]{40}/);
     }
@@ -215,10 +212,12 @@ describe("kb-sync.push-held observability (#12600 AC5)", () => {
   });
 
   test("the expected outcomes are info only: no Sentry event", () => {
-    for (const reason of ["synthetic_pushed", "held_foreign", "remote_ahead", "remote_unknown_tip"] as const) {
+    for (const reason of ["synthetic_pushed", "held_foreign", "remote_ahead", "remote_unknown_tip", "side_pending", "side_declined"] as const) {
       reportPushHeld(reason, reason === "synthetic_pushed" ? "pushed" : "held", ctx);
     }
     expect(captureMessageSpy).not.toHaveBeenCalled();
-    expect(heldLines()).toHaveLength(4);
+    expect(heldLines()).toHaveLength(6);
+    // D21: the info line names the workspace (the Sentry warning keys on it too), never a path, sha or branch
+    expect(heldLines().map(([o]) => (o as { workspaceId?: string }).workspaceId)).toEqual(Array(6).fill("ws-1"));
   });
 });

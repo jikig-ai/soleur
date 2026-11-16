@@ -13,9 +13,10 @@ import { stripHostGitBlock } from "../helpers/host-git-block";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
 
-const { reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, publishSpy, writeRepoColsSpy } = vi.hoisted(() => ({
+const { reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, mirrorWarnWithDebounceSpy, publishSpy, writeRepoColsSpy } = vi.hoisted(() => ({
   reportSilentFallbackSpy: vi.fn(),
   mirrorWithDebounceSpy: vi.fn(),
+  mirrorWarnWithDebounceSpy: vi.fn(),
   warnSilentFallbackSpy: vi.fn(),
   publishSpy: vi.fn(),
   writeRepoColsSpy: vi.fn(async () => undefined),
@@ -56,7 +57,7 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
   mirrorWithDebounce: mirrorWithDebounceSpy,
-  mirrorWarnWithDebounce: vi.fn(),
+  mirrorWarnWithDebounce: mirrorWarnWithDebounceSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
@@ -77,7 +78,7 @@ vi.mock("../../server/logger", () => {
   return { default: l, createChildLogger: () => l };
 });
 
-import { syncPush } from "@/server/session-sync";
+import { CONNECTED_REPO_GIT_TIMEOUT_MS, syncPush } from "@/server/session-sync";
 import { KbSyncError } from "../../server/kb-sync-publish";
 
 const STUB_SERVICE = {} as never;
@@ -87,7 +88,7 @@ const opsOf = (spy: typeof reportSilentFallbackSpy, op: string) =>
 const gh006 = () => new KbSyncError("push_rejected", "protected_branch");
 
 beforeEach(() => {
-  for (const f of [reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, publishSpy, writeRepoColsSpy]) f.mockReset();
+  for (const f of [reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, mirrorWarnWithDebounceSpy, publishSpy, writeRepoColsSpy]) f.mockReset();
 });
 
 describe("syncPush — protected-branch fallback op contract (#5426, #12600)", () => {
@@ -113,10 +114,11 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     writer.casBranch("main", "a".repeat(40), "b".repeat(40));
     writer.setTracking("main", "c".repeat(40));
     expect(spy).toHaveBeenCalledTimes(3);
+    // D21: a 30 s bound (the sync child blocks the event loop; the async process-group kill is a follow-up)
+    expect(CONNECTED_REPO_GIT_TIMEOUT_MS).toBe(30_000);
     for (const call of spy.mock.calls) {
       const opts = call[2] as { timeout?: number };
-      expect(opts.timeout).toBeGreaterThan(0);
-      expect(opts.timeout).toBeLessThanOrEqual(60_000);
+      expect(opts.timeout).toBe(CONNECTED_REPO_GIT_TIMEOUT_MS);
     }
   });
 
@@ -155,17 +157,44 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     expect(writeRepoColsSpy).not.toHaveBeenCalled();
   });
 
-  test("persistent_other (shallow) -> kb-sync.protected-fallback-failed with null err and tag reason persistent_other, not op syncPush", async () => {
+  test("persistent_other (shallow) -> kb-sync.protected-fallback-failed with null err and tag reason persistent_other, debounced per workspace (D21), not op syncPush", async () => {
     publishSpy.mockRejectedValue(new KbSyncError("push_rejected", "persistent_other"));
     await run();
-    const failed = opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed");
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    const failed = opsOf(mirrorWithDebounceSpy, "kb-sync.protected-fallback-failed");
     expect(failed).toHaveLength(1);
-    const [err, ctx] = failed[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }];
+    const [err, ctx, key, errorClass] = failed[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }, string, string];
     expect(err).toBeNull();
     expect(ctx.extra).toEqual({ userId: "user-1", reason: "persistent_other" });
     expect(ctx.tags).toEqual({ reason: "persistent_other", push_class: "persistent_other" });
+    expect(key).toBe("ws-1");
+    expect(errorClass).toBe("kb-sync-persistent-other");
     expect(opsOf(reportSilentFallbackSpy, "syncPush")).toHaveLength(0);
     expect(writeRepoColsSpy).not.toHaveBeenCalled();
+  });
+
+  test("D21: a transient side push (side_push_transient) warns OFF the paging op, debounced per workspace; no bookkeeping", async () => {
+    publishSpy.mockResolvedValue({ kind: "fallback_failed", fallbackReason: "side_push_transient", pushErr: new KbSyncError("push_transient", "other") });
+    await run();
+    expect(opsOf(mirrorWithDebounceSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    const warned = opsOf(mirrorWarnWithDebounceSpy, "kb-sync.side-push-transient");
+    expect(warned).toHaveLength(1);
+    const [err, ctx, key, errorClass] = warned[0] as [unknown, { tags?: Record<string, string>; extra?: Record<string, unknown> }, string, string];
+    expect(err).toBeNull();
+    expect(ctx.tags).toEqual({ fallback_reason: "side_push_transient", push_class: "other" });
+    expect(ctx.extra).toEqual({ userId: "user-1" });
+    expect(key).toBe("ws-1");
+    expect(errorClass).toBe("kb-sync-side-push-transient");
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+  });
+
+  test("D21: an isolated_refused error carries the refusal's closed reason as a tag (no path)", async () => {
+    publishSpy.mockRejectedValue(new KbSyncError("isolated_refused", undefined, "shallow_invalid"));
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    expect((outer[0][1] as { tags?: Record<string, string> }).tags).toEqual({ reason: "isolated_refused", push_class: "none", isolated_reason: "shallow_invalid" });
   });
 
   test("other (auth / network) -> outer catch op:syncPush, null err, closed reason + push_class tags, no fallback op", async () => {

@@ -283,6 +283,18 @@ describe("session-sync path allowlist (#2905)", () => {
     expect(gitArgs0).not.toContain("branch");
   });
 
+  test("D21: syncPush runs ONE status per turn, and that one run still sees an unmerged entry (no add, no commit)", async () => {
+    porcelainOutput = "M  knowledge-base/a.md\0?? knowledge-base/new.md\0";
+    await syncPush("user-1", "/tmp/fake-workspace", STUB_SERVICE, "user-1");
+    expect(calls.filter((c) => c.args[0] === "status")).toHaveLength(1);
+    expect(calls.filter((c) => c.args[0] === "add")[0]?.args).toEqual(["add", "--", "knowledge-base/a.md", "knowledge-base/new.md"]);
+    calls.length = 0;
+    porcelainOutput = "UU knowledge-base/a.md\0?? knowledge-base/new.md\0";
+    await syncPush("user-1", "/tmp/fake-workspace", STUB_SERVICE, "user-1");
+    expect(calls.filter((c) => c.args[0] === "status")).toHaveLength(1);
+    expect(calls.filter((c) => c.args[0] === "add" || c.args[0] === "commit")).toEqual([]);
+  });
+
   test("auto-commit never invokes 'git add -A' or 'git add .'", async () => {
     porcelainOutput =
       " M .claude/settings.json\0 M knowledge-base/foo.md\0 M .github/workflows/x.yml\0";

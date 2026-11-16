@@ -12,7 +12,7 @@ import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
-import { createIsolatedPushDir, type IsolatedPushDirHandle } from "./git-isolated-push-dir";
+import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle, type IsolatedPushDirReason } from "./git-isolated-push-dir";
 import { createChildLogger } from "./logger";
 import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME, disposeIsolated } from "./push-branch";
 
@@ -65,7 +65,7 @@ const KB_SYNC_SIDE_BRANCH = "soleur/kb-sync";
 const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
 const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
 
-// GitHub owner/repo charset (mirrors agent-runner.ts:1525-1538 GITHUB_NAME_RE).
+// GitHub owner/repo charset (the same as the `GITHUB_NAME_RE` owner/repo check in server/agent-runner.ts).
 const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
 
 function kbSyncPrBody(defaultBranch: string): string {
@@ -113,7 +113,8 @@ function parseOwnerRepo(repoUrl: string | null): {
 // The KB-only publish (#12600, CTO ruling R14): the sync pushes only a commit the server built.
 // ---------------------------------------------------------------------------
 
-const KB_ENTRY = "knowledge-base";
+/** The knowledge-base root: the one root entry a sync commit may change, and the auto-commit's allowlisted prefix (D21). */
+export const KB_ROOT = "knowledge-base";
 const TREE_MODE = "40000";
 const SIDE_REF = `refs/heads/${KB_SYNC_SIDE_BRANCH}`;
 const LS_REMOTE_TIMEOUT_MS = 30_000;
@@ -142,7 +143,8 @@ export type KbPushHeldReason =
 
 export type KbPushOutcome = "pushed" | "side_pushed" | "held";
 
-const HELD_WARN_MESSAGES: Partial<Record<KbPushHeldReason, string>> = {
+/** Every reason, with its static Sentry message or an explicit `null` for an info-only reason (D21: compile-checked). */
+const HELD_WARN_MESSAGES: Record<KbPushHeldReason, string | null> = {
   merge_in_progress: "KB sync held: a merge is in progress in the workspace",
   detached_head: "KB sync held: the workspace HEAD is detached",
   non_default_branch: "KB sync held: the workspace is not on the default branch",
@@ -154,7 +156,13 @@ const HELD_WARN_MESSAGES: Partial<Record<KbPushHeldReason, string>> = {
   head_moved: "KB sync held: the local branch moved during the sync",
   ref_update_failed: "KB sync held: the local branch update failed",
   unpack_failed: "KB sync held: the object hand-over to the workspace failed",
-  side_ahead: "KB sync held: soleur/kb-sync holds knowledge-base content the workspace has not seen",
+  side_ahead: "KB sync held: the side branch holds knowledge-base content the workspace has not seen",
+  remote_unknown_tip: null,
+  remote_ahead: null,
+  side_pending: null,
+  side_declined: null,
+  held_foreign: null,
+  synthetic_pushed: null,
 };
 
 export interface KbSyncContext {
@@ -167,9 +175,9 @@ export interface KbSyncContext {
  * anomaly reasons only, a debounced warning per workspace and reason. No path, sha, URL or branch name.
  */
 export function reportPushHeld(reason: KbPushHeldReason, outcome: KbPushOutcome, ctx: KbSyncContext): void {
-  log.info({ op: "kb-sync.push-held", reason, outcome }, "KB sync push outcome");
+  log.info({ op: "kb-sync.push-held", reason, outcome, workspaceId: ctx.workspaceId }, "KB sync push outcome");
   const message = HELD_WARN_MESSAGES[reason];
-  if (!message) return;
+  if (message === null) return;
   mirrorWarnWithDebounce(
     null,
     { feature: "session-sync", op: "kb-sync.push-held", message, tags: { reason, outcome }, extra: { userId: ctx.userId } },
@@ -181,7 +189,6 @@ export function reportPushHeld(reason: KbPushHeldReason, outcome: KbPushOutcome,
 /** A failed sync step, with a closed reason and a static message: never the git error, whose argv names the URL and shas. */
 export type KbSyncErrorReason =
   | "ls_remote_failed"
-  | "fetch_failed"
   | "push_rejected"
   | "push_transient"
   | "isolated_refused"
@@ -193,6 +200,8 @@ export class KbSyncError extends Error {
   constructor(
     readonly reason: KbSyncErrorReason,
     readonly pushClass?: PushErrorClass,
+    /** `isolated_refused` only: the refusal's closed reason (D21), never a path. */
+    readonly isolatedReason?: IsolatedPushDirReason,
   ) {
     super(`KB sync step failed (${reason})`);
     this.name = "KbSyncError";
@@ -350,7 +359,7 @@ async function readVerified(isolated: IsolatedPushDirHandle, id: string): Promis
   return root ? { id, commit, root } : null;
 }
 
-const kbOf = (root: readonly TreeEntry[]): TreeEntry | undefined => root.find((e) => e.name === KB_ENTRY);
+const kbOf = (root: readonly TreeEntry[]): TreeEntry | undefined => root.find((e) => e.name === KB_ROOT);
 const entryKey = (e: TreeEntry): string => `${e.mode} ${e.id}\t${e.name}`;
 
 /**
@@ -413,7 +422,7 @@ async function buildKbOverlay(
   kb: TreeEntry,
   parents: readonly string[],
 ): Promise<{ sha: string; tree: string }> {
-  const entries = [...baseRoot.filter((e) => e.name !== KB_ENTRY), { mode: TREE_MODE, name: KB_ENTRY, id: kb.id }];
+  const entries = [...baseRoot.filter((e) => e.name !== KB_ROOT), { mode: TREE_MODE, name: KB_ROOT, id: kb.id }];
   const mk = await runIsolatedGitLocal(isolated, ["mktree", "-z"], { input: mktreeInput(entries) });
   const tree = mk.stdout.toString("utf8").trim();
   if (mk.code !== 0 || !HEX40.test(tree)) throw new KbSyncError("local_git_failed");
@@ -436,8 +445,8 @@ async function assertRootDiffersOnlyInKb(
   if (commit.message !== `${KB_SYNC_SIDE_COMMIT_MSG}\n`) return false;
   const kb = kbOf(root);
   if (!kb || kb.mode !== TREE_MODE) return false;
-  const a = root.filter((e) => e.name !== KB_ENTRY).map(entryKey).sort();
-  const b = baseRoot.filter((e) => e.name !== KB_ENTRY).map(entryKey).sort();
+  const a = root.filter((e) => e.name !== KB_ROOT).map(entryKey).sort();
+  const b = baseRoot.filter((e) => e.name !== KB_ROOT).map(entryKey).sort();
   return a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
@@ -490,7 +499,7 @@ async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
 }
 
 /** The message of the local merge `M` that keeps held (non-KB) commits on the local branch next to `S` (P7). */
-export const KB_SYNC_MERGE_MSG = "Soleur: merge knowledge-base sync";
+const KB_SYNC_MERGE_MSG = "Soleur: merge knowledge-base sync";
 
 /**
  * The workspace writes the sync makes, injected by `session-sync.ts` (its guarded `runConnectedRepoGit`, R12, R19, R20):
@@ -564,7 +573,7 @@ async function resolvePushUrl(userId: string, workspaceId: string): Promise<{ ur
 }
 
 /** Why the protected-branch fallback did not deliver (the `fallback_reason` tag, closed). */
-export type KbFallbackReason = "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "pr_failed";
+export type KbFallbackReason = "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "side_push_transient" | "pr_failed";
 
 export type KbPublishResult =
   | { readonly kind: "pushed" }
@@ -708,7 +717,9 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   try {
     await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D });
   } catch (err) {
-    return fail(err instanceof KbHeld ? "side_guard_failed" : "side_push_rejected");
+    if (err instanceof KbHeld) return fail("side_guard_failed");
+    // D21: a network failure of the side push is retried next turn (warning, off the paging op); a reject is a failure.
+    return fail(err instanceof KbSyncError && err.reason === "push_transient" ? "side_push_transient" : "side_push_rejected");
   }
   // D5c/D14(2): the next turn finds the side commit local and an ancestor of HEAD, so (with no new edit) it is
   // `side_pending`: no push to D, no new merge commit. A failure here is a held reason, never a fallback failure.
@@ -759,8 +770,8 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const { url, owner, repo } = await resolvePushUrl(input.userId, input.workspaceId);
     try {
       isolated = createIsolatedPushDir(input.workspacePath);
-    } catch {
-      throw new KbSyncError("isolated_refused");
+    } catch (err) {
+      throw new KbSyncError("isolated_refused", undefined, err instanceof IsolatedPushDirRefusal ? err.reason : undefined);
     }
     const remote = await readRemoteState(isolated, installationId, url);
     if (!remote) throw new KbHeld("remote_branch_absent");
