@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-all-pr-battery-gate — ADR-262 Guard 1: the pull_request gate over the six self-test
-# mutation batteries (#9323, #9340).
+# mutation batteries plus the nine #9340 admits (#9323, #9340; 2026-11-12 addendum).
 #
 # PROPERTY. On a `pull_request` CI run a gated battery is declined if and only if the PR's net diff
 # (rename sources included) contains none of its subject paths and none of the gate-machinery paths.
@@ -81,8 +81,21 @@ L_TAC="scripts/test-all-affected-c"
 L_TAD="scripts/test-all-affected-d"
 TAA_ARMS="$L_TAA|$L_TAB|$L_TAC|$L_TAD"
 L_OPR="scripts/orphan-process-reaper-mutations"
-ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR")
-ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS)
+# #9340 admits (ADR-262 2026-11-12 addendum). The three glob-registered suites carry their PATH as
+# the label (the glob registers `run_suite "$f"`), same convention as the skip_suite lines emit.
+L_C4="plugins/soleur/test/c4-from-components.test.sh"
+L_MPC="plugins/soleur/test/monitor-pr-checks.test.sh"
+L_PMCP="plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh"
+L_GDB="tests/scripts/git-data-birth-readiness-gate"
+L_BRL="tests/scripts/betterstack-roundtrip-latency"
+L_TC="scripts/test-contention"
+L_SALF="tests/scripts/sentry-alert-live-fidelity"
+L_RUNALL=".github/scripts/test/run-all.sh"
+L_WU="apps/web-platform [unit]"
+ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR" \
+  "$L_C4" "$L_MPC" "$L_PMCP" "$L_GDB" "$L_BRL" "$L_TC" "$L_SALF" "$L_RUNALL" "$L_WU")
+ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS \
+  C4_PRODUCER_PATHS MONITOR_PR_CHECKS_PATHS PLAYWRIGHT_MCP_REDACT_PROXY_PATHS GIT_DATA_BIRTH_READINESS_GATE_PATHS BETTERSTACK_ROUNDTRIP_LATENCY_PATHS TEST_CONTENTION_PATHS SENTRY_ALERT_LIVE_FIDELITY_PATHS GITHUB_SCRIPTS_SUITE_PATHS WEBPLAT_APP_PATHS)
 
 # one file that belongs to exactly one battery's array (its own battery file)
 own_file() {
@@ -93,6 +106,15 @@ own_file() {
     TAG_AUTHORSHIP_BATTERY_PATHS) echo "scripts/battery-tag-authorship-mutations.test.sh" ;;
     TEST_ALL_AFFECTED_BATTERY_PATHS) echo "scripts/test-all-affected.test.sh" ;;
     AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS) echo "scripts/orphan-process-reaper-mutation.test.sh" ;;
+    C4_PRODUCER_PATHS) echo "plugins/soleur/test/c4-from-components.test.sh" ;;
+    MONITOR_PR_CHECKS_PATHS) echo "plugins/soleur/test/monitor-pr-checks.test.sh" ;;
+    PLAYWRIGHT_MCP_REDACT_PROXY_PATHS) echo "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh" ;;
+    GIT_DATA_BIRTH_READINESS_GATE_PATHS) echo "tests/scripts/test-git-data-birth-readiness-gate.sh" ;;
+    BETTERSTACK_ROUNDTRIP_LATENCY_PATHS) echo "tests/scripts/test-betterstack-roundtrip-latency.sh" ;;
+    TEST_CONTENTION_PATHS) echo "scripts/test-contention.test.sh" ;;
+    SENTRY_ALERT_LIVE_FIDELITY_PATHS) echo "tests/scripts/test-sentry-alert-live-fidelity.sh" ;;
+    GITHUB_SCRIPTS_SUITE_PATHS) echo ".github/scripts/test/run-all.sh" ;;
+    WEBPLAT_APP_PATHS) echo "apps/web-platform/test/repo-wide-containment.test.ts" ;;
   esac
 }
 
@@ -172,7 +194,7 @@ build_base() {
       # shellcheck disable=SC2154  # `el` is assigned by the eval above
       for p in "${el[@]}"; do
         case "$p" in
-          */*.*|*.sh|*.yml|*.tsv|*.txt|*.md) mkdir -p "$BASE/$(dirname "$p")" && printf 'base\n' > "$BASE/$p" ;;
+          */*.*|*.sh|*.yml|*.tsv|*.txt|*.md|*.json) mkdir -p "$BASE/$(dirname "$p")" && printf 'base\n' > "$BASE/$p" ;;
           *) mkdir -p "$BASE/$p" && printf 'base\n' > "$BASE/$p/placeholder" ;;
         esac
       done
@@ -266,7 +288,10 @@ check_set() {
 # Row layout (US-separated): id event ci mods expected [extra-env] [runner-args]
 ARM_IDS=()
 ARM_SPEC_FILE="$TMP/arms.tsv"; : > "$ARM_SPEC_FILE"
-add_arm() { ARM_IDS+=("$1"); printf '%s\n' "$*" | tr ' ' '\037' >> "$ARM_SPEC_FILE"; }
+# Field-per-argument encoding, NOT `$*` + tr: a label containing a literal space
+# ("apps/web-platform [unit]", #9340) must survive into the expected field intact.
+# `tr ' ' '\037'` would split it into two fields and land `[unit]` in extra.
+add_arm() { ARM_IDS+=("$1"); printf '%s\037' "$@" >> "$ARM_SPEC_FILE"; printf '\n' >> "$ARM_SPEC_FILE"; }
 # add_arm <id> <event> <ci> <mods> <expected> [extra-env] [runner-args]   (event "-" = unset, ci "-" = unset)
 expect_labels() { case "$1" in ALL) printf '%s\n' "${ALL_LABELS[@]}" ;; NONE) ;; *) printf '%s\n' "$1" | tr '|' '\n' ;; esac; }
 
@@ -290,6 +315,17 @@ add_arm own-lint          "$PR" 1 "modify:$(own_file LINT_ORPHAN_BATTERY_PATHS)"
 add_arm own-tag           "$PR" 1 "modify:$(own_file TAG_AUTHORSHIP_BATTERY_PATHS)" "$L_TAG"
 add_arm own-taa           "$PR" 1 "modify:$(own_file TEST_ALL_AFFECTED_BATTERY_PATHS)" "$TAA_ARMS"
 add_arm own-reaper        "$PR" 1 "modify:$(own_file AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS)" "$L_OPR"
+# #9340 admit arms. The three plugins/soleur-tree own-file diffs ALSO arm run-all.sh — its array
+# carries the `plugins/soleur` directory element, so the expectation names both labels.
+add_arm own-c4            "$PR" 1 "modify:plugins/soleur/test/c4-from-components.test.sh" "$L_C4|$L_RUNALL"
+add_arm own-monitor       "$PR" 1 "modify:plugins/soleur/test/monitor-pr-checks.test.sh" "$L_MPC|$L_RUNALL"
+add_arm own-playwright    "$PR" 1 "modify:plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh" "$L_PMCP|$L_RUNALL"
+add_arm own-git-data      "$PR" 1 "modify:tests/scripts/test-git-data-birth-readiness-gate.sh" "$L_GDB"
+add_arm own-betterstack   "$PR" 1 "modify:tests/scripts/test-betterstack-roundtrip-latency.sh" "$L_BRL"
+add_arm own-contention    "$PR" 1 "modify:scripts/test-contention.test.sh" "$L_TC"
+add_arm own-sentry        "$PR" 1 "modify:tests/scripts/test-sentry-alert-live-fidelity.sh" "$L_SALF"
+add_arm own-runall        "$PR" 1 "modify:.github/scripts/test/run-all.sh" "$L_RUNALL"
+add_arm own-webplat-unit  "$PR" 1 "modify:apps/web-platform/test/repo-wide-containment.test.ts" "$L_WU"
 add_arm ev-push           push 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-merge-group    merge_group 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-dispatch       workflow_dispatch 1 "modify:knowledge-base/note.md" ALL
@@ -368,12 +404,17 @@ grade_arms() {
     if (( ${#only[@]} )); then local keep=0 o; for o in "${only[@]}"; do [[ "$o" == "$id" ]] && keep=1; done; (( keep )) || continue; fi
     ARM_WHY=""
     case "$extra" in
-      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR") ;;
-      TEST_GROUP=scripts-heavy) UNIVERSE=("$L_REG" "$L_TAG") ;;
+      # The scripts group registers fourteen gated labels (the #9340 explicit admits live in the
+      # first want_scripts block, the glob admits in the second); scripts-heavy registers three.
+      TEST_GROUP=scripts) UNIVERSE=("$L_LA" "$L_LB" "$L_CF" "$L_TAA" "$L_TAB" "$L_TAC" "$L_TAD" "$L_OPR" "$L_TC" "$L_GDB" "$L_BRL" "$L_SALF" "$L_C4" "$L_MPC" "$L_PMCP") ;;
+      TEST_GROUP=scripts-heavy) UNIVERSE=("$L_REG" "$L_TAG" "$L_RUNALL") ;;
       *) UNIVERSE=("${ALL_LABELS[@]}") ;;
     esac
-    # shellcheck disable=SC2046
-    check_set "$tag-$id" $(expect_labels "$expected" | tr '\n' ' '); crc=$?
+    # Read expected labels LINE-wise into an array: the `$(… | tr '\n' ' ')` form word-splits,
+    # and "apps/web-platform [unit]" (#9340) is two words, not one label.
+    local -a exp_l=()
+    while IFS= read -r _exp_l; do [[ -n "$_exp_l" ]] && exp_l+=("$_exp_l"); done < <(expect_labels "$expected")
+    check_set "$tag-$id" "${exp_l[@]+"${exp_l[@]}"}"; crc=$?
     if (( crc == 1 )); then GRADE_FAILED+=("$id"); bad=$((bad + 1)); GRADE_WHY["$id"]="$ARM_WHY"
     elif (( crc == 2 )); then GRADE_INFRA+=("$id"); bad=$((bad + 1)); GRADE_WHY["$id"]="$ARM_WHY"
     fi
@@ -603,6 +644,55 @@ for arr in "${ARRAYS[@]}"; do
     LINT_ORPHAN_BATTERY_PATHS) arm_id=own-lint ;; TAG_AUTHORSHIP_BATTERY_PATHS) arm_id=own-tag ;;
     TEST_ALL_AFFECTED_BATTERY_PATHS) arm_id=own-taa ;;
     AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS) arm_id=own-reaper ;;
+    C4_PRODUCER_PATHS) arm_id=own-c4 ;; MONITOR_PR_CHECKS_PATHS) arm_id=own-monitor ;;
+    PLAYWRIGHT_MCP_REDACT_PROXY_PATHS) arm_id=own-playwright ;;
+    GIT_DATA_BIRTH_READINESS_GATE_PATHS) arm_id=own-git-data ;;
+    BETTERSTACK_ROUNDTRIP_LATENCY_PATHS) arm_id=own-betterstack ;;
+    TEST_CONTENTION_PATHS) arm_id=own-contention ;;
+    SENTRY_ALERT_LIVE_FIDELITY_PATHS) arm_id=own-sentry ;;
+    GITHUB_SCRIPTS_SUITE_PATHS) arm_id=own-runall ;;
+    WEBPLAT_APP_PATHS) arm_id=own-webplat-unit ;;
+  esac
+  # Arrays whose SELF element is dead for matching (it sits UNDER a directory element) need a
+  # double-typo mutant: renaming only the battery file leaves the directory element arming the
+  # diff, so a single-element typo is survivable BY DESIGN. The honest mutation for those typos
+  # BOTH the covering directory element AND the self element — the smallest drift that actually
+  # un-arms the battery on its own diff.
+  case "$arr" in
+    WEBPLAT_APP_PATHS)
+      mutant "array-typo-$arr" 'import re
+m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)
+assert m, "array not found"
+seg = m.group(0)
+seg2 = seg.replace("\"apps/web-platform/\"", "\"apps/web-platform-TYPO/\"") \
+          .replace("\"apps/web-platform/test/repo-wide-containment.test.ts\"", "\"apps/web-platform-TYPO/test/repo-wide-containment.test.ts\"")
+assert seg2.count("TYPO") == 2, "expected BOTH app-local elements renamed"
+lib = lib[:m.start()] + seg2 + lib[m.end():]' "$arm_id"
+      continue
+      ;;
+    PLAYWRIGHT_MCP_REDACT_PROXY_PATHS)
+      mutant "array-typo-$arr" 'import re
+m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)
+assert m, "array not found"
+seg = m.group(0)
+seg2 = seg.replace("\"plugins/soleur/skills/agent-browser\"", "\"plugins/soleur/skills/agent-browser-TYPO\"") \
+          .replace("\"plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh\"", "\"plugins/soleur/skills/agent-browser-TYPO/test/playwright-mcp-redact-proxy.test.sh\"")
+assert seg2.count("TYPO") == 2, "expected BOTH agent-browser elements renamed"
+lib = lib[:m.start()] + seg2 + lib[m.end():]' "$arm_id"
+      continue
+      ;;
+    GITHUB_SCRIPTS_SUITE_PATHS)
+      mutant "array-typo-$arr" 'import re
+m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)
+assert m, "array not found"
+seg = m.group(0)
+# Line-anchored: the SELF comment also mentions ".github", and a bare replace would hit it too.
+seg2 = re.sub(r"(?m)^\s*\"\.github\"", "  \".github-TYPO\"", seg)
+seg2 = seg2.replace("\".github/scripts/test/run-all.sh\"", "\".github-TYPO/scripts/test/run-all.sh\"")
+assert seg2.count("TYPO") == 2, "expected BOTH .github elements renamed"
+lib = lib[:m.start()] + seg2 + lib[m.end():]' "$arm_id"
+      continue
+      ;;
   esac
   mutant "array-typo-$arr" 'import re
 m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)
@@ -610,6 +700,17 @@ assert m, "array not found"
 seg = m.group(0)
 assert seg.count("\"'"$f"'\"") == 1, "own file not exactly once"
 lib = lib[:m.start()] + seg.replace("\"'"$f"'\"", "\"'"${f%.*}"'-TYPO.'"${f##*.}"'\"") + lib[m.end():]' "$arm_id"
+done
+
+# row 13: the glob-loop special-case deleted — the suite registers unconditionally via the glob's
+# bare `run_suite "$f"`, so the docs-only arm (which expects its counted decline) reds. One mutant
+# per glob-registered admit: c4's block is the ruling shape the other two were built on, and a
+# deleted block is exactly the regression the special-case exists to gate (#9340).
+for spec in "plugins/soleur/test/c4-from-components.test.sh" "plugins/soleur/test/monitor-pr-checks.test.sh" "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh"; do
+  mutant "special-case-deleted-${spec##*/}" 'import re
+m = re.search(r"    if \[\[ \"\$f\" == \"'"$spec"'\" \]\]; then\n.*?^    fi\n", s, re.S | re.M)
+assert m, "special-case block not found"
+s = s[:m.start()] + s[m.end():]' docs-only
 done
 
 # =================================================================================================
@@ -634,7 +735,7 @@ printf 'test-all-pr-battery-gate: %d passed, %d failed, %d assertion(s) executed
 # The floor sits flush against its `if` with its threshold on the line above, for the reason
 # scripts/guard-vacuity-floor.test.sh states (it slices the floor block and widens backward over
 # CONTIGUOUS simple assignments).
-PR_GATE_MIN_ASSERTIONS=88
+PR_GATE_MIN_ASSERTIONS=110
 if (( asserted < PR_GATE_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PR_GATE_MIN_ASSERTIONS=%d\n' "$asserted" "$PR_GATE_MIN_ASSERTIONS" >&2
   exit 1

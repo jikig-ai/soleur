@@ -575,6 +575,7 @@ scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured
 scripts/measure-plan-sharp-edges-turns	2422	measured
+scripts/merge-bypass-audit	1272	floor
 scripts/monitor-streak-state	1222	floor
 scripts/no-dangling-committed-symlinks	16	measured
 scripts/orphan-process-reaper	10250	measured

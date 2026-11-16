@@ -53,7 +53,7 @@ grep -qF 'run_suite "apps/web-platform [unit]"' <<<"$BLOCK" \
 echo ""
 
 echo "A2: the app-local suite is gated, and its decline is COUNTED"
-grep -qF '_diff_touches "${WEBPLAT_APP_PATHS[@]}"' <<<"$BLOCK" \
+grep -qF '_diff_touches --pr-gated "${WEBPLAT_APP_PATHS[@]}"' <<<"$BLOCK" \
   && pass "gate predicate present" || fail "gate predicate present"
 grep -qF 'skip_suite "apps/web-platform [unit]"' <<<"$BLOCK" \
   && pass "decline goes through skip_suite (ADR-181: a decline is a verdict)" \
@@ -145,7 +145,7 @@ check "3" "$(grep -cF 'if [[ -n "${VITEST_SHARD:-}" ]]; then' <<<"$BLOCK")" \
 # `_diff_touches` line must precede its first `if [[ -n "${VITEST_SHARD` line.
 # (A bare VITEST_SHARD grep would hit the repo-wide registration's
 # `env VITEST_SHARD=...` passthrough, which legitimately sits above the gate.)
-_unit_ln=$(grep -nF '_diff_touches "${WEBPLAT_APP_PATHS[@]}"' <<<"$BLOCK" | tail -1 | cut -d: -f1)
+_unit_ln=$(grep -nF '_diff_touches --pr-gated "${WEBPLAT_APP_PATHS[@]}"' <<<"$BLOCK" | tail -1 | cut -d: -f1)
 _shard_ln=$(grep -nF 'if [[ -n "${VITEST_SHARD:-}" ]]; then' <<<"$BLOCK" | head -1 | cut -d: -f1)
 if [[ -n "$_unit_ln" && -n "$_shard_ln" && "$_shard_ln" -gt "$_unit_ln" ]]; then
   pass "the battery shard-gate sits below the unit relevance gate"
@@ -209,12 +209,12 @@ mutate() {
 }
 
 echo "M1: dropping the gate must break A2"
-mutate m1 's/if _diff_touches "\${WEBPLAT_APP_PATHS\[@\]}"; then/if true; then/' || exit 2
+mutate m1 's/if _diff_touches --pr-gated "\${WEBPLAT_APP_PATHS\[@\]}"; then/if true; then/' || exit 2
 M1="$TMP/m1.sh"
 bash -n "$M1" && pass "M1 mutant is still a parseable script" || fail "M1 mutant parses"
 [[ -n "$(extract_block "$M1")" ]] && pass "M1 mutant still contains the webplat block" \
   || fail "M1 mutant still contains the webplat block"
-if grep -qF '_diff_touches "${WEBPLAT_APP_PATHS[@]}"' <<<"$(extract_block "$M1")"; then
+if grep -qF '_diff_touches --pr-gated "${WEBPLAT_APP_PATHS[@]}"' <<<"$(extract_block "$M1")"; then
   fail "M1 mutant still shows a gate — A2 is vacuous"
 else
   pass "ungated mutant is detected (A2 can be driven red)"
@@ -229,7 +229,7 @@ echo "M2: gating repo-wide must break A3"
 mutate m2 '/run_suite "apps\/web-platform \[repo-wide+component\]"/,+1d' || exit 2
 M2="$TMP/m2.sh"
 awk '
-  /if _diff_touches "\$\{WEBPLAT_APP_PATHS\[@\]\}"; then/ {
+  /if _diff_touches --pr-gated "\$\{WEBPLAT_APP_PATHS\[@\]\}"; then/ {
     print
     print "    run_suite \"apps/web-platform [repo-wide+component]\" env VITEST_SHARD=\"${VITEST_SHARD:-}\" \\"
     print "      bash -c '"'"'cd apps/web-platform \&\& npm run test:ci -- --project repo-wide'"'"'"

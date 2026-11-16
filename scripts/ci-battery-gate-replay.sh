@@ -11,7 +11,10 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 source scripts/lib/test-relevance-paths.sh
 base=origin/main
 git rev-parse --verify -q "$base" >/dev/null 2>&1 || base=HEAD   # sandboxed checkouts carry no origin/main
-log=$(git log --first-parent -n "$n" --format='tformat:@@@' --name-status -M "$base" 2>/dev/null) || exit 2
+# --diff-merges=first-parent: bare `--name-status` suppresses merge-commit diffs, so merges would
+# count in the denominator while never being able to arm. Giving each merge its first-parent diff
+# is the honest replay of whether the PR that merge landed would have armed the battery.
+log=$(git log --first-parent --diff-merges=first-parent -n "$n" --format='tformat:@@@' --name-status -M "$base" 2>/dev/null) || exit 2
 printf 'run_rate\tbattery\t(base=%s commits=%s)\n' "$base" "$(grep -c '^@@@$' <<<"$log")"
 # The gated arrays are DERIVED from the runner's own --pr-gated call sites, never listed here, so a
 # sixth gated battery appears in this report without anyone remembering to add it.
