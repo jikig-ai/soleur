@@ -194,12 +194,12 @@ CHECK_GIT = (os.path.abspath(GHDIR) == os.path.abspath(os.path.join(REPO, ".gith
              and os.path.exists(os.path.join(REPO, ".git")))
 
 # ── constants (plan Phase 1 item 1) ────────────────────────────────────────────────
-ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_APP"]
+ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_DEPLOY_CHANNEL"]
 TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
                 "GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_INSTALLATION_ID", "GITHUB_INFRA_APP_PRIVATE_KEY",
                 "TF_STATE_AWS_ACCESS_KEY_ID", "TF_STATE_AWS_SECRET_ACCESS_KEY",
                 "GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY"]
-TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover"}
+TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover", "deploy-channel"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
 GUARD4_ROOTS = ["apps/web-platform/infra", "apps/web-platform/infra/git-data-root-key", "apps/web-platform/infra/lb-staging"]
@@ -1807,7 +1807,8 @@ check("G6d: no workflow, action or reachable script mints a Doppler token on sol
 # for every possible HCL or shell spelling (a `local-exec` provisioner, a `data "external"`, a
 # remote module, an out-of-tree root, an inline `sh -c` mint). The boundary that holds for those is
 # the one ADR-241 D2/D11 state: the main-only environment policy plus review of main.
-G7_LIT = re.compile(r'"soleur-infra-app"')
+G7_PROJECTS = ("soleur-infra-app", "soleur-deploy-channel")
+G7_LIT = re.compile(r'"(?:%s)"' % "|".join(G7_PROJECTS))
 # Doppler resource types that hold a value, mint a credential, grant a reader or copy values out. The
 # G6 set (which also fails a stateful resource with NO project) plus the types that only matter when
 # they name this project.
@@ -1825,8 +1826,11 @@ for rel, t in g6_tf:
         g7_blocks.append((rel, "data" if m.group(0).startswith("data") else "resource", m.group(1), m.group(2), b))
 g7_tainted = {"doppler_project.%s" % nm for _r, kind, typ, nm, b in g7_blocks
               if kind == "resource" and typ == "doppler_project"
-              and re.search(r'^\s*name\s*=\s*"soleur-infra-app"\s*(?:(?:#|//).*)?$', b, re.M)}
-g7_declared = bool(g7_tainted)
+              and re.search(r'^\s*name\s*=\s*"(?:%s)"\s*(?:(?:#|//).*)?$' % "|".join(G7_PROJECTS), b, re.M)}
+g7_declared = {p for p in G7_PROJECTS
+               if any(kind == "resource" and typ == "doppler_project"
+                      and re.search(r'^\s*name\s*=\s*"%s"\s*(?:(?:#|//).*)?$' % re.escape(p), b, re.M)
+                      for _r, kind, typ, nm, b in g7_blocks)}
 # The tainted address set is derived from the declaring block, so a renamed label or an environment/config
 # aliasing the project does not leave a reference the guard cannot see.
 while True:
@@ -1854,13 +1858,14 @@ for rel, kind, typ, nm, b in g7_blocks:
 # `.tf.json` is not read by tf_files (and terraform fmt ignores it): refuse any that names the project.
 for r in sorted(tf_root_files):
     for f in sorted(os.listdir(os.path.join(REPO, r))):
-        if f.endswith(".tf.json") and "soleur-infra-app" in open(os.path.join(REPO, r, f), encoding="utf-8", errors="replace").read():
-            g7_bad_c.append("%s/%s names the project" % (r, f))
-check("G7c: soleur-infra-app is declared (project, name soleur-infra-app) and no root declares a stateful "
-      "doppler_* resource on it, through any alias of its project/environment/config (or one whose project "
-      "cannot be shown to be another project) [%d .tf files, declared=%s, %d tainted addresses]"
-      % (len(g6_tf), g7_declared, len(g7_tainted)),
-      len(g6_tf) >= 1 and g7_declared and not g7_bad_c, "tf=%d bad=%s" % (len(g6_tf), g7_bad_c[:5]))
+        if f.endswith(".tf.json") and any(p in open(os.path.join(REPO, r, f), encoding="utf-8", errors="replace").read() for p in G7_PROJECTS):
+            g7_bad_c.append("%s/%s names a narrow D11 project" % (r, f))
+check("G7c: each narrow D11 project is declared (soleur-infra-app, soleur-deploy-channel; #9294 adds the "
+      "second) and no root declares a stateful doppler_* resource on either, through any alias of its "
+      "project/environment/config (or one whose project cannot be shown to be another project) "
+      "[%d .tf files, declared=%s, %d tainted addresses]"
+      % (len(g6_tf), sorted(g7_declared), len(g7_tainted)),
+      len(g6_tf) >= 1 and g7_declared == set(G7_PROJECTS) and not g7_bad_c, "tf=%d bad=%s" % (len(g6_tf), g7_bad_c[:5]))
 
 G7_MINT = re.compile(r"\bdoppler\b[^\n]*?\b(?:configs[ \t]+tokens|service-tokens)\b[^\n]*?\bcreate\b")
 G7_REST_MINT = re.compile(r"api\.doppler\.com/v3/configs/config/tokens")
@@ -1869,21 +1874,21 @@ for where, b in g6_bodies:
     for line in CONT.sub(" ", b).split("\n"):
         if re.match(r"\s*#", line):
             continue
-        if G7_REST_MINT.search(line) and "soleur-infra-app" in line:
+        if G7_REST_MINT.search(line) and any(p in line for p in G7_PROJECTS):
             g7_bad_d.append(where)
         if G7_MINT.search(line):
             # a literal project (quoted or not, on either side of the verb), or a project the guard cannot name
             vals = re.findall(r"(?:^|\s)(?:-p|--project)(?:[= ]+|(?=\S))[\"']?([^\s\"']+)", line) \
                 + re.findall(r"DOPPLER_PROJECT=[\"']?([^\s\"']+)", line)
-            if "soleur-infra-app" in line or any(v.startswith("$") for v in vals):
+            if any(p in line for p in G7_PROJECTS) or any(v.startswith("$") for v in vals):
                 g7_bad_d.append(where)
 # The bootstrap script that mints the read token is the one place a token is stored. It must store
 # it only at ENVIRONMENT level: a repository-level secret is reachable from any branch's workflow. Scripts are
 # found by their literal (archived ones included: archiving the spec directory must not retire the guard).
 g7_scripts = [f for f in sorted(glob.glob(os.path.join(REPO, "knowledge-base", "project", "specs", "**", "bootstrap.sh"), recursive=True))
-              if "soleur-infra-app" in open(f, encoding="utf-8", errors="replace").read()]
+              if any(p in open(f, encoding="utf-8", errors="replace").read() for p in G7_PROJECTS)]
 G7_STORE = re.compile(r"\bgh\s+secret\s+set\b")
-G7_ENV_OK = re.compile(r"(?:^|\s)(?:--env|-e)[ =]+[\"']?(?:infra-privileged|\$\{?GH_ENVIRONMENT\}?)[\"']?(?:\s|$)")
+G7_ENV_OK = re.compile(r"(?:^|\s)(?:--env|-e)[ =]+[\"']?(?:infra-privileged|deploy-channel|\$\{?GH_ENVIRONMENT\}?)[\"']?(?:\s|$)")
 G7_OTHER_STORE = re.compile(r"\bsoleur_op_gh_secret_set\b|\bgh\s+variable\s+set\b|\bgh\s+api\b[^\n]*(?:-X|--method)[ =]+PUT\b[^\n]*(?:actions|dependabot)/secrets")
 for f in g7_scripts:
     src = open(f, encoding="utf-8", errors="replace").read()
@@ -1896,11 +1901,12 @@ for f in g7_scripts:
             g7_bad_d.append("%s:%d gh secret set without --env infra-privileged" % (rel, i))
         if G7_OTHER_STORE.search(code):
             g7_bad_d.append("%s:%d a store that is not an environment-level `gh secret set --env`" % (rel, i))
-    if re.search(r"\$\{?GH_ENVIRONMENT\}?", src) and not re.search(r'^GH_ENVIRONMENT="infra-privileged"\s*$', src, re.M):
-        g7_bad_d.append("%s: GH_ENVIRONMENT is not pinned to infra-privileged" % rel)
-check("G7d: no workflow, action or reachable script mints a Doppler token on soleur-infra-app (a quoted, "
-      "variable or flag-first project included), and the bootstrap script stores it only with "
-      "`gh secret set --env infra-privileged` [%d bootstrap script(s)]" % len(g7_scripts),
+    if re.search(r"\$\{?GH_ENVIRONMENT\}?", src) and not re.search(r'^GH_ENVIRONMENT="(?:infra-privileged|deploy-channel)"\s*$', src, re.M):
+        g7_bad_d.append("%s: GH_ENVIRONMENT is not pinned to a Tier-B environment" % rel)
+check("G7d: no workflow, action or reachable script mints a Doppler token on a narrow D11 project "
+      "(soleur-infra-app or soleur-deploy-channel; a quoted, variable or flag-first project included), "
+      "and the bootstrap script stores it only with `gh secret set --env <Tier-B env>` "
+      "[%d bootstrap script(s)]" % len(g7_scripts),
       not g7_bad_d and (len(g7_scripts) >= 1 or not CHECK_GIT), "scripts=%d bad=%s" % (len(g7_scripts), sorted(set(g7_bad_d))[:5]))
 
 # G6e / G6m -- a Tier-B job's plan and its logs stay private. The saved plan carries every variable
@@ -1949,12 +1955,14 @@ g6_bad_n = sorted({rel for rel, t in g6_scan if G6_XREF.search(t)})
 check("G6n: no workflow, action, reachable script, .tf, .tmpl or cloud-init file carries a Doppler "
       "reference `${soleur-github-app.` [%d files scanned]" % len(g6_scan), not g6_bad_n, g6_bad_n[:5])
 
-# G7e -- no Doppler cross-project reference to the soleur-infra-app project (`${soleur-infra-app.prd.X}`): a reference
-# resolves with the READER's permissions, which would copy the App key into a project a branch-reachable token reads.
-G7_XREF = re.compile(r"\$\$?\{\s*soleur-infra-app\.")
+# G7e -- no Doppler cross-project reference to a narrow D11 project (`${soleur-infra-app.prd.X}`,
+# `${soleur-deploy-channel.prd.X}`): a reference resolves with the READER's permissions, which would copy
+# the value into a project a branch-reachable token reads.
+G7_XREF = re.compile(r"\$\$?\{\s*(?:%s)\." % "|".join(G7_PROJECTS))
 g7_bad_e = sorted({rel for rel, t in g6_scan if G7_XREF.search(t)})
 check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file carries a Doppler reference "
-      "`${soleur-infra-app.` [%d files scanned]" % len(g6_scan), not g7_bad_e, g7_bad_e[:5])
+      "`${soleur-infra-app.` or `${soleur-deploy-channel.` [%d files scanned]" % len(g6_scan),
+      not g7_bad_e, g7_bad_e[:5])
 
 # G7f (#9321, ADR-241 D11) -- every call of the App-token composite is exactly ONE of two source shapes, and the
 # composite itself offers nothing else:
@@ -2095,6 +2103,77 @@ check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-proj
       not g7f_bad,
       "clauses=%s callers=%s bad=%s" % (sorted({b[1:b.index("]")] for b in g7f_bad}), sorted(g7f_callers), sorted(set(g7f_bad))[:4]))
 
+# G7i (#9294, ADR-241 D11) -- the infra-credentials loader's NARROW arm, one clause per property:
+#   allow-list       `doppler-project` admits exactly {soleur-infra-privileged, soleur-deploy-channel}
+#                    plus a `*` arm that exits non-zero, so an attacker-chosen or typo'd project name
+#                    is refused before any Doppler call;
+#   empty-token      the narrow arm's first act is `-z "${DP_DEPLOY_CHANNEL:-}"` -> the shared
+#                    no_credential_source verdict and `exit 1`, BEFORE the download line;
+#   no-prd_terraform the arm's whole body reads soleur-deploy-channel/prd explicitly and names no
+#                    prd_terraform at all -- a read there is the reach the move removes.
+# The loader's own suite (infra-credentials.test.sh rows dc1-dc6) drives these behaviourally; this row
+# pins the STRUCTURE so a refactor cannot drop a limb silently. `if`/`fi` depth counting delimits the
+# arm; comments are stripped first, so a mention in prose cannot satisfy or trip a clause.
+g7i_bad = []
+_ld2 = docs.get(LOADER_REL)
+if _ld2 is None:
+    g7i_bad.append("[composite-missing] the loader %s was not found" % LOADER_REL)
+else:
+    _ldc = "\n".join(l for l in "\n".join(step_bodies(_ld2[0])).split("\n")
+                     if not l.lstrip().startswith("#"))
+    cm = re.search(r'case\s+"?\$\{DP_PROJECT[^"]*"?\s+in\b(.*?)\besac\b', _ldc, re.S)
+    if cm is None:
+        g7i_bad.append("[allow-list] no `case` dispatch on DP_PROJECT found")
+    else:
+        alts = set()
+        for am in re.finditer(r'([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)*)\)\s*;;', cm.group(1)):
+            alts |= set(am.group(1).split("|"))
+        if alts != {"soleur-infra-privileged", "soleur-deploy-channel"}:
+            g7i_bad.append("[allow-list] project alternatives are %s, not exactly the two" % sorted(alts))
+        sm = re.search(r'(^|\n)\s*\*\s*\)(.*?);;', cm.group(1), re.S)
+        if sm is None or "exit 1" not in sm.group(2):
+            g7i_bad.append("[allow-list] no `*` arm exiting non-zero")
+    ls = _ldc.split("\n")
+    si = next((i for i, l in enumerate(ls)
+               if re.match(r"\s*if\b", l) and "DP_PROJECT" in l and '"soleur-deploy-channel"' in l), None)
+    g7i_arm = ""
+    if si is None:
+        g7i_bad.append("[arm-missing] no arm selecting soleur-deploy-channel")
+    else:
+        depth, ei = 0, None
+        for i in range(si, len(ls)):
+            s = ls[i].lstrip()
+            if re.match(r"if\b", s):
+                depth += 1
+            elif re.match(r"fi\b", s):
+                depth -= 1
+                if depth == 0:
+                    ei = i
+                    break
+        if ei is None:
+            g7i_bad.append("[arm-missing] the narrow arm's `fi` was not found")
+        else:
+            g7i_arm = "\n".join(ls[si:ei + 1])
+    if g7i_arm:
+        di = g7i_arm.find("doppler secrets download")
+        if di < 0:
+            g7i_bad.append("[no-prd_terraform] the narrow arm makes no `doppler secrets download`")
+            pre = g7i_arm
+        else:
+            pre = g7i_arm[:di]
+        if not (re.search(r'-z\s+"?\$\{DP_DEPLOY_CHANNEL:-\}"?', pre)
+                and "no_credential_source" in pre and "exit 1" in pre):
+            g7i_bad.append("[empty-token] no `-z DP_DEPLOY_CHANNEL` no_credential_source refusal before the first doppler call")
+        if "prd_terraform" in g7i_arm:
+            g7i_bad.append("[no-prd_terraform] the arm names prd_terraform")
+        if not (re.search(r"-p\s+soleur-deploy-channel\b", g7i_arm) and re.search(r"-c\s+prd\b", g7i_arm)):
+            g7i_bad.append("[no-prd_terraform] the arm does not read soleur-deploy-channel/prd explicitly")
+check("G7i: the loader's narrow arm admits exactly {soleur-infra-privileged, soleur-deploy-channel} "
+      "before any Doppler call, refuses an empty deploy-channel token with the named "
+      "no_credential_source verdict first, and never reads prd_terraform "
+      "(behavioural proof: infra-credentials.test.sh dc1-dc6)",
+      not g7i_bad, "clauses=%s" % sorted({b[1:b.index("]")] for b in g7i_bad}))
+
 # G6l -- the provider fact the state-residency argument rests on.
 g6_lock = os.path.join(REPO, G6_LOCK_REL)
 g6_ver = ""
@@ -2231,7 +2310,7 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=48  # 47 -> 48 (#10990): +1 row, G1k (AC7b limb 3 — local .sh state-writers source their ambient AWS_* pair from a Tier-B name). Previously: # 46 -> 47 (#9927 8b): +1 row, G1j (every loader job declares a Tier-B environment). Previously: # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=49  # 48 -> 49 (#9294): +1 row, G7i (the infra-credentials loader's narrow deploy-channel arm — allow-list, empty-token refusal, no prd_terraform read). Previously: # 47 -> 48 (#10990): +1 row, G1k (AC7b limb 3 — local .sh state-writers source their ambient AWS_* pair from a Tier-B name). Previously: # 46 -> 47 (#9927 8b): +1 row, G1j (every loader job declares a Tier-B environment). Previously: # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
 # 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
@@ -2357,12 +2436,39 @@ inputs:
   doppler-token-infra-privileged:
     required: false
     default: ""
+  doppler-project:
+    required: false
+    default: "soleur-infra-privileged"
+  doppler-token-deploy-channel:
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        DP_PROJECT: ${{ inputs.doppler-project }}
+        DP_DEPLOY_CHANNEL: ${{ inputs.doppler-token-deploy-channel }}
       run: |
         set -euo pipefail
+        # #9294: the fixture mirrors the live loader's narrow arm so the G7i
+        # structural row has a real dispatch + arm to read in the control tree.
+        case "${DP_PROJECT:-soleur-infra-privileged}" in
+          soleur-infra-privileged|soleur-deploy-channel) ;;
+          *)
+            echo "::error title=infra-privileged::verdict=doppler_project_refused"
+            exit 1
+            ;;
+        esac
+        if [[ "${DP_PROJECT:-soleur-infra-privileged}" == "soleur-deploy-channel" ]]; then
+          if [[ -z "${DP_DEPLOY_CHANNEL:-}" ]]; then
+            echo "::error title=infra-privileged::verdict=no_credential_source"
+            exit 1
+          fi
+          payload="$(DOPPLER_TOKEN="$DP_DEPLOY_CHANNEL" doppler secrets download \
+            --no-file --format json -p soleur-deploy-channel -c prd)"
+          exit 0
+        fi
         # The fixture loader must actually ALIAS, because G1i's `${AWS_ACCESS_KEY_ID:-...}`
         # exemption is LICENSED by `loader_aliases` reading this file. With `run: echo loader`
         # here, that licence was False in the control and in every mutant -- so the branch 21
@@ -2746,6 +2852,16 @@ resource "github_repository_environment_deployment_policy" "workspaces_luks_cuto
   environment    = github_repository_environment.workspaces_luks_cutover.environment
   branch_pattern = "main"
 }
+# #9294: the narrow deploy-channel carrier — same main-only, reviewer-less shape.
+resource "github_repository_environment" "deploy_channel" {
+  repository  = "soleur"
+  environment = "deploy-channel"
+}
+resource "github_repository_environment_deployment_policy" "deploy_channel_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.deploy_channel.environment
+  branch_pattern = "main"
+}
 EOF
 
 cat > "$FIX/tree/apps/web-platform/infra/github-app.tf" <<'EOF'
@@ -2874,6 +2990,20 @@ resource "doppler_project" "infra_app" {
 }
 resource "doppler_environment" "infra_app_prd" {
   project = doppler_project.infra_app.name
+  slug    = "prd"
+  name    = "Production"
+}
+EOF
+
+cat > "$FIX/tree/apps/web-platform/infra/deploy-channel-environment.tf" <<'EOF'
+# The fixture mirror of the narrow deploy-channel carrier: containers only, no
+# secret-bearing doppler_* resources (G7c forbids them on this project too).
+resource "doppler_project" "deploy_channel" {
+  name        = "soleur-deploy-channel"
+  description = "fixture"
+}
+resource "doppler_environment" "deploy_channel_prd" {
+  project = doppler_project.deploy_channel.name
   slug    = "prd"
   name    = "Production"
 }
@@ -4707,7 +4837,7 @@ if mutate g7f-h4-lowercase-narrow-token "$MUTDIR/tree/.github/workflows/release.
   fi
 fi
 # G7 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2 does for Guard 6.
-G7_ROW_IDS="G7c G7d G7e G7f"
+G7_ROW_IDS="G7c G7d G7e G7f G7i"
 g7_present() { rows_present "$1" "$G7_ROW_IDS"; }
 if g7_present "$T/live.tsv" && g7_present "$T/control.tsv"; then
   pass "G7h2: every named G7 row id ($G7_ROW_IDS) is present in the live and the control census"
@@ -4729,6 +4859,51 @@ if [ "$(grep -c . "$T/mut/g7h2-f.tsv")" -eq "$(( $(grep -c . "$T/control.tsv") -
   mutant_red g7h2-g7f-row-missing g7_present "$T/mut/g7h2-f.tsv"
 else
   fail "M-g7h2-g7f-row-missing: the removal did not land on exactly one line"
+fi
+
+# ── #9294 deploy-channel mutants: the second G7 project and the G7i narrow arm ────────
+# Each row proves a clause or a project membership binds: a stateful resource on the new
+# project (G7c), a CI mint naming it (G7d), a cross-project reference (G7e), and the
+# three narrow-arm limbs (G7i). Without these, widening the guard's literals could have
+# shipped untested on exactly the project the whole change exists to protect.
+MUTDIR="$(fixcopy g7c-dc)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "doppler_secret" "dc_leak" {\n  project = doppler_project.deploy_channel.name\n  config  = "prd"\n  name    = "X"\n  value   = "x"\n}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-dc.tf"
+if fixture_written g7c-dc-secret-on-project "$MUTDIR/tree/apps/web-platform/infra/zz-dc.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c-dc.tsv" ""
+  mutant_red g7c-dc-secret-on-project wf_row "$T/mut/g7c-dc.tsv" "G7c:"
+fi
+
+MUTDIR="$(fixcopy g7d-dc)"; assert_fixture_dir "$MUTDIR"
+if mutate g7d-dc-token-mint "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          bash scripts\/tierb-helper\.sh$/a\          doppler configs tokens create g7-dc -p soleur-deploy-channel -c prd --plain > /dev/null'; then
+  fixcensus "$MUTDIR" "$T/mut/g7d-dc.tsv" ""
+  mutant_red g7d-dc-token-mint wf_row "$T/mut/g7d-dc.tsv" "G7d:"
+fi
+
+MUTDIR="$(fixcopy g7e-dc)"; assert_fixture_dir "$MUTDIR"
+if mutate g7e-dc-cross-project-reference "$MUTDIR/tree/.github/workflows/tiera.yml" 1 '$a\          doppler secrets set K='"'"'${soleur-deploy-channel.prd.KEY}'"'"' -p soleur -c prd_terraform --silent >/dev/null'; then
+  fixcensus "$MUTDIR" "$T/mut/g7e-dc.tsv" ""
+  mutant_red g7e-dc-cross-project-reference wf_row "$T/mut/g7e-dc.tsv" "G7e:"
+fi
+
+MUTDIR="$(fixcopy g7i-al)"; assert_fixture_dir "$MUTDIR"
+if mutate g7i-allowlist-drop "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 2 \
+   's/\|soleur-deploy-channel\)/)/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7i-al.tsv" ""
+  mutant_red g7i-allowlist-drop wf_clause "$T/mut/g7i-al.tsv" "G7i:" allow-list
+fi
+
+MUTDIR="$(fixcopy g7i-tok)"; assert_fixture_dir "$MUTDIR"
+if mutate g7i-empty-token-neutered "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 2 \
+   's/-z "\$\{DP_DEPLOY_CHANNEL:-\}"/-n "nonempty"/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7i-tok.tsv" ""
+  mutant_red g7i-empty-token-neutered wf_clause "$T/mut/g7i-tok.tsv" "G7i:" empty-token
+fi
+
+MUTDIR="$(fixcopy g7i-prdtf)"; assert_fixture_dir "$MUTDIR"
+if mutate g7i-prd-terraform-read "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 2 \
+   's/-c prd\)/-c prd_terraform)/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7i-prdtf.tsv" ""
+  mutant_red g7i-prd-terraform-read wf_clause "$T/mut/g7i-prdtf.tsv" "G7i:" no-prd_terraform
 fi
 
 # G6h2 — PRESENCE of every named G6 row (a count floor cannot tell a renamed or dropped row from
@@ -4866,7 +5041,10 @@ fi
 #   (caller-job secrets: block), g1-2h (secrets: inherit), g1-2i (lowercase spelling),
 #   g1-2j (DOPPLER_TOKEN_INNGEST_ARM name); 1 landing each. Measured: 163 ran.
 # 163 -> 164 (#9927 review): g1-2k (DOPPLER_TOKEN_INNGEST_FLIP_READ name in REPO_SCOPED_PRIV); 1 landing.
-MUTANT_FLOOR=164
+# 164 -> 170 (#9294): the second G7 project (soleur-deploy-channel) and the G7i narrow arm — g7c-dc,
+#   g7d-dc, g7e-dc (1 landing each), g7i-allowlist-drop, g7i-empty-token-neutered, g7i-prd-terraform-read
+#   (1 landing each). Measured: 170 ran.
+MUTANT_FLOOR=170
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4922,7 +5100,9 @@ _ran=$((passes + fails))
 # 404 -> 406 (#9755 review): g1-2c (1 landing + 1 verdict). Measured: 406 ran.
 # 406 -> 420 (#9755 review round 2): g1-2d..g1-2j (7 landings + 7 verdicts). Measured: 420 ran.
 # 420 -> 422 (#9927 review): g1-2k (1 landing + 1 verdict). Measured: 422 ran.
-FLOOR=422
+# 422 -> 435 (#9294): live G7i (in the census, not an assertion), 6 landings + 6 verdicts for the
+#   deploy-channel mutants, +1 for the G7h2 string now naming five row ids. Measured: 435 ran.
+FLOOR=435
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
