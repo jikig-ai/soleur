@@ -87,7 +87,13 @@ export async function PUT(
         ? { rerenderDiagnostic: result.rerenderDiagnostic }
         : {}),
       // #12600 D16: the commit landed but the workspace was held; the client shows the shared non-error notice.
-      ...(result.workspaceSync === "pending" ? { workspace_sync: WORKSPACE_SYNC_PENDING } : {}),
+      ...(result.workspaceSync === "pending"
+        ? {
+            workspace_sync: WORKSPACE_SYNC_PENDING,
+            // D22(c): which sync was held, so the UI can word a resync-only hold (the source IS in the workspace).
+            ...(result.workspaceSyncHeld ? { workspace_sync_held: result.workspaceSyncHeld } : {}),
+          }
+        : {}),
     },
     { status: 200 },
   );

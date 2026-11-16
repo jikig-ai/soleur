@@ -35,7 +35,12 @@ import "@likec4/diagram/styles.css";
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
 import type { Diagnostic } from "@/lib/c4-model-shape";
-import { isWorkspaceSyncPending, kbWorkspaceSyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
+import {
+  isWorkspaceSyncPending,
+  isWorkspaceSyncResyncOnly,
+  kbWorkspaceSyncPendingNotice,
+  kbWorkspaceSyncResyncPendingNotice,
+} from "@/lib/kb-workspace-sync-notice";
 
 // By supplying our own MantineProvider (Lever 1, below) we displace
 // @likec4/diagram's LikeC4MantineProvider — which the library renders only when
@@ -511,9 +516,11 @@ export function C4CodePanel({
       // #12600 D16: the commit landed but the workspace was held, so the diagram did not re-render here.
       // D22(c): the render ran on GitHub's copy, so a render diagnostic is still shown after the notice.
       isWorkspaceSyncPending(j)
-        ? diagnostic
-          ? `${kbWorkspaceSyncPendingNotice("save")} — ${diagnostic}`
-          : kbWorkspaceSyncPendingNotice("save")
+        ? isWorkspaceSyncResyncOnly(j)
+          ? kbWorkspaceSyncResyncPendingNotice()
+          : diagnostic
+            ? `${kbWorkspaceSyncPendingNotice("save")} — ${diagnostic}`
+            : kbWorkspaceSyncPendingNotice("save")
         : rerendered
         ? "Saved — diagram updated."
         : diagnostic

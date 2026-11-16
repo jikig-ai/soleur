@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, renderHook, screen, fireEvent, waitFor } from "@testing-library/react";
-import { kbWorkspaceSyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
+import { kbWorkspaceSyncPendingNotice, kbWorkspaceSyncResyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
 
 // c4-shared.tsx imports browser-only deps at module top (@likec4/diagram,
 // @likec4/core/model, CodeMirror). Stub them so the REAL C4Diagnostics /
@@ -250,6 +250,28 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
     expect(screen.getByText(kbWorkspaceSyncPendingNotice("save"))).toBeTruthy();
+    expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
+  });
+
+  it("#12600 D22(c): a hold on only the post-render resync says the workspace may not show the save yet", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: false, workspace_sync: "pending", workspace_sync_held: "rerender" }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(screen.getByText(kbWorkspaceSyncResyncPendingNotice())).toBeTruthy());
+    expect(screen.queryByText(kbWorkspaceSyncPendingNotice("save"))).toBeNull();
     expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
   });
 
