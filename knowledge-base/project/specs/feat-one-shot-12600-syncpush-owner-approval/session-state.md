@@ -36,3 +36,8 @@ None
 - Post-planning re-probe: no open PR on the 42 planned files, no linked or body-ref open PR, no sibling worktree. Overlap preflight exit 0.
 - technical-ruling-gate --branch: exit 0. cto_spawns=1 (batched, planning subagent).
 - Order: work Phases 0-7 (12600) now; wireframe + deepen-plan on 12718/12714 sections + Phases 8-11 after the design tool works.
+
+## Review round 1 (2026-11-16)
+- 14/14 seats at PANEL_SHA 3b7ff59635; synthesis G1-G9 (scratchpad review-12704-synthesis.md).
+- CTO rulings D5-D13 committed at 2266c7480d. Follow-up to file at ship: "kb-sync: memoize the held_foreign outcome per headSha to skip the per-turn ls-remote" (D13/G8). Post-merge: close #12792 and #12734 with a comment (not in the Closes set).
+- Fixes in progress in two disjoint-file agents (PUBLISH: kb-sync-publish/session-sync/git-isolated-local/git-hardened-env; SELFHEAL: workspace-sync + ADR prose). Interim seams for D5(e)/D6(c) land with Phase 9.

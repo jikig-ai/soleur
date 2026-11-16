@@ -861,7 +861,7 @@ describe("census: every host-side git exec site is classified (consistency with 
   // The census proves the classification table agrees with the source IN THE SAME COMMIT; a diff can edit both. The
   // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
   const SERVER = join(__dirname, "..", "server");
-  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts"];
+  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts", "workspace-local-git.ts"];
   const CENSUS_ONLY: Record<string, string> = {
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
     "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",

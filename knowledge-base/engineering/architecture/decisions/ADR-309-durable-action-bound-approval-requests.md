@@ -560,8 +560,8 @@ decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owne
   `@{u}` or `refs/remotes/*`). It hash-verifies `T`'s commit and root tree and HEAD's commit and root tree by recomputing
   their ids, then builds `S`: parent `T`, root tree = `T`'s root with only the `knowledge-base` entry taken from HEAD,
   message "Soleur: sync knowledge-base", author and committer "Soleur Agent" / `agent@soleur.ai`. Guard 1
-  (`assertRootDiffersOnlyInKb`) is re-run on the exact sha inside `pushVerifiedKbOnly`, the only push argv of the flow,
-  which pushes `<S>:refs/heads/<D>` non-force from the server-created isolated GIT_DIR. Every decision and build runs
+  (`assertRootDiffersOnlyInKb`) runs once on the exact sha and yields a module-private token that
+  `pushVerifiedKbOnly` (the only push argv of the flow, not exported) requires; that push sends `<S>:refs/heads/<D>` non-force from the server-created isolated GIT_DIR. Every decision and build runs
   token-free in that directory (`server/git-isolated-local.ts`); the workspace receives only `unpack-objects -q` of
   the server-built objects (an explicit object list, D10) and `update-ref --no-deref` in two shapes: a CAS of
   `refs/heads/<branch>` with a mandatory old value, and the advisory tracking ref `refs/remotes/origin/<D>`. These are
@@ -572,10 +572,10 @@ decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owne
   and its Owner approval. The local branch moves to `S` (KB-only turn) or to a merge `M` of HEAD and `S` (code held)
   before the push, so the clone stays fast-forwardable.
 - **Refusals** (op `kb-sync.push-held`, tags `reason` + `outcome`): `merge_in_progress`, `detached_head`,
-  `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`,
+  `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`,
   `ref_update_failed`, `unpack_failed` and `side_ahead` warn (debounced per workspace and reason); `remote_ahead`,
   `remote_unknown_tip`, `held_foreign`, `synthetic_pushed` and `side_pending` (D5b) log only.
-- **Protected default branch.** A rejection is `protected_branch` when its stderr (CR stripped) has GitHub's
+- **Protected default branch.** A rejection is `protected_branch` when its stderr (CRLF and a lone CR both end a line) has GitHub's
   `remote: error: GH006:` line or a `remote:` line carrying "Changes must be made through a pull request", the #5426
   require-PR text that a `GH013` ruleset requiring a PR also prints (D9; line-anchored, stderr only). A `GH013` without
   that text (secret push protection) stays `other`. On `protected_branch` the side commit on `soleur/kb-sync` is built
