@@ -117,11 +117,11 @@ fi
 
 # S6: the emitted LINE carries the full readiness field set (parseable marker).
 missing=""
-for field in "SOLEUR_FRESH_BOOT_READY ready=" "stage=cloud_init_complete" "token=" "vector=" "volume=" "luks=" "luks_arm=" "escrow=" "boot_id=" "host=" "reason=" "boot_window_s="; do
+for field in "SOLEUR_FRESH_BOOT_READY ready=" "stage=cloud_init_complete" "token=" "vector=" "volume=" "luks=" "luks_arm=" "escrow=" "boot_id=" "host=" "reason=" "boot_window_s=" "kernel="; do
   printf '%s\n' "$HELPER" | grep -cF -- >/dev/null "$field" || missing="$missing '$field'"
 done
 if [ -z "$missing" ]; then
-  ok "S6: the marker LINE carries ready/stage/token/vector/volume/luks/luks_arm/escrow/boot_id/host/reason/boot_window_s"
+  ok "S6: the marker LINE carries ready/stage/token/vector/volume/luks/luks_arm/escrow/boot_id/host/reason/boot_window_s/kernel"
 else
   no "S6: marker LINE missing field(s):$missing"
 fi
@@ -246,6 +246,19 @@ STUB
 [ "$*" = "secrets get BETTERSTACK_LOGS_TOKEN --plain --project soleur --config prd" ] || { echo "REFUSED doppler $*" >> "$FBR_CAP"; exit 64; }
 printf '%s' "${FBR_DOPPLER_TOKEN:-}"
 STUB
+  # (#12008) the kernel predicate's two reads. dpkg-query answers only the one query the helper must ask;
+  # FBR_KTARGET='' models a meta package with no linux-image dependency, FBR_DPKG_RC an unreadable dpkg.
+  cat > "$sb/bin/dpkg-query" <<'STUB'
+#!/bin/sh
+[ "$#" -eq 3 ] && [ "$1" = "-W" ] && [ "$2" = '-f=${Depends}' ] && [ "$3" = "linux-image-generic" ] || { echo "REFUSED dpkg-query $*" >> "$FBR_CAP"; exit 64; }
+[ "${FBR_DPKG_RC:-0}" = 0 ] || exit "$FBR_DPKG_RC"
+if [ -n "${FBR_KTARGET-0.0.0-1-generic}" ]; then printf 'linux-image-%s, linux-firmware' "${FBR_KTARGET-0.0.0-1-generic}"; else printf 'linux-firmware'; fi
+STUB
+  cat > "$sb/bin/uname" <<'STUB'
+#!/bin/sh
+[ "$#" -eq 1 ] && [ "$1" = "-r" ] || { echo "REFUSED uname $*" >> "$FBR_CAP"; exit 64; }
+printf '%s\n' "${FBR_KUNAME:-0.0.0-1-generic}"
+STUB
   if [ "${FBR_VECTOR_BIN:-0}" = 1 ]; then printf '#!/bin/sh\nexit 0\n' > "$sb/bin/vector"; fi
   chmod +x "$sb/bin/"*
   local envfile="$sb/webhook-deploy" armfile="$sb/luks-arm" bootid="$sb/boot_id"
@@ -266,6 +279,7 @@ STUB
     LUKS_ARM_FILE="$armfile" BOOT_ID_FILE="$bootid" SOLEUR_STAGE_DETAIL_DIR="$sb/detail" \
     BETTERSTACK_LOGS_TOKEN="$bs_token" BETTERSTACK_INGEST_URL="$bs_url" \
     FBR_MOUNTED="${FBR_MOUNTED:-0}" FBR_VECTOR_ACTIVE="${FBR_VECTOR_ACTIVE:-0}" \
+    FBR_KTARGET="${FBR_KTARGET-0.0.0-1-generic}" FBR_KUNAME="${FBR_KUNAME:-0.0.0-1-generic}" FBR_DPKG_RC="${FBR_DPKG_RC:-0}" \
     FBR_MOUNT_SRC="$([ "${FBR_LUKS:-0}" = 1 ] && echo /dev/mapper/workspaces || echo /dev/sdb)" FBR_HOST="${FBR_HOST-soleur-web-2}" \
     sh -c "$body" >/dev/null 2>"$sb/stderr" )
   R_ROW="$(grep -F 'SOLEUR_FRESH_BOOT_READY' "$cap" | sed -n '1p')"
@@ -298,7 +312,7 @@ run_case() {
 
 # --- The decision table (a healthy Better Stack channel: creds present, pinned URL, curl ok) ---
 case_ready()   { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 run_case "all-satisfied" \
-  "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=none" "fresh_boot_ready info"; }
+  "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=none boot_window_s=1140 kernel=1" "fresh_boot_ready info"; }
 case_token()   { FBR_TOKEN=0 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 run_case "token-absent" \
   "ready=0 stage=cloud_init_complete token=0 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=token" "fresh_boot_not_ready_token fatal"; }
 case_vector()  { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=0 FBR_MOUNTED=1 FBR_LUKS=1 run_case "vector-inactive" \
@@ -334,7 +348,20 @@ case_bootid_bound() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNT
 case_arm_vocab() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_ARM=RAW FBR_ARM_RAW=$'luks_arm=evil value\nescrow=fine' run_case "arm-file-off-vocabulary-reads-none" \
   "luks_arm=none escrow=none" "fresh_boot_ready info"; }
 
+# (#12008) kernel currency is GATED: a host running anything but the kernel the installed
+# linux-image-generic points to is not ready, and an unreadable or empty target is never a match.
+case_kernel()  { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_KUNAME=0.0.0-0-generic run_case "kernel-mismatch-not-ready" \
+  "ready=0 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=kernel boot_window_s=1140 kernel=0" "fresh_boot_not_ready_kernel fatal"; }
+case_kernel_empty() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_KTARGET='' FBR_KUNAME=0.0.0-1-generic run_case "kernel-empty-target-not-ready" \
+  "ready=0 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=kernel boot_window_s=1140 kernel=0" "fresh_boot_not_ready_kernel fatal"; }
+case_kernel_unreadable() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_DPKG_RC=1 run_case "kernel-unreadable-dpkg-not-ready" \
+  "reason=kernel boot_window_s=1140 kernel=0" "fresh_boot_not_ready_kernel fatal"; }
+# luks outranks kernel: two unmet preconditions name the earlier field.
+case_prec_lk() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=0 FBR_KUNAME=0.0.0-0-generic run_case "luks+kernel unmet -> reason=luks" \
+  "luks=0 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=luks boot_window_s=1140 kernel=0" "fresh_boot_not_ready_luks fatal"; }
+
 case_ready; case_token; case_vector; case_volume; case_luks; case_noarm; case_escrow
+case_kernel; case_kernel_empty; case_kernel_unreadable; case_prec_lk
 case_bootid_unreadable; case_splice; case_hostile
 case_prec_tv; case_prec_vv; case_bootid_bound; case_arm_vocab
 
@@ -379,9 +406,9 @@ case_bs_ok; case_bs_notoken; case_bs_nourl; case_bs_unpinned; case_bs_failed; ca
 
 # The Sentry twin carries the joinable fields itself, so a dead direct channel loses nothing.
 case_detail_ready() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_ARM=opened FBR_ESCROW=missing run_helper
-  if [ "$(detail_of fresh_boot_ready)" = "token=1 vector=1 volume=1 luks=1 luks_arm=opened escrow=missing boot_id=$BID" ]; then verdict "ready twin carries luks_arm/escrow/boot_id in its Sentry detail" ok ""; else verdict "ready twin carries luks_arm/escrow/boot_id in its Sentry detail" no "got '$(detail_of fresh_boot_ready)'"; fi; }
+  if [ "$(detail_of fresh_boot_ready)" = "token=1 vector=1 volume=1 luks=1 luks_arm=opened escrow=missing boot_id=$BID kernel=1" ]; then verdict "ready twin carries luks_arm/escrow/boot_id in its Sentry detail" ok ""; else verdict "ready twin carries luks_arm/escrow/boot_id in its Sentry detail" no "got '$(detail_of fresh_boot_ready)'"; fi; }
 case_detail_notready() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=0 run_helper
-  if [ "$(detail_of fresh_boot_not_ready_luks)" = "token=1 vector=1 volume=1 luks=0 luks_arm=formatted escrow=ok boot_id=$BID" ]; then verdict "not-ready page carries the whole field set in its Sentry detail" ok ""; else verdict "not-ready page carries the whole field set in its Sentry detail" no "got '$(detail_of fresh_boot_not_ready_luks)'"; fi; }
+  if [ "$(detail_of fresh_boot_not_ready_luks)" = "token=1 vector=1 volume=1 luks=0 luks_arm=formatted escrow=ok boot_id=$BID kernel=1" ]; then verdict "not-ready page carries the whole field set in its Sentry detail" ok ""; else verdict "not-ready page carries the whole field set in its Sentry detail" no "got '$(detail_of fresh_boot_not_ready_luks)'"; fi; }
 case_detail_ready; case_detail_notready
 
 # --- DEFAULT-PATH CONTRACT. Every case above overrides the seams, so the production defaults were never
@@ -438,20 +465,25 @@ mut_row "token shape guard dropped (a malformed token reaches curl)" case_bs_bad
 _m_from="  post() { printf 'header = \"Authorization: Bearer %s\"\\n' \"\$TOKEN\" | curl --disable --noproxy '*' -fsS -m 10 --config - -H 'Content-Type: application/json'"
 _m_to="  post() { curl --disable --noproxy '*' -fsS -m 10 -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json'"
 mut_row "bearer back on curl's argv" case_bs_ok "$_m_from" "$_m_to"
-mut_row "ready twin detail dropped" case_detail_ready '  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"' '  :'
-mut_row "not-ready detail dropped" case_detail_notready '  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"' '  :'
+mut_row "ready twin detail dropped" case_detail_ready '  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID kernel=$K"' '  :'
+mut_row "not-ready detail dropped" case_detail_notready '  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID kernel=$K"' '  :'
+# (#12008) Guard 1 rows: the kernel comparison is load-bearing in READY, an empty target is never a match,
+# and the precedence keeps luks ahead of kernel.
+mut_row "kernel comparison dropped from READY" case_kernel ' && [ "$LUKS" = 1 ] && [ "$K" = 1 ]; then' ' && [ "$LUKS" = 1 ]; then'
+mut_row "empty kernel target treated as a match" case_kernel_empty 'if [ -n "$KT" ] && [ "$KT" = "$(uname -r 2>/dev/null)" ]; then K=1' 'if [ -z "$KT" ] || [ "$KT" = "$(uname -r 2>/dev/null)" ]; then K=1'
+mut_row "kernel target read from the wrong package" case_ready "linux-image-generic 2>/dev/null" "linux-image-virtual 2>/dev/null"
 # HARMLESS variant: a comment-only edit must stay green (the harness is not just rejecting every change).
 MUTATION_ROWS=$((MUTATION_ROWS + 1))
 if FBR_HELPER="${HELPER/'READY=0; REASON=none'/'READY=0; REASON=none # harmless'}" FBR_QUIET=1 case_ready && [ "${HELPER/'READY=0; REASON=none'/'READY=0; REASON=none # harmless'}" != "$HELPER" ]; then ok "M: a comment-only edit stays green (harmless variant)"; else no "M: the harmless variant turned red or did not land"; fi
 
 # Anti-vacuity: an exact floor on the assertions of this file. Deleting a case group, the mutation
 # battery or the structural half leaves a lower count, which reds here.
-EXPECTED_ASSERTIONS=68
+EXPECTED_ASSERTIONS=75
 total=$((pass + fail))
 if [ "$total" -ne "$EXPECTED_ASSERTIONS" ]; then
   no "floor: ran $total assertions, expected exactly $EXPECTED_ASSERTIONS (a group of cases was deleted or added without moving the floor)"
 fi
-if [ "$MUTATION_ROWS" -ne 23 ]; then no "count: $MUTATION_ROWS mutation rows ran, expected exactly 23"; fi
+if [ "$MUTATION_ROWS" -ne 26 ]; then no "count: $MUTATION_ROWS mutation rows ran, expected exactly 26"; fi
 
 echo "=== fresh-boot-ready: $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
