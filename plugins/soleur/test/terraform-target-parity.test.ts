@@ -6420,7 +6420,11 @@ describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B hand
   function repoTfFiles(): string[] {
     const r = spawnSync("git", ["ls-files", "-z", "--", "*.tf", "*.tf.json"], { cwd: REPO_ROOT, encoding: "utf8" });
     if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
-    return r.stdout.split("\0").filter(Boolean).map((f) => resolve(REPO_ROOT, f));
+    const rel = r.stdout.split("\0").filter(Boolean);
+    // git ls-files emits repo-relative paths with no `..` segment; assert it rather than rely on it.
+    const escaping = rel.filter((f) => f.startsWith("/") || f.split("/").includes(".."));
+    if (escaping.length) throw new Error(`git ls-files returned non-relative paths: ${escaping.join(", ")}`);
+    return rel.map((f) => `${REPO_ROOT}/${f}`);
   }
 
   /** [start, end) line ranges of every heredoc in RAW text. Quotes are deliberately ignored, so a
