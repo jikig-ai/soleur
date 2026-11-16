@@ -92,7 +92,7 @@ Conclusion: <conclusion>
 Failed log tail:
 <last 50 lines>
 
-Before writing a fix, run [ci-fix-probe.md](./references/ci-fix-probe.md). The merge is complete; production may not deploy.
+Before fixing, run [ci-fix-probe.md](./references/ci-fix-probe.md). Merged; production may not deploy.
 ```
 
 ## Phase 3: Verify Production Deployment
