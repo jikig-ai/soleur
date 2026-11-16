@@ -890,7 +890,7 @@ describe("Bash — the api filing shape is order- and spelling-agnostic (#8074 r
   // earlier by the allowlist prefix, but the shared predicate covers it for
   // the deny-marker, which sees commands after any deny).
   const shapes = [
-    "gh api repos/jikig-ai/soleur/issues?x=1 -X POST -f title=spam",
+    "gh api repos/jikig-ai/soleur/'issues?x=1' -X POST -f title=spam",
     "gh api repos/jikig-ai/soleur/issues/ -X POST -f title=spam",
     "gh api repos/jikig-ai/soleur/issues -f title=spam",
     "gh api repos/jikig-ai/soleur/issues --method=POST -f body=b",
@@ -903,10 +903,10 @@ describe("Bash — the api filing shape is order- and spelling-agnostic (#8074 r
   });
   it("still allows a non-create endpoint under the same prefix (comments POST, issues GET)", () => {
     expect(verdict(bash("gh api repos/jikig-ai/soleur/issues/123/comments -X POST -f body=b"))).toBe("allow");
-    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues?state=open"))).toBe("allow");
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/'issues?state=open'"))).toBe("allow");
   });
   it("passes exit 1 on the api form with the method after the fields", () => {
-    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues -f title=t -f labels[]=meta/machinery -X POST"))).toBe("allow");
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues -f title=t -f 'labels[]=meta/machinery' -X POST"))).toBe("allow");
   });
   it("a method-FIRST spelling never reaches the gate: the allowlist prefix (`gh api repos/…/`) denies it first", () => {
     expect(reason(bash("gh api -X POST repos/jikig-ai/soleur/issues -f title=spam"))).toContain("not allowlisted");
@@ -954,8 +954,8 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
 
   it("allows the two remaining spellings too (-l=<label>, bare labels[]= field) — every spelling exit 1 reads", () => {
     expect(rr(bash(`gh issue create --title t -l=${LABEL}`))).toBe("allow");
-    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
-    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t labels[]=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f 'labels[]=${LABEL}'`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t 'labels[]=${LABEL}'`))).toBe("allow");
   });
 
   it("denies a DIFFERENT valid run-report label (no cross-cron borrowing) and the meta/machinery exit still stands", () => {
@@ -1014,8 +1014,8 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
   });
 
   it("the api form honours the directive via -f labels[]=", () => {
-    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
-    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}x`))).toBe("deny");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f 'labels[]=${LABEL}'`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f 'labels[]=${LABEL}x'`))).toBe("deny");
   });
 });
 
@@ -1046,13 +1046,13 @@ describe("Bash — the --input filing refusal (#9089)", () => {
   // exit 0) must not win over the refusal.
   it("--input with -f labels[]=meta/machinery STILL gets the --input refusal", () => {
     expect(
-      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery"),
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f 'labels[]=meta/machinery'"),
     ).toBe(INPUT_REFUSAL);
     expect(
-      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=scheduled-x", "scheduled-x"),
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f 'labels[]=scheduled-x'", "scheduled-x"),
     ).toBe(INPUT_REFUSAL);
     expect(
-      reason(bash("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery")),
+      reason(bash("gh api repos/jikig-ai/soleur/issues --input b.json -f 'labels[]=meta/machinery'")),
     ).toBe(`cron-containment: ${INPUT_REFUSAL}`);
   });
 
@@ -1910,7 +1910,20 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
       expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecision, cron).toBe("deny");
     expect(decideOn(bash(cmd), BF_LINES).permissionDecisionReason).toMatch(/^cron-containment: metachar: \$/);
   });
-  it.each(["git add ./.", "git add .//", "git add ./././", "git add --al", "git add --no-ignore-removal", "git add --upd", "git add ? ?? ???", "git add [a-z]*", "git add @(x)", "git commit --al -m x"])(
+  it.each(["git add -?", "git add --*", "git add --a?l", "git commit -? -m x", "git commit --?ll -m x", "git add ? ?? ???", "git add [a-z]x", "git add @(x)", "gh issue view 1 --json labels --jq .[0]"])(
+    "both crons: unquoted pathname expansion %s is denied as a metachar",
+    (cmd) => {
+      for (const cron of VERB_TABLE_CRONS)
+        expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS[cron]).permissionDecisionReason, cron).toMatch(/^cron-containment: metachar: pathname expansion/);
+    },
+  );
+  it.each(["git add 'apps/web-platform/app/(dashboard)/dashboard/approvals/[id]/page.tsx'", 'git add -- "app/[slug]/page.tsx"'])(
+    "bug-fixer: a quoted dynamic-route path %s stays allowed",
+    (cmd) => {
+      expect(decideOn(bash(cmd), BF_LINES).permissionDecision).toBe("allow");
+    },
+  );
+  it.each(["git add ./.", "git add .//", "git add ./././", "git add --al", "git add --no-ignore-removal", "git add --upd", "git add '*'", "git add --pathspec-from-file=list", "git add --pathspec-from=list", "git commit --pathspec-from-file=list -m x", "git commit --al -m x"])(
     "bug-fixer: whole-tree git spelling %s is denied",
     (cmd) => {
       expect(decideOn(bash(cmd), BF_LINES).permissionDecision).toBe("deny");

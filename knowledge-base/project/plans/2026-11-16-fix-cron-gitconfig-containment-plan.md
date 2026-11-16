@@ -1413,3 +1413,8 @@ The 12-seat review changed these points. The sections above are kept as planned.
   (`{-a,-m{}}`). Deny-listing forms kept missing one, so the classes are closed outright: any `$` not followed by
   whitespace, and any unquoted `{`. `git add` also refuses root-equivalent paths (`./.`), `?`/`[`/extglob, and long-option
   prefixes of `--all`/`--update`/`--no-ignore-removal`; `git commit` refuses `--al`.
+- **Fix round 5 (security seat on 43392ec5c9).** Unquoted globs inside flag words (`git add -?` with a planted `-A`
+  file) and `--pathspec-from-file` still staged the whole tree; the token-level `[` check over-denied quoted Next.js
+  `[id]` route paths. Unquoted pathname expansion is now a metachar deny (the hook's own messages already quote
+  `-f 'labels[]=…'`; six test rows moved to the quoted spelling), the git-add token check keeps only `*` (git's own
+  pathspec glob), and `--pathspec-from-file` prefixes are refused on add and commit.

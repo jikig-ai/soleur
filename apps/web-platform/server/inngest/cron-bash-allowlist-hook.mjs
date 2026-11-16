@@ -561,6 +561,10 @@ function dangerousMetacharReason(command) {
   // expanding forms missed nested lists (`{-a,-m{}}`), so ANY unquoted `{` is refused; a quoted `--jq '{…}'` was
   // stripped above and stays allowed.
   if (/\{/.test(ctrlScan)) return "brace expansion -- quote any literal { } text";
+  // Fix round 5 — unquoted pathname expansion, the same class: bash globs `-?` / `--*` into a file the agent wrote
+  // named `-A` or `--all` (measured: a whole-tree stage), and `? ??` into most of the tree, after the hook read the
+  // raw word. Quoted text is git's own pathspec matching, checked per verb below.
+  if (/[*?[]|[!@+]\(/.test(ctrlScan)) return "pathname expansion -- quote any literal * ? [ text";
   return null;
 }
 
@@ -708,7 +712,7 @@ function gitVerbReason(tokens) {
       if (t.startsWith("--")) {
         // git accepts any unambiguous prefix of a long option (`--al` is `--all`), and --no-ignore-removal is --all.
         const isPrefix = (long) => t.length >= 3 && long.startsWith(t.split("=")[0]);
-        if (isPrefix("--all") || isPrefix("--update") || isPrefix("--no-ignore-removal"))
+        if (isPrefix("--all") || isPrefix("--update") || isPrefix("--no-ignore-removal") || isPrefix("--pathspec-from-file"))
           return `blanket git-add flag ${t} denied — ${scoped}`;
         continue;
       }
@@ -721,7 +725,9 @@ function gitVerbReason(tokens) {
       // `./.`, `.//`, `./././` all resolve to the tree root; `?`, `[` and extglob are pathname expansion bash runs on
       // the raw word after the hook has read it (`git add ? ?? ???` stages almost every file).
       const rootish = t.replace(/\/+$/, "").replace(/^(\.\/+)+/, "").replace(/\/+$/, "");
-      if (rootish === "." || rootish === "" || path.startsWith(":") || /[*?[]|[!@+]\(/.test(t))
+      // Only `*` here: unquoted globs were refused as a metachar, and a quoted `[id]` is a Next.js route path git
+      // matches literally (a quoted `*` is git's own match-everything pathspec).
+      if (rootish === "." || rootish === "" || path.startsWith(":") || t.includes("*"))
         return `git-add pathspec '${t}' denied (stages the whole tree) — ${scoped}`;
       // Absolute paths resolve back into the clone (`git add /abs/cwd` ===
       // `git add .`) and dodge every relative-form check above — no
@@ -768,6 +774,8 @@ function gitVerbReason(tokens) {
   if (sub === "commit") {
     for (let i = 2; i < tokens.length; i++) {
       const t = tokens[i];
+      if (t.length >= 4 && "--pathspec-from-file".startsWith(t.split("=")[0]) && t.split("=")[0].length >= 11)
+        return "git commit --pathspec-from-file denied (commits paths listed in a file the agent wrote) — commit only files you explicitly staged";
       if (t.length >= 4 && "--all".startsWith(t.split("=")[0]))
         return "git commit --all denied (stages every tracked change, bypassing scoped add) — commit only files you explicitly staged";
       if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
