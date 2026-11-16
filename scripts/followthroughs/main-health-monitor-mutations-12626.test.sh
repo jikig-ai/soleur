@@ -39,17 +39,16 @@ if [ "$passes" -ne $((_p0 + 1)) ] || [ "$fails" -ne $((_f0 + 1)) ] || [ "${#FAIL
 fi
 passes=0; fails=0; asserted=0; FAILURES=()
 
-# --- the fake gh: answers the endpoints the probe reads from $FX/*.json, applying --jq with real jq ---
+# --- the fake gh: answers the endpoints the probe reads from $FX/*.json ---
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 refuse() { printf 'REFUSED %s\n' "$*" >> "$FX/refused.log"; exit 64; }
 [ "$1" = "api" ] || refuse "$@"
 shift
-jqx=""; ep=""
+ep=""
 while (( $# )); do
   case "$1" in
-    --jq) jqx="$2"; shift ;;
     -*) refuse "api $*" ;;
     *) ep="$1" ;;
   esac
@@ -57,7 +56,7 @@ while (( $# )); do
 done
 printf '%s\n' "$ep" >> "$FX/requests.log"
 case "$ep" in
-  repos/*/actions/workflows/main-health-monitor.yml/runs\?event=workflow_dispatch\&per_page=30)
+  repos/*/actions/workflows/main-health-monitor.yml/runs\?event=workflow_dispatch\&per_page=100)
     [ -f "$FX/fail-runs" ] && { echo "gh: HTTP 500" >&2; exit 1; }
     f="$FX/runs.json" ;;
   repos/*/actions/runs/*/jobs\?per_page=100)
@@ -66,7 +65,7 @@ case "$ep" in
   *) refuse "$ep" ;;
 esac
 [ -f "$f" ] || exit 1
-if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
+cat "$f"
 FAKE
 chmod +x "$TMP/bin/gh"
 
@@ -79,7 +78,7 @@ runs_body() { local first=1; printf '{"workflow_runs":['; for r in "$@"; do [ $f
 # mut-legs <n_good> <n_bad_or_missing-as-absent> — writes a jobs body with the
 # given number of green mut legs plus n_bad red ones (missing legs are modelled
 # by simply having fewer entries)
-jobs_body() { # <n_green_mut> <n_red_mut>
+jobs_body() {
   local g="$1" b="$2" i
   printf '{"jobs":['
   for ((i=0;i<g;i++)); do [ "$i" -eq 0 ] || printf ','; printf '{"name":"test-webplat-mutations (leg-%d-mutation)","conclusion":"success"}' "$i"; done
@@ -97,13 +96,18 @@ run_probe() {
   printf '%s' "$out" > "$fx/last.out"
   return $rc
 }
-# row <name> <expected rc> <fixture dir>
+# row <name> <expected rc> <fixture dir>; records the expectation so mutant and
+# harness rows grade against the same table (a row added here but not there
+# would otherwise over-credit every mutant it touches)
+declare -A WANT
 row() {
   local name="$1" want="$2" fx="$3" got
+  WANT["$name"]="$want"
   run_probe "$fx"; got=$?
   if [ "$got" -eq "$want" ]; then pass "$name -> rc $want"
   else fail "$name -> rc $got (want $want): $(tail -c 400 "$fx/last.out")"; fi
 }
+expected_rc() { echo "${WANT[$1]:-9}"; }
 
 T0="2026-11-12T19:46:34Z"   # merge instant; fixture runs sit after it
 
@@ -148,6 +152,8 @@ mkfx "$TMP/fx-manual-only"
 runs_body "$(run 1001 deruelle success '2026-11-13T00:00:31Z')" \
           "$(run 1000 deruelle success '2026-11-12T20:00:29Z')" > "$TMP/fx-manual-only/runs.json"
 row r-manual-only 2 "$TMP/fx-manual-only"
+grep -q 'workflows/main-health-monitor.yml/runs' "$TMP/fx-manual-only/requests.log" \
+  && pass 'r-manual-only read the runs listing' || fail 'r-manual-only never called gh (row is vacuous)'
 grep -q 'jobs' "$TMP/fx-manual-only/requests.log" && fail 'r-manual-only read jobs for a manual dispatch' || pass 'r-manual-only never read jobs'
 
 # 5. cancelled run between two green scheduled runs -> ignored, PASS
@@ -267,13 +273,6 @@ PY
     printf '  mutant %-22s SURVIVOR (suite reds)\n' "$name"
   fi
 }
-expected_rc() { case "$1" in
-  r-pass|r-cancelled|r-manual-red) echo 0 ;;
-  r-red-latest|r-missing-leg|r-later-red|r-red-leg|r-tail-red|r-timedout) echo 1 ;;
-  r-manual-only|r-one-green|r-premerge|r-nonmain) echo 2 ;;
-  r-malformed|r-runs-fail|r-jobs-fail) echo 3 ;;
-  *) echo 9 ;; esac }
-
 # a probe that trusts run-level conclusions and never checks the mut legs
 # cannot see the leg-silently-dropped shape
 mutant m-no-jobs 'if [ "$mut_total" -lt "$MUT_LEG_MIN" ] || [ "$mut_green" != "$mut_total" ]; then' 'if false; then' r-missing-leg r-red-leg
@@ -293,7 +292,7 @@ mutant m-premerge '   | select(.created_at >= $since)' '' r-premerge
 mutant m-api-quiet 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }' 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 0; }' r-runs-fail r-jobs-fail r-malformed
 # a probe that accepts a non-main scheduled run
 mutant m-branch '   | select(.head_branch == "main")' '' r-nonmain
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 7 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -eq 8 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
 
 # harness row: an always-PASS probe must turn the red-expectation rows red
@@ -303,12 +302,12 @@ for r in r-red-latest r-missing-leg r-later-red r-red-leg r-tail-red r-timedout 
   run_probe "$TMP/fx-${r#r-}" "$TMP/always-pass.sh"; _rc=$?
   [ "$_rc" -ne "$(expected_rc "$r")" ] && _harness_reds=$((_harness_reds + 1))
 done
-[ "$_harness_reds" -ge 7 ] && pass "HARNESS: an always-PASS probe turns $_harness_reds rows red" \
+[ "$_harness_reds" -eq 9 ] && pass "HARNESS: an always-PASS probe turns $_harness_reds rows red" \
   || fail "HARNESS: an always-PASS probe turned only $_harness_reds rows red"
 
 printf 'main-health-monitor-mutations-12626: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 _total=$((passes + fails))
-_FLOOR=24
+_FLOOR=29
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

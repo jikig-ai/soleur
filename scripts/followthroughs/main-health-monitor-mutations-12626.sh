@@ -19,7 +19,10 @@
 # excluded from the sample — a cancel is operational, not regression evidence;
 # the "run never happened" arm is owned by the missed-check-in watchdog
 # `sentry_cron_monitor.main_health_monitor`. `action_required` (a waiting
-# state, not a verdict) is excluded for the same reason. `timed_out`,
+# state, not a verdict) is excluded for the same reason, and so are `stale` and
+# `skipped` (a queued run that never produced a verdict is likewise not evidence
+# in either direction; an unlisted conclusion only shrinks the sample toward
+# NOT YET, never toward a false verdict). `timed_out`,
 # `startup_failure` and `neutral` are NOT excluded: a scheduled run that died
 # before producing a green verdict is exactly the signal class this probe
 # exists to see, so they stand in the sample as non-success evidence.
@@ -46,13 +49,15 @@
 #
 # Test seams (the sweeper runs this under env -i, so they are inert in
 # production): PATH controls which `gh` resolves (fixture suites prepend a fake
-# bin dir); nothing else is read from the environment.
+# bin dir); the only other environment names read are GH_TOKEN (required) and
+# GITHUB_TOKEN (the xtrace refusal's live-credential probe above).
 #
 # RETIREMENT: when the tracker carrying this probe's `soleur:followthrough`
 # directive closes, delete this file, its .test.sh, the
 # `scripts/followthroughs/main-health-monitor-mutations-12626` run_suite line in
-# scripts/test-all.sh, and its rows in scripts/suite-shard-legs.tsv and
-# scripts/suite-durations.tsv.
+# scripts/test-all.sh, its rows in scripts/suite-shard-legs.tsv and
+# scripts/suite-durations.tsv, and its generated-registry row in
+# plugins/soleur/test/fixture-relative-assert.baseline.txt.
 set -uo pipefail
 
 # xtrace refusal: never let a live credential reach a trace (see #7797)
@@ -85,7 +90,7 @@ done
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 api() { gh api "$@" 2>/dev/null; }
 
-runs_json="$(api "repos/$REPO/actions/workflows/$WORKFLOW/runs?event=workflow_dispatch&per_page=30")" \
+runs_json="$(api "repos/$REPO/actions/workflows/$WORKFLOW/runs?event=workflow_dispatch&per_page=100")" \
   || fail_api "workflow runs listing"
 printf '%s' "$runs_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
   || fail_api "workflow runs listing unparseable"
@@ -117,6 +122,8 @@ while IFS=$'\t' read -r id conc ts; do
   fi
   jobs_json="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100")" \
     || fail_api "jobs listing for run $id"
+  printf '%s' "$jobs_json" | jq -e '.jobs | type == "array"' >/dev/null 2>&1 \
+    || fail_api "jobs listing unparseable for run $id"
   mut_counts="$(printf '%s' "$jobs_json" | jq -r --arg p "$MUT_LEG_PREFIX" '
       [.jobs[] | select(.name | startswith($p))] as $m
       | "\($m | length)\t\([$m[] | select(.conclusion == "success")] | length)"' 2>/dev/null)" \
