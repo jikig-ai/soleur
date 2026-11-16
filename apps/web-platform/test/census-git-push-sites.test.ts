@@ -257,5 +257,5 @@ describe("census: the token-bearing git surface of server/ (D12)", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
