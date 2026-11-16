@@ -36,6 +36,7 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import { CRON_GIT_CONFIG_PIN, withCronGitConfigPin } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -65,10 +66,11 @@ interface HandlerResult {
 
 function spawnGit(
   args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts?: { cwd?: string },
 ): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { stdio: "ignore", ...opts });
+    // #12757 — env after ...opts, built at call time (never a module-load snapshot).
+    const child = spawn("git", args, { stdio: "ignore", ...opts, env: { ...process.env, ...CRON_GIT_CONFIG_PIN } });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
   });
@@ -84,7 +86,7 @@ async function spawnScriptCapture(
     const child = spawn("bash", [script, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts.cwd,
-      env: opts.env,
+      env: withCronGitConfigPin(opts.env),
     });
     let stdout = "";
     let stderr = "";
@@ -204,6 +206,7 @@ export async function cronRulePruneHandler({
       NODE_ENV: process.env.NODE_ENV,
         HOME: process.env.HOME,
         GH_TOKEN: installationToken,
+        ...CRON_GIT_CONFIG_PIN,
       };
 
       const result = await spawnScriptCapture(
