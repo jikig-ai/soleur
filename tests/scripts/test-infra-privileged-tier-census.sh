@@ -1874,11 +1874,29 @@ for rel, kind, typ, nm, b in g7_blocks:
     pm = re.search(r"^\s*project\s*=\s*(.+?)\s*(?:(?:#|//).*)?$", b, re.M)
     if not pm or not G7_PLAIN_PROJECT.match(pm.group(1)):
         g7_bad_c.append("%s %s %s.%s project is not a literal or a Doppler resource reference" % (rel, kind, typ, nm))
-# `.tf.json` is not read by tf_files (and terraform fmt ignores it): refuse any that names the project.
+# `.tf.json` is not read by tf_files (and terraform fmt ignores it): refuse any that names the
+# project, AND refuse one that co-declares a github_* secret/variable resource type and the
+# deploy-channel surface -- the G7c2 seed spelled in JSON, which no resource-block limb ever
+# parses. That second hit lands in g7_bad_gha so the row whose prose describes the bypass is
+# the one that reports it. G7_DC_SEED and G7_GHA_TEXT are defined here so this loop and the
+# G7c2 limbs below share them; G7_GHA_TEXT is the text-search twin of the ^$-anchored G7_GHA.
+# The `\b` on deploy[-_]channel keeps `redeploy-channel` / `undeploy_channel` text inside a
+# matching body out; a `...deploy_channel...` label reference still matches (`.` and `"` are
+# non-word), and a `github_repository_environment` resource's own label is out of the seed
+# limb's window anyway because that limb only reads bodies of G7_GHA-TYPE resources.
+G7_DC_SEED = re.compile(r"\bdeploy[-_]channel|DOPPLER_TOKEN_DEPLOY_CHANNEL", re.I)
+G7_GHA_TEXT = re.compile(r"github_(?:actions|dependabot|codespaces)_\w*(?:secret|variable)")
+g7_bad_gha = []
 for r in sorted(tf_root_files):
     for f in sorted(os.listdir(os.path.join(REPO, r))):
-        if f.endswith(".tf.json") and any(p in open(os.path.join(REPO, r, f), encoding="utf-8", errors="replace").read() for p in G7_PROJECTS):
+        if not f.endswith(".tf.json"):
+            continue
+        body = open(os.path.join(REPO, r, f), encoding="utf-8", errors="replace").read()
+        if any(p in body for p in G7_PROJECTS):
             g7_bad_c.append("%s/%s names a narrow D11 project" % (r, f))
+        if G7_GHA_TEXT.search(body) and G7_DC_SEED.search(body):
+            g7_bad_gha.append("%s/%s (a .tf.json co-declares a github_* secret/variable and the "
+                              "deploy-channel surface)" % (r, f))
 check("G7c: each narrow D11 project is declared (soleur-infra-app, soleur-deploy-channel; #9294 adds the "
       "second) and no root declares a stateful doppler_* resource on either, through any alias of its "
       "project/environment/config (or one whose project cannot be shown to be another project) "
@@ -1891,34 +1909,37 @@ check("G7c: each narrow D11 project is declared (soleur-infra-app, soleur-deploy
 # env secret the tier move routes DOPPLER_TOKEN_DEPLOY_CHANNEL through (the settled decision
 # puts it on the environment via `gh secret set --env`, never .tf).
 #   narrow-file    a file that DECLARES a narrow D11 project is the carrier's own manifest:
-#                  NO github_actions_* / github_dependabot_* secret or variable resource may
-#                  be declared there at ANY scope -- repo, environment or organization (the
-#                  first draft named only the repo/environment spellings and left the
-#                  `organization_` types unmatched).
+#                  NO github_actions_* / github_dependabot_* / github_codespaces_* secret or
+#                  variable resource may be declared there at ANY scope -- repo, environment,
+#                  organization or user (the first draft named only the repo/environment
+#                  spellings and left the `organization_` types unmatched; fix round 2 adds
+#                  the codespaces family, whose plaintext_value is the same state/seed bypass).
 #   seed-anywhere  in ANY scanned .tf file, a member of the same family whose body names the
 #                  deploy-channel surface (the `deploy-channel` environment literal, a
 #                  `...deploy_channel...` label reference, or DOPPLER_TOKEN_DEPLOY_CHANNEL)
 #                  TF-seeds the env secret from a sibling file the narrow-file limb never
 #                  inspects. This is deliberately NOT a blanket repo ban: repo-level
 #                  `github_actions_secret` is the legitimate publication shape elsewhere
-#                  (anthropic-ci-key.tf, cf-pages.tf, doppler-write-token.tf,
-#                  inngest-arm-write-token.tf).
-G7_GHA = re.compile(r"^github_(?:actions|dependabot)_(?:(?:environment|organization)_)?(?:secret|variable)$")
-G7_DC_SEED = re.compile(r"deploy[-_]channel|DOPPLER_TOKEN_DEPLOY_CHANNEL", re.I)
+#                  (anthropic-ci-key.tf, cf-pages.tf, inngest-arm-write-token.tf).
+# The `.tf.json` twin of the seed limb lives in the refusal loop above: the JSON spelling is
+# the same bypass the block parser cannot see. G7_DC_SEED and g7_bad_gha are defined there so
+# that loop feeds this row's bucket; G7_GHA stays here next to the limbs that match on it.
+G7_GHA = re.compile(r"^github_(?:actions|dependabot|codespaces)_(?:(?:environment|organization|user)_)?(?:secret|variable)$")
 g7_narrow_files = {rel for rel, kind, typ, _nm, b in g7_blocks
                    if kind == "resource" and typ == "doppler_project"
                    and re.search(r'^\s*name\s*=\s*"(?:%s)"\s*(?:(?:#|//).*)?$' % "|".join(G7_PROJECTS), b, re.M)}
-g7_bad_gha = ["%s resource %s.%s (declared in a narrow-project file)" % (rel, typ, nm)
-              for rel, kind, typ, nm, _b in g7_blocks
-              if kind == "resource" and rel in g7_narrow_files and G7_GHA.match(typ)]
+g7_bad_gha += ["%s resource %s.%s (declared in a narrow-project file)" % (rel, typ, nm)
+               for rel, kind, typ, nm, _b in g7_blocks
+               if kind == "resource" and rel in g7_narrow_files and G7_GHA.match(typ)]
 g7_bad_gha += ["%s resource %s.%s (references the deploy-channel surface)" % (rel, typ, nm)
                for rel, kind, typ, nm, b in g7_blocks
                if kind == "resource" and rel not in g7_narrow_files
                and G7_GHA.match(typ) and G7_DC_SEED.search(b)]
 check("G7c2: no .tf file declaring a narrow D11 project (soleur-infra-app, soleur-deploy-channel) "
-      "also declares a github_actions_* / github_dependabot_* secret or variable resource at any "
-      "scope (repo, environment, organization), and no such resource in ANY scanned .tf file names "
-      "the deploy-channel surface (deploy-channel / deploy_channel / DOPPLER_TOKEN_DEPLOY_CHANNEL) "
+      "also declares a github_actions_* / github_dependabot_* / github_codespaces_* secret or "
+      "variable resource at any scope (repo, environment, organization, user), no such resource "
+      "in ANY scanned .tf file names the deploy-channel surface (deploy-channel / deploy_channel / "
+      "DOPPLER_TOKEN_DEPLOY_CHANNEL), and no .tf.json co-declares the family type and that surface "
       "-- a TF-written secret lands in Tier-A-readable state and bypasses the operator mint "
       "[%d narrow files]" % len(g7_narrow_files),
       bool(g7_narrow_files) and not g7_bad_gha,
@@ -2176,7 +2197,14 @@ check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-proj
 #                    verb-anchored pattern never counted. The `doppler-project` /
 #                    `doppler-token-*` input names cannot false-match -- a hyphen is not
 #                    whitespace, and cmd_sites' command-position plus print/echo carve-outs
-#                    keep prose and printed instructions out;
+#                    keep prose and printed instructions out. DOCUMENTED RESIDUAL:
+#                    wrapper-prefixed invocations (`env`, `command`, `exec`, `nice`, `time`,
+#                    `sudo` ahead of `doppler`), a quoted or escaped `doppler` token, an
+#                    interpreter-fed heredoc body, env-name indirection (`environment = var.x`)
+#                    and the long-flag `--project`/`--config` spellings are all out of window
+#                    -- the last two fail CLOSED (a false-red on a compliant call is the safe
+#                    direction); the wrappers, quoting and heredoc bodies fail open and stay a
+#                    residual of the census spelling;
 #   no-prd_terraform the arm names no prd_terraform at all -- a read there is the reach the
 #                    move removes;
 #   arm-totality     the arm keeps its terminal `emit source "tier_b_deploy_channel"`. The
@@ -5084,6 +5112,26 @@ if fixture_written g7c2-gha-org-secret-in-narrow-file "$MUTDIR/tree/apps/web-pla
   mutant_red g7c2-gha-org-secret-in-narrow-file wf_row "$T/mut/g7c2-org.tsv" "G7c2:"
 fi
 
+# Fix round 2: the CODESPACES family the widened G7_GHA now names, inside the
+# narrow-declaring file. The body names no deploy-channel surface, so only the
+# widened type set can red it (same isolation as the organization mutant).
+MUTDIR="$(fixcopy g7c2-cs)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "github_codespaces_secret" "cs_seed" {\n  secret_name     = "CS_SEED"\n  plaintext_value = "seed"\n}\n' >> "$MUTDIR/tree/apps/web-platform/infra/deploy-channel-environment.tf"
+if fixture_written g7c2-codespaces-secret-in-narrow-file "$MUTDIR/tree/apps/web-platform/infra/deploy-channel-environment.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-cs.tsv" ""
+  mutant_red g7c2-codespaces-secret-in-narrow-file wf_row "$T/mut/g7c2-cs.tsv" "G7c2:"
+fi
+
+# Fix round 2: the same env-secret seed in `.tf.json` spelling -- tf_files never
+# reads JSON and terraform fmt ignores it, so no resource-block limb sees it; the
+# co-mention arm of the `.tf.json` refusal loop is the only row that can red it.
+MUTDIR="$(fixcopy g7c2-js)"; assert_fixture_dir "$MUTDIR"
+printf '{"resource":{"github_actions_environment_secret":{"dc_seed":{"repository":"soleur","environment":"deploy-channel","secret_name":"DOPPLER_TOKEN_DEPLOY_CHANNEL","plaintext_value":"seed"}}}}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-gha-seed.tf.json"
+if fixture_written g7c2-tfjson-env-secret-seed "$MUTDIR/tree/apps/web-platform/infra/zz-gha-seed.tf.json"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-js.tsv" ""
+  mutant_red g7c2-tfjson-env-secret-seed wf_row "$T/mut/g7c2-js.tsv" "G7c2:"
+fi
+
 # G1d-bis: drop ONLY the `deployment_branch_policy { custom_branch_policies = true }`
 # block from one environment -- G1d's policy RESOURCE survives, so the new row is the
 # only one that can see the named list is no longer activated.
@@ -5240,7 +5288,11 @@ fi
 #   g7c2-gha-env-secret-sibling-file (fixture-written: a deploy-channel TF-seed in a sibling .tf
 #   declaring no narrow project), g7c2-gha-org-secret-in-narrow-file (fixture-written: the
 #   `organization_` spelling the first G7_GHA draft never named). Measured: 177 ran.
-MUTANT_FLOOR=177
+# 177 -> 179 (#9294 fix round 2): g7c2-codespaces-secret-in-narrow-file (fixture-written: the
+#   `github_codespaces_*` family's plaintext_value is the same state/seed bypass the
+#   actions/dependabot-only set missed) and g7c2-tfjson-env-secret-seed (fixture-written: the
+#   `.tf.json` seed spelling no resource-block limb parses). 1 landing each. Measured: 179 ran.
+MUTANT_FLOOR=179
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5306,7 +5358,11 @@ _ran=$((passes + fails))
 #   deploy-channel surface) and G7i's argv-totality now counts every `doppler` site, verb-less
 #   included — same row ids, no new rows, so CENSUS_ROWS and G7_ROW_IDS are unchanged.
 #   Measured: 451 ran.
-FLOOR=451
+# 451 -> 455 (#9294 fix round 2): two new mutants (2 landings + 2 verdicts). G7_GHA widened in
+#   place to the codespaces family (repo, organization and user scopes) and the `.tf.json`
+#   refusal loop gained a co-mention arm feeding G7c2 — same row ids, no new rows, so
+#   CENSUS_ROWS and G7_ROW_IDS are unchanged. Measured: 455 ran.
+FLOOR=455
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
