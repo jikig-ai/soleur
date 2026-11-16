@@ -69,7 +69,7 @@ for i in $(seq 1 20); do
 done
 ```
 
-React to the final status from the Monitor output.
+React to the final status.
 
 **If CI passes:** Proceed to Phase 3.
 
@@ -80,8 +80,6 @@ gh run view <run-id> --log-failed 2>&1 | tail -50
 ```
 
 Ship refuses post-deploy actions on `CI=failure` too. Still run Phase 3's `find`: a `MATCH=descendant DEPLOY=success` line means production carries the merge via `<DEPLOYED_SHA>` — say so.
-
-Before writing a fix for the failure, look for one already in flight. For each file the fix would edit, run `gh pr list --state open -L 100 --json number,title,files --jq '.[] | select(any(.files[].path; . == "<path>")) | "\(.number) \(.title)"'`. A hit may be a feature PR that carries the same fix under an unrelated title. **Why:** #12782 duplicated a fix that #12705 already carried.
 
 Stop:
 
@@ -94,7 +92,7 @@ Conclusion: <conclusion>
 Failed log tail:
 <last 50 lines>
 
-Investigate before proceeding. The merge is complete but production may not deploy.
+Before writing a fix, run [ci-fix-probe.md](./references/ci-fix-probe.md). The merge is complete; production may not deploy.
 ```
 
 ## Phase 3: Verify Production Deployment
