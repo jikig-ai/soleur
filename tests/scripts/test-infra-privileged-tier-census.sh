@@ -1880,11 +1880,15 @@ for rel, kind, typ, nm, b in g7_blocks:
 # parses. That second hit lands in g7_bad_gha so the row whose prose describes the bypass is
 # the one that reports it. G7_DC_SEED and G7_GHA_TEXT are defined here so this loop and the
 # G7c2 limbs below share them; G7_GHA_TEXT is the text-search twin of the ^$-anchored G7_GHA.
-# The `\b` on deploy[-_]channel keeps `redeploy-channel` / `undeploy_channel` text inside a
-# matching body out; a `...deploy_channel...` label reference still matches (`.` and `"` are
-# non-word), and a `github_repository_environment` resource's own label is out of the seed
-# limb's window anyway because that limb only reads bodies of G7_GHA-TYPE resources.
-G7_DC_SEED = re.compile(r"\bdeploy[-_]channel|DOPPLER_TOKEN_DEPLOY_CHANNEL", re.I)
+# The `(?<![A-Za-z0-9])` lookbehind on deploy[-_]channel keeps `redeploy-channel` /
+# `undeploy_channel` text inside a matching body out. `\b` would be wrong here: `_` is a
+# word character, so `\b` would also exclude the idiomatic prefixed label
+# `prd_deploy_channel`/`x_deploy_channel` (word-char before `deploy`), re-opening the
+# sibling-file seed path. Excluding only alphanumerics keeps every prefixed label matching
+# (`...deploy_channel...`, `"deploy-channel"`, `prd_deploy_channel`), and a
+# `github_repository_environment` resource's own label is out of the seed limb's window
+# anyway because that limb only reads bodies of G7_GHA-TYPE resources.
+G7_DC_SEED = re.compile(r"(?<![A-Za-z0-9])deploy[-_]channel|DOPPLER_TOKEN_DEPLOY_CHANNEL", re.I)
 G7_GHA_TEXT = re.compile(r"github_(?:actions|dependabot|codespaces)_\w*(?:secret|variable)")
 g7_bad_gha = []
 for r in sorted(tf_root_files):
@@ -5132,6 +5136,32 @@ if fixture_written g7c2-tfjson-env-secret-seed "$MUTDIR/tree/apps/web-platform/i
   mutant_red g7c2-tfjson-env-secret-seed wf_row "$T/mut/g7c2-js.tsv" "G7c2:"
 fi
 
+# Fix round 3 verification: the `\b`-anchored seed regex missed the idiomatic prefixed
+# label `prd_deploy_channel` (`_` is a word character, so `\b` fails before `deploy`) --
+# a sibling-file env-secret seed spelling its target that way evaded both limbs. The
+# `(?<![A-Za-z0-9])` lookbehind matches it; this mutant proves the prefixed shape reds.
+MUTDIR="$(fixcopy g7c2-pref)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "github_actions_environment_secret" "pref_seed" {\n  secret_name     = "DOPPLER_TOKEN_DEPLOY_CHANNEL"\n  environment     = "prd_deploy_channel"\n  plaintext_value = "seed"\n}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-gha-pref.tf"
+if fixture_written g7c2-prefixed-label-seed "$MUTDIR/tree/apps/web-platform/infra/zz-gha-pref.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-pref.tsv" ""
+  mutant_red g7c2-prefixed-label-seed wf_row "$T/mut/g7c2-pref.tsv" "G7c2:"
+fi
+# MUST-PASS twin: the lookbehind must still exclude the alphanumeric-prefixed
+# `redeploy-channel`/`undeploy_channel` -- a guard that reds every `...deploy-channel...`
+# substring would false-positive on those unrelated environment names inside a secret
+# body. G7c2 has to stay GREEN here (only its row is checked; the fixture is otherwise
+# the compliant control).
+MUTDIR="$(fixcopy g7c2-nopref)"; assert_fixture_dir "$MUTDIR"
+printf 'resource "github_actions_environment_secret" "redeploy_seed" {\n  secret_name     = "REDEPLOY_TOKEN"\n  environment     = "redeploy-channel"\n  plaintext_value = "seed"\n}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-gha-redeploy.tf"
+if fixture_written g7c2-redeploy-exclusion "$MUTDIR/tree/apps/web-platform/infra/zz-gha-redeploy.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g7c2-nopref.tsv" ""
+  if awk -F'\t' 'index($2, "G7c2:") == 1 && $1 == "ok" { c = 1 } END { exit c ? 0 : 1 }' "$T/mut/g7c2-nopref.tsv"; then
+    pass "M-g7c2-redeploy-exclusion-must-pass: G7c2 stays GREEN on an env-secret body mentioning redeploy-channel (alphanumeric prefix excluded by the lookbehind)"
+  else
+    fail "M-g7c2-redeploy-exclusion-must-pass: G7c2 reds an unrelated redeploy-channel mention" "$(grep -E '^(FAIL)' "$T/mut/g7c2-nopref.tsv" | cut -c1-240)"
+  fi
+fi
+
 # G1d-bis: drop ONLY the `deployment_branch_policy { custom_branch_policies = true }`
 # block from one environment -- G1d's policy RESOURCE survives, so the new row is the
 # only one that can see the named list is no longer activated.
@@ -5292,7 +5322,13 @@ fi
 #   `github_codespaces_*` family's plaintext_value is the same state/seed bypass the
 #   actions/dependabot-only set missed) and g7c2-tfjson-env-secret-seed (fixture-written: the
 #   `.tf.json` seed spelling no resource-block limb parses). 1 landing each. Measured: 179 ran.
-MUTANT_FLOOR=179
+# 179 -> 180 (#9294 fix round 3 verification): g7c2-prefixed-label-seed — the `\b` anchor on
+#   G7_DC_SEED missed `prd_deploy_channel` (underscore is a word character); the
+#   `(?<![A-Za-z0-9])` lookbehind matches it. 1 landing. Measured: 180 ran.
+# 180 -> 181: g7c2-redeploy-exclusion (must-pass fixture: an alphanumeric-prefixed
+#   `redeploy-channel` mention in a secret body must NOT red — pins the exclusion side
+#   of the lookbehind). 1 landing. Measured: 181 ran.
+MUTANT_FLOOR=181
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5362,7 +5398,14 @@ _ran=$((passes + fails))
 #   place to the codespaces family (repo, organization and user scopes) and the `.tf.json`
 #   refusal loop gained a co-mention arm feeding G7c2 — same row ids, no new rows, so
 #   CENSUS_ROWS and G7_ROW_IDS are unchanged. Measured: 455 ran.
-FLOOR=455
+# 455 -> 457 (#9294 fix round 3 verification): G7_DC_SEED's `\b` anchor missed the idiomatic
+#   prefixed label `prd_deploy_channel` (`_` is a word character); switched to a
+#   `(?<![A-Za-z0-9])` lookbehind and added g7c2-prefixed-label-seed (1 landing + 1 verdict).
+#   Measured: 457 ran.
+# 457 -> 459: g7c2-redeploy-exclusion must-pass twin (1 landing + 1 verdict) — pins the
+#   alphanumeric-prefix exclusion so the lookbehind can't regress to a bare substring
+#   match without reding the suite. Measured: 459 ran.
+FLOOR=459
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
