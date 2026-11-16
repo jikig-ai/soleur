@@ -89,7 +89,7 @@ Give "no match" an exit code that bash never produces by itself, and make every 
 2. **Six capture lines**: `[ $? -eq 1 ]` becomes `[ $? -eq 42 ]` (counsel `legal_touch`; ship `ledger_touched`, `gdpr_gate_touch`, `diff_match`, `dpf_match`, `plan_refs`).
 3. **Direct `--match` prose consumers**:
    - ship/SKILL.md Phase 7 UNTRUSTED-CI notice: "prints anything or exits 2/127" becomes "does not exit 42 (no match)" (Q1).
-   - review/SKILL.md:371 gdpr-gate trigger: "exits 0 (a match) or 2/127 (unknown: treat as a match)" becomes "does not exit 42 (no match): 0 is a match and any other exit is unknown, so treat both as a match".
+   - review/SKILL.md:371 gdpr-gate trigger: "exits 0 (a match) or 2/127 (unknown: treat as a match)" becomes "does not exit 42 (no match): treat as a match" (Ruled by CTO agent, 2026-11-16: the shorter form; see decision-challenges.md).
 4. **Plain-mode prose consumers** (Q3): `exit 2/127` becomes `non-zero exit` in one-shot/SKILL.md:179, observability-coverage-reviewer.md:29 and ship/SKILL.md:1307.
 5. **Code-backed annotations** (Q2, Q6): delete the exit-code list and keep the value or marker.
    - ship:896 becomes "`unknown` is NOT an edit".
