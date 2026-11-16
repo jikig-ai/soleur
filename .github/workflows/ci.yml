@@ -1,4 +1,5 @@
 name: CI
+# Runner pinned to ubuntu-24.04 until the uutils-on-ubuntu-26.04 test failures are fixed (un-pin tracker #12790). push-dedupe, draft-light and the `test` aggregator stay on ubuntu-latest: their structural tests pin that runner.
 
 on:
   push:
@@ -98,7 +99,7 @@ jobs:
     # 15m — measured max 0.3m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
     steps:
@@ -390,7 +391,7 @@ jobs:
   oracle-selection:
     if: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && vars.CI_ORACLE_LANE != '' }}
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     permissions:
       contents: read
@@ -455,7 +456,7 @@ jobs:
   # context must report on every PR. pull-requests: read is what the reviews read needs.
   oracle-review-required:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -550,7 +551,7 @@ jobs:
     # old job name as the leading token and are quoted because ` #` would
     # otherwise start a YAML comment mid-scalar.
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
     # workflow-internal literals; no untrusted input is interpolated into the run: blocks.
     # To upgrade, bump BOTH together — the checksum is for actionlint_<VERSION>_linux_amd64.tar.gz.
@@ -768,7 +769,7 @@ jobs:
     # 15m — measured max 0.2m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Encryption posture — Layer A repo-sweep (ADR-140)
@@ -799,7 +800,7 @@ jobs:
     # (max member 1.4m lockfile-sync; the rest <=0.8m) plus ~2m of member
     # installs (npm@11 pin, Bun, the pinned Grok CLI); >=3x headroom.
     timeout-minutes: 20
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GROK_PIN: "1.0.41"
       # sha256 of grok-${GROK_PIN}-linux-x86_64, measured 2026-09-24. xAI publishes no
@@ -1129,7 +1130,7 @@ jobs:
     # propagation + 15m harness-discovery) is far tighter than that; the
     # harness-discovery installs dominate (~10m worst case, three CLIs serial).
     timeout-minutes: 20
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # One declaration per pin, hoisted from the folded harness-discovery job
       # (#8574 bumps these monthly).
@@ -1377,7 +1378,7 @@ jobs:
   # there. What being non-required buys is that this job's own red -- a readable
   # stylish log, and the file-count floor below -- does not gate an unrelated PR.
   lint-webplat:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The only wall-clock bound on this job. The guard suite's own ESLINT_TIMEOUT_MS
     # caps the vitest side; nothing capped this one, and a config that hangs would have
     # run to the Actions six-hour default. Measured cost of the whole job is ~82s.
@@ -1453,7 +1454,7 @@ jobs:
     # built here (apt, cli.github.com and the Playwright CDN would sit inside a required
     # aggregate); it is FROM `cli-tools`, which holds both global installs the release layers.
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -1555,7 +1556,7 @@ jobs:
   test-webplat:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat,')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bounds a HUNG job (#7902). As of #12626 this leg carries vitest + the light webplat suites
     # ONLY — the three mutation batteries that used to run in FULL on BOTH shards
     # (approval-guard1-mutation ~12-15 min, destroy-ask-mutation ~2 min, home-census-mutations)
@@ -1676,7 +1677,7 @@ jobs:
   test-webplat-mutations:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat-mutations,')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -1736,7 +1737,7 @@ jobs:
   test-bun:
     needs: [push-dedupe, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-bun,')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
     # runner. No suite on this path declares a per-suite budget.
     timeout-minutes: 20
@@ -1774,7 +1775,7 @@ jobs:
   test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts,')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
     # named below). The three cost-heaviest registrations moved to
@@ -2013,7 +2014,7 @@ jobs:
   test-scripts-heavy:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts-heavy,')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -2106,7 +2107,7 @@ jobs:
   shard-totality-mutations:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha)) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
     # sites and takes `--rows A-B`; each leg runs its third plus the
     # unconditional control and instrument self-test. The battery's own
@@ -2215,7 +2216,7 @@ jobs:
   oracle-index-check:
     if: ${{ always() && !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
     needs: [oracle-selection]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -2605,7 +2606,7 @@ jobs:
     # 20m — measured max 4.2m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 20
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       # Pinned by both tag (greppable version) AND multi-arch manifest-list
       # digest (vendor-pin discipline, per AGENTS.md
@@ -2731,7 +2732,7 @@ jobs:
     timeout-minutes: 15
     needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       # Pinned by both tag (greppable version) AND digest (vendor-pin discipline,
       # per AGENTS.md hr-mcp-tools-playwright-etc-resolve-paths). The Playwright
