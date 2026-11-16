@@ -69,7 +69,7 @@ for i in $(seq 1 20); do
 done
 ```
 
-React to the final status from the Monitor output.
+React to the final status.
 
 **If CI passes:** Proceed to Phase 3.
 
@@ -92,7 +92,7 @@ Conclusion: <conclusion>
 Failed log tail:
 <last 50 lines>
 
-Investigate before proceeding. The merge is complete but production may not deploy.
+Before fixing, run [ci-fix-probe.md](./references/ci-fix-probe.md). Merged; production may not deploy.
 ```
 
 ## Phase 3: Verify Production Deployment
