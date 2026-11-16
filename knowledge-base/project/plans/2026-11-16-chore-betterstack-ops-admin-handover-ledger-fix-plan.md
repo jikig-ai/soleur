@@ -16,11 +16,33 @@ lane: cross-domain
 
 # chore(infra): hand the Better Stack ops@ team member to the vendor web app and correct the Better Stack cost record
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-16
+**Sections enhanced:** 5 (Research Insights, Files to Edit 2, Infrastructure (IaC), Guard Contract, Sharp Edges)
+**Research agents used:**
+
+- soleur:engineering:infra:terraform-architect, which ran a scratch-root `fmt` and a forget-plan experiment on TF 1.9.8 and ran the census read-only;
+- a verify-the-negative and post-edit self-audit grep pass (general-purpose);
+- the deepen halt gates 4.6–4.13, run mechanically.
+
+### Key Improvements
+
+1. Ran a forget plan on a scratch root. With the address targeted it plans `["forget"]` and `0 to destroy`. Without it in `-target`, the state entry stays. This confirms the kept `-target`.
+2. Ran census Guard 4 read-only: 422 passed, G4a at 9 blocks. The 9 → 10 expectation holds.
+3. All nine content anchors the plan quotes match exactly once. The P4 sweep now excludes post-mortems, matching the prose.
+
+### New Considerations Discovered
+
+- The provider's `Read` still runs on the forgotten address during the plan. A 404 drops the entry (no change). Any other error, such as a 5xx or a 401/403, fails the whole per-merge plan. AC13 covers the token. A 5xx is transient, and a re-run recovers.
+- Census G4b only reads steps containing a literal `terraform apply`. The saved-plan step qualifies only because of an `::error::` echo line. G4b also merges the target lists across steps, so mutation row 6 rests on FIX B (c) alone.
+- Between the merge and the forget applying, the scheduled drift job (a full plan with no `-target`) would show the forget and exit 2. The per-merge apply on the same push closes that window.
+
 ## Overview
 
-On 2026-11-16 the Better Stack org was changed through the vendor's web app. ops@jikigai.com is now
-the org's only **Admin**. jean.deruelle@jikigai.com is **Billing admin**, a role that is not billed.
-harry@soleur.ai, a free Member, was removed. The responder usage page reads "1 out of 2 licenses
+On 2026-11-16 the Better Stack org was changed through the vendor's web app. `ops@jikigai.com` is now
+the org's only **Admin**. `jean.deruelle@jikigai.com` is **Billing admin**, a role that is not billed.
+`harry@soleur.ai`, a free Member, was removed. The responder usage page reads "1 out of 2 licenses
 used". Cutting the license count from 2 to 1 is a pending billing decision for the operator, and it
 is not part of this PR.
 
@@ -79,7 +101,9 @@ and `"Better Stack expenses"` both return nothing, and draft PR #12813 is this b
   - docs that call ops@ a Terraform-managed responder.
 
   Sweep command, re-run at work time:
-  `git grep -n -i 'betteruptime_team_member\|responder seat\|responder tier\|responder-tier' -- knowledge-base apps/web-platform/infra ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/learnings' ':!knowledge-base/project/brainstorms' ':!**/archive/**'`.
+  `git grep -n -i 'betteruptime_team_member\|responder seat\|responder tier\|responder-tier' -- knowledge-base apps/web-platform/infra ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/learnings' ':!knowledge-base/project/brainstorms' ':!**/archive/**' ':!**/post-mortems/**'`.
+  At deepen time (2026-11-16), every hit mapped to Files to Edit 1, 3 or 5–11. `cost-model.md`
+  (item 6) is found by `still declined` rather than by the sweep terms.
 
   The sweep excludes post-mortems on purpose, because they are point-in-time records.
 
@@ -147,7 +171,7 @@ BS-408456-20261114-335.
     This description is rendered into `model.likec4.json`, and `c4-model-freshness.test.sh`
     byte-diffs that file, so the edit needs `bash scripts/regenerate-c4-model.sh`.
 - `knowledge-base/engineering/architecture/decisions/ADR-276-…md`, bullet
-  `**Named responder for \`SOLEUR_FULL_BATTERY_ESCAPE\`.**`: it names
+  `` **Named responder for `SOLEUR_FULL_BATTERY_ESCAPE`.** ``: it names
   `betteruptime_team_member.ops` and says "no Responder-tier seat is purchased". The sweep found
   this one.
 - `.github/workflows/infra-validation.yml`: the PR-time live-state plan runs with
@@ -249,8 +273,11 @@ BS-408456-20261114-335.
    - **Non-vacuity**, anchored on this root itself: `listInfraTfFiles().length > 0`, the resource
      scan sees at least one `betteruptime_heartbeat` in `uptime-alerts.tf`, and `savedPlan` targets
      `hcloud_firewall_attachment.web`.
-   - Update the `TEST_FLOOR` comment per its in-file convention (line 81 of the test file). The
-     floor value stays 376, a `>=` floor.
+   - Add one `<before> -> <after> (this PR, <delta>)` line to the history comment above
+     `const TEST_FLOOR`, re-deriving both counts with
+     `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (395 today). The
+     constant stays 376, because the final describe asserts
+     `expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR)`.
 3. **`apps/web-platform/infra/betterstack-logs-alerts.tf`.** In the ROUTING comment, replace
    `(account owner + betteruptime_team_member.ops)` with
    `(the team's responder ops@jikigai.com, the org Admin managed by the vendor since 2026-11-16)`.
@@ -271,7 +298,7 @@ BS-408456-20261114-335.
      - A dated note headed **[2026-11-16 — supersedes the DEFERRED status and the 2026-09-28 "STILL
        DECLINED" line]**:
        - The seat has been billing, at $34 a license rather than the $29 this row assumed.
-       - Since 2026-11-16, ops@jikigai.com has been the only org Admin and holds the one seat
+       - Since 2026-11-16, `ops@jikigai.com` has been the only org Admin and holds the one seat
          needed. The owner is Billing admin, which is not billed.
        - Usage reads 1 of 2 licenses.
        - The 2→1 license cut is a pending operator billing decision. It is expected to bring this
@@ -347,8 +374,8 @@ BS-408456-20261114-335.
    org Admin, managed by the vendor, because the provider manages non-admin members only. The
    `-target` stays as a tombstone.*
 10. **`knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md`.**
-    After the bullet `**Named responder for \`SOLEUR_FULL_BATTERY_ESCAPE\`.**`, add a dated note:
-    "2026-11-16: ops@jikigai.com is now the org Admin, managed by the vendor and no longer a
+    After the bullet `` **Named responder for `SOLEUR_FULL_BATTERY_ESCAPE`.** ``, add a dated note:
+    "2026-11-16: `ops@jikigai.com` is now the org Admin, managed by the vendor and no longer a
     Terraform resource. A Responder seat is billed (see expenses.md). Escalation policies stay off
     (#12817), and the Slack and email wake path is unchanged."
 11. **`knowledge-base/engineering/architecture/diagrams/model.c4`** and the regenerated
@@ -403,6 +430,7 @@ workflow fires on the merge push.
   outcomes show `0 to destroy`.
 - No API write reaches Better Stack. There is no downtime and no host is touched.
 - The blast radius is one state entry.
+- Lookup during the plan: the provider's `Read` (`GET /api/v2/team-members?email=…`) still runs on the forgotten address. A 404 drops the entry, giving no change. A non-404 error, such as a 5xx or a 401/403, fails the per-merge plan loudly. AC13 pre-checks the token, and a 5xx is re-run (terraform-architect, deepen 2026-11-16).
 
 ### Host fan-out
 
@@ -522,7 +550,7 @@ discoverability_test:
 
 ### Guard 1 — ops@ forget pin (FIX B describe + census Guard 4)
 
-**Property.** Terraform never again manages ops@jikigai.com as a Better Stack team member, and the
+**Property.** Terraform never again manages `ops@jikigai.com` as a Better Stack team member, and the
 per-merge saved plan forgets the old address rather than deleting it.
 
 **Assembly.** The property runs through three chokepoints:
@@ -557,6 +585,8 @@ per-merge saved plan forgets the old address rather than deleting it.
 | H2 | Must-PASS non-canonical input: `resource "betteruptime_team_member" "oncall" { email = "oncall@example.com" }`, a different non-admin member | PASS: the contract forbids only ops@ and `.ops` |
 
 **Anchor.** None: no stored value is compared.
+
+**Known weakness (deepen 2026-11-16).** Census G4b reads only steps that contain a literal `terraform apply`. The saved-plan step qualifies today only because of an `::error::` echo line. G4b also merges every apply step's `-target` list, so row 6 (saved plan versus post-bridge) rests on FIX B (c) alone. Rewording that echo turns G4b red, which is loud, not silent. Hardening G4b is out of scope here.
 
 The work phase runs rows 1–7 and H1–H2 as throwaway local mutations, reverts them, and records a
 one-line tally in the PR body. Only the final assertions are committed.
@@ -772,3 +802,4 @@ infra, ledger and docs change, so the tier is NONE.
   ReferenceError when the module loads.
 - The pre-commit hook `c4-model-regenerate` may regenerate `model.likec4.json` by itself. Either
   way, commit the regenerated file, and confirm `c4-model-freshness.test.sh` is green.
+- Until the forget applies, `scheduled-terraform-drift.yml` (a full plan with no `-target`) shows the forget and exits 2. The per-merge apply on the merge push closes that window, so a drift issue opened in between can be closed as expected.

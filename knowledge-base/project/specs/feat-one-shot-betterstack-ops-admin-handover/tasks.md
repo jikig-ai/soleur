@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-11-16-chore-betterstack-ops-admin-hando
 
 ## Phase 1: Test first (RED)
 
-- [ ] 1.1 Rewrite the FIX B describe in `plugins/soleur/test/terraform-target-parity.test.ts`. Put it after the #8754 describe and use only hoisted helpers, with `g2eStrip()`. Include assertions (a), (b) and (c) and the non-vacuity anchors.
+- [ ] 1.1 Rewrite the FIX B describe in `plugins/soleur/test/terraform-target-parity.test.ts`. Put it after the #8754 describe and use only hoisted helpers, with `g2eStrip()`. Include assertions (a), (b) and (c) and the non-vacuity anchors. Add a history line above `const TEST_FLOOR`, re-deriving the count with `grep -cE`. The constant stays 376.
 - [ ] 1.2 Run `bun test plugins/soleur/test/terraform-target-parity.test.ts`. Expect RED on (a) and (b), because the resource is still declared and no removed block exists yet.
 
 ## Phase 2: IaC (GREEN)
