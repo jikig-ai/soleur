@@ -4,8 +4,8 @@ Census date: 2026-10-21. Corpus definition (enforced by `test/manifest.test.sh`,
 which re-derives this set from `git ls-files` — a new member with no row here is a
 CI failure):
 
-- `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **57 files**.
-- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **48 files**.
+- `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **59 files**.
+- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **52 files**.
 
 ## Verdicts
 
@@ -123,6 +123,7 @@ template rather than shipping the monolith.
 | `lint-legal-registers.sh` | soleur-coupled | `knowledge-base/legal/` registers. |
 | `lint-legal-scope-block-placement.sh` | soleur-coupled | Legal scope-block placement + the same mirror dir. |
 | `lint-migrated-rule-ids.sh` | soleur-coupled | AGENTS rule-id migration registry. |
+| `lint-orphan-consumed-workflows.txt` | soleur-coupled | Data companion of the orphan-test lint: consumed-workflow manifest driving the enumeration-parity census (#9340). |
 | `lint-orphan-test-suites.sh` | generic-after-extraction | **v1 `orphan-test` source.** The `git ls-files '*.test.sh'` producer is generic; couplings = `scripts/test-all.sh` runner name, `TEST_GROUP`/`SCRIPTS_SHARD` labels, `apps/web-platform/infra/` surfaces. |
 | `lint-questionnaire-identity.sh` | soleur-coupled | `knowledge-base/project/questionnaires/` identity guard. |
 | `lint-rejected-register.sh` | soleur-coupled | `knowledge-base/project/rejected/` no-list guard. |

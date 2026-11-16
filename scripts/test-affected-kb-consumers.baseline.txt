@@ -128,6 +128,7 @@ plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/specs
+plugins/soleur/test/ci-head-verdict.test.sh	knowledge-base/engineering/operations/post-mortems/2026-11-12-pr-12565-red-required-check-bypass-audit-postmortem.md
 plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base
 plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	knowledge-base/project/plans
