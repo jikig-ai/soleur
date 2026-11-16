@@ -3257,6 +3257,17 @@
 "id": "de9r7gnfj59q",
 "title": "CONSUMER reachability probe (#6548): web-git-data-probe.sh does a bounded SSH connect-and-close to 10.0.1.20:22 over the private net and pings the git_data_prd heartbeat on success. Fail-soft (connect-and-close, not a git ls-remote — the accepted reachability-vs-serviceability tradeoff for a v1 overlay); this is what finally FEEDS git_data_prd, previously unfed. The target host is born (ADR-149); its store is empty until the LUKS cutover (#5274)"
 },
+"drlfjmzmvkq4": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "drlfjmzmvkq4",
+"title": "Deploy-channel credentials (#9294, ADR-241 D10/D11): .github/actions/infra-credentials gains a NARROW arm for the soleur-deploy-channel/prd project, selected by doppler-project=soleur-deploy-channel and reaching Doppler with a read service token that is the environment secret DOPPLER_TOKEN_DEPLOY_CHANNEL on the deploy-channel environment — a deployment-branch policy admitting `main` ONLY and an empty reviewer set BY DESIGN (the branch policy is the boundary, as on infra-privileged; a reviewer gate on an environment used for unattended applies is dead weight). The narrow arm reads ONLY that project/config: an empty token is the named no_credential_source refusal BEFORE any Doppler call, never a legacy prd_terraform fallback and never a silent widen to soleur-infra-privileged, and the loader's two-literal case dispatch refuses any other project name by name. The carrier file (apps/web-platform/infra/deploy-channel-environment.tf) declares containers only — github_repository_environment + github_repository_environment_deployment_policy (branch_pattern=main) and doppler_project + doppler_environment — no doppler_secret, doppler_service_token or data source, because this root's state is readable by the very Tier-A credentials the move evicts. STATUS (Phase 1): the environment, the project and the loader arm exist and are pinned by the tier census (G7c/G7d/G7e widened to the second project; G7i on the arm's shape) and by the loader suite's dc1-dc6 fixtures; NO consumer job references DOPPLER_TOKEN_DEPLOY_CHANNEL or names the narrow project yet — the /hooks/infra-config and /hooks/deploy-status consumers migrate in Phase 2, and the prd_terraform copies are deleted only in the operator-named Phase 3 tail, so until then this edge is the carrier, not a live credential read"
+},
 "dzi0y2l27gzq": {
 "source": {
 "model": "founder"
@@ -9142,7 +9153,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14593,7 +14605,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24500,7 +24513,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
