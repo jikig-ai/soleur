@@ -30,3 +30,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: cto, learnings-rese
 - AC8 note: the only non-new figures on the rewritten rows are quoted history ($29 assumed seat price, #7577's "Nano ($30 EU)", $0 Slack path / Team member).
 - AC13: monitors probe 200. GET team-members?email=ops@ returns 404 (ops@ is Admin now) -> the forget's refresh drops the entry: expected plan shows no change / 0 to destroy for that address.
 - Gates: parity 402/0, census 422/0 (G4a 10 blocks), c4 parity+freshness green, vitest c4 35/35, encryption-posture PASS, markdownlint 0.
+- Affected gate: NOT run locally (operator call 2026-11-16: machine contended — SIBLING_RUN_DETECTED, queued 355 s, selected 332 of 762; stopped before any suite verdict). CI's required `test` context is the gate for this PR; the touched-file suites above were run directly.
