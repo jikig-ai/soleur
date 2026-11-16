@@ -650,6 +650,9 @@ resource "betteruptime_heartbeat" "inngest_luks_key_probe_deadman" {
 # ops@'s Admin membership is drift outside IaC, recorded only by the vendor. No Terraform root
 # in this repo may declare a betteruptime_team_member again (FIX B (a) in
 # terraform-target-parity.test.ts pins that across every tracked .tf/.tf.json).
+# DO NOT `git revert` this change: a revert also deletes that test, and once the forget has
+# applied the restored `role = "responder"` resource would plan a CREATE against the Admin's
+# email. To manage a member again, start from an `import` block and a fresh review.
 #
 # Under -target a removed block is planned only when its address is targeted, so keep
 # `-target=betteruptime_team_member.ops` in the apply job's saved plan. Once the forget has
