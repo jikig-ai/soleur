@@ -424,7 +424,10 @@ export function infoSilentFallback(
  *   The info-only reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`) never reach this
  *   map; every reason writes its pino line before the debounce (`reportPushHeld` in kb-sync-publish.ts). Also
  *   `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.tracking-ref`, workspace-id key): the
- *   advisory tracking-ref update failed, so the next turn mints a token again.
+ *   advisory tracking-ref update failed, so the next turn mints a token again. Also
+ *   `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via `mirrorWithDebounce`, op `kb-sync.protected-fallback-failed`,
+ *   workspace-id key, null err with tags `reason` / `fallback_reason` / `push_class`; CTO ruling D8): the protected-branch
+ *   fallback ran and did not deliver, which can repeat every turn (R16), so one slot per workspace and fallback reason.
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.

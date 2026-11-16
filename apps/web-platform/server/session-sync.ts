@@ -16,6 +16,7 @@ import {
 } from "@/lib/supabase/tenant";
 import {
   hashUserId,
+  mirrorWithDebounce,
   reportSilentFallback,
   warnSilentFallback,
 } from "@/server/observability";
@@ -823,14 +824,25 @@ export async function syncPush(
       // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
       // test pin the single `kb-sync.protected-fallback-failed` op. The closed
       // `fallback_reason` tag names the step (#12600).
-      reportSilentFallback(result.pushErr, {
-        feature: "session-sync",
-        op: "kb-sync.protected-fallback-failed",
-        extra: { userId, reason: "fallback_failed" },
-        tags: { fallback_reason: result.fallbackReason },
-        message:
-          "KB-sync protected-branch fallback failed — writes preserved on default for retry",
-      });
+      // CTO ruling D8: a null error (an Error loses these tags to the pino-mirror capture, #8629), debounced per
+      // workspace and reason (the fallback can fail every turn, R16).
+      mirrorWithDebounce(
+        null,
+        {
+          feature: "session-sync",
+          op: "kb-sync.protected-fallback-failed",
+          extra: { userId, reason: "fallback_failed" },
+          tags: {
+            reason: "fallback_failed",
+            fallback_reason: result.fallbackReason,
+            push_class: result.pushErr.pushClass ?? "none",
+          },
+          message:
+            "KB-sync protected-branch fallback failed — writes preserved on default for retry",
+        },
+        workspaceId,
+        `kb-sync-fallback-failed:${result.fallbackReason}`,
+      );
       return;
     }
     if (result.kind === "fallback") {
@@ -872,22 +884,27 @@ export async function syncPush(
     if (err instanceof KbSyncError && err.pushClass === "persistent_other") {
       // Non-protection persistent reject (e.g. shallow update not allowed) —
       // retrying would loop forever. Emit a distinct op and stop here.
-      reportSilentFallback(err, {
+      // D8: null error, the cause in tags (the Error path's tags are lost to the pino-mirror capture, #8629).
+      reportSilentFallback(null, {
         feature: "session-sync",
         op: "kb-sync.protected-fallback-failed",
         extra: { userId, reason: "persistent_other" },
+        tags: { reason: "persistent_other", push_class: "persistent_other" },
         message:
           "KB-sync push persistently rejected (non-protection) — not retried",
       });
       return;
     }
     log.warn({ err, userId }, "Sync push failed — next session will retry");
-    reportSilentFallback(err, {
+    // D8: null error, the closed reason and push class in tags. A non-KbSyncError carries only its class name: its
+    // message is git's argv (the URL and the refspec, R2), so it never reaches Sentry.
+    const kbErr = err instanceof KbSyncError ? err : null;
+    reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPush",
       // workspacePath dropped — see syncPull catch for the rationale.
-      extra: { userId },
-      tags: { reason: err instanceof KbSyncError ? err.reason : "unclassified" },
+      extra: kbErr ? { userId } : { userId, errName: err instanceof Error ? err.name : typeof err },
+      tags: { reason: kbErr ? kbErr.reason : "unclassified", push_class: kbErr?.pushClass ?? "none" },
       message: "Sync push failed — next session will retry",
     });
   }
