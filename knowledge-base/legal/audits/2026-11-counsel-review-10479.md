@@ -128,6 +128,7 @@ The PR author applies these. Once each lands verbatim, nothing is re-reviewed; a
 
 - **P-1. Per-host evidence (rulings C and C2).** Record in the PR one Better Stack `origin-tls: listening` row with `required: true` for soleur-web-platform (web-1). Record another for soleur-web-2. Each must be dated within 24 h before merge. Record a strict-mode measurement in the same window: zone `strict`, and the config ruleset's last match for app.soleur.ai `strict`. **Not yet re-taken.** The 2026-11-12 rows lapsed at 2026-11-13T22:18Z.
 - **P-2. Last Updated dates.** The Last Updated strings on the four published surfaces read November 15, 2026. If the merge date differs, re-bump all four, together with the R2 note dates, and re-pin the SHAs.
+  - *Applied 2026-11-16 (the merge day):* all six Last Updated strings and the four R2 notes on both surfaces now read November 16, 2026 / `*(Added 2026-11-16, ref #10479:`, and `LEGAL_DOC_SHAS` is re-pinned for privacy-policy and data-protection-disclosure. No wording other than the date changed.
 - **P-3. R1 to R4 applied.**
 
 The CTO's merge-alone check (D5) and the `[ack-destroy]` line also apply. They are technical rulings, recorded in decision-challenges.md and not repeated here.
