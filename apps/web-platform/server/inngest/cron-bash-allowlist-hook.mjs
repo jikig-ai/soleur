@@ -416,6 +416,10 @@ const SECRET_PATH_PATTERNS = [
 const WRITE_PROTECTED_PATTERNS = [
   /(^|\/)\.claude(\/|$)/,
   /cron-bash-allowlist-hook/,
+  // #11076 (CTO D1) — the PostToolUse gh-output framing hook. Once registered, the CLI runs it
+  // under node after every Bash call with the spawn env, so a rewrite would be code execution
+  // outside the Bash allowlist. Any new file that hook imports at runtime must join this list.
+  /cron-gh-output-framing-hook/,
   /(^|\/)settings\.json$/,
   /(^|\/)\.git(\/|$)/,
   /\.env(\.[\w-]+)?$/,
@@ -485,6 +489,13 @@ function dangerousMetacharReason(command) {
 // `/\s*(?:&&|\|\||;)\s*/` re-scanned the whole whitespace run from every start
 // position and took seconds on a command padded with spaces (a 30k-space command
 // cost 3.8 s, 100k about 25 s); `String.trim` is linear.
+//
+// Consumers: `decide()` here, and `cron-gh-output-framing-hook.mjs`, which imports this
+// function and `tokenize` at runtime (#11076). The posture is inverted there: a null token
+// list or a throw means "no annotation", not deny, so a change that makes either one throw
+// or return null on a new shape keeps containment safe and silently turns framing off for
+// that shape. Guarded by the AC2 rows and the differential in
+// `test/server/inngest/cron-gh-output-framing-hook.test.ts`.
 export function splitSegments(command) {
   return command
     .split(/&&|\|\||;/)
@@ -501,6 +512,8 @@ export function splitSegments(command) {
 // never a label token), and only space and tab separate words (bash does not
 // split on \f, \v or U+00A0; JS `\s` does). Returns null on an unbalanced
 // quote (→ caller denies).
+//
+// Consumers: `decide()` here and `cron-gh-output-framing-hook.mjs` (see `splitSegments`).
 export function tokenize(segment) {
   const tokens = [];
   let cur = "";
@@ -564,6 +577,14 @@ function argumentInjectionReason(tokens) {
   return null;
 }
 
+// #11076 K1' — one branch-name token: leading alphanumeric, then [A-Za-z0-9._/-]; no `..`,
+// `//` or `@{`; not ending in `/`, `.` or `.lock`. Never read as a path by the admitted forms.
+function isBranchName(t) {
+  if (typeof t !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(t)) return false;
+  if (t.includes("..") || t.includes("//") || t.includes("@{")) return false;
+  return !(t.endsWith("/") || t.endsWith(".") || t.endsWith(".lock"));
+}
+
 // git sub-commands that surface the tokenized remote URL or redirect the authed
 // remote — denied regardless of the allowlist (SECURITY PANEL P0-B).
 function gitVerbReason(tokens) {
@@ -625,6 +646,26 @@ function gitVerbReason(tokens) {
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
     }
   }
+  // #11076 review (CTO K1') — an allow-list, not a deny-list. In the depth-1 clone the hooks
+  // run from tracked files, and checkout/switch/restore can delete or revert them (`--orphan`,
+  // `--no-overlay <tree> <dir>`, globs, parent folders, abbreviated long options such as
+  // `--orph`), after which a missing hook fails open. A deny-list cannot keep up with git's
+  // option parsing, so only three branch forms are admitted, none of which reads a path:
+  // `git checkout [-q] -b <branch>`, `git switch [-q] -c <branch>`, `git switch [-q] <branch>`.
+  // A bare `git checkout <name>` is a path restore when no branch has that name, so changing
+  // branch goes through `switch`. `git restore` is denied in every form.
+  if (sub === "checkout" || sub === "switch" || sub === "restore") {
+    const use =
+      "create a branch with `git checkout -b <branch>` or `git switch -c <branch>`; change branch with `git switch <branch>`";
+    if (sub === "restore") return `git restore denied (can revert the run's hook files) — ${use}`;
+    const args = tokens.slice(2);
+    while (args[0] === "-q" || args[0] === "--quiet") args.shift();
+    const create = sub === "checkout" ? "-b" : "-c";
+    const branch = args[0] === create ? args[1] : sub === "switch" ? args[0] : undefined;
+    const expected = args[0] === create ? 2 : 1;
+    if (args.length !== expected || !isBranchName(branch))
+      return `git ${sub} form denied (only branch creation or a branch switch is admitted; other forms can remove or revert the run's hook files) — ${use}`;
+  }
   // `commit -a`/`--all` stages every tracked modification/deletion without
   // any `git add` at all — the same blanket vector through a side door.
   if (sub === "commit") {
@@ -651,9 +692,16 @@ function loadAllowlist(path) {
   }
 }
 
+// Collapse every whitespace run (JS `\s`, so NBSP and other Unicode spaces too) to one space.
+// Consumers: `segmentMatchesAllowlist()` here and `cron-gh-output-framing-hook.mjs`, which
+// matches gh reads on the same normalised text containment admitted (#11076 review K2).
+export function normalizeSegmentWhitespace(segment) {
+  return segment.replace(/\s+/g, " ").trim();
+}
+
 function segmentMatchesAllowlist(segment, allowPrefixes) {
   // normalize internal whitespace for prefix comparison
-  const norm = segment.replace(/\s+/g, " ").trim();
+  const norm = normalizeSegmentWhitespace(segment);
   // A match requires a SEPARATOR after the allowlisted prefix — never a bare
   // continuation of the prefix's final token. The bare `startsWith(p)` clause
   // that was here let `bash …/worktree-manager.sh-pwn` prefix-match the
