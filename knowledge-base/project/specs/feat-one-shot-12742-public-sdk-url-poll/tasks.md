@@ -23,6 +23,11 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     decision-challenges row).
 - [ ] T2. `tests/scripts/lib/inngest-host-dark-gate.sh` L128: `_IHDG_EXPECTED_SCHEMA="9"` → `"10"`;
   update the `stale_schema` comment if it hardcodes "9".
+  - T2a. Audit every `stale_schema` consumer: `scheduled-inngest-health.yml` ~L1294+ runs the gate
+    REPORT-ONLY and counts the verdict token in a streak — verify whether `stale_schema` counts as a
+    page-bearing refusal; if so, add an explicit `stale_schema`→alive/not-dark mapping (a host
+    emitting old-schema rows is emitting, not dark) with a `#12742` comment. `cutover-inngest.sh`
+    L1105 wants the refusal (designed-for). `infra-validation.yml` L205 is presence-only.
 - [ ] T3. `scripts/followthroughs/inngest-luks-field-8525.sh` (~L104-110): accept `probe_schema` 9
   or 10 (`>=9` semantics preserved: a schema-10 row must not read TRANSIENT/not_schema9).
 - [ ] T4. `apps/web-platform/infra/inngest.test.sh` (~L1365+): `PROBE_7695_FIELDS` +=

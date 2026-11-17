@@ -89,7 +89,17 @@ production acts or separate PRs.
   `MUT_ROWS=28` (L674-675).
 - **Schema consumers:**
   - `tests/scripts/lib/inngest-host-dark-gate.sh` L128 `_IHDG_EXPECTED_SCHEMA="9"`, verdict
-    `stale_schema` when the host's newest `probe_schema=` row ≠ expected (G4, L541-563).
+    `stale_schema` when the host's newest `probe_schema=` row ≠ expected (G4, L541-563). The lib is
+    sourced by THREE callers, so a bump fans out:
+    (a) `scripts/cutover-inngest.sh` L1104-1105 — owner-run registry/execute gate (stale_schema
+        refusal on the pre-replace host is designed-for);
+    (b) `scheduled-inngest-health.yml` ~L1294-1320 — the #8080 darkness witness calls
+        `inngest_execute_registry_gate` in REPORT-ONLY mode; the verdict token is regex-validated
+        and "counted by the streak rather than crashing the arm". A `stale_schema` token counted as a
+        refusal streak during the merge→replace window could misread a HEALTHY-emitting host as a
+        streak event — the witness must map `stale_schema` to alive/not-dark (or the streak
+        classification must be audited and pinned) as part of the bump task;
+    (c) `infra-validation.yml` L205 — required-path presence pin only (no semantics).
   - `scripts/followthroughs/inngest-luks-field-8525.sh` greps `probe_schema=9` rows (`newest9`,
     ~L104-110); a schema-10 host would read TRANSIENT — must accept `9|10` (or `>=9`).
   - `apps/web-platform/infra/inngest.test.sh` ~L1370: `PROBE_7695_FIELDS` list +
@@ -139,10 +149,13 @@ production acts or separate PRs.
     `https://app.soleur.ai` registration is legible in the same row. This doubles as the read-only
     evidence item 4 will need ("the stored `url` of each app row (host-local GQL, as the probe
     already does)").
-  - `probe_schema` bumps `9` → `10`; `_IHDG_EXPECTED_SCHEMA` bumps to `10` (dark-gate `stale_schema`
-    on the pre-replace host is the designed-for signal that the host predates the emitter that can
-    prove recent sync — record; it cannot block the owner's replace, which does not route through
-    that gate).
+  - `probe_schema` bumps `9` → `10`; `_IHDG_EXPECTED_SCHEMA` bumps to `10`. The bump cannot block
+    the owner's replace (the `inngest_host_replace` job never routes through the dark gate — it is
+    terraform `-target` apply; the gate is only sourced by `cutover-inngest.sh`, the health witness,
+    and its own tests). It DOES change the witness's reported token to `stale_schema` for the whole
+    merge→replace window: a task must audit the witness streak's classification of that token and,
+    if it counts toward a page-bearing streak, add the explicit `stale_schema`→alive/not-dark mapping
+    (a host emitting old-schema rows is emitting — not dark). See decision-challenges row 5.
   - The registry-empty **alert SQL is unchanged**: a stale non-zero registry with failing sync is
     surfaced by `sdk_sync=error`/`sdk_app_url=` in the same row for the responder, and a future alert
     on `sdk_sync=` is a separate decision (extending a live paging surface now, pre-replace, has
@@ -161,12 +174,18 @@ production acts or separate PRs.
   taking no positional args (or a `--from-file` test seam); in CI it execs
   `doppler run -p soleur -c prd_terraform -- "$REPO/plugins/soleur/scripts/cloudflare-readonly.sh
   config-entrypoint"`, captures stdout+rc, and passes only when: output begins
-  `cloudflare-readonly: config-entrypoint ok`, the JSON projection parses, ≥1 enabled rule mentions
-  `app.soleur.ai`, and the **last** such rule has `ssl == "strict"`. Refusals (distinct `::error::`
-  per arm, never echoing tokens or raw bodies): missing `DOPPLER_TOKEN`, doppler/wrapper rc≠0,
-  `unverified` output, malformed JSON, no matching rule, `enabled=false` on all matches, last match
-  `ssl != strict`, ambiguous shape. `--from-file <path>` reads a captured projection instead of
-  calling doppler — the parity test's behavior table runs that seam (live path is exercised by the
+  `cloudflare-readonly: config-entrypoint ok`, the JSON projection parses, ≥1 enabled rule has
+  `mentions_app_host: true`, and the **last** such rule has `ssl == "strict"`. The projection shape
+  is pinned (cloudflare-readonly.sh L426): `.rules[]` in order, each carrying `ref`, `enabled`
+  (already normalized to `enabled != false`), `ssl` (from `.action_parameters.ssl`), and the
+  booleans `mentions_app_host` / `mentions_lb_staging_host`; top-level `rule_count`,
+  `enabled_ssl_rules`, `last_updated`. Refusals (distinct `::error::` per arm, never echoing tokens
+  or raw bodies): missing `DOPPLER_TOKEN`, doppler/wrapper rc≠0, `unverified` output, malformed
+  JSON, no matching enabled rule, last match `ssl != strict`, ambiguous shape. Note the wrapper's
+  own verdict is a dated snapshot (rule_count=3 / ref-pinned, 2026-11-13) — the preflight judges the
+  per-rule projection, not the baked verdict, so added rules re-key the answer while any wrapper
+  non-`ok` line still refuses. `--from-file <path>` reads a captured projection instead of calling
+  doppler — the parity test's behavior table runs that seam (live path is exercised by the
   dispatch itself, never by CI tests).
 - **Workflow placement:** replace each `Validate dispatch inputs` step with a one-comment +
   four-line step placed **after** `Load infra credentials (tiered)` and **before** any terraform
@@ -302,23 +321,75 @@ production acts or separate PRs.
 
 ## Scope Check
 
-| Ask | Covered by |
-|---|---|
-| Probe field proving recent last-sync, merged pre-replace | Phase 1 tasks 1–4; AC 1–2 |
-| Registry-empty alert can't see stale non-zero | Preserved property + new `sdk_sync` discriminator in same row; AC 1 |
-| Fail-closed live-mode preflight on both dispatches | Phase 2 tasks 1–3; AC 4 |
-| Replace (not merely delete) confirm script | New script + delete + CODEOWNERS; AC 5 |
-| Remove B10 sweep recipes + both tokens | Phase 2 task 4; AC 5 |
-| F4(ii): sanitize fields OR countMatches + rendered mutation row | Sanitize chosen; Phase 1 task 5; AC 3 |
-| Items 2–9 out of scope | Non-Goals; item-9 carrier-comment tension recorded |
-| No product/YAML/test edits during planning | This run wrote only `knowledge-base/project/**` |
+### Ask Mapping
 
-## Observability & Signal Discrimination
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "[issue #12742 item 1] Add a field to `SOLEUR_INNGEST_SERVER_PROBE` showing that the server's last successful sync is recent. This must merge before the replace." | Phase 1 T1–T4 (`sdk_sync`/`sdk_app_url`, schema 10); AC 1–2 | mapped |
+| 2 | "[issue #12742 item 1] The registry-empty alert added in #12737 cannot see a stale non-zero registry (CTO ruling 2026-11-13)." | `sdk_sync` discriminator in same row; AC 1 | mapped |
+| 3 | "[brief] Replace `tests/scripts/lib/inngest-public-sdk-url-confirm.sh` with a fail-closed live-mode preflight. Both `inngest_host_replace` and `inngest_host` birth must invoke it... refuse unless the last Cloudflare config rule matching `app.soleur.ai` has `ssl = strict`." | Phase 2 T8–T10; Guard 1; AC 4 | mapped |
+| 4 | "[brief] Remove the B10 recipe sweep... including: three recovery lines in `scripts/cutover-inngest.sh`; `scripts/followthroughs/inngest-private-nic-8539.sh`; runbooks inngest-config-refresh.md and inngest-luks-cutover-6894.md; the workflow's own `hcloud_server.inngest` error line. Remove both confirmation tokens." | Phase 2 T10–T13; Guard 3; AC 5 | mapped |
+| 5 | "[brief/CTO F4(ii)] `image_ref` and `cli_version` are free-text fields... A value containing ` registry_fns=5 ` could mask a real `registry_fns=0`. Choose one permitted remedy: sanitize both fields... or change the alert... Add a rendered-line mutation row either way." | Phase 1 T1 (sanitize) + T5 (guard rows); Guard 2; AC 3 | mapped |
+| 6 | "[brief] Do not plan or touch issue #12742 items 2–9." | Non-Goals; item-9 tension recorded in decision-challenges row 7 | mapped |
+| 7 | "[brief] changed paths must be limited to `knowledge-base/project/(plans\|specs)/`" during planning | This run wrote only `knowledge-base/project/**` | mapped |
 
-The probe row is the diagnostic surface. Post-change, one `SOLEUR_INNGEST_SERVER_PROBE` row
-discriminates: healthy cutover (`registry_fns≥1 sdk_sync=ok sdk_app_url=https://app.soleur.ai…`),
-stale registry after failed replace (`registry_fns≥1 sdk_sync=error`), diagnostic boot
-(`registry_fns=0 sdk_sync=no_apps`), dead local API (`__UNREADABLE__` pair), pre-replace host
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `sdk_sync`/`sdk_app_url` fields + gather block | asks 1–2 | asked |
+| `probe_schema` 9→10 + `_IHDG_EXPECTED_SCHEMA` | — | inferred — justification: the emit schema declares the new fields' contract; all consumers pin it (`probe_schema=9` asserts, dark gate G4, luks-field followthrough), so leaving 9 ships a lie about the row's shape |
+| `image_ref`/`cli_version` sanitize + guard rows | ask 5 | asked |
+| `inngest-public-sdk-url-preflight.sh` + step swap | ask 3 | asked |
+| B10 successor tests + inverted recipe sweep + token removal | asks 3–4 | asked |
+| Witness `stale_schema`→alive audit (T2 subtask) | — | inferred — justification: the schema bump is required, and an unaudited streak classification could misread a healthy-emitting host during the merge→replace window |
+| CODEOWNERS repoint | ask 4 ("the live-mode preflight must take its place") | inferred — justification: the pinned path is deleted; a dead CODEOWNERS line silently un-owns the replacement |
+| Item-9 carrier-comment refresh | — | inferred — justification: item 9's own trigger is "the next time that file changes for a real reason"; tension with the items-2–9 exclusion recorded as decision row 7 |
+
+### Split Assessment
+
+- Subsystems touched: 3 — `apps/web-platform/infra` (probe emitter + alert guard tests), `tests/`+`plugins/soleur/test`+`.github` (gate lib, parity suite, workflow, CODEOWNERS), `scripts/`+`knowledge-base/engineering/operations/runbooks` (recipe sweep, followthroughs)
+- Planned files: ~18 | Estimated changed lines: ~700 (incl. ~90 new script lines)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — the issue mandates the probe field AND the gate swap land in the same merge (the gate exists to protect the replace the fields must precede); splitting re-opens the window
+
+## Observability
+
+```yaml
+liveness_signal:
+  what:            SOLEUR_INNGEST_SERVER_PROBE journald row -> Vector -> Better Stack (existing pipeline; this PR appends sdk_sync/sdk_app_url fields, probe_schema=10)
+  cadence:         per-probe tick (systemd timer on the dedicated host; unchanged)
+  alert_target:    operator email + push via logtail_exploration_alert.inngest_registry_empty (existing; SQL unchanged) and the #8080 health witness
+  configured_in:   apps/web-platform/infra/betterstack-logs-alerts.tf (logtail_exploration{,_alert}.inngest_registry_empty); emitter apps/web-platform/infra/inngest-bootstrap.sh:1335
+
+error_reporting:
+  destination:     Better Stack logs-alerts (probe rows + vector-down phone-home detail); GHA job log for the dispatch gate
+  fail_loud:       probe row carries sdk_sync=error or __UNREADABLE__ (stale registry / dead local GQL); preflight prints a distinct ::error:: per refusal arm and exits 1
+
+failure_modes:
+  - mode:          stale non-zero registry after a failed post-replace sync (the gap the #12737 alert cannot see)
+    detection:     same-row sdk_sync=error with registry_fns>=1 — responder evidence, not a new page (alert extension deferred per Alternatives)
+    alert_route:   existing registry-empty alert unchanged; witness/dark-gate verdicts unchanged
+  - mode:          dispatch attempted while last enabled app.soleur.ai rule is not ssl=strict (or CF read unverifiable)
+    detection:     inngest-public-sdk-url-preflight.sh refuses rc=1 with a distinct ::error:: arm before any terraform step
+    alert_route:   the dispatching job fails red in the Actions UI
+  - mode:          free-text probe field (image_ref/cli_version) injects a second ` registry_fns=` token
+    detection:     charset sanitize at bind + rendered-line row in inngest-registry-empty-alert.test.sh proving the decoy cannot mask registry_fns=0
+    alert_route:   pre-merge test failure (drift guard)
+
+logs:
+  where:           journald on the dedicated host (LOG_TAG soleur-inngest-probe) -> Better Stack; vector-down fallback via inngest-boot-phone-home.sh (shipper=cloud-init-phone-home)
+  retention:       Better Stack plan retention (existing; unchanged by this PR)
+
+discoverability_test:
+  command:         bash apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh
+  expected_output: "0 failed"
+```
+
+**Signal discrimination.** Post-change, one `SOLEUR_INNGEST_SERVER_PROBE` row discriminates: healthy
+cutover (`registry_fns>=1 sdk_sync=ok sdk_app_url=https://app.soleur.ai…`), stale registry after a
+failed replace (`registry_fns>=1 sdk_sync=error`), diagnostic boot (`registry_fns=0
+sdk_sync=no_apps`), dead local API (`__UNREADABLE__` pair), pre-replace host
 (`sdk_app_url=http://10.0.1.10…`). No alert SQL changes: the registry-empty alert keeps its
 ruling-F1 scope; the new fields are responder evidence in the same row (the single-event,
 no-correlation rationale from the #10538 decision). A future `sdk_sync=error` page is possible but
@@ -326,27 +397,38 @@ deferred — the field must first exist on the live host to tune against.
 
 ## Encryption Posture
 
-The new edge (GHA job → Cloudflare API via `cloudflare-readonly.sh`) is already-in-repo, HTTPS,
-token-scoped (`CF_API_TOKEN_RULESETS`), no persistence, no payload beyond the ruleset read; the
-credential rides Doppler injection and is never printed (wrapper's xtrace refusal + `::add-mask::`
-precedent). Probe-side, the new GQL read is loopback-only; `sdk_app_url` carries URLs (hostnames,
-not secrets) through the same allowed-charset sanitize that precedent `probe_scan_err` uses; no GQL
-error text is shipped to the warehouse (existing comment contract preserved). Ledger row 6
-conversion is item 5 — out of scope.
+```yaml
+at_rest: []  # no new persistent stores; the projection is evaluated in-memory and discarded
+in_transit:
+  - connection:        GHA runner (inngest_host / inngest_host_replace jobs) -> api.cloudflare.com rulesets entrypoint (via cloudflare-readonly.sh config-entrypoint)
+    enforced_at:       plugins/soleur/scripts/cloudflare-readonly.sh (fixed https URL, absolute curl path, credential on stdin config)
+    tls:               https (TLS 1.2+ via Cloudflare edge policy; curl default verification)
+    cert_verification: on
+    does_not_defend:   a stolen CF_API_TOKEN_RULESETS still authorizes ruleset WRITES (token is write-capable; a read-only equivalent is owner credential work, not this PR)
+    disclosed_as:      not-publicly-claimed
+```
+
+Notes: the probe's new GQL read reuses the existing loopback socket
+(`http://127.0.0.1:8288/v0/gql`, same as `registry_fns`) — not a new connection. `sdk_app_url`
+carries hostnames (not secrets) through the `[A-Za-z0-9_:.@/+-]` sanitize; no GQL error text is
+shipped (stderr stays swallowed per the existing comment contract). Ledger row 6 conversion is
+item 5 — out of scope.
 
 ## User-Brand Impact
 
-The Inngest sdk_url carries workflow event traffic. Today the live host polls over plaintext HTTP on
-the private network; remedy (c) is what retires that exposure. If `inngest-host-replace` ran while a
-`flexible` rule still matched `app.soleur.ai`, the public hop would serve TLS-to-edge/plaintext-to-
-origin (or worse) — the exact class this remedy exists to kill — while the repo's published posture
-claims strict. The typed token cannot see that; the preflight can. Exposure description for users:
-event names and payloads (which embed user identifiers) traversing an unencrypted segment contrary
-to stated privacy commitments. Brand-survival threshold: **zero replaces dispatched while any
-applicable `app.soleur.ai` rule is non-strict** — the gate must fail closed on unverifiable reads
-because "unknown" is not "safe". The sync-evidence field protects a different brand surface: a
-silent post-replace failure would leave customer workflows un-executed while every dashboard reads
-healthy — the row-level `sdk_sync=error` is the first discriminating signal.
+- **If this lands broken, the user experiences:** a post-replace sync failure invisible to every
+  surface — workflow events stop being scheduled while the registry-empty alert, the health
+  witness, and the probe row all still read healthy (stale Postgres registry masks it); the
+  user-visible symptom is automations silently not running.
+- **If this leaks, the user's [data / workflow / money] is exposed via:** the Inngest sdk_url poll
+  carrying event names and payloads (which embed user identifiers) over a TLS-to-edge /
+  plaintext-to-origin path — exactly what happens if `inngest-host-replace` is ever dispatched while
+  the last applicable `app.soleur.ai` rule is not `ssl=strict`, contrary to the stated privacy
+  posture (Privacy Policy s11 / DPD 8.1(c) carve-out this remedy retires).
+- **Brand-survival threshold:** `aggregate pattern`
+- **Threshold decision (challengeable):** exposure is all-users' event traffic on the shared
+  scheduler, not one user's session — above `single-user incident`; it is bounded by a single
+  dispatch decision, not a systemic recurring leak, so not the maximal reading either.
 
 ## Domain Review
 
@@ -363,12 +445,77 @@ advisory for the eventual PR review, not blocking planning.
 
 ## Guard Contract
 
-New guards ship with mutation evidence: the preflight's behavior table covers every refusal arm;
-the parity tests mutate step shape (removed `if`, moved position, dropped env); the alert guard adds
-the sanitize-removal `mutate_red` and the hostile-rendered-line row; floors (`PRESENCE_ROWS`,
-`MUT_ROWS`) are bumped so an untested row cannot go uncounted. Type/token widening is swept via
-`grep` for `PUBLIC-SDK-URL`, `probe_schema=9`, `inngest-public-sdk-url-confirm` across all consumers
-(cq-type-widening-cross-consumer-grep).
+### Guard 1 — strict-SSL dispatch preflight (`inngest-public-sdk-url-preflight.sh` + job steps)
+
+**Property.** Neither `inngest_host` nor `inngest_host_replace` may reach a terraform step unless
+the live Cloudflare config-settings entrypoint shows the LAST enabled rule mentioning
+`app.soleur.ai` with `ssl=strict`; every unreadable or ambiguous read refuses.
+
+**Assembly.** Each job's step list is the sole path from dispatch to `terraform plan/apply` for
+`hcloud_server.inngest`; the gate step sits after `Load infra credentials (tiered)` (which makes
+`doppler`/the CF token reachable) and before the first terraform step in BOTH jobs, is
+unconditional (no `if`, no `continue-on-error`, no `shell`/`working-directory` override), and the
+script is the single evaluator of the wrapper's `.rules[]` projection — a closed verdict set:
+pass iff `>=1` enabled `mentions_app_host` rule AND its last member has `ssl == "strict"`;
+everything else (no token, doppler rc, `unverified`, malformed JSON, no match, non-strict last,
+ambiguous shape) refuses rc=1 with a distinct `::error::` and no echoed credential or body.
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Step moved after `Terraform plan` (or deleted from one job) | parity step-shape row RED |
+| 2 | `continue-on-error: true` or an `if:` added to the step | parity row RED (gate tolerated) |
+| 3 | `env.DOPPLER_TOKEN` dropped | RED — the missing-token arm must be reachable |
+| 4 | `--from-file` fixture: last enabled app-host rule `ssl=flexible`; fixture: `strict` but disabled leaving no enabled match | script rc=1 in both (behavior table) |
+| 5 | Fixture: wrapper prints `... unverified - <reason>`; malformed JSON | rc=1, distinct `::error::` (not a crash) |
+
+### Guard 2 — probe-field masking sanitize (F4(ii))
+
+**Property.** No free-text field on the probe row may inject a second space-delimited ` key=` token
+— a ` registry_fns=5 ` inside `image_ref`/`cli_version` must never mask a real `registry_fns=0`.
+
+**Assembly.** The emit line and its phone-home twin are the ONLY producers of the row; the ruling
+names `image_ref` (L~679) and `cli_version` (L~704) as the free-text binds — the remaining fields
+are enum/numeric sentinels or infra-fixed tokens (boot_id hex, mount device paths) whose values are
+structurally space-free on this host. Routing both named binds through the `[A-Za-z0-9_:.@/+-]` charset
+sanitize (in-file `tr` precedent at L1184) at bind time covers every emitted path structurally,
+including the phone-home detail that reuses the same variables.
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Remove the sanitize from the `image_ref` bind | guard presence row RED |
+| 2 | Remove the sanitize from the `cli_version` bind | RED |
+| 3 | Rendered line: hostile value containing ` registry_fns=5 ` through the extracted sanitize pipeline | alert still fires on `registry_fns=0` (EMIT and PH) |
+| 4 | Fixture emit where `image_ref` survives un-sanitized | the ` registry_fns=[1-9]` positive needle must not satisfy off the real field |
+
+### Guard 3 — B10 successor parity pins (terraform-target-parity.test.ts)
+
+**Property.** The retired confirm mechanism leaves no live carrier: zero workflow steps, zero
+recipes, zero script references to `PUBLIC-SDK-URL*`/`inngest-public-sdk-url-confirm.sh`; the two
+jobs each keep exactly one unconditional preflight step in the post-credentials/pre-terraform slot.
+
+**Assembly.** The git-ls-files census the old B10 sweep already walks (`scripts`,
+`tests/scripts/lib`, `apps/web-platform/infra`, `.github/workflows`,
+`knowledge-base/engineering/operations/runbooks`, `plugins/soleur/skills`) is the same set the new
+sweep re-walks with the inverted predicate; the step-shape assertions re-run over the parsed YAML
+job blocks — same chokepoints, inverted claim.
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | A recipe re-introduces `-f confirm=PUBLIC-SDK-URL` | inverted sweep RED |
+| 2 | A job's preflight step deleted or renamed | step-shape row RED |
+| 3 | `CONFIRM_RAW` reintroduced on a step | RED (no `inputs.confirm` consumer remains) |
+| 4 | `inngest-public-sdk-url-confirm.sh` restored to disk | file-absence row RED |
+
+Floors (`PRESENCE_ROWS`, `MUT_ROWS` in the alert guard; the parity suite's counts) are bumped per
+added row so an untested assertion cannot go uncounted. Token widening is swept via `grep` for
+`PUBLIC-SDK-URL`, `probe_schema=9`, `inngest-public-sdk-url-confirm` across all consumers
+(hr-type-widening-cross-consumer-grep).
 
 ## Architecture Decision
 
@@ -407,9 +554,56 @@ C4 `inngest -> api` edge update is explicitly item 6 — out of scope.
 - Any new paging alert on `sdk_sync` (deferred, see Alternatives).
 - Any change to `inputs.confirm` or the ~10 other targets consuming it.
 
+## Downtime & Cutover
+
+The user_data rendered from `inngest-bootstrap.sh` changes, which marks `hcloud_server.inngest`
+for replacement on any apply that targets it — but no such apply runs on merge: the per-PR CI
+apply strips both inngest targets (`stripDispatchJobs` parity pin), and the only applicator is the
+owner's `workflow_dispatch` of `inngest_host_replace` (item 2, a sanctioned production act with its
+own runbook, downtime model, and now a stricter preflight). This PR introduces **no new
+offline-inducing operation**: the host keeps serving on the old image until the owner chooses the
+replace window; a replace is itself a drain-by-destruction act already owned by that runbook. The
+zero-downtime path is therefore "deferred to the owner act it already is"; residual risk noted:
+between merge and replace the witness reports `stale_schema` (truthful, see Observability/
+decision-challenges row 5), and `inngest-luks-field-8525.sh`-style consumers are updated to read
+both schemas so no measurement silently empties.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| `apps { url error }` GQL field names differ on the pinned Inngest version | `__UNREADABLE__` fail-loud arms; verify against the installed build at implementation (fixture-driven test in `inngest.test.sh` pins the JSON shape the probe parses) |
+| Witness streak counts `stale_schema` as a page-bearing refusal during the merge→replace window | T2 subtask: audit the streak classification; map the token to alive/not-dark if needed; recorded as decision row 5 |
+| Workflow edit exceeds the 5-byte headroom | Net-negative diff (removes ~660 B, adds ~520 B); `wc -c` verified before commit; prose relocated to the job-rationale runbook per the gate's own error text |
+| Wrapper's dated-snapshot verdict drifts (rules added after 2026-11-13) | Preflight judges `.rules[]` projection, not the baked verdict; a non-`ok` wrapper line still refuses — fail closed in both directions |
+| Sanitize changes a legitimate `image_ref`/`cli_version` value | Charset `[A-Za-z0-9_:.@/+-]` covers docker refs, semver, and registry paths; `must-PASS` fixture row keeps a representative real value green |
+
+### Precedent-diff (pattern-bound behaviors)
+
+| New shape | Sibling precedent | Delta |
+|---|---|---|
+| `inngest-public-sdk-url-preflight.sh` fail-closed gate + `--from-file` seam | `tests/scripts/lib/preapply-entrypoint-gate.sh` (ADR-136, `--gate tfplan.json`, `::add-mask::`, default-deny) | same verdict shape; reads a captured projection instead of a plan file; adds the doppler-exec arm |
+| `SDK_SYNC_GQL_QUERY` + gather block | `FUNCTIONS_GQL_QUERY` + `registry_fns` block (L650/L955-995) | identical failure-arm taxonomy (`__UNREADABLE__`, swallowed stderr, jq-guarded) |
+| `image_ref`/`cli_version` sanitize | `probe_scan_err` `tr -c 'A-Za-z0-9' '_' \| cut -c1-48` (L1184) | extended charset (`_:.@/+-` retained) — docker refs/versions need them; no truncation (the mask property doesn't require a 48-char cut) |
+| Step placement post-credentials | `Pre-apply entrypoint gate` step (workflow ~L928-955) | same post-credential, pre-write position; lighter env (single `DOPPLER_TOKEN`) |
+
+No novel pattern lacks a repo sibling.
+
+## Enhancement Summary
+
+Deepen-plan pass (2026-11-17) sharpened the plan on: (1) the exact `.rules[]` projection shape at
+cloudflare-readonly.sh L426 (`enabled` pre-normalized, `mentions_app_host` boolean) and the
+wrapper's dated-snapshot verdict — the preflight judges the projection, not the verdict; (2) the
+dark-gate lib's THREE sourcing callers — the witness's report-only `stale_schema` token needs a
+streak classification audit (new T2 subtask, decision row 5); (3) `hr-` (not `cq-`) rule-id
+citation fix; (4) gate-schema sections (Observability/Encryption/Guard Contract/Scope Check/
+Downtime) emitted in template form; (5) precedent-diff table for all four new shapes.
+Reviewed-Coverage: sequential-fallback — no agent-spawn capability in this session; research,
+verify-the-negative, and review passes ran inline.
+
 ## Open Questions / Decision Records
 
 See `knowledge-base/project/specs/feat-one-shot-12742-public-sdk-url-poll/decision-challenges.md`
 for pending-assumed rulings: sync-evidence field names/GQL shape, F4(ii) sanitize-vs-countMatches
 choice, alert-extension deferral, preflight script interface details, schema-10 `stale_schema`
-window consequence, item-9 carrier-comment scope tension.
+window + witness classification consequence, item-9 carrier-comment scope tension.
