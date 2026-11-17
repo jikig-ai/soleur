@@ -346,6 +346,64 @@ The status dimension, its range operators, `orderBy datetimeHour_DESC` and the d
 
 Not separated by these reads: candidates 1 to 4 of the table above, and any link between the p90 step and the edge 5xx rows. A controlled flip-back is the owner's production decision and is not proposed here.
 
+##### Addendum 2026-11-16: second wrapper reads and the CTO ruling (Cloudflare analytics, Ref #12441)
+
+Additions-only: the 2026-11-09 and 2026-11-11 addenda above are left as written, and this read supersedes nothing in them. The one exception is a reading note, not an edit: the line "**Status: unexplained.**" at the head of this p90 section stays as written, and is now read together with the CTO ruling of 2026-11-16 below. No cause is claimed beyond that ruling. Every figure is a sampled estimate, so the results are `Unverified:` lines, as in the 2026-11-11 addendum.
+
+Source: `cloudflare-readonly.sh analytics-health 216` and `cloudflare-readonly.sh analytics-edge-errors 216`, read 2026-11-16 at about 17:00Z from `origin/main` (checkout SHA not recorded). The health read is Cloudflare-side origin response time for the `/health` path; it is path-filtered and not host-scoped. The edge read is filtered to the host `app.soleur.ai` (all paths). The two reads do not cover the same requests.
+
+Unverified: Cloudflare analytics-health (F) #12441, read 2026-11-16 about 17:00Z. Daily medians of the hourly p50 and p90:
+
+| Day (UTC) | Median hourly p50 | Median hourly p90 |
+|---|---|---|
+| 11-07: the 11-07 daily median, over the 8 hourly rows dated 2026-11-07 inside that read's window, recorded as given; the raw file is lost, so whether the straddling 23Z hour was among the 8 rows is not recorded, and the 2026-11-11 recipe excluded it | 233 ms | 468 ms |
+| 11-08 | 258 ms | 852 ms (max hourly p90 1388 ms) |
+| 11-09 | 279 ms | 859 ms |
+| 11-10 | 416 ms | 869 ms |
+| 11-11 | 545 ms | 883 ms |
+| 11-12 | 546 ms | 1378 ms |
+| 11-13 | 555 ms | 892 ms |
+| 11-14 | 572 ms | 1388 ms |
+| 11-15 | 556 ms | 902 ms |
+| 11-16, 00Z to 07Z | 540 to 795 ms (hourly range) | 846 to 1477 ms (hourly range) |
+| 11-16, 08Z to 15Z | 206 to 273 ms (hourly range) | 810 to 852 ms (hourly range) |
+
+As a description only: the 11-08, 11-09 and 11-10 p50 figures equal the 2026-11-11 addendum's upper daily medians (258, 279 and 416 ms). That addendum's 11-11 figure (548 ms, 17 h) and this read's 545 ms (full day) differ by 3 ms.
+
+Unverified: Cloudflare analytics-edge-errors (G) #12441, read 2026-11-16 about 17:00Z. The 5xx histogram by day (sampled counts):
+
+| Day (UTC) | 500 | 503 | 520 | 521 | 525 / 526 |
+|---|---|---|---|---|---|
+| 11-07 (only the hours inside this read's window) | no rows | 1 | no rows | 20 | no rows |
+| 11-08 | no rows | no rows | 17 | 20 | no rows |
+| 11-09 | no rows | no rows | no rows | no rows | no rows |
+| 11-10 | no rows | no rows | no rows | no rows | no rows |
+| 11-11 | 46 | no rows | no rows | no rows | no rows |
+| 11-12 | 206 | no rows | no rows | no rows | no rows |
+| 11-13 | no rows | no rows | no rows | no rows | no rows |
+| 11-14 | no rows | no rows | no rows | no rows | no rows |
+| 11-15 | no rows | no rows | no rows | no rows | no rows |
+| 11-16 | no rows | 2 | no rows | 1 | no rows |
+| Total | 252 | 3 | 17 | 41 | no rows |
+
+"No rows" means the read returned no row for that day and status. It is never a record of no errors (sampling, and the dataset may under-report edge-generated pages). No 525 or 526 row appears; that describes this read and is not evidence about certificate validation on the hop. The 2026-11-11 read returned no rows from 2026-11-08T20Z to 2026-11-11T16Z. The raw file of this read is lost, so the hours of its 11-11 rows are not recorded, and whether they fall after the 2026-11-11 read's last hour is not known.
+
+Unverified: laptop corroboration, client-side `GET /health` x30 (n=30 each; a different measurement from the Cloudflare-side series). 2026-11-16 16:55Z: p50 0.325 s, p90 0.484 s. 2026-11-17 11:33Z: p50 0.247 s, p90 0.320 s.
+
+**Limitation.** The raw hourly file from this read was lost to a session-scratchpad wipe, so no evidence file exists for it and the figures above cannot be re-derived. The wrapper's window ends at the current hour and starts 216 h before it (`gql_window`: `[floor(now to the hour) - 216 h, floor(now to the hour))`). By the window arithmetic, the last pre-flip hour (2026-11-07T22Z) is outside the window for every read from 2026-11-16T23:00Z on, and the straddling 23Z hour is outside it from 2026-11-17T00:00Z. So the daily medians above are the only surviving pre-flip comparison from the 2026-11-16 read. The committed `evidence/2026-11-11-analytics-health-216h.json` and `evidence/2026-11-11-analytics-edge-errors-216h.json` are the only surviving hourly pre-flip record (126 pre-flip hourly rows, 2026-11-02T17Z to 2026-11-07T22Z).
+
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the p90 step at the 11-08 strict flip (about 470 ms to about 850 ms) is "provisionally attributed" to the strict TLS origin hop. Confirming it needs a site-split (`coloCode`), host-filtered (`app.soleur.ai`) query with an end-time offset, as a later wrapper change, tracked in #12846.
+
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the p50 rise from 11-10 to 11-16 08:00Z is "unexplained". It ended at the 08:55Z release, before the web-2 replaces at 11:51Z and 12:01Z, so the replace is ruled out. The candidates are process state cleared by a restart, or Supabase latency (candidate 4 in the table above).
+
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the 500s on 11-11 and 11-12 map to no known incident (unverified).
+
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123), evidence bar: "attributed" needs a change point within ±1 h, a matching mechanism read, and no alternative event in the window. "Noise" means the values stay within the pre-event hourly range. Anything else is "unexplained".
+
+Ruled by CTO agent, 2026-11-17 (marker): trigger (2) of the 2026-11-08 marker ruling ("Cloudflare origin duration shows a step change aligned with the flip") was first met by the 2026-11-11 read, and was not acted on then. The marker is revived as #12845, in the shape the marker ruling gives. No code is added here.
+
+Save every analytics read's line 2 to `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-<subcommand>-216h.json` and commit it; never leave it in a session scratchpad.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
