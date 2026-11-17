@@ -6,10 +6,13 @@
 -- run-verify.sh when the catalog must be proven.
 --
 -- Invariants:
---   * `authenticated` has no SELECT on either new column (174's column-split SELECT does not name them). The
---     table-level INSERT/UPDATE from 174 is NOT checked here: it remains by design and RLS is the barrier.
+--   * `authenticated` has no SELECT on any of the three new columns (174's column-split SELECT does not name them).
+--     The table-level INSERT/UPDATE from 174 is NOT checked here: it remains by design and RLS is the barrier.
+--   * anon: its table-level SELECT from 174 is pre-existing (narrowing it is follow-up FU-6), so RLS is the anon
+--     barrier, and this file asserts the barrier holds: no workspaces policy names anon or PUBLIC (D45(c)).
+--   * both named checks exist (the 0..10000 range, the closed pull-blocked values).
 --   * the RPC is SECURITY DEFINER with search_path pinned to public, pg_temp, STABLE, member-checked on auth.uid(),
---     EXECUTE-able by authenticated and not by anon.
+--     returns the three held columns (D42), EXECUTE-able by authenticated and not by anon or PUBLIC.
 --   * no other function of that name exists in public (no leftover overload).
 
 SELECT 'held_files_authenticated_no_select' AS check_name,
@@ -19,6 +22,27 @@ UNION ALL
 SELECT 'held_checked_at_authenticated_no_select',
        CASE WHEN has_column_privilege('authenticated','public.workspaces','kb_sync_held_checked_at','SELECT')
             THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'pull_blocked_authenticated_no_select',
+       CASE WHEN has_column_privilege('authenticated','public.workspaces','kb_sync_pull_blocked','SELECT')
+            THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'workspaces_no_policy_for_anon_or_public',
+       (SELECT count(*) FROM pg_policies
+         WHERE schemaname = 'public' AND tablename = 'workspaces'
+           AND roles && ARRAY['anon','public']::name[])::int
+UNION ALL
+SELECT 'pull_blocked_values_check_present',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_constraint
+                          WHERE conrelid = 'public.workspaces'::regclass
+                            AND conname = 'workspaces_kb_sync_pull_blocked_values'
+                            AND contype = 'c')
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'get_kb_sync_held_returns_three_columns',
+       CASE WHEN (SELECT proargnames @> ARRAY['kb_sync_held_files','kb_sync_held_checked_at','kb_sync_pull_blocked']
+                    FROM pg_proc WHERE oid = 'public.get_workspace_kb_sync_held(uuid)'::regprocedure)
+            THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'held_files_range_check_present',
        CASE WHEN EXISTS (SELECT 1 FROM pg_constraint
@@ -39,6 +63,10 @@ SELECT 'get_kb_sync_held_member_checked',
 UNION ALL
 SELECT 'get_kb_sync_held_anon_revoked',
        CASE WHEN has_function_privilege('anon','public.get_workspace_kb_sync_held(uuid)','EXECUTE')
+            THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'get_kb_sync_held_public_revoked',
+       CASE WHEN has_function_privilege('public','public.get_workspace_kb_sync_held(uuid)','EXECUTE')
             THEN 1 ELSE 0 END::int
 UNION ALL
 SELECT 'get_kb_sync_held_authenticated_granted',
