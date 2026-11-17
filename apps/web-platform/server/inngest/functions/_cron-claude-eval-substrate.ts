@@ -762,8 +762,10 @@ export const PLUGIN_ROOT_TOKEN = "<plugin-root>";
 /**
  * #12847 review — the crons that load the plugin (`spawnClaudeEval({ loadPlugin: true })`). Setup resolves the
  * read-only root for each, so a refusal fails the run in setup, where every handler posts an ok:false heartbeat,
- * rather than inside the claude-eval step. spawnClaudeEval refuses a call site that disagrees with this set, and the
- * write-and-execute census pins it against the discovered call sites.
+ * rather than inside the claude-eval step. spawnClaudeEval refuses `loadPlugin: true` for a cron outside this set (test
+ * fixtures reuse these names with `false`, so the reverse is not checked at runtime); the write-and-execute census
+ * pins both directions against the discovered call sites. History: these crons used to pass
+ * `--plugin-dir plugins/soleur`, the clone's own tracked tree (#4989, #5091); #12824 reversed that.
  */
 export const CRON_PLUGIN_LOADERS: ReadonlySet<string> = new Set([
   "cron-agent-native-audit",

@@ -549,9 +549,14 @@ Residuals, stated plainly:
 with the spawn's whole env. The invariant is now: **for every cron that reaches `spawnClaudeEval`, no path it executes
 is a path it can write.** Six changes hold it.
 
+Reverses: the cron `--plugin-dir plugins/soleur` from the clone (#4989, #5098), the shared container HOME for cron
+spawns (#5243), bug-fixer's local `vitest run` baseline and `install_deps` (#5018, #9271), and the clone-relative
+allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's body.
+
 1. **The substrate owns `--plugin-dir`.** `SpawnArgs.loadPlugin` is required. When it is `true`, `spawnClaudeEval`
    resolves the deployed plugin through `resolveCronPluginRoot()` before any side effect, and `buildClaudeArgv` inserts
-   `--plugin-dir <root>` ahead of every caller flag. The root is `getPluginPath()` (`/app/shared/plugins/soleur`, the
+   `--plugin-dir <root>` ahead of every caller flag. Only the twelve crons in `CRON_PLUGIN_LOADERS` may pass `true`
+   (census-pinned); setup resolves the root for them, so a refused root turns the heartbeat red before any spawn. The root is `getPluginPath()` (`/app/shared/plugins/soleur`, the
    `:ro` bind ADR-093 owns). It must pass `assertTrustedPluginPath`, carry its manifest and `.seed-complete` (retried
    once after 30 s), and probe not-writable (`EROFS`/`EACCES` only) at the root and at `hooks/`. A refusal reports op
    `cron-plugin-root-untrusted` and throws `NonRetriableError`. A caller flag `--plugin-dir X` or `--plugin-dir=X`
@@ -562,11 +567,17 @@ is a path it can write.** Six changes hold it.
 3. **A fresh HOME per spawn.** Every claude child gets `HOME` = `mkdtemp(<ephemeralRoot>/home-)` (a sibling of the clone
    `repo/`, never inside it) and `TMPDIR` = `<HOME>/tmp` (mode 0700). Both are set after the cron's `buildSpawnEnv` and
    before `CRON_GIT_CONFIG_PIN`, and the HOME is removed when the spawn ends. No state survives into a later spawn. The
-   seed tag is compared at exit, and a mismatch reports `plugin-reseeded-mid-run`.
+   two server-cwd spawns (`cron-daily-triage`, `cron-follow-through-monitor`) have no ephemeral root; they get
+   `<CRON_WORKSPACE_ROOT>/soleur-home-*`, which no write root admits (they run without the hook and without Write).
+   The seed tag is compared at exit; a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
+   (`pluginReseeded`), which `classifyEvalFatal` treats as fatal.
 4. **Writes are confined to the run (CTO S1).** `decide()` in `cron-bash-allowlist-hook.mjs` denies Write, Edit and
-   MultiEdit outside two roots: the run's clone, derived from the hook's own path, and a `home-*` HOME that is its
-   sibling. The check uses the realpath of the nearest existing ancestor, so a dangling link fails closed. The deny
-   reason is `cron-containment: write outside run roots`. This is an allow-list, not a new deny pattern; the 2026-11-16
+   MultiEdit outside two roots: the run's clone, derived from the hook's own path, and the `tmp/` (TMPDIR) of a
+   `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
+   writable HOME would be a write-then-execute path. The check uses the realpath of the nearest existing ancestor, so
+   a dangling link fails closed, and the protected-path patterns are re-checked on that realpath. The deny reason is
+   `cron-containment: write outside run roots` and names the working directory and `$TMPDIR` as the places to write;
+   the off-box new-rule metric counts it as `write-outside-roots`. This is an allow-list, not a new deny pattern; the 2026-11-16
    ruling against more write-protect patterns stands.
 5. **Memory files cannot import secrets (CTO S3).** A nested `CLAUDE.md` the agent writes is loaded lazily, and its
    `@`-imports reach Anthropic-bound context (Phase 0.7g), so `@../.git/config` would carry the clone's token. The
@@ -595,6 +606,11 @@ Residuals, stated plainly:
   their own clone. This PR detects it but does not prevent it (#12856), and a bad mount fails cron runs, not the
   deploy (#12857).
 - Tools that ignore `TMPDIR` still write to the shared `/tmp`.
+- Reads are not confined: `Read`/`Glob`/`Grep` reach founder workspaces under `/workspaces` (#12863, pre-existing).
+- The write-root check resolves a path before the write happens, so a symlink swapped in between is a TOCTOU window;
+  no cron holds a verb that can win that race today.
+- The hook runs from the clone of `main` and the substrate from the deployed image, so the layout contract
+  (`repo/`, `home-*`) can skew between merge and deploy. Both sides fail closed on a mismatch.
 - The deployed copy holds only md/json/njk/yml/yaml/sh/txt (`.dockerignore`). The census lists each non-vendored
   script a cron's skill names, with its disposition: a handler-side import, or a call that fails closed because no cron
   holds an interpreter verb.

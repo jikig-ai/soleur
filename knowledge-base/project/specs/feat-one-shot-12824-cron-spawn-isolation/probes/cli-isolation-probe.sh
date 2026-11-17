@@ -591,7 +591,7 @@ arm_0_7e() {
 }
 
 # 0.7h (#12824, follow-on to 0.7g): the same nested-import shape plus an ABSOLUTE `@/proc/self/environ` import, run
-# twice -- without and with the `claudeMdExcludes` list the substrate ships (CRON_CLAUDE_MD_EXCLUDES). Expected with
+# twice -- without and with the `claudeMdExcludes` list the substrate ships (cronClaudeMdExcludes(), _cron-claude-eval-substrate.ts). Expected with
 # the list: root CLAUDE.md loads, and no canary (root .git import, nested md, nested .git import, env) reaches context.
 arm_0_7h_one() {
   local with="$1"
