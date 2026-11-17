@@ -165,6 +165,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/host-git.test.ts",
   "test/git-isolated-local-real-git.test.ts",
   "test/kb-sync-x2-alternate-refs-real-git.test.ts",
+  "test/kb-sync-held-real-git.test.ts",
   "test/session-sync-kb-only-push-real-git.test.ts",
   "test/workspace-sync-self-heal-real-git.test.ts",
 ];
