@@ -1,0 +1,4133 @@
+{
+  "version": "2.21",
+  "children": [
+    {
+      "type": "frame",
+      "id": "s2a2GZ",
+      "x": 0,
+      "y": 0,
+      "name": "Owner — nothing held",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "JW2fs",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · nothing held",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "uTuSH",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Settings › Project (#12714). No held notice when the stored count is 0 or null, or the repo is not ready. Only the date label changes.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "QufNC",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · NOTHING HELD (n = 0, null, or unreadable)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "M34xIA",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "XGgUF",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "ICCHW",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "GSyKV",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "tyUte",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "fWZTS",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "BH5LX",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "p8u3Nx",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "tO2tr",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "h5YcaG",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gzAXE",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "gftsL",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "\"Last synced:\" is relabelled \"Updated from GitHub: {date}\" (V2, W5). Only the session-start pull stamps the date, so it no longer moves after a push-only turn. No new control; Disconnect is unchanged.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "M6vxf",
+      "x": 640,
+      "y": 0,
+      "name": "Owner — held, publish route",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "I0a3k0",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · held files (route available)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "wv4CA",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "kb_sync_held_files = 3 and isCcGithubPushRouteAvailable = true. Neutral informational notice inside the card, below the date line. No new control.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "GyWwm",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n > 1 · PUBLISH ROUTE AVAILABLE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "e2V6T",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "u93wVi",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "BtKHj",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "K0Sovx",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "lzIVM",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "VmHs9",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "e6fCQu",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "PG7og",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "C1aQSp",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "fQvA3",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "GlxYE",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "jvPCL",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MmQS3",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "VYqdm",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "V6 copy: \"not on your repository's main branch yet\" (never \"not on GitHub\", D23). Count only: no file names, commit messages or authors (C4). The route is named in words; github_push_branch appears only in the agent's context (V3, C5). The notice clears by itself when a later sync stores 0 (C1).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "dmBtZ",
+      "x": 1280,
+      "y": 0,
+      "name": "Owner — held, singular",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "R6tMQr",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · held files, n = 1",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "s5dXFN",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Singular wording (\"file\", \"change\", \"it\") per the V5 table; route available.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "S6Fk4A",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n = 1 · PUBLISH ROUTE AVAILABLE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "Zvif4",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "y8Dy3",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "qmcBX",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f9cSw",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "KARg0",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "h7EcZ",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "YIpDn",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "C1kItB",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "eoALX",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ScPkn",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "vNVFz",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. To publish it, ask your agent to push it to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ch4XZ",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "PtCAQ",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "lQ39v",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "No-route singular (not drawn): \"1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Publishing code changes is not available for this workspace.\"",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "u7hjaB",
+      "x": 1920,
+      "y": 0,
+      "name": "Owner — held, no publish route",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "NgYHS",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · held files (no publish route)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "U6LzC",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "isCcGithubPushRouteAvailable = false (a definite answer, not a blip): the publish instructions are dropped (W3, C3). No way to publish is offered; the gap is a ship-time follow-up issue (C8).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "CuksI",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n > 1 · NO PUBLISH ROUTE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "Kz8I8",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "SpnU6",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "XJBw8",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zJqsJ",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "omepe",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "oTWXs",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Ca8Ur",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Chxty",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "GJOhP",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "pnaZv",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "G2DeKX",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Publishing code changes is not available for this workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "sK1Qw",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kNRUD",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "IAO6k",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Same neutral notice treatment as the route-available state: this is information, not an error, and nothing on the card can resolve it.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "x7SRS",
+      "x": 2560,
+      "y": 0,
+      "name": "Owner — held incl. recovered branch",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "InQ3g",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · count includes a recovered branch",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "JxJh7",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "The workspace self-heal set commits aside on soleur/recovered-kb-sync-* before a reset. Their non-KB files join the count (W1, W4), so \"Nothing is lost\" stays true.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Z5khJ",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · RECOVERED-BRANCH FILES COUNTED (e.g. 2 on main + 2 set aside = 4)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "gCe3u",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "z5wP8",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "OqVeM",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "MKsWz",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "L253d",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "bJP2g",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "EDr78",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "qz7X9",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "gyFLE",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xgKi0",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "dIsMI",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "4 changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Z2qbTN",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "J2P5Pv",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "T6qKK",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "The plan gives this case no separate string: the copy is the same V5 string with the unioned, de-duplicated count. The UI never names the recovered branch. The member view follows the same rule (member string, same number).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "V5AqIT",
+      "x": 0,
+      "y": 760,
+      "name": "Member — nothing held",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "vXduA",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Member · nothing held",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "TVUZe",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Read-only member card (ADR-044): \"managed by {ownerLabel}\", no date, no controls. n = 0, null or not ready: no notice.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "mFMUp",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · NOTHING HELD (n = 0, null, or unreadable)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "i0CbD0",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "I9aUs",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "xYnnf",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "VlAxM",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qrFUQ",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "mo8PZ",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "KzJeB",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "R36Dry",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "A5WBuJ",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "FlEkU",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Members still see no date (V2). {ownerLabel} is the card's existing value; when absent the line reads \"managed by your workspace owner\".",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "d6wXk",
+      "x": 640,
+      "y": 760,
+      "name": "Member — held, publish route",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "isYpy",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Member · held files (route available)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "Fsctf",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Same notice under the \"managed by\" line. V6: the member gets an action (ask the agent, then ask the Owner), and the copy never says a request is waiting.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "qFurK",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · HELD · n > 1 · PUBLISH ROUTE AVAILABLE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "foGss",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "PKT4T",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "mo6qz",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f2uYu5",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "AUfb8",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "KWQ7r",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nPCRE",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "rl1aW",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Zmmsg",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "h2FCF1",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "rPHx6",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. To publish them, ask your agent to push them to a new branch, then ask Acme Co to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "S6QjyN",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "{ownerLabel} = \"Acme Co\" here; fallback \"your workspace owner\" (\"…then ask your workspace owner to approve the push…\"). Count only, no paths (C4).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "kd2oB",
+      "x": 1280,
+      "y": 760,
+      "name": "Member — held, singular",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "ITU0u",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Member · held files, n = 1",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "n5vGU5",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Singular member wording, route available.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "A9q05K",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · HELD · n = 1 · PUBLISH ROUTE AVAILABLE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "V5mLS8",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "F9Eu6",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "aCx8p",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "fx7a6",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "QfpPm",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "pAPDT",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fis4f",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "TDGIe",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "TaGfg",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "AqLvT",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "TyY6C",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace. To publish it, ask your agent to push it to a new branch, then ask Acme Co to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "z2FIt",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "No-route singular (not drawn): \"1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace.\"",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "R8brnq",
+      "x": 1920,
+      "y": 760,
+      "name": "Member — held, no publish route",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "WL1bO",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Member · held files (no publish route)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "UU6SC",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "No route: no wait and no action (C7). The member is never told to wait for the Owner.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "ri1mo",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · HELD · n > 1 · NO PUBLISH ROUTE",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "Ill5b",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "P9B8k",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "NwEkQ",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "xztGN",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "b6Um3q",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "J8wiq",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "LDjb8",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "iY7qZ",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "P0pni",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "v03l1i",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "UfJ8Z",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "F4oja7",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "A broken installation gives the member this string too: the member card has no reconnect state and follows the predicate (V6).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "P6eU17",
+      "x": 2560,
+      "y": 760,
+      "name": "Mobile 375 — Owner and member, held",
+      "width": 375,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "paMV8",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · 375 px · held files",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "NugU7",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Owner (top) and member (bottom) at phone width, route available. The V6 notice wraps inside the card; no truncation.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "sBlpO",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n > 1 · 375 px",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "XcJiT",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "Z04Ib",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "ylV9g",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "GtNVY",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "SFu94",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "r6GrBL",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "L4GRni",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "nFNcl",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "j4R6dw",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "N0mod",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "X7UN2f",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "kDLMo",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ozjTb",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "h3bteM",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · HELD · n > 1 · 375 px",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "l7nLI",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "Rfod0",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "aGSYy",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Y1E9jy",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "KAkCE",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "o8YMCL",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "x1Bo5",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "o6dKA",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "P4Mx6d",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rBfc6",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t5W5U",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. To publish them, ask your agent to push them to a new branch, then ask Acme Co to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "e4dz5",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Card padding drops to 16 at phone width to keep the notice readable; the strings are never shortened.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "bVeHQ",
+      "x": 0,
+      "y": 1480,
+      "name": "KB tree — workspace sync pending notice",
+      "width": 760,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "UaV5z",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "KB tree · KB-write pending notice",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "D7TfK",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "A KB upload, delete or rename landed on GitHub, but the workspace was held (D16, D23, V6 final detail). Non-error status row under the row that was acted on, dismissible.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "x4M6hX",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "KB TREE · UPLOAD HELD (workspace_sync: \"pending\")",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "thF67",
+          "name": "KB shell",
+          "clip": true,
+          "width": "fill_container",
+          "height": 300,
+          "fill": "$--bg-surface-1",
+          "cornerRadius": 12,
+          "stroke": "$--border-default",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "frame",
+              "id": "B5ixp",
+              "name": "file tree",
+              "width": 280,
+              "height": "fill_container",
+              "fill": "$--bg-base",
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 2,
+              "padding": [
+                12,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "oClc5",
+                  "name": "tree row knowledge-base",
+                  "width": "fill_container",
+                  "padding": [
+                    4,
+                    8
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "N9Jssl",
+                      "name": "row label",
+                      "fill": "$--text-secondary",
+                      "content": "knowledge-base",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "DzpxJ",
+                  "name": "tree row product/",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "padding": [
+                    4,
+                    8,
+                    4,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kW2Ri",
+                      "name": "row label",
+                      "fill": "$--text-primary",
+                      "content": "product/",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "EYais",
+                  "name": "SyncPendingNotice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 4,
+                  "gap": 6,
+                  "padding": [
+                    4,
+                    8
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jlokO",
+                      "name": "notice text",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "IDgAh",
+                      "name": "dismiss ×",
+                      "fill": "$--text-tertiary",
+                      "content": "×",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "FNCz5",
+                  "name": "tree row customer-interviews.pdf",
+                  "width": "fill_container",
+                  "padding": [
+                    4,
+                    8,
+                    4,
+                    32
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "U5fzU6",
+                      "name": "row label",
+                      "fill": "$--text-secondary",
+                      "content": "customer-interviews.pdf",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "k95JnK",
+                  "name": "tree row roadmap.md",
+                  "width": "fill_container",
+                  "padding": [
+                    4,
+                    8,
+                    4,
+                    32
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "HNBPi",
+                      "name": "row label",
+                      "fill": "$--text-secondary",
+                      "content": "roadmap.md",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "GCpQN",
+                  "name": "tree row pricing-notes.md",
+                  "width": "fill_container",
+                  "padding": [
+                    4,
+                    8,
+                    4,
+                    32
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "R05kN",
+                      "name": "row label",
+                      "fill": "$--text-secondary",
+                      "content": "pricing-notes.md",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qetKs",
+              "name": "document content",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "QDfs1",
+                  "name": "doc title",
+                  "fill": "$--text-primary",
+                  "content": "product/roadmap.md",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "G1gDI",
+                  "name": "text line",
+                  "fill": "$--border-default",
+                  "width": 360,
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "Dad4Z",
+                  "name": "text line",
+                  "fill": "$--border-default",
+                  "width": 300,
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "RkgfH",
+                  "name": "text line",
+                  "fill": "$--border-default",
+                  "width": 330,
+                  "height": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "BNgvK",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Lead clause per op (one shared constant, lib/kb-workspace-sync-notice.ts): upload \"Saved to GitHub.\", delete \"Deleted on GitHub.\", rename \"Renamed on GitHub.\"; the second clause is shared. Upload shows it under the target folder row, delete and rename under the file row. Neutral surface-2 fill and secondary text, not the red error or amber duplicate treatment. The row indents with the tree level (mx-2 + paddingLeft).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "cfAbx",
+      "x": 840,
+      "y": 1480,
+      "name": "Diagram editor — save held notices",
+      "width": 760,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "ziof6",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Diagram editor · KB-write pending notices",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "Uni50",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "C4 source editor: Save landed on GitHub, the workspace was held (D16, D22(c), D23). The save message is a non-error status in muted 11 px text.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "z3TREi",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "SAVE HELD · WORKSPACE NOT UPDATED (workspace_sync: \"pending\")",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "czzhF",
+          "name": "C4 editor pane",
+          "clip": true,
+          "width": "fill_container",
+          "fill": "$--bg-surface-1",
+          "cornerRadius": 12,
+          "stroke": "$--border-default",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "d1QroB",
+              "name": "header row",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "gap": 8,
+              "padding": [
+                6,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "IJCLZ",
+                  "name": "file select",
+                  "fill": "$--bg-base",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    2,
+                    24,
+                    2,
+                    8
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "dQNYq",
+                      "name": "file",
+                      "fill": "$--text-primary",
+                      "content": "model.c4",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Pif0H",
+                  "name": "spacer",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "PueJL",
+                  "name": "font stepper",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "gap": 2,
+                  "padding": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "J57GB",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A−",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "twstD",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "13px",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "tozGB",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A+",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "DZDKx",
+                  "name": "Save button (gold)",
+                  "fill": "$--accent-gold-fill",
+                  "cornerRadius": 4,
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YSUoB",
+                      "name": "save",
+                      "fill": "$--text-on-accent",
+                      "content": "Save",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "vYH7p",
+              "name": "save status row (role=status)",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "padding": [
+                6,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fhWXm",
+                  "name": "save message",
+                  "fill": "$--text-tertiary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "r1bkaN",
+              "name": "code area",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "OyIwL",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 220,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "V0MU0k",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 300,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "Lk6Lj",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 260,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "oJsoy",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 180,
+                  "height": 7
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "F6AZg",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "SAVE HELD · WITH RENDER DIAGNOSTIC (D22(c))",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "oU32U",
+          "name": "C4 editor pane",
+          "clip": true,
+          "width": "fill_container",
+          "fill": "$--bg-surface-1",
+          "cornerRadius": 12,
+          "stroke": "$--border-default",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "CWdTR",
+              "name": "header row",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "gap": 8,
+              "padding": [
+                6,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Nw5KT",
+                  "name": "file select",
+                  "fill": "$--bg-base",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    2,
+                    24,
+                    2,
+                    8
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gTOnq",
+                      "name": "file",
+                      "fill": "$--text-primary",
+                      "content": "model.c4",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "B6t3g",
+                  "name": "spacer",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "U7jYdC",
+                  "name": "font stepper",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "gap": 2,
+                  "padding": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "rxGi1",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A−",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KmkBv",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "13px",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "L9h0o1",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A+",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "GK5Gj",
+                  "name": "Save button (gold)",
+                  "fill": "$--accent-gold-fill",
+                  "cornerRadius": 4,
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "WzHWn",
+                      "name": "save",
+                      "fill": "$--text-on-accent",
+                      "content": "Save",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "CqNQf",
+              "name": "save status row (role=status)",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "padding": [
+                6,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nuLN0",
+                  "name": "save message",
+                  "fill": "$--text-tertiary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again. — {render diagnostic}",
+                  "lineHeight": 1.45,
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S7ukPU",
+              "name": "code area",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "M637es",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 220,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "E8STy",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 300,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "hiyUT",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 260,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "QCLPO",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 180,
+                  "height": 7
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "t8Zgjc",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "RESYNC-ONLY HELD · SOURCE IS IN THE WORKSPACE (workspace_sync_held: \"rerender\")",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "Hswxq",
+          "name": "C4 editor pane",
+          "clip": true,
+          "width": "fill_container",
+          "fill": "$--bg-surface-1",
+          "cornerRadius": 12,
+          "stroke": "$--border-default",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "vZbP8",
+              "name": "header row",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "gap": 8,
+              "padding": [
+                6,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "t5JqU",
+                  "name": "file select",
+                  "fill": "$--bg-base",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    2,
+                    24,
+                    2,
+                    8
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "B4HDZA",
+                      "name": "file",
+                      "fill": "$--text-primary",
+                      "content": "model.c4",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uoysm",
+                  "name": "spacer",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "h8ol5H",
+                  "name": "font stepper",
+                  "cornerRadius": 4,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "gap": 2,
+                  "padding": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CzNaC",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A−",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "x3vlot",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "13px",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Uc23a",
+                      "name": "step",
+                      "fill": "$--text-tertiary",
+                      "content": "A+",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "bJgro",
+                  "name": "Save button (gold)",
+                  "fill": "$--accent-gold-fill",
+                  "cornerRadius": 4,
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "njGVl",
+                      "name": "save",
+                      "fill": "$--text-on-accent",
+                      "content": "Save",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yc9HX",
+              "name": "save status row (role=status)",
+              "width": "fill_container",
+              "stroke": "$--border-default",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "padding": [
+                6,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "u7VX1K",
+                  "name": "save message",
+                  "fill": "$--text-tertiary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Saved to GitHub. Your workspace may not show the updated diagram yet, because it has local changes that aren't on your repository's main branch yet. You don't need to try again.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "i79EI8",
+              "name": "code area",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "k8BIv",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 220,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "amh9S",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 300,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "hX8ni",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 260,
+                  "height": 7
+                },
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 3,
+                  "id": "CVV1o",
+                  "name": "code line",
+                  "fill": "$--border-default",
+                  "width": 180,
+                  "height": 7
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "kAcve",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Layout proposal: today the message is an inline span in the one-row header, between the font stepper and Save. These 180-230 character strings do not fit there at editor-pane widths and would break the header's one-row rule (the file picker comment in c4-shared.tsx). The wireframe moves the message to a status row directly under the header, full width, same 11 px muted style. Copy unchanged (V6 final detail; the resync-only string is final as shipped). The diagnostic is appended after \" — \" exactly as the code does; {render diagnostic} is the existing render message, not new copy.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "r2rAlh",
+      "x": 0,
+      "y": 2400,
+      "name": "Owner and member — transient predicate",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "Wrb2i",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · route check failed (transient)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "IDUvj",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "The publish-route predicate errored or timed out (or a D29(5) transient reason). The no-route sentence is never shown on a blip (V6).",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "vxqp7",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n > 1 · ROUTE CHECK TRANSIENT",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "jMNz8",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "yPQ3O",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "l2X78d",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "M5iBm",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "AXMh9",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "DSaJx",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "kujqm",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "q2VhP",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "cAXuv",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "HtI1e",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xPtuW",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ht0Qf",
+                  "name": "Disconnect button",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ieqTO",
+                      "name": "label",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "AMXbg",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "MEMBER · HELD · n > 1 · ROUTE CHECK TRANSIENT",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "meYmh",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "q7U69k",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "xSwm0",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "unN49",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "O0HCb",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "GI31o",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "aF8rU",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "VNAjq",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "fqlGe",
+                      "name": "managed by",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "managed by Acme Co",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "h4MxTJ",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "uongY",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "J2sHth",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Singular variants (not drawn): Owner \"1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Whether your agent can publish it could not be checked right now. Reload this page to check again.\" Member: same with \"the repository's\" and \"the workspace\". No reload control is added: the sentence names the browser's own reload.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "cmwhP",
+      "x": 640,
+      "y": 2400,
+      "name": "Owner — reconnect needed (held suppressed)",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "vtOTE",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Project card · Owner · reconnect needed",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "TdUVC",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "repoStatus = ready and needsReconnect: ReconnectNotice is the only notice, even while kb_sync_held_files > 0 (V6). The held notice returns after the reconnect while n > 0.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "jfuEt",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · RECONNECT NEEDED · n > 0 · HELD NOTICE NOT SHOWN",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "ahjfw",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "WyOqI",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "hZB1u",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "BX0fn",
+                  "name": "ReconnectNotice (card variant)",
+                  "width": "fill_container",
+                  "fill": "$--amber-notice-bg",
+                  "cornerRadius": 8,
+                  "stroke": "$--amber-notice-border",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "m35Lmr",
+                      "name": "reconnect copy",
+                      "fill": "$--amber-notice-fg",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "This project can't sync — reconnect to restore Knowledge Base updates. Reconnect re-authorizes GitHub access so syncing can resume.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "EPZqI",
+                      "name": "Reconnect button",
+                      "fill": "$--amber-notice-bg",
+                      "cornerRadius": 8,
+                      "stroke": "$--amber-notice-border",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "padding": [
+                        8,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "XpmWy",
+                          "name": "label",
+                          "fill": "$--amber-notice-fg-strong",
+                          "content": "Reconnect",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "O2uvA",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Unchanged ReconnectNotice (#4712, card variant). No date line, no Disconnect, no held notice. The member card has no reconnect state: it follows the predicate, so a broken installation shows the member the no-route string (see \"Member — held, no publish route\").",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "dZ0QT",
+      "x": 1280,
+      "y": 2400,
+      "name": "Settings team icon — pending and 409 notices",
+      "width": 760,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "wYYqQ",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Settings › Your Team · leader icon upload notices",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "cuHAE",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Task 11.7 (conversation-names-settings.tsx). Two new non-error outcomes of a leader icon upload; \"Upload failed. Please try again.\" stays red for every other failure.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "j2eHq",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "ICON UPLOAD · WORKSPACE HELD (workspace_sync: \"pending\")",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "vJKDR",
+          "name": "LeaderRow + notice",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "children": [
+            {
+              "type": "frame",
+              "id": "N4SHKT",
+              "name": "LeaderRow",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "gap": 16,
+              "padding": [
+                12,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Y7VES",
+                  "name": "avatar (default icon)",
+                  "width": 40,
+                  "height": 40,
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "y9VEX9",
+                      "name": "avatar glyph",
+                      "fill": "$--accent-gold-fill",
+                      "content": "M",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "nL08V",
+                  "name": "leader title",
+                  "fill": "$--text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Chief Marketing Officer",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "ZYGvV",
+                  "name": "name input",
+                  "width": 192,
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "PD8Qs",
+                      "name": "placeholder",
+                      "fill": "$--text-tertiary",
+                      "content": "Enter a name...",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Ab8MG",
+              "name": "icon upload notice (role=status)",
+              "width": "fill_container",
+              "fill": "$--bg-surface-2",
+              "cornerRadius": 8,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "padding": [
+                8,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SItk1",
+                  "name": "notice text",
+                  "fill": "$--text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "GCN0Q",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "ICON UPLOAD · 409 (FILE NAME ALREADY ON GITHUB)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "qrcai",
+          "name": "LeaderRow + notice",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "children": [
+            {
+              "type": "frame",
+              "id": "jYQzb",
+              "name": "LeaderRow",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "gap": 16,
+              "padding": [
+                12,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "qSJI7",
+                  "name": "avatar (default icon)",
+                  "width": 40,
+                  "height": 40,
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "h14vhy",
+                      "name": "avatar glyph",
+                      "fill": "$--accent-gold-fill",
+                      "content": "M",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "t0qrIO",
+                  "name": "leader title",
+                  "fill": "$--text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Chief Marketing Officer",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "f676W",
+                  "name": "name input",
+                  "width": 192,
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    8,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VANay",
+                      "name": "placeholder",
+                      "fill": "$--text-tertiary",
+                      "content": "Enter a name...",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jsaYj",
+              "name": "icon upload notice (role=status)",
+              "width": "fill_container",
+              "fill": "$--bg-surface-2",
+              "cornerRadius": 8,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "padding": [
+                8,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "j2grn",
+                  "name": "notice text",
+                  "fill": "$--text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "oqBLH",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Layout proposal: today the row's only message slot is the red error line under the 192 px name input. These strings would wrap to 8-10 lines there, so both render as a full-width neutral status row under the leader row (surface-2, secondary text, role=status). The 409 string is neutral, not red, because it tells the user nothing failed that a retry would fix. The avatar keeps the default icon while pending. Copy verbatim from V6.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "--bg-base": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "--bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "--bg-surface-2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "--border-default": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "--text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "--text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "--text-tertiary": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "--accent-gold-fill": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "--text-on-accent": {
+      "type": "color",
+      "value": "#1A1612"
+    },
+    "--green-chip-bg": {
+      "type": "color",
+      "value": "#14532D80"
+    },
+    "--green-chip-fg": {
+      "type": "color",
+      "value": "#4ADE80"
+    },
+    "--font-primary": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "--amber-notice-border": {
+      "type": "color",
+      "value": "#92400E"
+    },
+    "--amber-notice-bg": {
+      "type": "color",
+      "value": "#451A0380"
+    },
+    "--amber-notice-fg": {
+      "type": "color",
+      "value": "#FBBF24"
+    },
+    "--amber-notice-fg-strong": {
+      "type": "color",
+      "value": "#FCD34D"
+    }
+  }
+}
