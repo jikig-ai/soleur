@@ -480,6 +480,7 @@ CASES
 # Where a capture's fail-closed value LANDS (CTO R4, R5(c)): the plan_refs consumer line and the counsel trigger block, run for real.
 caller_consumer_rows() { # <fixture A dir> <fixture B dir>
   local da="$1" db="$2" real="$REPO_ROOT/plugins/soleur" ship="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" cap con out n
+  assert_fixture_dir "$db"
   local counsel="$REPO_ROOT/plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md"
   cap="$(census_entry plan_refs | sed -E 's/^[[:space:]]+//')"
   n="$(grep -c -F -- '[[ $plan_refs == unknown ]] && echo' "$ship" || true)"
@@ -492,7 +493,7 @@ caller_consumer_rows() { # <fixture A dir> <fixture B dir>
   if [ -z "$out" ]; then h_ok "consumer plan_refs: control A (real root, no plan files) prints nothing"; else h_bad "consumer plan_refs: control A printed '${out:0:120}'"; fi
   # Positive: fixture B's plan-tree file carries a CLOSE_DEFER_RE hit, so the grep branch must print exactly that hit.
   local pf; pf="$(awk -F'\t' '$1 == "plan_refs" { print $2 }' <<<"$CALLER_FIXTURE_B")"
-  out="$(cd "$db" && printf 'Close after the deploy is verified.\n' > "$pf" && env CLAUDE_PLUGIN_ROOT="$real" CLOSE_DEFER_RE='close[sd]?.*(after|once|when)' bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  out="$(cd "$db" && printf 'Close after the deploy is verified.\n' > "$db/$pf" && env CLAUDE_PLUGIN_ROOT="$real" CLOSE_DEFER_RE='close[sd]?.*(after|once|when)' bash -c "$cap"$'\n'"$con" 2>/dev/null)"
   # One file: grep prints line:text with no file name.
   if [ "$out" = "1:Close after the deploy is verified." ]; then h_ok "consumer plan_refs: a plan file with a deferred-close phrase prints exactly that hit"
   else h_bad "consumer plan_refs: want '1:Close after the deploy is verified.' got '${out:0:160}' (the grep branch is dead or changed)"; fi
@@ -552,6 +553,7 @@ counsel_expect() { # <label> <want verdict line, exact>
 }
 counsel_rows() { # <fixture B dir: a legal change plus one branch spec that is not single-user>
   local db="$1" dc dd de ok="$COUNSEL_SHIMS/gh-ok" sui='brand_survival_threshold: single-user incident' spec P=knowledge-base/project/plans
+  assert_fixture_dir "$db"
   local SKIP=COUNSEL_GATE=skip F='COUNSEL_GATE=fire legal=changed'
   local FIRE_U="$F sui_threshold=unknown draft_marker=none"
   spec="$(awk -F'\t' '$1 == "sui_plans" { print $2 }' <<<"$CALLER_FIXTURE_B")"
@@ -2434,7 +2436,7 @@ skill_fixture() { # <root>
   {
     printf '## Phase 0\n\n```bash\n'
     printf '%s origin/main...HEAD %s "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }\n' "$call" '>'
-    printf '```\n\nVerify via `a=$(mktemp) && %s --match %s origin/main...HEAD > "$a" && grep -E x "$PREFLIGHT_TMP/preflight-diff-files.txt"`.\n' "$call" "'(^|/)supabase/migrations/.*\\.sql\$'"
+    printf '```\n\nVerify via `a=$(mktemp) && %s --match %s origin/main...HEAD %s "$a" && grep -E x "$PREFLIGHT_TMP/preflight-diff-files.txt"`.\n' "$call" "'(^|/)supabase/migrations/.*\\.sql\$'" '>'
     printf '\n**Cache-missing rule.** Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 => RUN.\n\n'
     local c
     for c in 1 2 3 6 8 10; do
