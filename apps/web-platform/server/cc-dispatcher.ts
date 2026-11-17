@@ -15,6 +15,7 @@
 
 import { randomUUID } from "crypto";
 import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import path from "path";
 
 import { ROUTINE_AUTHORING_DIRECTIVE } from "@/server/routine-authoring-directive";
@@ -310,7 +311,14 @@ import {
   assertCcApprovalSetWired,
   ccPushPromptAddendum,
   resolveCcGithubPushRegistration,
+  type CcPushRegistration,
 } from "./cc-github-push";
+import {
+  buildKbSyncHeldAgentLine,
+  buildKbSyncMergeBlockedAgentLine,
+  heldLineRouteFromRegistration,
+  type KbSyncMergeBlockedReason,
+} from "./kb-sync-held-agent-line";
 import {
   ccGithubReadPromptAddendum,
   ccGithubReadUnavailableLine,
@@ -1935,6 +1943,72 @@ export function crmLeadPermissionToolNames(crmLead: boolean): string[] {
   );
 }
 
+/** Upper bound of the held-count RPC on the cold path: a hung read must not hold Query construction. */
+const KB_SYNC_HELD_READ_TIMEOUT_MS = 2_000;
+
+/**
+ * #12714 (D29(3)): the held-files count and its "as of" time for the agent line, read through the member-checked SECURITY
+ * DEFINER RPC `get_workspace_kb_sync_held` (migration 187; the `authenticated` SELECT grant excludes both columns, so no tenant
+ * select may name them). Zero rows (a non-member) is null: no line. Never throws: an error, a rejection or the deadline is
+ * null plus ONE warning with a static message (null first, never the Error: #8629).
+ */
+async function readKbSyncHeldForAgentLine(
+  tenant: Awaited<ReturnType<typeof getFreshTenantClient>>,
+  userId: string,
+  workspaceId: string,
+): Promise<{ heldFiles: unknown; checkedAt: string | null } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const read = (async () => {
+      const { data, error } = await tenant.rpc("get_workspace_kb_sync_held", { p_workspace_id: workspaceId });
+      if (error) throw Object.assign(new Error("rpc error"), { code: (error as { code?: unknown }).code });
+      return data as unknown;
+    })();
+    const deadline = new Promise<never>((_r, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), KB_SYNC_HELD_READ_TIMEOUT_MS);
+    });
+    const data = await Promise.race([read, deadline]);
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { kb_sync_held_files?: unknown; kb_sync_held_checked_at?: unknown }
+      | null
+      | undefined;
+    if (!row || typeof row !== "object") return null;
+    // The builder validates the count (an integer in 1..10000, D29(8)); only the time's type is narrowed here.
+    return {
+      heldFiles: row.kb_sync_held_files,
+      checkedAt: typeof row.kb_sync_held_checked_at === "string" ? row.kb_sync_held_checked_at : null,
+    };
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    reportSilentFallback(null, {
+      feature: "cc-dispatcher",
+      op: "kb-sync-held-read",
+      extra: { userId, workspaceId, errName: err instanceof Error ? err.name : undefined, ...(typeof code === "string" ? { code } : {}) },
+      message: "get_workspace_kb_sync_held read failed; no held-files line",
+    });
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * #12714 (D29(4)): an unfinished merge in the workspace, for the cc agent line. lstat only (no git child on the
+ * agent-writable repo, no symlink follow): `.git/MERGE_HEAD` or `.git/MERGE_AUTOSTASH` present, the same files
+ * session-sync's `mergeInProgress` treats as a merge in progress. Absent (or any read error, which claims nothing) is null.
+ */
+async function readCcMergeBlockedReason(workspacePath: string): Promise<KbSyncMergeBlockedReason | null> {
+  for (const name of ["MERGE_HEAD", "MERGE_AUTOSTASH"]) {
+    try {
+      await lstat(path.join(workspacePath, ".git", name));
+      return "unresolved_merge";
+    } catch {
+      // ENOENT / ENOTDIR (no merge, or no .git directory) and any other error: say nothing.
+    }
+  }
+  return null;
+}
+
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
  * because workspace path + BYOK key + service tokens are DB-resident.
@@ -2052,6 +2126,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       repoUrlResult,
       repoReadinessRow,
       webEgressEntitled,
+      kbSyncHeld,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
@@ -2101,6 +2176,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         // resolver blip or membership reset can never over-grant egress.
         // Keyed on the unified activeWorkspaceId (repoUrl precedent).
         resolveWebEgress(args.userId, activeWorkspaceId),
+        // #12714 (D29(3)) — the held-files count for the agent line, through
+        // the member-checked RPC (the tenant SELECT grant excludes the
+        // columns), keyed on the SAME activeWorkspaceId the push
+        // registration below gets. Never throws: a failure is no line plus
+        // one warning. Support never writes code, so it never reads it.
+        mode.runRepoLifecycle
+          ? readKbSyncHeldForAgentLine(dispatchTenant, args.userId, activeWorkspaceId)
+          : Promise.resolve(null),
       ]);
 
     // #9558 — a write-closed sandbox must carry NO GitHub credential at all:
@@ -2668,6 +2751,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   let approvalTools: readonly { name: string }[] = [];
   let approvalToolNames: readonly string[] = [];
   let pushPromptAddendum: string | undefined;
+  // #12714 — the push registration result the held-files line takes its variant from; undefined = never attempted (no repo
+  // or installation), "threw" = the registration catch below.
+  let heldLineRegistration: CcPushRegistration | "threw" | undefined;
   // #12469 — the read-only GitHub tools (entitlement + non-support persona + connected PUBLIC repo + installation). The registrar
   // always runs (it is called OUTSIDE the repo/installation block below) so the "entitled, no tools" states are observable.
   let readTools: readonly { name: string }[] = [];
@@ -2804,12 +2890,15 @@ export const realSdkQueryFactory: QueryFactory = async (
           approvalToolNames = pushRegistration.toolNames;
           pushPromptAddendum = addendum;
         }
+        // #12714 (W3): the held line's variant comes from THIS result (never a second flag read).
+        heldLineRegistration = pushRegistration;
       } catch (err) {
         // Fail closed AND visible: a defect in the optional push registration (its own checks are already fail-closed) must
         // never break the Concierge's Query construction, and must never leave a half-registered tool.
         approvalTools = [];
         approvalToolNames = [];
         pushPromptAddendum = undefined;
+        heldLineRegistration = "threw";
         // null first, never the Error: the pino mirror captures a passed Error first and Sentry drops the tagged second capture
         // (#8629); the class name is what the operator needs.
         reportSilentFallback(null, {
@@ -2991,6 +3080,29 @@ export const realSdkQueryFactory: QueryFactory = async (
   // #11636: likewise for the gated push tool: advertised only when the registrar registered it.
   if (pushPromptAddendum) {
     effectiveSystemPrompt += `\n\n${pushPromptAddendum}`;
+  }
+  // #12714 (D29(3), D29(6), D29(7)): the held-files line, next to the capability addenda above. The count is the RPC read from
+  // the Promise.all (the same activeWorkspaceId as the registration); the variant is the registration result's; null, 0 or a
+  // null checked_at add nothing. Then the unfinished-merge line (D29(4)): the agent is the only party that can finish one.
+  const heldLine = kbSyncHeld
+    ? buildKbSyncHeldAgentLine({
+        heldFiles: kbSyncHeld.heldFiles,
+        checkedAt: kbSyncHeld.checkedAt,
+        route: heldLineRouteFromRegistration(heldLineRegistration),
+        defaultBranch:
+          heldLineRegistration !== undefined && heldLineRegistration !== "threw" && heldLineRegistration.registered
+            ? heldLineRegistration.defaultBranch
+            : null,
+      })
+    : null;
+  if (heldLine) {
+    effectiveSystemPrompt += `\n\n${heldLine}`;
+  }
+  const mergeBlockedLine = mode.runRepoLifecycle
+    ? buildKbSyncMergeBlockedAgentLine(await readCcMergeBlockedReason(workspacePath))
+    : null;
+  if (mergeBlockedLine) {
+    effectiveSystemPrompt += `\n\n${mergeBlockedLine}`;
   }
   // Routines "Draft a routine" tab (#5402): scope the agent to routine
   // authoring (create = propose-as-PR; run/verify existing = gated routine_run).
