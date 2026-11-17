@@ -448,25 +448,6 @@ resource "betteruptime_policy" "uptime" {
   }
 }
 
-# ── Better Stack managed alert recipient: ops@jikigai.com ──────────────────
-#
-# ops@jikigai.com as a managed Better Stack team member so free-tier heartbeat/
-# monitor email alerts reach ops@ (not just the account owner, jean.deruelle@).
-# Root cause of the unacknowledged soleur-registry-disk-prd incident: recipients
-# were not managed in Terraform at all, so only the account owner was emailed.
-#
-# No new no-default var — the betteruptime provider authenticates via the existing
-# var.betterstack_api_token (main.tf:66-68). ops@ is the operator's own contact
-# address, not a secret. role = "responder" is the provider default and free-tier
-# valid (Phase 0.1: schema — email required, role optional, team_name optional).
-# team_name = "Your team" mirrors every other team-scoped betteruptime resource in
-# this root (the global token routes to the named team — see soleur_apex above,
-# inngest.tf:120-129 for the case-sensitivity rationale).
-#
-# INERT until ops@ accepts the one-time invite (ops@'s own inbox — analogous to
-# OAuth consent). A pending (un-accepted) member receives no alerts; free-tier
-# non-owner routing is best-effort. Documented fallback if it proves owner-only:
-# betteruptime_outgoing_webhook forward or a Responder-tier upgrade (expense-gated).
 # #6604 — the DAILY /workspaces LUKS at-rest probe heartbeat (DP-10: the steady-state dead-probe
 # switch, distinct from the soak's log-line query). luks-monitor.sh pushes it once a day on a
 # fully-green escrow+header re-test, so a MISSED push (period 86400 + 1h grace) pages — a dead probe
@@ -659,10 +640,29 @@ resource "betteruptime_heartbeat" "inngest_luks_key_probe_deadman" {
   }
 }
 
-resource "betteruptime_team_member" "ops" {
-  email     = "ops@jikigai.com"
-  role      = "responder"
-  team_name = "Your team"
+# ── Better Stack alert recipient ops@jikigai.com (vendor-managed) ─────────────
+#
+# FORGOTTEN, NOT DESTROYED (2026-11-16). ops@jikigai.com is now the org's sole Admin, set
+# through the Better Stack web app; the account owner was moved to Billing admin, so only one
+# Responder seat is used. ops@ forwards to the Soleur inbox. BetterStackHQ/better-uptime
+# manages NON-ADMIN members only, and its Delete calls DELETE /api/v2/team-members?email=… —
+# deleting the resource block WITHOUT this removed block would delete the org's only Admin.
+# ops@'s Admin membership is drift outside IaC, recorded only by the vendor. No Terraform root
+# in this repo may declare a betteruptime_team_member again (FIX B (a) in
+# terraform-target-parity.test.ts pins that across every tracked .tf/.tf.json).
+# DO NOT `git revert` this change: a revert also deletes that test, and once the forget has
+# applied the restored `role = "responder"` resource would plan a CREATE against the Admin's
+# email. To manage a member again, start from an `import` block and a fresh review.
+#
+# Under -target a removed block is planned only when its address is targeted, so keep
+# `-target=betteruptime_team_member.ops` in the apply job's saved plan. Once the forget has
+# applied, both are inert tombstones (the inngest-host.tf #8754 precedent keeps them).
+removed {
+  from = betteruptime_team_member.ops
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── Cloudflare zone-level origin-5xx notification policy: NOT shipped ──────

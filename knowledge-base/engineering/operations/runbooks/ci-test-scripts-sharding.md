@@ -431,6 +431,31 @@ span to the NEXT registered mark.
   artifact); evidence posted as an issue comment. 1 floor row in the
   measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
   staged runs — no CI timing yet).
+- **2026-11-12 post-#12654 re-price + Lever-A re-rank (epic #11556 AC
+  chain):** five fresh green `merge_group` runs — 43308874521,
+  43286327218 (post-`34634d7431`), 43278615612, 43185108804, 43138951876 —
+  all 8 light + 3 heavy legs present per run (runs 43275115845 and
+  43272862450 had already lost their timing artifacts to expiry and
+  contribute nothing). `--drift-report`: 140 floor→measured rows and 2
+  measured-price breaches — `followthroughs/pr-battery-gate-saving-9323`
+  11,826→149,646 ms (12.6×) and `test/sync-pr-behind.test.sh`
+  32,366→161,367 ms (5.0×). Incumbent-manifest leg sums observed
+  371–2,469 s vs the 1,789 s perfect-bound — the skew the committed
+  prices hid. `--write --allow-growth` (32 violations acknowledged, the
+  gate's recorded channel): total measured weight 9.45 M→14.32 M ms,
+  42 rows re-seated, predicted legs 1,761–1,817 s (spread 89 s). The
+  stale `ci-push-dedupe-soak-9512` row reconciled 185,400→**81,308 ms**
+  (run medians 63,170 / 69,116 / 81,308 / 81,427 / 97,965 — the earlier
+  single-run observation of 80,676 ms was within noise of the median).
+  Heavy group: zero drift rows, no write. **Fresh top-15 suite medians
+  (ms):** test-all-group-affected 424,950; real-sdk-ask-probe-workflow
+  397,520; monitor-pr-checks 394,189; ci-head-verdict 357,205;
+  launch-check/issues-resume 296,569; git-commit-secret-scan 250,950;
+  test-all-infra-coverage-notice 231,458; destructive-command-guard-mutation
+  195,532; ci-push-dedupe 191,818; check-web-host-escrow-config 191,632;
+  git-data-birth-readiness-gate 184,390; playwright-mcp-redact-proxy
+  179,156; betterstack-roundtrip-latency 166,467; ship-phase-7-poll-fixtures
+  163,409; sync-pr-behind 161,367.
 - **2026-11-08 post-#12296 re-price (replay-a only, exemption dropped):**
   after the observation-window retirement, 3 green merge_group runs
   42447940669 / 42442159415 / 42439386564 carried arm medians (ms):

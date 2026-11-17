@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseFrontMatterSafe } from "@/server/front-matter-guard";
+import { CRON_GIT_CONFIG_PIN, withCronGitConfigPin } from "@/server/host-git";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
@@ -99,10 +100,11 @@ interface HandlerResult {
 
 function spawnGit(
   args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts?: { cwd?: string },
 ): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { stdio: "ignore", ...opts });
+    // #12757 — env after ...opts, built at call time (never a module-load snapshot).
+    const child = spawn("git", args, { stdio: "ignore", ...opts, env: { ...process.env, ...CRON_GIT_CONFIG_PIN } });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
   });
@@ -153,7 +155,7 @@ async function teardownEphemeralWorkspace(
  * spread — that would leak Doppler secrets into the child.
  */
 export function buildPublisherEnv(ghToken: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
+  return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     NODE_ENV: process.env.NODE_ENV,
@@ -161,11 +163,11 @@ export function buildPublisherEnv(ghToken: string): NodeJS.ProcessEnv {
     X_ALLOW_POST: "true",
     LINKEDIN_ALLOW_POST: "true",
     BSKY_ALLOW_POST: "true",
+    // Every key is present, an unset one as `undefined` (as the old loop did).
+    ...Object.fromEntries(PUBLISHER_ENV_KEYS.map((k) => [k, process.env[k]])),
+    // #12757 — LAST, so HOME's ~/.gitconfig and the system gitconfig are never read.
+    ...CRON_GIT_CONFIG_PIN,
   };
-  for (const key of PUBLISHER_ENV_KEYS) {
-    env[key] = process.env[key];
-  }
-  return env;
 }
 
 /**
@@ -202,7 +204,7 @@ async function spawnScriptCapture(
     const child = spawn("bash", [script, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts.cwd,
-      env: opts.env,
+      env: withCronGitConfigPin(opts.env),
     });
     let stdout = "";
     let stderr = "";

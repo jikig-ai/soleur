@@ -78,6 +78,11 @@ watches.
    `betteruptime_policy` arm requires the Responder seat ($29–34/mo) the
    operator declined at ADR-260. It is named, not built; the trigger remains
    ADR-260's revisit condition.
+
+   > **2026-11-16 (covers this item and the Alternatives row "Paid-tier escalation policy"):** a
+   > Responder seat is now billed (see `expenses.md` "Better Stack Responder"), so the premise
+   > "the seat the operator declined at ADR-260" no longer holds. The `betteruptime_policy` arm
+   > stays deferred as a scope decision (#12817).
 5. **The post-merge read lands in `postmerge` + a generic soak verifier.**
    `soleur:postmerge` Phase 3.9 is an advisory point read of the alert
    channels after the deploy verdict (report, never block);

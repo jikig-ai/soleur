@@ -35,6 +35,7 @@ import { inngest } from "@/server/inngest/client";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { reportSilentFallback } from "@/server/observability";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 const FUNCTION_NAME = "event-ship-merge";
 
@@ -88,6 +89,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -180,6 +182,7 @@ export async function eventShipMergeHandler({
             HOME: process.env.HOME,
             NODE_ENV: process.env.NODE_ENV,
             GH_TOKEN: installationToken,
+            ...CRON_GIT_CONFIG_PIN,
           },
         },
       );
@@ -194,6 +197,7 @@ export async function eventShipMergeHandler({
         HOME: process.env.HOME,
         NODE_ENV: process.env.NODE_ENV,
         GH_TOKEN: installationToken,
+        ...CRON_GIT_CONFIG_PIN,
       };
       const unshallow = await spawnSimple(
         "git",

@@ -146,6 +146,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -654,6 +655,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     X_API_SECRET: process.env.X_API_SECRET,
     X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,
     X_ACCESS_TOKEN_SECRET: process.env.X_ACCESS_TOKEN_SECRET,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 

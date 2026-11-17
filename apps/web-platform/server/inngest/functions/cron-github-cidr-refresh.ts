@@ -45,6 +45,7 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -120,12 +121,12 @@ async function setupEphemeralWorkspace(
   );
   const repoRoot = join(ephemeralRoot, "repo");
   await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, CRON_NAME);
-  const clone = await runProc("git", [
-    "clone",
-    "--depth=1",
-    buildAuthenticatedCloneUrl(token),
-    repoRoot,
-  ]);
+  // #12757 — a token-bearing clone must not read HOME's ~/.gitconfig (env built at call time).
+  const clone = await runProc(
+    "git",
+    ["clone", "--depth=1", buildAuthenticatedCloneUrl(token), repoRoot],
+    { env: { ...process.env, ...CRON_GIT_CONFIG_PIN } },
+  );
   if (clone.exitCode !== 0) {
     throw new Error(
       `git clone failed (exit ${clone.exitCode}) for ${REPO_OWNER}/${REPO_NAME}`,
@@ -190,6 +191,7 @@ async function refreshCidr(args: {
       HOME: process.env.HOME,
       META_JSON_FILE: metaPath,
       OUT: join(repoRoot, CIDR_FILE_REL),
+      ...CRON_GIT_CONFIG_PIN,
     },
   });
   // The temp /meta JSON has served its purpose — remove it regardless of outcome.
@@ -204,7 +206,7 @@ async function refreshCidr(args: {
   const status = await runProc(
     "git",
     ["status", "--porcelain=v1", "--", CIDR_FILE_REL],
-    { cwd: repoRoot },
+    { cwd: repoRoot, env: { ...process.env, ...CRON_GIT_CONFIG_PIN } },
   );
   if (status.exitCode !== 0) {
     throw new Error(`git status failed: ${status.stderr.slice(-2000)}`);

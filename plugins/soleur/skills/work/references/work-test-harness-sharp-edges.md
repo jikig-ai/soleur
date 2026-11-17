@@ -93,6 +93,8 @@ already carries — see
 
 - **A suite run is evidence for the tree it ran on — re-run the touched suites after the LAST edit of the commit, comment-only edits included.** A comment can trip a strict substring pin: a test-all.sh comment naming an array that contains a refused prefix turned the lint's unit suite red at the pushed head, after the suite had run green one edit earlier. **Why:** #12348/PR #12561 — all 11 escalation seats found it; see `knowledge-base/project/learnings/2026-11-11-each-fix-round-found-the-next-sibling-until-the-test-stated-its-residuals.md`.
 
+- **A mutation copy must assert the mutant's own failure line, not a non-zero rc — and must carry every file the original resolves.** A scratch copy that resolves `REPO` from its own location loses any lib extracted after it was written; it then fails for the missing file and stays green on rc alone. Rewrite `REPO` in the copy, pass each lib path, and grep for the specific line (`[FATAL] assertion floor`) plus the absence of unrelated `[FAIL]` rows. **Why:** #10479/PR #12737 — `mutate_floor_red` measured nothing after `logtail-pair-census.awk` was extracted. See `knowledge-base/project/learnings/2026-11-15-a-gate-on-one-boot-path-and-a-stripper-that-ate-live-claims.md`.
+
 ## `0 issues in 0 files` is a skipped lint, not a clean one
 
 `markdownlint-cli2` never reads a path matched by `.markdownlintignore` (for
@@ -101,3 +103,5 @@ Lint a `/var/tmp` copy with the pinned binary and `-c .markdownlint.json`, and
 confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
 `knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
 session error 5.
+
+- **A signal trap runs inside the redirections of the command it interrupted, when bash applied them itself** (a shell function, a builtin or a `{ }` group; an external command's redirect lives in the child, so the trap's fd 2 is untouched) — a handler that reports to fd 2 while `my_fn >/dev/null 2>&1` is in flight writes into /dev/null. Take a private dup at startup (`exec 9>&2`) and report on it (`printf '...\n' >&9`); close it for children that may daemonize (`9>&-`). **Why:** #12736 — the rotation script's partial-store report was silently lost on SIGTERM until a stub-driven signal row caught it. See `knowledge-base/project/learnings/2026-11-13-a-log-marker-gate-matched-the-echoed-workflow-source-and-a-trap-inherited-the-writes-redirect.md`.
