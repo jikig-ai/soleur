@@ -1,4 +1,5 @@
-import { reportSilentFallback } from "@/server/observability";
+import log from "@/server/logger";
+import { mirrorWithDebounce, reportSilentFallback } from "@/server/observability";
 
 /**
  * The ADR-044 repo-connection columns — authoritative on `workspaces` as of the
@@ -14,10 +15,8 @@ export type WorkspaceRepoCols = Partial<{
   repo_status: string;
   repo_last_synced_at: string | null;
   repo_error: string | null;
-  /** #12714 (migration 187): display-only held-files count, 0..10000, null = unknown. Service-client only. */
-  kb_sync_held_files: number | null;
-  /** #12714 (migration 187): when `kb_sync_held_files` was computed. */
-  kb_sync_held_checked_at: string | null;
+  // The #12714 held columns (migration 187) are deliberately NOT here (simplicity F6, D29(1), D33(2)): they have their
+  // own row type below, so folding them into the fail-closed repo write is a compile error, not a census regex.
 }>;
 
 interface ServiceClientLike {
@@ -107,52 +106,16 @@ export async function writeRepoColsToWorkspace(
   }
 }
 
-interface HeldClearClientLike {
-  from: (table: string) => {
-    update: (patch: Pick<WorkspaceRepoCols, "kb_sync_held_files" | "kb_sync_held_checked_at">) => {
-      eq: (col: string, val: string) => PromiseLike<{ error: unknown }>;
-    };
-  };
-}
-
 /**
- * #12714 (D29(1), D33(2)): null the held-files columns of the workspace, in a SEPARATE best-effort UPDATE that the
- * disconnect and setup routes run after their own repo-column write. A held count describes one connection, so it
- * must not reappear after a reconnect. Never throws: a failure (a missing column during an apply that lags, or after a
- * rollback) sends one mirror and leaves the route's status and response unchanged. A missing column also means no
- * count was ever stored, so nothing goes stale.
- */
-export async function clearKbSyncHeldCols(service: HeldClearClientLike, workspaceId: string): Promise<void> {
-  let failure: unknown = null;
-  try {
-    const { error } = await service
-      .from("workspaces")
-      .update({ kb_sync_held_files: null, kb_sync_held_checked_at: null })
-      .eq("id", workspaceId);
-    failure = error ?? null;
-  } catch (err) {
-    failure = err ?? new Error("clearKbSyncHeldCols rejected");
-  }
-  if (failure) {
-    reportSilentFallback(failure, {
-      feature: "workspace-repo-write",
-      op: "clear-kb-sync-held",
-      extra: { workspaceId },
-      message: "Failed to clear the held-files columns on the workspace",
-    });
-  }
-}
-
-/**
- * Why the self-heal is blocked from pulling (D42): the closed values of `workspaces.kb_sync_pull_blocked`, which lands
- * with WP3's amendment of migration 187.
+ * Why the self-heal is blocked from pulling (D42): the closed values of `workspaces.kb_sync_pull_blocked` (migration 187's
+ * named check).
  */
 export type KbSyncPullBlocked = "merge_conflict_precheck" | "untracked_collision";
 
 /**
- * The held-files write (frozen signature, review Phase 0): the count (null = unknown) and the instant it was computed,
- * always together. `pullBlocked` undefined leaves that column untouched; in Phase 0 the column does not exist yet, so
- * `pullBlocked` is accepted and never written (WP3 writes it).
+ * The held-files write (frozen signature, review Phase 0): the count (null = unknown) and the instant this run read the
+ * remote tip it was computed against (`RemoteState.readAt`, D39(f)), always together. `pullBlocked` undefined leaves
+ * that column untouched; a value or null writes it in the same guarded UPDATE (D42).
  */
 export interface KbSyncHeldPatch {
   heldFiles: number | null;
@@ -160,54 +123,126 @@ export interface KbSyncHeldPatch {
   pullBlocked?: KbSyncPullBlocked | null;
 }
 
-interface HeldWriteClientLike {
-  from: (table: string) => {
-    update: (patch: { kb_sync_held_files: number | null; kb_sync_held_checked_at: string }) => {
-      eq: (col: string, val: string) => {
-        select: (cols: string) => PromiseLike<{ data: Array<{ id: string }> | null; error: unknown }>;
-      };
-    };
-  };
+/** The migration-187 columns by name: the only row shape the held UPDATE takes. */
+interface KbSyncHeldRow {
+  kb_sync_held_files: number | null;
+  kb_sync_held_checked_at: string | null;
+  kb_sync_pull_blocked?: KbSyncPullBlocked | null;
+}
+
+interface HeldFilterLike {
+  eq: (col: string, val: string) => HeldFilterLike;
+  or: (filters: string) => HeldFilterLike;
+  select: (cols: string) => PromiseLike<{ data: Array<{ id: string }> | null; error: unknown }>;
+}
+
+interface HeldColsClientLike {
+  from: (table: string) => { update: (row: KbSyncHeldRow) => HeldFilterLike };
+}
+
+/** A PostgREST (`PGRST204`) or Postgres SQLSTATE (`42703`) code, or "none": the tag never carries free text. */
+function pgCodeOf(err: unknown): string {
+  const code = (err as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(code) ? code : "none";
+}
+
+const HELD_OP_MESSAGES = {
+  "kb-sync-held.write": "Failed to write the held-files count to the workspace",
+  "kb-sync-held.clear": "Failed to clear the held-files columns on the workspace",
+} as const;
+
+/**
+ * The ONE held-columns UPDATE body (simplicity F7) behind both the write and the clear. Never throws.
+ *   - `guardCheckedAt` set (the write): the row must be `repo_status = 'ready'` and its stored `checked_at` null or
+ *     older (D39(f)), so a stale run and a disconnected or re-cloning row are no-ops.
+ *   - 0 rows matched: expected (a newer or not-ready row, or a deleted workspace). One info line, no mirror.
+ *   - an error or a rejection: one pino line every time (layer 2), and one debounced Sentry event on a CONSTANT key
+ *     per op and pg code (obs F1), err null with `pg_code` in the tags (obs F9: an Error object would lose `op` to the
+ *     pino-mirror capture). A missing column (an apply that lags, or a rollback, D33) then costs one event per process
+ *     per window, not one per sync.
+ */
+async function updateKbSyncHeldCols(
+  service: HeldColsClientLike,
+  workspaceId: string,
+  row: KbSyncHeldRow,
+  op: keyof typeof HELD_OP_MESSAGES,
+  guardCheckedAt: string | null,
+): Promise<void> {
+  let failure: { pgCode: string; errName: string } | null = null;
+  try {
+    let q = service.from("workspaces").update(row).eq("id", workspaceId);
+    if (guardCheckedAt !== null) {
+      q = q
+        .eq("repo_status", "ready")
+        .or(`kb_sync_held_checked_at.is.null,kb_sync_held_checked_at.lt."${guardCheckedAt}"`);
+    }
+    const { data, error } = await q.select("id");
+    if (error) {
+      failure = { pgCode: pgCodeOf(error), errName: "PostgrestError" };
+    } else if (!data || data.length === 0) {
+      log.info({ op, workspaceId, outcome: "no_row" }, "Held-columns update matched no row (newer, not ready, or gone)");
+    }
+  } catch (err) {
+    failure = { pgCode: pgCodeOf(err), errName: err instanceof Error ? err.name : typeof err };
+  }
+  if (failure === null) return;
+  log.warn({ op, workspaceId, pgCode: failure.pgCode, errName: failure.errName }, HELD_OP_MESSAGES[op]);
+  mirrorWithDebounce(
+    null,
+    {
+      feature: "workspace-repo-write",
+      op,
+      message: HELD_OP_MESSAGES[op],
+      tags: { pg_code: failure.pgCode, err_name: failure.errName },
+      extra: { workspaceId, pgCode: failure.pgCode, errName: failure.errName },
+    },
+    op,
+    `${op}:${failure.pgCode}`,
+  );
 }
 
 /**
- * #12714 (D29(1), D33): write the held-files count and the time it was computed, after every sync that computed one
- * (`syncPush` from its `finally`, `syncPull` after its merge and adoption). A SEPARATE service-client UPDATE, never folded
- * into the `repo_last_synced_at` stamp, so a missing column (an apply that lags, or a rollback) fails only this write.
- * Written every time (no write-on-change map), so `kb_sync_held_checked_at` advances on an unchanged value too.
+ * #12714 (D29(1), D33(2), D42): null the held columns of the workspace (count, checked_at, pull-blocked), in a SEPARATE
+ * best-effort UPDATE that the disconnect and setup routes run apart from their own repo-column write. A held count
+ * describes one connection, so it must not reappear after a reconnect. No freshness guard: the clear always applies.
+ * Never throws: a failure (a missing column during an apply that lags, or after a rollback) is mirrored (debounced) and
+ * leaves the route's status and response unchanged. A missing column also means no count was ever stored.
+ */
+export async function clearKbSyncHeldCols(service: HeldColsClientLike, workspaceId: string): Promise<void> {
+  await updateKbSyncHeldCols(
+    service,
+    workspaceId,
+    { kb_sync_held_files: null, kb_sync_held_checked_at: null, kb_sync_pull_blocked: null },
+    "kb-sync-held.clear",
+    null,
+  );
+}
+
+/**
+ * #12714 (D29(1), D33, D39(b)/(f), D42): write the held-files count (null = a count was attempted and failed) and the
+ * instant the run read `T`, plus the pull-blocked reason when given. A SEPARATE service-client UPDATE, never folded into
+ * the `repo_last_synced_at` stamp, so a missing column fails only this write. Last writer wins by `checkedAt`, never by
+ * arrival: an older run, or a row that is not `ready` (disconnected, or re-cloning after a setup clear), matches 0 rows.
  *
- * Never throws: an error, a rejection or a 0-row match (the workspace was deleted mid-flight, or the id never existed)
- * sends one mirror, and the sync's result is unchanged. The caller passes the membership-verified workspace id it already
- * resolved (agent-runner), never a re-resolved or request-supplied one.
+ * R2 exemption (D45(b)): no workspace-membership re-check before this service-role write. The value is display-only,
+ * derived from the same workspace's own files, and read by no gate (test/kb-sync-held-readers-census.test.ts pins the
+ * readers); the `repo_status = 'ready'` guard is the added bound. The caller passes a server-resolved workspace id (the
+ * agent-runner's membership-verified one, or a background job's own row), never a request-supplied one.
+ *
+ * Never throws.
  */
 export async function writeKbSyncHeldCols(
-  service: HeldWriteClientLike,
+  service: HeldColsClientLike,
   workspaceId: string,
   patch: KbSyncHeldPatch,
 ): Promise<void> {
-  let failure: unknown = null;
-  let op = "write-kb-sync-held";
-  try {
-    const { data, error } = await service
-      .from("workspaces")
-      .update({ kb_sync_held_files: patch.heldFiles, kb_sync_held_checked_at: patch.checkedAt.toISOString() })
-      .eq("id", workspaceId)
-      .select("id");
-    if (error) {
-      failure = error;
-    } else if (!data || data.length === 0) {
-      failure = new Error(`writeKbSyncHeldCols matched 0 rows for workspace ${workspaceId}`);
-      op = "write-kb-sync-held.zero-rows";
-    }
-  } catch (err) {
-    failure = err ?? new Error("writeKbSyncHeldCols rejected");
+  if (!(patch.checkedAt instanceof Date) || Number.isNaN(patch.checkedAt.getTime())) {
+    // A caller bug, not a database state: no instant to order by, so nothing is written (never throws).
+    log.warn({ op: "kb-sync-held.write", workspaceId }, "Held-files write skipped: checkedAt is not a valid instant");
+    return;
   }
-  if (failure) {
-    reportSilentFallback(failure, {
-      feature: "workspace-repo-write",
-      op,
-      extra: { workspaceId },
-      message: "Failed to write the held-files count to the workspace",
-    });
-  }
+  const checkedAt = patch.checkedAt.toISOString();
+  const row: KbSyncHeldRow = { kb_sync_held_files: patch.heldFiles, kb_sync_held_checked_at: checkedAt };
+  if (patch.pullBlocked !== undefined) row.kb_sync_pull_blocked = patch.pullBlocked;
+  await updateKbSyncHeldCols(service, workspaceId, row, "kb-sync-held.write", checkedAt);
 }

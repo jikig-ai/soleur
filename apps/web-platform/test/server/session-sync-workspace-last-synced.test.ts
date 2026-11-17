@@ -29,6 +29,7 @@ const {
   mockCompute,
   mockRecovered,
   mockReport,
+  mockMirror,
 } = vi.hoisted(() => {
   const mockTenantUpdateEq = vi.fn().mockResolvedValue({ error: null });
   const mockTenantUpdate = vi.fn(() => ({ eq: mockTenantUpdateEq }));
@@ -54,6 +55,7 @@ const {
     mockCompute: vi.fn(),
     mockRecovered: vi.fn(),
     mockReport: vi.fn(),
+    mockMirror: vi.fn(),
   };
 });
 
@@ -101,7 +103,7 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReport,
   warnSilentFallback: vi.fn(),
   mirrorWarnWithDebounce: mockMirrorWarn,
-  mirrorWithDebounce: vi.fn(),
+  mirrorWithDebounce: mockMirror,
   hashUserId: (s: string) => `hash(${s})`,
 }));
 
@@ -401,7 +403,8 @@ describe("held-files write (TW2)", () => {
     } as never;
     mockPublish.mockImplementationOnce(publishWith({ result: { kind: "pushed" } }));
     await expect(syncPush(USER_ID, WS_PATH, failing, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
-    const heldMirrors = mockReport.mock.calls.filter(([, o]) => String(o?.op).startsWith("write-kb-sync-held"));
+    // The held write mirrors through the debounced helper (obs F1), op `kb-sync-held.write` (pattern P3-17).
+    const heldMirrors = mockMirror.mock.calls.filter(([, o]) => o?.op === "kb-sync-held.write");
     expect(heldMirrors).toHaveLength(1);
     expect(mockReport.mock.calls.filter(([, o]) => o?.op === "syncPush")).toHaveLength(0);
   });
@@ -471,7 +474,7 @@ describe("held-files write (TW2)", () => {
       checkedAt: "2026-11-17T10:00:00.000Z",
     });
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
-    expect(mockReport.mock.calls.filter(([, o]) => String(o?.op).startsWith("write-kb-sync-held"))).toHaveLength(1);
+    expect(mockMirror.mock.calls.filter(([, o]) => o?.op === "kb-sync-held.write")).toHaveLength(1);
     expect(mockReport.mock.calls.filter(([, o]) => o?.op === "syncPull")).toHaveLength(0);
   });
 });

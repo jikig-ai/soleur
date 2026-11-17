@@ -260,8 +260,13 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
       repo_error: null,
     });
     expect(writes.some((w) => w.repo_status === "error")).toBe(false);
-    // #12714 (D33(2)): the held columns are nulled by the separate best-effort clear, after the restore.
-    expect(mockClearKbSyncHeldCols).toHaveBeenCalledWith(expect.anything(), "user-1");
+    // #12714 (D33(2)): the held columns are nulled by the separate best-effort clear, after the restore. Two clears: the
+    // cloning flip's and the reaped-clone arm's (tests F8: a call-count, so deleting the reaped arm's clear reds).
+    expect(mockClearKbSyncHeldCols).toHaveBeenCalledTimes(2);
+    expect(mockClearKbSyncHeldCols.mock.calls[1]).toEqual([expect.anything(), "user-1"]);
+    expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      mockClearKbSyncHeldCols.mock.invocationCallOrder[1],
+    );
   });
 
   test("any OTHER background provisioning failure is still reported and written as `error`", async () => {

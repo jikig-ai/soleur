@@ -164,11 +164,6 @@ export async function DELETE(request: Request) {
     );
   }
 
-  // #12714 (D29(1), D33(2)): the held-files count describes this connection, so it must not reappear after a
-  // reconnect. A SEPARATE best-effort UPDATE after the clear above: it never throws, and a failure (a missing column)
-  // sends one mirror and leaves this route's status and response unchanged.
-  await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
-
   // The provisioning/readiness columns (`workspace_status`, `health_snapshot`)
   // are NOT relocated by ADR-044 — reset them on the caller's `users` row only for
   // a SOLO disconnect. For a team disconnect, resetting the (owner) caller's
@@ -209,6 +204,13 @@ export async function DELETE(request: Request) {
   await drainBeforeReap(() => waitForWorkspaceSessionsToDeregister(activeWorkspaceId), logger, {
     workspaceIdHash,
   });
+
+  // #12714 (D29(1), D33(2), D39(f), D42): the held-files columns describe this connection, so they must not reappear
+  // after a reconnect. Cleared AFTER the drain (history H2: a sync that already read its installation could otherwise
+  // write a count back after an earlier clear; `repo_status = 'not_connected'` above already makes any later held
+  // write a no-op) and BEFORE the reap. A SEPARATE best-effort UPDATE: it never throws, and a failure (a missing
+  // column) sends one debounced mirror and leaves this route's status and response unchanged.
+  await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
 
   // Best-effort workspace cleanup — deleteWorkspace derives the paths from every
   // tenant root + the workspace identifier and handles non-existent directories.

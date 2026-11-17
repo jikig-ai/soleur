@@ -16,6 +16,7 @@ const {
   mockAbortAllSessionsForWorkspace,
   mockWaitForWorkspaceSessions,
   mockReportSilentFallback,
+  mockMirrorWithDebounce,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockAbortAllSessionsForWorkspace: vi.fn(),
   mockWaitForWorkspaceSessions: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockMirrorWithDebounce: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -62,6 +64,7 @@ vi.mock("@/server/workspace-repo-mirror", async (importOriginal) => ({
 vi.mock("@/server/observability", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/observability")>()),
   reportSilentFallback: mockReportSilentFallback,
+  mirrorWithDebounce: mockMirrorWithDebounce,
 }));
 
 // ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
@@ -140,8 +143,9 @@ function setupServiceMocks(opts: {
   heldUpdateError?: { message: string; code?: string } | null;
 }) {
   const { repoStatus = "ready", selectError = null, updateError = null, heldUpdateError = null } = opts;
-  // #12714 (D33(2)): the separate best-effort held-column UPDATE on `workspaces`.
-  const mockHeldUpdateEq = vi.fn().mockResolvedValue({ error: heldUpdateError });
+  // #12714 (D33(2)): the separate best-effort held-column UPDATE on `workspaces` (`update(row).eq("id", id).select("id")`).
+  const mockHeldSelect = vi.fn().mockResolvedValue({ data: heldUpdateError ? null : [{ id: "ws" }], error: heldUpdateError });
+  const mockHeldUpdateEq = vi.fn(() => ({ select: mockHeldSelect }));
   const mockHeldUpdate = vi.fn(() => ({ eq: mockHeldUpdateEq }));
 
   const selectChain = mockQueryChain(
@@ -590,15 +594,25 @@ describe("DELETE /api/repo/disconnect — held-files columns (#12714)", () => {
   });
 
   const heldMirrors = () =>
-    mockReportSilentFallback.mock.calls.filter((c) => (c[1] as { op?: string } | undefined)?.op === "clear-kb-sync-held");
+    mockMirrorWithDebounce.mock.calls.filter((c) => (c[1] as { op?: string } | undefined)?.op === "kb-sync-held.clear");
 
-  test("nulls both held columns on the active workspace, in its own UPDATE after the repo-column clear", async () => {
+  test("nulls the held columns on the active workspace, in its own UPDATE after the drain and before the reap (D39(f))", async () => {
     const { mockHeldUpdate, mockHeldUpdateEq } = setupServiceMocks({});
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
-    expect(mockHeldUpdate).toHaveBeenCalledWith({ kb_sync_held_files: null, kb_sync_held_checked_at: null });
+    expect(mockHeldUpdate).toHaveBeenCalledWith({
+      kb_sync_held_files: null,
+      kb_sync_held_checked_at: null,
+      kb_sync_pull_blocked: null,
+    });
     expect(mockHeldUpdateEq).toHaveBeenCalledWith("id", TEAM_WORKSPACE_ID);
-    expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder[0]).toBeLessThan(mockHeldUpdate.mock.invocationCallOrder[0]);
+    const heldAt = mockHeldUpdate.mock.invocationCallOrder[0];
+    expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    // History H2: an in-flight sync that already read its installation could repopulate a count cleared earlier, so
+    // the clear runs after the sessions are aborted and drained, and before the workspace is deleted.
+    expect(mockAbortAllSessionsForWorkspace.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    expect(mockWaitForWorkspaceSessions.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    expect(heldAt).toBeLessThan(mockDeleteWorkspace.mock.invocationCallOrder[0]);
     expect(heldMirrors()).toHaveLength(0);
   });
 

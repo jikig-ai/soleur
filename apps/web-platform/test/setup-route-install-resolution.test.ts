@@ -83,6 +83,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  mirrorWithDebounce: vi.fn(),
 }));
 
 vi.mock("@/server/userid-pseudonymize", () => ({
@@ -181,8 +182,10 @@ function setupServiceClient() {
           const chain: Record<string, unknown> = {
             eq: (_col: string, id: string) => {
               workspacesUpdateCalls.push({ patch, id });
-              // #12714 (D33(2)): the held clear awaits `.eq(...)` directly.
-              if ("kb_sync_held_files" in patch) return Promise.resolve({ error: heldUpdateError });
+              // #12714 (D33(2)): the held clear is `.eq("id", id).select("id")`, resolving to the matched rows.
+              if ("kb_sync_held_files" in patch) {
+                return { select: async () => ({ data: heldUpdateError ? null : [{ id }], error: heldUpdateError }) };
+              }
               return chain;
             },
             neq: () => chain,
@@ -368,7 +371,7 @@ describe("POST /api/repo/setup — install resolution", () => {
     // synchronous `await POST` does not await — asserting its value would race).
   });
 
-  test("#12714 (D29(1), D33(2)): after the cloning flip, a SEPARATE update nulls both held columns; the flip payload is unchanged", async () => {
+  test("#12714 (D29(1), D33(2), D42): after the cloning flip, a SEPARATE update nulls the held columns; the flip payload is unchanged", async () => {
     storedInstallationId = 999;
     mockResolveReachable.mockResolvedValue([999]);
     mockResolveOwning.mockResolvedValue(999);
@@ -383,7 +386,7 @@ describe("POST /api/repo/setup — install resolution", () => {
     expect(workspacesUpdateCalls[flipIdx].patch).not.toHaveProperty("kb_sync_held_checked_at");
     expect(heldIdx).toBeGreaterThan(flipIdx);
     expect(workspacesUpdateCalls[heldIdx]).toEqual({
-      patch: { kb_sync_held_files: null, kb_sync_held_checked_at: null },
+      patch: { kb_sync_held_files: null, kb_sync_held_checked_at: null, kb_sync_pull_blocked: null },
       id: "user-1",
     });
   });
@@ -397,9 +400,9 @@ describe("POST /api/repo/setup — install resolution", () => {
     const res = await POST(makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "cloning" });
-    const { reportSilentFallback } = await import("@/server/observability");
-    const held = vi.mocked(reportSilentFallback).mock.calls.filter(
-      (c) => (c[1] as { op?: string } | undefined)?.op === "clear-kb-sync-held",
+    const { mirrorWithDebounce } = await import("@/server/observability");
+    const held = vi.mocked(mirrorWithDebounce).mock.calls.filter(
+      (c) => (c[1] as { op?: string } | undefined)?.op === "kb-sync-held.clear",
     );
     expect(held).toHaveLength(1);
   });

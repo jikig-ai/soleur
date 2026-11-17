@@ -61,7 +61,7 @@ type Role = { role: string; required: boolean };
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
   "server/workspace-repo-mirror.ts": {
-    role: "type: WorkspaceRepoCols; writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (each sync, D29(1))",
+    role: "type: KbSyncHeldRow (never WorkspaceRepoCols); writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (the held-count path, D29(1), D39)",
     required: true,
   },
   "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
@@ -95,10 +95,14 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect([...refresh.matchAll(/\bwriteKbSyncHeldCols\(/g)]).toHaveLength(1);
     expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service,\s*workspaceId,\s*\{\s*heldFiles: held\.total,\s*checkedAt: new Date\(held\.checkedAt\)\s*\}\s*\)/);
     expect(refresh).not.toMatch(/writeRepoColsToWorkspace/);
-    // workspace-repo-mirror.ts maps the patch to exactly the two migration-187 columns.
-    expect(sources.get("server/workspace-repo-mirror.ts") ?? "").toMatch(
-      /\.update\(\{\s*kb_sync_held_files: patch\.heldFiles,\s*kb_sync_held_checked_at: patch\.checkedAt\.toISOString\(\)\s*\}\)/,
+    // workspace-repo-mirror.ts maps the patch to the migration-187 columns (the pull-blocked one only when given, D42),
+    // in the one shared held UPDATE body (simplicity F7).
+    const mirror = sources.get("server/workspace-repo-mirror.ts") ?? "";
+    expect(mirror).toMatch(
+      /const row: KbSyncHeldRow = \{\s*kb_sync_held_files: patch\.heldFiles,\s*kb_sync_held_checked_at: checkedAt\s*\};/,
     );
+    expect(mirror).toMatch(/if \(patch\.pullBlocked !== undefined\) row\.kb_sync_pull_blocked = patch\.pullBlocked;/);
+    expect([...mirror.matchAll(/\.update\(row\)/g)]).toHaveLength(1);
     const src = sources.get("server/session-sync.ts") ?? "";
     // session-sync reaches the held write only through the moved helper, never writeKbSyncHeldCols directly.
     expect(src).not.toMatch(/\bwriteKbSyncHeldCols\b/);
