@@ -1,6 +1,10 @@
 // Called only by the disposable local PostgreSQL fixture.
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import postgres from '../node_modules/postgres/src/index.js';
 import { readLocalRoleBindings, inspectBoundRoles } from './holder-evidence-db-runner.mjs';
 import { readLocalRosterBindings, inspectBoundRoster } from './holder-evidence-db-roster.mjs';
@@ -365,10 +369,23 @@ try {
   }
   // Compare natural completion with a canceled query in this disposable
   // fixture. Cancellation must not count as delivery of a completed cursor.
+  const guardDir = await mkdtemp(join(tmpdir(), 'synthetic-collector-guard-'));
+  const guardPath = join(guardDir, 'fixture.sqlite');
+  const guardScript = fileURLToPath(new URL('./holder-evidence-guard-fixture.py', import.meta.url));
+  const guard = operation => {
+    const result = spawnSync('python3', [guardScript, guardPath, operation], {
+      encoding: 'utf8', timeout: 5000, maxBuffer: 4096, env: { PATH: '/usr/bin:/bin' },
+    });
+    assert.equal(result.status, 0, `synthetic guard operation failed: ${operation}`);
+    return JSON.parse(result.stdout);
+  };
+  assert.equal(guard('initialize').state, 'active');
+  try {
   for (const cancelAfterTimeout of [false, true]) {
     const lateClient = postgres({ host: '127.0.0.1', port: 5432, socket, database: databaseName,
       username: 'postgres', password, max: 1, connect_timeout: 5 });
     let lateArms = 0, lateTransaction, lateIdentity, lateCursorError, lateDelivered = false;
+    let guardAttempts = 0, guardResult, guardError;
     const late = { begin: (mode, callback) => {
       lateTransaction = lateClient.begin(mode, async tx => {
         const rows = await tx.unsafe("SELECT pg_backend_pid() AS pid, to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US') AS started FROM pg_stat_activity WHERE pid=pg_backend_pid()");
@@ -378,10 +395,17 @@ try {
           lateArms++;
           if (lateArms !== 1) return sp.unsafe(sql);
           return { cursor(size) {
-            const cursor = sp.unsafe('SELECT pg_sleep(2)').cursor(size);
+            const cursor = sp.unsafe('SELECT pg_sleep(4)').cursor(size);
             return (async function* () {
               try {
-                for await (const batch of cursor) { lateDelivered = true; yield batch; }
+                for await (const batch of cursor) {
+                  lateDelivered = true;
+                  if (!cancelAfterTimeout) {
+                    guardAttempts++;
+                    try { guardResult = guard('write'); } catch (error) { guardError = error; }
+                  }
+                  yield batch;
+                }
               } catch (error) {
                 lateCursorError = error.code;
                 throw error;
@@ -393,11 +417,12 @@ try {
       return lateTransaction;
     } };
     try {
-      const pending = bundled.inspectBundledRoster(late, bundle.queries, { timeoutMs: 600 });
+      const trackedLate = trackInspectionTransaction(late, db => bundled.inspectBundledRoster(db, bundle.queries, { timeoutMs: 1500 }));
+      const pending = trackedLate.inspection;
       let observed = false;
-      for (let attempt = 0; attempt < 100; attempt++) {
+      for (let attempt = 0; attempt < 200; attempt++) {
         if (lateIdentity && lateArms === 1) {
-          const rows = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(2)'", [lateIdentity.pid, lateIdentity.started]);
+          const rows = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(4)'", [lateIdentity.pid, lateIdentity.started]);
           if (rows[0].count === 1) { observed = true; break; }
         }
         await new Promise(resolve => setTimeout(resolve, 5));
@@ -406,21 +431,40 @@ try {
       const lateResult = await pending;
       assert.equal(lateResult.roles.state, 'failed');
       assert.equal(lateResult.backend_stop, 'unknown');
+      assert.equal(lateResult.writer_clearance, false);
       assert.equal(lateDelivered, false);
+      const activeAfterDeadline = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(4)'", [lateIdentity.pid, lateIdentity.started]);
+      assert.equal(activeAfterDeadline[0].count, 1);
+      if (!cancelAfterTimeout) {
+        assert.equal(guard('quarantine').state, 'quarantined');
+        assert.equal(guard('inspect').writes, 0);
+      }
       if (cancelAfterTimeout) {
         // PID-only cancellation is confined to this owned test server. The
         // preceding observation is not an atomic production identity fence.
-        const active = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(2)'", [lateIdentity.pid, lateIdentity.started]);
+        const active = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(4)'", [lateIdentity.pid, lateIdentity.started]);
         assert.equal(active[0].count, 1);
         assert.equal((await database.unsafe('SELECT pg_cancel_backend($1) AS canceled', [lateIdentity.pid]))[0].canceled, true);
       }
       let timer;
       const outcome = await Promise.race([
         lateTransaction.then(() => 'unexpected_success', error => error.message),
-        new Promise(resolve => { timer = setTimeout(() => resolve('settlement_timeout'), 4000); }),
+        new Promise(resolve => { timer = setTimeout(() => resolve('settlement_timeout'), 6000); }),
       ]).finally(() => clearTimeout(timer));
       assert.equal(outcome, 'deadline');
+      const settlement = await trackedLate.settlement;
+      assert.equal(settlement.state, 'rejected');
+      assert.equal(settlement.backend_stop, 'unknown');
+      assert.equal(settlement.writer_clearance, false);
       assert.equal(lateDelivered, !cancelAfterTimeout);
+      if (!cancelAfterTimeout) {
+        assert.equal(guardAttempts, 1);
+        assert.equal(guardError, undefined);
+        assert.equal(guardResult?.state, 'rejected');
+        assert.equal(guardResult?.backend_stop, 'unknown');
+        assert.equal(guardResult?.writer_clearance, false);
+      }
+      assert.equal(guard('inspect').writes, 0);
       assert.equal(lateCursorError, cancelAfterTimeout ? '57014' : undefined);
       assert.equal(lateArms, 1);
       assert.equal((await database.unsafe('SELECT 1 AS healthy'))[0].healthy, 1);
@@ -428,6 +472,15 @@ try {
       await lateClient.end({ timeout: 0 });
     }
   }
+  // The opposite sequential ordering must retain the prior synthetic write
+  // while refusing subsequent writes with the now-stale epoch.
+  await rm(guardPath);
+  assert.equal(guard('initialize').state, 'active');
+  assert.equal(guard('write').state, 'written');
+  assert.equal(guard('quarantine').state, 'quarantined');
+  assert.equal(guard('write').state, 'rejected');
+  assert.equal(guard('inspect').writes, 1);
+  } finally { await rm(guardDir, { recursive: true, force: true }); }
   const cancellable = postgres({ host: '127.0.0.1', port: 5432, socket, database: databaseName,
     username: 'postgres', password, max: 1, connect_timeout: 5,
     connection: { application_name: 'synthetic-cancel-probe' } });

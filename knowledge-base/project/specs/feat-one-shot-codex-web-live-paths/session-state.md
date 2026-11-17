@@ -4253,6 +4253,23 @@
   message-error handler is outside the wrapper, and non-bootstrap in-flight
   callers, registration ordering and real proxy transport remain unfenced.
   The reviewer did not run tests. These changes confer no gate clearance.
+- A disposable PostgreSQL test now combines the bundled roster collector and
+  its transaction tracker with a separate-process SQLite test guard. It checks
+  that the query remains active after the public deadline, commits synthetic
+  quarantine, and observes a rejected late write and zero retained writes.
+  A separate sequential positive control writes under an active epoch before
+  quarantining and confirms a stale later write is rejected. An independent
+  reviewer caught an assertion swallowed by the collector; it now records the
+  attempt and checks it after settlement, and a forced guard failure made the
+  fixture fail. The reviewer did not run tests. This is not a cross-process
+  contention test or a production authority, vault, backend-stop or clearance
+  proof; real authentication, anti-rollback and independent write fencing
+  remain open. After the original Node fixture passed, the helper was changed
+  to Python SQLite for compatibility with the application's declared Node
+  range; the complete disposable PostgreSQL fixture passed again. Its first
+  rerun failed before setup because the local PostgreSQL image was missing;
+  restoring the image allowed the rerun. No live collection or Firestore
+  write was performed.
 
 ### Earlier local experiments — 2026-11-06
 
