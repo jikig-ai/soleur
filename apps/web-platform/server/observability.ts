@@ -421,7 +421,8 @@ export function infoSilentFallback(
  *   `kb-sync.push-held`; dedup key is the WORKSPACE id, not a userId, so each workspace gets one slot per reason).
  *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
  *   `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
- *   `side_ahead`, `side_pr_unknown` (D23: the D17 PR re-check GET failed, any cause; nothing is created). The info-only
+ *   `side_ahead`, `side_not_kb_only` (#12718 D28(2): a present side tip changes files outside knowledge-base/, so the push never
+ *   builds on it), `side_pr_unknown` (D23: the D17 PR re-check GET failed, any cause; nothing is created). The info-only
  *   reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`, `side_pending` (D5b/D17: the side
  *   branch already carries HEAD's KB and its PR is open, or merged on that tip), `side_declined` (D17: the Owner closed the PR
  *   on that exact side tip, never reopened), `side_pr_created` (D23: the D17 re-check opened the missing PR; nothing was
@@ -443,6 +444,16 @@ export function infoSilentFallback(
  *   retried next turn. Also `kb-sync-persistent-other` (ERROR-level via `mirrorWithDebounce`, op
  *   `kb-sync.protected-fallback-failed`, workspace-id key, tag `reason=persistent_other`; D21): a non-protection persistent
  *   reject (`shallow update not allowed`) that the next turn hits again.
+ *   Also `kb-sync-pull-held:<reason>` (#12718, warn-level via `mirrorWarnWithDebounce`, op `kb-sync.pull-held`, workspace-id
+ *   key, tags `reason` and, for a fetch-stage reason, `ref` = default | side; D25(6)): the session-start pull on the hardened
+ *   arm did not simply merge. Reasons with a Sentry event: `remote_state`, `fetch_failed`, `isolated_refused`,
+ *   `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`, `handover_too_large`, `unresolved_merge`,
+ *   `merge_conflict`, `merge_refused`, `autostash_conflict`, `side_not_kb_only`, `side_pr_unknown` (and
+ *   `merge_conflict_precheck`, the self-heal's, which reports on `self-heal-aborted-held-commits` instead). The info-only
+ *   reasons (`up_to_date`, `merged`, `non_default_branch`, `side_declined`, `side_pr_created`, `side_linked`,
+ *   `side_conflict`) never reach this map; the `KB_PULL_HELD_MESSAGES` Record in kb-sync-pull.ts holds an explicit `null`
+ *   for each. Every reason writes its pino line (layer 2) before the debounce (`reportPullHeld` in session-sync.ts), one
+ *   per run.
  * - `kb-route-helpers` self-heal family (#12600, CTO rulings D7, D15(e), D20; server/workspace-sync.ts
  *   `selfHealNonFastForward`). The dedup key is the WORKSPACE PATH, an in-process token only, never emitted. Warn-level via
  *   `mirrorWarnWithDebounce` (designed holds the next session-start pull resolves): `self-heal-aborted-dirty-tracked`,

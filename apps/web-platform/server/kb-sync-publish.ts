@@ -21,6 +21,7 @@ import {
   IDENTITY_PREFIX,
   isAncestor,
   isCommitPresent,
+  isKbOnlySide,
   KbObjectsError,
   kbOf,
   mktreeInput,
@@ -114,6 +115,7 @@ export type KbPushHeldReason =
   | "ref_update_failed"
   | "unpack_failed"
   | "side_ahead"
+  | "side_not_kb_only"
   | "side_pending"
   | "side_declined"
   | "side_pr_unknown"
@@ -140,6 +142,7 @@ const HELD_WARN_MESSAGES: Record<KbPushHeldReason, string | null> = {
   unpack_failed: "KB sync held: the object hand-over to the workspace failed",
   side_ahead: "KB sync held: the side branch holds knowledge-base content the workspace has not seen",
   side_pr_unknown: "KB sync held: the side branch's pull request could not be checked",
+  side_not_kb_only: "KB sync held: the side branch changes files outside knowledge-base",
   remote_unknown_tip: null,
   remote_ahead: null,
   side_pending: null,
@@ -487,15 +490,17 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   const P = remote.sideTip;
   let parents: string[] = [T];
   if (P !== null) {
-    // Phase 9 (D5e/D6c): a side tip absent from the workspace is adopted on the PULL side (fetched with server-owned have
-    // refs, handed over, merged while its PR is open). Until then the push side holds the turn: `side_ahead`.
+    // D28(6): a side tip absent from the workspace holds the turn (`side_ahead`); the next session-start pull adopts it
+    // (server/kb-sync-pull.ts `adoptSideTip`: fetched with server-owned have refs, KB-only gated, handed over, merged).
     if (!(await isCommitPresent(isolated, P))) throw new KbHeld("side_ahead");
     const pV = await readVerified(isolated, P);
     if (!pV) return fail("side_hash_mismatch");
+    // D28(2): a present P that changes anything outside knowledge-base/ is never built on.
+    if (!(await isKbOnlySide(isolated, T, P))) throw new KbHeld("side_not_kb_only");
     const pKb = kbOf(pV.root);
     const tKb = kbOf(tV.root);
     const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
-    // Phase 9 (D5e/D6c): with no open PR, an abandoned P becomes a parent instead of a hold; here it is the interim refusal.
+    // D28(6): a P not in HEAD's history (and not merged) also holds `side_ahead`; the next session-start pull adopts it.
     if (!prMerged && !(await isAncestor(isolated, P, headSha))) throw new KbHeld("side_ahead");
     parents = pV.commit.parents.includes(T) || (await isAncestor(isolated, T, P)) ? [P] : [P, T];
   }

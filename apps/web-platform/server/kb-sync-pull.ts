@@ -16,7 +16,7 @@ import { HEX40 } from "./approval/workspace-head";
 import { runIsolatedGitLocal } from "./git-isolated-local";
 import type { IsolatedPushDirHandle } from "./git-isolated-push-dir";
 import { KB_ROOT } from "./kb-root";
-import { commitTree, handOver, isAncestor, isCommitPresent, readVerified, sameKb } from "./kb-sync-objects";
+import { commitTree, handOver, isAncestor, isCommitPresent, isKbOnlySide, readVerified, sameKb } from "./kb-sync-objects";
 import { fetchIntoIsolated, KB_SYNC_SIDE_BRANCH, KbRemoteError, readRemoteState, type RemoteState } from "./kb-sync-remote";
 import { createKbSyncPr, readSidePrState } from "./kb-sync-side-pr";
 
@@ -331,13 +331,7 @@ export async function adoptSideTip(input: AdoptSideInput): Promise<KbPullStep | 
     if (sameKb(pV.root, tV.root)) return null;
 
     // 2. The KB-only gate (D28(2)), token-free.
-    const base = await runIsolatedGitLocal(isolated, ["merge-base", T, P]);
-    const mergeBase = base.stdout.toString("utf8").trim();
-    if (base.code === 1) return step("side_not_kb_only");
-    if (base.code !== 0 || !HEX40.test(mergeBase)) return step("handover_failed");
-    const diff = await runIsolatedGitLocal(isolated, ["diff", "--quiet", "--no-renames", mergeBase, P, "--", ".", `:(exclude)${KB_ROOT}/`]);
-    if (diff.code === 1) return step("side_not_kb_only");
-    if (diff.code !== 0) return step("handover_failed");
+    if (!(await isKbOnlySide(isolated, T, P))) return step("side_not_kb_only");
 
     // 3. The PR table (D17, D28(3)).
     const pr = await readSidePrState(input.installationId, input.owner, input.repo, D, P);

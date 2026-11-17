@@ -185,3 +185,20 @@ export async function handOver(
     throw new KbObjectsError("unpack_failed");
   }
 }
+
+/**
+ * The KB-only gate of a side tip (D28(2)), token-free: `P` changes nothing outside `knowledge-base/` since its merge base
+ * with `T`: `diff --quiet --no-renames <merge-base(T,P)> <P> -- . ':(exclude)knowledge-base/'`. Unrelated histories fail
+ * the gate. Anyone with push access to `soleur/kb-sync` could otherwise land code in every workspace past branch
+ * protection. A child that could not run is `local_git_failed`.
+ */
+export async function isKbOnlySide(isolated: IsolatedPushDirHandle, T: string, P: string): Promise<boolean> {
+  const base = await runIsolatedGitLocal(isolated, ["merge-base", T, P]);
+  const mergeBase = base.stdout.toString("utf8").trim();
+  if (base.code === 1) return false;
+  if (base.code !== 0 || !HEX40.test(mergeBase)) throw new KbObjectsError("local_git_failed");
+  const diff = await runIsolatedGitLocal(isolated, ["diff", "--quiet", "--no-renames", mergeBase, P, "--", ".", `:(exclude)${KB_ROOT}/`]);
+  if (diff.code === 1) return false;
+  if (diff.code !== 0) throw new KbObjectsError("local_git_failed");
+  return true;
+}

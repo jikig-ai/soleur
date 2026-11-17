@@ -1169,9 +1169,9 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     row = newRow({ protectedMain: true });
     const dir = mkdtempSync(join(row.root, "pr-"));
     execFileSync("git", ["clone", "-q", `file://${row.remote}`, dir], { env: fixtureEnv(row.root), stdio: "pipe" });
-    write(join(dir, "README.md"), "side-only readme\n");
-    git(dir, "add", "-A");
-    git(dir, "commit", "-q", "-m", "older side");
+    // #12718 D28(2): an empty side commit (its KB equals T's, and it changes nothing outside knowledge-base/, so it passes
+    // the KB-only gate; a non-KB change is the side_not_kb_only row below)
+    git(dir, "commit", "-q", "--allow-empty", "-m", "older side");
     git(dir, "push", "-q", "origin", "HEAD:refs/heads/soleur/kb-sync");
     const P = remoteSide(row) as string;
     // P present in the workspace (D5d: the push side never fetches it)
@@ -1182,6 +1182,23 @@ describe("protected default branch: side commit on soleur/kb-sync (real git, rea
     expect(side).not.toBe(P);
     expect(gitOk(row.remote, "merge-base", "--is-ancestor", P, side)).toBe(true);
     expect(git(row.remote, "show", `${side}:knowledge-base/a.md`)).toBe("a\nkb");
+  });
+
+  test("D28(2)/(6): a present side tip that changes a file outside knowledge-base/ -> side_not_kb_only, never built on", async () => {
+    row = newRow({ protectedMain: true });
+    const dir = mkdtempSync(join(row.root, "pr-"));
+    execFileSync("git", ["clone", "-q", `file://${row.remote}`, dir], { env: fixtureEnv(row.root), stdio: "pipe" });
+    write(join(dir, "README.md"), "side-only readme\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "side with code");
+    git(dir, "push", "-q", "origin", "HEAD:refs/heads/soleur/kb-sync");
+    const P = remoteSide(row) as string;
+    git(row.ws, "fetch", "-q", "origin", "refs/heads/soleur/kb-sync");
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await run(row);
+    expect(remoteSide(row)).toBe(P);
+    expect(heldLines()).toEqual(["side_not_kb_only"]);
+    expect(heldWarn("side_not_kb_only")).toHaveLength(1);
   });
 });
 
