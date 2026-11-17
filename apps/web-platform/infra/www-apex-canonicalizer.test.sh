@@ -77,7 +77,6 @@ REDIR_TF="$SCRIPT_DIR/seo-bulk-redirects.tf"
 DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-docs.yml"
 CNAME_FILE="$REPO_ROOT/plugins/soleur/docs/CNAME"
 UPTIME_TF="$SCRIPT_DIR/uptime-alerts.tf"
-SENTRY_TF="$SCRIPT_DIR/sentry/uptime-monitors.tf"
 DEPLOY_SENTRY_ARRAY_SRC="$SCRIPT_DIR/cutover-verify.sh"
 
 PASS=0
