@@ -37,12 +37,21 @@ vi.mock("@/server/claude-cost-marker", async (importOriginal) => ({
   emitClaudeCostMarker: vi.fn(),
 }));
 
-// Only the W_OK probe is replaced; pathExists / readTextOrNull / createSpawnHome / removeSpawnHome stay real.
+// Only the W_OK probe is replaced; pathExists / readTextOrNull / createSpawnHome stay real, and removeSpawnHome
+// runs the real removal unless a row makes it throw (removeHomeFault).
 const probeSpy = vi.hoisted(() => vi.fn());
-vi.mock("@/server/inngest/functions/_cron-spawn-fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/server/inngest/functions/_cron-spawn-fs")>()),
-  probeWritable: probeSpy,
-}));
+const removeHomeFault = vi.hoisted(() => ({ err: null as NodeJS.ErrnoException | null }));
+vi.mock("@/server/inngest/functions/_cron-spawn-fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/inngest/functions/_cron-spawn-fs")>();
+  return {
+    ...actual,
+    probeWritable: probeSpy,
+    removeSpawnHome: (home: string) => {
+      if (removeHomeFault.err) throw removeHomeFault.err;
+      actual.removeSpawnHome(home);
+    },
+  };
+});
 
 import { NonRetriableError } from "inngest";
 import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
@@ -217,6 +226,29 @@ describe("Guard 2 — per-spawn HOME (AC3)", () => {
     // #8629 — an Error first arg is captured untagged under pino-mirror and the tagged capture is deduped away.
     expect(call![0]).toBeNull();
     expect(call![1].tags).toEqual({ cron: "cron-daily-triage" });
+    // #12847 escalation (observability P3) — the errno code only: the error message names the HOME path.
+    expect(call![1].extra).toEqual({ cron: "cron-daily-triage", code: "ENOENT" });
+    expect(JSON.stringify(call![1])).not.toContain(scratch);
+  });
+
+  it("a failed HOME removal warns cron-spawn-home-teardown with the errno code only, never the path", async () => {
+    const { spawnCwd } = workspace();
+    const err = Object.assign(new Error(`EBUSY: resource busy, rmdir '${scratch}/x/home-abc/tmp/agent-named.md'`), {
+      code: "EBUSY",
+    });
+    removeHomeFault.err = err;
+    try {
+      const result = await run(spawnCwd);
+      expect(result.ok).toBe(true);
+    } finally {
+      removeHomeFault.err = null;
+    }
+    const call = warnSpy.mock.calls.find((c) => c[1]?.op === "cron-spawn-home-teardown");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull();
+    expect(call![1].tags).toEqual({ cron: "cron-bug-fixer" });
+    expect(call![1].extra).toEqual({ cron: "cron-bug-fixer", code: "EBUSY" });
+    expect(JSON.stringify(call![1])).not.toContain(scratch);
   });
 
   it("M16: the hardening triple wins over a cron env that sets its own GIT_CONFIG_COUNT", async () => {
@@ -305,7 +337,11 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
   beforeEach(() => noSleep.sleep.mockClear());
 
   it("H2: manifest + sentinel + an EROFS probe → the root and its seed tag", async () => {
-    await expect(resolveCronPluginRoot(pluginRoot, noSleep)).resolves.toEqual({ root: pluginRoot, seedTag: "v1" });
+    await expect(resolveCronPluginRoot(pluginRoot, noSleep)).resolves.toEqual({
+      root: pluginRoot,
+      seedTag: "v1",
+      seedLine: "seeded 2026-11-17T00:00:00Z tag=v1",
+    });
     expect(probeSpy.mock.calls.map((c) => c[0])).toEqual([pluginRoot, join(pluginRoot, "hooks")]);
   });
 
@@ -342,7 +378,11 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     const sleep = vi.fn(async () => {
       seedPluginRoot(pluginRoot, { tag: "v3" }); // the copy finishes during the wait
     });
-    await expect(resolveCronPluginRoot(pluginRoot, { sleep })).resolves.toEqual({ root: pluginRoot, seedTag: "v3" });
+    await expect(resolveCronPluginRoot(pluginRoot, { sleep })).resolves.toEqual({
+      root: pluginRoot,
+      seedTag: "v3",
+      seedLine: "seeded 2026-11-17T00:00:00Z tag=v3",
+    });
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
@@ -358,7 +398,7 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     const sleep = vi.fn(async () => {
       writeFileSync(join(pluginRoot, ".seed-complete"), "seeded tag=v2\n");
     });
-    await expect(resolveCronPluginRoot(pluginRoot, { sleep })).resolves.toEqual({ root: pluginRoot, seedTag: "v2" });
+    await expect(resolveCronPluginRoot(pluginRoot, { sleep })).resolves.toEqual({ root: pluginRoot, seedTag: "v2", seedLine: "seeded tag=v2" });
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
@@ -451,6 +491,31 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     const result = await run(spawnCwd, { cronName: "cron-community-monitor", loadPlugin: false });
     expect(result.pluginReseeded).toBe(true);
     expect(result.ok).toBe(false);
+  });
+
+  // #12847 escalation (architecture + data-integrity P3) — ci-deploy.sh deletes and recopies the tree on every
+  // deploy and writes a fresh `seeded <timestamp> tag=<tag>` line, so a same-tag redeploy is a reseed too.
+  it("row 7g: a same-tag reseed (new timestamp) while the child runs is detected", async () => {
+    spawnSpy.mockImplementation(
+      fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded 2026-11-17T09:30:00Z tag=v1\n")),
+    );
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { loadPlugin: true });
+    const reseed = reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run");
+    expect(reseed).toHaveLength(1);
+    expect(reseed[0][1].extra).toMatchObject({ seedTagAtSpawn: "v1", seedTagAtExit: "v1" });
+    expect(result.ok).toBe(false);
+    expect(result.pluginReseeded).toBe(true);
+  });
+
+  it("row 7g control: the same sentinel line rewritten byte-for-byte (trailing whitespace aside) is no reseed", async () => {
+    spawnSpy.mockImplementation(
+      fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded 2026-11-17T00:00:00Z tag=v1  \n\n")),
+    );
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { loadPlugin: true });
+    expect(reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run")).toHaveLength(0);
+    expect(result.ok).toBe(true);
   });
 
   it("row 7 control: an unchanged tag reports nothing and keeps the verdict", async () => {

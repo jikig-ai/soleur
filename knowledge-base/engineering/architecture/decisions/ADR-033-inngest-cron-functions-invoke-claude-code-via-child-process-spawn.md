@@ -570,30 +570,39 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
    before `CRON_GIT_CONFIG_PIN`, and the HOME is removed when the spawn ends. No state survives into a later spawn. The
    two server-cwd spawns (`cron-daily-triage`, `cron-follow-through-monitor`) have no ephemeral root; they get
    `<CRON_WORKSPACE_ROOT>/soleur-home-*`, which no write root admits (they run without the hook and without Write).
-   The seed tag is compared at exit; a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
+   The whole `.seed-complete` line is compared at exit (every reseed writes a new `seeded <timestamp>`, so a
+   same-tag redeploy counts too); a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
    (`pluginReseeded`): `classifyEvalFatal` treats it as fatal for best-effort crons, and `resolveOutputAwareOk`
-   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run. The exception is
-   `cron-community-monitor`, which runs plugin scripts without loading the plugin: its heartbeat goes red after
-   persistence, so its digest is still committed, as on a collector failure.
+   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run. Bug-fixer's
+   persistence step is auto-merge: on a reseed it skips the auto-merge gate and relabels the PR
+   `bot-fix/review-required`. The exception is `cron-community-monitor`, which runs plugin scripts without loading
+   the plugin: its heartbeat goes red after persistence, so its digest is still committed, as on a collector failure.
 4. **Writes are confined to the run (CTO S1).** `decide()` in `cron-bash-allowlist-hook.mjs` denies Write, Edit and
    MultiEdit outside two roots: the run's clone, derived from the hook's own path, and the `tmp/` (TMPDIR) of a
    `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
    writable HOME would be a write-then-execute path. The check uses the realpath of the nearest existing ancestor, so
    a dangling link fails closed, and the protected-path patterns are re-checked on that realpath. The deny reason is
-   `cron-containment: write outside run roots` and names the working directory and the literal `<HOME>/tmp` path as the places to write;
-   the off-box new-rule metric counts it as `write-outside-roots`. This is an allow-list, not a new deny pattern; the 2026-11-16
-   ruling against more write-protect patterns stands.
+   `cron-containment: write outside run roots` and names the working directory and the literal `<HOME>/tmp` path as the places to write.
+   This is an allow-list, not a new deny pattern; the 2026-11-16 ruling against more write-protect patterns stands.
+   The off-box new-rule metric (op `cron-containment-new-rule-deny`, warning level, tags `cron` and `rule`, at most one
+   event per rule per run) gains three `rule` values: `write-outside-roots` for this deny, `body-file-secret-path`
+   for a gh body/input file (`--body-file`, `-F`, `--input`, `--recover`, any spelling) that names a Read-gate secret
+   path, and `plugin-clone-path` for a skill script called by its clone path (`bash plugins/soleur/…`) rather than
+   the plugin root, which no allowlist line admits.
 5. **Memory files cannot import secrets (CTO S3).** A nested `CLAUDE.md` the agent writes is loaded lazily, and its
    `@`-imports reach Anthropic-bound context (Phase 0.7g), so `@../.git/config` would carry the clone's token. The
    cron `settings.json` carries `claudeMdExcludes` (`cronClaudeMdExcludes()`): nested memory files, any import under
-   `.git/`, the pseudo-filesystems and the secret paths the hook's Read gate refuses (`/run/secrets`, `.env*`,
-   `.ssh`, `.aws`, `.config`, `.netrc`, `.npmrc`, `storage-state.json`, the ux-audit dirs and others) are not
-   loaded, while the clone's root `CLAUDE.md` still is. Only the original seven entries were measured against the CLI
+   `.git/`, the pseudo-filesystems and globs that approximate the secret paths the hook's Read gate refuses
+   (`/run/secrets`, `.env*`, `.ssh`, `.aws`, `.config`, `.netrc`, `.npmrc`, `.claude.json`, `storage-state.json`, the
+   ux-audit dirs and others) are not loaded, while the clone's root `CLAUDE.md` still is. `.claude/` stays loadable
+   for the clone's own rules, although the Read gate refuses it. Only the original seven entries were measured against the CLI
    (Phase 0.7h); the secret-path entries are checked with picomatch, the CLI's matcher. The
    self-test refuses a spawn whose `settings.json` lacks the list. This uses the CLI's own exclusion, so no
    `CLAUDE.md` write-deny was added.
 6. **No cron holds a code-exec verb.** Bug-fixer loses `./node_modules/.bin/vitest run` and sets
-   `SOLEUR_WORKTREE_SKIP_INSTALL=1`, so it opens fixes without a local test baseline. Ux-audit launches the
+   `SOLEUR_WORKTREE_SKIP_INSTALL=1`, which skips the dependency install. Its prompt passes `--no-local-tests`, which
+   makes fix-issue skip Phases 2 and 4 and treat the auto-merge test condition as met, so it opens fixes without a
+   local test baseline (CI runs the suite on the PR; #12858 covers CI running agent code). Ux-audit launches the
    root-owned `/app/node_modules/.bin/playwright-mcp` instead of `npx`.
 
 **Enforcement.** `test/server/inngest/cron-write-execute-census.test.ts` (Guard 1) finds every `spawnClaudeEval` call
@@ -630,4 +639,3 @@ Residuals, stated plainly:
 - Phase 0 measurements against CLI 2.1.321 are in
   `knowledge-base/project/specs/feat-one-shot-12824-cron-spawn-isolation/measurements.md`. They ran against a scripted
   local Messages-API mock (no dev API key), so they show what the CLI does, not what a model would choose.
-

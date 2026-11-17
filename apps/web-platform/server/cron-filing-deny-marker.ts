@@ -177,6 +177,7 @@ export const NEW_RULE_IDS = [
   "protected-trust-root",
   "write-outside-roots", // #12824 — counted only when the caller passes the run's write roots
   "body-file-secret-path", // #12847 — a gh body/input file naming a Read-gate secret path
+  "plugin-clone-path", // #12847 — a skill script called by the clone path, not the vendored plugin root
 ] as const;
 export type NewRuleId = (typeof NEW_RULE_IDS)[number];
 

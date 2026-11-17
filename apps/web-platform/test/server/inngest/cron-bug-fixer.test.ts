@@ -751,6 +751,35 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     );
     expect(sentryCall![0] as string).toContain("status=error");
   });
+
+  // #12847 escalation (test-design P2) — setup resolves the root for every cronUsesPluginRoot cron, not only
+  // for those whose allowlist names `<plugin-root>`: a plugin LOADER with no such line still refuses in setup.
+  it("setupEphemeralWorkspace refuses a plugin-loading cron with no <plugin-root> allowlist line (cron-growth-audit)", async () => {
+    const { CRON_BASH_ALLOWLISTS, CRON_PLUGIN_LOADERS, PLUGIN_ROOT_TOKEN, setupEphemeralWorkspace } = await import(
+      "@/server/inngest/functions/_cron-claude-eval-substrate"
+    );
+    // Attributable to the cronUsesPluginRoot predicate: the old `allow.some(<plugin-root>)` test is false here.
+    expect(CRON_PLUGIN_LOADERS.has("cron-growth-audit")).toBe(true);
+    expect((CRON_BASH_ALLOWLISTS["cron-growth-audit"] ?? []).some((l) => l.includes(PLUGIN_ROOT_TOKEN))).toBe(false);
+
+    pathExistsSpy.mockImplementation((p: string) => !p.endsWith(".claude-plugin/plugin.json"));
+    const { NonRetriableError } = await import("inngest");
+    const err = await setupEphemeralWorkspace({ installationToken: "tok", cronName: "cron-growth-audit" }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NonRetriableError);
+    const rootErrs = reportSilentFallbackSpy.mock.calls.filter(
+      ([, ctx]) => (ctx as { op?: string }).op === "cron-plugin-root-untrusted",
+    );
+    expect(rootErrs).toHaveLength(1);
+    expect((rootErrs[0][1] as { tags?: Record<string, string> }).tags).toEqual({
+      cron: "cron-growth-audit",
+      reason: "manifest-missing",
+    });
+    // Refused before any workspace exists: no mkdtemp, no clone.
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
 });
 
 // ===========================================================================
@@ -967,6 +996,50 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
 
     expect(result.autoMergeQueued).toBe(false);
     expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+  });
+
+  // #12847 escalation (data-integrity + user-impact P3) — a run whose plugin mount was reseeded mid-run worked
+  // from a mixed or half-copied tree: its otherwise-eligible PR is left for human review, never auto-merged.
+  it("skips the auto-merge gate and relabels review-required when the plugin was reseeded mid-run", async () => {
+    wireOctokitForGate({});
+    // The sentinel line changes once the claude child has started (a same-tag redeploy writes a new timestamp).
+    let claudeStarted = false;
+    readTextOrNullSpy.mockImplementation(() =>
+      claudeStarted ? "seeded 2026-11-17T09:30:00Z tag=t1\n" : "seeded x tag=t1\n",
+    );
+    const claudeChild = makeChild();
+    spawnSpy.mockImplementation((cmd: string) => {
+      if (cmd === "git") {
+        const gitChild = makeChild();
+        queueMicrotask(() => gitChild.emit("exit", 0, null));
+        return gitChild;
+      }
+      claudeStarted = true;
+      queueMicrotask(() => claudeChild.emit("exit", 0, null));
+      return claudeChild;
+    });
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).not.toContain("auto-merge-gate");
+    const addReviewLabel = octokitRequestSpy.mock.calls.find(
+      ([route, params]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels" &&
+        (params as { issue_number?: number }).issue_number === PR_NUMBER &&
+        Array.isArray((params as { labels?: string[] }).labels) &&
+        (params as { labels: string[] }).labels.includes("bot-fix/review-required"),
+    );
+    expect(addReviewLabel).toBeDefined();
+    const stripEligible = octokitRequestSpy.mock.calls.find(
+      ([route, params]) =>
+        route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}" &&
+        (params as { name?: string }).name === "bot-fix/auto-merge-eligible",
+    );
+    expect(stripEligible).toBeDefined();
   });
 });
 

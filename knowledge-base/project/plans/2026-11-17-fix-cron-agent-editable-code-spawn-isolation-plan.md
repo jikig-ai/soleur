@@ -81,8 +81,8 @@ What this PR closes, and what it does not, stated plainly:
   baseline (fix-issue's SKILL documents "proceed without a baseline"); CI still runs the suite on its PR.
 - **Write confinement (CTO S1).** The containment hook's `decide()` allows Write/Edit/MultiEdit only when
   the realpath of the target's nearest existing ancestor is under the run's own clone (`spawnCwd`, derived
-  from the hook's own file location) or the run's own spawn HOME (accepted only when `process.env.HOME`
-  is exactly `<dirname(spawnCwd)>/home-*`; otherwise the clone only). This closes a pre-existing server
+  from the hook's own file location) or the run's own `<spawn HOME>/tmp` (the TMPDIR; accepted only when
+  `process.env.HOME` is exactly `<dirname(spawnCwd)>/home-*`; otherwise the clone only; HOME itself is not a root). This closes a pre-existing server
   RCE found while deepening: `/app/.next` is chowned to uid 1001 (Dockerfile) and no write pattern covered
   it, so a prompt-injected agent in any file-tool cron could plant code the web server (holding every prod
   secret, and the process that runs the crons) loads. It also closes cross-cron planting (S2), writes into
@@ -351,7 +351,8 @@ census that goes red when a cron can write and execute the same path.
   apply inside both roots. This is an allow-list, not another deny pattern, so the 2026-11-16 ruling does
   not bar it. Deny reason: `cron-containment: write outside run roots: <path>`. The work phase lists every
   place a cron's prompt or skill writes (each must be inside the two roots, or the cron degrades as
-  documented); `/tmp/ux-audit` and the Playwright profile move under `TMPDIR`/the spawn HOME.
+  documented); ux-audit output moves under the clone (`<clone>/tmp/ux-audit/`), and the Playwright profile and
+  the MCP overlay move to `<ephemeralRoot>/workspace/`, outside both roots.
 - **No code-exec verb for any cron (R5/A4 reversed).** `CRON_BASH_ALLOWLISTS["cron-bug-fixer"]` drops
   `./node_modules/.bin/vitest run`, and bug-fixer's spawn env sets `SOLEUR_WORKTREE_SKIP_INSTALL=1`, so
   `worktree-manager.sh create` runs no `install_deps`. The census has no exemption for running code
@@ -649,20 +650,20 @@ The bullets above are the plan-time statement and are kept as written. The revie
 
 ```yaml
 liveness_signal:
-  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (a refusal at spawn time is a missed check-in for cron-legal-audit and cron-agent-native-audit) (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path, except for cron-legal-audit and cron-agent-native-audit, whose try/finally has no catch, so for them it is a missed check-in. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
+  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (a refusal at spawn time is a missed check-in for cron-legal-audit and cron-agent-native-audit) (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path, except for cron-legal-audit and cron-agent-native-audit, whose try/finally has no catch, so for them it is a missed check-in. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); and three new `rule` tag values (write-outside-roots, body-file-secret-path, plugin-clone-path) on the existing warning op cron-containment-new-rule-deny (feature cron-claude-eval, tags {cron, rule}); no new monitor."
   cadence: "per cron run, on each cron's own schedule"
   alert_target: "each cron's Sentry heartbeat monitor (ok:false; not routed to email until #12859 declares the monitors) and the Sentry issue for op cron-plugin-root-untrusted"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (resolveCronPluginRoot, spawnClaudeEvalUnguarded); apps/web-platform/server/inngest/functions/_cron-shared.ts (heartbeat)"
 error_reporting:
   destination: "Sentry via reportSilentFallback / warnSilentFallback and the Inngest sentry-correlation middleware; Better Stack via the Vector journald shipper of the pino logs"
-  fail_loud: "a thrown CronPluginRootError naming reason (manifest-missing, seed-incomplete, writable, untrusted-path) and the cron, mirrored as op cron-plugin-root-untrusted via reportSilentFallback(null, {feature: cronName, op, message: <fixed per-reason string>, tags: {cron, reason}}) - err is null and the reason is in tags, because a reportSilentFallback(err) after pino's logger.error({err}) hook is deduplicated by Sentry and the tagged capture is lost (#8629); the caller's existing setup-ephemeral-workspace report also fires for the same run, documented as the generic companion event; a hook deny 'cron-containment: not allowlisted: bash plugins/soleur/...' in the run's permission_denials"
+  fail_loud: "a thrown CronPluginRootError naming reason (manifest-missing, seed-incomplete, writable, untrusted-path) and the cron, mirrored as op cron-plugin-root-untrusted via reportSilentFallback(null, {feature: \"cron-claude-eval\", op, message: <fixed per-reason string>, tags: {cron, reason}}) (query: feature:cron-claude-eval op:cron-plugin-root-untrusted cron:<cron>) - err is null and the reason is in tags, because a reportSilentFallback(err) after pino's logger.error({err}) hook is deduplicated by Sentry and the tagged capture is lost (#8629); the caller's existing setup-ephemeral-workspace report also fires for the same run, documented as the generic companion event"
 failure_modes:
   - mode: "the plugin mount is absent, half-seeded or writable (drifted SOLEUR_PLUGIN_PATH, missing :ro)"
     detection: "in-surface: resolveCronPluginRoot runs inside the step before the child spawns and reports op cron-plugin-root-untrusted with a closed reason enum, which separates the four causes in one event"
     alert_route: "Sentry issue (op cron-plugin-root-untrusted) + heartbeat ok:false (a missed check-in for cron-legal-audit and cron-agent-native-audit when the refusal comes at spawn time)"
   - mode: "a skill's own script call is denied after the move (CLAUDE_PLUGIN_ROOT substitution differs from the allowlist line)"
-    detection: "in-surface: the hook's deny reason names the exact command; the run's permission_denials carry it; Phase 0.5 records the expected form"
-    alert_route: "none off-host (corrected in the #12847 fix round): a deny does not fail the run, so it can end green with less output; the deny is visible only in the run's permission_denials"
+    detection: "in-surface: the hook denies it as not allowlisted; classifyNewRuleDeny names rule plugin-clone-path for a segment whose script word is a clone-relative plugins/soleur/ path, and the substrate emits warnSilentFallback(null, {feature: \"cron-claude-eval\", op: cron-containment-new-rule-deny, tags: {cron, rule: plugin-clone-path}}) once per run (layer: Sentry tagged capture + pino mirror to Better Stack; counted for the hooked file-tool crons, not for community-monitor or the two server-cwd crons)"
+    alert_route: "Sentry warning (op cron-containment-new-rule-deny, rule=plugin-clone-path; no page): the deny does not fail the run, so it can still end green with less output"
   - mode: "the CLI fails to start under the fresh HOME"
     detection: "in-surface: the child's stderr tail (redacted) and capture_status no-result-event from parseClaudeResultLine"
     alert_route: "heartbeat ok:false and the existing claude-eval FATAL classification"
@@ -673,8 +674,8 @@ failure_modes:
     detection: "in-surface: reportSilentFallback(null, op cron-spawn-home-create, tags {cron}) inside the try, before the throw; the finally still clears the heartbeat timer (layer: pino mirror + sentry-correlation)"
     alert_route: "Sentry issue (op cron-spawn-home-create) + heartbeat ok:false via the claude-eval failure path; cron-legal-audit and cron-agent-native-audit wrap that step in try/finally with no catch, so for them it is a missed check-in"
   - mode: "the plugin mount is reseeded by a deploy while a spawn runs"
-    detection: "in-surface: the seed tag read from .seed-complete at spawn differs at exit; reportSilentFallback(null, op plugin-reseeded-mid-run, tags {cron}) (layer: pino mirror + sentry-correlation); the run's output-aware verdict is downgraded to not-ok, so the heartbeat posts ok:false rather than a green run on a mixed plugin tree"
-    alert_route: "Sentry issue (op plugin-reseeded-mid-run) + heartbeat ok:false (best-effort and, since the #12847 fix round, output-aware crons; event-ship-merge posts no heartbeat)"
+    detection: "in-surface: the whole .seed-complete line read at spawn differs at exit (each reseed writes a new timestamp, so a same-tag redeploy counts); reportSilentFallback(null, op plugin-reseeded-mid-run, tags {cron}) (layer: pino mirror + sentry-correlation); the run's output-aware verdict is downgraded to not-ok, so the heartbeat posts ok:false rather than a green run on a mixed plugin tree"
+    alert_route: "Sentry issue (op plugin-reseeded-mid-run) + heartbeat ok:false (best-effort and, since the #12847 fix round, output-aware crons; community-monitor red after persistence; bug-fixer skips auto-merge and relabels the PR review-required; event-ship-merge posts no heartbeat)"
   - mode: "a new cron executes a path it can write"
     detection: "pre-merge: cron-write-execute-census.test.ts goes red on the PR that adds it, naming the cron, the path and the source"
     alert_route: "CI failure on that PR"

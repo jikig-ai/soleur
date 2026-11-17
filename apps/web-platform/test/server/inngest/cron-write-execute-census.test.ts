@@ -10,7 +10,8 @@
 //     alias cannot hide a call site. Stored as an identity map file → { cronName, loadPlugin }.
 //   - Executed paths, read from the REAL producers: (1) the `--plugin-dir` root from buildClaudeArgv(); (2) every
 //     `bash <path>` line of buildAllowlistLines(); (3) every hook command of buildCronEvalSettings() for both
-//     frameGhOutput values; (4) every MCP server `command` a cron writes into its `.mcp.json` overlay. The plugin
+//     frameGhOutput values; (4) every MCP server `command` a cron writes into its MCP overlay (ux-audit's
+//     `<ephemeralRoot>/workspace/mcp.json`, outside both write roots, named by `--mcp-config ../workspace/mcp.json`). The plugin
 //     root fed to the producers is the constant SOLEUR_PLUGIN_PATH_DEFAULT, never getPluginPath() (which a test
 //     fixture's SOLEUR_PLUGIN_PATH would move).
 //   - Writability: a path is writable when the REAL decide() of cron-bash-allowlist-hook.mjs, fed that cron's real
@@ -41,7 +42,7 @@ import { join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { decide, deriveWriteRoots } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
+import { decide, deriveWriteRoots, writeOutsideRootsReason } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
   buildAllowlistLines,
   buildClaudeArgv,
@@ -448,6 +449,16 @@ describe("Guard 1 — population (identity map)", () => {
     for (const name of invokes) expect(CRON_PLUGIN_LOADERS.has(name), `${name} invokes a /soleur: skill`).toBe(true);
   });
 
+  // #12847 escalation (test-design P3) — the flag and the setup write site name the same file: a rename on
+  // either side would hand the spawn a config path that does not exist.
+  it("ux-audit's --mcp-config resolves to the overlay its setup step writes (<ephemeralRoot>/workspace/mcp.json)", () => {
+    const uxSrc = readFileSync(join(SERVER, "inngest/functions/cron-ux-audit.ts"), "utf-8");
+    expect(mcpConfigPath(uxSrc)).toBe(join(EPHEMERAL, "workspace", "mcp.json"));
+    const code = stripComments(uxSrc);
+    expect(code).toMatch(/const wDir = join\(base\.ephemeralRoot, "workspace"\);/);
+    expect(code).toMatch(/writeFile\(join\(wDir, "mcp\.json"\)/);
+  });
+
   it("an MCP `command` is read by key, quoted or not, and a commented-out literal does not count", () => {
     expect(mcpCommands('const c = { mcpServers: { p: { "command": "npx", args: [] } } };')).toEqual(["npx"]);
     expect(mcpCommands('const c = { mcpServers: { p: { command: CMD } } }; // command: "/abs"')).toEqual([null]);
@@ -502,10 +513,13 @@ describe("Guard 1 — population (identity map)", () => {
 
   it("every plugin-loading cron judged by its output passes the reseed flag; community-monitor applies it (#12847)", () => {
     const src = (f: string) => stripComments(readFileSync(join(SERVER, f), "utf-8"));
+    // cronUsesPluginRoot, not CRON_PLUGIN_LOADERS: community-monitor's advisory verify-output call carries the flag
+    // too, so a reseed is not reported a second time as a non-zero exit (#12847 escalation).
     const outputAware = Object.entries(POPULATION).filter(
-      ([f, p]) => CRON_PLUGIN_LOADERS.has(p.cronName) && /resolveOutputAwareOk\(/.test(src(f)),
+      ([f, p]) => cronUsesPluginRoot(p.cronName) && /resolveOutputAwareOk\(/.test(src(f)),
     );
-    expect(outputAware.map(([, p]) => p.cronName).sort()).toHaveLength(7);
+    expect(outputAware.map(([, p]) => p.cronName).sort()).toHaveLength(8);
+    expect(outputAware.map(([, p]) => p.cronName)).toContain("cron-community-monitor");
     for (const [f] of outputAware) expect(src(f), f).toMatch(/pluginReseeded: spawnResult!?\.pluginReseeded/);
     // Every cron that runs plugin scripts without loading the plugin gets a reseed baseline; each applies it, and
     // right after the collector gate (itself order-pinned after persistence and outside the try).
@@ -608,14 +622,21 @@ describe("Guard 1 — write confinement probes through the real decide() (CTO S1
 
   // #12847 review (security P1) — HOME is not a write root: programs the allowlists run read their config from it,
   // so a writable HOME is a write-then-execute path that names no file in any allowlist line.
+  // #12847 escalation (test-design P3) — each row asserts the gate it rests on. decide() reports the first gate
+  // that refuses, and `.gitconfig` is also write-protected (that gate runs first), so the roots gate is asked on
+  // its own for every row: under a HOME-as-root mutant the rows would go red here, not pass on the protect.
   it.each([
-    [".config/gh/config.yml", "gh: the browser / editor / pager it launches"],
-    [".curlrc", "curl: proxy, output and config options"],
-    [".gitconfig", "git: aliases, hooks, pager"],
-    [".claude.json", "claude CLI: per-user state and MCP servers"],
-    ["x", "any other file in HOME"],
-  ])("denies a write to $HOME/%s (%s)", (rel) => {
-    expect(verdict(join(HOME, rel))).toBe("deny");
+    [".config/gh/config.yml", "gh: the browser / editor / pager it launches", /write outside run roots/],
+    [".curlrc", "curl: proxy, output and config options", /write outside run roots/],
+    [".gitconfig", "git: aliases, hooks, pager", /protected-path write/],
+    [".claude.json", "claude CLI: per-user state and MCP servers", /write outside run roots/],
+    ["x", "any other file in HOME", /write outside run roots/],
+  ])("denies a write to $HOME/%s (%s)", (rel, _why, decideReason) => {
+    const out = realDecide({ tool_name: "Write", tool_input: { file_path: join(HOME, rel) } }, lines, { writeRoots: ROOTS })
+      .hookSpecificOutput as { permissionDecision: string; permissionDecisionReason?: string };
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(decideReason);
+    expect(writeOutsideRootsReason(join(HOME, rel), ROOTS)).toMatch(/write outside run roots/);
   });
 
   it("denies a write through an in-clone symlink that points outside the roots (AC8 row 15)", () => {

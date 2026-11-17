@@ -171,14 +171,24 @@ describe("cron eval overlay — hook-primary containment (#5018/#5000/#5004)", (
       `${cwd}/.github/CLAUDE.md`,
       "/sys/kernel/x",
       "/dev/stdin",
-      // #12847 review (architecture P2) — every secret path the hook's Read gate refuses.
+      // #12847 review (architecture P2) — the secret paths the hook's Read gate refuses, as the globs approximate
+      // them (`.claude/` stays loadable for the clone root's own rules; see the must-load list below).
       `${cwd}/.env`,
       `${cwd}/apps/web-platform/.env.local`,
       "/run/secrets/doppler",
       "/tmp/ephemeral/workspace/storage-state.json",
       `${cwd}/tmp/ux-audit/findings.json`,
       "/tmp/ephemeral/workspace/playwright-mcp-profile/Default/Cookies",
-      "/tmp/ephemeral/home-abc/.config/gh/hosts.yml",
+      "/tmp/ephemeral/home-abc/.config/gh/config.yml", // the .config/ glob
+      // #12847 escalation (test-design / security P3) — one row per glob, each OUTSIDE `.config/`, so deleting
+      // that glob goes red (a row under `.config/` would stay green on the `.config` glob alone).
+      "/tmp/ephemeral/x/hosts.yml",
+      "/tmp/ephemeral/x/hosts.yaml",
+      "/tmp/ephemeral/home-abc/.aws/credentials",
+      "/tmp/ephemeral/home-abc/.docker/config.json",
+      `${cwd}/.git-credentials`,
+      `${cwd}/.env/k`,
+      "/tmp/ephemeral/home-abc/.claude.json", // the CLI's per-HOME state file, a Read-gate secret since fix round 2
       `${cwd}/.npmrc`,
       "/tmp/ephemeral/home-abc/.netrc",
       "/tmp/ephemeral/home-abc/.gitconfig",
@@ -194,6 +204,7 @@ describe("cron eval overlay — hook-primary containment (#5018/#5000/#5004)", (
       `${cwd}/sub/file.md`,
       `${cwd}/.github/x.md`,
       `${cwd}/.claude/rules/x.md`, // the clone root's own rules still load; only nested rules dirs are dropped
+      `${cwd}/docs/x.claude.json`, // the .claude.json glob names the file, not a suffix
       `${cwd}/knowledge-base/engineering/x.md`,
     ]) {
       expect(isExcluded(p), p).toBe(false);

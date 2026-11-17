@@ -556,9 +556,16 @@ export const HOOK_NEW_RULE_IDS = Object.freeze([
   ...NEW_WRITE_RULES.values(),
   "write-outside-roots",
   "body-file-secret-path",
+  "plugin-clone-path",
 ]);
-// The deny-reason prefix classifyNewRuleDeny maps to `body-file-secret-path`.
+// The deny-reason prefix of the body-file secret-path check, and its next step for the agent.
 const BODY_FILE_SECRET_REASON = "secret-path body file via";
+const BODY_FILE_SECRET_HINT =
+  "-- write the body to a plain relative path such as tmp/<name>.md (not under .claude/ or .git, not a credential file name)";
+// #12847 escalation (observability P1) — a clone-relative script path of the plugin tree. Since #12824 the
+// plugin loads from the vendored root (`<plugin-root>`), so `bash plugins/soleur/…` is never allowlisted.
+const CLONE_PLUGIN_PATH_RE = /^(\.\/)?plugins\/soleur\//;
+const SCRIPT_INTERPRETERS = new Set(["bash", "sh", "node"]);
 
 // The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
 // Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
@@ -757,9 +764,35 @@ export function tokenize(segment) {
 // Argument-injection / egress-via-allowed-verb denials that apply even when the
 // leading verb is allowlisted (SECURITY PANEL P0-B). Returns a deny reason or
 // null if clean.
+// `-F` is a body/notes file flag on the gh subcommands the allowlists hold; on `gh api` (and `gh workflow
+// run`) it is a field flag (#12847 fix round 2; no allowlist holds `gh workflow run`).
+const isGhBodyCommand = (tokens) => tokens[0] === "gh" && tokens[1] !== "api";
+
+// #12847 escalation — the path value of every body-file spelling argumentInjectionReason refuses:
+// `--body-file X`, `--body-file=X`, `-F X` / `-F<X>` / `-F=<X>` / `-wF X` / `-wF<X>` (gh body commands),
+// `--input[=]X`, `--recover[=]X`. The off-host metric (classifyNewRuleDeny) judges these values, so a secret
+// body file counts as body-file-secret-path whichever check refused the command first.
+function bodyFileValues(tokens) {
+  const ghBody = isGhBodyCommand(tokens);
+  const values = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--body-file" || t === "--input" || t === "--recover" || (ghBody && /^-[A-Za-z]*F$/.test(t))) {
+      values.push(tokens[i + 1] || "");
+      continue;
+    }
+    const eq = /^--(body-file|input|recover)=(.*)$/s.exec(t);
+    if (eq) values.push(eq[2]);
+    const attached = ghBody ? /^-[A-Za-z]*F=?(.+)$/s.exec(t) : null;
+    if (attached) values.push(attached[1]);
+  }
+  return values;
+}
+
+const ATTACHED_F_HINT = "-- put a space after -F (-F <path>), or reword a --title/--body value that starts with -F";
+
 function argumentInjectionReason(tokens) {
-  // `-F` is --body-file on every gh subcommand but `gh api`, where it is a field flag (#12847 fix round 2).
-  const ghBody = tokens[0] === "gh" && tokens[1] !== "api";
+  const ghBody = isGhBodyCommand(tokens);
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     // gh/curl-style file-as-body flags read a file the model never saw and post
@@ -768,7 +801,9 @@ function argumentInjectionReason(tokens) {
     if (t === "--body-file" || t === "-F" || t === "--field" || t === "-f") {
       const v = tokens[i + 1] || "";
       if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
-        return `file-as-arg via ${t}`;
+        return t === "-f"
+          ? "file-as-arg via -f -- a -f value may not contain @, .git, .env or ..; reword it, or file with gh issue create --body-file <relative path>"
+          : `file-as-arg via ${t}`;
     }
     // #12847 fix round (security P1) — gh reads a body or input file itself, so the paths the Read gate
     // refuses are refused here too (storage-state.json, a spawn HOME's .claude/ transcripts, hosts.yml,
@@ -777,17 +812,24 @@ function argumentInjectionReason(tokens) {
       (t === "--body-file" || t === "--input" || t === "--recover" || (t === "-F" && ghBody)) &&
       pathPatternMatches(BODY_FILE_SECRET_PATTERNS, tokens[i + 1] || "").length
     )
-      return `${BODY_FILE_SECRET_REASON} ${t} -- write the body under the working directory instead`;
+      return `${BODY_FILE_SECRET_REASON} ${t} ${BODY_FILE_SECRET_HINT}`;
     const eqFile = /^--(input|recover)=(.*)$/s.exec(t);
     if (eqFile && pathPatternMatches(BODY_FILE_SECRET_PATTERNS, eqFile[2]).length)
-      return `${BODY_FILE_SECRET_REASON} --${eqFile[1]}= -- write the body under the working directory instead`;
+      return `${BODY_FILE_SECRET_REASON} --${eqFile[1]}= ${BODY_FILE_SECRET_HINT}`;
+    // #12847 escalation (security P3) — the check above is lexical (raw + posix.normalize) but gh opens the path
+    // physically: `/dev/fd` links to `/proc/self/fd`, so `/dev/fd/../environ` is `/proc/self/environ` while
+    // normalize reads `/dev/environ`. A `..` segment is refused here, as the --body-file / -F guard refuses it.
+    if ((t === "--input" || t === "--recover") && (tokens[i + 1] || "").split("/").includes(".."))
+      return `file-as-arg via ${t} (a .. segment)`;
+    if (eqFile && eqFile[2].split("/").includes("..")) return `file-as-arg via --${eqFile[1]}= (a .. segment)`;
     // An attached or clustered short -F (`-F<path>`, `-F=<path>`, `-wF <path>`) would skip every check above.
     // Checked on EVERY token, flag values included. A "previous token is a value flag" skip was tried and is
     // unsound: `--title --label -F<path>` makes `--label` the title and gh still reads the file (#12847 round 4,
     // measured on gh 2.104.0). Accepted over-deny: a title or body that starts with `-F` is refused; use a body file.
-    // Refused whatever the path, so the off-host metric does not count these as body-file-secret-path.
-    if (ghBody && /^-[A-Za-z]*F./.test(t)) return "file-as-arg via attached -F";
-    if (ghBody && /^-[A-Za-z]+F$/.test(t)) return "file-as-arg via clustered -F";
+    // Refused whatever the path; the off-host metric still counts one as body-file-secret-path when its
+    // value is a secret path (bodyFileValues).
+    if (ghBody && /^-[A-Za-z]*F./.test(t)) return `file-as-arg via attached -F ${ATTACHED_F_HINT}`;
+    if (ghBody && /^-[A-Za-z]+F$/.test(t)) return `file-as-arg via clustered -F ${ATTACHED_F_HINT}`;
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
     if (/=@/.test(t) || /^@/.test(t)) return "@file argument";
     // VAR=val prefix (env indirection before the verb) — leading token only
@@ -1405,7 +1447,10 @@ export function decide(input, allowPrefixes, opts = {}) {
 
 // #12757 (CTO H3) — which new containment rule a denied tool call hit, as a closed id
 // (HOOK_NEW_RULE_IDS: `git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`,
-// `write-outside-roots`, `body-file-secret-path`), or null.
+// `write-outside-roots`, `body-file-secret-path`, `plugin-clone-path`), or null. `body-file-secret-path`
+// is named for any argument-injection deny whose body-file value (every spelling, bodyFileValues) is a
+// Read-gate secret path; `plugin-clone-path` for a segment whose script word is a clone-relative
+// `plugins/soleur/` path (never allowlisted, so refused as not allowlisted).
 // The deny reason never leaves the host (permission_denials[] carries only the tool input), so
 // the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
 // function, which runs the same predicates decide() gates on (commandWordShapeReason,
@@ -1439,11 +1484,19 @@ export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
       for (const seg of splitSegments(command)) {
         const tokens = tokenize(seg);
         if (tokens === null || !tokens.length) return null;
-        const injection = argumentInjectionReason(tokens);
-        if (injection) return injection.startsWith(BODY_FILE_SECRET_REASON) ? "body-file-secret-path" : null;
+        // Any refused body-file spelling whose value is a Read-gate secret path, whichever check refused it.
+        if (argumentInjectionReason(tokens))
+          return bodyFileValues(tokens).some((v) => pathPatternMatches(BODY_FILE_SECRET_PATTERNS, v).length)
+            ? "body-file-secret-path"
+            : null;
         if (commandWordShapeReason(tokens)) return "git-gh-shape";
         if (gitVerbReason(tokens)) return null;
         if (tokens[0] === "gh" && tokens[1] === "api" && tokens.some(hasDotSegment)) return null;
+        // The script word only (`plugins/soleur/…` or `bash|sh|node plugins/soleur/…`): no allowlist line
+        // starts that way (hook test pins it), so this segment was refused as not allowlisted. A clone path
+        // as an argument (`git add plugins/soleur/x`) is not counted.
+        const scriptWord = SCRIPT_INTERPRETERS.has(tokens[0]) ? tokens[1] : tokens[0];
+        if (typeof scriptWord === "string" && CLONE_PLUGIN_PATH_RE.test(scriptWord)) return "plugin-clone-path";
       }
       return null;
     }

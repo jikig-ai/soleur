@@ -810,14 +810,23 @@ export class CronPluginRootError extends Error {
 
 export interface CronPluginRoot {
   root: string;
-  /** The `tag=` field of `.seed-complete` at resolve time (the whole line when it has none). */
+  /** The `tag=` field of `.seed-complete` at resolve time (the whole line when it has none). Report extras only. */
   seedTag: string | null;
+  /**
+   * The whole trimmed `.seed-complete` text at resolve time: the reseed compare. ci-deploy.sh writes a fresh
+   * `seeded <timestamp> tag=<tag>` line on every reseed, so a same-tag redeploy is detected too (#12847 escalation).
+   */
+  seedLine: string | null;
 }
 
 function seedTagOf(text: string | null): string | null {
   if (text === null) return null;
   const m = /\btag=(\S+)/.exec(text);
   return m ? m[1] : text.trim();
+}
+
+function seedLineOf(text: string | null): string | null {
+  return text === null ? null : text.trim();
 }
 
 /**
@@ -861,7 +870,8 @@ export async function resolveCronPluginRoot(
       throw new CronPluginRootError("writable", `${p} is not read-only (W_OK probe: ${probe.code ?? "ok"})`);
     }
   }
-  return { root, seedTag: seedTagOf(spawnFs.readTextOrNull(sentinel)) };
+  const seedText = spawnFs.readTextOrNull(sentinel);
+  return { root, seedTag: seedTagOf(seedText), seedLine: seedLineOf(seedText) };
 }
 
 /**
@@ -1019,7 +1029,8 @@ export function cronClaudeMdExcludes(spawnCwd: string): string[] {
     // #12847 review (architecture P2) — an `@`-import is a read the containment hook never sees, so the
     // secret paths an import can reach are excluded here too. These globs approximate SECRET_PATH_PATTERNS
     // (picomatch globs cannot express every regex suffix form; `.claude/` stays loadable for the clone's
-    // own rules). The seven entries above were measured against the CLI (Phase 0.7h); none below was.
+    // own rules, while the `.claude.json` state file is excluded). The seven entries above were measured
+    // against the CLI (Phase 0.7h); none below was.
     g("", "run", "secrets", "**"),
     g("**", ".env"),
     g("**", ".env.*"),
@@ -1029,6 +1040,7 @@ export function cronClaudeMdExcludes(spawnCwd: string): string[] {
     g("**", ".docker", "**"),
     g("**", ".config", "**"),
     g("**", ".netrc"),
+    g("**", ".claude.json"), // #12847 escalation — the CLI's per-HOME state file (a Read-gate secret path)
     g("**", ".npmrc"),
     g("**", ".gitconfig"),
     g("**", ".git-credentials"),
@@ -1888,7 +1900,8 @@ async function spawnClaudeEvalUnguarded(args: {
         op: "cron-spawn-home-create",
         message: "could not create the per-spawn HOME; the cron did not spawn",
         tags: { cron: cronName },
-        extra: { cron: cronName, detail: err instanceof Error ? err.message : String(err) }, // #8629: null first arg
+        // #8629: null first arg. The errno code only: the error message names the mkdtemp path (#12847 escalation).
+        extra: { cron: cronName, code: (err as NodeJS.ErrnoException)?.code },
       });
       throw err;
     }
@@ -2242,12 +2255,14 @@ async function spawnClaudeEvalUnguarded(args: {
       try {
         spawnFs.removeSpawnHome(spawnHome);
       } catch (err) {
-        warnSilentFallback(err, {
+        // null, not err, and the errno code only: a recursive rm error names the entry that failed, which can be
+        // a file the agent named under <HOME>/tmp (#12847 escalation). Same tag shape as the sibling ops (#8629).
+        warnSilentFallback(null, {
           feature: "cron-claude-eval",
           op: "cron-spawn-home-teardown",
           message: "per-spawn HOME removal failed; teardownEphemeralWorkspace / cron-workspace-gc sweep it",
           tags: { cron: cronName },
-          extra: { cron: cronName },
+          extra: { cron: cronName, code: (err as NodeJS.ErrnoException)?.code },
         });
       }
     }
@@ -2255,15 +2270,18 @@ async function spawnClaudeEvalUnguarded(args: {
 }
 
 /**
- * #12824 (CTO T1) — ci-deploy.sh reseeds the :ro mount source in place; a tag change during the run means the
- * child may have loaded files from two plugin versions. Reports once and returns true. Never throws.
+ * #12824 (CTO T1) — ci-deploy.sh reseeds the :ro mount source in place (delete, then copy); a sentinel line that
+ * changed during the run means the child may have loaded files from two plugin versions, or found files missing
+ * mid-copy under the same tag. Reports once and returns true. Never throws.
  */
 function pluginReseededDuringRun(plugin: ReseedBaseline | null, cronName: string): boolean {
   if (!plugin) return false;
   // An unreadable sentinel at exit reads as null and counts as a reseed (fail closed). A snapshot taken with no
   // sentinel at spawn (seedPending) means a reseed was under way when the child started.
-  const tagNow = seedTagOf(spawnFs.readTextOrNull(join(plugin.root, ".seed-complete")));
-  if (!plugin.seedPending && tagNow === plugin.seedTag) return false;
+  const textNow = spawnFs.readTextOrNull(join(plugin.root, ".seed-complete"));
+  // The whole line, not the tag: every reseed writes a new timestamp, so a same-tag redeploy is caught too.
+  if (!plugin.seedPending && textNow !== null && seedLineOf(textNow) === plugin.seedLine) return false;
+  const tagNow = seedTagOf(textNow);
   try {
     reportSilentFallback(null, {
       feature: "cron-claude-eval",
@@ -2285,7 +2303,7 @@ function pluginSeedSnapshot(): ReseedBaseline | null {
   try {
     const root = assertTrustedPluginPath(getPluginPath());
     const text = spawnFs.readTextOrNull(join(root, ".seed-complete"));
-    return { root, seedTag: seedTagOf(text), seedPending: text === null };
+    return { root, seedTag: seedTagOf(text), seedLine: seedLineOf(text), seedPending: text === null };
   } catch {
     // review: swallowed — setup already refused an untrusted root (reported); this spawn is then unreachable
     return null;

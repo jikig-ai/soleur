@@ -199,8 +199,8 @@ interface AutoMergeGateResult {
 //
 // #12824 — HOME is overridden by the substrate with a fresh per-spawn dir. SOLEUR_WORKTREE_SKIP_INSTALL=1
 // makes `worktree-manager.sh create` skip install_deps (package-install scripts are code the agent can
-// write, run below the containment hook), so the clone stays node_modules-free and fix-issue takes its
-// documented no-baseline path; CI runs the tests on the PR.
+// write, run below the containment hook), so the clone stays node_modules-free; the prompt's
+// `--no-local-tests` makes fix-issue skip its test phases (2 and 4). CI runs the tests on the PR.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
@@ -326,6 +326,36 @@ async function detectBotFixPr(
     return { number: anyBotFix.number, node_id: anyBotFix.node_id };
   }
   return null;
+}
+
+// #12847 escalation — strip auto-merge eligibility and add review-required on a PR that a reseeded run
+// opened. Best-effort, like the gate's own relabels: a failure is reported, and the PR is still not queued.
+async function demoteToReviewRequired(octokit: Octokit, prNumber: number): Promise<void> {
+  try {
+    await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      issue_number: prNumber,
+      name: "bot-fix/auto-merge-eligible",
+    });
+  } catch {
+    // review: swallowed — the label may be absent (the agent never set it); the add below is what matters
+  }
+  try {
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      issue_number: prNumber,
+      labels: ["bot-fix/review-required"],
+    });
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "cron-bug-fixer",
+      op: "relabel-reseeded-pr",
+      message: "Failed to add review-required to a PR from a run whose plugin mount was reseeded",
+      extra: { fn: "cron-bug-fixer", prNumber },
+    });
+  }
 }
 
 // Three safety nets + label assertion + GraphQL auto-merge mutation.
@@ -829,15 +859,27 @@ export async function cronBugFixerHandler({
     }
 
     // --- Step 7: auto-merge-gate ---
-    const gateResult = await step.run("auto-merge-gate", async () => {
-      const octokit = await createProbeOctokit();
-      return runAutoMergeGate({
-        octokit: octokit as unknown as Octokit,
-        pr: detectedPr,
-        sourceIssueNumber: selectedIssue,
-        logger,
-      });
-    });
+    // #12847 escalation — a run whose plugin mount was reseeded mid-run read its skill from a mixed or
+    // half-copied tree (decision.ok is already false). Its PR is left for human review (review-required),
+    // never queued: auto-merge is this cron's persistence step, which the KB crons skip in the same case.
+    const gateResult: AutoMergeGateResult = spawnResult.pluginReseeded
+      ? await step.run("demote-reseeded-pr", async () => {
+          const octokit = await createProbeOctokit();
+          await demoteToReviewRequired(octokit as unknown as Octokit, detectedPr.number);
+          return {
+            queued: false,
+            reason: `PR #${detectedPr.number} came from a run whose plugin mount was reseeded mid-run`,
+          };
+        })
+      : await step.run("auto-merge-gate", async () => {
+          const octokit = await createProbeOctokit();
+          return runAutoMergeGate({
+            octokit: octokit as unknown as Octokit,
+            pr: detectedPr,
+            sourceIssueNumber: selectedIssue,
+            logger,
+          });
+        });
 
     if (!gateResult.queued) {
       logger.info(

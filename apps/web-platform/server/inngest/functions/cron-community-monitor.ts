@@ -1353,6 +1353,9 @@ export async function cronCommunityMonitorHandler({
             try {
               return await resolveOutputAwareOk({
                 spawnOk: spawnResult!.ok,
+                // #12847 escalation — a reseed sets ok:false with exit 0; without the flag this advisory call
+                // would also report it as a non-zero exit (scheduled-output-nonzero-exit), the wrong cause.
+                pluginReseeded: spawnResult!.pluginReseeded,
                 label: SENTRY_MONITOR_SLUG,
                 runStartedAt,
                 cronName: "cron-community-monitor",
