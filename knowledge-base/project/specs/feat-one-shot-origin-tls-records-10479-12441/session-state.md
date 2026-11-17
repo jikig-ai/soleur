@@ -26,3 +26,9 @@
 - constraint: Run plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh before every push.
 - constraint: Do NOT arm or enqueue the merge; when CI is green and review is done, stop and ask the owner for a typed go naming this PR.
 - constraint: Never touch #12698.
+
+## Work Phase (2026-11-17)
+
+- Records committed at e436ecf0b8 and pushed. Follow-ups filed: #12845 (timing marker), #12846 (site-split query).
+- AC1-AC8 and AC10 verified by command; AC9 (PR body) is pending at ship.
+- Affected gate: `=== 124/778 suites passed ===`, 125 selected, rc=1. The only failure is `plugins/soleur` > cloud-init-user-data-size "seam can only RAISE the floor". It is pre-existing on origin/main ba062449df: reproduced there in isolation, and CI skips it because there is no terraform. Filed as #12850. It is not caused by this diff, which touches knowledge-base/ only.
