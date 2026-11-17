@@ -1,9 +1,9 @@
 ---
-title: The merge queue ate my byte headroom, and a CLA startup_failure needs a close and reopen, not a re-run
+title: The merge queue ate my byte headroom, and a CLA startup_failure needs a re-fired event, not a comment
 category: workflow-patterns
 date: 2026-11-17
-module: ship / merge queue / CLA checks
-related: [PR #12821, PR #12736, "#11789", "Ref #12008", "Ref #9421"]
+module: ship, merge-queue, cla
+related: [PR #12821, PR #12736, "#11789"]
 ---
 
 # Learning: three merge-queue traps from PR #12821
@@ -16,86 +16,124 @@ between "ready" and "merged". Each one cost a cycle.
 ### (a) A byte budget that passed on the PR failed in the merge queue
 
 `scripts/lint-skill-body-budget.py` checks each lifecycle SKILL.md against its
-ceiling in `plugins/soleur/test/skill-body-budget.json`. It reads the ceiling from
-the merge base. On the PR, `postmerge/SKILL.md` fit under its 48000-byte ceiling.
-While #12821 waited in the merge queue, #12736 landed on main and added 8 bytes to
-the same file. The merge-group build combines main with the PR, so it measured
-48006 bytes, over the 48000 ceiling, and the queue ejected the PR.
+ceiling in `plugins/soleur/test/skill-body-budget.json`, reading the ceiling from
+the merge base. It runs in the `guards-ruleset` job of `ci.yml`, on both
+`pull_request` and `merge_group`.
 
-The PR's own check could not see this. It measured the PR head against an older
-main. Only the queue build measures the real combination, and by then any
-unrelated PR that touched the same file has already eaten the margin.
+On the PR, `postmerge/SKILL.md` was 47998 bytes, 2 under its 48000 ceiling. The PR
+check measures `refs/pull/N/merge`: the PR merged with main as of the last push.
+While #12821 waited in the queue (enqueued 14:26Z), #12736 merged at 14:46Z and added
+8 bytes to the same file. The merge-group build measured main as it was when the
+PR's turn came, read 48006, and the queue ejected the PR at 16:26Z. Commit
+`ff5134ae9f` trimmed it to 47984 and it was re-enqueued.
 
-After #12821 merged, `postmerge/SKILL.md` is 47984 bytes: 16 bytes of headroom.
-The next PR that adds prose to it will fail unless it trims something first.
+So the PR check is not wrong, it is stale: it measures against an older main. Only
+the queue build sees what landed meanwhile.
 
-### (b) CLA checks with `startup_failure` cannot be re-run
+`postmerge/SKILL.md` is now 47984 bytes: 16 bytes of headroom. Six of the ten
+budgeted files on main are under 50 bytes spare (work 2, qa 11, plan 11, postmerge
+16, one-shot 32, compound 40).
 
-The `CLA Assistant` and `cla-evidence` checks run on `pull_request_target`. Both
-can end with `startup_failure`, which means the runner never started. GitHub does
-not allow a re-run of a `startup_failure` run.
+### (b) A comment does not re-fire a CLA check that hit `startup_failure`
 
-The usual workaround, a PR comment such as `recheck`, re-fires the workflow, but
-under `pull_request_target` the new run is attached to main's commit, not the PR's
-head. The PR's required contexts stay missing, so the PR never enters the queue.
+The required contexts `cla-check` (workflow `CLA Assistant`, `cla.yml`) and
+`cla-evidence` run on `pull_request_target`. At 16:29:20Z on head `4af860cf93` both
+ended in `startup_failure`: zero jobs, `run_attempt` 1. Two other branches hit
+`startup_failure` on the same workflows between 16:01Z and 16:44Z, and the workflow
+files had not changed since 2026-10-01, so the cause looks GitHub-side and is
+undiagnosed. No re-run was attempted.
 
-What works: close the PR and reopen it (`gh pr close N && gh pr reopen N`). This
-fires the `reopened` event, and both checks run again on the same head SHA.
+A PR comment re-fires the workflows on `issue_comment`, and those runs attach to
+main's commit (`branch=main`, head `c02b95289e`), not the PR head. The PR's
+required contexts stayed missing and it never entered the queue.
+
+What worked: `gh pr close 12821 && gh pr reopen 12821` at 19:06Z. The `reopened`
+event re-fired both `pull_request_target` workflows on the same head and both
+passed. A sibling branch recovered the other way, with a new push (`synchronize`).
+
+The reopen has costs that the first draft of this learning missed:
+
+- The close turned auto-merge off (`auto_merge_disabled` at 19:06:45Z). It had to
+  be re-armed by hand at 19:07:08Z.
+- Closing fires `cleanup-unmerged-bot-branches.yml`, which deletes the head branch
+  for `ci/`, `bot-fix`, `learning-`, `review-` and `soleur/inngest-pin-` prefixes
+  without checking for a reopen. #12821's branch did not match; one of the other
+  `startup_failure` branches (`ci/campaign-calendar-…`) would have.
+- `reopened` also re-runs `ci.yml`.
 
 ### (c) `autoMergeRequest` reads `null` while the PR is queued
 
 While a PR waits in the merge queue, `gh pr view N --json autoMergeRequest` returns
-`null`. A monitor that reads `null` as "auto-merge disarmed" will raise a false alarm
-or re-arm a PR that is already queued. This is already written down in
-`plugins/soleur/skills/ship/references/ready-run-wait.md` (caveat #11789). The
-#12821 monitor was ad hoc and skipped that reference, so the trap fired again.
+`null`. A monitor that reads `null` as "auto-merge disarmed" raises a false alarm or
+re-arms a PR that is already queued. This is already written down: the #11789
+caveat in `plugins/soleur/skills/ship/references/ready-run-wait.md`, and
+`2026-10-07-merge-queue-silent-ejection-re-enqueue.md` in this directory. The
+#12821 monitor was an ad hoc loop that skipped both, so the trap fired again.
 
 ## Solution
 
-- (a) Leave at least 50 bytes of headroom under any byte ceiling when you ready the
-  PR. Measure `ceiling - wc -c` on the head you ready, not just pass or fail. If the
-  margin is under 50 bytes, trim before you enqueue.
-- (b) On a `startup_failure` from `CLA Assistant` or `cla-evidence`, close and reopen
-  the PR. Do not comment, and do not try `gh run rerun`.
-- (c) Read the queue state with
-  `bash plugins/soleur/scripts/sync-pr-behind.sh N --queue-state`. `null` means
-  disarmed only when the queue state is `not_queued` or `dequeued`.
+- (a) For each budgeted SKILL.md your diff grows, leave at least 50 bytes under its
+  ceiling, measured as `ceiling - wc -c` on the head you ready. A file already under
+  50 needs a trim of its shortfall plus your growth. 50 bytes absorbs a small edit
+  like #12736's 8; it does not absorb a large one (`postmerge/SKILL.md` has taken
+  +138 and +287 in single PRs), so re-measure after merging main. Added to
+  `plugins/soleur/skills/plan/references/plan-sharp-edges.md` (plan time) and to
+  the local gate list in `ready-run-wait.md` (ready time).
+- (b) On a `startup_failure` of `cla-check` or `cla-evidence`, do not comment. On a
+  branch without one of the bot prefixes above, close and reopen, then re-arm
+  auto-merge through the arm check. On a bot-prefixed branch, push a new commit
+  instead (it needs fresh review evidence before arming). Added under the
+  `RECOVERY no cancelled run at this head` line in `ready-run-wait.md`, which is
+  the line `ci-head-verdict.sh required` prints for this state.
+- (c) Use the Phase 7 poll or `plugins/soleur/scripts/monitor-pr-checks.sh`, not an
+  ad hoc loop. Both read the queue state; the full rules (including `dequeued` and
+  exit 4) are in `ready-run-wait.md`.
 
 ## Key Insight
 
-A check that passes on the PR is a check against yesterday's main. Anything with a
-margin, like a byte ceiling, must keep enough slack to survive what lands on main
-while the PR waits in the queue. And with `pull_request_target`, the commit a
-re-fired check attaches to depends on the event that fired it, so pick the event
-(`reopened`) that targets the PR's head.
+A check that passes on the PR is a check against an older main. Anything with a
+margin, like a byte ceiling, needs enough slack to survive what lands on main while
+the PR waits. And for a `pull_request_target` check, the commit a re-fired run
+attaches to depends on the event that fired it: `issue_comment` goes to main,
+`reopened` and `synchronize` go to the PR head. Before prescribing a re-fire, list
+what else that event triggers.
 
 ## Session Errors
 
 1. **Queue build failed on the skill-body budget (48006 > 48000) after an unrelated
-   PR (#12736) added 8 bytes on main.** Recovery: trimmed and re-enqueued. —
-   **Prevention:** keep at least 50 bytes of headroom at ready time (added to
-   `plugins/soleur/skills/plan/references/plan-sharp-edges.md`, next to the existing
-   measure-first bullet).
-2. **`CLA Assistant` and `cla-evidence` ended in `startup_failure`; a re-run is not
-   allowed, and a comment re-run attached the checks to main's commit.** Recovery:
-   closed and reopened the PR, which re-fired both on the head. — **Prevention:**
-   the remedy is now in `ship/references/ready-run-wait.md`, in the
-   required-context section that already names `cla-evidence`.
+   PR (#12736) added 8 bytes on main.** Recovery: trimmed in `ff5134ae9f` and
+   re-enqueued. — **Prevention:** the 50-byte rule above, in
+   `plugins/soleur/skills/plan/references/plan-sharp-edges.md` and
+   `plugins/soleur/skills/ship/references/ready-run-wait.md`.
+2. **`cla-check` and `cla-evidence` ended in `startup_failure`; a comment re-run
+   attached the checks to main's commit.** Recovery: closed and reopened the PR,
+   then re-armed auto-merge. — **Prevention:** the remedy, its branch-prefix guard
+   and the re-arm step are in `ready-run-wait.md` under the RECOVERY line the
+   resolver prints.
 3. **The merge monitor read `autoMergeRequest: null` on a queued PR as "disarmed".**
-   Recovery: checked the queue state, which said queued. — **Prevention:** already
-   documented (`ready-run-wait.md`, #11789). Ad hoc monitors must use the
-   `--queue-state` probe and not read `autoMergeRequest` on its own.
+   Recovery: checked the queue state, which said queued. — **Prevention:** monitor
+   with the Phase 7 poll or `monitor-pr-checks.sh`, never an ad hoc loop.
 4. **This session: `worktree-manager.sh --help` is not a command** (it printed usage
-   after "Unknown command"). One-off, no impact. — **Prevention:** none needed; the
-   usage text prints anyway.
+   after "Unknown command"). One-off, no impact. — **Prevention:** none needed.
 5. **This session: the `durable-reminder-prefer-inngest` hook blocked a CronCreate
-   reminder for #12820.** The Inngest path needs `INNGEST_MANUAL_TRIGGER_SECRET`, a prd
-   secret, and the brief forbade reading live secrets. Recovery: re-sent with the
-   hook's `gate-override` comment and the reason. — **Prevention:** when the brief
-   forbids live-secret reads, take the override path on the first call and state why.
+   reminder for #12820.** The Inngest path needs a prd secret the brief forbade
+   reading, so the reminder was re-sent with the hook's `gate-override`. —
+   **Prevention:** use the override only for a reminder that fires within this
+   session; for anything later, leave a dated comment on the issue and say the
+   session cron will not survive the session.
 6. **This session: the PR body shipped the template placeholder "undo PR #N".**
    Recovery: replaced it with #12848 and ran `gh pr edit`. — **Prevention:** after
    `gh pr create` returns the number, grep the body for `#N` before moving on.
+7. **This session: the first draft of the close-and-reopen remedy omitted the
+   auto-merge re-arm and the branch-deleting `closed` workflow.** Found by review.
+   — **Prevention:** before prescribing a GitHub event as a remedy, grep
+   `.github/workflows/` for every workflow that event (and its inverse, here
+   `closed`) triggers.
+
+## Related
+
+- `knowledge-base/project/learnings/2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so.md`
+  — a different `startup_failure` cause (a workflow-file limit, zero jobs).
 
 ## Tags
 
