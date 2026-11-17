@@ -32,6 +32,9 @@ const H = vi.hoisted(() => ({
   /** The fixture remote the literal URL is rewritten to on the hardened arm (D27: the held-commits merge). */
   remoteUrl: "",
   writeRepoCols: vi.fn(async () => undefined),
+  writeHeldCols: vi.fn(async () => undefined),
+  /** D39(a)/D42: every held-count write the self-heal asked for, with the count its inputs give (WP3 owns the write). */
+  heldWrites: [] as Array<{ T: string; headSha: string; pullBlocked: unknown; count: number | null }>,
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -45,7 +48,20 @@ vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.l
 vi.mock("@/server/github-app", () => ({ generateInstallationToken: async () => ["ghs", "_", "c".repeat(36)].join("") }));
 // D27: the held-commits merge resolves the literal URL from the workspace row and never stamps.
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeldCols }));
+// The self-heal's held-count write (frozen signature): recorded with the count the REAL compute gives on its inputs, so a
+// row asserts what would be stored without depending on the write's body.
+vi.mock("@/server/kb-sync-held-refresh", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/kb-sync-held-refresh")>();
+  return {
+    ...actual,
+    writeHeldFromIsolated: async (a: Parameters<typeof actual.writeHeldFromIsolated>[0]) => {
+      const held = await actual.heldCountOn(a.isolated, a.T, a.headSha, a.workspacePath, a.workspaceId);
+      H.heldWrites.push({ T: a.T, headSha: a.headSha, pullBlocked: a.pullBlocked, count: held?.total ?? null });
+      return held?.total ?? null;
+    },
+  };
+});
 vi.mock("@/lib/supabase/tenant", () => ({ RuntimeAuthError: class RuntimeAuthError extends Error {}, getFreshTenantClient: async () => ({}) }));
 vi.mock("@/server/git-hardened-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/git-hardened-env")>();
@@ -202,6 +218,7 @@ beforeEach(() => {
   H.afterTokenCall = null;
   H.tokenVerbs.length = 0;
   H.writeRepoCols.mockClear();
+  H.heldWrites.length = 0;
   for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
 });
 
@@ -287,6 +304,8 @@ describe("self-heal: held commits are merged, never reset (D27 amending D6(c), r
       expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "nonkb", reason: "merge_conflict_precheck" } }),
     ]);
     expect(H.writeRepoCols).not.toHaveBeenCalled();
+    // D42: the precheck hold is recorded for the cc surfaces, with the count (src/s.ts is held)
+    expect(H.heldWrites).toEqual([{ T: git(r.remote, "rev-parse", "refs/heads/main"), headSha: held, pullBlocked: "merge_conflict_precheck", count: 1 }]);
   });
 
   test("held code commit + an ignored local file at an upstream-added path -> refused, the file byte-identical", async () => {
@@ -302,6 +321,11 @@ describe("self-heal: held commits are merged, never reset (D27 amending D6(c), r
     expect(read(join(r.ws, "build", "out.txt"))).toBe("local ignored bytes\n");
     expect(mergeHeadPresent(r)).toBe(false);
     expect(H.writeRepoCols).not.toHaveBeenCalled();
+    // D42: the pre-call collision refusal reads T (no merge) and records the hold with the count
+    expect(result).toEqual(expect.objectContaining({ held: "untracked_collision" }));
+    expect(H.heldWrites).toEqual([
+      expect.objectContaining({ T: git(r.remote, "rev-parse", "refs/heads/main"), headSha: git(r.ws, "rev-parse", "HEAD"), pullBlocked: "untracked_collision" }),
+    ]);
   });
 
   test("KB-only unpublished local commit, upstream moves elsewhere -> merged, never stranded on a recovery branch", async () => {
@@ -546,5 +570,52 @@ describe("self-heal: no token reaches a planted clean/smudge filter (D6d, real g
     expect(leak).not.toContain("ghs_");
     // D15(d): `symbolic-ref` is a local verb and runs token-free; only `pull` and `fetch origin` carry the token
     expect(new Set(H.tokenVerbs)).toEqual(new Set(["pull", "fetch"]));
+  });
+});
+
+describe("self-heal: review fix round 1, WP2 (D37, D39(a), D42, real git)", { timeout: 30_000 }, () => {
+  test("D39(a): the squash-merge scenario: held code that GitHub already merged as a squash is merged in and the count is rewritten to 0", async () => {
+    const r = newRow();
+    const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    upstreamCommit(r, (d) => {
+      write(join(d, "src", "s.ts"), "export const s = 2; // held code\n");
+      write(join(d, "README.md"), "readme 2\n");
+    }, "held code (#9, squash)");
+    const T = git(r.remote, "rev-parse", "refs/heads/main");
+    const result = await heal(r);
+    expect(result).toEqual({ ok: true });
+    expect(isAncestor(r, held, "HEAD")).toBe(true);
+    expect(isAncestor(r, T, "HEAD")).toBe(true);
+    // one write, on this run's T and the POST-merge HEAD, clearing pullBlocked: nothing is held any more
+    expect(H.heldWrites).toEqual([{ T, headSha: git(r.ws, "rev-parse", "HEAD"), pullBlocked: null, count: 0 }]);
+  });
+
+  // needs WP1: the writer's entry check (D37(1), server/connected-repo-git.ts `kbPullWriter().merge`).
+  test("D37(1), data P2-2 repro: a stale MERGE_AUTOSTASH alone -> unresolved_merge, no merge child, worktree and HEAD unchanged", async () => {
+    const r = newRow();
+    const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nupstream kb\n"));
+    // an interrupted earlier merge left only its autostash pointer (the tracked tree reads clean to the dirty gate)
+    const stash = git(r.ws, "commit-tree", "-m", "autostash", "-p", "HEAD", "HEAD^{tree}");
+    writeFileSync(join(r.ws, ".git", "MERGE_AUTOSTASH"), `${stash}\n`);
+    const before = treeBytes(r);
+    const result = await heal(r);
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "held_commits" }));
+    expect(localMain(r)).toBe(held);
+    expect(treeBytes(r)).toBe(before);
+    expect(mergeHeadPresent(r)).toBe(false);
+    expect(existsSync(join(r.ws, ".git", "MERGE_AUTOSTASH"))).toBe(true); // never moved or deleted (D36(c))
+    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: expect.objectContaining({ reason: "unresolved_merge" }) })]);
+    expect(H.heldWrites).toEqual([]);
+  });
+
+  // needs WP1: the second pinned merge shape (D37(2), server/connected-repo-git.ts `mergeArgv` / `AUTO_MERGE_MSG_SELF_HEAL`).
+  test("D37(2): the self-heal's merge commit carries the self-heal message, not the session-start one", async () => {
+    const r = newRow();
+    localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nupstream kb\n"));
+    expect(await heal(r)).toEqual({ ok: true });
+    expect(git(r.ws, "log", "-1", "--format=%s", "HEAD")).toBe("Soleur: merge GitHub into workspace");
+    expect(git(r.ws, "rev-list", "--parents", "-n", "1", "HEAD").split(" ")).toHaveLength(3);
   });
 });

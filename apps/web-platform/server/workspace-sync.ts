@@ -6,14 +6,14 @@
 // unaffected.
 //
 // Deliberately imports NOTHING from `@/lib/supabase/server` (next/headers).
-// Deps: observability (clean), a type-only KbSyncErrorClass, pino's Logger
-// type, the token-free local runner (a host-git leaf), the collision precheck
-// (workspace-collision, node:fs/promises), two import-free leaves
-// (branch-validation, kb-root), and a LAZY `@/server/git-auth`
-// import inside syncWorkspace. The held-commits merge (#12718, D27) imports its
-// modules LAZILY inside that branch: the pull leaves (kb-sync-pull, kb-sync-remote,
-// never kb-sync-publish or push-branch, census row D25(3)), the isolated-dir
-// creator and dispose leaf, and the connected-repo guarded writer (`kbPullWriter`, server/connected-repo-git.ts).
+// Deps: observability (clean), type-only KbSyncErrorClass / KbPullHeldReason / KbPullWriter, pino's Logger type, the
+// token-free local runner (a host-git leaf), the collision precheck (workspace-collision, node:fs/promises), two
+// import-free leaves (branch-validation, kb-root), a LAZY `@/server/git-auth` import inside syncWorkspace, and a LAZY
+// kb-sync-held import for the recovered-branch prefix at the branch-aside (its logger stays out of module scope). The held-commits merge (#12718, D27) imports its modules LAZILY inside
+// that branch: the pull leaves (kb-sync-pull, kb-sync-remote), the isolated-dir creator and dispose leaf, the held-count
+// leaf (kb-sync-held-refresh), the service client for system callers (D43), and the connected-repo guarded writer and
+// lock (server/connected-repo-git.ts). None of them reaches kb-sync-publish or push-branch at runtime: connected-repo-git
+// imports kb-sync-publish for a type only (census row D25(3)).
 import {
   mirrorWarnWithDebounce,
   mirrorWithDebounce,
@@ -21,6 +21,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import type { KbSyncErrorClass } from "@/server/session-sync";
+import type { KbPullHeldReason, KbPullWriter } from "@/server/kb-sync-pull";
 import { runWorkspaceLocalGit, type WorkspaceLocalGitRunner } from "@/server/workspace-local-git";
 import type { Logger } from "pino";
 import { firstAppFrame } from "@/server/error-frame";
@@ -45,6 +46,29 @@ export type SyncWorkspaceHeld = "held_commits" | "dirty_tracked" | "untracked_co
 export type SyncWorkspaceResult =
   | { ok: true; recovered?: boolean }
   | { ok: false; error: unknown; errorClass: KbSyncErrorClass; held?: SyncWorkspaceHeld };
+
+/**
+ * Who asked for the sync. A route caller acts for a signed-in user (`userId`, the tenant-scoped repo read). A background
+ * job (cron reconcile, webhook reconcile) is `system: true` (CTO ruling D43): no user acts, so the held-commits merge
+ * reads `repo_url` through the service client keyed on the job's own `workspaceId` (server-resolved, never user input),
+ * and the logs carry `workspaceId` instead of a `userId`.
+ */
+export type SyncWorkspaceContext = {
+  /** The workspace whose repo row names the literal URL of the held-commits merge (#12718, D27). */
+  workspaceId: string;
+  op: "delete" | "rename" | "upload" | "push" | "manual";
+} & ({ userId: string; system?: undefined } | { system: true; userId?: undefined });
+
+/**
+ * D38(4): the self-heal's total budget, measured from the self-heal's start. A route caller (KB routes, c4-writer) answers
+ * the user's request, so on expiry it answers the existing `pending`; a background caller has the pre-range pull bound.
+ */
+export const SELF_HEAL_BUDGET_MS = { route: 15_000, background: 60_000 } as const;
+/**
+ * D38(3): the held-commits merge (and its object hand-over) starts only with at least this much budget left. A started
+ * merge is never cut short: it keeps its own child timeout, since killing it is the stranded mid-merge state D36(c) pins.
+ */
+export const SELF_HEAL_MERGE_START_MIN_MS = { route: 5_000, background: 20_000 } as const;
 
 /**
  * Classify a failed-git error into a {@link KbSyncErrorClass}. Two distinct
@@ -142,14 +166,10 @@ export async function syncWorkspace(
   installationId: number,
   workspacePath: string,
   log: Logger,
-  context: {
-    userId: string;
-    /** The workspace whose repo row names the literal URL of the held-commits merge (#12718, D27). */
-    workspaceId: string;
-    op: "delete" | "rename" | "upload" | "push" | "manual";
-  },
+  context: SyncWorkspaceContext,
 ): Promise<SyncWorkspaceResult> {
   const { gitWithInstallationAuth } = await import("@/server/git-auth");
+  const who = actor(context);
   try {
     await gitWithInstallationAuth(["pull", "--ff-only"], installationId, {
       cwd: workspacePath,
@@ -179,10 +199,7 @@ export async function syncWorkspace(
       // happen, and warns op:self-heal-reset (phantom zero-commit reset) /
       // op:self-heal-recovered-diverged (upstream-equivalent default-branch
       // commits branched aside + reset) on success.
-      log.info(
-        { userId: context.userId, op: context.op, errorClass },
-        `kb/${context.op}: ff-only pull blocked — attempting gated self-heal`,
-      );
+      log.info({ ...who, op: context.op, errorClass }, `kb/${context.op}: ff-only pull blocked — attempting gated self-heal`);
       return await selfHealNonFastForward(
         gitWithInstallationAuth,
         runWorkspaceLocalGit,
@@ -194,71 +211,300 @@ export async function syncWorkspace(
     }
 
     // Non-self-healable (`sync_failed`) — a genuine failure worth paging.
-    log.error(
-      { err: syncError, userId: context.userId, op: context.op, errorClass },
-      `kb/${context.op}: workspace sync failed`,
-    );
+    log.error({ err: syncError, ...who, op: context.op, errorClass }, `kb/${context.op}: workspace sync failed`);
     reportSilentFallback(syncError, {
       feature: "kb-route-helpers",
       op: `workspace-sync-${context.op}`,
       // workspacePath omitted — the path embeds raw userId
       // (workspacePath = `<root>/<userId>`) and bypasses the
       // hashExtraUserId top-level rename (Recital 26).
-      extra: { userId: context.userId },
+      extra: who,
       message: `kb/${context.op}: workspace sync failed`,
     });
     return { ok: false, error: syncError, errorClass };
   }
 }
 
-/**
- * D27 (amending D6(c)): the held-commits branch merges the verified remote tip instead of refusing, on the hardened arm
- * (server/kb-sync-pull.ts `mergeVerifiedDefault`, with this caller's token-free `merge-tree` pre-check so a background KB
- * write never leaves `MERGE_HEAD` or conflict markers). No stamp, no side-tip adoption; the caller reports once. Returns the
- * pull reason (`merged` on success).
- */
-async function mergeHeldCommits(
-  installationId: number,
-  workspacePath: string,
-  context: { userId: string; workspaceId: string },
-): Promise<string> {
-  const [{ readWorkspaceHeadRef }, { createIsolatedPushDir, IsolatedPushDirRefusal }, { disposeIsolated }, remoteMod, { mergeVerifiedDefault }, { kbPullWriter }] =
-    await Promise.all([
-      import("@/server/approval/workspace-head"),
-      import("@/server/git-isolated-push-dir"),
-      import("@/server/git-isolated-dispose"),
-      import("@/server/kb-sync-remote"),
-      import("@/server/kb-sync-pull"),
-      import("@/server/connected-repo-git"),
-    ]);
-  let repo: { url: string };
-  try {
-    repo = await remoteMod.resolveRepoUrl(context.userId, context.workspaceId);
-  } catch (err) {
-    if (err instanceof remoteMod.KbRemoteError) return "remote_state";
-    throw err;
+/** The log and mirror identity of a sync (D43): the user for a route caller, the workspace for a system job. */
+function actor(context: SyncWorkspaceContext): { userId: string } | { workspaceId: string } {
+  return context.system ? { workspaceId: context.workspaceId } : { userId: context.userId };
+}
+
+/** The self-heal's clock (D38(4)): the budget left, and whether the held-commits merge may still start. */
+interface SelfHealBudget {
+  remaining(): number;
+  mayStartMerge(): boolean;
+}
+
+function selfHealBudget(context: SyncWorkspaceContext): SelfHealBudget {
+  const kind = context.system ? "background" : "route";
+  const startedAt = Date.now();
+  const remaining = () => SELF_HEAL_BUDGET_MS[kind] - (Date.now() - startedAt);
+  return { remaining, mayStartMerge: () => remaining() >= SELF_HEAL_MERGE_START_MIN_MS[kind] };
+}
+
+/** Thrown by the budget-gated writer in place of a hand-over or merge child that may no longer start (D38(3)). */
+class SelfHealDeadline extends Error {
+  constructor() {
+    super("self-heal budget left too little time to start the merge");
+    this.name = "SelfHealDeadline";
   }
+}
+
+/**
+ * The guarded writer with D38(3)'s start gate: the hand-over (`unpack`) and the merge child start only while the budget
+ * allows; a refused start sets `hit` and throws (the pull maps the throw to `handover_failed` / `merge_refused`, which
+ * the caller then reports as `pull_deadline`). Tracking-ref and branch writes pass through untouched.
+ */
+function budgetGatedWriter(inner: KbPullWriter, budget: SelfHealBudget, hit: { deadline: boolean }): KbPullWriter {
+  const gate = (): void => {
+    if (!budget.mayStartMerge()) {
+      hit.deadline = true;
+      throw new SelfHealDeadline();
+    }
+  };
+  return {
+    unpack: async (pack) => {
+      gate();
+      return inner.unpack(pack);
+    },
+    setTracking: (branch, sha) => inner.setTracking(branch, sha),
+    casBranch: (branch, next, prev) => inner.casBranch(branch, next, prev),
+    merge: async (target) => {
+      gate();
+      return inner.merge(target);
+    },
+  };
+}
+
+/** What the held-commits merge reported, beyond its reason: the isolated-dir refusal's own reason (obs F4). */
+interface HeldMergeDiag {
+  isolatedReason?: string;
+}
+
+/** The literal `https://github.com/<owner>/<repo>.git` of the workspace, or null when it cannot be read (`remote_state`). */
+async function resolveSelfHealRepoUrl(context: SyncWorkspaceContext): Promise<string | null> {
+  const remoteMod = await import("@/server/kb-sync-remote");
+  if (!context.system) {
+    try {
+      return (await remoteMod.resolveRepoUrl(context.userId, context.workspaceId)).url;
+    } catch (err) {
+      if (err instanceof remoteMod.KbRemoteError) return null;
+      throw err;
+    }
+  }
+  // D43: a system job has no user to mint a tenant token for. Service read keyed on the job's own workspace id (from the
+  // job's own query, never user input, R3), connected rows only. A failed read is `remote_state`, like the tenant read's.
+  try {
+    const [{ createServiceClient }, { normalizeRepoUrl }] = await Promise.all([
+      import("@/lib/supabase/service"),
+      import("@/lib/repo-url"),
+    ]);
+    const { data, error } = await createServiceClient()
+      .from("workspaces")
+      .select("repo_url")
+      .eq("id", context.workspaceId)
+      .eq("repo_status", "ready")
+      .maybeSingle();
+    const raw = (data as { repo_url?: unknown } | null)?.repo_url;
+    if (error || typeof raw !== "string") return null;
+    const { owner, repo } = remoteMod.parseOwnerRepo(normalizeRepoUrl(raw));
+    return owner && repo ? `https://github.com/${owner}/${repo}.git` : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The shared skeleton of the two held-arm git paths: the repo URL, HEAD, one isolated directory disposed in `finally`.
+ * `remote_state` / `isolated_refused` when either cannot be had.
+ */
+async function onIsolatedDir(
+  workspacePath: string,
+  context: SyncWorkspaceContext,
+  diag: HeldMergeDiag,
+  body: (a: {
+    isolated: import("@/server/git-isolated-push-dir").IsolatedPushDirHandle;
+    url: string;
+    head: { sha: string; refName: string | null };
+  }) => Promise<KbPullHeldReason>,
+): Promise<KbPullHeldReason> {
+  const [{ readWorkspaceHeadRef }, { createIsolatedPushDir, IsolatedPushDirRefusal }, { disposeIsolated }] = await Promise.all([
+    import("@/server/approval/workspace-head"),
+    import("@/server/git-isolated-push-dir"),
+    import("@/server/git-isolated-dispose"),
+  ]);
+  const url = await resolveSelfHealRepoUrl(context);
+  if (url === null) return "remote_state";
   const head = readWorkspaceHeadRef(workspacePath);
   let isolated: ReturnType<typeof createIsolatedPushDir> | undefined;
   try {
     try {
       isolated = createIsolatedPushDir(workspacePath);
     } catch (err) {
-      if (err instanceof IsolatedPushDirRefusal) return "isolated_refused";
+      if (err instanceof IsolatedPushDirRefusal) {
+        diag.isolatedReason = err.reason;
+        return "isolated_refused";
+      }
       throw err;
     }
-    const r = await mergeVerifiedDefault({
-      isolated,
-      installationId,
-      url: repo.url,
-      headSha: head.sha,
-      refName: head.refName,
-      writer: kbPullWriter(workspacePath),
-      precheck: true,
-    });
-    return r.reason;
+    return await body({ isolated, url, head });
   } finally {
     disposeIsolated(isolated);
+  }
+}
+
+/** The four self-heal outcomes that write the held count (D39(a)), with the pull-blocked state each one leaves (D42). */
+const HELD_COUNT_WRITES: Partial<Record<KbPullHeldReason, "merge_conflict_precheck" | "untracked_collision" | null>> = {
+  merged: null,
+  up_to_date: null,
+  merge_conflict_precheck: "merge_conflict_precheck",
+  untracked_collision: "untracked_collision",
+};
+
+/**
+ * D27 (amending D6(c)), D37: the held-commits branch merges the verified remote tip instead of refusing, on the hardened
+ * arm (server/kb-sync-pull.ts `mergeVerifiedDefault`, with this caller's token-free `merge-tree` pre-check). The writer is
+ * the second pinned shape, WITHOUT `--autostash` (D37(2)): the tree was gated clean, so a path dirtied after the gate makes
+ * git refuse the merge, and git never stashes and never resets. The writer's entry check (D37(1), server/connected-repo-git.ts)
+ * never starts a merge over an unfinished one. A precheck/merge parity break caused by same-uid workspace config is the
+ * D26(3) residual. Runs under the same-host workspace lock (D38(6)); the lock wait and every step before the merge count
+ * against the self-heal budget, and the hand-over and merge start only while it allows (D38(3)). After `merged`,
+ * `up_to_date`, `merge_conflict_precheck` or the writer's `untracked_collision`, the held count is rewritten on this run's
+ * isolated dir and `T`, with the pull-blocked state (D39(a), D42). No stamp, no side-tip adoption; the caller reports once.
+ */
+async function mergeHeldCommits(
+  installationId: number,
+  workspacePath: string,
+  context: SyncWorkspaceContext,
+  budget: SelfHealBudget,
+  diag: HeldMergeDiag,
+): Promise<KbPullHeldReason> {
+  const [{ mergeVerifiedDefault }, { kbPullWriter, withWorkspaceGitLock }, { writeHeldFromIsolated }] = await Promise.all([
+    import("@/server/kb-sync-pull"),
+    import("@/server/connected-repo-git"),
+    import("@/server/kb-sync-held-refresh"),
+  ]);
+  return withWorkspaceGitLock(workspacePath, async () => {
+    if (!budget.mayStartMerge()) return "pull_deadline";
+    return onIsolatedDir(workspacePath, context, diag, async ({ isolated, url, head }) => {
+      const hit = { deadline: false };
+      const r = await mergeVerifiedDefault({
+        isolated,
+        installationId,
+        url,
+        headSha: head.sha,
+        refName: head.refName,
+        writer: budgetGatedWriter(kbPullWriter(workspacePath, { autostash: false }), budget, hit),
+        precheck: true,
+      });
+      const reason: KbPullHeldReason = hit.deadline ? "pull_deadline" : r.reason;
+      const pullBlocked = HELD_COUNT_WRITES[reason];
+      // X5: no count when HEAD is not the remote's default branch (paths that never attempted a count write nothing).
+      if (pullBlocked !== undefined && r.remote && head.refName === `refs/heads/${r.remote.defaultBranch}`) {
+        const { readWorkspaceHeadRef } = await import("@/server/approval/workspace-head");
+        await writeHeldFromIsolated({
+          isolated,
+          workspacePath,
+          workspaceId: context.workspaceId,
+          T: r.remote.tip,
+          // the merge moved HEAD: count on the HEAD it left
+          headSha: reason === "merged" ? readWorkspaceHeadRef(workspacePath).sha : head.sha,
+          checkedAt: r.remote.readAt,
+          pullBlocked,
+        });
+      }
+      return reason;
+    });
+  });
+}
+
+/**
+ * D42: the self-heal's own untracked-collision refusal on the held arm (before any merge) still records the state, so a
+ * cc workspace is not frozen silently: one hardened `ls-remote` for `T`, the count on HEAD, `pullBlocked =
+ * untracked_collision`. Nothing is merged or handed over. Never throws (the refusal stands whatever happens here).
+ */
+async function recordCollisionHeld(installationId: number, workspacePath: string, context: SyncWorkspaceContext): Promise<void> {
+  try {
+    const [{ readRemoteState, KbRemoteError }, { writeHeldFromIsolated }] = await Promise.all([
+      import("@/server/kb-sync-remote"),
+      import("@/server/kb-sync-held-refresh"),
+    ]);
+    await onIsolatedDir(workspacePath, context, {}, async ({ isolated, url, head }) => {
+      let remote: Awaited<ReturnType<typeof readRemoteState>> = null;
+      try {
+        remote = await readRemoteState(isolated, installationId, url);
+      } catch (err) {
+        if (!(err instanceof KbRemoteError)) throw err;
+      }
+      if (!remote || head.refName !== `refs/heads/${remote.defaultBranch}`) return "remote_state";
+      await writeHeldFromIsolated({
+        isolated,
+        workspacePath,
+        workspaceId: context.workspaceId,
+        T: remote.tip,
+        headSha: head.sha,
+        checkedAt: remote.readAt,
+        pullBlocked: "untracked_collision",
+      });
+      return "untracked_collision";
+    });
+  } catch {
+    // display-only state: the refusal itself is already decided and reported by the caller
+  }
+}
+
+/**
+ * Structural 3a#9: what each held-commits merge result means, honestly. `ok` (merged, or the remote is already in HEAD),
+ * `collision` (the writer found an untracked or ignored entry in the merge's way: the D15(a) hold), `not_started` (the
+ * merge was not started: it would conflict, or exceeds a limit or the budget), `mid_merge` (an unfinished merge is in the
+ * workspace, or this merge left one), `failed` (the remote tip could not be read, verified or handed over). The side-tip
+ * reasons are never produced by the default-branch merge and fall in `failed`. Every non-`ok` keeps the held-commits hold.
+ */
+type HeldMergeVerdict = "ok" | "collision" | "not_started" | "mid_merge" | "failed";
+const HELD_MERGE_VERDICT: Record<KbPullHeldReason, HeldMergeVerdict> = {
+  merged: "ok",
+  up_to_date: "ok",
+  untracked_collision: "collision",
+  merge_conflict_precheck: "not_started",
+  walk_cap: "not_started",
+  handover_too_large: "not_started",
+  pull_deadline: "not_started",
+  unresolved_merge: "mid_merge",
+  merge_conflict: "mid_merge",
+  autostash_conflict: "mid_merge",
+  merge_unverified: "mid_merge",
+  remote_state: "failed",
+  fetch_failed: "failed",
+  isolated_refused: "failed",
+  tip_mismatch: "failed",
+  shallow_changed: "failed",
+  handover_failed: "failed",
+  merge_refused: "failed",
+  non_default_branch: "failed",
+  pull_unexpected: "failed",
+  side_not_kb_only: "failed",
+  side_pr_unknown: "failed",
+  side_declined: "failed",
+  side_pr_created: "failed",
+  side_linked: "failed",
+  side_conflict: "failed",
+  side_pr_create_failed: "failed",
+};
+
+/** The refusal message of a non-`ok`, non-collision verdict (no paths, no shas). */
+function heldMergeWhat(verdict: "not_started" | "mid_merge" | "failed", heldKind: string): string {
+  switch (verdict) {
+    case "not_started":
+      return `held ${heldKind} commits; the merge with GitHub was not started`;
+    case "mid_merge":
+      return `held ${heldKind} commits; the workspace is mid-merge (an unfinished merge)`;
+    case "failed":
+      return `held ${heldKind} commits; the GitHub tip could not be read or handed over`;
+    default: {
+      const never: never = verdict;
+      return never;
+    }
   }
 }
 
@@ -283,11 +529,14 @@ const remoteTrackingRef = (defaultBranch: string): string => `refs/remotes/origi
  *  3. ANY tracked change, `knowledge-base/` included -> refuse (op:self-heal-aborted-dirty-tracked, held dirty_tracked).
  *  4. With local commits whose content is NOT upstream (`diff --quiet refs/remotes/origin/D...HEAD -- .
  *     ':(exclude)knowledge-base/'` exits 1, or the `knowledge-base` trees of HEAD and the remote-tracking ref differ): D27,
- *     the untracked-collision precheck, then the hardened merge of the verified remote tip (`mergeHeldCommits`: token-free
- *     `merge-tree` pre-check, `--no-overwrite-ignore`, no stamp, no adoption). `merged` returns ok with the held commits
- *     kept; any other reason is op:self-heal-aborted-held-commits, tags `held_kind` = nonkb | kb and `reason` (the pull
- *     reason, e.g. `merge_conflict_precheck`), debounce class `<op>:<held_kind>` (D20), held held_commits. Content that IS
- *     upstream (the squash-merged side-PR case) goes on to step 5.
+ *     the untracked-collision precheck (a hit also records the count with `pullBlocked`, D42), then the hardened merge of
+ *     the verified remote tip (`mergeHeldCommits`: token-free `merge-tree` pre-check, no `--autostash`,
+ *     `--no-overwrite-ignore`, no stamp, no adoption). `merged` and `up_to_date` return ok with the held commits kept
+ *     (D37(3)); the writer's `untracked_collision` is the step-5 refusal (arm diverged); any other reason is
+ *     op:self-heal-aborted-held-commits, tags `held_kind` = nonkb | kb, `reason` (the pull reason, e.g.
+ *     `merge_conflict_precheck`) and, for a refused isolated dir, `isolated_reason` (obs F4), debounce class
+ *     `<op>:<held_kind>:<reason>` (D20, obs F2), held held_commits, the message naming the verdict (structural 3a#9).
+ *     Content that IS upstream (the squash-merged side-PR case) goes on to step 5.
  *  5. The untracked-collision precheck ({@link hasUntrackedCollision}) on both arms, BEFORE the branch-aside so a refusal
  *     leaves no recovery branch: op:self-heal-aborted-untracked-collision, tag `arm` = phantom | diverged, no paths in
  *     tags or extra, held untracked_collision.
@@ -298,7 +547,8 @@ const remoteTrackingRef = (defaultBranch: string): string => `refs/remotes/origi
  * emit passes a null error and carries its details in tags / extra (D8, the #8629 Error-path tag loss); `self-heal-failed`
  * adds `extra.frame` (D20). The three refusals are designed holds the next session-start pull resolves, so they warn,
  * debounced per workspace (D7, D6e). Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above; the
- * debounce key is in-process only.
+ * debounce key is in-process only. A system caller (D43) logs and mirrors `workspaceId` where a route caller has `userId`.
+ * The budget (D38(4)) starts here; on expiry before the merge the result is the held-commits hold (the route's `pending`).
  */
 async function selfHealNonFastForward(
   gitWithInstallationAuth: (
@@ -310,10 +560,12 @@ async function selfHealNonFastForward(
   installationId: number,
   workspacePath: string,
   log: Logger,
-  context: { userId: string; workspaceId: string; op: string },
+  context: SyncWorkspaceContext,
 ): Promise<SyncWorkspaceResult> {
+  const budget = selfHealBudget(context);
   const gitOpts = { cwd: workspacePath, timeout: 30_000 };
-  const extra = { userId: context.userId };
+  const who = actor(context);
+  const extra = who;
   const refuse = (reason: string, held?: SyncWorkspaceHeld): SyncWorkspaceResult => ({
     ok: false,
     error: new Error(reason),
@@ -324,7 +576,7 @@ async function selfHealNonFastForward(
   const refuseUntrackedCollision = (arm: "diverged" | "phantom"): SyncWorkspaceResult => {
     const op = "self-heal-aborted-untracked-collision";
     log.warn(
-      { userId: context.userId, op: context.op, arm },
+      { ...who, op: context.op, arm },
       `kb/${context.op}: self-heal aborted — an untracked or ignored file is in the reset's way`,
     );
     mirrorWarnWithDebounce(
@@ -368,7 +620,7 @@ async function selfHealNonFastForward(
       const abortOp = head === "detached" ? "self-heal-aborted-detached-head" : "self-heal-aborted-dirty";
       const what =
         head === "detached" ? "detached HEAD" : head === "non_default" ? "not on the default branch" : "local-commit count unreadable";
-      log.error({ userId: context.userId, op: context.op, localCommits, head }, `kb/${context.op}: self-heal aborted — ${what}`);
+      log.error({ ...who, op: context.op, localCommits, head }, `kb/${context.op}: self-heal aborted — ${what}`);
       mirrorWithDebounce(
         null,
         { feature: "kb-route-helpers", op: abortOp, tags: { head }, extra, message: `kb/${context.op}: self-heal aborted (${what})` },
@@ -378,11 +630,11 @@ async function selfHealNonFastForward(
       return refuse(`non-fast-forward clone ${what}`);
     }
 
-    // D6b: any tracked change refuses, knowledge-base/ included. The stall ends at the next session-start
-    // `pull --no-rebase --autostash`; #5221 keeps the broader recovery-and-lock work.
+    // D6b: any tracked change refuses, knowledge-base/ included. The stall ends at the next session-start pull (syncPull's
+    // hardened merge of the verified remote tip); #5221 keeps the broader recovery-and-lock work.
     if (hasTrackedChange(statusOut)) {
       const op = "self-heal-aborted-dirty-tracked";
-      log.warn({ userId: context.userId, op: context.op, localCommits }, `kb/${context.op}: self-heal aborted — tracked changes in the working tree`);
+      log.warn({ ...who, op: context.op, localCommits }, `kb/${context.op}: self-heal aborted — tracked changes in the working tree`);
       mirrorWarnWithDebounce(
         null,
         { feature: "kb-route-helpers", op, extra, message: `kb/${context.op}: self-heal aborted (tracked changes in the working tree)` },
@@ -413,30 +665,38 @@ async function selfHealNonFastForward(
         // D27: the D15 untracked precheck first (an untracked or ignored entry at an incoming path refuses as below), then
         // the hardened merge. `merged` keeps the held commits and the upstream ones: no reset, no branch-aside.
         if (await hasUntrackedCollision((argv) => runLocal(argv, gitOpts), workspacePath, target)) {
+          await recordCollisionHeld(installationId, workspacePath, context);
           return refuseUntrackedCollision("diverged");
         }
-        const reason = await mergeHeldCommits(installationId, workspacePath, context);
-        if (reason === "merged") {
-          log.info({ userId: context.userId, op: context.op, localCommits }, `kb/${context.op}: self-heal merged the default branch`);
+        const diag: HeldMergeDiag = {};
+        const reason = await mergeHeldCommits(installationId, workspacePath, context, budget, diag);
+        const verdict = HELD_MERGE_VERDICT[reason];
+        if (verdict === "ok") {
+          log.info(
+            { ...who, op: context.op, localCommits, reason },
+            reason === "merged"
+              ? `kb/${context.op}: self-heal merged the default branch`
+              : `kb/${context.op}: self-heal found the default branch already in the workspace`,
+          );
           return { ok: true };
         }
+        if (verdict === "collision") return refuseUntrackedCollision("diverged");
         const op = "self-heal-aborted-held-commits";
         const heldKind = nonKbHeld ? "nonkb" : "kb";
-        log.warn(
-          { userId: context.userId, op: context.op, localCommits, heldKind },
-          `kb/${context.op}: self-heal aborted — local commits hold content upstream lacks`,
-        );
+        const what = heldMergeWhat(verdict, heldKind);
+        const isolatedTag: Record<string, string> = diag.isolatedReason ? { isolated_reason: diag.isolatedReason } : {};
+        log.warn({ ...who, op: context.op, localCommits, heldKind, reason, ...isolatedTag }, `kb/${context.op}: self-heal aborted — ${what}`);
         mirrorWarnWithDebounce(
           null,
           {
             feature: "kb-route-helpers",
             op,
-            tags: { held_kind: heldKind, reason },
+            tags: { held_kind: heldKind, reason, ...isolatedTag },
             extra: { ...extra, localCommits },
-            message: `kb/${context.op}: self-heal aborted (held ${heldKind} commits)`,
+            message: `kb/${context.op}: self-heal aborted (${what})`,
           },
           workspacePath,
-          `${op}:${heldKind}`,
+          `${op}:${heldKind}:${reason}`,
         );
         return refuse("non-fast-forward with held local commits", "held_commits");
       }
@@ -454,7 +714,9 @@ async function selfHealNonFastForward(
     // timestamp avoids clobbering a prior recovery branch.
     let recoveryBranch: string | null = null;
     if (localCommits > 0) {
-      recoveryBranch = `soleur/recovered-kb-sync-${Date.now()}`;
+      // RC-H: the one spelling of the prefix, which the held count reads back (server/kb-sync-held.ts).
+      const { RECOVERED_REF_PREFIX } = await import("@/server/kb-sync-held");
+      recoveryBranch = `${RECOVERED_REF_PREFIX.slice("refs/heads/".length)}${Date.now()}`;
       await runLocal(["branch", recoveryBranch, "HEAD"], gitOpts);
     }
 
@@ -465,7 +727,7 @@ async function selfHealNonFastForward(
 
     if (recoveryBranch) {
       log.warn(
-        { userId: context.userId, op: context.op, defaultBranch, localCommits, recoveryBranch },
+        { ...who, op: context.op, defaultBranch, localCommits, recoveryBranch },
         `kb/${context.op}: self-heal recovered diverged default-branch clone — branched ${localCommits} commit(s) aside to ${recoveryBranch}, reset to origin/${defaultBranch}`,
       );
       warnSilentFallback(null, {
@@ -479,7 +741,7 @@ async function selfHealNonFastForward(
 
     // Phantom divergence (upstream force-push / corrupted ref). Safe reset, no commits were stranded.
     log.warn(
-      { userId: context.userId, op: context.op, defaultBranch },
+      { ...who, op: context.op, defaultBranch },
       `kb/${context.op}: self-heal reset clone to origin/${defaultBranch}`,
     );
     warnSilentFallback(null, {
@@ -494,7 +756,7 @@ async function selfHealNonFastForward(
     // when one exists, the first app code frame (D20).
     const errName = healError instanceof Error ? healError.name : typeof healError;
     const frame = firstAppFrame(healError);
-    log.error({ userId: context.userId, op: context.op, errName, ...(frame ? { frame } : {}) }, `kb/${context.op}: self-heal failed`);
+    log.error({ ...who, op: context.op, errName, ...(frame ? { frame } : {}) }, `kb/${context.op}: self-heal failed`);
     reportSilentFallback(null, {
       feature: "kb-route-helpers",
       op: "self-heal-failed",
