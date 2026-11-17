@@ -12,6 +12,39 @@ refs: [12742, 10538]
 
 # Renew the leg-2 Inngest sdk_url poll exception to 2026-12-10
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-17 (after plan review). **Sections enhanced:** Rulings, Phases 1-5, Measurement commands, CLO
+drafts A-C, Files to Edit, Acceptance Criteria, Architecture Decision. **Inputs:** plan review (DHH, Kieran,
+code-simplicity), CLO and CTO agent re-rulings on each review finding, and live verification of every citation.
+
+### Key Improvements
+
+1. One public evidence comment: the separate measurement comment is folded into the #12742 acceptance comment (CLO cut F2),
+   which carries every value labelled by reader and time plus its query; the ledger and record cite only `ACCEPT_ID`.
+2. The record, the ledger and the comments cite the plan-time reads (CTO 17:04-17:07Z, planner 17:11Z). Work-phase reads only
+   decide whether to halt, against one halt predicate that includes the Hetzner void checks. The merge-day re-read is the
+   last step before enqueueing, and "unchanged" may be written only over values that were actually re-read.
+3. Ledger Draft B is trimmed (CLO cut F3) and keeps the void result in words, the full legacy clause and the measurement times.
+4. Three more statements of the superseded 2026-11-20 requirement now get their own markers: counsel-review Q-2, the
+   runbook precondition-1 note, and an ADR-294 dated note (the 7th file).
+5. Phase 5 order fixed: the relabel comes before the acceptance comment that says it happened. PR #12884 already exists,
+   so the work phase fills its number up front.
+
+### New Considerations Discovered
+
+- `git diff -U0` on the 2026-11-13 record shows the one-line `addenda:` array as changed; AC6 now allows exactly the three
+  frontmatter lines.
+- A PR cannot carry its own merge time. The late-merge gap wording now points at the merge commit's timestamp.
+- `lint-legal-registers.sh` checks cited paths with `git ls-files`, so AC8 runs after `git add`.
+- MD028 is disabled in `.markdownlint.json`, so adjacent Superseded blockquotes lint clean.
+- Verified live on 2026-11-17:
+  - every cited issue and PR (including #12884 OPEN draft, and #12876 changing only its own plan and spec files);
+  - comment 6846245981;
+  - run 43862798565 (12:01:10Z-12:08:55Z, success);
+  - all four labels;
+  - the nft `legacy_8288` rule's source set (`ip saddr { ${web_host_private_ips} }`).
+
 ## Overview
 
 Ledger row 6 of `scripts/encryption-posture-ledger.json` (the plain-HTTP poll from the dedicated
