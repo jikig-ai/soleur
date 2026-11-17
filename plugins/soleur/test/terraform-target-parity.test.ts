@@ -1636,6 +1636,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.grok_dogfood",
   "hcloud_firewall.grok_dogfood",
   "hcloud_firewall_attachment.grok_dogfood",
+  // #12866 (ADR-327 step 2a) — the dedicated bastion. Born only by the bastion_host_create dispatch,
+  // replaced only by bastion-host-replace (#12879); a per-PR -target would birth or mutate a host the
+  // HALT forbids. The host key never rotates on a replace (F5), so no routine apply may touch it.
+  // tests/scripts/lib/bastion-resources.txt is the one list; the bastion describe block below
+  // asserts every entry is here and equals the job's -target lines.
+  "tls_private_key.bastion_host_ssh",
+  "hcloud_firewall.bastion",
+  "hcloud_server.bastion",
+  "hcloud_server_network.bastion",
+  "hcloud_firewall_attachment.bastion",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
