@@ -333,7 +333,7 @@ export async function POST(request: Request) {
       userData.github_installation_id,
       userData.workspace_path,
       logger,
-      { userId, op: "upload" },
+      { userId, workspaceId: access.activeWorkspaceId, op: "upload" },
     );
     if (!sync.ok && !sync.held) {
       return NextResponse.json(

@@ -9,7 +9,10 @@
 // Deps: observability (clean), a type-only KbSyncErrorClass, pino's Logger
 // type, the token-free local runner (a host-git leaf), node:fs/promises, two
 // import-free leaves (branch-validation, kb-root), and a LAZY `@/server/git-auth`
-// import inside syncWorkspace.
+// import inside syncWorkspace. The held-commits merge (#12718, D27) imports its
+// modules LAZILY inside that branch: the pull leaves (kb-sync-pull, kb-sync-remote,
+// never kb-sync-publish or push-branch, census row D25(3)), the isolated-dir
+// creator and dispose leaf, and session-sync's guarded writer (`kbPullWriter`).
 import { lstat } from "node:fs/promises";
 import {
   mirrorWarnWithDebounce,
@@ -140,6 +143,8 @@ export async function syncWorkspace(
   log: Logger,
   context: {
     userId: string;
+    /** The workspace whose repo row names the literal URL of the held-commits merge (#12718, D27). */
+    workspaceId: string;
     op: "delete" | "rename" | "upload" | "push" | "manual";
   },
 ): Promise<SyncWorkspaceResult> {
@@ -205,8 +210,56 @@ export async function syncWorkspace(
   }
 }
 
-/** Interim `reason` of `self-heal-aborted-held-commits` until the Phase 9 hardened pull-merge (#12718) is called here. */
-const HELD_COMMITS_REASON_INTERIM = "merge_not_attempted";
+/**
+ * D27 (amending D6(c)): the held-commits branch merges the verified remote tip instead of refusing, on the hardened arm
+ * (server/kb-sync-pull.ts `mergeVerifiedDefault`, with this caller's token-free `merge-tree` pre-check so a background KB
+ * write never leaves `MERGE_HEAD` or conflict markers). No stamp, no side-tip adoption; the caller reports once. Returns the
+ * pull reason (`merged` on success).
+ */
+async function mergeHeldCommits(
+  installationId: number,
+  workspacePath: string,
+  context: { userId: string; workspaceId: string },
+): Promise<string> {
+  const [{ readWorkspaceHeadRef }, { createIsolatedPushDir, IsolatedPushDirRefusal }, { disposeIsolated }, remoteMod, { mergeVerifiedDefault }, { kbPullWriter }] =
+    await Promise.all([
+      import("@/server/approval/workspace-head"),
+      import("@/server/git-isolated-push-dir"),
+      import("@/server/git-isolated-dispose"),
+      import("@/server/kb-sync-remote"),
+      import("@/server/kb-sync-pull"),
+      import("@/server/session-sync"),
+    ]);
+  let repo: { url: string };
+  try {
+    repo = await remoteMod.resolveRepoUrl(context.userId, context.workspaceId);
+  } catch (err) {
+    if (err instanceof remoteMod.KbRemoteError) return "remote_state";
+    throw err;
+  }
+  const head = readWorkspaceHeadRef(workspacePath);
+  let isolated: ReturnType<typeof createIsolatedPushDir> | undefined;
+  try {
+    try {
+      isolated = createIsolatedPushDir(workspacePath);
+    } catch (err) {
+      if (err instanceof IsolatedPushDirRefusal) return "isolated_refused";
+      throw err;
+    }
+    const r = await mergeVerifiedDefault({
+      isolated,
+      installationId,
+      url: repo.url,
+      headSha: head.sha,
+      refName: head.refName,
+      writer: kbPullWriter(workspacePath),
+      precheck: true,
+    });
+    return r.reason;
+  } finally {
+    disposeIsolated(isolated);
+  }
+}
 
 /**
  * The full remote-tracking refname of the default branch: never `@{u}` (resolved from the agent-writable
@@ -330,16 +383,20 @@ async function hasUntrackedCollision(
  *     (D15e). The `-dirty` slug is a MISNOMER kept for continuity (4 test consumers, no alert keys on it): it never means
  *     a dirty tree, which is `-dirty-tracked`.
  *  3. ANY tracked change, `knowledge-base/` included -> refuse (op:self-heal-aborted-dirty-tracked, held dirty_tracked).
- *  4. With local commits: refuse unless their content is upstream - `diff --quiet refs/remotes/origin/D...HEAD -- .
- *     ':(exclude)knowledge-base/'` exits 0 AND the `knowledge-base` trees of HEAD and the remote-tracking ref are equal
- *     (the squash-merged side-PR case); else op:self-heal-aborted-held-commits, tags `held_kind` = nonkb | kb and
- *     `reason`, debounce class `<op>:<held_kind>` (D20), held held_commits.
+ *  4. With local commits whose content is NOT upstream (`diff --quiet refs/remotes/origin/D...HEAD -- .
+ *     ':(exclude)knowledge-base/'` exits 1, or the `knowledge-base` trees of HEAD and the remote-tracking ref differ): D27,
+ *     the untracked-collision precheck, then the hardened merge of the verified remote tip (`mergeHeldCommits`: token-free
+ *     `merge-tree` pre-check, `--no-overwrite-ignore`, no stamp, no adoption). `merged` returns ok with the held commits
+ *     kept; any other reason is op:self-heal-aborted-held-commits, tags `held_kind` = nonkb | kb and `reason` (the pull
+ *     reason, e.g. `merge_conflict_precheck`), debounce class `<op>:<held_kind>` (D20), held held_commits. Content that IS
+ *     upstream (the squash-merged side-PR case) goes on to step 5.
  *  5. The untracked-collision precheck ({@link hasUntrackedCollision}) on both arms, BEFORE the branch-aside so a refusal
  *     leaves no recovery branch: op:self-heal-aborted-untracked-collision, tag `arm` = phantom | diverged, no paths in
  *     tags or extra, held untracked_collision.
  *  6. With local commits, the branch-aside to `soleur/recovered-kb-sync-*`; then `reset --keep refs/remotes/origin/<D>`
  *     (op:self-heal-recovered-diverged, or op:self-heal-reset on the phantom arm).
- * Every local verb runs token-free through `runLocal`; only `fetch origin` and the `pull --ff-only` carry the token. Every
+ * Every local verb runs token-free through `runLocal`; only `fetch origin` and the `pull --ff-only` carry the token on the
+ * legacy arm (X3), and the held-commits merge's `ls-remote` and fetch on the hardened arm. Every
  * emit passes a null error and carries its details in tags / extra (D8, the #8629 Error-path tag loss); `self-heal-failed`
  * adds `extra.frame` (D20). The three refusals are designed holds the next session-start pull resolves, so they warn,
  * debounced per workspace (D7, D6e). Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above; the
@@ -355,7 +412,7 @@ async function selfHealNonFastForward(
   installationId: number,
   workspacePath: string,
   log: Logger,
-  context: { userId: string; op: string },
+  context: { userId: string; workspaceId: string; op: string },
 ): Promise<SyncWorkspaceResult> {
   const gitOpts = { cwd: workspacePath, timeout: 30_000 };
   const extra = { userId: context.userId };
@@ -365,6 +422,21 @@ async function selfHealNonFastForward(
     errorClass: ERROR_CLASS_NON_FAST_FORWARD,
     ...(held ? { held } : {}),
   });
+  /** D15(a): an untracked or ignored entry is in the way of the incoming tree: refuse, before any branch-aside or merge. */
+  const refuseUntrackedCollision = (arm: "diverged" | "phantom"): SyncWorkspaceResult => {
+    const op = "self-heal-aborted-untracked-collision";
+    log.warn(
+      { userId: context.userId, op: context.op, arm },
+      `kb/${context.op}: self-heal aborted — an untracked or ignored file is in the reset's way`,
+    );
+    mirrorWarnWithDebounce(
+      null,
+      { feature: "kb-route-helpers", op, tags: { arm }, extra, message: `kb/${context.op}: self-heal aborted (an untracked or ignored file is in the reset's way)` },
+      workspacePath,
+      op,
+    );
+    return refuse("non-fast-forward with an untracked or ignored file in the reset's way", "untracked_collision");
+  };
   try {
     const defaultBranch = await resolveDefaultBranch(runLocal, workspacePath);
     const target = remoteTrackingRef(defaultBranch);
@@ -440,7 +512,16 @@ async function selfHealNonFastForward(
           gitOpts,
         )) === 1;
       if (nonKbHeld || kbHeld) {
-        // Phase 9 (D6c): call the hardened pull-merge routine (X1) here; on any X1 refusal emit this op with its reason.
+        // D27: the D15 untracked precheck first (an untracked or ignored entry at an incoming path refuses as below), then
+        // the hardened merge. `merged` keeps the held commits and the upstream ones: no reset, no branch-aside.
+        if (await hasUntrackedCollision(runLocal, workspacePath, target, gitOpts)) {
+          return refuseUntrackedCollision("diverged");
+        }
+        const reason = await mergeHeldCommits(installationId, workspacePath, context);
+        if (reason === "merged") {
+          log.info({ userId: context.userId, op: context.op, localCommits }, `kb/${context.op}: self-heal merged the default branch`);
+          return { ok: true };
+        }
         const op = "self-heal-aborted-held-commits";
         const heldKind = nonKbHeld ? "nonkb" : "kb";
         log.warn(
@@ -452,7 +533,7 @@ async function selfHealNonFastForward(
           {
             feature: "kb-route-helpers",
             op,
-            tags: { held_kind: heldKind, reason: HELD_COMMITS_REASON_INTERIM },
+            tags: { held_kind: heldKind, reason },
             extra: { ...extra, localCommits },
             message: `kb/${context.op}: self-heal aborted (held ${heldKind} commits)`,
           },
@@ -466,19 +547,7 @@ async function selfHealNonFastForward(
     // D15(a): nothing the reset can replace may be an entry HEAD does not track (untracked or ignored). Both arms; before
     // the branch-aside, so a refusal leaves no recovery branch behind.
     if (await hasUntrackedCollision(runLocal, workspacePath, target, gitOpts)) {
-      const op = "self-heal-aborted-untracked-collision";
-      const arm = localCommits > 0 ? "diverged" : "phantom";
-      log.warn(
-        { userId: context.userId, op: context.op, localCommits, arm },
-        `kb/${context.op}: self-heal aborted — an untracked or ignored file is in the reset's way`,
-      );
-      mirrorWarnWithDebounce(
-        null,
-        { feature: "kb-route-helpers", op, tags: { arm }, extra, message: `kb/${context.op}: self-heal aborted (an untracked or ignored file is in the reset's way)` },
-        workspacePath,
-        op,
-      );
-      return refuse("non-fast-forward with an untracked or ignored file in the reset's way", "untracked_collision");
+      return refuseUntrackedCollision(localCommits > 0 ? "diverged" : "phantom");
     }
 
     // `recoveryBranch` is set ONLY when un-pushed commits are branched aside; it distinguishes the recovered-diverged

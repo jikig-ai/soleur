@@ -65,6 +65,7 @@ export async function PUT(
 
   const result = await writeC4Diagram({
     userId: ctx.user.id,
+    workspaceId: ctx.workspaceId,
     installationId: ctx.userData.github_installation_id,
     owner: ctx.owner,
     repo: ctx.repo,

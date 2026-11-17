@@ -132,6 +132,8 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
 
 export interface BuildC4ConciergeToolsOpts {
   userId: string;
+  /** The active workspace id the dispatcher resolved: `writeC4Diagram`'s workspace sync keys on it (#12718, D27). */
+  workspaceId: string;
   installationId: number;
   owner: string;
   repo: string;
@@ -156,7 +158,7 @@ export interface BuildC4ConciergeToolsOpts {
  * Returns an array so the caller can spread it into `createSdkMcpServer`.
  */
 export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
-  const { userId, installationId, owner, repo, workspacePath } = opts;
+  const { userId, workspaceId, installationId, owner, repo, workspacePath } = opts;
   return [
     tool(
       EDIT_C4_DIAGRAM_TOOL,
@@ -173,6 +175,7 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
         const { writeC4Diagram } = await import("@/server/c4-writer");
         const result = await writeC4Diagram({
           userId,
+          workspaceId,
           installationId,
           owner,
           repo,

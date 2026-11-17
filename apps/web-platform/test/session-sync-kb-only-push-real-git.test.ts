@@ -922,7 +922,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     row = newRow();
     foreignPlusKb(row);
     await run(row);
-    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" });
+    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, workspaceId: WS_ID, op: "push" });
     expect(result).toEqual({ ok: true });
     expect(git(row.ws, "for-each-ref", "--format=%(refname)", "refs/heads/soleur/")).toBe("");
     expect(status(row)).toBe(" M src/s.ts");
@@ -932,7 +932,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     row = newRow();
     const foreign = foreignPlusKb(row, { kb: false });
     upstreamCommit(row, (d) => write(join(d, "README.md"), "readme 2\n"));
-    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" });
+    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, workspaceId: WS_ID, op: "push" });
     expect(result.ok).toBe(false);
     expect(readFileSync(join(row.ws, "src", "s.ts"), "utf8")).toBe("export const s = 2; // dirty, uncommitted\n");
     expect(localMain(row)).toBe(foreign);
@@ -946,7 +946,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     const foreign = foreignPlusKb(row, { kb: false, dirtyCode: false });
     write(join(row.ws, "knowledge-base", "a.md"), "a\ndirty kb\n");
     upstreamCommit(row, (d) => write(join(d, "README.md"), "readme 2\n"));
-    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" });
+    const result = await syncWorkspace(1, row.ws, H.log as never, { userId: USER, workspaceId: WS_ID, op: "push" });
     expect(result.ok).toBe(false);
     expect(readFileSync(join(row.ws, "knowledge-base", "a.md"), "utf8")).toBe("a\ndirty kb\n");
     expect(localMain(row)).toBe(foreign);
@@ -1521,7 +1521,7 @@ describe("D14: the protected-branch fallback converges on every exit (real git)"
     // a KB UI upload lands upstream: the workspace fast-forwards (no held_commits refusal)
     upstreamCommit(row, (d) => write(join(d, "knowledge-base", "upload.md"), "uploaded via UI\n"), "Upload via KB UI");
     resetTurn();
-    expect(await syncWorkspace(1, row.ws, H.log as never, { userId: USER, op: "push" })).toEqual({ ok: true });
+    expect(await syncWorkspace(1, row.ws, H.log as never, { userId: USER, workspaceId: WS_ID, op: "push" })).toEqual({ ok: true });
     expect(readFileSync(join(row.ws, "knowledge-base", "upload.md"), "utf8")).toBe("uploaded via UI\n");
     // and the next KB edit publishes again (never remote_ahead)
     resetTurn();

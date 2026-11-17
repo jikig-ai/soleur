@@ -102,6 +102,7 @@ import {
 const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const TEST_INSTALLATION_ID = 12345;
 const TEST_WORKSPACE_PATH = "/workspaces/test-user";
+const TEST_WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
 const TEST_REPO_URL = "https://github.com/test-owner/test-repo";
 
 function createRequest(): Request {
@@ -464,7 +465,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "delete" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "delete" },
     );
     expect(result.ok).toBe(true);
 
@@ -486,7 +487,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "rename" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "rename" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe(pullErr);
@@ -503,6 +504,7 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, logger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "upload",
     });
 
@@ -527,6 +529,7 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "delete",
     });
 
@@ -653,7 +656,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     // Recovered → ok:true. The classification is asserted via the self-heal
@@ -679,7 +682,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -711,7 +714,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -753,7 +756,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -788,7 +791,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -806,7 +809,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "manual" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "manual" },
     );
 
     expect(result.ok).toBe(false);
@@ -827,7 +830,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -858,7 +861,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -902,7 +905,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     // AC1 — recovered, not aborted.
@@ -949,7 +952,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -984,6 +987,7 @@ describe("syncWorkspace", () => {
     });
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
     expect(mockWarnSilentFallback.mock.calls.length).toBeGreaterThan(0);
@@ -1003,6 +1007,7 @@ describe("syncWorkspace", () => {
     });
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
     expect(mockMirrorWithDebounce.mock.calls.length).toBeGreaterThan(0);
@@ -1024,7 +1029,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -1062,7 +1067,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -1093,7 +1098,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -1118,7 +1123,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -1138,6 +1143,7 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
 
@@ -1154,7 +1160,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "manual" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "manual" },
     );
 
     expect(result.ok).toBe(true);

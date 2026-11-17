@@ -53,6 +53,8 @@ const MAX_C4_MODEL_BYTES = 4 * 1024 * 1024;
 
 export type WriteC4Input = {
   userId: string;
+  /** The membership-resolved workspace the write targets: `syncWorkspace` keys the repo URL on it (#12718, D27). */
+  workspaceId: string;
   installationId: number;
   owner: string;
   repo: string;
@@ -95,7 +97,7 @@ export type WriteC4Result =
 export async function writeC4Diagram(
   input: WriteC4Input,
 ): Promise<WriteC4Result> {
-  const { userId, installationId, owner, repo, workspacePath, relativePath, content } =
+  const { userId, workspaceId, installationId, owner, repo, workspacePath, relativePath, content } =
     input;
 
   // --- Scope guard (security-critical) ------------------------------------
@@ -146,6 +148,7 @@ export async function writeC4Diagram(
 
     const sync = await syncWorkspace(installationId, workspacePath, logger, {
       userId,
+      workspaceId,
       op: "manual",
     });
     // A designed hold (`sync.held`, #12600 D16) is a success: the commit is on
@@ -187,6 +190,7 @@ export async function writeC4Diagram(
         repo,
         workspacePath,
         userId,
+        workspaceId,
         relativePath,
         // #8623: the render input is THIS commit's diagrams subtree, fetched
         // from GitHub — never the (tenant-writable) workspace.
@@ -250,6 +254,7 @@ type RerenderInput = {
   repo: string;
   workspacePath: string;
   userId: string;
+  workspaceId: string;
   relativePath: string;
   /** The commit GitHub returned for the `.c4` write. */
   commitSha: string | undefined;
@@ -390,7 +395,7 @@ const HEAD_RELIST_TIMEOUT_MS = 5_000;
 async function rerenderAndCommit(
   input: RerenderInput,
 ): Promise<RerenderOutcome> {
-  const { installationId, owner, repo, workspacePath, userId, relativePath, commitSha, content } =
+  const { installationId, owner, repo, workspacePath, userId, workspaceId, relativePath, commitSha, content } =
     input;
   const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
   const jsonFilePath = `knowledge-base/${jsonRelPath}`;
@@ -538,6 +543,7 @@ async function rerenderAndCommit(
 
     const resync = await syncWorkspace(installationId, workspacePath, logger, {
       userId,
+      workspaceId,
       op: "manual",
     });
     // A designed hold (#12600 D16): the model IS committed on GitHub and the

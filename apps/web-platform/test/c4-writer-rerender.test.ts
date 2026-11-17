@@ -56,6 +56,7 @@ import * as Sentry from "@sentry/nextjs";
 
 const BASE = {
   userId: "user-1",
+  workspaceId: "22222222-2222-4222-8222-222222222222",
   installationId: 42,
   owner: "jikig-ai",
   repo: "soleur",

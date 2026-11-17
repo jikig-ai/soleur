@@ -200,7 +200,7 @@ describe("cc registration sweep (derived from the registry function)", () => {
   }
 
   function buildC4ToolsForSweep() {
-    return buildC4Tools({ userId: "sweep-user", installationId: 1, owner: "example-org", repo: "example-repo", workspacePath: "/tmp/ws" });
+    return buildC4Tools({ userId: "sweep-user", workspaceId: "sweep-workspace", installationId: 1, owner: "example-org", repo: "example-repo", workspacePath: "/tmp/ws" });
   }
 
   it("registers a non-vacuous set that includes the narration tools, the c4 tool and the CRM tools", () => {

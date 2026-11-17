@@ -74,7 +74,7 @@ export async function DELETE(
         userData.github_installation_id,
         userData.workspace_path,
         logger,
-        { userId: user.id, op: "delete" },
+        { userId: user.id, workspaceId: ctx.workspaceId, op: "delete" },
       );
       if (!sync.ok && !sync.held) {
         if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);
@@ -340,7 +340,7 @@ export async function PATCH(
       userData.github_installation_id,
       userData.workspace_path,
       logger,
-      { userId: user.id, op: "rename" },
+      { userId: user.id, workspaceId: ctx.workspaceId, op: "rename" },
     );
     if (!sync.ok && !sync.held) {
       if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);

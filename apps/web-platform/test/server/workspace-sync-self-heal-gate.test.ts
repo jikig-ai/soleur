@@ -19,6 +19,23 @@ const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy, lstatSpy
   mirrorSpy: vi.fn(),
   mirrorWarnSpy: vi.fn(),
 }));
+// D27: the held-commits branch calls the hardened merge (lazily imported); its real-git rows are in
+// test/workspace-sync-self-heal-real-git.test.ts. Here it is a seam returning the pull reason a row names.
+const { mergeSpy, disposeSpy } = vi.hoisted(() => ({
+  mergeSpy: vi.fn<(input: { precheck?: boolean }) => Promise<{ reason: string; remote: null }>>(async () => ({ reason: "merge_conflict_precheck", remote: null })),
+  disposeSpy: vi.fn(),
+}));
+vi.mock("@/server/kb-sync-pull", () => ({ mergeVerifiedDefault: mergeSpy }));
+vi.mock("@/server/kb-sync-remote", () => ({
+  KbRemoteError: class KbRemoteError extends Error {},
+  resolveRepoUrl: async () => ({ url: "https://github.com/acme/widget.git", owner: "acme", repo: "widget" }),
+}));
+vi.mock("@/server/approval/workspace-head", () => ({ readWorkspaceHeadRef: () => ({ sha: "a".repeat(40), refName: "refs/heads/main" }) }));
+vi.mock("@/server/git-isolated-push-dir", () => ({
+  IsolatedPushDirRefusal: class IsolatedPushDirRefusal extends Error {},
+  createIsolatedPushDir: () => ({ gitDir: "/tmp/iso", dispose: disposeSpy }),
+}));
+vi.mock("@/server/session-sync", () => ({ kbPullWriter: () => ({}) }));
 
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: gitSpy }));
 vi.mock("@/server/workspace-local-git", () => ({ runWorkspaceLocalGit: localSpy }));
@@ -100,7 +117,7 @@ function script(s: Shape = {}): void {
   });
 }
 
-const run = () => syncWorkspace(1, WS, log, { userId: "u-1", op: "push" });
+const run = () => syncWorkspace(1, WS, log, { userId: "u-1", workspaceId: "w-1", op: "push" });
 const localVerbs = (): string[] => localSpy.mock.calls.map(([a]) => a[0]);
 const tokenVerbs = (): string[] => gitSpy.mock.calls.map(([a]) => a[0]);
 const opOf = (call: unknown[]): string => (call[1] as { op?: string }).op ?? "";
@@ -112,6 +129,8 @@ const DIR = { isDirectory: () => true };
 beforeEach(() => {
   for (const f of ALL_SPIES) f.mockReset();
   lstatSpy.mockReset();
+  disposeSpy.mockClear();
+  mergeSpy.mockClear();
   lstatSpy.mockImplementation(async () => {
     throw ENOENT();
   });
@@ -208,9 +227,11 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     expect(precheckAt).toBeLessThan(branchAt);
   });
 
-  test("held non-KB commits -> refused, op self-heal-aborted-held-commits, held_kind nonkb, no branch-aside, no reset", async () => {
+  test("held non-KB commits whose merge pre-check conflicts -> refused, op self-heal-aborted-held-commits, held_kind nonkb, tag reason = the pull reason, no branch-aside, no reset", async () => {
     script({ nonKbDiff: 1 });
     const result = await run();
+    expect(mergeSpy).toHaveBeenCalledWith(expect.objectContaining({ precheck: true }));
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
     expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward", held: "held_commits" }));
     expect(localVerbs()).not.toContain("reset");
     expect(localVerbs()).not.toContain("branch");
@@ -218,10 +239,20 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     const [err, ctx, key, errorClass] = mirrorWarnSpy.mock.calls[0] as [unknown, { op: string; tags: Record<string, string> }, string, string];
     expect(err).toBeNull();
     expect(ctx.op).toBe("self-heal-aborted-held-commits");
-    expect(ctx.tags).toEqual({ held_kind: "nonkb", reason: "merge_not_attempted" });
+    expect(ctx.tags).toEqual({ held_kind: "nonkb", reason: "merge_conflict_precheck" });
     expect(key).toBe(WS);
     // D20: keyed `<op>:<held_kind>`, so a kb hold and a nonkb hold on one workspace are separate debounce classes
     expect(errorClass).toBe("self-heal-aborted-held-commits:nonkb");
+  });
+
+  test("D27: held commits whose hardened merge succeeds -> ok, no reset, no branch-aside, no emit", async () => {
+    script({ nonKbDiff: 1 });
+    mergeSpy.mockResolvedValueOnce({ reason: "merged", remote: null });
+    expect(await run()).toEqual({ ok: true });
+    expect(localVerbs()).not.toContain("reset");
+    expect(localVerbs()).not.toContain("branch");
+    expect(allEmits()).toEqual([]);
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
   });
 
   test("held KB-only commits upstream lacks -> refused with held_kind kb (not stranded on a recovery branch)", async () => {

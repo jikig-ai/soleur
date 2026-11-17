@@ -474,6 +474,7 @@ export async function workspaceReconcileOnPushHandler({
       // VALID .git — preserve the existing pull/reset sync path unchanged.
       const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
         userId: ownerId ?? ws.id,
+        workspaceId: ws.id,
         op: "push",
       });
 

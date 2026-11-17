@@ -348,7 +348,7 @@ export async function cronWorkspaceSyncHealthHandler({
                 decision.installId,
                 workspacePath,
                 moduleLogger,
-                { userId: f.workspaceId, op: "manual" },
+                { userId: f.workspaceId, workspaceId: f.workspaceId, op: "manual" },
               );
               if (syncResult.ok) {
                 await appendKbSyncRowForWorkspace(service, f.workspaceId, {
