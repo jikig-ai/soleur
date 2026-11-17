@@ -106,3 +106,39 @@ export async function writeRepoColsToWorkspace(
     }
   }
 }
+
+interface HeldClearClientLike {
+  from: (table: string) => {
+    update: (patch: Pick<WorkspaceRepoCols, "kb_sync_held_files" | "kb_sync_held_checked_at">) => {
+      eq: (col: string, val: string) => PromiseLike<{ error: unknown }>;
+    };
+  };
+}
+
+/**
+ * #12714 (D29(1), D33(2)): null the held-files columns of the workspace, in a SEPARATE best-effort UPDATE that the
+ * disconnect and setup routes run after their own repo-column write. A held count describes one connection, so it
+ * must not reappear after a reconnect. Never throws: a failure (a missing column during an apply that lags, or after a
+ * rollback) sends one mirror and leaves the route's status and response unchanged. A missing column also means no
+ * count was ever stored, so nothing goes stale.
+ */
+export async function clearKbSyncHeldCols(service: HeldClearClientLike, workspaceId: string): Promise<void> {
+  let failure: unknown = null;
+  try {
+    const { error } = await service
+      .from("workspaces")
+      .update({ kb_sync_held_files: null, kb_sync_held_checked_at: null })
+      .eq("id", workspaceId);
+    failure = error ?? null;
+  } catch (err) {
+    failure = err ?? new Error("clearKbSyncHeldCols rejected");
+  }
+  if (failure) {
+    reportSilentFallback(failure, {
+      feature: "workspace-repo-write",
+      op: "clear-kb-sync-held",
+      extra: { workspaceId },
+      message: "Failed to clear the held-files columns on the workspace",
+    });
+  }
+}

@@ -50,9 +50,10 @@ type Role = { role: string; required: boolean };
 // task (the writer in session-sync, task 11.2); it is allowed now and flips to `true` when it lands.
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
-  "server/workspace-repo-mirror.ts": { role: "type: WorkspaceRepoCols", required: true },
-  "app/api/repo/disconnect/route.ts": { role: "writer: nulls both columns on disconnect", required: true },
-  "app/api/repo/setup/route.ts": { role: "writer: nulls both columns on (re)connect", required: true },
+  "server/workspace-repo-mirror.ts": {
+    role: "type: WorkspaceRepoCols; writer: clearKbSyncHeldCols (disconnect and setup, D33(2))",
+    required: true,
+  },
   "server/session-sync.ts": { role: "writer: separate service-client UPDATE after each sync", required: false },
   "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
 };
@@ -68,6 +69,14 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect(unlisted, `classify these held-column readers/writers in HELD_MENTIONS: ${unlisted.join(", ")}`).toEqual([]);
     for (const [f, { required }] of Object.entries(HELD_MENTIONS)) {
       if (required) expect(mentioning, f).toContain(f);
+    }
+  });
+
+  it("disconnect and setup null the held columns through the separate best-effort clearKbSyncHeldCols (D33(2))", () => {
+    for (const f of ["app/api/repo/disconnect/route.ts", "app/api/repo/setup/route.ts"]) {
+      expect(sources.get(f) ?? "", f).toMatch(/\bclearKbSyncHeldCols\(\s*serviceClient,\s*activeWorkspaceId\s*\)/);
+      // Never folded into the existing repo-column write (D33(2)).
+      expect(HELD_TOKEN.test(sources.get(f) ?? ""), f).toBe(false);
     }
   });
 

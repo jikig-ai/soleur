@@ -48,6 +48,7 @@ vi.mock("@/lib/repo-url", () => ({ normalizeRepoUrl: (u: string) => u }));
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: (...a: unknown[]) =>
     mockWriteRepoColsToWorkspace(...a),
+  clearKbSyncHeldCols: vi.fn(async () => {}),
 }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: (...a: unknown[]) => mockResolveActiveWorkspace(...a),

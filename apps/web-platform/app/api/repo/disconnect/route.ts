@@ -137,7 +137,7 @@ export async function DELETE(request: Request) {
   // appears connected and the agent could still act under the revoked GitHub
   // grant. The helper throws on either failure so we surface a 500 and the
   // (idempotent) disconnect is retried.
-  const { writeRepoColsToWorkspace } = await import(
+  const { writeRepoColsToWorkspace, clearKbSyncHeldCols } = await import(
     "@/server/workspace-repo-mirror"
   );
   try {
@@ -150,9 +150,6 @@ export async function DELETE(request: Request) {
         repo_status: "not_connected",
         repo_last_synced_at: null,
         repo_error: null,
-        // #12714 (D29(1)): the held count describes this connection; it must not reappear after a reconnect.
-        kb_sync_held_files: null,
-        kb_sync_held_checked_at: null,
       },
       { throwOnError: true },
     );
@@ -166,6 +163,11 @@ export async function DELETE(request: Request) {
       { status: 500 },
     );
   }
+
+  // #12714 (D29(1), D33(2)): the held-files count describes this connection, so it must not reappear after a
+  // reconnect. A SEPARATE best-effort UPDATE after the clear above: it never throws, and a failure (a missing column)
+  // sends one mirror and leaves this route's status and response unchanged.
+  await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
 
   // The provisioning/readiness columns (`workspace_status`, `health_snapshot`)
   // are NOT relocated by ADR-044 — reset them on the caller's `users` row only for
