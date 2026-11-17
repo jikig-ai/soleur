@@ -25,3 +25,6 @@
 ## Operator Constraints
 
 None — the resume brief carried no constraint lines (status handoff, no Constraints paragraph or rules list).
+
+## Technical Rulings
+- `cto_spawns=1` (2026-11-17, batched — all 10 rows ruled; 8 ratified, item 4 strengthened, item 5 overturned; plan/tasks amended)

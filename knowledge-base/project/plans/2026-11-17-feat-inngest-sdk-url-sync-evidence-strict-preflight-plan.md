@@ -95,10 +95,13 @@ production acts or separate PRs.
         refusal on the pre-replace host is designed-for);
     (b) `scheduled-inngest-health.yml` ~L1294-1320 — the #8080 darkness witness calls
         `inngest_execute_registry_gate` in REPORT-ONLY mode; the verdict token is regex-validated
-        and "counted by the streak rather than crashing the arm". A `stale_schema` token counted as a
-        refusal streak during the merge→replace window could misread a HEALTHY-emitting host as a
-        streak event — the witness must map `stale_schema` to alive/not-dark (or the streak
-        classification must be audited and pinned) as part of the bump task;
+        and counted by the streak (`inngest-gate-witness-classify.sh:60` maps `stale_schema` to
+        `refusal`; at ≥8 it files a deduped `action-required` issue, auto-closing on `satisfy`).
+        **CTO ruled 2026-11-17 (decision-challenges row 5): keep `stale_schema`→`refusal`** — the
+        witness measures execute-gate satisfiability, not host darkness, and during the
+        merge→replace window the gate IS unsatisfiable by design; `suppressed` would forgive a
+        stuck replace past the ledger expiry. T2a is now comment-only: record the deliberate
+        choice at the classify arm;
     (c) `infra-validation.yml` L205 — required-path presence pin only (no semantics).
   - `scripts/followthroughs/inngest-luks-field-8525.sh` greps `probe_schema=9` rows (`newest9`,
     ~L104-110); a schema-10 host would read TRANSIENT — must accept `9|10` (or `>=9`).
@@ -153,9 +156,9 @@ production acts or separate PRs.
     the owner's replace (the `inngest_host_replace` job never routes through the dark gate — it is
     terraform `-target` apply; the gate is only sourced by `cutover-inngest.sh`, the health witness,
     and its own tests). It DOES change the witness's reported token to `stale_schema` for the whole
-    merge→replace window: a task must audit the witness streak's classification of that token and,
-    if it counts toward a page-bearing streak, add the explicit `stale_schema`→alive/not-dark mapping
-    (a host emitting old-schema rows is emitting — not dark). See decision-challenges row 5.
+    merge→replace window — **ruled deliberate** (decision-challenges row 5): `stale_schema` stays
+    `refusal` (a stuck replace past 2026-11-20 must still alarm); one deduped issue filing ~2h
+    post-merge on the designed-for state is the accepted cost. See decision-challenges row 5.
   - The registry-empty **alert SQL is unchanged**: a stale non-zero registry with failing sync is
     surfaced by `sdk_sync=error`/`sdk_app_url=` in the same row for the responder, and a future alert
     on `sdk_sync=` is a separate decision (extending a live paging surface now, pre-replace, has
@@ -175,13 +178,18 @@ production acts or separate PRs.
   `doppler run -p soleur -c prd_terraform -- "$REPO/plugins/soleur/scripts/cloudflare-readonly.sh
   config-entrypoint"`, captures stdout+rc, and passes only when: output begins
   `cloudflare-readonly: config-entrypoint ok`, the JSON projection parses, ≥1 enabled rule has
-  `mentions_app_host: true`, and the **last** such rule has `ssl == "strict"`. The projection shape
+  `mentions_app_host: true`, the **last** enabled app-host rule with non-null `ssl` has
+  `ssl == "strict"`, AND **no enabled rule positioned after it carries `ssl ∈ {off, flexible}`**
+  (CTO-strengthened predicate, decision-challenges row 4 — closes the documented wildcard-expression
+  evasion: an `ends_with(http.host,".soleur.ai")`/`true` `flexible`/`off` rule appended after the
+  strict rule would override it for `app.soleur.ai` undetected by the substring flag). The projection shape
   is pinned (cloudflare-readonly.sh L426): `.rules[]` in order, each carrying `ref`, `enabled`
   (already normalized to `enabled != false`), `ssl` (from `.action_parameters.ssl`), and the
   booleans `mentions_app_host` / `mentions_lb_staging_host`; top-level `rule_count`,
   `enabled_ssl_rules`, `last_updated`. Refusals (distinct `::error::` per arm, never echoing tokens
   or raw bodies): missing `DOPPLER_TOKEN`, doppler/wrapper rc≠0, `unverified` output, malformed
-  JSON, no matching enabled rule, last match `ssl != strict`, ambiguous shape. Note the wrapper's
+  JSON, no matching enabled rule, last match `ssl != strict`, trailing enabled rule
+  `ssl ∈ {off, flexible}`, ambiguous shape. Note the wrapper's
   own verdict is a dated snapshot (rule_count=3 / ref-pinned, 2026-11-13) — the preflight judges the
   per-rule projection, not the baked verdict, so added rules re-key the answer while any wrapper
   non-`ok` line still refuses. `--from-file <path>` reads a captured projection instead of calling
@@ -308,7 +316,8 @@ production acts or separate PRs.
       phone-home.
 - [ ] Both `inngest_host` and `inngest_host_replace` run the preflight unconditionally after
       credential load and before terraform; the preflight passes only when the last enabled
-      `app.soleur.ai` config rule is `ssl=strict`, and refuses distinctly on every ambiguity
+      `app.soleur.ai` config rule with non-null `ssl` is `ssl=strict` AND no enabled trailing rule
+      carries `ssl ∈ {off, flexible}`, and refuses distinctly on every ambiguity
       (unverified API read included).
 - [ ] `PUBLIC-SDK-URL`/`PUBLIC-SDK-URL-BIRTH` appear in zero live recipes, zero workflow lines, zero
       scripts; `inngest-public-sdk-url-confirm.sh` is deleted and CODEOWNERS repointed.

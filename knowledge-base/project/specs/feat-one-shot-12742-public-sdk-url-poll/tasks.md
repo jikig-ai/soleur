@@ -23,11 +23,13 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     decision-challenges row).
 - [ ] T2. `tests/scripts/lib/inngest-host-dark-gate.sh` L128: `_IHDG_EXPECTED_SCHEMA="9"` → `"10"`;
   update the `stale_schema` comment if it hardcodes "9".
-  - T2a. Audit every `stale_schema` consumer: `scheduled-inngest-health.yml` ~L1294+ runs the gate
-    REPORT-ONLY and counts the verdict token in a streak — verify whether `stale_schema` counts as a
-    page-bearing refusal; if so, add an explicit `stale_schema`→alive/not-dark mapping (a host
-    emitting old-schema rows is emitting, not dark) with a `#12742` comment. `cutover-inngest.sh`
-    L1105 wants the refusal (designed-for). `infra-validation.yml` L205 is presence-only.
+  - T2a. Add a `#12742` comment at the `stale_schema`→`refusal` arm in
+    `scripts/inngest-gate-witness-classify.sh` (~L60) recording the deliberate choice — CTO ruled
+    2026-11-17 (decision-challenges row 5): the witness measures execute-gate satisfiability, not
+    host darkness, so `refusal` is the truthful token during the merge→replace window; no
+    alive/not-dark mapping is added (it would forgive a stuck replace past the 2026-11-20 ledger
+    expiry). `cutover-inngest.sh` L1105 wants the refusal (designed-for). `infra-validation.yml`
+    L205 is presence-only.
 - [ ] T3. `scripts/followthroughs/inngest-luks-field-8525.sh` (~L104-110): accept `probe_schema` 9
   or 10 (`>=9` semantics preserved: a schema-10 row must not read TRANSIENT/not_schema9).
 - [ ] T4. `apps/web-platform/infra/inngest.test.sh` (~L1365+): `PROBE_7695_FIELDS` +=
@@ -54,10 +56,12 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     config-entrypoint`, capture stdout+rc (requires `DOPPLER_TOKEN` in env; missing → refuse).
   - `--from-file <path>` test seam: read a captured projection file instead of calling doppler.
   - pass iff output is `cloudflare-readonly: config-entrypoint ok` + parseable JSON projection AND
-    ≥1 enabled rule mentions `app.soleur.ai` AND the LAST such rule has `ssl=strict`.
+    ≥1 enabled rule mentions `app.soleur.ai` AND the LAST enabled app-host rule with non-null `ssl`
+    has `ssl=strict` AND no enabled rule positioned after it carries `ssl` in `{off, flexible}`
+    (CTO-strengthened predicate, decision-challenges row 4: closes the wildcard-expression evasion).
   - refuse rc=1 with distinct `::error::` messages: no token / doppler rc / `unverified` / malformed
-    JSON / no matching rule / all matches disabled / last match `ssl!=strict` / ambiguous shape.
-    Never echo the token or the raw API body.
+    JSON / no matching rule / all matches disabled / last match `ssl!=strict` / trailing rule
+    `ssl ∈ {off, flexible}` / ambiguous shape. Never echo the token or the raw API body.
 - [ ] T9. `.github/workflows/apply-web-platform-infra.yml` (byte budget: 489,995 / 490,000):
   - `inngest_host` (~L1719) and `inngest_host_replace` (~L1902): delete the
     `Validate dispatch inputs … confirm token` step; insert after `Load infra credentials (tiered)`
@@ -78,7 +82,8 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   - inverted recipe sweep: ≥6 live recipes for the two targets still found (non-vacuity) AND zero
     may carry `confirm=PUBLIC-SDK-URL[-BIRTH]`; assert zero offenders.
   - script behavior table over `--from-file` fixtures: strict-last → 0; flexible-last, all-disabled,
-    no-match, `unverified`, malformed JSON, missing file → 1 with the right `::error::` arm.
+    no-match, `unverified`, malformed JSON, missing file, strict-then-trailing-flexible → 1 with the
+    right `::error::` arm (the trailing-flexible arm is the CTO-strengthened predicate).
   - keep G2f and all unrelated pins; check the L113 `349 -> 353` count comment for drift.
 - [ ] T11. Delete `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`; repoint
   `.github/CODEOWNERS` L48 to the new script.
@@ -92,6 +97,11 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
   (§inngest_host, §inngest_host_replace),
   `scripts/test-all.sh` L7009 comment if it names removed tests.
+  Also restate the preflight's placement property in `inngest-server.md` (~L2709) and
+  `apply-web-platform-infra-job-rationale.md` (~L1447): the new property is "immediately after
+  `Load infra credentials (tiered)`, before `Terraform init`, unconditional, fail-closed" — the
+  old "before any credential loads" wording describes a property that no longer exists (CTO row 6
+  dissent).
 - [ ] T13. Final sweeps: `grep -rn 'PUBLIC-SDK-URL' --exclude-dir=node_modules` → archive/history
   only; `grep -rn 'inngest-public-sdk-url-confirm'` → archive/history only.
 
@@ -104,3 +114,6 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   (`inngest-probe-heartbeat-feeder.test.sh`, `cloud-init-inngest-bootstrap.test.sh`,
   `cutover-inngest-workflow.test.sh` as applicable).
 - [ ] T15. `bash scripts/test-all.sh` (or the repo CI subset) green.
+- [ ] T16. At ship time, post a comment on #12742 recording the deferred `sdk_sync=error` paging
+  decision (CTO row 3: "page on `sdk_sync=error` post-measurement" — deferred until the field has
+  production history after the owner's replace).
