@@ -23,6 +23,7 @@ PATTERNS=(
 )
 
 TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
 cp "$INPUT" "$TMP"
 
 for p in "${PATTERNS[@]}"; do
