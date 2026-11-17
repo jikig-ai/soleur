@@ -6,7 +6,7 @@
 // its normal success body plus `workspace_sync: "pending"` and the KB UI shows this notice as a non-error status.
 //
 // ONE shared constant (client-safe: no server import) for the wire value and the user-facing copy. No timing promise:
-// no code path guarantees when the workspace updates. Interim copy; the #12714 wireframe may refine it.
+// no code path guarantees when the workspace updates. Copy final per CPO ruling V6(5) (#12714).
 
 /** The `workspace_sync` value a KB write route adds to its success body when the workspace was held. */
 export const WORKSPACE_SYNC_PENDING = "pending" as const;
@@ -22,7 +22,8 @@ export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
     save: "Saved to GitHub.",
   } satisfies Record<KbWriteOp, string>,
   /** The shared second clause. */
-  detail: "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try again.",
+  detail:
+    "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.",
 } as const;
 
 /** The full notice for `op`. */

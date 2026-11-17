@@ -273,7 +273,7 @@ describe("FileTree delete: a workspace hold after the GitHub delete (#12600 D16)
     fireEvent.click(fileItem.querySelector('[aria-label*="elete"]') as HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
     const notice = await screen.findByRole("status");
-    expect(notice.textContent).toContain("Deleted on GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try again.");
+    expect(notice.textContent).toContain("Deleted on GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.");
     expect(notice.className).not.toMatch(/red/);
     expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /dismiss notice/i }));

@@ -308,7 +308,7 @@ describe("FileTree rename: a workspace hold after the GitHub rename (#12600 D16)
     fireEvent.change(input, { target: { value: "renamed" } });
     fireEvent.keyDown(input, { key: "Enter" });
     const notice = await screen.findByRole("status");
-    expect(notice.textContent).toContain("Renamed on GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try again.");
+    expect(notice.textContent).toContain("Renamed on GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.");
     expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
   });
 });
