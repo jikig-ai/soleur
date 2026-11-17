@@ -152,3 +152,8 @@ merge-tree conflict: rc=1
 merge-tree unrelated: rc=128
 merge-tree missing object: rc=1
 merge-base unrelated: rc=1
+##### probe8 (shallow-store fetch, D26(3); same image, run 2026-11-17)
+git: git version 2.39.5
+shallow-store fetch: rc=0 ref-written=no isolated-shallow-changed=no
+stderr: shallow roots are not allowed to be updated
+# reading: git exits 0 and writes no ref; kb-sync-remote.ts maps rc 0 with no ref to shallow_changed (and matches the stderr line on a non-zero exit).
