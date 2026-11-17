@@ -8,6 +8,7 @@ import { KeyboardShortcutsToggle } from "./keyboard-shortcuts-toggle";
 import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
 import { AgentEngineSettings } from "./agent-engine-settings";
 import { describeCredentialBasis } from "@/lib/credential-basis";
+import type { HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -39,6 +40,10 @@ interface SettingsContentProps {
    * the controls don't render (e.g. an unresolvable workspace).
    */
   workspaceIdentity?: WorkspaceIdentity | null;
+  /** #12714 — `workspaces.kb_sync_held_files` (display-only; null = nothing shown). */
+  heldFiles?: number | null;
+  /** #12714 — the viewer's publish-route predicate result; omitted = "unknown" (transient copy). */
+  heldRoute?: HeldRouteState;
 }
 
 function formatDate(iso: string): string {
@@ -66,6 +71,8 @@ export function SettingsContent({
   oauthInEffect = false,
   oauthTokenSavedAt = null,
   workspaceIdentity = null,
+  heldFiles = null,
+  heldRoute = "unknown",
 }: SettingsContentProps) {
   // Computed ONCE and passed to KeyRotationForm (null iff no token stored), so
   // the status line and the remove-token confirm dialog cannot disagree.
@@ -124,6 +131,8 @@ export function SettingsContent({
         // or owner of their own workspace) keep the full controls.
         isOwner={workspaceIdentity?.isOwner ?? true}
         ownerLabel={workspaceIdentity?.organizationName ?? null}
+        heldFiles={heldFiles}
+        heldRoute={heldRoute}
       />
 
       {/* API Key Section */}

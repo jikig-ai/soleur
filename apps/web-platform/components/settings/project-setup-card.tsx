@@ -6,6 +6,7 @@ import { NavLink } from "@/components/ui/nav-link";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 import { useReconnect, type ReconnectRepoStatus } from "@/components/repo/use-reconnect";
+import { kbSyncHeldNotice, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 // Single-sourced from use-reconnect.ts (the lower-level module) so the union
 // can't drift across the two files. Re-exported under the existing name for
@@ -35,6 +36,32 @@ interface ProjectSetupCardProps {
   /** Display label for the workspace owner (the team/org name), shown in the
    *  member read-only "managed by …" line. Omitted → generic fallback. */
   ownerLabel?: string | null;
+  /**
+   * #12714 — `workspaces.kb_sync_held_files`: code files the KB-only sync holds back from the repository's main branch.
+   * Display-only. Only an integer in 1..10000 renders (D29(8)); 0, null or anything else shows nothing.
+   */
+  heldFiles?: number | null;
+  /**
+   * #12714 — the publish-route predicate for the VIEWER (`isCcGithubPushRouteAvailable`). Omitted reads as "unknown":
+   * the transient copy, never the no-route sentence on a blip (V6(3)).
+   */
+  heldRoute?: HeldRouteState;
+}
+
+/**
+ * #12714 — the neutral informational notice inside the Project card (wireframe kb-sync-held-commits.pen). No control:
+ * the copy names the steps. The string is a React text child (no HTML), so an owner label renders literally.
+ */
+function HeldFilesNotice({ text }: { text: string }) {
+  return (
+    <div
+      data-testid="kb-sync-held-notice"
+      role="note"
+      className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-3 text-sm leading-relaxed text-soleur-text-primary"
+    >
+      {text}
+    </div>
+  );
 }
 
 function extractRepoName(url: string): string {
@@ -53,8 +80,15 @@ export function ProjectSetupCard({
   needsReconnect = false,
   isOwner = true,
   ownerLabel = null,
+  heldFiles = null,
+  heldRoute = "unknown",
 }: ProjectSetupCardProps) {
   const router = useRouter();
+  // V6: n = 0, null or a repo that is not `ready` shows nothing; the Owner's reconnect state shows ReconnectNotice only.
+  const heldText =
+    repoStatus === "ready" && repoUrl
+      ? kbSyncHeldNotice({ audience: isOwner ? "owner" : "member", route: heldRoute, count: heldFiles, ownerLabel })
+      : null;
 
   // ADR-044 PR-1 (FR3) — member (non-owner) read-only variant. No connect /
   // disconnect / reconnect controls; the member doesn't own the connection.
@@ -67,18 +101,21 @@ export function ProjectSetupCard({
         <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
           Project
         </h2>
-        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 sm:p-6">
           {repoStatus === "ready" && repoUrl ? (
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-soleur-text-primary">
-                  {extractRepoName(repoUrl)}
-                </p>
-                <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
-                  Connected
-                </span>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-soleur-text-primary">
+                    {extractRepoName(repoUrl)}
+                  </p>
+                  <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
+                    Connected
+                  </span>
+                </div>
+                <p className="text-sm text-soleur-text-secondary">{managedBy}</p>
               </div>
-              <p className="text-sm text-soleur-text-secondary">{managedBy}</p>
+              {heldText && <HeldFilesNotice text={heldText} />}
             </div>
           ) : (
             <p className="text-sm text-soleur-text-secondary">
@@ -93,7 +130,7 @@ export function ProjectSetupCard({
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Project</h2>
-      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 sm:p-6">
         {repoStatus === "not_connected" && (
           <div>
             <p className="mb-4 text-sm text-soleur-text-secondary">
@@ -127,13 +164,14 @@ export function ProjectSetupCard({
                   Connected
                 </span>
               </div>
+              {/* V2/W5: only the session-start pull stamps this column, so the line says where the update came from. */}
               {repoLastSyncedAt && (
                 <p className="text-sm text-soleur-text-secondary">
-                  Last synced:{" "}
-                  {new Date(repoLastSyncedAt).toLocaleDateString()}
+                  {`Updated from GitHub: ${new Date(repoLastSyncedAt).toLocaleDateString()}`}
                 </p>
               )}
             </div>
+            {heldText && <HeldFilesNotice text={heldText} />}
             <DisconnectRepoDialog repoName={extractRepoName(repoUrl)} />
           </div>
         )}

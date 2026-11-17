@@ -75,7 +75,7 @@ describe("ProjectSetupCard", () => {
     expect(screen.getByText(/connected/i)).toBeInTheDocument();
   });
 
-  it("shows last synced date when ready", async () => {
+  it("shows the 'Updated from GitHub' date line when ready (V2/W5 relabel; no 'Last synced')", async () => {
     const { ProjectSetupCard } = await import(
       "@/components/settings/project-setup-card"
     );
@@ -86,7 +86,8 @@ describe("ProjectSetupCard", () => {
         repoLastSyncedAt="2026-04-01T12:00:00Z"
       />,
     );
-    expect(screen.getByText(/last synced/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Updated from GitHub: /)).toBeInTheDocument();
+    expect(screen.queryByText(/last synced/i)).not.toBeInTheDocument();
   });
 
   it("shows error state with retry button when status is error", async () => {
@@ -217,5 +218,133 @@ describe("ProjectSetupCard", () => {
     );
     expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
     expect(screen.getByText(/connected/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #12714 held-files notice (V6, D29(8), D31). The strings come from lib/kb-sync-held-copy.ts, whose own test pins them
+// verbatim; these rows pin which string each card state renders, and that nothing else renders.
+// ---------------------------------------------------------------------------
+
+describe("ProjectSetupCard held-files notice (#12714)", () => {
+  const READY = {
+    repoUrl: "https://github.com/acme-co/web-platform",
+    repoStatus: "ready" as const,
+    repoLastSyncedAt: "2026-11-16T12:00:00Z",
+  };
+  const NOTICE = "kb-sync-held-notice";
+
+  it("Owner, route available, n = 3: the V6 Owner string under the date line, Disconnect unchanged, no new control", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const { heldOwnerRouteAvailable } = await import("@/lib/kb-sync-held-copy");
+    render(<ProjectSetupCard {...READY} heldFiles={3} heldRoute="available" />);
+    const notice = screen.getByTestId(NOTICE);
+    expect(notice).toHaveTextContent(heldOwnerRouteAvailable(3));
+    expect(notice.textContent).toBe(heldOwnerRouteAvailable(3));
+    expect(screen.getByText(/^Updated from GitHub: /)).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  it("Owner, no route and transient: the V6 no-route and transient strings", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const copy = await import("@/lib/kb-sync-held-copy");
+    const { unmount } = render(<ProjectSetupCard {...READY} heldFiles={1} heldRoute="unavailable" />);
+    expect(screen.getByTestId(NOTICE).textContent).toBe(copy.heldOwnerNoRoute(1));
+    unmount();
+    render(<ProjectSetupCard {...READY} heldFiles={3} heldRoute="unknown" />);
+    expect(screen.getByTestId(NOTICE).textContent).toBe(copy.heldOwnerTransient(3));
+  });
+
+  it("a missing route state reads as transient, never as the no-route sentence", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const copy = await import("@/lib/kb-sync-held-copy");
+    render(<ProjectSetupCard {...READY} heldFiles={2} />);
+    expect(screen.getByTestId(NOTICE).textContent).toBe(copy.heldOwnerTransient(2));
+  });
+
+  it("Member, each route state: the V6 member string under the 'managed by' line, no date", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const copy = await import("@/lib/kb-sync-held-copy");
+    const cases = [
+      ["available", copy.heldMemberRouteAvailable(3, "Acme Co")],
+      ["unavailable", copy.heldMemberNoRoute(3)],
+      ["unknown", copy.heldMemberTransient(3)],
+    ] as const;
+    for (const [route, expected] of cases) {
+      const { unmount } = render(
+        <ProjectSetupCard {...READY} isOwner={false} ownerLabel="Acme Co" heldFiles={3} heldRoute={route} />,
+      );
+      expect(screen.getByText("managed by Acme Co")).toBeInTheDocument();
+      expect(screen.getByTestId(NOTICE).textContent).toBe(expected);
+      expect(screen.queryByText(/Updated from GitHub/)).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("Member, no owner label: the 'your workspace owner' fallback", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    render(<ProjectSetupCard {...READY} isOwner={false} ownerLabel={null} heldFiles={3} heldRoute="available" />);
+    expect(screen.getByTestId(NOTICE)).toHaveTextContent("then ask your workspace owner to approve the push");
+  });
+
+  it("n = 0, null, non-integer or outside 1..10000 renders no held notice (Owner and member)", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    for (const heldFiles of [0, null, undefined, 2.5, -1, 10_001]) {
+      for (const isOwner of [true, false]) {
+        const { unmount } = render(
+          <ProjectSetupCard {...READY} isOwner={isOwner} heldFiles={heldFiles} heldRoute="available" />,
+        );
+        expect(screen.queryByTestId(NOTICE), `${heldFiles} owner=${isOwner}`).not.toBeInTheDocument();
+        expect(screen.queryByText(/changed code file/)).not.toBeInTheDocument();
+        unmount();
+      }
+    }
+  });
+
+  it("a repo that is not ready renders no held notice (Owner and member)", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    for (const repoStatus of ["not_connected", "cloning", "error"] as const) {
+      for (const isOwner of [true, false]) {
+        const { unmount } = render(
+          <ProjectSetupCard
+            repoUrl="https://github.com/acme-co/web-platform"
+            repoStatus={repoStatus}
+            repoLastSyncedAt={null}
+            isOwner={isOwner}
+            heldFiles={3}
+            heldRoute="available"
+          />,
+        );
+        expect(screen.queryByTestId(NOTICE), `${repoStatus} owner=${isOwner}`).not.toBeInTheDocument();
+        unmount();
+      }
+    }
+  });
+
+  it("Owner with needsReconnect: ReconnectNotice is the only notice (V6(4))", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    render(<ProjectSetupCard {...READY} needsReconnect heldFiles={3} heldRoute="available" />);
+    expect(screen.getByText(/can't sync/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(NOTICE)).not.toBeInTheDocument();
+    expect(screen.queryByText(/changed code file/)).not.toBeInTheDocument();
+  });
+
+  it("an owner label carrying markup renders as literal text, never HTML", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const evil = "<img src=x onerror=alert(1)>";
+    const { container } = render(
+      <ProjectSetupCard {...READY} isOwner={false} ownerLabel={evil} heldFiles={3} heldRoute="available" />,
+    );
+    expect(screen.getByTestId(NOTICE)).toHaveTextContent(`then ask ${evil} to approve the push`);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("the member notice holds the count only: no path, commit message or tool name", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    render(<ProjectSetupCard {...READY} isOwner={false} ownerLabel="Acme Co" heldFiles={3} heldRoute="available" />);
+    const text = screen.getByTestId(NOTICE).textContent ?? "";
+    expect(text).not.toMatch(/[\w-]+\/[\w.-]+\.(ts|tsx|js|md)\b/);
+    expect(text).not.toMatch(/github_push_branch|commit/i);
   });
 });

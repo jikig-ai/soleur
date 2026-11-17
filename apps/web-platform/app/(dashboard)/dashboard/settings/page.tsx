@@ -6,7 +6,9 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
+import { isCcGithubPushRouteAvailable } from "@/server/cc-github-push";
 import { mirrorWithDebounce } from "@/server/observability";
+import { isRenderableHeldCount, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -52,7 +54,9 @@ export default async function SettingsPage() {
       ? service
           .from("workspaces")
           .select(
-            "repo_url, repo_status, repo_last_synced_at, github_installation_id",
+            // #12714: kb_sync_held_files is NOT in the `authenticated` column grant (migration 187), so it is
+            // read here, with the service client, keyed on the membership-verified active workspace id.
+            "repo_url, repo_status, repo_last_synced_at, github_installation_id, kb_sync_held_files",
           )
           .eq("id", active.workspaceId)
           .maybeSingle()
@@ -87,12 +91,30 @@ export default async function SettingsPage() {
     user.id,
   );
 
+  // #12714 (D29(3), D29(5)): the held-files notice. The count is display-only; the publish-route predicate is asked
+  // for the VIEWER (a member's agent is the one that would push) and only when a notice can render. A throw reads as
+  // "unknown" (the transient copy), never "unavailable": a blip must not say publishing is impossible (V6(3)).
+  const rawHeldFiles: unknown = repoData?.kb_sync_held_files;
+  const heldFiles = isRenderableHeldCount(rawHeldFiles) ? rawHeldFiles : null;
+  const heldRoutePromise: Promise<HeldRouteState> =
+    active.ok && repoData?.repo_status === "ready" && heldFiles !== null
+      ? isCcGithubPushRouteAvailable({ userId: user.id, workspaceId: active.workspaceId }).catch((err: unknown) => {
+          mirrorWithDebounce(
+            err,
+            { feature: "settings", op: "held-files-route-predicate", extra: { userId: user.id } },
+            "settings:held-files-route-predicate",
+            "settings_held_files_route_predicate",
+          );
+          return "unknown" as const;
+        })
+      : Promise.resolve("unknown" as const);
+
   // #4916: workspace-identity controls (logo + rename), relocated from the
   // flag-gated Team page so they are reachable for every user.
-  const workspaceIdentity = await resolveWorkspaceIdentityForSettings(
-    supabase,
-    service,
-  );
+  const [workspaceIdentity, heldRoute] = await Promise.all([
+    resolveWorkspaceIdentityForSettings(supabase, service),
+    heldRoutePromise,
+  ]);
 
   // feat-operator-cc-oauth — show the subscription-token toggle ONLY for an
   // operator/internal account (ADMIN_USER_IDS) with the kill-switch on.
@@ -119,6 +141,8 @@ export default async function SettingsPage() {
       oauthInEffect={ccOauthEnabled && oauthRow?.is_valid === true}
       oauthTokenSavedAt={oauthRow?.updated_at ?? null}
       workspaceIdentity={workspaceIdentity}
+      heldFiles={heldFiles}
+      heldRoute={heldRoute}
     />
   );
 }
