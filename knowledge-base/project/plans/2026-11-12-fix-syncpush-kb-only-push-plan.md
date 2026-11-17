@@ -525,6 +525,39 @@ Rulings V1-V5, V-M (CPO) and W1-W7 (CTO) in `decision-challenges.md`. Wireframe 
 `{ownerLabel}` is the card's existing value, falling back to "your workspace owner". n = 0, null, unreadable: nothing on
 any surface.
 
+##### V6 amendments (CPO, 2026-11-17; row V6 in `decision-challenges.md`)
+
+These replace the V5 Owner and member rows above. The Owner date line, C4, C5, C7, the `{ownerLabel}` fallback and the
+n = 0 / null / not-`ready` rule stand. The agent rows are governed by D29(5)/(6), and they must not say "not on GitHub"
+where the card says "not on the repository's main branch yet" (D23).
+
+- **Owner, route available.**
+  - n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. To publish it, ask your agent to push it to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace."
+  - n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace."
+- **Owner, no route.**
+  - n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Publishing code changes is not available for this workspace."
+  - n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Publishing code changes is not available for this workspace."
+- **Member, route available.** The member gets an action, and the copy never says a request is waiting.
+  - n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace. To publish it, ask your agent to push it to a new branch, then ask {ownerLabel} to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace."
+  - n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. To publish them, ask your agent to push them to a new branch, then ask {ownerLabel} to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace."
+- **Member, no route** (C7: no wait and no action).
+  - n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace."
+  - n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace."
+- **Transient predicate** (a read error or timeout, or a D29(5) transient reason). The no-route sentence is never shown on a blip.
+  - Owner, n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Whether your agent can publish it could not be checked right now. Reload this page to check again."
+  - Owner, n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again."
+  - Member, n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace. Whether your agent can publish it could not be checked right now. Reload this page to check again."
+  - Member, n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again."
+- **Reconnect needed** (Owner card, `repoStatus === "ready" && needsReconnect`): no held notice. `ReconnectNotice` is the
+  only notice, and the held notice returns after the reconnect while n > 0. The member card has no reconnect state. It
+  follows the predicate, so a broken installation gives the member the no-route string.
+- **D16 KB notice** (`lib/kb-workspace-sync-notice.ts`). The four `lead` clauses are final. `detail` becomes: "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again." "You don't need to try again" stays because it stays true: the write is already on GitHub, and a retry can only return 404 or 409. `kbWorkspaceSyncResyncPendingNotice` is final as shipped. The header sentence "Interim copy; the #12714 wireframe may refine it" is removed.
+- **Settings team icon** (task 11.7, `conversation-names-settings.tsx`).
+  - On `workspace_sync: "pending"`: "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again."
+  - On a 409 from the upload, instead of "Upload failed. Please try again.": "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub."
+  - "Upload failed. Please try again." stays for every other failure. The 409 string is true whether or not a hold
+    caused it. The pre-existing same-name replacement 409 (the client never sends the returned sha) is out of this PR.
+
 ### Research Insights (deepen-plan, 2026-11-13)
 
 **Measured (scratch probes, git 2.56.0):**
