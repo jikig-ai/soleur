@@ -22,6 +22,38 @@ production write, no live cron trigger, no label edit on existing issues, one PR
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-17. **Sections enhanced:** Overview, Property List, Proposed Solution, Phase 0,
+Phase 2, Attack Surface, User-Brand Impact, Observability, Guard Contract (all three guards), ADR,
+Acceptance Criteria, Risks, Research Insights. **Agents:** security-sentinel, observability-coverage-reviewer,
+user-impact-reviewer, test-design-reviewer, learnings-researcher, a verify-the-negative pass and a
+post-edit self-audit pass; forks ruled by the CTO agent (S1-S5).
+
+### Key Improvements
+
+1. **Server RCE closed (CTO S1).** `/app/.next` is chowned to uid 1001 and no write pattern covered it,
+   so any file-tool cron's agent could plant code the web server (prod secrets; the cron host) loads. The
+   containment hook now allows Write/Edit only under the run's own clone and HOME (allow-by-root, realpath
+   of nearest existing ancestor), which also closes cross-cron planting and founder-workspace writes.
+2. **No cron runs code its agent wrote (R5/A4 reversed).** Bug-fixer loses `vitest run` and
+   `install_deps`; the census's all-writable set and exemption map are both empty.
+3. **Observability made true:** setup-step failures post heartbeat ok:false but file no FAILED issue (claim
+   corrected); `reportSilentFallback(null, …)` with tags to survive Sentry dedup; three new failure-mode
+   rows; teardown at warning level.
+4. **Test design hardened:** Guard 2 on the real filesystem; resolver takes its candidate path as a
+   parameter (the `getPluginPath()` silent swap would make the untrusted row pass for the wrong reason);
+   H1 uses a known-writable control; census root is the constant, not a fixture env.
+5. **Git hardening (S5)** and a measured nested-CLAUDE.md import arm (S3, Phase 0.7g).
+
+### New Considerations Discovered
+
+- CI runs agent-committed site code with secrets (F6, pre-existing).
+- Playwright's default browser path is `$HOME/.cache`; Phase 0.6 records where the image's browser lives.
+- The `discoverability_test.expected_output` is now the single literal `deny` (Check 10 tokenizes it).
+- The helper module is `_cron-spawn-fs.ts` (underscore prefix, so it is not presumed a new Inngest
+  function by the task-design gate).
+
 ## Overview
 
 Crons that give their spawned `claude --print` child the file tools (Write/Edit) run that child in a
@@ -43,20 +75,23 @@ What this PR closes, and what it does not, stated plainly:
   the CLI loads via `--plugin-dir`) for all 12 plugin-loading functions (11 crons plus `event-ship-merge.ts`), the cross-run half of path 4
   (`~/.bashrc` and any other HOME file planted in one run and read by a later one), and the cross-run
   npm-cache variant of it (`~/.npm/_npx` is no longer shared between ux-audit runs).
-- **Not closed, tracked:** path 2 (bug-fixer edits a test and runs the allowlisted `vitest run`), the
-  `install_deps` lifecycle-script variant of it reached through the read-only `worktree-manager.sh`, and
-  (if Phase 0 measures it) the in-run half of path 4. All three are code the agent wrote running with the
-  token in its env, and the root fix is the scope-out: take the token out of the agent env. Until that
-  follow-up lands, bug-fixer still runs code it wrote with its token in the env.
-- **For bug-fixer specifically, this PR closes only the cross-run half** (fresh HOME, a plugin that no
-  run can change for the next). Within one run, vitest or an install lifecycle script can rewrite any
-  file uid 1001 can, including the clone-resident containment hook, so paths 1 and 3 stay open in-run for
-  bug-fixer until F1 lands (CTO A3). The 11 other plugin-loading crons hold no arbitrary-exec verb and get
-  the full path-1 and path-3 closure. The PR body and the ADR-033 amendment say this in these words.
-- **Not this class, tracked separately:** a file-tool cron's Write/Edit reaches any path uid 1001 can
-  write, including the shared `/home/soleur` and founder workspaces under `/workspaces/<uuid>`. That is
-  a cross-tenant write, not a write-then-execute, and it needs a new mechanism (a Write/Edit allow-list on
-  `spawnCwd` and the spawn HOME). Filed as its own `type/security` issue from this PR (CTO R8).
+- **Also closed (deepen-pass, CTO S1 and the R5/A4 reversal):** path 2 for bug-fixer. Its allowlist
+  loses `./node_modules/.bin/vitest run` and its spawn env sets `SOLEUR_WORKTREE_SKIP_INSTALL=1`, so no
+  cron keeps a verb that runs code the agent wrote. Bug-fixer therefore opens fixes without a local test
+  baseline (fix-issue's SKILL documents "proceed without a baseline"); CI still runs the suite on its PR.
+- **Write confinement (CTO S1).** The containment hook's `decide()` allows Write/Edit/MultiEdit only when
+  the realpath of the target's nearest existing ancestor is under the run's own clone (`spawnCwd`, derived
+  from the hook's own file location) or the run's own spawn HOME (accepted only when `process.env.HOME`
+  is exactly `<dirname(spawnCwd)>/home-*`; otherwise the clone only). This closes a pre-existing server
+  RCE found while deepening: `/app/.next` is chowned to uid 1001 (Dockerfile) and no write pattern covered
+  it, so a prompt-injected agent in any file-tool cron could plant code the web server (holding every prod
+  secret, and the process that runs the crons) loads. It also closes cross-cron planting (S2), writes into
+  another live run's HOME (T9) and founder workspaces under `/workspaces/<uuid>`.
+- **Not closed, tracked:** the installation token and the operator Anthropic key are still in the agent
+  env (path 2's root fix, the brief's scope-out, F1). With no exec verb left the agent cannot run its own
+  code with them, but a context-injection route could still surface them (S3, measured in Phase 0.7g).
+  CI runs agent-committed code with secrets (Eleventy `_data/*.js`, Nunjucks-rendered markdown; F6).
+  Pre-existing and filed, not fixed here.
 
 ## Research Insights
 
@@ -90,11 +125,13 @@ What this PR closes, and what it does not, stated plainly:
 
 - P1. No code a cron's agent can write is later executed by that cron with the spawn's secrets, other
   than the tracked, named exemptions (path 2 and anything it subsumes).
-- P2. Nothing a cron's agent writes into its own `HOME` survives into a later spawn. (Concurrent spawns share uid 1001, so a live agent can still Write into another live spawn's HOME; that is the cross-tenant Write class, tracked under F2.)
+- P2. Nothing a cron's agent writes into its own `HOME` survives into a later spawn, and no agent can Write outside its own run's clone and HOME (CTO S1, which also closes the concurrent same-uid case).
 - P3. The plugin a cron loads (skills, agents, hooks) is the deployed plugin, not the clone's copy.
 - P4. The allowlisted scripts a cron may run are the deployed copies, and the clone copies are denied.
 - P5. Paths 3 and 4 are measured on the real CLI, with the result recorded in the PR.
 - P6. A test goes red when any cron can both write and execute the same path.
+- P7. No cron's agent can write a path that the process hosting the crons (the web server, holding prod
+  secrets) executes, and no cron holds a verb that runs code the agent wrote (deepen-pass, CTO S1).
 
 ### Cut List
 
@@ -127,7 +164,7 @@ What this PR closes, and what it does not, stated plainly:
   (`CRON_WORKSPACE_ROOT=/workspaces` in prod); `cron-workspace-gc.ts` sweeps `soleur-*` dirs older than 1h.
 - `plugins/soleur/hooks/hooks.json` — PreToolUse hooks on Bash/Write/Edit and SessionStart hooks, all
   `${CLAUDE_PLUGIN_ROOT}`-relative; per ADR-277 cron spawns get none of the `SOLEUR_DISABLE_*` overrides,
-  so these hooks run inside cron spawns with the spawn env (path 3 reaches all 12 plugin-loading crons).
+  so these hooks run inside cron spawns with the spawn env (path 3 reaches all 12 plugin-loading functions).
 - `plugins/soleur/skills/fix-issue/SKILL.md` — calls
   `bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --yes create …` and the
   literal `./node_modules/.bin/vitest run --root apps/web-platform`.
@@ -176,6 +213,22 @@ What this PR closes, and what it does not, stated plainly:
 - No external research: the change is confined to this repo's substrate, whose behavior is measured
   against the pinned CLI rather than taken from docs.
 
+- **Deepen-pass additions (2026-11-17).**
+  `knowledge-base/project/learnings/2026-03-20-process-env-spread-leaks-secrets-to-subprocess-cwe-526.md`:
+  the spawn env stays an allowlist; the new `HOME`/`TMPDIR` keys are added to the literal, never via a
+  spread of `process.env`. `knowledge-base/project/learnings/2026-04-29-bind-mount-seed-detection-needs-late-sentinel.md`:
+  `.seed-complete` (written last) is the completeness proof, not the manifest; the resolver checks both.
+  `knowledge-base/project/learnings/2026-06-12-inngest-cron-heartbeat-gate-on-final-attempt-and-step-memoization.md`:
+  the resolver's verdict lives in the memoized setup step, so a retried claude-eval step reuses it; the
+  exit-time seed-tag compare is what catches a mount that changed after setup.
+  `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`:
+  the census floor is a fixed constant (not indexed to the discovered count), and H1 uses a known-writable
+  control. `knowledge-base/project/learnings/2026-03-05-verify-pretooluse-hooks-ci-deterministic-guard-testing.md`:
+  hooks are re-verified in the headless `--print` context (Phase 0.3), not assumed from interactive runs.
+  `knowledge-base/project/learnings/2026-04-19-enoent-on-optional-mount-should-not-alarm.md`: in CI and
+  local dev the mount is legitimately absent; the resolver throws (fail closed) but tests never reach the
+  real mount, and no boot-time alarm is added.
+
 ### CLAUDE.md conventions in force
 
 `hr-observability-as-plan-quality-gate`, `cq-write-failing-tests-before`, `hr-autonomous-loop-skill-api-budget-disclosure`
@@ -187,10 +240,10 @@ What this PR closes, and what it does not, stated plainly:
 Full table in `knowledge-base/project/specs/feat-one-shot-12824-cron-spawn-isolation/decision-challenges.md`.
 R1 read-only mount via `getPluginPath()` plus a runtime read-only and `.seed-complete` check; R2 the
 substrate owns `--plugin-dir` with a required `loadPlugin`; R3 fresh HOME for every claude spawn at the
-chokepoint; R4 both script-allowlisting crons move to the read-only root; R5 keep `install_deps`, one
-exemption with vitest tied to the path-2 follow-up; R6 the `.bashrc` decision rule, pinned to the CLI
+chokepoint; R4 both script-allowlisting crons move to the read-only root; R5 (reversed at deepen-pass by CTO S1:
+bug-fixer loses vitest and `install_deps`, no exemption); R6 the `.bashrc` decision rule, pinned to the CLI
 version measured; R7 the census anchor, plus MCP commands as executed paths and stale exemptions red;
-R8 a separate cross-tenant Write issue; R9 amend ADR-033 (cron spawn); A1 ux-audit is checked under a
+R8 a separate cross-tenant Write issue (superseded by CTO S1: the Write confinement lands in this PR); R9 amend ADR-033 (cron spawn); A1 ux-audit is checked under a
 fresh HOME and never falls back to the shared npm cache; A2 no new pattern for the spawn HOME's `.claude`.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -201,7 +254,7 @@ fresh HOME and never falls back to the shared npm cache; A2 no new pattern for t
 | "15 crons load via `--plugin-dir`" (issue path 3) | 12 files pass `"--plugin-dir","plugins/soleur"`; 18 call sites reach `spawnClaudeEval` | The census counts by identity map, not by the issue's number; the plan uses the measured 12 |
 | bug-fixer passes `HOME: process.env.HOME` | True, and so does every other cron `buildSpawnEnv`; the substrate spreads `buildSpawnEnv` then `CRON_GIT_CONFIG_PIN` | The fresh HOME is applied once at the chokepoint, after `buildSpawnEnv`, before the pin (R3) |
 | allowlisted script is run from the clone | `bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` (bug-fixer) and 13 `community-router.sh` lines (community-monitor) | Both move to `bash <plugin-root>/…`, substituted at allowlist-build time (R4) |
-| (unstated) a read-only script runs only read-only code | `worktree-manager.sh create` runs `install_deps` in the new worktree; lifecycle scripts come from the editable clone | Named exemption with vitest, tied to the path-2 follow-up (R5) |
+| (unstated) a read-only script runs only read-only code | `worktree-manager.sh create` runs `install_deps` in the new worktree; lifecycle scripts come from the editable clone | Closed: bug-fixer sets `SOLEUR_WORKTREE_SKIP_INSTALL=1` and loses vitest (R5 reversed, CTO S1) |
 | (unstated) the hook files run from the image | They run from the clone and are write-protected by existing patterns | Classified as pattern-protected in the census; no relocation (out of scope) |
 | crons run on the Inngest host | They run in the web container on the exec host | Paths and mounts are the web container's |
 
@@ -224,11 +277,12 @@ census that goes red when a cron can write and execute the same path.
 ## Proposed Solution
 
 - **Plugin root (R1, R2).** A new `resolveCronPluginRoot()` in the substrate returns
-  `assertTrustedPluginPath(getPluginPath())` after four checks, each a throw (the cron self-reports
-  FAILED; there is no fallback to `/opt/soleur/plugin` or to the clone): the manifest
+  `assertTrustedPluginPath(getPluginPath())` after these checks, each a throw (the cron fails closed;
+  there is no fallback to `/opt/soleur/plugin` or to the clone): the manifest
   `.claude-plugin/plugin.json` exists; `.seed-complete` exists (same sentinel `plugin-mount-check.ts`
-  reads); the root is not writable by the process (`fs.accessSync(root, W_OK)` must throw `EROFS` or
-  `EACCES`); and it is absolute. `spawnClaudeEval` refuses a caller-supplied `--plugin-dir` in both the
+  reads; one retry after about 30 s, CTO T1); neither the root nor `hooks/` is writable by the process
+  (the `W_OK` probe in `_cron-spawn-fs.ts` must throw `EROFS` or `EACCES`); and it is absolute. Details in
+  Phase 2.1. `spawnClaudeEval` refuses a caller-supplied `--plugin-dir` in both the
   `--plugin-dir X` and `--plugin-dir=X` forms, as it already refuses `--max-budget-usd`. `SpawnArgs`
   gains a required `loadPlugin: boolean`; when true the substrate inserts `--plugin-dir <root>` before
   the caller's flags (so it can never land after the caller's trailing `--`). The 12 plugin-loading
@@ -240,7 +294,7 @@ census that goes red when a cron can write and execute the same path.
   `{ ...buildSpawnEnv(token), HOME: spawnHome, TMPDIR: <spawnHome>/tmp,
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ...CRON_GIT_CONFIG_PIN }`. `mkdtemp` already creates mode
   0700. The HOME is removed in the same `finally` that clears the heartbeat timer; a removal failure
-  reports `cron-spawn-home-teardown` through `reportSilentFallback` and does not fail the run. Living
+  reports `cron-spawn-home-teardown` through `warnSilentFallback` (warning, no page) and does not fail the run. Living
   inside the run's ephemeral root, a leaked HOME shares the workspace's existing teardown
   (`teardownEphemeralWorkspace` removes `ephemeralRoot`) and `cron-workspace-gc` sweep, with no new GC
   prefix and no separate age race. Tools that hard-code `/tmp` instead of honouring `TMPDIR` are a noted
@@ -287,14 +341,38 @@ census that goes red when a cron can write and execute the same path.
   (see Phase 0) and records the result tables in the spec directory and the PR body.
 - **Census (P6).** `cron-write-execute-census.test.ts` (Guard 1) plus the chokepoint tests (Guard 2) and
   the resolver tests (Guard 3).
+- **Write confinement in the containment hook (CTO S1).** In `cron-bash-allowlist-hook.mjs`, the
+  Write/Edit/MultiEdit branch becomes allow-by-root: resolve the target (absolute, `..` normalised), take
+  the realpath of its nearest existing ancestor (so a symlink in the clone pointing outward resolves
+  outside and is denied), and allow only when it lies under `realpath(spawnCwd)` or `realpath(spawnHome)`.
+  `spawnCwd` is a fixed walk up from the hook's own file (`<spawnCwd>/apps/web-platform/server/inngest/…`),
+  never an env value; `spawnHome` is accepted only when `process.env.HOME` equals a `home-*` child of
+  `dirname(spawnCwd)`, so an env value cannot widen the area. Existing `WRITE_PROTECTED_PATTERNS` still
+  apply inside both roots. This is an allow-list, not another deny pattern, so the 2026-11-16 ruling does
+  not bar it. Deny reason: `cron-containment: write outside run roots: <path>`. The work phase lists every
+  place a cron's prompt or skill writes (each must be inside the two roots, or the cron degrades as
+  documented); `/tmp/ux-audit` and the Playwright profile move under `TMPDIR`/the spawn HOME.
+- **No code-exec verb for any cron (R5/A4 reversed).** `CRON_BASH_ALLOWLISTS["cron-bug-fixer"]` drops
+  `./node_modules/.bin/vitest run`, and bug-fixer's spawn env sets `SOLEUR_WORKTREE_SKIP_INSTALL=1`, so
+  `worktree-manager.sh create` runs no `install_deps`. The census has no exemption for running code
+  in-run; its all-writable set must be empty. The PR body says bug-fixer loses its local test baseline.
+- **Git hardening (CTO S5).** At the `CRON_GIT_CONFIG_PIN` spread point add `GIT_CONFIG_COUNT=3` with
+  `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `safe.bareRepository=explicit`
+  (`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`; command-level config outranks the clone's `.git/config`).
+  Today the pin carries only `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM` (`server/host-git.ts`), so nothing
+  else sets a COUNT; a test fails if any other site sets `GIT_CONFIG_COUNT`. The #12757 census maps in
+  `cron-spawn-git-config-pin.test.ts` are updated to match.
 - **Follow-ups filed from this PR (beyond F1/F2).** F3: atomic versioned plugin seed with a symlink
-  swap in `ci-deploy.sh` (CTO T1). F4: make the plugin-mount check a canary readiness gate (CTO T3). F5,
+  swap in `ci-deploy.sh` (CTO T1). F4: make the plugin-mount check a canary readiness gate (CTO T3). F6: CI runs
+  agent-committed code with secrets (CTO S4, P1). F5,
   only if Phase 0.6 shows it: uid 1001 cannot reach the root-installed Playwright browser (image change).
   All `type/security` or `type/bug`, `domain/engineering`, no priority label.
-- **Follow-ups filed from this PR.** F1 (path 2: take `GH_TOKEN` and `ANTHROPIC_API_KEY` out of the
-  agent env, or out of reach of agent-written code, for crons that run code they wrote; covers vitest,
-  `install_deps` and any in-run `.bashrc` result). F2 (cross-tenant Write: confine Write/Edit to
-  `spawnCwd` and the spawn HOME by allow-list). Both `type/security`, `domain/engineering`; the priority
+- **Follow-ups filed from this PR.** F1 (path 2's root fix: take `GH_TOKEN` and `ANTHROPIC_API_KEY` out
+  of the agent env; re-evaluation criterion: before any cron regains a local test runner or install, it
+  must run tokenless; also lists `npm_config_ignore_scripts` and moving the hook `.mjs` to the `:ro` root).
+  F2 (now: the Dockerfile chowns only `.next/cache`, so no uid-1001 code can write `.next/server`; needs an
+  ISR measurement first; P1; the Write/Edit allow-list originally planned for F2 lands in this PR per
+  CTO S1; `/app/node_modules/.vite-temp` is recorded here). Both `type/security`, `domain/engineering`; the priority
   of F2 is the operator's call (decision-challenges row O1).
 
 ## Technical Approach
@@ -305,13 +383,14 @@ census that goes red when a cron can write and execute the same path.
 Inngest step (web container, uid 1001)
   setupEphemeralWorkspace ──► /workspaces/soleur-<cron>-X/repo         (clone: agent-writable)
                          └──► repo/.claude/{settings.json,cron-allow.txt}  (write-protected)
+    resolveCronPluginRoot() ─► /app/shared/plugins/soleur              (:ro bind, EROFS; once per run, in setup)
   spawnClaudeEval
-    resolveCronPluginRoot() ─► /app/shared/plugins/soleur              (:ro bind, EROFS)
     mkdtemp ────────────────► /workspaces/soleur-<cron>-X/home-Y   (per spawn, 0700, sibling of repo/, rm in finally)
     claude --strict-mcp-config … [--plugin-dir /app/shared/plugins/soleur] <flags> -- <prompt>
-         env: buildSpawnEnv ∪ {HOME: Y} ∪ CRON_GIT_CONFIG_PIN
+         env: buildSpawnEnv ∪ {HOME: Y, TMPDIR: Y/tmp} ∪ CRON_GIT_CONFIG_PIN
          executes: plugin hooks/skills (ro) · containment + framing hook (clone, pattern-protected)
-                   allowlisted `bash /app/shared/plugins/soleur/…` (ro) · vitest/install (exempt → F1)
+                   allowlisted `bash /app/shared/plugins/soleur/…` (ro) · no code-exec verb (vitest removed)
+         writes:   Write/Edit only under repo/ and home-Y/ (hook allow-by-root, CTO S1)
 ```
 
 ### Implementation Phases
@@ -346,7 +425,9 @@ branch.
   `$HOME/.bashrc` with `export PROBE_RC=sourced`, run `echo "[$PROBE_RC]"` again. Arm B: a second,
   separate spawn reusing the same HOME runs `echo "[$PROBE_RC]"`. Outcomes: in-run re-source (A prints
   `[sourced]` on the second call), cross-run only (B prints `[sourced]`), or neither. Decision rule (R6):
-  cross-run is closed by the fresh HOME; an in-run result is added to the F1 exemption, pinned to 2.1.321.
+  cross-run is closed by the fresh HOME; an in-run result needs no exemption now, because no cron can run
+  code it wrote (R5 reversed) and Write confinement keeps the rc file inside the run's own HOME; record it,
+  pinned to 2.1.321.
 - **0.5 `${CLAUDE_PLUGIN_ROOT}` substitution.** A scratch skill whose text is
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"`: record the literal Bash command the CLI emits with an
   absolute `--plugin-dir`. If it is the absolute root, the new allowlist line matches the fix-issue
@@ -354,21 +435,23 @@ branch.
   `git worktree add` fallback (SKILL.md line 144). Record which, in the PR (CTO R4 dissent).
 - **0.6 ux-audit MCP under an empty HOME (A1, CTO T6).** In the pinned web-platform image as uid 1001
   (if the image pulls locally, read-only; otherwise on the host, labelled `unverified-in-image`), with an
-  empty HOME: run `/app/node_modules/.bin/mcp-server-playwright --help` (the binary name the pinned
-  package exposes, confirmed from its `package.json` `bin`), and record whether the root-run
+  empty HOME: run `/app/node_modules/.bin/playwright-mcp --help` (the pinned `@playwright/mcp@0.0.75`
+  declares `"bin": {"playwright-mcp": "cli.js"}` in its `package.json`, and `apps/web-platform/package.json`
+  lists it as a runtime dependency, so `npm ci` in the image places it under `/app/node_modules/.bin/`),
+  and record whether the root-run
   `npx playwright install` (Dockerfile) left a browser uid 1001 can launch. A missing browser is recorded
   as pre-existing with a follow-up, not fixed here.
 - **Decision branches, written before measuring (CTO A5).** 0.5: absolute → the absolute allowlist line
   matches; literal `${CLAUDE_PLUGIN_ROOT}` → the call is denied, the cron fails closed and reports FAILED;
   record it and never allowlist a `$` line. 0.4: the R6 rule above. 0.7b: a cold-cache failure is accepted
-  (below). 0.8: anything other than `EROFS`/`EACCES` fails the resolver.
+  (below). 0.7c: anything other than `EROFS`/`EACCES` fails the resolver.
 - **0.7a git and gh under an empty HOME.** With `CRON_GIT_CONFIG_PIN` set and an empty HOME: `git commit`
   in a scratch repo succeeds with the pinned identity; `gh api /rate_limit` with a dummy `GH_TOKEN`
   reaches auth (a 401 is the expected pass, a config-dir error is the failure). No API spend.
 - **0.7b Cold-cache install.** In a scratch copy of `apps/web-platform/package.json` + lockfile, empty HOME,
   registry unreachable (`npm_config_registry=http://127.0.0.1:9`): run `bun install --frozen-lockfile` and
-  `npm ci`. If `install_deps` fails, accept that bug-fixer's vitest baseline degrades as fix-issue's SKILL
-  documents, and record it in the PR and F1. Never point the npm or bun cache at the shared `/home/soleur`
+  `npm ci`. (Bug-fixer no longer runs `install_deps`, R5 reversed; this arm now only
+  records cold-cache behaviour for the record and F1.) Never point the npm or bun cache at the shared `/home/soleur`
   cache to keep it warm (a writable shared cache is a cross-run write-then-execute path); a per-spawn cache
   directory under the spawn HOME is acceptable.
 - **0.7c `:ro` errno.** `docker run --rm -v <dir>:/p:ro node:22-slim node -e 'try{require("fs").accessSync("/p",2);console.log("OK")}catch(e){console.log(e.code)}'`
@@ -384,7 +467,15 @@ branch.
   from a `chmod -R a-w` copy of the plugin tree with CWD in a `git clone --depth=1` scratch clone and
   `SOLEUR_WORKTREE_SKIP_INSTALL=1`; record that the libs resolve and the worktree is created in the clone,
   not under the plugin copy. No API spend.
-- **0.7 Record.** Write `measurements.md` in the spec directory: CLI version, command, raw output
+- **0.7g Nested CLAUDE.md import (CTO S3).** In the spawn shape, a nested `CLAUDE.md` in the clone with an
+  `@`-import of a canary file under `.git/` (a path the Read gate denies). Prompt the model to repeat any
+  canary it sees; `--model haiku`, one turn. Decision branches, written before measuring: the canary does
+  NOT reach context → record it, add nothing; it DOES → use a CLI-native way to exclude nested
+  `CLAUDE.md`/`AGENTS.md` if the pinned CLI has one, else add a write-deny for
+  `(^|/)(CLAUDE(\.local)?|AGENTS)\.md$` inside the confined roots, recorded as a narrow, explicit exception
+  to the 2026-11-16 ruling (it blocks context injection of the tokenized `.git/config`, not deny-list sprawl
+  over executed code). Also record `~/.claude.json` contents in arm 0.2.
+- **0.7f Record.** Write `measurements.md` in the spec directory: CLI version, command, raw output
   excerpt and verdict per arm. These outputs become the fixtures of the tests that depend on them
   (the substituted command string, the HOME file list), not hand-written shapes.
 
@@ -402,7 +493,7 @@ Write Guard 1, 2 and 3 suites and the updated shape tests against the new contra
   configuration fault does not retry into repeated Sentry events and operator emails. The not-writable
   check probes both the root and `hooks/` (a root-only probe misses a writable subtree). The error text
   names the local-dev cause ("plugin root must be a read-only mount; locally, bind-mount a copy `:ro`"),
-  with no bypass setting. The filesystem calls live in one small module (`cron-spawn-fs.ts`: resolver
+  with no bypass setting. The filesystem calls live in one small module (`_cron-spawn-fs.ts`: resolver
   probes, HOME create/remove) so handler tests replace it with one `vi.mock` line; CI-as-root is handled by
   mocking that module, not by a chmod fixture. `getPluginPath()` silently falls back to the default when
   an override is untrusted, so a drifted `SOLEUR_PLUGIN_PATH` surfaces as `writable` or `seed-incomplete`
@@ -419,7 +510,7 @@ Write Guard 1, 2 and 3 suites and the updated shape tests against the new contra
   runs against the spawn HOME (or the plan records why the container HOME is the right probe).
 - 2.4 `<plugin-root>` substitution in `buildAllowlistLines`; `CRON_BASH_ALLOWLISTS["cron-bug-fixer"]`
   and `COMMUNITY_ROUTER_READ_VERBS`; the community-monitor prompt builds from the substituted lines.
-- 2.5 The 12 plugin-loading crons drop the flag pair and pass `loadPlugin: true`; the other callers pass
+- 2.5 The 12 plugin-loading functions drop the flag pair and pass `loadPlugin: true`; the other callers pass
   `false`; rewrite the stale header comments (the #5091/#5026 block in the substrate, and each cron's
   "`--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree)" line).
 - 2.6 ux-audit MCP `command` → `/app/node_modules/.bin/` binary, unconditionally (CTO T6).
@@ -429,14 +520,14 @@ Write Guard 1, 2 and 3 suites and the updated shape tests against the new contra
   not-writable probe returning `EROFS`) wired through the test setup; derive every handler test that ends
   in a spawn with `git grep -l 'spawnClaudeEval\|setupEphemeralWorkspace' apps/web-platform/test` and
   update each (known: `cron-bug-fixer.test.ts` mocks `@/server/plugin-path` without
-  `assertTrustedPluginPath`, mocks `node:fs` without `accessSync`, and indexes `mkdtempSpy.mock.calls[0]`,
+  `assertTrustedPluginPath`, does not mock `_cron-spawn-fs.ts`, and indexes `mkdtempSpy.mock.calls[0]`,
   which a second `mkdtemp` reorders). Phase 0 values the tests depend on are literals in the tests with a
   comment citing `measurements.md`, plus one test that fails when the CLI pin in `package.json` moves off
   2.1.321 ("re-run the Phase 0 probe").
 
 #### Phase 3: Census and anchor (Guard 1)
 
-`cron-write-execute-census.test.ts`, the static `:ro` anchor, the exemption map, and the mutation
+`cron-write-execute-census.test.ts`, the anchor citing `docker-run-tuple.test.sh`, the exemption map, and the mutation
 battery recorded in the PR.
 
 #### Phase 4: ADR, follow-ups, measurements in the PR
@@ -456,7 +547,8 @@ battery recorded in the PR.
 | Write-protect `plugins/soleur/**`, tests and `~/.bashrc` | Rejected by the 2026-11-16 CTO ruling: bug-fixer must edit and test; it would also be one more deny list |
 | Keep `--plugin-dir` in each cron and check it in a test | 12 copies that drift; the substrate already owns `--max-budget-usd` the same way (R2) |
 | Fresh HOME only for file-tool crons | A per-cron split invites drift; one chokepoint covers all 18 call sites (R3) |
-| Set `SOLEUR_WORKTREE_SKIP_INSTALL=1` for bug-fixer | Closes nothing while vitest stays allowlisted, and removes the fix-issue test baseline (R5) |
+| Keep vitest and `install_deps` for bug-fixer, exempted to F1 (original R5/A4) | Reversed by CTO S1: code they run executes as uid 1001 below the Write hook and can write `/app/.next/server`; removing the token (F1) would not close that |
+| Deny patterns for `/app/`, `/opt/soleur/` (S1 option b) | One more deny list (2026-11-16 ruling) and incomplete; the allow-by-root confinement covers every outside path |
 | Make the spawn HOME read-only (0555 with pre-created rc files) | Out of scope; in-run execution is already open through path 2 (R6) |
 | Relocate the hook `.mjs` files out of the clone | They are already pattern-protected; relocation needs an image change and is not this class |
 
@@ -474,18 +566,22 @@ does to each:
 | `bash plugins/soleur/…` (clone copy) | Was allowlisted | Yes | Denied: no longer allowlisted |
 | Containment and framing hook `.mjs` (clone) | CLI `PreToolUse`/`PostToolUse` | No (existing `WRITE_PROTECTED_PATTERNS`) | Unchanged, census-classified |
 | `.claude/settings.json`, `cron-allow.txt` | CLI settings | No (`.claude` pattern) | Unchanged |
-| `~/.bashrc` and other HOME rc files | CLI shell snapshot | Yes, per spawn only | Cross-run closed; in-run → F1 if measured |
+| `~/.bashrc` and other HOME rc files | CLI shell snapshot | Own run's HOME only | Cross-run closed; in-run measured (0.4), no code-exec verb to exploit it |
 | `~/.claude/settings.json` hooks in HOME | CLI user settings | No (`.claude` pattern); fresh HOME has none | Inherited user settings removed |
 | `~/.npm/_npx` (ux-audit MCP launch) | `npx` at session start | Yes, per spawn only | Cross-run closed |
-| Test files run by `./node_modules/.bin/vitest run` | Allowlisted Bash | Yes | Exempt → F1 (path 2, scope-out) |
-| `package.json` lifecycle scripts run by `install_deps` | `worktree-manager.sh create` | Yes | Exempt → F1 (R5) |
-| `.git/hooks`, `core.hooksPath` | git | No (`.git` pattern, config pin) | Unchanged |
+| Test files run by `./node_modules/.bin/vitest run` | Was allowlisted (bug-fixer) | Yes | Closed: verb removed (R5 reversed) |
+| `package.json` lifecycle scripts run by `install_deps` | `worktree-manager.sh create` | Yes | Closed: `SOLEUR_WORKTREE_SKIP_INSTALL=1` |
+| `/app/.next/server/**` route chunks | The web server (holds prod secrets, runs the crons) | Was: yes (chowned to uid 1001) | Closed: Write confinement (S1); F2 removes the chown |
+| Nested `CLAUDE.md` `@`-imports of `.git/config` | CLI context loader | Yes, inside the clone | Measured (0.7g); branch per S3 |
+| Agent-committed `_data/*.js`, Nunjucks markdown | CI with secrets | Yes, via PR | Pre-existing → F6 |
+| `.git/hooks`, `core.hooksPath`, `core.fsmonitor` | git | No (`.git` pattern) | Hardened: `GIT_CONFIG_COUNT` pin (S5) |
 | `.mcp.json` in the clone | CLI | n/a (`--strict-mcp-config`) | Unchanged |
-| Any path outside the clone and HOME (`/home/soleur`, `/workspaces/<uuid>`) | Other consumers | Yes | Not this class → F2 |
+| Any path outside the run's clone and HOME (`/home/soleur`, `/workspaces/<uuid>`, another run's root, `/opt/soleur`) | Other consumers | Was: yes | Closed: Write confinement (S1) |
 
 ### Performance and cost
 
-One `mkdtemp` + `rm -r` per spawn and three `stat`/`access` calls; negligible against a multi-minute
+Resolver probes (manifest, sentinel, root and `hooks/` `W_OK`, seed tag) run once per run in setup, plus
+one seed-tag re-read at exit; one `mkdtemp`, one `mkdir` and one `rm -r` per spawn; negligible against a multi-minute
 spawn. No change to model, turns or budget flags.
 
 ### NFR impact
@@ -497,7 +593,26 @@ mount fails every plugin-loading cron loudly rather than running unprotected). N
 
 - **If this lands broken, the user experiences:** scheduled agents that maintain the product (the bug
   fixer, audits, content, ship-merge follow-ups) stop producing their issues and PRs; each self-reports
-  FAILED and its Sentry cron monitor goes red. No founder-facing surface changes.
+  FAILED and its Sentry cron monitor goes red, emailing the operator (AC15). No founder-facing UI changes.
+  Three degraded modes land with it, each detectable: a skill step whose `.py`/`.ts` script is absent
+  from the deployed copy degrades as the skill documents (for example event-ship-merge's ship flow runs
+  without `scripts/lint-ratchet.py`); the vendored-file coverage row forces a recorded disposition per
+  miss, and a degraded run must not report green. ux-audit's switch to the image's `playwright-mcp` may
+  find no browser uid 1001 can launch (Phase 0.6 measures it; F5 if so). A deploy that reseeds the plugin
+  mount mid-run can hand a running cron a mixed plugin tree, new for crons in this PR (seed-tag compare
+  marks the run degraded; F3 fixes it).
+- **Behaviour change the operator will see:** bug-fixer opens fix PRs without running tests locally
+  first (vitest and `install_deps` removed); CI still runs the suite before merge, so a broken fix shows
+  as a red PR rather than a skipped PR. A cron whose prompt writes outside its own clone and HOME now gets
+  a `write outside run roots` deny and degrades as documented.
+- **Still open after this PR (stated plainly):** the cron agents still hold a repo-write token and the
+  Anthropic key in their env (F1). They can no longer run code they wrote, but a context-injection route
+  could still surface the token to the model (Phase 0.7g measures the nested-CLAUDE.md case). CI runs
+  agent-committed site code with secrets (F6). `/app/.next` is still chowned to uid 1001 in the image, now
+  unreachable by the agent's Write tool but reachable by any future code-exec verb (F2).
+- **Closed, which founders should know:** before this PR a prompt-injected file-tool cron could Write
+  into founder workspaces under `/workspaces/<uuid>` and into the web server's build output; the Write
+  confinement closes both.
 - **If this leaks, the user's workflow is exposed via:** a prompt-injected issue, web page or social
   snippet steering a file-tool cron to rewrite a plugin hook or allowlisted script, which then runs with
   an installation token that can write `jikig-ai/soleur`, the repository every plugin user pulls from.
@@ -510,13 +625,13 @@ mount fails every plugin-loading cron loudly rather than running unprotected). N
 
 ```yaml
 liveness_signal:
-  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal or a spawn-HOME setup fault throws before the agent starts, so the run self-reports FAILED and the monitor goes red. One new error op and one new warning op; no new monitor."
+  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red and emails the operator (AC15); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
   cadence: "per cron run, on each cron's own schedule"
-  alert_target: "each cron's Sentry heartbeat monitor (ok:false), the Sentry issue for op cron-plugin-root-untrusted, and the cron's FAILED self-report issue"
+  alert_target: "each cron's Sentry heartbeat monitor (ok:false, routed to operator email by cron-monitor-alerts.tf) and the Sentry issue for op cron-plugin-root-untrusted"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (resolveCronPluginRoot, spawnClaudeEvalUnguarded); apps/web-platform/server/inngest/functions/_cron-shared.ts (heartbeat)"
 error_reporting:
   destination: "Sentry via reportSilentFallback / warnSilentFallback and the Inngest sentry-correlation middleware; Better Stack via the Vector journald shipper of the pino logs"
-  fail_loud: "a thrown CronPluginRootError naming reason (manifest-missing, seed-incomplete, writable, untrusted-path) and the cron, mirrored as op cron-plugin-root-untrusted; a hook deny 'cron-containment: not allowlisted: bash plugins/soleur/...' in the run's permission_denials"
+  fail_loud: "a thrown CronPluginRootError naming reason (manifest-missing, seed-incomplete, writable, untrusted-path) and the cron, mirrored as op cron-plugin-root-untrusted via reportSilentFallback(null, {feature: cronName, op, message: <fixed per-reason string>, tags: {cron, reason}}) - err is null and the reason is in tags, because a reportSilentFallback(err) after pino's logger.error({err}) hook is deduplicated by Sentry and the tagged capture is lost (#8629); the caller's existing setup-ephemeral-workspace report also fires for the same run, documented as the generic companion event; a hook deny 'cron-containment: not allowlisted: bash plugins/soleur/...' in the run's permission_denials"
 failure_modes:
   - mode: "the plugin mount is absent, half-seeded or writable (drifted SOLEUR_PLUGIN_PATH, missing :ro)"
     detection: "in-surface: resolveCronPluginRoot runs inside the step before the child spawns and reports op cron-plugin-root-untrusted with a closed reason enum, which separates the four causes in one event"
@@ -528,8 +643,14 @@ failure_modes:
     detection: "in-surface: the child's stderr tail (redacted) and capture_status no-result-event from parseClaudeResultLine"
     alert_route: "heartbeat ok:false and the existing claude-eval FATAL classification"
   - mode: "a spawn HOME is not removed"
-    detection: "warning op cron-spawn-home-teardown; cron-workspace-gc removes soleur-* leftovers older than 1h"
+    detection: "warnSilentFallback op cron-spawn-home-teardown (layer: pino mirror + Inngest sentry-correlation middleware); the HOME lives inside the run's ephemeralRoot, which teardownEphemeralWorkspace and cron-workspace-gc already remove"
     alert_route: "Sentry warning (no page)"
+  - mode: "the spawn HOME cannot be created (ENOSPC on /workspaces)"
+    detection: "in-surface: reportSilentFallback(null, op cron-spawn-home-create, tags {cron}) inside the try, before the throw; the finally still clears the heartbeat timer (layer: pino mirror + sentry-correlation)"
+    alert_route: "Sentry issue (op cron-spawn-home-create) + heartbeat ok:false via the claude-eval failure path"
+  - mode: "the plugin mount is reseeded by a deploy while a spawn runs"
+    detection: "in-surface: the seed tag read from .seed-complete at spawn differs at exit; reportSilentFallback(null, op plugin-reseeded-mid-run, tags {cron}) (layer: pino mirror + sentry-correlation); the run's output-aware verdict is downgraded to not-ok, so the heartbeat posts ok:false rather than a green run on a mixed plugin tree"
+    alert_route: "Sentry issue (op plugin-reseeded-mid-run) + heartbeat ok:false"
   - mode: "a new cron executes a path it can write"
     detection: "pre-merge: cron-write-execute-census.test.ts goes red on the PR that adds it, naming the cron, the path and the source"
     alert_route: "CI failure on that PR"
@@ -538,7 +659,7 @@ logs:
   retention: "Better Stack and Sentry plan retention; nothing new is retained"
 discoverability_test:
   command: "node -e 'process.stdout.write(require(\"node:child_process\").spawnSync(process.execPath,[\"apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs\",(require(\"node:fs\").writeFileSync(require(\"node:path\").join(require(\"node:os\").tmpdir(),\"c12824-allow.txt\"),\"bash /app/shared/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh\"),require(\"node:path\").join(require(\"node:os\").tmpdir(),\"c12824-allow.txt\"))],{input:JSON.stringify({tool_name:\"Bash\",tool_input:{command:\"bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create x\"}}),encoding:\"utf8\"}).stdout)'"
-  expected_output: "not allowlisted"
+  expected_output: "deny"
 ```
 
 The command carries none of Check 10's shell-active bytes (`|`, `;`, `&`, `<`, `>`, `$`, backtick). It was
@@ -560,9 +681,14 @@ and env at spawn time.
 **Property.** For every cron that reaches `spawnClaudeEval`, no path that cron executes is one that cron
 can write, unless the (cron, path) pair is in the exemption map with an open tracking issue.
 
-**Assembly.** The population is every `spawnClaudeEval(...)` call under `apps/web-platform/server/inngest/`
-(discovered with the TypeScript compiler API, open-world and recursive, stored as an identity map of
-file → `cronName`). Executed-path sources, all read from the real producers, never retyped: (1) the
+**Assembly.** The population is every `spawnClaudeEval(...)` call under `apps/web-platform/server/`
+(discovered with the TypeScript compiler API, one `createSourceFile` per file as
+`cron-spawn-git-config-pin.test.ts` already does, open-world and recursive, stored as an identity map of
+file → `cronName`); any reference to `spawnClaudeEval` that is not a direct call (an alias, a re-export,
+a value passed around) fails the census, so aliasing cannot hide a call site. The plugin root fed to
+`buildAllowlistLines(…, pluginRoot)` and `buildClaudeArgv(pluginRoot, …)` is the constant
+`SOLEUR_PLUGIN_PATH_DEFAULT`, never `getPluginPath()`, so a test fixture's `SOLEUR_PLUGIN_PATH` cannot
+move the census onto a temp directory. Executed-path sources, all read from the real producers, never retyped: (1) the
 argv from the exported `buildClaudeArgv()` for that cron's `loadPlugin` and flags (the `--plugin-dir`
 root); (2) every line of `buildAllowlistLines(cronName, CRON_BASH_ALLOWLISTS[cronName])` whose first
 token, or the token after `bash`/`sh`/`node`, is a path (`./node_modules/.bin/*` resolves against the
@@ -577,9 +703,15 @@ denied or it is under the plugin root and the anchor below holds. The census nev
 write clone paths only": it asks `decide()`. A cron is classed **all paths writable in-run** when any of
 its allowlist lines matches a fixed list of arbitrary-exec verb shapes (`./node_modules/.bin/*`,
 `bash <non-plugin-root path>`, `node <path>`, any package-install verb, a worktree `create` that runs
-`install_deps`), decided by line shape, never by cron name. Today only bug-fixer matches; it carries one
-whole-cron exemption keyed to F1, and the census asserts that the all-writable set equals
-`{cron-bug-fixer}` exactly, so a second cron acquiring an exec verb goes red. Every cron is treated as write-capable
+`install_deps`), decided by line shape, never by cron name. After the R5/A4 reversal no cron matches; the
+census asserts that the all-writable set is empty and the exemption map is empty, so any cron acquiring
+an exec verb goes red. Write confinement probes (CTO S1), each through the real `decide()` with the hook's
+spawnCwd and HOME derivation exercised: `/app/.next/server/x.js`, `/home/soleur/.bashrc`,
+`/workspaces/<uuid-shaped>/x`, another run's `<root>/repo/x`, `/opt/soleur/plugin/x`, a `..` escape out of
+`repo/`, and a symlink in the clone pointing outward must all be denied; the run's own `repo/x` and
+`home-*/x` must be allowed; a `HOME` env value that is not a `home-*` child of `dirname(spawnCwd)` must
+not widen the allowed area. PATH: every entry in the spawn env's `PATH` is absolute and outside spawnCwd
+and the spawn HOME. Every cron is treated as write-capable
 unless its allowlist carries the `no-file-tools` directive (`--allowedTools` does not fail closed headless).
 Any allowlist line that runs something and fits no source class lands in a red UNCLASSIFIED bucket.
 
@@ -603,19 +735,26 @@ exemption is a review finding.
 | 4 | Rename the discovered call (the census finds zero `spawnClaudeEval` calls) | RED (identity map / non-vacuity floor) |
 | 5 | Change `SOLEUR_PLUGIN_PATH_DEFAULT` to `/opt/soleur/plugin` | RED (not the `:ro` mount target the anchor names; the census compares the constant, since `getPluginPath()` bypasses under vitest) |
 | 6 | Drop `:ro` from `_VOLS` | RED (in `docker-run-tuple.test.sh`, the cited anchor; the census does not duplicate it) |
-| 7 | Leave an exemption for a path no cron executes | RED (stale exemption) |
+| 7 | Add any entry to the exemption map | RED (the map must be empty; an entry matching no exec-verb cron is also stale) |
 | 8 | Add an allowlist line `python3 scripts/x.py` | RED (UNCLASSIFIED) |
 | 9 | Remove `cron-community-monitor` from `CRON_NO_FILE_TOOLS` while its router lines still name the clone | RED |
 | 10 | Make the hook's `gitVerbReason` admit `git checkout -- <path>` for roadmap-review | RED (hook file writable via a probe form) |
-| 11 | Add `./node_modules/.bin/tsx` to roadmap-review's allowlist | RED (second all-writable cron) |
+| 11 | Add `./node_modules/.bin/tsx` to roadmap-review's allowlist, or restore `./node_modules/.bin/vitest run` to bug-fixer's | RED (all-writable set non-empty) |
 | 12 | Set `loadPlugin: false` on a cron whose prompt invokes a `soleur:` skill | RED (skills silently not found) |
 | 13 | Add a `${CLAUDE_PLUGIN_ROOT}/scripts/x.py` reference to a skill a plugin-loading cron invokes, with no disposition row | RED (vendored-file coverage) |
+| 14 | Revert the Write branch to allow-unless-pattern (today's behaviour) | RED (`/app/.next/server/x.js` and `/workspaces/<uuid>/x` allowed) |
+| 15 | Resolve the target lexically instead of by nearest-existing-ancestor realpath | RED (outward symlink in the clone allowed) |
+| 16 | Derive the allowed HOME from `process.env.HOME` without the `home-*` sibling check | RED (`HOME=/` widens the area) |
+| 17 | Drop `SOLEUR_WORKTREE_SKIP_INSTALL=1` from bug-fixer's spawn env | RED (worktree `create` runs `install_deps`, an exec verb) |
+| 18 | Add a second `GIT_CONFIG_COUNT` setter, or drop `core.hooksPath=/dev/null` from the pin | RED |
 
-**Harness rows:** (H1) replace the census's `decide()` with a stub that denies everything → RED, because
-the anchor and exemption rows then contradict the stub (the battery checks that vitest's exempt path is
-reported writable, so an all-deny stub cannot pass); (H2) make the census iterate an empty population →
+**Harness rows:** (H1) replace the census's `decide()` with a stub that denies everything → RED via a
+known-writable control: a `Write` to a clone file (absolute path, the form the hook sees) must classify
+writable; bug-fixer's all-writable class comes from its allowlist text, not `decide()`, so it cannot serve
+as the control; (H2) make the census iterate an empty population →
 RED by the floor; (H3) must-PASS: a cron whose allowlist holds only `gh issue view` and loads no plugin;
-(H4) must-PASS: bug-fixer with its whole-cron exemption intact and every other line on the read-only root.
+(H4) must-PASS: bug-fixer with no vitest line, `SOLEUR_WORKTREE_SKIP_INSTALL=1`, and its worktree line on the
+read-only root.
 
 ### Guard 2 — chokepoint argv and env
 
@@ -626,7 +765,9 @@ any caller flag exactly when `loadPlugin` is true.
 **Assembly.** `spawnClaudeEvalUnguarded` is the single chokepoint (`resolveClaudeBin()` may be referenced
 only in the substrate, already pinned by `cron-claude-eval-mcp-flags.test.ts`); the observed artifacts are
 the argv and env passed to the mocked `child_process.spawn`, and the filesystem state at spawn time and
-after resolve.
+after resolve. Guard 2 uses the REAL filesystem under a temp workspace root and mocks only
+`child_process.spawn` (mocking `_cron-spawn-fs.ts` here would test the fake, so rows 4, 5 and 10 could not
+fail); modes and existence are checked inside the fake spawn call.
 
 **Mutation matrix:**
 
@@ -643,6 +784,7 @@ after resolve.
 | 9 | Pass the raw `allow` (unsubstituted) to `runHookSelfTest` | RED (community-monitor setup throws) |
 | 10 | Replace `mkdtemp` with `mkdir(…, {mode: 0o755})` | RED (mode at spawn time is not 0700; `mkdtemp` already creates 0700, so a dropped `chmod` alone is not a meaningful mutation) |
 | 11 | Create the HOME under `spawnCwd` | RED (HOME-not-in-clone assertion) |
+| 12 | Create `<HOME>/tmp` with mode 0755, or omit `TMPDIR` from the env | RED (TMPDIR equals `<HOME>/tmp`, mode 0700 at spawn time) |
 
 **Harness rows:** (H1) the spy records env by reference and the test mutates it → RED unless the spy
 deep-copies at call time; (H2) must-PASS: a `loadPlugin: false` cron whose flags contain no `--plugin-dir`.
@@ -668,9 +810,12 @@ manifest and a `.seed-complete`, and is not writable by the process; otherwise i
 | 7 | Skip the exit-time seed-tag compare | RED (fixture whose tag changes during the spawn reports no `plugin-reseeded-mid-run`) |
 
 **Harness rows:** (H1) the mocked probe returns success for every call → RED by row 1's fixture; (H2)
-must-PASS: a fixture with manifest, sentinel and a probe that throws `EROFS`. The `untrusted-path` row runs
-with `VITEST` and `NODE_ENV` deleted (restored in `afterEach`), because `getPluginPath()` and
-`assertTrustedPluginPath()` bypass under the test env; without that the row passes vacuously.
+must-PASS: a fixture with manifest, sentinel and a probe that throws `EROFS`. The resolver takes the
+candidate path as a parameter (`resolveCronPluginRoot(candidate = getPluginPath())`), so row 4's
+neighbour, an `untrusted-path` assertion, feeds a non-`/app/` path directly with `vi.stubEnv` for
+`VITEST`/`NODE_ENV` and asserts the exact reason; `getPluginPath()` silently swaps a bad override for the
+default, so going through it would fail on `writable` or `seed-incomplete` and pass for the wrong
+reason. Row 6 uses fake timers (or an injected sleep), never a real 30 s wait.
 
 ## Architecture Decision (ADR/C4)
 
@@ -681,14 +826,15 @@ with a dated 2026-11-17 amendment (#12824): the substrate owns `--plugin-dir` an
 `:ro` plugin through `resolveCronPluginRoot()`; every claude spawn gets a fresh per-spawn HOME; allowlisted
 scripts are named under the plugin root; the write-and-execute census is the guard. Update the #12757
 amendment's residual list: the "agent-editable-code class is tracked in #12824" bullet becomes the
-residuals that remain (F1 path 2 + install + in-run rc, F2 cross-tenant Write). No new ADR (R9). There
+residuals that remain (F1 token in the agent env, F2 the `.next` chown, F6 CI running agent-committed
+code). The amendment also records the Write confinement (allow-by-root in the containment hook) and that
+no cron holds a code-exec verb. No new ADR (R9). There
 are three `ADR-033-*` files; cite this one by its full name.
 
-The amendment states, in these words, that for bug-fixer this change closes only the cross-run half until
-F1 lands, and that the census's all-writable set is `{cron-bug-fixer}`. Its residual list also names:
-the in-place reseed race, new for crons in this PR (F3, with the seed-tag detection); concurrent same-uid
-writes into another live spawn's HOME or TMPDIR (F2); tools that ignore `TMPDIR`; and the vendored-copy
-file-type gap with its per-miss dispositions.
+The amendment states that the census's all-writable set is empty and that bug-fixer runs without a local
+test baseline. Its residual list also names: the in-place reseed race, new for crons in this PR (F3, with
+the seed-tag detection); tools that ignore `TMPDIR`; the vendored-copy file-type gap with its per-miss
+dispositions; and the S3 measurement result.
 
 Also add a short dated amendment to
 `knowledge-base/engineering/architecture/decisions/ADR-093-sdk-plugin-source-is-platform-deployed-not-connected-repo.md`
@@ -718,9 +864,10 @@ The canonical regulated-data regex matched none of the paths the plan names
 (`gdpr-gate: path scan complete — 67 examined, 0 matched`); the corpus is 1 day since `last-verified`, so
 no staleness banner fired. None of the five v1 checks fired: no schema column, no PII table, no FK to
 `users`, no new vendor or SDK, no Art. 9 column. The change moves where a spawned CLI reads its plugin and
-HOME; it processes no personal data. The cross-tenant Write reach found during planning (F2) does put
-founder workspace data in reach of a prompt-injected cron, which is pre-existing; per the CPO condition,
-F2 is routed to `soleur:legal:clo` for a GDPR read when filed. This is not legal review.
+HOME; it processes no personal data. The deepen pass found that a prompt-injected file-tool cron could
+Write into founder workspaces under `/workspaces/<uuid>` (pre-existing); the Write confinement in this PR
+closes it, and per the CPO condition the PR body asks `soleur:legal:clo` for a GDPR read on whether the
+pre-existing exposure needs a record (no evidence of exploitation is known). This is not legal review.
 
 ## Domain Review
 
@@ -741,13 +888,15 @@ Not applicable: no UI surface (no `components/**`, `app/**/page.tsx` or `app/**/
 list). The CPO took part only as the plan-time sign-off the threshold requires: **approved with conditions**
 (2026-11-17), folded in as follows.
 
-1. F1 is filed p1, `single-user incident`, current active milestone. If it cannot land soon, scoping the
-   bug-fixer token down or pausing the cron is a schedule/scope call for the operator (decision-challenges
-   row O2), not a change in this PR.
-2. F2 is filed with the CPO's recommendation (at least p1, `single-user incident`) recorded in its body and
-   routed to the CLO; the final priority stays the operator's (row O1).
-3. The PR body opens with a plain "still open" paragraph: bug-fixer can still run code it wrote while
-   holding a repo-write token, tracked in F1 (AC16).
+1. F1 is filed p1, `single-user incident`, current active milestone. (Condition 1's fallback, scoping the
+   bug-fixer token down or pausing the cron, is largely met by removing bug-fixer's code-exec verbs in
+   this PR; row O2 records it.)
+2. The cross-tenant Write the CPO asked to be filed (F2 at planning time) now lands in this PR as the
+   Write confinement (CTO S1); the CLO GDPR read is still requested in the PR body, since founder data was
+   in reach before it. F2 now names the `.next` chown; its priority stays the operator's (row O1), with the
+   CPO's recommendation (at least p1, `single-user incident`) recorded in its body.
+3. The PR body opens with a plain "still open" paragraph: the cron agents still hold a repo-write token
+   in their env (F1); bug-fixer has lost its local test baseline (AC16).
 4. A cron that fails closed must reach the operator's normal alert channel, not only Sentry: AC15 checks
    that every affected cron's monitor is routed through `sentry_alert.cron_monitor_failure`
    (`apps/web-platform/infra/sentry/cron-monitor-alerts.tf`), which emails the operator.
@@ -771,7 +920,18 @@ copy, vendor or spend (beyond a few cents of local probe API usage).
   `cron-follow-through-monitor.ts`, `oneshot-f2-defer-gate-review.ts`, `oneshot-recheck-4217-calibration.ts`.
   The work phase re-derives this list from the census's discovered population; a caller not listed here
   is added, not skipped.
-- `cron-ux-audit.ts` MCP `command` — switch to the `/app/node_modules/.bin/` binary (CTO T6).
+- `cron-ux-audit.ts` MCP `command` — switch to the `/app/node_modules/.bin/` binary (CTO T6); its
+  `/tmp/ux-audit` and Playwright-profile write sites move under the spawn `TMPDIR`/HOME (S1 confinement).
+- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` — Write/Edit/MultiEdit allow-by-root
+  (clone and spawn HOME, derived from the hook's own path), deny reason `write outside run roots`
+  (CTO S1); the `CLAUDE.md`/`AGENTS.md` write-deny only if Phase 0.7g resolves the import and no
+  CLI-native exclusion exists (CTO S3).
+- `cron-bug-fixer.ts` / `CRON_BASH_ALLOWLISTS["cron-bug-fixer"]` — drop `./node_modules/.bin/vitest run`,
+  set `SOLEUR_WORKTREE_SKIP_INSTALL=1` in its spawn env, update the prompt's test step to the
+  no-baseline path (R5/A4 reversed).
+- `_cron-claude-eval-substrate.ts` — `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` at the pin spread point (CTO S5).
+- `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts` and
+  `cron-spawn-git-config-pin.test.ts` — confinement rows and the updated #12757 census maps.
 - Tests that pin today's shape: `apps/web-platform/test/server/inngest/cron-producer-output-wiring.test.ts`,
   `cron-content-generator.test.ts`, `cron-untrusted-preamble.test.ts`, `cron-claude-eval-substrate.test.ts`,
   `cron-claude-eval-mcp-flags.test.ts`, `cron-spawn-git-config-pin.test.ts` (the substrate's new `HOME`
@@ -786,7 +946,7 @@ copy, vendor or spend (beyond a few cents of local probe API usage).
 ## Files to Create
 
 - `apps/web-platform/test/server/inngest/cron-write-execute-census.test.ts` — Guard 1.
-- `apps/web-platform/server/inngest/functions/cron-spawn-fs.ts` — the small filesystem module (resolver
+- `apps/web-platform/server/inngest/functions/_cron-spawn-fs.ts` — the small filesystem module (resolver
   probes, HOME create/remove) that handler tests replace with one `vi.mock` (CTO T8).
 - `apps/web-platform/test/server/inngest/cron-spawn-isolation.test.ts` — Guards 2 and 3 (spawn spy and
   resolver; isolated from `cron-claude-eval-substrate.test.ts`, which must not mock `node:child_process`).
@@ -831,14 +991,18 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
 | Phase 0 probe script and `measurements.md` | asks 3 | asked |
 | Census, chokepoint and resolver suites | asks 4 | asked |
 | F1 issue | asks 5 | asked |
-| F2 issue (cross-tenant Write) | — | inferred — justification: found while enumerating the attack surface for ask 4; CTO R8 ruled a separate issue, no code here |
+| Write confinement in the containment hook | asks 4 | asked (CTO S1: `/app/.next` is a path the cron's own host process executes and the agent could write, the write-then-execute ask 4 names) |
+| Remove vitest / `install_deps` from bug-fixer | asks 4 | asked (CTO S1 reversal of R5/A4: code they run writes below the hook) |
+| `GIT_CONFIG_COUNT` hardening | — | inferred — justification: CTO S5, hardens the clone root the confinement leaves writable; three env keys |
+| Phase 0.7g nested CLAUDE.md probe | asks 3 | asked (measure against the real CLI, CTO S3) |
+| F2 issue (`.next` chown), F3-F6 | — | inferred — justification: residuals found while enumerating ask 4's attack surface; each is pre-existing or needs an image/deploy/CI change outside a dark-launch PR (CTO S1, T1, T3, T6, S4) |
 | ADR-033 amendment | asks 6 | asked (architecture decision is a plan deliverable) |
 | Shape-test updates | asks 1, 2 | asked |
 
 ### Split Assessment
 
 - Subsystems touched: 2 — `apps/web-platform/server/inngest/` (substrate + callers) and `knowledge-base/` (ADR, spec artifacts)
-- Planned files: about 40 (after plan review) | Estimated changed lines: about 1,250 (most in the three new suites and the measurement record; the 18 caller edits are 1-3 lines each)
+- Planned files: about 44 (after deepen-pass) | Estimated changed lines: about 1,500 (most in the three new suites and the measurement record; the 18 caller edits are 1-3 lines each)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines — files and lines exceed
 - Recommendation: single PR. The brief caps the work at one PR, and the parts cannot ship apart safely:
   the refusal of a caller `--plugin-dir` without the 18 caller edits breaks every cron, and the callers
@@ -850,13 +1014,13 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
 
 - **AC1** `resolveCronPluginRoot()` returns `getPluginPath()` only when manifest, `.seed-complete` and a
   not-writable root (`EROFS`/`EACCES`) all hold, and throws `CronPluginRootError` with the matching reason
-  otherwise; Guard 3 rows 1-4 go red when applied (`cron-spawn-isolation.test.ts`).
+  otherwise; Guard 3 rows 1-7 go red when applied (`cron-spawn-isolation.test.ts`).
 - **AC2** `spawnClaudeEval` throws on `--plugin-dir X` and `--plugin-dir=X` in caller flags; with
   `loadPlugin: true` the real argv carries `--plugin-dir <root>` before the caller flags and before `--`;
   with `false` it carries none (Guard 2 rows 6-8).
 - **AC3** Every claude child's env has a HOME equal to a fresh `home-*` dir directly under the run's
   `ephemeralRoot` (not under `spawnCwd`), and `TMPDIR` equal to `<HOME>/tmp`, mode 0700 at spawn time, distinct across two spawns, absent after
-  resolve; `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM` still equal `CRON_GIT_CONFIG_PIN` (Guard 2 rows 1-5).
+  resolve; `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM` still equal `CRON_GIT_CONFIG_PIN` (Guard 2 rows 1-5, 10-12).
 - **AC4** `cron-spawn-git-config-pin.test.ts` passes with the substrate's HOME literal in
   `KNOWN_HOME_LITERALS`; no other map entry shrinks.
 - **AC5** No file under `apps/web-platform/server/` contains the string pair `"--plugin-dir"` outside the
@@ -866,13 +1030,14 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
   contains `$` or `<plugin-root>`; bug-fixer's and community-monitor's script lines start with
   `bash /app/shared/plugins/soleur/` in a prod-shaped env.
 - **AC7** `cron-write-execute-census.test.ts` passes, its discovered population equals its stored identity
-  map, and its only exemption is bug-fixer's whole-cron "all paths writable in-run" entry naming the F1
-  issue number (covering vitest, `install_deps` and, if Phase 0.4 measured it, the in-run rc result), and
-  the all-writable set equals `{cron-bug-fixer}`.
-- **AC8** The Guard 1 mutation battery (rows 1-13, H1-H4), the Guard 2 battery (rows 1-11, H1-H2) and the
+  map, its exemption map is empty, the all-writable set is empty, and every Write-confinement probe in
+  Guard 1 has the expected allow/deny verdict.
+- **AC8** The Guard 1 mutation battery (rows 1-18, H1-H4), the Guard 2 battery (rows 1-12, H1-H2) and the
   Guard 3 battery (rows 1-7, H1-H2) is run once against the finished suite and the
-  per-row result is pasted in the PR body; every RED row was red and every must-PASS row was green.
-- **AC9** `measurements.md` records Phase 0 arms 0.1-0.6 and 0.7a-0.7e with the CLI version (2.1.321), command, output
+  per-row result is pasted in the PR body; every RED row was red with vitest exit code 1 (an exit of 2 or
+  127, a crash or a collection error, counts as not-run, never as red), every must-PASS row was green, and
+  each mutation ran in a scratch copy or a reverted working tree so no mutation reaches a commit.
+- **AC9** `measurements.md` records Phase 0 arms 0.1-0.6 and 0.7a-0.7f with the CLI version (2.1.321), command, output
   excerpt and verdict; the PR body carries the path-3 and path-4 tables.
 - **AC10** The ADR-033 (cron spawn) amendment exists, names F1 and F2 by number, and its #12757 residual
   bullet for #12824 is updated; the C4 read is recorded and `c4-count-parity.test.sh` is green.
@@ -884,7 +1049,23 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
   since ADR-235, so it is not in the diff).
 - **AC13** The web-platform suite and typecheck pass: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest`
   and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- **AC14** The Observability `discoverability_test.command` prints `not allowlisted` on the final tree.
+- **AC14** The Observability `discoverability_test.command` prints a `permissionDecision` of `deny` (reason `cron-containment: not allowlisted`) on the final tree.
+- **AC15** Every cron whose spawn now runs through `resolveCronPluginRoot()` has its Sentry cron monitor
+  routed in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` (the existing routing test passes and
+  the work phase lists the 13 monitor slugs it checked: the 11 plugin-loading crons, community-monitor,
+  and the monitor that covers `event-ship-merge.ts` or a note that it has none and how its failure surfaces), so a fail-closed run emails the operator.
+- **AC16** The PR body's first paragraph states, in plain words, that the cron agents still hold a
+  repo-write token in their env (naming F1), that bug-fixer now opens fixes without a local test run, and
+  that a prompt-injected cron could previously write into founder workspaces and the web server's build
+  output (closed here), with a request for a CLO read.
+- **AC19** `CRON_BASH_ALLOWLISTS["cron-bug-fixer"]` contains no `./node_modules/.bin/` line and
+  bug-fixer's spawn env has `SOLEUR_WORKTREE_SKIP_INSTALL=1`; fix-issue's SKILL "no baseline" path is the
+  documented behaviour (no SKILL edit needed, or the edit is listed).
+- **AC20** `decide()` denies Write/Edit/MultiEdit outside the run's clone and HOME (Guard 1 rows 14-16) with
+  reason `cron-containment: write outside run roots`, and every write site the work phase enumerated for
+  the 18 callers' prompts and skills is inside the two roots or has a recorded degrade disposition.
+- **AC21** The spawn env carries `GIT_CONFIG_COUNT=3` with `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+  `safe.bareRepository=explicit`, and no other site sets `GIT_CONFIG_COUNT`.
 - **AC17** community-monitor's `setupEphemeralWorkspace` passes the hook self-test with the substituted
   router lines (Guard 2 row 9).
 - **AC18** A red census prints, per finding, the cron, the path, the executed source (argv, allowlist line,
@@ -892,13 +1073,6 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
   order (write the line as `bash <plugin-root>/…`; add a `WRITE_PROTECTED_PATTERNS` entry; add an
   exemption naming an open issue, with the map's `file:line`); a red from the identity map says
   "add `file → cronName`". The census file opens with a header comment explaining the model.
-
-- **AC15** Every cron whose spawn now runs through `resolveCronPluginRoot()` has its Sentry cron monitor
-  routed in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` (the existing routing test passes and
-  the work phase lists the 13 monitor slugs it checked: the 11 plugin-loading crons, community-monitor,
-  and the monitor that covers `event-ship-merge.ts` or a note that it has none and how its failure surfaces), so a fail-closed run emails the operator.
-- **AC16** The PR body's first paragraph states, in plain words, that bug-fixer can still run code it wrote
-  while holding a repo-write token, and names F1.
 
 ### Post-merge
 
@@ -910,7 +1084,7 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
 
 - A plugin-loading cron spawns with a prod-shaped resolver: argv has `--plugin-dir /app/shared/plugins/soleur`
   before its flags; env HOME is a fresh dir; the dir is gone after exit.
-- A fixture root that is writable (seam returns success): the cron throws `writable` before any spawn and
+- A fixture root that is writable (the mocked `_cron-spawn-fs.ts` probe returns success): the cron throws `writable` before any spawn and
   reports `cron-plugin-root-untrusted`.
 - A fixture root without `.seed-complete`: throws `seed-incomplete`.
 - A caller that still passes `--plugin-dir plugins/soleur`: throws before spawning.
@@ -935,8 +1109,22 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
   matches; the fallback path is documented in the SKILL.
 - **Spawn HOME removal vs a running grandchild.** A detached grandchild of the claude child can outlive it;
   the process-group kill (ADR-033 I3) runs before removal, and `rm -r` with `force` tolerates a race.
-- **CI as root.** `access(W_OK)` succeeds for root on a 0555 dir, so the resolver tests use the injected
-  seam, never a chmod fixture alone.
+- **Write confinement breaks a cron that writes elsewhere.** A prompt or skill step that writes outside
+  the run's clone and HOME (a shared `/tmp` path, `~/` under the container HOME) is now denied. The work
+  phase enumerates every write site of the 18 callers' prompts and invoked skills before the hook change
+  lands; each must resolve inside the two roots (TMPDIR helps) or carry a recorded degrade disposition.
+- **Bug-fixer quality without a local baseline.** Fixes are no longer pre-tested in the run; CI is the
+  only test gate, so more fix PRs may go red. Accepted (CTO S1); the PR body says so.
+- **ux-audit browser under a fresh HOME.** Playwright's default browser path on Linux is
+  `$HOME/.cache/ms-playwright`. The image installs Chromium as root (likely `/root/.cache`), so uid 1001
+  probably cannot reach it today; but if a browser ever lived under `/home/soleur/.cache`, the fresh HOME
+  would hide it. Phase 0.6 records where the browser is and whether uid 1001 can launch it. Pointing
+  `PLAYWRIGHT_BROWSERS_PATH` at a uid-1001-writable cache would itself be a cross-run write-then-execute
+  path, so the fix (F5) is an image change that installs the browser to a root-owned path, never a
+  writable cache (CTO T6).
+- **CI as root.** `access(W_OK)` succeeds for root on a 0555 dir, so the resolver tests `vi.mock`
+  `_cron-spawn-fs.ts`, never a chmod fixture alone. Guard 2 is the exception: it uses the real filesystem
+  under a temp root and mocks only `child_process.spawn`, checking modes inside the fake spawn call.
 
 ## Sharp Edges
 
