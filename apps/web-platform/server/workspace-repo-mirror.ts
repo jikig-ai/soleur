@@ -142,3 +142,61 @@ export async function clearKbSyncHeldCols(service: HeldClearClientLike, workspac
     });
   }
 }
+
+/** The held-files write: both columns, always together, never null (a null count is "write nothing", decided by the caller). */
+export interface KbSyncHeldPatch {
+  kb_sync_held_files: number;
+  kb_sync_held_checked_at: string;
+}
+
+interface HeldWriteClientLike {
+  from: (table: string) => {
+    update: (patch: KbSyncHeldPatch) => {
+      eq: (col: string, val: string) => {
+        select: (cols: string) => PromiseLike<{ data: Array<{ id: string }> | null; error: unknown }>;
+      };
+    };
+  };
+}
+
+/**
+ * #12714 (D29(1), D33): write the held-files count and the time it was computed, after every sync that computed one
+ * (`syncPush` from its `finally`, `syncPull` after its merge and adoption). A SEPARATE service-client UPDATE, never folded
+ * into the `repo_last_synced_at` stamp, so a missing column (an apply that lags, or a rollback) fails only this write.
+ * Written every time (no write-on-change map), so `kb_sync_held_checked_at` advances on an unchanged value too.
+ *
+ * Never throws: an error, a rejection or a 0-row match (the workspace was deleted mid-flight, or the id never existed)
+ * sends one mirror, and the sync's result is unchanged. The caller passes the membership-verified workspace id it already
+ * resolved (agent-runner), never a re-resolved or request-supplied one.
+ */
+export async function writeKbSyncHeldCols(
+  service: HeldWriteClientLike,
+  workspaceId: string,
+  patch: KbSyncHeldPatch,
+): Promise<void> {
+  let failure: unknown = null;
+  let op = "write-kb-sync-held";
+  try {
+    const { data, error } = await service
+      .from("workspaces")
+      .update({ kb_sync_held_files: patch.kb_sync_held_files, kb_sync_held_checked_at: patch.kb_sync_held_checked_at })
+      .eq("id", workspaceId)
+      .select("id");
+    if (error) {
+      failure = error;
+    } else if (!data || data.length === 0) {
+      failure = new Error(`writeKbSyncHeldCols matched 0 rows for workspace ${workspaceId}`);
+      op = "write-kb-sync-held.zero-rows";
+    }
+  } catch (err) {
+    failure = err ?? new Error("writeKbSyncHeldCols rejected");
+  }
+  if (failure) {
+    reportSilentFallback(failure, {
+      feature: "workspace-repo-write",
+      op,
+      extra: { workspaceId },
+      message: "Failed to write the held-files count to the workspace",
+    });
+  }
+}

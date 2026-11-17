@@ -62,7 +62,7 @@ vi.mock("@/server/worktree-config-seed", () => ({ seedWorktreeConfig: vi.fn() })
 vi.mock("@/server/workspace-permission-lock", () => ({
   withWorkspacePermissionLock: (_p: string, fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: vi.fn() }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: vi.fn(), writeKbSyncHeldCols: vi.fn() }));
 vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: async () => null }));
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: async () => `ghs_${"a".repeat(36)}`,

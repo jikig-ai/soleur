@@ -53,6 +53,7 @@ const H = vi.hoisted(() => ({
   isoFault: null as null | ((args: string[]) => { code: number; stdout: Buffer; stderr: string; timedOut: boolean } | null),
   verifyFault: null as null | ((type: string, id: string) => unknown),
   writeRepoCols: vi.fn(async () => undefined),
+  writeHeld: vi.fn(async () => undefined),
   rpc: vi.fn(async () => ({ data: null, error: null })),
   findOpenPullRequest: vi.fn(async () => null as null | { htmlUrl: string }),
   /** The fake GitHub PR list (D17): `createPullRequest` appends an open PR on the remote's side tip; rows may close one. */
@@ -71,7 +72,7 @@ vi.mock("@/server/observability", () => ({
   hashUserId: (x: string) => `h-${x}`,
 }));
 vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.log }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeld }));
 vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: async () => 1 }));
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("@/server/github-app", () => ({
@@ -336,6 +337,8 @@ function foreignPlusKb(r: Row, { kb = true, dirtyCode = true } = {}): string {
 }
 
 const run = (r: Row): Promise<void> => syncPush(USER, r.ws, {} as never, WS_ID);
+/** #12714 TW2: the held counts this turn wrote (one per turn that computed one). */
+const heldCounts = (): number[] => H.writeHeld.mock.calls.map((c) => ((c as unknown[])[2] as { kb_sync_held_files: number }).kb_sync_held_files);
 
 beforeEach(() => {
   for (const k of ["HOME", "TMPDIR"]) savedEnv[k] = process.env[k];
@@ -349,7 +352,7 @@ beforeEach(() => {
   H.verifyFault = null;
   H.beforeCall = null;
   H.afterCall = null;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.listPullRequestsForHead, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.writeHeld, H.rpc, H.findOpenPullRequest, H.createPullRequest, H.listPullRequestsForHead, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
   H.findOpenPullRequest.mockImplementation(async () => null);
   H.prs.length = 0;
   H.sideTipNow = () => (row ? (remoteSide(row) ?? "") : "");
@@ -388,7 +391,10 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(status(row)).toBe("");
     expect(heldInfo("synthetic_pushed")).toHaveLength(1);
     expect((heldInfo("synthetic_pushed")[0] as unknown[])[0]).toEqual({ op: "kb-sync.push-held", reason: "synthetic_pushed", outcome: "pushed", workspaceId: WS_ID });
-    expect(H.writeRepoCols).toHaveBeenCalledTimes(1);
+    // W5 (D29(9)): the push never stamps `repo_last_synced_at`; #12714: it writes the held count (KB-only: 0 code files)
+    expect(H.writeRepoCols).not.toHaveBeenCalled();
+    expect(H.writeHeld).toHaveBeenCalledTimes(1);
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: expect.any(String) }]);
     // D10: the hand-over packs exactly S and its root tree, from an explicit object list (no --revs walk)
     const sTree = git(row.remote, "rev-parse", `${S}^{tree}`);
     expect(packs()).toEqual([{ args: ["pack-objects", "--stdout", "-q"], objects: [S, sTree], count: 2 }]);
@@ -454,6 +460,8 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     // D10: S, its root tree and M (M's tree is HEAD's, already local)
     expect(packs()).toEqual([{ args: ["pack-objects", "--stdout", "-q"], objects: [S, git(row.remote, "rev-parse", `${S}^{tree}`), M], count: 3 }]);
     expect(guardReads(S)).toBe(1);
+    // #12714 TW2: the committed workflow file is held (the KB edit and the uncommitted src/s.ts are not counted)
+    expect(heldCounts()).toEqual([1]);
   });
 
   test("D10: a KB change set larger than the isolated stdout cap still syncs (the pack carries only the server-built objects)", async () => {
@@ -499,6 +507,8 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(heldInfo("held_foreign")).toHaveLength(1);
     expect(H.mirrorWarnWithDebounce).not.toHaveBeenCalled();
     expect(H.reportSilentFallback).not.toHaveBeenCalled();
+    // #12714 TW2: a held exit writes the count too
+    expect(heldCounts()).toEqual([1]);
   });
 
   test("H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call", async () => {
@@ -635,6 +645,8 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(git(row.remote, "show", "refs/heads/main:knowledge-base/a.md")).toBe("a\nremote kb edit");
     expect(heldInfo("remote_ahead")).toHaveLength(1);
     expect(H.mirrorWarnWithDebounce).not.toHaveBeenCalled();
+    // #12714 TW2: a held remote_ahead turn writes (three-dot from the merge base: the upstream KB edit is not counted)
+    expect(heldCounts()).toEqual([0]);
   });
 
   test("remote tip absent from the workspace -> nothing pushed, remote_unknown_tip", async () => {

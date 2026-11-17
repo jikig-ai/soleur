@@ -122,7 +122,7 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
     }
   });
 
-  test("fallback delivered -> warn kb-sync.push-protected-fallback with PR url + commit count, bookkeeping runs", async () => {
+  test("fallback delivered -> warn kb-sync.push-protected-fallback with PR url + commit count, no last-synced stamp", async () => {
     publishSpy.mockResolvedValue({ kind: "fallback", prUrl: "https://github.com/acme/widgets/pull/7", commitCount: 1 });
     await run();
     const warned = opsOf(warnSilentFallbackSpy, "kb-sync.push-protected-fallback");
@@ -134,7 +134,8 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
       }),
     );
     expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
-    expect(writeRepoColsSpy).toHaveBeenCalledTimes(1);
+    // W5 (D29(9)): a delivered fallback no longer stamps `repo_last_synced_at` (only syncPull does)
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
   });
 
   test("fallback failed -> kb-sync.protected-fallback-failed, null err, closed fallback_reason + push_class tags, debounced per workspace and reason, no bookkeeping", async () => {

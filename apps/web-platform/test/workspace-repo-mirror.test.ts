@@ -4,7 +4,7 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
-import { clearKbSyncHeldCols, writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
+import { clearKbSyncHeldCols, writeKbSyncHeldCols, writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
 
 // The write chain is `from("workspaces").update(patch).eq("id", id).select("id")`
 // resolving to `{ data, error }`. `data` is the rows the UPDATE matched — an
@@ -182,6 +182,76 @@ describe("clearKbSyncHeldCols", () => {
   it("a rejected UPDATE resolves too, and mirrors exactly once", async () => {
     const svc = heldService({ reject: new Error("socket hang up") });
     await expect(clearKbSyncHeldCols(svc.client, "ws-1")).resolves.toBeUndefined();
+    const { reportSilentFallback } = await import("@/server/observability");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #12714 (D29(1), D33): every sync writes the held count in a SEPARATE service-client UPDATE (never folded into the
+// `repo_last_synced_at` stamp), so a missing column fails only this write. Never throws; one mirror per failure.
+describe("writeKbSyncHeldCols", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const PATCH = { kb_sync_held_files: 3, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" };
+
+  function writeService(result: { data?: Array<{ id: string }> | null; error?: unknown; reject?: unknown } = {}) {
+    const data = result.data === undefined ? [{ id: "ws-team" }] : result.data;
+    const select = vi.fn(() =>
+      result.reject !== undefined ? Promise.reject(result.reject) : Promise.resolve({ data, error: result.error ?? null }),
+    );
+    const eq = vi.fn(() => ({ select }));
+    const update = vi.fn(() => ({ eq }));
+    const from = vi.fn(() => ({ update }));
+    return { client: { from }, from, update, eq, select };
+  }
+
+  it("writes exactly the two held columns on workspaces WHERE id = the supplied workspace id", async () => {
+    const svc = writeService();
+    await writeKbSyncHeldCols(svc.client, "ws-team", PATCH);
+    expect(svc.from).toHaveBeenCalledWith("workspaces");
+    expect(svc.update).toHaveBeenCalledTimes(1);
+    expect(svc.update).toHaveBeenCalledWith(PATCH);
+    expect(svc.eq).toHaveBeenCalledWith("id", "ws-team");
+    const { reportSilentFallback } = await import("@/server/observability");
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("writes a 0 too (a clean sync clears the notice)", async () => {
+    const svc = writeService();
+    await writeKbSyncHeldCols(svc.client, "ws-1", { ...PATCH, kb_sync_held_files: 0 });
+    expect(svc.update).toHaveBeenCalledWith({ ...PATCH, kb_sync_held_files: 0 });
+  });
+
+  it("an UPDATE error (column missing, D33) resolves, and mirrors exactly once", async () => {
+    const svc = writeService({ error: { message: "column workspaces.kb_sync_held_files does not exist", code: "42703" } });
+    await expect(writeKbSyncHeldCols(svc.client, "ws-1", PATCH)).resolves.toBeUndefined();
+    const { reportSilentFallback } = await import("@/server/observability");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportSilentFallback).mock.calls[0][1]).toMatchObject({
+      feature: "workspace-repo-write",
+      op: "write-kb-sync-held",
+      extra: { workspaceId: "ws-1" },
+    });
+  });
+
+  it("a rejected UPDATE resolves, and mirrors exactly once", async () => {
+    const svc = writeService({ reject: new Error("socket hang up") });
+    await expect(writeKbSyncHeldCols(svc.client, "ws-1", PATCH)).resolves.toBeUndefined();
+    const { reportSilentFallback } = await import("@/server/observability");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 0-row UPDATE (workspace gone) resolves, and mirrors exactly once", async () => {
+    const svc = writeService({ data: [] });
+    await expect(writeKbSyncHeldCols(svc.client, "ws-gone", PATCH)).resolves.toBeUndefined();
+    const { reportSilentFallback } = await import("@/server/observability");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportSilentFallback).mock.calls[0][1]).toMatchObject({ op: "write-kb-sync-held.zero-rows" });
+  });
+
+  it("a client whose from() throws resolves, and mirrors exactly once", async () => {
+    const client = { from: () => { throw new Error("boom"); } };
+    await expect(writeKbSyncHeldCols(client as never, "ws-1", PATCH)).resolves.toBeUndefined();
     const { reportSilentFallback } = await import("@/server/observability");
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
   });

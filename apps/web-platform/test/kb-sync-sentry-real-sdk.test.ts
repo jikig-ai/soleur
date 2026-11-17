@@ -62,7 +62,10 @@ vi.mock("@/lib/supabase/tenant", () => {
 });
 vi.mock("../server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
 vi.mock("../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
-vi.mock("../server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: vi.fn(async () => undefined) }));
+vi.mock("../server/workspace-repo-mirror", () => ({
+  writeRepoColsToWorkspace: vi.fn(async () => undefined),
+  writeKbSyncHeldCols: vi.fn(async () => undefined),
+}));
 vi.mock("../server/approval/workspace-head", async (orig) => ({
   ...(await orig<typeof import("../server/approval/workspace-head")>()),
   readWorkspaceHeadRef: () => ({ sha: "a".repeat(40), refName: "refs/heads/main" }),

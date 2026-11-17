@@ -35,6 +35,7 @@ const H = vi.hoisted(() => ({
   mirrorWarnWithDebounce: vi.fn(),
   iso: [] as Array<{ args: string[]; input: string; code: number }>,
   writeRepoCols: vi.fn(async () => undefined),
+  writeHeld: vi.fn(async () => undefined),
   rpc: vi.fn(async () => ({ data: null, error: null })),
   prs: [] as Array<{ number: number; htmlUrl: string; url: string; state: "open" | "closed"; merged: boolean; headSha: string }>,
   prListFails: false,
@@ -57,7 +58,7 @@ vi.mock("@/server/observability", () => ({
   hashUserId: (x: string) => `h-${x}`,
 }));
 vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.log }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeld }));
 vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: async () => 1 }));
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("@/server/github-app", () => ({
@@ -247,7 +248,7 @@ const resetTurn = (): void => {
   H.calls.length = 0;
   H.host.length = 0;
   H.iso.length = 0;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.writeHeld, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
 };
 
 beforeEach(() => {
@@ -300,7 +301,10 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     const shallowBefore = read(join(r.ws, ".git", "shallow"));
     const ups = [1, 2, 3].map((i) => upstreamCommit(r, (d) => write(join(d, "src", "x.ts"), `export const x = ${i + 1};\n`), `u${i}`));
     const result = await pull(r);
-    expect(result).toEqual({ heldFiles: null, pullReason: "merged" });
+    // #12714: the count is computed on the pull's own isolated dir after the merge (nothing local is held here) and written
+    expect(result).toEqual({ heldFiles: 0, onRecovered: 0, pullReason: "merged", checkedAt: expect.any(String) });
+    expect(H.writeHeld).toHaveBeenCalledTimes(1);
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: result.checkedAt }]);
     for (const u of ups) expect(isAncestor(r, u, "HEAD")).toBe(true);
     expect(gitOk(r.ws, "rev-list", "--objects", "HEAD")).toBe(true);
     expect(gitOk(r.ws, "fsck", "--connectivity-only")).toBe(true);

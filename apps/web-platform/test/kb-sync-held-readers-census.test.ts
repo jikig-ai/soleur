@@ -16,7 +16,9 @@ import path from "node:path";
 // Multi-line aware: the scan reads whole files, and `.select(` arguments are matched across line breaks.
 
 const APP = path.join(__dirname, "..");
-const ROOTS = ["app", "server", "lib", "components", "hooks"];
+const ROOTS = ["app", "server", "lib", "components", "hooks", "scripts", "infra"];
+// Root-level app files that run server code (a reader there would be missed by the directory walk).
+const ROOT_FILES = ["middleware.ts", "instrumentation.ts"];
 const HELD_TOKEN = /\b(kb_sync_held_files|kb_sync_held_checked_at|get_workspace_kb_sync_held)\b/;
 
 function walk(dir: string, out: string[]): void {
@@ -42,19 +44,29 @@ function code(src: string): string {
 
 const files: string[] = [];
 for (const r of ROOTS) walk(path.join(APP, r), files);
+for (const f of ROOT_FILES) {
+  try {
+    if (statSync(path.join(APP, f)).isFile()) files.push(path.join(APP, f));
+  } catch {
+    // absent: nothing to scan
+  }
+}
 const sources = new Map(files.map((f) => [path.relative(APP, f).split(path.sep).join("/"), code(readFileSync(f, "utf8"))]));
 
 type Role = { role: string; required: boolean };
 
-// Every app file whose code names a held column or the RPC. A `required: false` row is owned by a sibling Phase 11
-// task (the writer in session-sync, task 11.2); it is allowed now and flips to `true` when it lands.
+// Every app file whose code names a held column or the RPC, each required to name it (task 11.2 landed the session-sync
+// writer).
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
   "server/workspace-repo-mirror.ts": {
-    role: "type: WorkspaceRepoCols; writer: clearKbSyncHeldCols (disconnect and setup, D33(2))",
+    role: "type: WorkspaceRepoCols; writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (each sync, D29(1))",
     required: true,
   },
-  "server/session-sync.ts": { role: "writer: separate service-client UPDATE after each sync", required: false },
+  "server/session-sync.ts": {
+    role: "writer: the patch for writeKbSyncHeldCols, a separate service-client UPDATE after each sync (D29(1))",
+    required: true,
+  },
   "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
 };
 
@@ -78,6 +90,16 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
       // Never folded into the existing repo-column write (D33(2)).
       expect(HELD_TOKEN.test(sources.get(f) ?? ""), f).toBe(false);
     }
+  });
+
+  it("session-sync writes the held columns only through writeKbSyncHeldCols, never folded into the stamp (D29(1))", () => {
+    const src = sources.get("server/session-sync.ts") ?? "";
+    expect(src).toMatch(/writeKbSyncHeldCols\(\s*service,\s*workspaceId,\s*\{\s*kb_sync_held_files:/);
+    // The only `writeRepoColsToWorkspace(` call is the stamp, and it names no held column.
+    const repoWrites = [...src.matchAll(/writeRepoColsToWorkspace\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(repoWrites.length).toBeGreaterThan(0);
+    for (const args of repoWrites) expect(args).not.toMatch(/kb_sync_held/);
+    expect(src).toMatch(/async function updateLastSynced\([^)]*\)[^{]*\{\s*await writeRepoColsToWorkspace\(service, workspaceId, \{\s*repo_last_synced_at: new Date\(\)\.toISOString\(\),\s*\}\);\s*\}/);
   });
 
   it("no gate, approval or push module reads the held columns (display-only)", () => {
@@ -124,13 +146,14 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
 
 // Every app file whose code names `repo_last_synced_at`, with its role. W5: on the sync path only `syncPull` stamps
 // it, so "Updated from GitHub" stays true. DB-side reader (not app code): claim_repo_clone_lock (migration 108) uses it
-// as the clone lock's staleness clock, which is why setup stamps it on the cloning flip.
+// as the clone lock's staleness clock, which is why setup stamps it on the cloning flip. DB-side writers (not app code):
+// that RPC (the cloning flip) and set_repo_status (migration 113) on `ready`; both are repo setup, not the sync path.
 const LAST_SYNCED_MENTIONS: Record<string, string> = {
   "app/(dashboard)/dashboard/settings/page.tsx": "reader: Owner 'Updated from GitHub' date line",
   "app/api/repo/status/route.ts": "reader: lastSyncedAt in the repo status payload",
   "app/api/repo/setup/route.ts": "writer: cloning flip (clone-lock clock), ready stamp, cleared on a reaped clone",
   "app/api/repo/disconnect/route.ts": "writer: cleared on disconnect",
-  "server/session-sync.ts": "writer: updateLastSynced, syncPull only (W5)",
+  "server/session-sync.ts": "writer: updateLastSynced, syncPull only (W5; syncPush never stamps, AC17)",
   "server/workspace-repo-mirror.ts": "type: WorkspaceRepoCols",
 };
 
@@ -138,6 +161,25 @@ describe("repo_last_synced_at: readers census (#12714, D29(9))", () => {
   it("every file whose code names repo_last_synced_at is listed", () => {
     const mentioning = [...sources].filter(([, src]) => /\brepo_last_synced_at\b/.test(src)).map(([f]) => f).sort();
     expect(mentioning).toEqual(Object.keys(LAST_SYNCED_MENTIONS).sort());
+  });
+
+  it("AC17: syncPush never stamps it; syncPull is the only updateLastSynced caller", () => {
+    const src = sources.get("server/session-sync.ts") ?? "";
+    const pushAt = src.indexOf("export async function syncPush(");
+    const pullAt = src.indexOf("export async function syncPull(");
+    expect(pushAt).toBeGreaterThan(-1);
+    expect(pullAt).toBeGreaterThan(-1);
+    const push = src.slice(pushAt);
+    const pull = src.slice(pullAt, pushAt > pullAt ? pushAt : undefined);
+    expect(push).not.toMatch(/\bupdateLastSynced\(|\brepo_last_synced_at\b/);
+    expect(pull).toMatch(/\bupdateLastSynced\(service, workspaceId\)/);
+    // The definition plus exactly one call site.
+    expect([...src.matchAll(/\bupdateLastSynced\(/g)]).toHaveLength(2);
+  });
+
+  it("the DB-side writer set_repo_status stamps it only on ready (migration 113)", () => {
+    const m113 = readFileSync(path.join(APP, "supabase/migrations/113_set_repo_status_writes_workspace_repo_error.sql"), "utf8");
+    expect(m113).toMatch(/repo_last_synced_at\s*=\s*CASE WHEN p_status = 'ready' THEN now\(\)/);
   });
 
   it("the DB-side reader is the clone lock (migration 108)", () => {

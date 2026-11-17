@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { stripHostGitBlock } from "../helpers/host-git-block";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +25,10 @@ const {
   mockMirrorWarn,
   mockMerge,
   mockAdopt,
+  mockWriteHeld,
+  mockCompute,
+  mockRecovered,
+  mockReport,
 } = vi.hoisted(() => {
   const mockTenantUpdateEq = vi.fn().mockResolvedValue({ error: null });
   const mockTenantUpdate = vi.fn(() => ({ eq: mockTenantUpdateEq }));
@@ -44,6 +48,12 @@ const {
     // test/session-sync-pull-isolated-real-git.test.ts); this suite pins only the stamp around them.
     mockMerge: vi.fn(),
     mockAdopt: vi.fn(),
+    // #12714: the held-files write and its computation are the seams (the count's git is asserted on real git in
+    // test/kb-sync-held-real-git.test.ts; the helper's own UPDATE in test/workspace-repo-mirror.test.ts).
+    mockWriteHeld: vi.fn().mockResolvedValue(undefined),
+    mockCompute: vi.fn(),
+    mockRecovered: vi.fn(),
+    mockReport: vi.fn(),
   };
 });
 
@@ -78,12 +88,20 @@ vi.mock("@/server/resolve-installation-id", () => ({
 
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: mockWriteRepoCols,
+  writeKbSyncHeldCols: mockWriteHeld,
+}));
+
+vi.mock("@/server/kb-sync-held", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/kb-sync-held")>()),
+  computeHeldFiles: mockCompute,
+  readRecoveredKbSyncTips: mockRecovered,
 }));
 
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: mockReport,
   warnSilentFallback: vi.fn(),
   mirrorWarnWithDebounce: mockMirrorWarn,
+  mirrorWithDebounce: vi.fn(),
   hashUserId: (s: string) => `hash(${s})`,
 }));
 
@@ -126,12 +144,29 @@ vi.mock("@/server/kb-sync-pull", async (importOriginal) => ({
 }));
 
 import { syncPull, syncPush } from "@/server/session-sync";
+import { KbSyncError, type KbPublishInput } from "@/server/kb-sync-publish";
 
 const SERVICE = { __service: true } as never;
 const USER_ID = "user-solo-1";
 const TEAM_WORKSPACE_ID = "team-ws-uuid-99";
 const SOLO_WORKSPACE_ID = USER_ID; // solo invariant: workspaces.id == users.id
 const WS_PATH = "/tmp/ws/x";
+const T_SHA = "f".repeat(40);
+const HEAD_SHA = "c".repeat(40);
+const ISO_DIR = { gitDir: "/tmp/iso", dispose: () => {} };
+
+/** The publish seam as `publishKbOnly` behaves: the hook runs before the isolated dir is disposed, on every exit past the
+ * remote read (held exits and throws included). `hook: false` is an exit before the remote read (no dir, no tip). */
+function publishWith(outcome: { result?: unknown; throws?: unknown; hook?: boolean }) {
+  return async (input: KbPublishInput) => {
+    if (outcome.hook !== false) await input.onHeldFiles?.({ isolatedDir: ISO_DIR as never, T: T_SHA, headSha: input.headSha });
+    if (outcome.throws !== undefined) throw outcome.throws;
+    return outcome.result;
+  };
+}
+
+const heldWrites = (): Array<[string, { kb_sync_held_files: number; kb_sync_held_checked_at: string }]> =>
+  mockWriteHeld.mock.calls.map(([, ws, patch]) => [ws, patch]);
 
 describe("session-sync write relocation (ADR-044 PR-B)", () => {
   beforeEach(() => {
@@ -144,6 +179,9 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     mergeHead.present = false;
     mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: "f".repeat(40), sideTip: null } });
     mockAdopt.mockResolvedValue(null);
+    mockWriteHeld.mockResolvedValue(undefined);
+    mockCompute.mockResolvedValue(null);
+    mockRecovered.mockReturnValue([]);
   });
 
   // Scenario 7 — write lands on workspaces, keyed on resolved workspace id.
@@ -175,24 +213,21 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     ["non_default_branch", 0],
   ] as const)("syncPull %s -> %i repo_last_synced_at write(s)", async (reason, writes) => {
     mockMerge.mockResolvedValue({ reason, remote: null });
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: reason });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: reason, checkedAt: null });
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(writes);
     if (writes) expect(mockWriteRepoCols.mock.calls[0][1]).toBe(TEAM_WORKSPACE_ID);
   });
 
   test("syncPull: a half-done merge (MERGE_HEAD) refuses before the pull: no merge, no stamp", async () => {
     mergeHead.present = true;
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: "unresolved_merge" });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({
+      heldFiles: null,
+      onRecovered: null,
+      pullReason: "unresolved_merge",
+      checkedAt: null,
+    });
     expect(mockMerge).not.toHaveBeenCalled();
     expect(mockWriteRepoCols).not.toHaveBeenCalled();
-  });
-
-  // Scenario 8 — read-back parity is structural: the write targets the same
-  // workspaces.id the repo/status read keys on. Asserted via the id threading.
-  test("syncPush → writes to the SAME workspace id the caller resolved", async () => {
-    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
-    expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
-    expect(mockWriteRepoCols.mock.calls[0][1]).toBe(SOLO_WORKSPACE_ID);
   });
 
   // Scenario 9 — best-effort: the 0-row write does not throw. The Sentry-mirror
@@ -200,15 +235,15 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
   // scope, which mocks it); session-sync's contract here is only no-throw.
   test("syncPull does not throw when the write is a best-effort no-op", async () => {
     mockWriteRepoCols.mockResolvedValue(undefined);
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: "merged" });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: "merged", checkedAt: null });
     mockWriteRepoCols.mockRejectedValueOnce(new Error("0 rows"));
     // a write that throws lands in the pull's outer catch: reported, and the pull still resolves
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: null });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null });
   });
 
-  // Scenario 10 — team-active member writes to the TEAM workspace, never userId.
-  test("team-active member sync writes to the TEAM workspaceId, NOT userId (LOAD-BEARING)", async () => {
-    await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
+  // Scenario 10 (pull side) — team-active member stamps the TEAM workspace, never userId.
+  test("team-active member pull stamps the TEAM workspaceId, NOT userId (LOAD-BEARING)", async () => {
+    await syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
     const wsId = mockWriteRepoCols.mock.calls[0][1];
     expect(wsId).toBe(TEAM_WORKSPACE_ID);
@@ -246,10 +281,188 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     expect(mockWriteRepoCols).not.toHaveBeenCalled();
   });
 
-  test("a delivered protected-branch fallback does write last-synced", async () => {
+  // W5 / D29(9) / AC17: only syncPull stamps `repo_last_synced_at` ("Updated from GitHub" stays true). A delivered push or
+  // protected-branch fallback no longer stamps it.
+  test("syncPush never stamps repo_last_synced_at (pushed, delivered fallback)", async () => {
+    mockPublish.mockResolvedValueOnce({ kind: "pushed" });
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
     mockPublish.mockResolvedValueOnce({ kind: "fallback", prUrl: "https://github.com/acme/widget/pull/1", commitCount: 1 });
     await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    expect(mockWriteRepoCols).not.toHaveBeenCalled();
+  });
+});
+
+// TW2 (#12714, D29(1), D33): every sync that computed a held-files count writes it through the SEPARATE service-client
+// helper, with `kb_sync_held_checked_at` advancing; no count computed -> no write (never a guessed 0); a failed write
+// sends one mirror and leaves the sync's result unchanged.
+describe("held-files write (TW2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-17T10:00:00.000Z"));
+    mockGetFreshTenantClient.mockResolvedValue(makeTenantClient());
+    mockResolveInstallationId.mockResolvedValue(123);
+    mockWriteRepoCols.mockResolvedValue(undefined);
+    mockWriteHeld.mockResolvedValue(undefined);
+    mockHead.mockReturnValue({ sha: HEAD_SHA, refName: "refs/heads/main" });
+    mergeHead.present = false;
+    mockRecovered.mockReturnValue([]);
+    mockCompute.mockResolvedValue({ total: 2, onRecovered: 0 });
+    mockMerge.mockResolvedValue({ reason: "up_to_date", remote: { defaultBranch: "main", tip: T_SHA, sideTip: null } });
+    mockAdopt.mockResolvedValue(null);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  test("push: a held turn writes the count, a later clean sync writes 0, an unchanged value is written again", async () => {
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_ahead" } }));
+    await expect(syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toBeUndefined();
+
+    vi.setSystemTime(new Date("2026-11-17T11:00:00.000Z"));
+    mockCompute.mockResolvedValueOnce({ total: 0, onRecovered: 0 });
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "pushed" } }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
+
+    vi.setSystemTime(new Date("2026-11-17T12:00:00.000Z"));
+    mockCompute.mockResolvedValueOnce({ total: 0, onRecovered: 0 });
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "noop" } }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
+
+    expect(heldWrites()).toEqual([
+      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 2, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }],
+      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T11:00:00.000Z" }],
+      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T12:00:00.000Z" }],
+    ]);
+    expect(mockWriteHeld.mock.calls.every(([svc]) => svc === SERVICE)).toBe(true);
+    // Separate from the stamp: the push never stamps (W5), so the only workspace write is the held one.
+    expect(mockWriteRepoCols).not.toHaveBeenCalled();
+  });
+
+  test("push: the count is computed on the publish's isolated dir, over T...frozen HEAD, with the recovered tips", async () => {
+    const recovered = ["a".repeat(40)];
+    mockRecovered.mockReturnValue(recovered);
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_ahead" } }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    expect(mockRecovered).toHaveBeenCalledWith(WS_PATH);
+    expect(mockCompute).toHaveBeenCalledTimes(1);
+    expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: ISO_DIR, base: T_SHA, head: HEAD_SHA, recovered });
+  });
+
+  test("push: a thrown turn after the remote read still writes (the finally path), and is still reported", async () => {
+    mockPublish.mockImplementationOnce(publishWith({ throws: new KbSyncError("local_git_failed") }));
+    await expect(syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { kb_sync_held_files: 2, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+    expect(mockReport.mock.calls.some(([, o]) => o?.op === "syncPush")).toBe(true);
+  });
+
+  test("push: no count computed -> no write (no dir, a null count, unreadable recovered refs, a throwing count)", async () => {
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_branch_absent" }, hook: false }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mockCompute.mockResolvedValueOnce(null);
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_ahead" } }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mockRecovered.mockReturnValueOnce(null);
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_ahead" } }));
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mockCompute.mockRejectedValueOnce(new Error("spawn failed"));
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "pushed" } }));
+    await expect(syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
+    expect(mockPublish).toHaveBeenCalledTimes(4);
+    expect(mockCompute).toHaveBeenCalledTimes(2); // the null-recovered turn never computes
+    expect(mockWriteHeld).not.toHaveBeenCalled();
+  });
+
+  test("push: a refused turn before the publish (merge in progress, detached HEAD) writes nothing", async () => {
+    mergeHead.present = true;
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    mergeHead.present = false;
+    mockHead.mockReturnValueOnce({ sha: HEAD_SHA, refName: null });
+    await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockWriteHeld).not.toHaveBeenCalled();
+  });
+
+  test("push: a failed held write sends exactly one mirror and the sync result is unchanged", async () => {
+    const real = await vi.importActual<typeof import("@/server/workspace-repo-mirror")>("@/server/workspace-repo-mirror");
+    mockWriteHeld.mockImplementation(real.writeKbSyncHeldCols);
+    const failing = {
+      from: () => ({
+        update: () => ({ eq: () => ({ select: async () => ({ data: null, error: { code: "42703", message: "column missing" } }) }) }),
+      }),
+    } as never;
+    mockPublish.mockImplementationOnce(publishWith({ result: { kind: "pushed" } }));
+    await expect(syncPush(USER_ID, WS_PATH, failing, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
+    const heldMirrors = mockReport.mock.calls.filter(([, o]) => String(o?.op).startsWith("write-kb-sync-held"));
+    expect(heldMirrors).toHaveLength(1);
+    expect(mockReport.mock.calls.filter(([, o]) => o?.op === "syncPush")).toHaveLength(0);
+  });
+
+  test("pull: after the merge and the adoption, the count is computed over T...the fresh HEAD and written", async () => {
+    const merged = "d".repeat(40);
+    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: T_SHA, sideTip: "e".repeat(40) } });
+    mockAdopt.mockImplementation(async () => {
+      mockHead.mockReturnValue({ sha: merged, refName: "refs/heads/main" }); // the adoption moved HEAD
+      return null;
+    });
+    mockCompute.mockResolvedValue({ total: 3, onRecovered: 1 });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toEqual({
+      heldFiles: 3,
+      onRecovered: 1,
+      pullReason: "merged",
+      checkedAt: "2026-11-17T10:00:00.000Z",
+    });
+    expect(mockAdopt.mock.invocationCallOrder[0]).toBeLessThan(mockCompute.mock.invocationCallOrder[0]);
+    expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: expect.objectContaining({ gitDir: "/tmp/iso" }), base: T_SHA, head: merged, recovered: [] });
+    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { kb_sync_held_files: 3, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+    // The stamp is its own write (D29(1): never folded together).
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
-    expect(mockWriteRepoCols.mock.calls[0][1]).toBe(TEAM_WORKSPACE_ID);
+    expect(mockWriteRepoCols.mock.calls[0][2]).not.toHaveProperty("kb_sync_held_files");
+  });
+
+  test("pull: up_to_date computes and writes too; 0 is written", async () => {
+    mockCompute.mockResolvedValue({ total: 0, onRecovered: 0 });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({
+      heldFiles: 0,
+      onRecovered: 0,
+      pullReason: "up_to_date",
+      checkedAt: "2026-11-17T10:00:00.000Z",
+    });
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+  });
+
+  test("pull: no remote read (remote null), a null count or an unresolved merge -> no count, no write", async () => {
+    mockMerge.mockResolvedValueOnce({ reason: "fetch_failed", remote: null });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({
+      heldFiles: null,
+      onRecovered: null,
+      pullReason: "fetch_failed",
+      checkedAt: null,
+    });
+    mockCompute.mockResolvedValueOnce(null);
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toMatchObject({ heldFiles: null, checkedAt: null });
+    mergeHead.present = true;
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toMatchObject({
+      heldFiles: null,
+      pullReason: "unresolved_merge",
+    });
+    expect(mockCompute).toHaveBeenCalledTimes(1);
+    expect(mockWriteHeld).not.toHaveBeenCalled();
+  });
+
+  test("pull: a failed held write sends one mirror; the stamp stays written and the result is unchanged", async () => {
+    const real = await vi.importActual<typeof import("@/server/workspace-repo-mirror")>("@/server/workspace-repo-mirror");
+    mockWriteHeld.mockImplementation(real.writeKbSyncHeldCols);
+    const failing = {
+      from: () => ({ update: () => ({ eq: () => ({ select: async () => { throw new Error("socket hang up"); } }) }) }),
+    } as never;
+    await expect(syncPull(USER_ID, WS_PATH, failing, SOLO_WORKSPACE_ID)).resolves.toEqual({
+      heldFiles: 2,
+      onRecovered: 0,
+      pullReason: "up_to_date",
+      checkedAt: "2026-11-17T10:00:00.000Z",
+    });
+    expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
+    expect(mockReport.mock.calls.filter(([, o]) => String(o?.op).startsWith("write-kb-sync-held"))).toHaveLength(1);
+    expect(mockReport.mock.calls.filter(([, o]) => o?.op === "syncPull")).toHaveLength(0);
   });
 });

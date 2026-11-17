@@ -26,6 +26,7 @@ import { disposeIsolated } from "./git-isolated-dispose";
 import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle } from "./git-isolated-push-dir";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { KB_ROOT } from "./kb-root";
+import { computeHeldFiles, readRecoveredKbSyncTips, type HeldFiles } from "./kb-sync-held";
 import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
 import {
   adoptSideTip,
@@ -43,7 +44,7 @@ import {
 import { KbRemoteError, resolveRepoUrl } from "./kb-sync-remote";
 import { HEX40, readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
-import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
+import { writeKbSyncHeldCols, writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
@@ -702,10 +703,63 @@ export function reportPullHeld(reason: KbPullHeldReason, ctx: { userId: string; 
   );
 }
 
-/** What `syncPull` hands its caller (D29(4)): the held-files count (wired by #12714; null here) and the run's reason. */
+/**
+ * What `syncPull` hands its caller (D29(4)): this run's fresh held-files count and the run's reason. The legacy runner
+ * builds its agent lines from it (task 11.3b), so it never reads the stored columns.
+ * - `heldFiles`: `computeHeldFiles().total`, or null when no count was computed this run (no remote read, a refused or
+ *   unreadable state, a git failure). Null is "unknown", never 0.
+ * - `onRecovered`: `computeHeldFiles().onRecovered`, null exactly when `heldFiles` is.
+ * - `checkedAt`: when the count was computed (ISO 8601, the value written to `kb_sync_held_checked_at`), null with it.
+ */
 export interface SyncPullResult {
   readonly heldFiles: number | null;
+  readonly onRecovered: number | null;
   readonly pullReason: KbPullHeldReason | null;
+  readonly checkedAt: string | null;
+}
+
+/** A computed held-files count and when it was computed. */
+interface HeldCount extends HeldFiles {
+  readonly checkedAt: string;
+}
+
+/**
+ * #12714 (W1, W2, W4, D29(1)): the held-files count on an isolated dir this sync holds, over `base...head` (`base` = the
+ * remote tip this run's hardened `ls-remote` returned, `head` = a HEX40 HEAD sha) plus the recovered kb-sync tips. Null
+ * (write nothing, show nothing) when the recovered refs cannot be read safely or the count cannot be computed; never
+ * throws (the count is display-only and must not change the sync's result).
+ */
+async function heldCountOn(
+  isolated: IsolatedPushDirHandle,
+  base: string,
+  head: string,
+  workspacePath: string,
+  workspaceId: string,
+): Promise<HeldCount | null> {
+  try {
+    const recovered = readRecoveredKbSyncTips(workspacePath);
+    if (recovered === null) return null;
+    const held = await computeHeldFiles({ isolated, base, head, recovered, workspaceId });
+    return held === null ? null : { total: held.total, onRecovered: held.onRecovered, checkedAt: new Date().toISOString() };
+  } catch (err) {
+    log.warn({ workspaceId, errName: err instanceof Error ? err.name : typeof err }, "Held-files count failed; nothing written");
+    return null;
+  }
+}
+
+/**
+ * The separate held-files UPDATE (D29(1)): never folded into `updateLastSynced`, so a missing column fails only this write.
+ * `writeKbSyncHeldCols` never throws by contract; the catch keeps a broken client from changing the sync's result.
+ */
+async function writeHeldCount(service: SupabaseClient, workspaceId: string, held: HeldCount): Promise<void> {
+  try {
+    await writeKbSyncHeldCols(service, workspaceId, {
+      kb_sync_held_files: held.total,
+      kb_sync_held_checked_at: held.checkedAt,
+    });
+  } catch (err) {
+    log.warn({ workspaceId, errName: err instanceof Error ? err.name : typeof err }, "Held-files write threw");
+  }
 }
 
 /** The reasons after which the workspace is in sync with GitHub's default branch, so `repo_last_synced_at` is stamped (X1). */
@@ -722,7 +776,9 @@ const PULL_ADOPTS = new Set<KbPullHeldReason>(["up_to_date", "merged"]);
  * `mergeVerifiedDefault` (server/kb-sync-pull.ts) and, after `merged` or `up_to_date`, the side-tip adoption. The token
  * reaches only the hardened `ls-remote` and fetches against the literal URL; no workspace config, ref or hook takes part.
  * `repo_last_synced_at` is stamped after `up_to_date`, `merged` and `autostash_conflict` (a merge that exited 0). One
- * `kb-sync.pull-held` report per run.
+ * `kb-sync.pull-held` report per run. After the merge and the adoption, the held-files count (#12714) is computed on the
+ * same isolated directory, written through the separate `writeKbSyncHeldCols`, and returned for the legacy runner's
+ * agent line.
  */
 export async function syncPull(
   userId: string,
@@ -735,7 +791,7 @@ export async function syncPull(
   workspaceId: string,
   opts: { readonly limits?: KbPullLimits } = {},
 ): Promise<SyncPullResult> {
-  const none: SyncPullResult = { heldFiles: null, pullReason: null };
+  const none: SyncPullResult = { heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null };
   if (!hasRemote(workspacePath)) {
     return none; // Empty workspace, no remote
   }
@@ -754,7 +810,7 @@ export async function syncPull(
     const status = readStatus(workspacePath, "syncPull");
     if (mergeInProgress(workspacePath, status)) {
       reportPullHeld("unresolved_merge", ctx);
-      return { heldFiles: null, pullReason: "unresolved_merge" };
+      return { ...none, pullReason: "unresolved_merge" };
     }
 
     const installationId = await getInstallationId(userId);
@@ -769,6 +825,7 @@ export async function syncPull(
 
     const head = readWorkspaceHeadRef(workspacePath);
     let result: KbPullStep;
+    let held: HeldCount | null = null;
     let repo: { url: string; owner: string; repo: string } | null = null;
     try {
       repo = await resolveRepoUrl(userId, workspaceId);
@@ -813,10 +870,21 @@ export async function syncPull(
           });
           if (side) result = side;
         }
+        // #12714 (D29(1)): after the merge and the adoption (up_to_date too), on this run's remote tip and the HEAD those
+        // steps left. No remote read: no tip, so no count (null, never 0).
+        if (merged.remote) {
+          held = await heldCountOn(isolated, merged.remote.tip, readWorkspaceHeadRef(workspacePath).sha, workspacePath, workspaceId);
+          if (held) await writeHeldCount(service, workspaceId, held);
+        }
       }
     }
     reportPullHeld(result.reason, ctx, result.ref);
-    return { heldFiles: null, pullReason: result.reason };
+    return {
+      heldFiles: held?.total ?? null,
+      onRecovered: held?.onRecovered ?? null,
+      pullReason: result.reason,
+      checkedAt: held?.checkedAt ?? null,
+    };
   } catch (err) {
     // D25(7): no raw error reaches Sentry (git's argv names the URL and shas): the class name and the first app frame only.
     const errName = err instanceof Error ? err.name : typeof err;
@@ -947,7 +1015,9 @@ function mergeInProgress(workspacePath: string, entries: readonly PorcelainEntry
 /**
  * Push the session's knowledge-base changes after an agent session (#12600). Only a commit the server built reaches the
  * remote: `S` = the remote tip's verified root with HEAD's `knowledge-base` entry, parent the remote tip, Soleur's
- * message and identity (server/kb-sync-publish.ts). Best-effort: failures are logged but never throw.
+ * message and identity (server/kb-sync-publish.ts). Best-effort: failures are logged but never throw. It never stamps
+ * `repo_last_synced_at` (W5: only `syncPull` does); it writes the held-files count (#12714) from its `finally` whenever the
+ * publish's `onHeldFiles` hook computed one.
  */
 export async function syncPush(
   userId: string,
@@ -969,6 +1039,10 @@ export async function syncPush(
   }
 
   const ctx = { userId, workspaceId };
+  // #12714 (D29(1)): set by the publish's `onHeldFiles` hook, before its isolated dir is disposed; written from the
+  // `finally`, so held returns and the catch path write too. Null (no dir, no remote tip, no count): nothing is written.
+  // `as`: assigned inside the hook closure, so control flow must not narrow it to `null` here.
+  let held = null as HeldCount | null;
   try {
     // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
     const status = readStatus(workspacePath, "syncPush");
@@ -1012,6 +1086,9 @@ export async function syncPush(
       headSha: head.sha,
       refName: head.refName,
       writer: kbWorkspaceWriter(workspacePath),
+      onHeldFiles: async ({ isolatedDir, T, headSha }) => {
+        held = await heldCountOn(isolatedDir, T, headSha, workspacePath, workspaceId);
+      },
     });
 
     if (result.kind === "fallback_failed" && result.fallbackReason === "side_push_transient") {
@@ -1070,7 +1147,7 @@ export async function syncPush(
         message:
           "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",
       });
-      // Fall through to history recording + last-synced (writes delivered).
+      // Fall through to history recording (writes delivered).
     } else if (result.kind !== "pushed") {
       // Held or nothing to sync: no push happened, so no bookkeeping (CPO condition C4).
       return;
@@ -1090,7 +1167,7 @@ export async function syncPush(
       });
     }
 
-    await updateLastSynced(service, workspaceId);
+    // W5 (D29(9)): no `repo_last_synced_at` stamp here: only `syncPull` stamps it, so "Updated from GitHub" stays true.
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     if (err instanceof KbSyncError && err.pushClass === "persistent_other") {
@@ -1130,5 +1207,7 @@ export async function syncPush(
       },
       message: "Sync push failed — next session will retry",
     });
+  } finally {
+    if (held) await writeHeldCount(service, workspaceId, held);
   }
 }

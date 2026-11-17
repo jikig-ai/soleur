@@ -135,7 +135,7 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
     // #12718: no legacy token pull is left to throw; an unexpected throw inside the pull's try is the catch's input.
     headThrows.value = true;
 
-    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1")).resolves.toEqual({ heldFiles: null, pullReason: null });
+    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1")).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null });
 
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>
@@ -202,7 +202,12 @@ describe("kb-sync.pull-held observability (#12718, D25(6))", () => {
     childLog.info.mock.calls.filter(([o]) => (o as { op?: string } | undefined)?.op === "kb-sync.pull-held");
 
   test("a workspace that is not on disk: one pull-held line (isolated_refused), one Sentry warning, no catch report, never throws", async () => {
-    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "ws-1")).resolves.toEqual({ heldFiles: null, pullReason: "isolated_refused" });
+    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "ws-1")).resolves.toEqual({
+      heldFiles: null,
+      onRecovered: null,
+      pullReason: "isolated_refused",
+      checkedAt: null,
+    });
     expect(pullLines()).toHaveLength(1);
     expect(pullLines()[0][0]).toEqual({ op: "kb-sync.pull-held", reason: "isolated_refused", workspaceId: "ws-1" });
     expect(captureMessageSpy).toHaveBeenCalledTimes(1);
