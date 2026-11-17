@@ -13,6 +13,24 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-17
+**Sections enhanced:** 4 (Research Insights, Phase 3, Files to Edit, Acceptance Criteria)
+**Research agents used:** none in this pass. The 2026-11-16 plan-review panel is not re-run. External research stays skipped under the clean-room ceiling.
+
+### Key Improvements
+
+1. The two halt cues have a named same-edit payment, so the 52000-byte ceiling is a measured remainder.
+2. The stop-hook reorder is a change to the current file. The first-frontmatter awk and its `mv` run before `pipeline-tally.sh show` today.
+3. `Read references/` is a new cue. No skill body uses that phrase. The token-discipline load stays a markdown link, and that link is not the payment.
+
+### New Considerations Discovered
+
+- The cue `Read references/retry-budget-ruling.md` is 38 bytes. With a leading space and a trailing period the insertion is 40 bytes at each halt, 80 together. Headroom on the 51968-byte file is 32, so the edit deletes 56 bytes that are not conditions.
+- The payment is the second `dispose of it` in the prose-Ref bullet, including the space before those words (14 bytes), and the parenthetical on the token-discipline Read whose text is `moved verbatim; byte-ceiling extraction`, including the space before the opening parenthesis (42 bytes). Net is +24. When `wc -c` is still 51968 the file ends at 51992.
+- Today's capped path exits 0 after appending `budget-capped:` and before any keep-alive block. The no-grant path keeps that exit. The grant path rewrites the line in that same awk and reads it back after the `mv`.
+
 ## Overview
 
 When a parent pipeline halt is caused by a child's classified budget stop, a fresh context reads the attempt evidence and returns one verb. The parent spends one bounded iteration, moves to an earlier allow-listed phase, or keeps today's halt and writes a ledger. The classified stop stays in force. The cap is not raised.
@@ -49,6 +67,12 @@ ADR-268 plus the one-shot `grep -q budget-capped` halt plus `write-budget-marker
 
 Skipped. ADR-268, `pipeline-tally.sh`, `stop-hook.sh`, and the skill halt sites are the local authority. Fetching the compared peer's repository is forbidden by the clean-room ceiling. No external URL is a source for the prompt, the ledger fields, or the tests.
 
+### Deepen measurement
+
+Measured 2026-11-17 on `plugins/soleur/skills/one-shot/SKILL.md` at 51968 bytes. The `one-shot` ceiling is still 52000. A search for `Read references/` across `plugins/soleur/skills/*/SKILL.md` returned no matches. The token-discipline line is a markdown link, and that link stays. The halt sites add the bare cue because a filename mention does not load a reference.
+
+In `plugins/soleur/hooks/stop-hook.sh` the awk that rewrites the first frontmatter block writes a temp file and `mv`s it onto the ralph file. The tally floor calls `pipeline-tally.sh show` after that `mv`. On a cap it prints `SOLEUR_TALLY_CAPPED`, appends `budget-capped:`, and exits 0. Phase 2 moves `show` to before that awk. A capped stop whose grant line is absent keeps this exit. The grant path rewrites the line inside that same awk and reads the line back after the `mv` before it emits the keep-alive block.
+
 ### Community and functional discovery
 
 Community discovery skipped. The worktree root has no `pubspec.yaml`, `Cargo.toml`, `mix.exs`, `go.mod`, `Package.swift`, `build.gradle`, or `composer.json` (checked 2026-11-16).
@@ -61,7 +85,7 @@ Functional discovery ran and returned skip-all. Registries responded. Do not ins
 
 One-shot's `description:` line is not edited. The skill-description budget check is skipped.
 
-Measured 2026-11-16: `plugins/soleur/skills/one-shot/SKILL.md` is 51968 bytes. The `one-shot` ceiling in `plugins/soleur/test/skill-body-budget.json` is 52000. Headroom is 32 bytes. `scripts/lint-skill-body-budget.py` rejects a ceiling raise unless that json file is the only path in the diff. This plan does not raise the ceiling. The ruling procedure goes in a reference file. Each halt site contains `Read references/retry-budget-ruling.md`. A filename mention does not load the reference. One such Read is 39 bytes, and both sites need it, which is already past the 32-byte headroom. Pay for those bytes by deleting other skill bytes in the same edit. The net change stays inside those 32 bytes. Re-measure before editing. Fitting the procedure by compressing it into the skill body drops conditions, so that is not the fit.
+Measured 2026-11-16: `plugins/soleur/skills/one-shot/SKILL.md` is 51968 bytes. The `one-shot` ceiling in `plugins/soleur/test/skill-body-budget.json` is 52000. Headroom is 32 bytes. `scripts/lint-skill-body-budget.py` rejects a ceiling raise unless that json file is the only path in the diff. This plan does not raise the ceiling. The ruling procedure goes in a reference file. Each halt site contains a leading space, then `Read references/retry-budget-ruling.md`, then a period A filename mention does not load the reference. Measured 2026-11-17: the cue without the space or the period is 38 bytes, one insertion is 40 bytes, and both sites are 80 bytes. Headroom is 32. The same edit deletes 56 bytes that are not conditions. Delete the second `dispose of it` in the prose-Ref bullet, including the space before those words (14 bytes), leaving `Dispose of it through`. Delete the parenthetical on the token-discipline Read whose text is `moved verbatim; byte-ceiling extraction`, including the space before the opening parenthesis (42 bytes). The Read target, `before Step 0`, and the following load-bearing sentence stay. Net is +24. When `wc -c` is still 51968 the file ends at 51992. Re-measure before editing. If that sum exceeds 52000, stop. Do not raise the ceiling, and do not pay by deleting a condition. Fitting the procedure by compressing it into the skill body drops conditions, so that is not the fit.
 
 ### Code anchors
 
@@ -172,9 +196,9 @@ The parent writes the unquoted line `retry_budget_grant: 1` only inside the firs
 
 ### Phase 3: Parent halt
 
-The procedure below is the body of a new file, `plugins/soleur/skills/one-shot/references/retry-budget-ruling.md`. Edit the two child-marker halts in `plugins/soleur/skills/one-shot/SKILL.md`, the header tally contract and the tally note before steps 3, 4, 5.5, and 7, so each contains `Read references/retry-budget-ruling.md`. Pay for those bytes by deleting other skill bytes in the same edit. Do not edit step 0d. Do not edit the `description:` line.
+The procedure below is the body of a new file, `plugins/soleur/skills/one-shot/references/retry-budget-ruling.md`. Edit the two child-marker halts in `plugins/soleur/skills/one-shot/SKILL.md`, the header tally contract and the tally note before steps 3, 4, 5.5, and 7, so each ends with a leading space, then `Read references/retry-budget-ruling.md`, then a period The same edit pays with the two deletions named in Research Insights. Do not edit step 0d. Do not edit the `description:` line. Do not delete the token-discipline Read target.
 
-Measured 2026-11-16, `wc -c` of that skill is 51968 and the ceiling is 52000. Headroom is 32 bytes. Re-measure before the edit. The net change stays within the headroom. Do not raise the ceiling. Do not shorten the reference to fit the skill. `scripts/lint-skill-body-budget.py --base origin/main` exits 0 after the edit. The skill text does not contain `SOLEUR_RETRY_BUDGET_RULING`. The existing `SOLEUR_SESSION_STATE_UNAVAILABLE` echo stays.
+Measured 2026-11-16, and again 2026-11-17, `wc -c` of that skill is 51968 and the ceiling is 52000. Headroom is 32 bytes. The two insertions are 80 bytes and the two deletions are 56, so the net is +24 and the file ends at 51992 when the re-measure is still 51968. Re-measure before the edit. If the result exceeds 52000, stop. Do not raise the ceiling. Do not shorten the reference to fit the skill. `scripts/lint-skill-body-budget.py --base origin/main` exits 0 after the edit. The skill text does not contain `SOLEUR_RETRY_BUDGET_RULING`. The existing `SOLEUR_SESSION_STATE_UNAVAILABLE` echo stays.
 
 Before any spawn, in this order, matching the script:
 
@@ -225,7 +249,7 @@ Unchecked on purpose: every other skill that writes `budget-capped` still halts 
 
 ## Files to Edit
 
-- `plugins/soleur/skills/one-shot/SKILL.md` — the two child-marker halts, each containing `Read references/retry-budget-ruling.md`, with other skill bytes deleted in the same edit to pay for that Read. Not step 0d. Not the `description:` line. Net bytes stay within the measured 32-byte headroom.
+- `plugins/soleur/skills/one-shot/SKILL.md` — the two child-marker halts, each ending with a leading space, then `Read references/retry-budget-ruling.md`, then a period The same edit deletes the duplicated `dispose of it` in the prose-Ref bullet and the token-discipline parenthetical `moved verbatim; byte-ceiling extraction`, including the space that precedes each. Not step 0d. Not the `description:` line. The token-discipline Read target stays. Net bytes stay inside the 52000 ceiling.
 - `plugins/soleur/hooks/stop-hook.sh` — one grant in the existing awk rewrite and the tally floor.
 - `plugins/soleur/test/ralph-loop.test.sh` — grant cases beside the existing no-block cases.
 - `knowledge-base/engineering/architecture/decisions/ADR-268-pipeline-tally-per-branch-counters.md` — Consequences amendment.
@@ -412,7 +436,7 @@ None. On 2026-11-16, 96 open issues labeled `code-review` were searched for each
 - [ ] On `continue`, the reference runs one bounded unit of the exhausted work, then stops. That unit is not a child re-entry whose `gate` exits before any work, and it is not the next one-shot step, `ship`, or `merge`. `reason=spent` does not apply during that unit. The `budget-capped` line that triggered the ruling does not start another ruling during that unit.
 - [ ] On `goto`, the reference sends the parent, in the same turn, to an earlier phase only: `plan` at steps 1–2, `work` at step 3, `review` at step 4, `qa` at step 5.5, and `test-fix-loop` after step 5.5 and before step 7. A halt before step 7 may enter `test-fix-loop` and must not enter step 7 or step 8. A halt at step 3, step 4, or step 5.5, or earlier, does not start `test-fix-loop`. The script has no `not-earlier` reason. A `goto` that is not earlier halts. The text does not send `goto` to step 7, step 8, `ship`, or `merge`. The sticky marker does not start another ruling until that action has started.
 - [ ] When the verb is `fail` and the reason is not `spent`, stdout is the verdict line plus one plain line that names the verb and the reason. When the reason is `spent`, stdout is the verdict line only and the script appends nothing.
-- [ ] One-shot's two child-marker halts each contain `Read references/retry-budget-ruling.md`. That reference names the ruling script. Step 0d does not. `wc -c` of `plugins/soleur/skills/one-shot/SKILL.md` is at most 52000, and `scripts/lint-skill-body-budget.py --base origin/main` exits 0. The skill body does not contain `SOLEUR_RETRY_BUDGET_RULING`. The existing `SOLEUR_SESSION_STATE_UNAVAILABLE` echo stays.
+- [ ] One-shot's two child-marker halts each contain `Read references/retry-budget-ruling.md`. That reference names the ruling script. Step 0d does not. The same edit deletes the duplicated `dispose of it` and the token-discipline parenthetical `moved verbatim; byte-ceiling extraction`, and it keeps that Read target. `wc -c` of `plugins/soleur/skills/one-shot/SKILL.md` is at most 52000, and `scripts/lint-skill-body-budget.py --base origin/main` exits 0. The skill body does not contain `SOLEUR_RETRY_BUDGET_RULING`. The existing `SOLEUR_SESSION_STATE_UNAVAILABLE` echo stays.
 - [ ] `scripts/test-all.sh` is not edited. The new suite path is `plugins/soleur/scripts/retry-budget-ruling.test.sh`.
 - [ ] ADR-268 Consequences state that one consumed grant does not clear `capped=` and is not `init --max-*`. The raised-cap and `--reset` resume paths remain.
 - [ ] `model.c4` plugin description names the one grant, and the `oneshot` description names the child-marker ruling. `plugins/soleur/test/c4-count-parity.test.sh` passes.

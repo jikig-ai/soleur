@@ -10,7 +10,7 @@
 - [ ] 2.1 Add `plugins/soleur/scripts/retry-budget-ruling.sh`: `--probe`, the predicate order, the ledger section, and the stdout contract in Phase 1 of the plan.
 - [ ] 2.2 Add `plugins/soleur/skills/one-shot/references/retry-budget-ruling.md` with the parent procedure in Phase 3 of the plan.
 - [ ] 2.3 Teach `plugins/soleur/hooks/stop-hook.sh` the exact grant line, `retry_budget_consumed: 1`, and the current-session sweep exception in Phase 2 of the plan. Extend `plugins/soleur/test/ralph-loop.test.sh` beside the existing no-block cases.
-- [ ] 2.4 Edit the two child-marker halts in `plugins/soleur/skills/one-shot/SKILL.md` so each contains `Read references/retry-budget-ruling.md`. Delete other skill bytes in the same edit to pay for that Read. Leave step 0d and the `description:` line.
+- [ ] 2.4 Edit the two child-marker halts in `plugins/soleur/skills/one-shot/SKILL.md` so each ends with a leading space, then `Read references/retry-budget-ruling.md`, then a period In that same edit, delete the second `dispose of it` in the prose-Ref bullet, including the space before those words, and delete the token-discipline parenthetical `moved verbatim; byte-ceiling extraction`, including the space before the parenthesis. Keep that Read target. Leave step 0d and the `description:` line. When the re-measure is still 51968 bytes, the file ends at 51992.
 - [ ] 2.5 Amend ADR-268 Consequences and the two `model.c4` descriptions in Phase 4 of the plan.
 
 ## Phase 3: Testing
