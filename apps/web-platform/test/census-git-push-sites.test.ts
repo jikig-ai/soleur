@@ -37,10 +37,11 @@ const VERBS = new Set(["push", "send-pack", "receive-pack"]);
 /** (file verb arm) for every call. Update ONLY with a reviewed reason: each row is a token-bearing git child. */
 const GIT_AUTH_SITES = [
   "server/ensure-workspace-repo.ts clone legacy",
-  "server/kb-sync-publish.ts ls-remote hardened",
   "server/kb-sync-publish.ts push hardened",
+  // #12718 (D25(1), D25(5)): the session-start pull's reads, both from the isolated directory against the literal URL
+  "server/kb-sync-remote.ts fetch hardened",
+  "server/kb-sync-remote.ts ls-remote hardened",
   "server/push-branch.ts push conditional", // hardened when the isolated dir was created, else the legacy cwd arm
-  "server/session-sync.ts pull legacy",
   "server/workspace-sync.ts fetch opts-dynamic", // an options variable built from the injected runner's caller
   "server/workspace-sync.ts pull legacy",
   "server/workspace.ts clone legacy",
@@ -55,6 +56,28 @@ const STRAY_ALLOWED = [
   "server/workspace-sync.ts other",
   "server/workspace-sync.ts other",
   "server/workspace-sync.ts other",
+];
+
+/** #12718 (D25(5)): KB sync modules with ZERO token-bearing calls and no git exec of their own (the isolated runner only). */
+const KB_SYNC_TOKEN_FREE = ["server/kb-sync-objects.ts", "server/kb-sync-pull.ts", "server/kb-sync-side-pr.ts", "server/kb-sync-held.ts"];
+
+/** The known `runIsolatedGitLocal` call sites per token-free KB sync file (a new token-free child is a reviewed row). */
+const ISOLATED_RUNNER_SITES: Record<string, number> = {
+  "server/kb-sync-objects.ts": 6, // isCommitPresent, isAncestor, commitTree, handOver, isKbOnlySide (merge-base, diff)
+  "server/kb-sync-pull.ts": 5, // the walk, the size check, merge-tree, the first-parent chain and its KB batch read
+  "server/kb-sync-side-pr.ts": 0,
+  "server/kb-sync-held.ts": 1, // the held count's diff (#12714)
+};
+
+/** #12718 (D25(3)): modules on the pull's import graph that must never import the push. */
+const PUSH_FREE_MODULES = [
+  "server/kb-sync-objects.ts",
+  "server/kb-sync-pull.ts",
+  "server/kb-sync-remote.ts",
+  "server/kb-sync-side-pr.ts",
+  "server/workspace-sync.ts",
+  "server/git-isolated-dispose.ts",
+  "server/agent-git-identity.ts",
 ];
 
 /** Files whose push-verb tokens in an argv position are allowed, with the reason. */
@@ -83,7 +106,7 @@ const PUSH_TOKEN_SITES = [
   "server/kb-sync-publish.ts push argv@call:gitWithInstallationAuth",
   "server/permission-callback-bash-batch.ts push argv@var:NO_BATCH_GIT_VERBS",
   "server/push-branch.ts push argv@call:gitWithInstallationAuth",
-  "server/session-sync.ts push arg:autoCommitFailure",
+  "server/session-sync.ts push arg:autoCommit", // the auto-commit stage name (human text; #12718 D26(1) shared helper)
 ];
 
 /** Edges into server/git-auth from non-test files outside server/: (file role). Each is a named import of another export. */
@@ -249,8 +272,54 @@ describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
   test("gitWithInstallationAuth: the call sites by file, first verb and arm equal the checked-in table", () => {
     expect(c.gitAuth).toEqual([...GIT_AUTH_SITES].sort());
     expect(c.gitAuth.filter((s) => s.endsWith(" legacy-suspect"))).toEqual([]);
-    // the KB sync's token-bearing calls are all hardened (H5)
-    for (const s of c.gitAuth.filter((x) => x.startsWith("server/kb-sync-publish.ts "))) expect(s).toMatch(/ hardened$/);
+    // the KB sync's token-bearing calls are all hardened (H5, D25(5)): the push, and the pull's ls-remote and fetch
+    const kbSync = c.gitAuth.filter((x) => /^server\/kb-sync-(publish|remote)\.ts /.test(x));
+    expect(kbSync).toHaveLength(3);
+    for (const s of kbSync) expect(s).toMatch(/ hardened$/);
+    // D25(5): the pull leaves and the held count never carry the token, and session-sync no longer does at all
+    for (const f of KB_SYNC_TOKEN_FREE) expect(c.gitAuth.filter((x) => x.startsWith(`${f} `)), f).toEqual([]);
+    expect(c.gitAuth.filter((x) => x.startsWith("server/session-sync.ts "))).toEqual([]);
+  });
+
+  test("D25(5): no literal git exec in the token-free KB sync modules; their isolated-runner call sites are the known counts", () => {
+    for (const f of KB_SYNC_TOKEN_FREE) {
+      if (!SERVER_FILES.includes(f)) continue; // kb-sync-held.ts lands with #12714's half of this PR
+      const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
+      const spawnsGit: string[] = [];
+      let runnerCalls = 0;
+      const visit = (n: ts.Node): void => {
+        if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && /child_process$/.test(n.moduleSpecifier.text)) spawnsGit.push("child_process import");
+        if (ts.isCallExpression(n)) {
+          const name = calleeName(n.expression);
+          if (name === "runIsolatedGitLocal") runnerCalls++;
+          const first = n.arguments[0];
+          if (first && literalText(first) === "git") spawnsGit.push(`${name}("git")`);
+          if (n.expression.kind === ts.SyntaxKind.ImportKeyword && first && /child_process$/.test(literalText(first) ?? "")) spawnsGit.push("child_process dynamic import");
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      expect(spawnsGit, f).toEqual([]);
+      expect(runnerCalls, f).toBe(ISOLATED_RUNNER_SITES[f]);
+    }
+  });
+
+  test("D25(3): the pull leaves never import the push (kb-sync-publish.ts, push-branch.ts), statically or dynamically", () => {
+    for (const f of PUSH_FREE_MODULES) {
+      expect(SERVER_FILES, f).toContain(f);
+      const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
+      const specs: string[] = [];
+      const visit = (n: ts.Node): void => {
+        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) specs.push(n.moduleSpecifier.text);
+        if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          const t = n.arguments[0] ? literalText(n.arguments[0]) : null;
+          specs.push(t ?? "<computed>");
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      expect(specs.filter((m) => /(^|\/)(kb-sync-publish|push-branch)$/.test(m) || m === "<computed>"), f).toEqual([]);
+    }
   });
 
   test("push / send-pack / receive-pack tokens, in any form, equal the checked-in table", () => {
@@ -279,13 +348,14 @@ describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
   });
 
   test("known-positive: planted pushes (backtick, variable, spread with a -c prefix, alias) and falsy hardened values all turn the census red", () => {
+    // #12718: session-sync.ts no longer imports gitWithInstallationAuth (the pull moved to the hardened arm), so the plant
+    // adds the import, with an alias, next to an import the file keeps.
     const target = "server/session-sync.ts";
     const src = readFileSync(join(APP, target), "utf8");
+    const ANCHOR = 'import { KB_ROOT } from "./kb-root";';
+    expect(src).toContain(ANCHOR);
     const planted = [
-      src.replace(
-        'import { gitWithInstallationAuth } from "./git-auth";',
-        'import { gitWithInstallationAuth, gitWithInstallationAuth as gAuth } from "./git-auth";',
-      ),
+      src.replace(ANCHOR, `import { gitWithInstallationAuth, gitWithInstallationAuth as gAuth } from "./git-auth";\n${ANCHOR}`),
       "export async function __plantedA(p: string): Promise<void> {",
       "  await gitWithInstallationAuth([`push`, \"u\", \"HEAD:refs/heads/x\"], 1, { cwd: p });",
       "}",
