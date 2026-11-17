@@ -112,7 +112,7 @@ Proceed once the tree is ready (worktree or current branch).
 
 Before spawning review agents, classify the PR to right-size the panel.
 
-1. Run the helper below (NUL-delimited, rename-free, submodule-honest; rc 2 on failure) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
+1. Run the helper below (NUL-delimited, rename-free, submodule-honest; non-zero exit on failure) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
@@ -121,7 +121,7 @@ Before spawning review agents, classify the PR to right-size the panel.
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
 
-   If the helper fails (rc 2/127; marker printed, file removed), skip the decision tree: class = code (full panel) and run gdpr-gate (fail toward more review).
+   If the helper fails (marker printed, file removed), skip the decision tree: class = code (full panel) and run gdpr-gate (fail toward more review).
 
    All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead.
 
@@ -368,7 +368,7 @@ Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](refer
 
 **When to run gdpr-gate at review time:**
 
-- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` exits 0 (a match) or 2/127 (unknown: treat as a match) (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` does not exit 42 (42 = no match): treat as a match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
 
 **What this agent checks:**
 

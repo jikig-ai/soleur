@@ -15,6 +15,7 @@ PR #12357 (issue #12332, arc tracker #12246) applied the #12326 construction (`g
 
 - Newline names: `grep -z` over the NUL stream where a match allows; helper exits 2; pr-quality-guards logs control bytes as `?`.
 - One canonical call form in prose — `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" ...` (the `:-` makes an unset root rc 127, i.e. unknown), `|| { [ $? -eq 1 ] || var=unknown; }`, and "unknown fires the gate" stated at each site; preflight removes the cache on failure and a MISSING cache means RUN; Steps 11.1/12.1 write to a temp name and `mv`.
+  > **Superseded 2026-11-16 (Ref #12246):** the call form above is wrong. Its `${CLAUDE_PLUGIN_ROOT:-}` did turn an unset root into rc 127 (unknown), but under `set -u` any OTHER unbound variable on the line (`$CANONICAL_REGEX`, `$DPF_REGEX`), or one inside the helper, exits 1, the same code the helper used for no match, so `[ $? -eq 1 ]` read that shell failure as "nothing gated changed". The `:-` is dropped because the root is loader-substituted on Claude Code and an unbound root now reads as unknown on its own. `changed-paths.sh --match` now exits 42 for no match, and the one call form is `var=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match ERE origin/main...HEAD) || { [ $? -eq 42 ] || var=unknown; }`. Every other non-zero exit (1, 2, 126, 127, 128+N) is unknown. See the helper's header CONTRACT.
 - The helper takes an ALLOWLIST of options, writes the NUL stream to a temp file first, checks every write, and runs grep in the byte locale from a `printf` pipe.
 - Suite: sentinel failures via process substitution; sentinel regex accepts any option words, `$GIT` launchers and quoted verbs; SKILL.md spelling pins plus handler/base/marker pins with their own self-test; positive controls for every verdict-owning helper; floors set to the exact count.
 
@@ -32,6 +33,34 @@ When a conversion REMOVES a representation (C-quoting), ask what protection that
 6. **`test-all-affected.test.sh` exceeded the fan-out agent's 3000 s timeout and the long pin suites ran in parallel** — Recovery: left to CI as a non-reader of the changed lines — Prevention: run pin suites alone, never alongside siblings.
 7. **The mutation battery's `git archive` copy was not a git repo, so the sentinel's `git ls-files` scanned nothing and the control went red** — Recovery: a one-call git shim — Prevention: any sandbox for a git-census guard is `git init && git add -A`.
 8. **The accept-row audit needed re-deriving after each of four suite edits** — Recovery: a small script — Prevention: recurring toil, not fixed here (a regenerate verb for `ci-pr-affected-audit.accept.tsv` would belong in its own PR).
+
+## Addendum — 2026-11-17 (PR #12809, Ref #12246)
+
+**Problem.** The exit-42 fix makes `changed-paths.sh --match` exit 42 on "none match". It was meant to stop an unset `${CLAUDE_PLUGIN_ROOT}` under `set -u` (rc 1) from reading as "no match". It took four fix rounds, and each round's own new code opened a new fail-open path in the counsel gate:
+
+- Round 2 read every open PR on the branch name, so a fork PR's body could supply a draft marker.
+- Round 2's legal `git diff` honoured `diff.relative`, `diff.external` and textconv from config.
+- Round 3's archive lookup matched a suffix-lookalike file.
+- Round 3 keyed a skip on `legal=unknown`, not on "no readable base". So any helper failure in a repo with no tracked legal docs skipped counsel.
+
+Each verification pass then found a sibling shape. You approved going past the 2+1 cap twice: A, then A2, with the last round verified only by the lead's mutant battery.
+
+**Key insight.** Code added to a fail-closed gate in a fix round is a new input surface. List every external input it reads (PR bodies, git config, attributes, file names) before writing it. A skip arm must be keyed on the measured cause ("base unreadable and nothing tracked"), never on the generic `unknown` the gate already treats as a fire.
+
+**Session errors (this PR).**
+9. **Each fix round added fail-opens in its own new code** — Recovery: rounds 3–4, owner-approved — Prevention: before writing a fix-round predicate, list its external inputs and add one hostile-input row per input (routed to `risk-tier-and-fix-rounds.md`).
+10. **I gave `review-scan-gate.sh` its paths on stdin; it printed `skip files=0` rc 0** — Recovery: re-ran with argv — Prevention: tracked on #12779 (refuse zero argv).
+11. **A shim row passed for the wrong reason (`REAL_GIT` not passed, so every git call failed)** — Recovery: `counsel_run` passes `REAL_GIT`, and the row asserts `legal_touch` — Prevention: every shim row asserts one field the real binary must produce.
+12. **A mutant went RED only because the shim refused its argv** — Recovery: the detached row passes `GH_EXPECT_BRANCH=` — Prevention: read why a mutant is RED, not only that it is.
+13. **`lint-rule-bodies.py` run without `--check --base`** (rc 2) — Recovery: re-ran with the flags — Prevention: one-off; read the runner's invocation.
+14. **The KB-ratchet baseline fix broke the file's 2-column format** — Recovery: restored 2 columns — Prevention: diff a baseline edit against its neighbouring rows.
+15. **A single-file grep row expected a `file:` prefix** — Recovery: fixed the expected value — Prevention: one-off.
+16. **`gh issue create` was refused twice (no milestone, then no filing exit)** — Recovery: added both — Prevention: already hook-enforced.
+17. **The pre-push lane `fixture-dir-operand-assert` went RED on this host only** — Recovery: ran it directly (green) and left it to CI — Prevention: one-off.
+18. **A seat could not delete its scratch repo (`rm -rf` hook on a dir holding `.git`)** — Recovery: owner removes it — Prevention: brief seats to clean up with `find <dir> -delete`.
+19. **The scratchpad was wiped between sessions, so the verify brief was lost** — Recovery: rewrote it — Prevention: one-off; re-derive from the PR.
+20. **Round 4's skip arm keyed "no base" on a missing merge base alone, so a shallow clone (base ref resolves, no merge base) of a branch deleting every legal doc skipped.** The lead's battery passed because no fixture had a base ref that resolves with no merge base. The CTO ruling pass that ship's technical-ruling gate requires found it — Recovery: round 5 (owner-approved), which also requires the base tree to hold no legal doc, plus fixture G, battery 12/12 RED — Prevention: when a predicate reads "X cannot be read", add a fixture for each way X can be half-readable (the ref resolves but the merge base, tree or object is missing).
+21. **The first full CI run after rounds 2–5 went red on three repo meta-guards the fix rounds never ran.** These were the harness-parity census (a regex's `[- ]incident` read as a `]incident` sigil), `fixture-relative-assert` (seven new cwd-relative fixture writes), and `grep-q-pipe-guard` (a `| grep -q` in fixture G, plus new grep/tr stubs with no exempt rows). Each fix round ran only the suite it edited — Recovery: `[i]ncident`, `assert_fixture_dir` plus `$db/`-rooted writes, `grep -q . < <(...)`, two deliberate-fault rows, and `PJ_TRIPLES` 387 on top of a fresh merge of main — Prevention: after a fix round that edits a `.test.sh` or skill reference, run `harness-parity-tree.test.ts`, `fixture-relative-assert.test.sh` and `grep-q-pipe-guard.test.sh` before pushing. All three are fast, and the standing "run the repo meta-guards before pushing" already asks for this.
 
 ## Tags
 
