@@ -5,9 +5,10 @@
 #
 # WHY ONE MONITOR:
 #   Sentry includes ONE uptime monitor on this plan; every further monitor bills
-#   $1.00/mo. That one slot goes to the production app, adopted by import from the
-#   monitor Sentry auto-detected for the web-platform project (detector 1422253),
-#   so the app is second-sourced across two vendors (DC-1, #6606): Better Stack
+#   $1.00/mo. That one slot goes to the production app, declared here as a new
+#   manual monitor that replaces the one Sentry auto-detected for the web-platform
+#   project (detector 1422253, deleted through the API after the first apply), so
+#   the app is second-sourced across two vendors (DC-1, #6606): Better Stack
 #   PAGES for this URL (betteruptime_monitor.app, betteruptime_monitor.app_health
 #   in ../uptime-alerts.tf); this monitor DETECTS (opens a Sentry issue) without
 #   paging.
@@ -43,7 +44,7 @@
 # composes the squash body, which breaks the anchor the apply gate matches).
 #
 # BETA STATUS: `sentry_uptime_monitor` may still be documented as beta in the
-# provider (pinned v0.15.4 as of #6636 — see provider docs at
+# provider (pinned v0.15.7 in versions.tf; first pinned at v0.15.4 in #6636 — see provider docs at
 # github.com/jianyuan/terraform-provider-sentry/blob/main/docs/resources/uptime_monitor.md).
 # The provider may still rename attributes when the resource graduates further.
 # Re-validate the schema on every provider bump (`terraform init -upgrade`).
@@ -64,19 +65,14 @@ locals {
   )
 }
 
-# ADOPTED, NOT CREATED (DC-1, #6606; ADR-328). Sentry auto-detected
-# https://app.soleur.ai for the web-platform project and runs it as detector
-# 1422253 in mode 3 (auto-detected). Importing it puts the one included slot
-# under IaC without a delete-and-create (which would discard its check history
-# and bill a second slot for the overlap). The declared name and environment
-# differ from live on purpose: the FIRST apply is therefore an in-place update,
-# and that update flips the detector from mode 3 (auto-detected) to manual (1).
-# An import whose config equalled live would plan a no-op and leave it mode 3.
-import {
-  to = sentry_uptime_monitor.app
-  id = "${var.sentry_org}/1422253" # uptime detector id (GET /organizations/{org}/detectors/)
-}
-
+# CREATED, NOT IMPORTED (ADR-328; decision-challenges D2). Sentry auto-detected
+# https://app.soleur.ai and runs it as detector 1422253 in mode 3 (auto-detected).
+# This block creates a separate manual monitor for the same URL. After its first
+# apply shows three passing checks, 1422253 is deleted through the API
+# (GET, DELETE, GET expecting 404; D3a). Until then two uptime monitors are
+# live and the scheduled drift check correctly reports UPTIME UNMANAGED.
+# An `import {}` is not usable here: scripts/sentry-adoption-plan-assert.sh
+# reads any import or forget row as the #7650 alert adoption and fails the plan.
 resource "sentry_uptime_monitor" "app" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -99,10 +95,10 @@ resource "sentry_uptime_monitor" "app" {
 
   assertion_json = local.uptime_assertion_2xx
 
-  # PERMANENT - do not drop in a tidy-up. The provider's import and read never
-  # set `project`, so state holds null after the import, and `project` carries
-  # RequiresReplace: without this, the import plans a destroy-and-create of the
-  # monitor it exists to adopt.
+  # PERMANENT - do not drop in a tidy-up. The provider's read never sets
+  # `project`, and `project` carries RequiresReplace: if state ever loses it
+  # (a re-import, a state rebuild), the next plan would destroy and re-create
+  # this monitor.
   lifecycle {
     ignore_changes = [project]
   }

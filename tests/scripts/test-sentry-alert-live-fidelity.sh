@@ -502,7 +502,7 @@ t_pinned_path_end_to_end() {
   # uptime section runs first), with the page size the `>= 100` ceilings assume;
   # and each call must be a plain GET.
   local urls; urls=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -E '^[a-z]+://' | tr '\n' ' ' || true)
-  [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/?query=type:uptime_domain_failure&per_page=100 https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100 " ]] || why+=("URL set is not exactly the two pinned URLs: $urls")
+  [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/?query=type:uptime_domain_failure&project=-1&per_page=100 https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100 " ]] || why+=("URL set is not exactly the two pinned URLs: $urls")
   # EVERY call is transport-confined with `--disable` literally first, not only the first one.
   local cf
   for cf in "$_shim_dir"/call.*.argv; do

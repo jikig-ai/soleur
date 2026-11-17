@@ -222,8 +222,10 @@ Sentry and BetterStack tokens are printed in full. That has already happened onc
 > `cutover-monitor-baseline.txt` still lists the old Sentry rows until it is
 > re-captured. CUT8 never reads them, because it iterates the live probe, not the
 > baseline. The re-capture, together with adding the Better Stack changelog
-> deep-path monitor to `BETTERSTACK_MONITORS`, is the follow-up PR of #12844. The
-> 2026-09-07 note above and the paragraph below are kept as written.
+> deep-path monitor to `BETTERSTACK_MONITORS`, is the follow-up PR of #12844.
+> `CUTOVER_SINCE` is now inert: it bounded Sentry's rolling check window, and Better
+> Stack reports current status only, so the `export CUTOVER_SINCE=` line above can be
+> skipped. The 2026-09-07 note above and the paragraph below are kept as written.
 
 `soleur-ai-www` is in an active failure incident *before* this cutover: it records
 its own correct `301` as a failure because the `equals 301` assertion declared in

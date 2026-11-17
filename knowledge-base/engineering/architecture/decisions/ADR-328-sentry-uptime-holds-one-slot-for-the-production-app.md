@@ -38,9 +38,9 @@ Stack" as a consequence. This decision ends that for the marketing site, so it n
 
 | Option | Why not |
 |---|---|
-| **Chosen:** the app monitor holds Sentry's slot, adopted by import; marketing-site uptime moves to Better Stack | See Decision |
+| **Chosen:** the app monitor holds Sentry's slot as a newly declared monitor, and 1422253 is deleted through the API; marketing-site uptime moves to Better Stack | See Decision |
 | Keep the ACME probe as the included slot and delete 1422253 (the brief's option A) | The probe cannot fail, so it watches nothing, and deleting 1422253 takes the production app off its second vendor, against DC-1 |
-| Declare a new app monitor, then delete 1422253 | Kept as the fallback only. It needs an overlap window, a six-monitor billing peak and a delete step. The import adopts the same monitor with none of these: provider v0.15.7 sends `mode = MANUAL` on every update to the detectors API, which turns an auto-detected monitor into a manual one (ruling D2) |
+| Adopt 1422253 by an `import` block (the first D2 ruling) | Cannot pass CI. `scripts/sentry-adoption-plan-assert.sh` runs unconditionally in `plan_pr` and in the apply job, and reads any import or forget row as the #7650 alert adoption: it requires 2 `sentry_alert` pairs and a no-op import row, so this plan failed it on run 44095436160. The `removed {}` variant is a forget and fails the same way. Weakening that gate to merge this change was rejected (D2 re-ruling) |
 | Move the ACME probe to Better Stack | A check that cannot fail buys nothing on any vendor |
 | Keep both vendors on the marketing apex ($1.00/mo) | The marketing site holds no user data, and `betteruptime_monitor.soleur_apex` already watches it at 180 s |
 | Route a Sentry alert for the app uptime monitor | Better Stack already pages for the app, so a routed Sentry alert would page the same outage twice (ruling D-F-E) |
@@ -48,9 +48,10 @@ Stack" as a consequence. This decision ends that for the marketing site, so it n
 ## Decision
 
 1. **Sentry's one included uptime monitor watches `https://app.soleur.ai`.** It is
-   `sentry_uptime_monitor.app` (`soleur-app-reachability`), adopted from 1422253 by an `import`
-   block. The first apply turns it from auto-detected to manual, so no auto-detected monitor
-   remains. Cadence: 60 s checks, downtime threshold 3, recovery threshold 1 (ruling D7). This keeps
+   `sentry_uptime_monitor.app` (`soleur-app-reachability`), a new manual monitor declared in
+   Terraform. The auto-detected 1422253 is deleted through the API (read, delete, read expecting
+   404), so no auto-detected monitor remains (ruling D2, D3a). Its check history is lost; that is
+   accepted. Cadence: 60 s checks, downtime threshold 3, recovery threshold 1 (ruling D7). This keeps
    two-vendor coverage where user data lives (DC-1).
 2. **Better Stack pages for the app; the Sentry monitor only detects.** `betteruptime_monitor.app`
    and `betteruptime_monitor.app_health` page. The Sentry monitor opens an issue on downtime and is
@@ -65,21 +66,27 @@ Stack" as a consequence. This decision ends that for the marketing site, so it n
    Dead-man and cron signals go to Sentry whenever the next Better Stack $20 heartbeat pack would be
    crossed; the first case is the four paused `soleur-host-kernel-*` heartbeats, which page from
    per-host Sentry cron monitors when #12386 arms them (ruling D4). The production app always stays
-   on two vendors. Every further Sentry uptime monitor costs $1.00/mo.
+   on two vendors. Once Better Stack's ten included uptime monitors are used, the next uptime
+   monitor goes to Sentry at $1.00/mo rather than starting a paid Better Stack tier.
 5. **The rule is checked, not trusted.** An uptime section in
    `scripts/sentry-alert-live-fidelity.sh` reports any live uptime detector whose mode is not
    manual, and a live count above the declared count (ruling D-F-B). No auto-detection setting is
-   written: Sentry exposes no public field for it.
+   written: the org-level option, which decides, has no public API field, and Sentry turned it off
+   itself when it created 1422253. The project-level option is writable through the project PUT
+   but does not override the org one.
 
 ### Sequencing
 
-This record is true at merge once both apply workflows finish. `apply-sentry-infra.yml` (full
-root) and `apply-web-platform-infra.yml` (target-scoped) run independently, so the Sentry changelog
-monitor can be gone minutes before the Better Stack one exists; that gap is one apply on a static
-page and is accepted. If the import does not turn 1422253 manual, the fallback runs: the import is
-released with `removed { destroy = false }`, a new app monitor is declared, and 1422253 is deleted
-through the API only after the new monitor shows three passing checks, with a read before and
-after the delete. On that path the delete lands after the merge. The Better Stack changelog entry
+This record is true at merge once both apply workflows finish and 1422253 is deleted.
+`apply-sentry-infra.yml` (full root) and `apply-web-platform-infra.yml` (target-scoped) run
+independently, so the Sentry changelog monitor can be gone minutes before the Better Stack one
+exists; that gap is one apply on a static page and is accepted. 1422253 is deleted immediately
+before the merge, not after it: the post-apply live-fidelity probe in `apply-sentry-infra.yml` runs
+under `set -e` and fails on any live uptime monitor that is not manual, so a delete after the apply
+would turn that merge's run red. The app has no Sentry uptime monitor from the delete until the
+apply creates `sentry_uptime_monitor.app`, minutes later; Better Stack pages for the app through
+that window (Decision 2). The new monitor is read back after the apply (mode 1, url
+`https://app.soleur.ai`). The Better Stack changelog entry
 in `cutover-verify.sh` CUT8 and its baseline row land together in the follow-up PR (ruling D-F-F),
 and the host-kernel cron monitors land in #12386.
 
@@ -128,10 +135,11 @@ No NFR changes status.
 
 ## Principle Alignment
 
-- **AP-001 Terraform-only infrastructure provisioning:** aligned. The one unmanaged monitor is
-  adopted into Terraform, and the Better Stack monitor is declared there.
-- **AP-007 Exhaust automation before manual steps:** aligned. No dashboard step: the import and the
-  scheduled check replace a settings change that has no API.
+- **AP-001 Terraform-only infrastructure provisioning:** aligned. The app monitor is declared in
+  Terraform; the one unmanaged monitor was created by Sentry, not by us, and is deleted through the
+  API because no import can pass the adoption gate. The Better Stack monitor is declared there too.
+- **AP-007 Exhaust automation before manual steps:** aligned. No dashboard step: the agent-run API
+  delete and the scheduled check replace a settings change that has no API.
 - **AP-011 ADRs for architecture decisions:** aligned (this record).
 - **AP-024 A verification surface does not actuate:** aligned. The uptime check reports an
   unmanaged monitor and does not delete it.

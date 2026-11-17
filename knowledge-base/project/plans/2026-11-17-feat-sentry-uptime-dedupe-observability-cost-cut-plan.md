@@ -17,6 +17,18 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Addendum - 2026-11-17 (D2 second re-ruling, CI run 44095436160)
+
+The import of 1422253 described below is **superseded**. `plan_pr` failed
+`scripts/sentry-adoption-plan-assert.sh`, which runs unconditionally in `plan_pr` and the apply job
+and reads any import or forget row as the #7650 alert adoption; no import and no `removed {}` can
+pass it. The CTO re-ruled (decision-challenges D2): `sentry_uptime_monitor.app` is declared as a
+new monitor, and 1422253 is deleted through the API (GET, DELETE, GET expecting 404, D3a). The
+delete runs immediately before the merge, because the post-apply fidelity probe runs under `set -e`
+and fails on any live non-manual uptime monitor. Better Stack pages for the app in the minutes
+between the delete and the apply. The import text in the sections below is kept as the record of
+the first ruling; the amended steps are Phase 7 steps 0, 2 and 4 and AC1, AC3 and AC11.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-17
@@ -74,7 +86,7 @@ flip fails.
 Savings, stated honestly (CFO review):
 
 - Sentry uptime: $4.00/mo PAYG becomes $0. That is the whole direct saving of this PR.
-- The current billing period (2026-11-16 to 2026-12-16) already shows $4.00 of uptime
+- The current billing period (2026-11-17 to 2026-12-16) already shows $4.00 of uptime
   accrued. Whether removal refunds it is unverified, so the 2026-12-16 invoice is $50.06 to
   $54.06. From the following period the steady state is $50.06/mo ($29 base + 27 billable
   cron seats x $0.78).
@@ -512,16 +524,26 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
 
 ### Phase 7: Post-merge (agent-run, same session)
 
+0. **Immediately before the merge (amended 2026-11-17, D2/D3a), with the operator's explicit
+   go-ahead on the exact commands:** GET `organizations/jikigai-eu/detectors/1422253/` (expect
+   `uptime_domain_failure`, mode 3, url `https://app.soleur.ai`), DELETE the same path, GET again
+   (expect 404). If the apply then refuses to create `.app`, Better Stack keeps paging for the app
+   and the apply is fixed in a follow-up PR.
 1. Watch `apply-sentry-infra.yml` and `apply-web-platform-infra.yml` on the merge commit to
    completion (Monitor tool with an until-loop on `gh run view`, per
    `hr-monitor-not-run-in-background-for-polling`). The apply runs only through these workflows,
    never a local apply.
-2. Read back (agent, `jikigai-eu.sentry.io`): detector 1422253 has `mode: 1`, name
-   `soleur-app-reachability`, environment `production`; 1221114-1221117 are gone. Better Stack
+2. Read back (agent, `jikigai-eu.sentry.io`; amended 2026-11-17): the new
+   `sentry_uptime_monitor.app` detector has `mode: 1`, name `soleur-app-reachability`, url
+   `https://app.soleur.ai`, environment `production`, bound to no workflow (`workflowIds == []`,
+   so it detects and does not page), and at least one passing check (a non-2xx final response,
+   such as a Cloudflare challenge, would open false downtime issues); 1422253 and
+   1221114-1221117 are gone (404). Better Stack
    lists `soleur dot ai changelog deep path` and it is up.
 3. Run `doppler run -p soleur -c prd_terraform -- bash scripts/sentry-alert-live-fidelity.sh`:
    expect `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1` and a clean verdict.
-4. **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
+4. **Superseded 2026-11-17** (the delete of 1422253 is now Phase 7 step 0, before the merge).
+   Kept for the record: **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
    D3a): in a new PR, replace the `import` with a multi-line
    `removed { from = sentry_uptime_monitor.app` / `lifecycle { destroy = false } }` block, declare
    a new `sentry_uptime_monitor.app_reachability` on the same URL, and commit with `[ack-destroy]`
@@ -832,13 +854,13 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: the Phase 1 step 7 identity command, output pasted in the PR, shows for uptime
-      exactly `update sentry_uptime_monitor.app jikigai-eu/1422253` and `delete` of the 4
-      removed addresses, and no `delete` on any other address.
+- [ ] AC1 (amended 2026-11-17): `plan_pr` output, pasted in the PR, shows for uptime exactly
+      `create sentry_uptime_monitor.app` and `delete` of the 4 removed addresses, no import row,
+      and no `delete` on any other address.
 - [ ] AC2: a commit on the branch carries `[ack-destroy]` on its own line in its BODY;
       `sentry-destroy-required` is green.
 - [ ] AC3: after stripping comments, `uptime-monitors.tf` has 1 `resource "sentry_uptime_monitor"`
-      block and 1 `import` block targeting it; `uptime-alerts.tf` has 8
+      block and no `import` block (amended 2026-11-17); `uptime-alerts.tf` has 8
       `resource "betteruptime_monitor"` blocks; `grep -c 'betteruptime_monitor.soleur_changelog_deep' .github/workflows/apply-web-platform-infra.yml`
       prints `1`.
 - [ ] AC5: `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` and
@@ -864,8 +886,8 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 - [ ] AC4: `sentry-alert-live-fidelity.sh` (prd_terraform Doppler) prints
       `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`. The billing `.categories.uptime.usage`
       read is pasted as information; the ledger re-read after 2026-12-16 is on the tracking issue.
-- [ ] AC11: detector 1422253 reads back `mode: 1`, name `soleur-app-reachability` (or, on the
-      fallback, is 404 and the new monitor reads `mode: 1`).
+- [ ] AC11 (amended 2026-11-17): detector 1422253 reads back 404, and the new
+      `sentry_uptime_monitor.app` reads `mode: 1`, name `soleur-app-reachability`.
 - [ ] AC13: Better Stack lists `https://soleur.ai/changelog/` as up, and the next
       heartbeat-live-reconcile run reports no absent-live or unmanaged monitor.
 - [ ] AC14: the follow-up PR merged with `BETTERSTACK_MONITORS` holding the changelog monitor

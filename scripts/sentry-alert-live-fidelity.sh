@@ -166,11 +166,12 @@ findings=0
 _finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
 
 # ── SENTRY UPTIME: no unmanaged uptime monitor (Guard 1, #6606) ─────────────
-# Sentry auto-detects uptime monitors from the app's traffic (mode 3) and will
-# re-create one we deleted; a monitor created in the UI is just as invisible to
-# Terraform. Either way it bills a slot and no apply ever removes it. The
+# Sentry auto-detects uptime monitors from the app's traffic (mode 3; a
+# re-detected one may start in mode 2). Its code turns auto-detection off after
+# the first one and does not re-create a deleted monitor, but a setting flip or
+# a monitor created in the UI is just as invisible to Terraform. Either way it bills a slot and no apply ever removes it. The
 # PROPERTY: every live uptime detector in the org has `mode == 1` (manual, i.e.
-# created or imported by Terraform), and the live count is not greater than
+# created by Terraform), and the live count is not greater than
 # the number of declared `resource "sentry_uptime_monitor"` blocks in
 # apps/web-platform/infra/sentry/*.tf.
 #
@@ -249,7 +250,7 @@ else
   uptime_json=$(printf 'Authorization: Bearer %s\n' "$SENTRY_AUTH_TOKEN" |
     curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 15 \
       --header @- \
-      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/?query=type:uptime_domain_failure&per_page=100")
+      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/?query=type:uptime_domain_failure&project=-1&per_page=100")
   uptime_rc=$?
   set -e
   [[ "$uptime_rc" -eq 0 ]] || uptime_unavail="the detectors GET failed (curl rc=${uptime_rc})"
@@ -285,6 +286,9 @@ if [[ -z "$uptime_unavail" ]]; then
             end
         end;
       .[] | [ (.id | safe),
+              # Mode is read from `.config.mode`, with the data source as a
+              # second place; a row with neither yields `null`, which is != 1
+              # and so reads as drift (fail loud, never clean).
               ((.config.mode // .dataSources[0].queryObj.mode) | tojson),
               (.dataSources[0].queryObj.url | url_shape | safe) ] | join("\t")' <<<"$uptime_json")
     if [[ "$uptime_declared" -eq 0 ]]; then
@@ -303,12 +307,12 @@ else
     [[ -n "$up_id" ]] || continue
     if [[ "$up_mode" != "1" ]]; then
       uptime_bad_mode=$((uptime_bad_mode + 1))
-      _finding "UPTIME UNMANAGED: $(_safe "${up_id}:${up_mode}:${up_url}") — this uptime monitor is not in manual mode (1): Sentry auto-detected it, or it was created outside Terraform, or its import has not applied. Import the monitor or DELETE it; re-running the apply does not fix it."
+      _finding "UPTIME UNMANAGED: $(_safe "${up_id}:${up_mode}:${up_url}") — this uptime monitor is not in manual mode (1): Sentry auto-detected it, or it was created outside Terraform, or its import has not applied. DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it."
     fi
   done <<<"$uptime_lines"
   uptime_excess=$(( uptime_live - uptime_declared ))
   if (( uptime_excess > 0 )); then
-    _finding "UPTIME UNMANAGED: live=${uptime_live} > declared=${uptime_declared} — the org has more uptime monitors than resource \"sentry_uptime_monitor\" blocks in apps/web-platform/infra/sentry/*.tf, so at least ${uptime_excess} of them is managed by nothing. Import the monitor or DELETE it; re-running the apply does not fix it. Live mode-1 monitors (one of these is the extra unless a mode != 1 finding above names it):"
+    _finding "UPTIME UNMANAGED: live=${uptime_live} > declared=${uptime_declared} — the org has more uptime monitors than resource \"sentry_uptime_monitor\" blocks in apps/web-platform/infra/sentry/*.tf, so at least ${uptime_excess} of them is managed by nothing. DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it. Live mode-1 monitors (one of these is the extra unless a mode != 1 finding above names it):"
     while IFS=$'\t' read -r up_id up_mode up_url; do
       [[ -n "$up_id" && "$up_mode" == "1" ]] || continue
       _finding "         $(_safe "${up_id}:${up_mode}:${up_url}")"
@@ -871,5 +875,5 @@ if [[ "$findings" -eq 0 ]]; then
 fi
 
 echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: UPTIME UNMANAGED is a live Sentry uptime monitor Terraform does not manage (mode != 1, or more live than declared): import it or DELETE it, an apply does not fix it; DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN RULE LEFT SCOPE is a Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the capture, never delete the captured id; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: UPTIME UNMANAGED is a live Sentry uptime monitor Terraform does not manage (mode != 1, or more live than declared): DELETE it through the API, an apply does not fix it; DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN RULE LEFT SCOPE is a Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the capture, never delete the captured id; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
 exit 1

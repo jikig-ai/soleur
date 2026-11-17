@@ -305,7 +305,9 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > ($29 + 31 × $0.78), giving COGS 359.69 and all-in ≥1,299.54 (8 / 8 and 27 / 28). That re-route
 > replaces the 2026-11-16 correction's pending change (2): the 4 paused heartbeats no longer buy a
 > second $20.00 Better Stack pack. The #12827 Responder 2→1 break-even figures in the 2026-11-16
-> correction were derived on the 73.56 Sentry line and need a re-derivation when #12827 lands.
+> correction were derived on the 73.56 Sentry line. Re-derived on this basis: the cut gives COGS
+> 326.57, **7** users at both $49 and $48 (8 on the old basis), and all-in ≥1,266.42, **26** users at
+> $49 and **27** at $48.
 
 ## Monthly Burn
 

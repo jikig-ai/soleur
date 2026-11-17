@@ -579,8 +579,8 @@ t_g1_row8_rule_drift_uptime_unavailable() {
 }
 
 # The two fixture pins. A `$GITHUB_ENV` write of SENTRY_FIXTURE_UPTIME would turn
-# the uptime half into a self-comparison; the marker's (FIXTURE) suffix keeps it
-# off `clean`, and this pin keeps it from arising at all.
+# the uptime half into a self-comparison; the marker's `uptime_verdict=fixture-clean`
+# keeps it off `clean`, and this pin keeps it from arising at all.
 # _pin_ok <wf> <job> <step-selector: run-substring> — both fixture names pinned "".
 _pin_ok() {
   python3 - "$1" "$2" "$3" <<'PYEOF'
@@ -612,8 +612,8 @@ t_w15_apply_probe_pins_fixture_uptime() {
 t_w16_drift_body_names_uptime_unmanaged() {
   local run
   run=$(_step_field "$WF" id file_drift run 2>&1) || { _report "W16 drift body" fail "$run"; return; }
-  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'import the monitor or DELETE it; re-running the apply does not fix it' <<<"$run"; then
-    _report "W16 the drift issue body explains UPTIME UNMANAGED (import or DELETE; an apply does not fix it)" ok
+  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it' <<<"$run"; then
+    _report "W16 the drift issue body explains UPTIME UNMANAGED (DELETE through the API; an apply does not fix it)" ok
   else _report "W16 drift body names UPTIME UNMANAGED" fail "bullet absent from the file_drift run block"; fi
 }
 t_g1_mutants() {

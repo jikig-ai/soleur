@@ -394,7 +394,7 @@ jobs:
           # — do not repoint this argument at alert-reference.json (#8050).
           bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
             /tmp/sentry-pr-plan.json 2 \
-            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 
           # ── REFERENCE gate (#8050) — ONE call site, here. ─────────────────
           # The daily drift probe has no Terraform access and reads the
@@ -946,7 +946,7 @@ jobs:
           # reference — do not repoint this argument at alert-reference.json (#8050).
           bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
             /tmp/sentry-apply-plan.json 2 \
-            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 
           counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json) || {
             echo "::error::sentry destroy counters could not be computed for the apply plan; refusing to apply."

@@ -162,7 +162,7 @@ capture_baseline() { # <out>
 curl_auth() { # <bearer> <url...>
   local tok="$1"; shift
   printf 'header = "Authorization: Bearer %s"\n' "$tok" \
-    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
+    | curl --disable --noproxy '*' -sS --max-time "$CURL_MAX_TIME" --config - "$@"
 }
 
 # HOISTED at #7798. `probe_monitor_health` CALLS this, and the
