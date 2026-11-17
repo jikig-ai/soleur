@@ -159,7 +159,11 @@ load_required_contexts() {
 }
 
 # api_get <endpoint> [gh api args…] — one gh api read; body on stdout. Callers `|| die_unread`.
-api_get() { gh api "$@"; }
+# --method GET is pinned here, at the chokepoint: gh api's documented default flips to POST
+# when any -f/--field is present, and POST /search/issues 404s — the -f dedupe calls below
+# died as `unread` on the live aae21955e6 backfill (#12875). -f still serializes into the
+# query string under an explicit GET, so callers keep the same flag shape.
+api_get() { gh api --method GET "$@"; }
 
 # ---------------------------------------------------------------- self-check
 self_check() {
