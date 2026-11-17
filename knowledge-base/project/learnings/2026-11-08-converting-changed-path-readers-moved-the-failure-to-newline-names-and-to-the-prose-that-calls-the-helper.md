@@ -34,6 +34,32 @@ When a conversion REMOVES a representation (C-quoting), ask what protection that
 7. **The mutation battery's `git archive` copy was not a git repo, so the sentinel's `git ls-files` scanned nothing and the control went red** — Recovery: a one-call git shim — Prevention: any sandbox for a git-census guard is `git init && git add -A`.
 8. **The accept-row audit needed re-deriving after each of four suite edits** — Recovery: a small script — Prevention: recurring toil, not fixed here (a regenerate verb for `ci-pr-affected-audit.accept.tsv` would belong in its own PR).
 
+## Addendum — 2026-11-17 (PR #12809, Ref #12246)
+
+**Problem.** The exit-42 fix makes `changed-paths.sh --match` exit 42 on "none match". It was meant to stop an unset `${CLAUDE_PLUGIN_ROOT}` under `set -u` (rc 1) from reading as "no match". It took four fix rounds, and each round's own new code opened a new fail-open path in the counsel gate:
+
+- Round 2 read every open PR on the branch name, so a fork PR's body could supply a draft marker.
+- Round 2's legal `git diff` honoured `diff.relative`, `diff.external` and textconv from config.
+- Round 3's archive lookup matched a suffix-lookalike file.
+- Round 3 keyed a skip on `legal=unknown`, not on "no readable base". So any helper failure in a repo with no tracked legal docs skipped counsel.
+
+Each verification pass then found a sibling shape. You approved going past the 2+1 cap twice: A, then A2, with the last round verified only by the lead's mutant battery.
+
+**Key insight.** Code added to a fail-closed gate in a fix round is a new input surface. List every external input it reads (PR bodies, git config, attributes, file names) before writing it. A skip arm must be keyed on the measured cause ("base unreadable and nothing tracked"), never on the generic `unknown` the gate already treats as a fire.
+
+**Session errors (this PR).**
+9. **Each fix round added fail-opens in its own new code** — Recovery: rounds 3–4, owner-approved — Prevention: before writing a fix-round predicate, list its external inputs and add one hostile-input row per input (routed to `risk-tier-and-fix-rounds.md`).
+10. **I gave `review-scan-gate.sh` its paths on stdin; it printed `skip files=0` rc 0** — Recovery: re-ran with argv — Prevention: tracked on #12779 (refuse zero argv).
+11. **A shim row passed for the wrong reason (`REAL_GIT` not passed, so every git call failed)** — Recovery: `counsel_run` passes `REAL_GIT`, and the row asserts `legal_touch` — Prevention: every shim row asserts one field the real binary must produce.
+12. **A mutant went RED only because the shim refused its argv** — Recovery: the detached row passes `GH_EXPECT_BRANCH=` — Prevention: read why a mutant is RED, not only that it is.
+13. **`lint-rule-bodies.py` run without `--check --base`** (rc 2) — Recovery: re-ran with the flags — Prevention: one-off; read the runner's invocation.
+14. **The KB-ratchet baseline fix broke the file's 2-column format** — Recovery: restored 2 columns — Prevention: diff a baseline edit against its neighbouring rows.
+15. **A single-file grep row expected a `file:` prefix** — Recovery: fixed the expected value — Prevention: one-off.
+16. **`gh issue create` was refused twice (no milestone, then no filing exit)** — Recovery: added both — Prevention: already hook-enforced.
+17. **The pre-push lane `fixture-dir-operand-assert` went RED on this host only** — Recovery: ran it directly (green) and left it to CI — Prevention: one-off.
+18. **A seat could not delete its scratch repo (`rm -rf` hook on a dir holding `.git`)** — Recovery: owner removes it — Prevention: brief seats to clean up with `find <dir> -delete`.
+19. **The scratchpad was wiped between sessions, so the verify brief was lost** — Recovery: rewrote it — Prevention: one-off; re-derive from the PR.
+
 ## Tags
 
 category: workflow-issues
