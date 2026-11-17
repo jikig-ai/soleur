@@ -14,6 +14,10 @@ export type WorkspaceRepoCols = Partial<{
   repo_status: string;
   repo_last_synced_at: string | null;
   repo_error: string | null;
+  /** #12714 (migration 187): display-only held-files count, 0..10000, null = unknown. Service-client only. */
+  kb_sync_held_files: number | null;
+  /** #12714 (migration 187): when `kb_sync_held_files` was computed. */
+  kb_sync_held_checked_at: string | null;
 }>;
 
 interface ServiceClientLike {
