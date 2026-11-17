@@ -4,11 +4,17 @@
 import type { IsolatedPushDirHandle } from "./git-isolated-push-dir";
 import { reportSilentFallback } from "./observability";
 
-/** Static Sentry message: a Sentry group is one condition. The op and feature are unchanged since the cc push owned it. */
-const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not be removed";
+/** Static Sentry messages, one per owner: a Sentry group is one condition. */
+const DISPOSE_FAILED_MESSAGE = {
+  "cc-push": "cc-push: the isolated push directory could not be removed",
+  "session-sync": "KB sync: the isolated directory could not be removed",
+} as const;
+
+/** Which caller's directory leaked (simplicity H3: a KB-sync leak no longer reads as the cc push's). */
+export type DisposeFeature = keyof typeof DISPOSE_FAILED_MESSAGE;
 
 /** A failing `dispose()` never changes the caller's result: it is reported by errno code only (no path, no message). */
-export function disposeIsolated(isolated: IsolatedPushDirHandle | undefined): void {
+export function disposeIsolated(isolated: IsolatedPushDirHandle | undefined, feature: DisposeFeature = "cc-push"): void {
   if (!isolated) return;
   try {
     isolated.dispose();
@@ -16,9 +22,9 @@ export function disposeIsolated(isolated: IsolatedPushDirHandle | undefined): vo
     const code = (err as { code?: unknown } | undefined)?.code;
     const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";
     reportSilentFallback(null, {
-      feature: "cc-push",
+      feature,
       op: "isolated-dir-dispose-failed",
-      message: DISPOSE_FAILED_MESSAGE,
+      message: DISPOSE_FAILED_MESSAGE[feature],
       tags: { class: cls },
       extra: { class: cls },
     });
