@@ -21,8 +21,10 @@ const calls: Call[] = [];
 // Controlled git-status-porcelain output per test.
 let porcelainOutput = "";
 
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((cmd: string, rawArgs: string[], _opts?: unknown) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("./helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((cmd: string, rawArgs: string[], _opts?: unknown) => {
     const args = stripHostGitBlock(rawArgs);
     calls.push({ cmd, args });
     if (args[0] === "remote") {
@@ -36,8 +38,9 @@ vi.mock("child_process", () => ({
       return Buffer.from("1\n");
     }
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),

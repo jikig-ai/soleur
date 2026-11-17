@@ -6,18 +6,23 @@
 // A leaf (#12718 review, Phase 0 of the D34-D47 rulings): moved verbatim out of server/session-sync.ts so the self-heal
 // (server/workspace-sync.ts) reaches the guarded writer without importing session-sync (and through it the push). It
 // imports the push module for a TYPE only (`KbWorkspaceWriter`, erased at runtime).
+//
+// Review fix round 1 (WP1): every child is async (`execFile`, D38(1)), so a large checkout never blocks the shared event
+// loop; the pull writer's merge checks for a merge in progress first (D37(1)), runs the untracked/ignored collision check
+// against the verified target (D35), and reads its outcome fail-closed (D36(a)(b)); an interrupted merge's autostash is
+// pinned under `refs/soleur/autostash/` (D36(c)); `withWorkspaceGitLock` serializes one workspace's writers (D38(6)).
 // ---------------------------------------------------------------------------
 
-import { execFileSync, type ExecFileSyncOptions } from "child_process";
-import { lstatSync } from "fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "fs";
 import { join } from "path";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
 import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import type { KbWorkspaceWriter } from "./kb-sync-publish";
-import { AUTO_MERGE_MSG_PULL, type KbMergeOutcome, type KbPullWriter } from "./kb-sync-pull";
+import { AUTO_MERGE_MSG_PULL, AUTO_MERGE_MSG_SELF_HEAL, type KbMergeOutcome, type KbPullWriter } from "./kb-sync-pull";
 import { createChildLogger } from "./logger";
+import { hasUntrackedCollision } from "./workspace-collision";
 
 // The moved lines keep the log context they had in session-sync.ts (no behaviour change in the move).
 const log = createChildLogger("session-sync");
@@ -38,6 +43,10 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   "unpack-objects",
   // #12718 (rulings X1, D26(2)): the session-start merge of the verified remote tip, ONE exact argv (`assertMergeArgv`).
   "merge",
+  // Review WP1 (D35, D36(a)): the writer's read-only checks, each ONE exact argv (`assertReadArgv`).
+  "diff",
+  "ls-files",
+  "rev-parse",
 ]);
 
 /**
@@ -61,24 +70,66 @@ export const MERGE_CONFIG_PINS: readonly string[] = [
   "core.hooksPath=/dev/null",
 ].flatMap((pin) => ["-c", pin]);
 
-/** The pinned merge argv for `target` (a 40-hex id the caller verified, D26(5)). */
-export function mergeArgv(target: string): string[] {
-  return [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_PULL, target];
+/**
+ * The pinned merge argv for `target` (a 40-hex id the caller verified, D26(5)). Two shapes (D37(2)): the session-start pull
+ * (`--autostash`, `AUTO_MERGE_MSG_PULL`) and the self-heal (`autostash: false`: no `--autostash`, `AUTO_MERGE_MSG_SELF_HEAL`),
+ * so a path dirtied after the self-heal's clean gate makes git refuse the merge; git never stashes and never resets.
+ * `--no-overwrite-ignore` stays in both: it still guards a fast-forward (a non-ff merge ignores it; D35's check guards that).
+ */
+export function mergeArgv(target: string, opts: { readonly autostash?: boolean } = {}): string[] {
+  return opts.autostash === false
+    ? [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_SELF_HEAL, target]
+    : [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_PULL, target];
 }
 
 /**
- * Shape only (D26(5)): a `-c`-led argv must be exactly the pins then the merge, and the merge exactly
- * `merge --no-edit --autostash --no-overwrite-ignore -m <AUTO_MERGE_MSG_PULL> <40hex>`. No `--ff-only`, no `--abort`, no
- * second target. That the target is the in-memory `T` is checked in server/kb-sync-pull.ts, not here.
+ * Shape only (D26(5), D37(2)): a `-c`-led argv must be exactly the pins then one of the two merges of `mergeArgv`, never a
+ * mix (`--autostash` with the self-heal message, or the pull message without it). No `--ff-only`, no `--abort`, no second
+ * target. That the target is the in-memory `T` (or the verified side tip) is checked in server/kb-sync-pull.ts, not here.
  */
 function assertMergeArgv(argv: readonly string[]): void {
-  const refuse = (): never => {
-    throw new Error("connected-repo git: 'merge' argv is not the pinned session-start merge");
-  };
   const target = argv[argv.length - 1];
-  if (argv.length !== MERGE_CONFIG_PINS.length + 7 || !guardedSha(target)) refuse();
-  const expected = mergeArgv(target);
-  if (!expected.every((a, i) => argv[i] === a)) refuse();
+  const same = (expected: readonly string[]): boolean => expected.length === argv.length && expected.every((a, i) => argv[i] === a);
+  if (!guardedSha(target) || !(same(mergeArgv(target)) || same(mergeArgv(target, { autostash: false })))) {
+    throw new Error("connected-repo git: 'merge' argv is not the pinned session-start merge or the pinned self-heal merge");
+  }
+}
+
+/** The collision listing against a verified target (D35): `HEAD` vs a 40-hex id, added and deleted paths, raw bytes. */
+export const COLLISION_DIFF_ARGV = ["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-filter=AD", "HEAD"] as const;
+const LITERAL_PREFIX = ":(literal)";
+const STASH_REF_ARGV = ["rev-parse", "-q", "--verify", "refs/stash"] as const;
+
+/**
+ * The exact argv shapes of the writer's read-only verbs (D35, D36(a)); any other argv for these verbs throws:
+ *   - `diff --name-status -z --no-renames --no-ext-diff --no-textconv --diff-filter=AD HEAD <40hex> --` (the collision listing);
+ *   - `ls-files -z --others --directory -- :(literal)<p>/` (shape 3: entries HEAD does not track under one directory);
+ *   - `rev-parse -q --verify refs/stash` (the stash tip before and after the merge, full refname).
+ */
+function assertReadArgv(argv: readonly string[]): void {
+  const refuse = (): never => {
+    throw new Error(`connected-repo git: '${argv[0]}' argv is not one of the pinned read shapes`);
+  };
+  if (argv[0] === "diff") {
+    const n = COLLISION_DIFF_ARGV.length;
+    if (argv.length !== n + 2 || !COLLISION_DIFF_ARGV.every((a, i) => argv[i] === a) || !guardedSha(argv[n]) || argv[n + 1] !== "--") refuse();
+    return;
+  }
+  if (argv[0] === "ls-files") {
+    const p = argv[5] ?? "";
+    const ok =
+      argv.length === 6 &&
+      ["ls-files", "-z", "--others", "--directory", "--"].every((a, i) => argv[i] === a) &&
+      p.startsWith(LITERAL_PREFIX) &&
+      p.endsWith("/") &&
+      p.length > LITERAL_PREFIX.length + 1 &&
+      !p.includes("\0");
+    if (!ok) refuse();
+    return;
+  }
+  if (argv[0] === "rev-parse") {
+    if (argv.length !== STASH_REF_ARGV.length || !STASH_REF_ARGV.every((a, i) => argv[i] === a)) refuse();
+  }
 }
 
 /** An object id the guarded `update-ref` shapes accept: 40 lowercase hex, never all-zero (git reads it as "delete" / "must not exist"). */
@@ -100,6 +151,8 @@ function guardedBranch(name: string): boolean {
  * The exact argv shapes of the two guarded write verbs (#12600):
  *   - `["update-ref", "--no-deref", "refs/heads/<b>", <40hex new>, <40hex old>]` (CAS mandatory, R1/R19), and
  *   - `["update-ref", "--no-deref", "refs/remotes/origin/<b>", <40hex>]` (the advisory tracking ref, R8/R17);
+ *   - `["update-ref", "--no-deref", "refs/soleur/autostash/<40hex>", <the same 40hex>]` (the autostash pin, D36(c):
+ *     idempotent, the ref is named by its own value);
  *   - `["unpack-objects", "-q"]` (the pack arrives on stdin).
  * Any other argv for these verbs throws.
  */
@@ -123,6 +176,10 @@ function assertGuardedWriteArgv(argv: readonly string[]): void {
   if (ref.startsWith("refs/remotes/origin/")) {
     if (argv.length !== 4 || !guardedBranch(ref.slice("refs/remotes/origin/".length))) refuse();
     if (!guardedSha(argv[3])) refuse();
+    return;
+  }
+  if (ref.startsWith(AUTOSTASH_PIN_PREFIX)) {
+    if (argv.length !== 4 || !guardedSha(argv[3]) || ref !== `${AUTOSTASH_PIN_PREFIX}${argv[3]}`) refuse();
     return;
   }
   refuse();
@@ -166,38 +223,90 @@ export function assertConnectedRepoArgv(argv: readonly string[]): void {
     }
   }
   assertGuardedWriteArgv(argv);
+  assertReadArgv(argv);
 }
 
 /**
- * Connected-repo git wrapper. Runs `execFileSync("git", ...)` through the shared host-git invocation
- * (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) with
- * an argv-shape guard that rejects:
- *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`,
- *     `branch`, `tag`, `cherry-pick`, ...) — categorically destructive or
- *     branch-switching surfaces the auto-commit sweep has no business in.
- *   - forbidden flags (`--force`, `--hard`, `--amend`, `--no-verify`) on
- *     any allowed subcommand.
- *
- * Throws a descriptive Error on rejection so the caller's try/catch logs
- * a meaningful warning rather than silently swallowing the violation.
- */
-/**
  * Upper bound of one connected-repo git child (D13; lowered to 30 s by D21): a stalled `.lock` or a wedged filesystem costs at
- * most this long. The child is synchronous, so the bound is also how long it can block the event loop; running the workspace
- * writers async with a process-group kill (a filter grandchild) is the follow-up.
+ * most this long. The child is async (D38(1)) and killed with SIGKILL at the bound, so a planted filter that traps SIGTERM
+ * cannot outlive it; it never blocks the event loop.
  */
 export const CONNECTED_REPO_GIT_TIMEOUT_MS = 30_000;
 
-export function runConnectedRepoGit(
-  argv: string[],
-  // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
-  opts: Omit<ExecFileSyncOptions, "env"> & { cwd: string },
-): Buffer {
+/** Options of one connected-repo git child. No `env`: the environment is the helper's (scrubbed, hardened), never a caller's. */
+export interface ConnectedRepoGitOptions {
+  readonly cwd: string;
+  /** Bytes written to the child's stdin (then closed). */
+  readonly input?: Buffer;
+  readonly timeoutMs?: number;
+  readonly maxBuffer?: number;
+}
+
+/** A failed child: git's exit status (null when killed), its signal, and stderr; the message is static (no argv). */
+export class ConnectedRepoGitError extends Error {
+  constructor(
+    readonly status: number | null,
+    readonly signal: string | null,
+    readonly stdout: Buffer,
+    readonly stderr: Buffer,
+  ) {
+    super(`connected-repo git failed (${status === null ? `signal ${signal ?? "unknown"}` : `exit ${status}`})`);
+    this.name = "ConnectedRepoGitError";
+  }
+}
+
+/**
+ * Connected-repo git wrapper (D38(1): the ONE runner; the synchronous one is gone). Runs one `execFile("git", ...)` through
+ * the shared host-git invocation (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) behind the argv-shape
+ * guard, which rejects (before any child runs):
+ *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`, `branch`, `tag`, `cherry-pick`, ...) —
+ *     categorically destructive or branch-switching surfaces the auto-commit sweep has no business in;
+ *   - forbidden flags (`--force`, `--hard`, `--amend`, `--no-verify`) on any allowed subcommand;
+ *   - any argv of a guarded verb that is not one of its exact shapes.
+ * Resolves with stdout; rejects with a `ConnectedRepoGitError` (exit status, signal, stdout, stderr), a `HostGitRefusedError`
+ * (a refused `.git` shape), or the guard's descriptive Error, so the caller's try/catch logs a meaningful warning.
+ * `child_process` is imported lazily (sibling suites mock it with factories that lack `execFile`).
+ */
+export async function runConnectedRepoGitAsync(argv: string[], opts: ConnectedRepoGitOptions): Promise<Buffer> {
   assertConnectedRepoArgv(argv);
   // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
   // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
   const h = hostGitInvocation(argv, { cwd: opts.cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
-  return execFileSync("git", h.args, { timeout: CONNECTED_REPO_GIT_TIMEOUT_MS, ...opts, env: h.env }) as Buffer;
+  const { execFile } = await import("child_process");
+  return new Promise<Buffer>((resolve, reject) => {
+    const asBuffer = (v: unknown): Buffer => (Buffer.isBuffer(v) ? v : Buffer.from(String(v ?? "")));
+    const child = execFile(
+      "git",
+      h.args,
+      {
+        cwd: opts.cwd,
+        env: h.env,
+        timeout: opts.timeoutMs ?? CONNECTED_REPO_GIT_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+        encoding: "buffer",
+        ...(opts.maxBuffer === undefined ? {} : { maxBuffer: opts.maxBuffer }),
+      },
+      (err, stdout, stderr) => {
+        if (!err) return resolve(asBuffer(stdout));
+        const e = err as { code?: unknown; signal?: unknown };
+        reject(
+          new ConnectedRepoGitError(
+            typeof e.code === "number" ? e.code : null,
+            typeof e.signal === "string" ? e.signal : null,
+            asBuffer(stdout),
+            asBuffer(stderr),
+          ),
+        );
+      },
+    );
+    const stdin = (child as { stdin?: NodeJS.WritableStream | null } | undefined)?.stdin;
+    if (stdin) {
+      // A child that exits before reading its input (a refused argv) must not crash the process with EPIPE.
+      stdin.on("error", () => {});
+      if (opts.input !== undefined) stdin.end(opts.input);
+      else stdin.end();
+    }
+  });
 }
 
 /** One `git status --porcelain=v1 -z` entry: the two XY status columns and the (destination) path. */
@@ -228,9 +337,9 @@ export function parsePorcelainZ(output: string): PorcelainEntry[] {
 }
 
 /** The working tree's status, ONE run in the mode the auto-commit needs (untracked files included); null when it could not run. */
-export function readStatus(workspacePath: string, gate: string): PorcelainEntry[] | null {
+export async function readStatus(workspacePath: string, gate: string): Promise<PorcelainEntry[] | null> {
   try {
-    return parsePorcelainZ(runConnectedRepoGit(["status", "--porcelain=v1", "-z"], { cwd: workspacePath, stdio: "pipe" }).toString());
+    return parsePorcelainZ((await runConnectedRepoGitAsync(["status", "--porcelain=v1", "-z"], { cwd: workspacePath })).toString());
   } catch (err) {
     mirrorGitRefusal(err, gate);
     return null;
@@ -254,55 +363,90 @@ export function mirrorGitRefusal(err: unknown, gate: string): boolean {
   return true;
 }
 
-/** The KB sync's workspace writes (#12600): only the guarded verbs of `runConnectedRepoGit`. */
+/** The KB sync's workspace writes (#12600): only the guarded verbs of `runConnectedRepoGitAsync`, each awaited (D38(1)). */
 export function kbWorkspaceWriter(workspacePath: string): KbWorkspaceWriter {
-  const opts = { cwd: workspacePath, stdio: "pipe" as const };
   return {
-    unpack: (pack) => {
-      runConnectedRepoGit(["unpack-objects", "-q"], { ...opts, input: pack });
+    unpack: async (pack) => {
+      await runConnectedRepoGitAsync(["unpack-objects", "-q"], { cwd: workspacePath, input: pack });
     },
-    casBranch: (branch, next, prev) => {
-      runConnectedRepoGit(["update-ref", "--no-deref", `refs/heads/${branch}`, next, prev], opts);
+    casBranch: async (branch, next, prev) => {
+      await runConnectedRepoGitAsync(["update-ref", "--no-deref", `refs/heads/${branch}`, next, prev], { cwd: workspacePath });
     },
-    setTracking: (branch, sha) => {
-      runConnectedRepoGit(["update-ref", "--no-deref", `refs/remotes/origin/${branch}`, sha], opts);
+    setTracking: async (branch, sha) => {
+      await runConnectedRepoGitAsync(["update-ref", "--no-deref", `refs/remotes/origin/${branch}`, sha], { cwd: workspacePath });
     },
   };
 }
 
-/** Upper bound of the session-start merge child (a large checkout is slower than the other guarded writes). */
-const MERGE_TIMEOUT_MS = 60_000;
+/**
+ * Upper bound of the merge child (a large checkout is slower than the other guarded writes). A started merge keeps this
+ * bound whatever the caller's budget (D38(3)): killing it mid-checkout is the stranded D36(c) state by design.
+ */
+export const MERGE_TIMEOUT_MS = 60_000;
+
+/** `refs/stash` now: its id, `null` when there is none, `undefined` when it could not be read (fail closed). */
+async function readStashTip(workspacePath: string): Promise<string | null | undefined> {
+  try {
+    const out = (await runConnectedRepoGitAsync([...STASH_REF_ARGV], { cwd: workspacePath })).toString("utf8").trim();
+    return HEX40.test(out) ? out : undefined;
+  } catch (err) {
+    return (err as { status?: unknown } | null)?.status === 1 ? null : undefined;
+  }
+}
 
 /**
- * The pull's workspace writes (#12718, D25(2)): the push writer's three guarded verbs plus the pinned merge. The merge's
- * outcome is read from its exit status, `MERGE_HEAD` and one status run: exit 0 with an unmerged entry is an autostash pop
- * that conflicted (`autostash_conflict`, D26(4)); exit 1 with `MERGE_HEAD` is a content conflict; anything else (an
- * unrelated history, an ignored file in the way, a refused argv) is `refused`. Exported for the self-heal
- * (server/workspace-sync.ts imports it lazily).
+ * The pull's workspace writes (#12718, D25(2)): the push writer's three guarded verbs plus the pinned merge. Exported for the
+ * self-heal (server/workspace-sync.ts imports it lazily), which passes `{ autostash: false }` (D37(2)). `merge(target)`:
+ *   1. D37(1): a merge in progress (`MERGE_HEAD` / `MERGE_AUTOSTASH` by lstat, fail closed, or an unmerged entry in ONE fresh
+ *      status run) is `in_progress` before any write, and the interrupted autostash is pinned (D36(c));
+ *   2. D35: the untracked/ignored collision check (`hasUntrackedCollision`, shapes 1-3) against the in-memory, verified
+ *      target is `collision`; a non-ff merge ignores `--no-overwrite-ignore` (measured), so this check, not the flag, guards;
+ *   3. the merge child; exit 1 with `MERGE_HEAD` is a content `conflict`; anything else that fails (an unrelated history, a
+ *      refusal, a timeout, a signal) is `refused`, after pinning a stranded `MERGE_AUTOSTASH` (D36(c));
+ *   4. D36(a)(b): after exit 0, a status run that cannot be read is `unverified`; an unmerged entry, or a `refs/stash` that
+ *      moved (git parked an autostash it could not re-apply), is `autostash_conflict` (D26(4)); else `clean`.
+ * A status or stash read that cannot run before the merge refuses it (`refused`): nothing was written.
  */
-export function kbPullWriter(workspacePath: string, _opts?: { readonly autostash?: boolean }): KbPullWriter {
-  // Phase 0 (frozen signature): `opts.autostash` is accepted and not yet read; the merge argv is the one pinned shape
-  // (`--autostash` included) for every caller until WP2 adds the self-heal's second shape (D37(2)).
+export function kbPullWriter(workspacePath: string, opts: { readonly autostash?: boolean } = {}): KbPullWriter {
+  const autostash = opts.autostash !== false;
   const base = kbWorkspaceWriter(workspacePath);
-  // The verbs are async (frozen contract); each still runs its one synchronous child at call time, as before.
+  const run = (argv: string[]): Promise<Buffer> => runConnectedRepoGitAsync(argv, { cwd: workspacePath });
   return {
-    unpack: async (pack) => base.unpack(pack),
-    setTracking: async (branch, sha) => base.setTracking(branch, sha),
-    casBranch: async (branch, next, prev) => base.casBranch(branch, next, prev),
+    unpack: base.unpack,
+    setTracking: base.setTracking,
+    casBranch: base.casBranch,
     merge: async (target): Promise<KbMergeOutcome> => {
+      const before = await readStatus(workspacePath, "kbPullWriter-merge");
+      if (before === null) return "refused";
+      if (mergeInProgress(workspacePath, before)) {
+        await pinInterruptedAutostash(workspacePath);
+        return "in_progress";
+      }
       try {
-        runConnectedRepoGit(mergeArgv(target), {
+        if (await hasUntrackedCollision(run, workspacePath, target)) return "collision";
+      } catch {
+        return "refused"; // a listing or lstat that could not run: fail closed, nothing written
+      }
+      const stashBefore = await readStashTip(workspacePath);
+      if (stashBefore === undefined) return "refused";
+      try {
+        await runConnectedRepoGitAsync(mergeArgv(target, { autostash }), {
           cwd: workspacePath,
-          stdio: "pipe",
-          timeout: MERGE_TIMEOUT_MS,
+          timeoutMs: MERGE_TIMEOUT_MS,
           maxBuffer: 16 * 1024 * 1024,
         });
       } catch (err) {
         const code = (err as { status?: unknown } | null)?.status;
-        return code === 1 && mergeHeadPresent(workspacePath) ? "conflict" : "refused";
+        if (code === 1 && mergeHeadPresent(workspacePath)) return "conflict";
+        await pinInterruptedAutostash(workspacePath);
+        return "refused";
       }
-      const after = readStatus(workspacePath, "syncPull-merge");
-      return (after ?? []).some((e) => UNMERGED_XY.has(e.xy)) ? "autostash_conflict" : "clean";
+      const after = await readStatus(workspacePath, "kbPullWriter-merge");
+      if (after === null) return "unverified";
+      const stashAfter = await readStashTip(workspacePath);
+      if (stashAfter === undefined) return "unverified";
+      if (stashAfter !== stashBefore || after.some((e) => UNMERGED_XY.has(e.xy))) return "autostash_conflict";
+      return "clean";
     },
   };
 }
@@ -316,9 +460,82 @@ export type MergeStateFile = (typeof MERGE_STATE_FILES)[number];
 
 /**
  * The ref namespace that pins an interrupted merge's autostash commit (D36(c)): host-local, outside the git-data
- * namespaces, and kept by `gc`. Phase 0 exports the prefix only; the pin itself lands with WP1.
+ * namespaces (`refs/soleur/worktrees/<id>/`, `soleur-store-tip-*`), and kept by `gc`.
  */
 export const AUTOSTASH_PIN_PREFIX = "refs/soleur/autostash/";
+
+/** The largest `MERGE_AUTOSTASH` the pin reads: a 40-hex id and a newline, with room to spare. */
+const AUTOSTASH_FILE_MAX_BYTES = 64;
+
+type AutostashRead = { readonly sha: string } | { readonly cause: "unreadable" | "not_regular" | "too_large" | "malformed" } | null;
+
+/** `.git/MERGE_AUTOSTASH`: lstat-checked regular file of at most 64 B, opened O_NOFOLLOW, first line HEX40; null when absent. */
+function readMergeAutostash(workspacePath: string): AutostashRead {
+  const path = join(workspacePath, ".git", "MERGE_AUTOSTASH");
+  let fd: number | undefined;
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile()) return { cause: "not_regular" };
+    if (st.size > AUTOSTASH_FILE_MAX_BYTES) return { cause: "too_large" };
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) return { cause: "not_regular" };
+    if (opened.size > AUTOSTASH_FILE_MAX_BYTES) return { cause: "too_large" };
+    const buf = Buffer.alloc(AUTOSTASH_FILE_MAX_BYTES + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    if (n > AUTOSTASH_FILE_MAX_BYTES) return { cause: "too_large" };
+    const first = buf.toString("latin1", 0, n).split("\n")[0] ?? "";
+    return guardedSha(first) ? { sha: first } : { cause: "malformed" };
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    return { cause: code === "ELOOP" ? "not_regular" : "unreadable" };
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* nothing to do */
+      }
+    }
+  }
+}
+
+/**
+ * D36(c): when `.git/MERGE_AUTOSTASH` exists without `MERGE_HEAD` (a merge child killed or refused after it stashed), pin the
+ * autostash commit as `refs/soleur/autostash/<sha>` so `gc` cannot prune the only copy of the user's uncommitted edits.
+ * Idempotent (the ref is named by its own value). `MERGE_AUTOSTASH` itself is never moved or deleted (recovery is #12719).
+ * Anything but a small regular file whose first line is 40 hex, or a failed `update-ref`, is no pin and one warning
+ * (debounced per workspace and cause). Never throws. Run by the writer and at every `mergeInProgress` refusal.
+ */
+export async function pinInterruptedAutostash(workspacePath: string): Promise<void> {
+  if (gitFilePresent(workspacePath, "MERGE_HEAD")) return;
+  const read = readMergeAutostash(workspacePath);
+  if (read === null) return;
+  let cause: string;
+  if ("sha" in read) {
+    try {
+      await runConnectedRepoGitAsync(["update-ref", "--no-deref", `${AUTOSTASH_PIN_PREFIX}${read.sha}`, read.sha], { cwd: workspacePath });
+      return;
+    } catch {
+      cause = "pin_failed";
+    }
+  } else {
+    cause = read.cause;
+  }
+  log.warn({ op: "kb-sync.autostash-pin", cause }, "KB sync: an interrupted merge's autostash could not be pinned");
+  mirrorWarnWithDebounce(
+    null,
+    {
+      feature: "session-sync",
+      op: "kb-sync.autostash-pin",
+      message: "KB sync: an interrupted merge's autostash could not be pinned",
+      tags: { cause },
+    },
+    workspacePath,
+    `kb-sync-autostash-pin:${cause}`,
+  );
+}
 
 /** `.git/<name>` is present (lstat: a symlink counts and is never followed), or could not be checked (fail closed). */
 function gitFilePresent(workspacePath: string, name: MergeStateFile): boolean {
@@ -346,11 +563,34 @@ export function mergeInProgress(workspacePath: string, entries: readonly Porcela
   return (entries ?? []).some((e) => UNMERGED_XY.has(e.xy));
 }
 
+/** The tail of each workspace's lock queue, keyed on its real path (in-process; the cross-host lease is separate). */
+const workspaceGitLocks = new Map<string, Promise<void>>();
+
 /**
  * Same-host serialization of the workspace git writers (D38(6)): syncPull, the syncPush publish and the self-heal's
- * `mergeHeldCommits` run `fn` under one in-process lock keyed on the workspace's real path. Phase 0 (frozen signature):
- * no lock yet, `fn` runs directly; WP1 adds the keyed lock.
+ * `mergeHeldCommits` run `fn` under one in-process lock keyed on the workspace's real path (the path itself when it cannot
+ * be resolved), so a sibling never reads another's in-flight `MERGE_AUTOSTASH` as an unfinished merge (arch F12). FIFO; a
+ * throwing `fn` releases the lock. The wait counts against the caller's own budget (the caller measures from its entry).
  */
-export async function withWorkspaceGitLock<T>(_workspacePath: string, fn: () => Promise<T>): Promise<T> {
-  return fn();
+export async function withWorkspaceGitLock<T>(workspacePath: string, fn: () => Promise<T>): Promise<T> {
+  let key = workspacePath;
+  try {
+    key = realpathSync(workspacePath);
+  } catch {
+    /* an unresolvable path keys on itself */
+  }
+  const prev = workspaceGitLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = prev.then(() => mine);
+  workspaceGitLocks.set(key, tail);
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+    if (workspaceGitLocks.get(key) === tail) workspaceGitLocks.delete(key);
+  }
 }

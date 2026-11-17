@@ -28,8 +28,10 @@ const { reportSilentFallbackSpy, gitWithInstallationAuthSpy, captureMessageSpy, 
 // `hasLocalCommits()` says yes. Other invocations return empty.
 let throwOnPullPush: "pull" | "push" | null = null;
 
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((cmd: string, rawArgs: string[]) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("../helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((cmd: string, rawArgs: string[]) => {
     const args = stripHostGitBlock(rawArgs);
     if (args[0] === "remote") {
       return Buffer.from("origin\tgit@github.com:t/t.git (fetch)\n");
@@ -37,8 +39,9 @@ vi.mock("child_process", () => ({
     if (args[0] === "rev-list") return Buffer.from("1\n");
     if (args[0] === "status") return Buffer.from("");
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
@@ -127,6 +130,7 @@ beforeEach(() => {
   headThrows.value = false;
   captureMessageSpy.mockReset();
   childLog.info.mockReset();
+  childLog.warn.mockReset();
   __resetMirrorDebounceForTests();
 });
 
@@ -194,6 +198,11 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
         message: expect.stringMatching(/sync push failed/i),
       }),
     );
+    // pattern P3-16, gdpr: the pino line carries the class name and the closed reason, never the raw error (its message
+    // is git's argv: the URL, the refspec, tenant paths)
+    const pushLine = childLog.warn.mock.calls.find(([, msg]) => /Sync push failed/.test(String(msg)));
+    expect(pushLine?.[0]).toEqual({ userId: "user-1", errName: "KbSyncError", reason: "isolated_refused" });
+    for (const [o] of childLog.warn.mock.calls) expect(Object.keys((o as object) ?? {})).not.toContain("err");
   });
 });
 
@@ -209,11 +218,12 @@ describe("kb-sync.pull-held observability (#12718, D25(6))", () => {
       checkedAt: null,
     });
     expect(pullLines()).toHaveLength(1);
-    expect(pullLines()[0][0]).toEqual({ op: "kb-sync.pull-held", reason: "isolated_refused", workspaceId: "ws-1" });
+    // obs F4: the refusal's closed reason rides on the line and the warning as `isolated_reason`
+    expect(pullLines()[0][0]).toEqual({ op: "kb-sync.pull-held", reason: "isolated_refused", isolated_reason: "setup_failed", workspaceId: "ws-1" });
     expect(captureMessageSpy).toHaveBeenCalledTimes(1);
     const [, payload] = captureMessageSpy.mock.calls[0] as [string, { level: string; tags: Record<string, string> }];
     expect(payload.level).toBe("warning");
-    expect(payload.tags).toEqual({ feature: "session-sync", op: "kb-sync.pull-held", reason: "isolated_refused" });
+    expect(payload.tags).toEqual({ feature: "session-sync", op: "kb-sync.pull-held", reason: "isolated_refused", isolated_reason: "setup_failed" });
     expect(reportSilentFallbackSpy.mock.calls.filter(([, c]) => (c as { op?: string }).op === "syncPull")).toEqual([]);
     expect(gitWithInstallationAuthSpy).not.toHaveBeenCalled(); // refused before any token-bearing read
   });

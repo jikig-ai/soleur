@@ -24,14 +24,17 @@ const { reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, m
 
 // execFileSync (connected-repo wrapper): `remote -v` returns a remote so hasRemote() passes; `rev-list` returns 1 so
 // hasLocalCommits() says yes; `status -z` is clean (no auto-commit).
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_cmd: string, rawArgs: string[]) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("../helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((_cmd: string, rawArgs: string[]) => {
     const args = stripHostGitBlock(rawArgs);
     if (args[0] === "remote") return Buffer.from("origin\tgit@github.com:acme/widgets.git (fetch)\n");
     if (args[0] === "rev-list") return Buffer.from("1\n");
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
@@ -107,19 +110,24 @@ describe("syncPush — protected-branch fallback op contract (#5426, #12600)", (
   test("D13: the injected workspace writers run their git child with a timeout (a stalled .lock cannot wedge the turn)", async () => {
     publishSpy.mockResolvedValue({ kind: "noop" });
     await run();
-    const writer = publishSpy.mock.calls[0][0].writer as { unpack(b: Buffer): void; casBranch(b: string, n: string, p: string): void; setTracking(b: string, s: string): void };
-    const { execFileSync } = await import("child_process");
-    const spy = vi.mocked(execFileSync);
+    const writer = publishSpy.mock.calls[0][0].writer as {
+      unpack(b: Buffer): Promise<void>;
+      casBranch(b: string, n: string, p: string): Promise<void>;
+      setTracking(b: string, s: string): Promise<void>;
+    };
+    const { execFile } = await import("child_process");
+    const spy = vi.mocked(execFile);
     spy.mockClear();
-    writer.unpack(Buffer.from("PACK"));
-    writer.casBranch("main", "a".repeat(40), "b".repeat(40));
-    writer.setTracking("main", "c".repeat(40));
+    await writer.unpack(Buffer.from("PACK"));
+    await writer.casBranch("main", "a".repeat(40), "b".repeat(40));
+    await writer.setTracking("main", "c".repeat(40));
     expect(spy).toHaveBeenCalledTimes(3);
-    // D21: a 30 s bound (the sync child blocks the event loop; the async process-group kill is a follow-up)
+    // D21: a 30 s bound; D38(1): the child is async and SIGKILLed at the bound, so it never blocks the event loop
     expect(CONNECTED_REPO_GIT_TIMEOUT_MS).toBe(30_000);
     for (const call of spy.mock.calls) {
-      const opts = call[2] as { timeout?: number };
+      const opts = call[2] as { timeout?: number; killSignal?: string };
       expect(opts.timeout).toBe(CONNECTED_REPO_GIT_TIMEOUT_MS);
+      expect(opts.killSignal).toBe("SIGKILL");
     }
   });
 

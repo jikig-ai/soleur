@@ -26,12 +26,13 @@ import {
   kbOf,
   mktreeInput,
   readVerified,
+  sameKb,
   TREE_MODE,
   type TreeEntry,
   type VerifiedCommit,
 } from "./kb-sync-objects";
 import { KbRemoteError, readRemoteState, resolveRepoUrl, SIDE_REF, type RemoteState } from "./kb-sync-remote";
-import { createKbSyncPr, ensureKbSyncPr, readSidePrState } from "./kb-sync-side-pr";
+import { createKbSyncPr, ensureKbSyncPr, readSidePrState, type SidePrState } from "./kb-sync-side-pr";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
@@ -303,14 +304,14 @@ async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
 const KB_SYNC_MERGE_MSG = "Soleur: merge knowledge-base sync";
 
 /**
- * The workspace writes the sync makes, injected by `session-sync.ts` (its guarded `runConnectedRepoGit`, R12, R19, R20):
- * `unpack-objects -q` with the pack on stdin, the `--no-deref` CAS of `refs/heads/<b>` and the tracking ref. Each throws
- * on failure (the error carries git's stderr).
+ * The workspace writes the sync makes, injected by `session-sync.ts` (its guarded `runConnectedRepoGitAsync`, R12, R19,
+ * R20): `unpack-objects -q` with the pack on stdin, the `--no-deref` CAS of `refs/heads/<b>` and the tracking ref. Each
+ * rejects on failure (the error carries git's stderr); async so no workspace child blocks the event loop (D38(1)).
  */
 export interface KbWorkspaceWriter {
-  unpack(pack: Buffer): void;
-  casBranch(branch: string, next: string, prev: string): void;
-  setTracking(branch: string, sha: string): void;
+  unpack(pack: Buffer): Promise<void>;
+  casBranch(branch: string, next: string, prev: string): Promise<void>;
+  setTracking(branch: string, sha: string): Promise<void>;
 }
 
 // The hand-over (CTO ruling D10, server/kb-sync-objects.ts `handOver`): every parent of a server-built commit is already in
@@ -321,9 +322,9 @@ export interface KbWorkspaceWriter {
 // hand-over is `unpack_failed` (`KbObjectsError`, mapped by `asKbError`).
 
 /** The `--no-deref` CAS of the local branch: a moved branch (`but expected`) is `head_moved`, anything else `ref_update_failed`. */
-function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string, prev: string): void {
+async function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string, prev: string): Promise<void> {
   try {
-    writer.casBranch(branch, next, prev);
+    await writer.casBranch(branch, next, prev);
   } catch (err) {
     throw new KbHeld(/but expected/.test(stderrOf(err)) ? "head_moved" : "ref_update_failed");
   }
@@ -334,9 +335,9 @@ function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string,
  * repeats (a stale `.lock`, a broken ref store) mints a token every turn, so it mirrors to Sentry at warning level,
  * debounced per workspace (cq-silent-fallback-must-mirror-to-sentry; CTO ruling D4). No path, sha or branch name.
  */
-function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: string, ctx: KbSyncContext): void {
+async function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: string, ctx: KbSyncContext): Promise<void> {
   try {
-    writer.setTracking(branch, sha);
+    await writer.setTracking(branch, sha);
   } catch {
     log.warn({ op: "kb-sync.tracking-ref" }, "KB sync: tracking ref update failed");
     mirrorWarnWithDebounce(
@@ -414,10 +415,24 @@ interface SideFallbackInput extends KbPublishInput {
  *   - the GET fails (any cause): `side_pr_unknown`, a debounced warning, nothing created (fail toward no duplicate PR, D23).
  */
 async function recheckSidePr(installationId: number, owner: string, repo: string, D: string, P: string, ctx: KbSyncContext): Promise<KbPublishResult> {
-  const state = await readSidePrState(installationId, owner, repo, D, P);
-  if (state === "unknown") throw new KbHeld("side_pr_unknown");
-  if (state === "open" || state === "merged") throw new KbHeld("side_pending");
-  if (state === "declined") throw new KbHeld("side_declined");
+  const state: SidePrState = await readSidePrState(installationId, owner, repo, D, P);
+  // An exhaustive switch (pattern P3-7): a new state fails the compile, never falls through into the create.
+  switch (state) {
+    case "unknown":
+      throw new KbHeld("side_pr_unknown");
+    case "open":
+    case "merged":
+      throw new KbHeld("side_pending");
+    case "declined":
+      throw new KbHeld("side_declined");
+    case "none":
+      break;
+    default: {
+      const never: never = state;
+      void never;
+      throw new KbHeld("side_pr_unknown");
+    }
+  }
   try {
     await createKbSyncPr(installationId, owner, repo, D);
   } catch {
@@ -433,9 +448,9 @@ async function recheckSidePr(installationId: number, owner: string, repo: string
  * `localNext` is the crash-safe value). A failed rollback (`head_moved`: the agent committed meanwhile) never changes the
  * turn's result: one debounced warning, no outcome line.
  */
-function rollbackBestEffort(f: SideFallbackInput): void {
+async function rollbackBestEffort(f: SideFallbackInput): Promise<void> {
   try {
-    casLocalBranch(f.writer, f.remote.defaultBranch, f.headSha, f.localNext);
+    await casLocalBranch(f.writer, f.remote.defaultBranch, f.headSha, f.localNext);
   } catch (err) {
     const reason = err instanceof KbHeld ? err.reason : "ref_update_failed";
     log.warn({ op: "kb-sync.rollback", reason, workspaceId: f.workspaceId }, "KB sync: the local branch rollback failed");
@@ -452,9 +467,9 @@ function rollbackBestEffort(f: SideFallbackInput): void {
  * D22(a): the best-effort CAS of the local branch from the merge `M` to `S` after `S` landed on D. A failure (`head_moved`: the
  * agent committed meanwhile) leaves `M`, which loses nothing: one debounced warning, no outcome line, the turn stays `pushed`.
  */
-function relinkBestEffort(writer: KbWorkspaceWriter, branch: string, S: string, M: string, ctx: KbSyncContext): void {
+async function relinkBestEffort(writer: KbWorkspaceWriter, branch: string, S: string, M: string, ctx: KbSyncContext): Promise<void> {
   try {
-    casLocalBranch(writer, branch, S, M);
+    await casLocalBranch(writer, branch, S, M);
   } catch (err) {
     const reason = err instanceof KbHeld ? err.reason : "ref_update_failed";
     log.warn({ op: "kb-sync.relink", reason, workspaceId: ctx.workspaceId }, "KB sync: the local branch relink to the pushed commit failed");
@@ -497,9 +512,8 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
     if (!pV) return fail("side_hash_mismatch");
     // D28(2): a present P that changes anything outside knowledge-base/ is never built on.
     if (!(await isKbOnlySide(isolated, T, P))) throw new KbHeld("side_not_kb_only");
-    const pKb = kbOf(pV.root);
-    const tKb = kbOf(tV.root);
-    const prMerged = pKb !== undefined && tKb !== undefined && pKb.mode === tKb.mode && pKb.id === tKb.id;
+    // simplicity F11: the shared KB-entry comparison (both present and equal: the PR merged).
+    const prMerged = kbOf(pV.root) !== undefined && sameKb(pV.root, tV.root);
     // D28(6): a P not in HEAD's history (and not merged) also holds `side_ahead`; the next session-start pull adopts it.
     if (!prMerged && !(await isAncestor(isolated, P, headSha))) throw new KbHeld("side_ahead");
     parents = pV.commit.parents.includes(T) || (await isAncestor(isolated, T, P)) ? [P] : [P, T];
@@ -524,7 +538,7 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   // push to D, no new merge commit. A failure here is a held reason, never a fallback failure; the side commit is delivered,
   // so its PR is still ensured, best effort (D22(b)), before the held reason propagates.
   try {
-    casLocalBranch(f.writer, D, linkTo, f.localNext);
+    await casLocalBranch(f.writer, D, linkTo, f.localNext);
   } catch (err) {
     await ensureKbSyncPr(installationId, f.owner, f.repo, D).catch(() => undefined); // a miss is retried by the D17 re-check
     throw err;
@@ -544,15 +558,15 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
   try {
     step = await deliverAndLinkSide(f);
   } catch (err) {
-    rollbackBestEffort(f);
+    await rollbackBestEffort(f);
     throw err;
   }
   if (step.kind !== "linked") {
-    rollbackBestEffort(f);
+    await rollbackBestEffort(f);
     return step;
   }
   const D = f.remote.defaultBranch;
-  setTrackingBestEffort(f.writer, D, f.remote.tip, f);
+  await setTrackingBestEffort(f.writer, D, f.remote.tip, f);
   let prUrl: string;
   try {
     prUrl = await ensureKbSyncPr(f.installationId, f.owner, f.repo, D);
@@ -590,7 +604,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const T = remote.tip;
     if (T === headSha) {
       // Nothing to push; the tracking ref stops the next turn's token mint (R8).
-      setTrackingBestEffort(writer, D, T, input);
+      await setTrackingBestEffort(writer, D, T, input);
       return { kind: "noop" };
     }
     if (!(await isCommitPresent(isolated, T))) throw new KbHeld("remote_unknown_tip");
@@ -632,7 +646,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const kbOnly = sTree === hV.commit.tree && !sideLineage;
     const localNext = kbOnly ? S : await commitTree(isolated, hV.commit.tree, [headSha, S], KB_SYNC_MERGE_MSG);
     await handOver(isolated, writer, kbOnly ? [S, sTree] : [S, sTree, localNext]);
-    casLocalBranch(writer, D, localNext, headSha);
+    await casLocalBranch(writer, D, localNext, headSha);
 
     try {
       await pushVerifiedKbOnly({ installationId, url, guarded: guardedS, ref: `refs/heads/${D}`, defaultBranch: D });
@@ -642,11 +656,11 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
         ...input, isolated, url, owner, repo, remote, tV, headTree: hV.commit.tree, headKb, guardedS, localNext, pushErr: err,
       });
     }
-    setTrackingBestEffort(writer, D, S, input);
+    await setTrackingBestEffort(writer, D, S, input);
     // D22(a): the M arm taken only for side lineage (HEAD's tree is S's tree) is replaced by S once S is on D. Lossless (same
     // tree; S carries HEAD's KB, a superset of the side tip's), so a lifted protection leaves local = S = remote, never an
     // unpushed merge that holds every later KB UI write as `held_commits`.
-    if (localNext !== S && sTree === hV.commit.tree) relinkBestEffort(writer, D, S, localNext, input);
+    if (localNext !== S && sTree === hV.commit.tree) await relinkBestEffort(writer, D, S, localNext, input);
     reportPushHeld("synthetic_pushed", "pushed", input);
     return { kind: "pushed" };
   } catch (caught) {
@@ -664,6 +678,6 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
         // The hook owns its own reporting (#12714); the turn's result never changes.
       }
     }
-    disposeIsolated(isolated);
+    disposeIsolated(isolated, "session-sync");
   }
 }

@@ -28,8 +28,10 @@ import {
   kbWorkspaceWriter,
   mergeInProgress,
   mirrorGitRefusal,
+  pinInterruptedAutostash,
   readStatus,
-  runConnectedRepoGit,
+  runConnectedRepoGitAsync,
+  withWorkspaceGitLock,
   type PorcelainEntry,
 } from "./connected-repo-git";
 import { HostGitRefusedError } from "./host-git";
@@ -40,11 +42,15 @@ import {
   adoptSideTip,
   KB_PULL_HELD_MESSAGES,
   KB_PULL_HELD_OP,
+  MERGE_START_MIN_MS,
   mergeVerifiedDefault,
+  pullBudget,
+  SYNC_PULL_BUDGET_MS,
   type KbPullHeldReason,
   type KbPullLimits,
   type KbPullRef,
   type KbPullStep,
+  type PullBudget,
 } from "./kb-sync-pull";
 import { KbRemoteError, resolveRepoUrl } from "./kb-sync-remote";
 import { readWorkspaceHeadRef } from "./approval/workspace-head";
@@ -88,8 +94,8 @@ const allowlisted = (entries: readonly PorcelainEntry[] | null): string[] =>
   (entries ?? []).filter((e) => isAllowlistedPath(e.path)).map((e) => e.path);
 
 /** The changed paths under `knowledge-base/`, from one status run (the auto-commit's allowlist, #2905). */
-export function getAllowlistedChanges(workspacePath: string): string[] {
-  return allowlisted(readStatus(workspacePath, "getAllowlistedChanges"));
+export async function getAllowlistedChanges(workspacePath: string): Promise<string[]> {
+  return allowlisted(await readStatus(workspacePath, "getAllowlistedChanges"));
 }
 
 // PR-C §2.1 (#3244): all four `.from("users")` sites in this file migrate
@@ -148,12 +154,9 @@ async function authProbe(userId: string, op: string): Promise<boolean> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function hasRemote(workspacePath: string): boolean {
+async function hasRemote(workspacePath: string): Promise<boolean> {
   try {
-    const result = runConnectedRepoGit(["remote", "-v"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    const result = await runConnectedRepoGitAsync(["remote", "-v"], { cwd: workspacePath });
     return result.toString().trim().length > 0;
   } catch (err) {
     mirrorGitRefusal(err, "hasRemote");
@@ -161,13 +164,10 @@ function hasRemote(workspacePath: string): boolean {
   }
 }
 
-function hasLocalCommits(workspacePath: string): boolean {
+async function hasLocalCommits(workspacePath: string): Promise<boolean> {
   try {
     // Check if there are commits ahead of the remote tracking branch
-    const result = runConnectedRepoGit(
-      ["rev-list", "--count", "@{u}..HEAD"],
-      { cwd: workspacePath, stdio: "pipe" },
-    );
+    const result = await runConnectedRepoGitAsync(["rev-list", "--count", "@{u}..HEAD"], { cwd: workspacePath });
     return parseInt(result.toString().trim(), 10) > 0;
   } catch (outer) {
     if (mirrorGitRefusal(outer, "hasLocalCommits")) return false;
@@ -175,10 +175,7 @@ function hasLocalCommits(workspacePath: string): boolean {
     // This handles the case where auto-commit created local commits but no
     // upstream tracking branch is set (first push after clone).
     try {
-      const result = runConnectedRepoGit(
-        ["rev-list", "--count", "HEAD"],
-        { cwd: workspacePath, stdio: "pipe" },
-      );
+      const result = await runConnectedRepoGitAsync(["rev-list", "--count", "HEAD"], { cwd: workspacePath });
       return parseInt(result.toString().trim(), 10) > 0;
     } catch {
       return false;
@@ -186,11 +183,12 @@ function hasLocalCommits(workspacePath: string): boolean {
   }
 }
 
-async function getInstallationId(userId: string): Promise<number | null> {
+/** D45(a): the installation of the caller's ONE resolved workspace (never a user-level guess; the #5435 divergence). */
+async function getInstallationId(userId: string, workspaceId: string): Promise<number | null> {
   const { resolveInstallationId } = await import(
     "@/server/resolve-installation-id"
   );
-  return resolveInstallationId(userId);
+  return resolveInstallationId(userId, workspaceId);
 }
 
 /**
@@ -309,10 +307,11 @@ export type KbSyncRow = {
   ok: boolean;
   error_class?: KbSyncErrorClass;
   // #self-heal (kb-sync-affordance-reconcile) — set true on an ok:true row
-  // when the clone was recovered via a gated `reset --hard origin/<default>`
-  // (a diverged clone with zero un-pushed local commits) rather than a clean
-  // `pull --ff-only`. Absent on clean syncs and all legacy rows. Keeps the
-  // forensic trail distinguishing a reset-recovery from a normal pull.
+  // when the self-heal (server/workspace-sync.ts `selfHealNonFastForward`)
+  // recovered a diverged clone (a `reset --keep` to the verified default tip,
+  // after branching any local commits aside) rather than a clean fast-forward.
+  // Absent on clean syncs and all legacy rows. Keeps the forensic trail
+  // distinguishing a recovery from a normal sync.
   recovered?: boolean;
   push_received_at?: number; // Unix ms — only set on webhook_push rows
   sync_completed_at: number; // Unix ms
@@ -463,13 +462,26 @@ async function updateLastSynced(
  * warning mirror (per workspace and reason) for the warning reasons. Tags carry the closed reason and, for a fetch-stage
  * reason, which fetch; no URL, sha, path or branch name.
  */
-export function reportPullHeld(reason: KbPullHeldReason, ctx: { userId: string; workspaceId: string }, ref?: KbPullRef): void {
-  log.info({ op: KB_PULL_HELD_OP, reason, ...(ref ? { ref } : {}), workspaceId: ctx.workspaceId }, "KB sync pull outcome");
+export function reportPullHeld(
+  reason: KbPullHeldReason,
+  ctx: { userId: string; workspaceId: string },
+  ref?: KbPullRef,
+  detail: Pick<KbPullStep, "remoteCause" | "isolatedReason" | "errName" | "frame"> = {},
+): void {
+  // Closed sub-causes ride as tags (obs F4, F8); the catch-all's class name and first app frame as extra (obs F3).
+  const tags = {
+    reason,
+    ...(ref ? { ref } : {}),
+    ...(detail.remoteCause ? { remote_cause: detail.remoteCause } : {}),
+    ...(detail.isolatedReason ? { isolated_reason: detail.isolatedReason } : {}),
+  };
+  const diag = { ...(detail.errName ? { errName: detail.errName } : {}), ...(detail.frame ? { frame: detail.frame } : {}) };
+  log.info({ op: KB_PULL_HELD_OP, ...tags, ...diag, workspaceId: ctx.workspaceId }, "KB sync pull outcome");
   const message = KB_PULL_HELD_MESSAGES[reason];
   if (message === null) return;
   mirrorWarnWithDebounce(
     null,
-    { feature: "session-sync", op: KB_PULL_HELD_OP, message, tags: { reason, ...(ref ? { ref } : {}) }, extra: { userId: ctx.userId } },
+    { feature: "session-sync", op: KB_PULL_HELD_OP, message, tags, extra: { userId: ctx.userId, ...diag } },
     ctx.workspaceId,
     `kb-sync-pull-held:${reason}`,
   );
@@ -517,10 +529,13 @@ export async function syncPull(
   // re-resolves the workspace (forbids the #5435 dual-resolver divergence).
   service: SupabaseClient,
   workspaceId: string,
-  opts: { readonly limits?: KbPullLimits } = {},
+  /** `budget` is a test seam (D38(2)); production passes none: `SYNC_PULL_BUDGET_MS` from this call's entry. */
+  opts: { readonly limits?: KbPullLimits; readonly budget?: PullBudget } = {},
 ): Promise<SyncPullResult> {
+  // Measured from entry, so the lock wait below counts against it (D38(6)).
+  const budget = opts.budget ?? pullBudget(SYNC_PULL_BUDGET_MS, MERGE_START_MIN_MS);
   const none: SyncPullResult = { heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null };
-  if (!hasRemote(workspacePath)) {
+  if (!(await hasRemote(workspacePath))) {
     return none; // Empty workspace, no remote
   }
 
@@ -531,17 +546,32 @@ export async function syncPull(
     return none;
   }
 
+  // D38(6): one workspace's git writers run one at a time on this host (a sibling pull never reads this one's in-flight
+  // MERGE_AUTOSTASH as an unfinished merge).
+  return withWorkspaceGitLock(workspacePath, () => pullLocked(userId, workspacePath, service, workspaceId, opts.limits, budget));
+}
+
+async function pullLocked(
+  userId: string,
+  workspacePath: string,
+  service: SupabaseClient,
+  workspaceId: string,
+  limitsOpt: KbPullLimits | undefined,
+  budget: PullBudget,
+): Promise<SyncPullResult> {
+  const none: SyncPullResult = { heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null };
   const ctx = { userId, workspaceId };
   let isolated: IsolatedPushDirHandle | undefined;
   try {
     // D26(1): ONE status run feeds the unmerged scan and the auto-commit allowlist, and the scan runs first.
-    const status = readStatus(workspacePath, "syncPull");
+    const status = await readStatus(workspacePath, "syncPull");
     if (mergeInProgress(workspacePath, status)) {
+      await pinInterruptedAutostash(workspacePath); // D36(c): a stranded autostash survives gc until #12719 recovers it
       reportPullHeld("unresolved_merge", ctx);
       return { ...none, pullReason: "unresolved_merge" };
     }
 
-    const installationId = await getInstallationId(userId);
+    const installationId = await getInstallationId(userId, workspaceId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync pull");
       return none;
@@ -549,7 +579,7 @@ export async function syncPull(
 
     // Auto-commit any uncommitted changes before pulling to avoid conflicts.
     // Path-scoped to `knowledge-base/` — see #2905.
-    autoCommit(workspacePath, allowlisted(status), "pull", userId);
+    await autoCommit(workspacePath, allowlisted(status), "pull", userId);
 
     const head = readWorkspaceHeadRef(workspacePath);
     let result: KbPullStep;
@@ -561,18 +591,20 @@ export async function syncPull(
       if (!(err instanceof KbRemoteError)) throw err;
     }
     if (repo === null) {
-      result = { reason: "remote_state" };
+      result = { reason: "remote_state", remoteCause: "repo_url_unresolved" };
     } else {
+      let refusal: IsolatedPushDirRefusal | undefined;
       try {
         isolated = createIsolatedPushDir(workspacePath);
       } catch (err) {
         if (!(err instanceof IsolatedPushDirRefusal)) throw err;
+        refusal = err;
       }
       if (!isolated) {
-        result = { reason: "isolated_refused" };
+        result = { reason: "isolated_refused", ...(refusal ? { isolatedReason: refusal.reason } : {}) };
       } else {
         const writer = kbPullWriter(workspacePath);
-        const limits = opts.limits ? { limits: opts.limits } : {};
+        const limits = limitsOpt ? { limits: limitsOpt } : {};
         const merged = await mergeVerifiedDefault({
           isolated,
           installationId,
@@ -580,10 +612,11 @@ export async function syncPull(
           headSha: head.sha,
           refName: head.refName,
           writer,
+          budget,
           ...limits,
         });
         result = merged;
-        if (PULL_STAMPS.has(merged.reason)) await updateLastSynced(service, workspaceId);
+        if (PULL_STAMPS.has(merged.reason)) await stampBestEffort(service, workspaceId);
         if (PULL_ADOPTS.has(merged.reason) && merged.remote) {
           const side = await adoptSideTip({
             isolated,
@@ -594,6 +627,7 @@ export async function syncPull(
             remote: merged.remote,
             headSha: readWorkspaceHeadRef(workspacePath).sha,
             writer,
+            budget,
             ...limits,
           });
           if (side) result = side;
@@ -606,7 +640,7 @@ export async function syncPull(
         }
       }
     }
-    reportPullHeld(result.reason, ctx, result.ref);
+    reportPullHeld(result.reason, ctx, result.ref, result);
     return {
       heldFiles: held?.total ?? null,
       onRecovered: held?.onRecovered ?? null,
@@ -631,7 +665,26 @@ export async function syncPull(
     });
     return none;
   } finally {
-    disposeIsolated(isolated);
+    disposeIsolated(isolated, "session-sync");
+  }
+}
+
+/**
+ * The X1 stamp, best effort (quality P3-3): a failed write never turns a completed merge into a failed pull (the result
+ * and its `kb-sync.pull-held` line stand); it is reported on its own op.
+ */
+async function stampBestEffort(service: SupabaseClient, workspaceId: string): Promise<void> {
+  try {
+    await updateLastSynced(service, workspaceId);
+  } catch (err) {
+    const errName = err instanceof Error ? err.name : typeof err;
+    log.warn({ op: "kb-sync.pull-stamp", errName, workspaceId }, "KB sync pull: the last-synced stamp failed");
+    reportSilentFallback(null, {
+      feature: "session-sync",
+      op: "kb-sync.pull-stamp",
+      extra: { workspaceId, errName },
+      message: "KB sync pull: the last-synced stamp failed",
+    });
   }
 }
 
@@ -639,19 +692,23 @@ export async function syncPull(
  * The path-scoped auto-commit (#2905) of `allowed` (the status run's `knowledge-base/` entries). Best-effort: a failure
  * is logged and reported (stage, exit status and a closed bucket only), never thrown.
  */
-function autoCommit(workspacePath: string, allowed: string[], stage: "pull" | "push", userId: string): void {
+async function autoCommit(workspacePath: string, allowed: string[], stage: "pull" | "push", userId: string): Promise<void> {
   try {
     if (allowed.length === 0) {
       log.info({ userId }, "No allowlisted changes to commit — skipping auto-commit");
       return;
     }
-    runConnectedRepoGit(["add", "--", ...allowed], { cwd: workspacePath, stdio: "pipe" });
-    runConnectedRepoGit(["commit", "-m", stage === "pull" ? AUTO_COMMIT_MSG_PULL : AUTO_COMMIT_MSG_PUSH], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    await runConnectedRepoGitAsync(["add", "--", ...allowed], { cwd: workspacePath });
+    await runConnectedRepoGitAsync(["commit", "-m", stage === "pull" ? AUTO_COMMIT_MSG_PULL : AUTO_COMMIT_MSG_PUSH], { cwd: workspacePath });
   } catch (err) {
-    log.warn({ err, userId }, `Auto-commit before ${stage} failed`);
+    // pattern P3-16, gdpr: no raw `err` in the pino line (its message is the argv, which names tenant file paths); the class
+    // name, the exit status and the first app frame only.
+    const frame = firstAppFrame(err);
+    const exit = (err as { status?: unknown } | null)?.status;
+    log.warn(
+      { userId, errName: err instanceof Error ? err.name : typeof err, ...(typeof exit === "number" ? { exit } : {}), ...(frame ? { frame } : {}) },
+      `Auto-commit before ${stage} failed`,
+    );
     const failure = autoCommitFailure(err, stage);
     if (failure) {
       reportSilentFallback(failure, {
@@ -679,7 +736,7 @@ export async function syncPush(
   service: SupabaseClient,
   workspaceId: string,
 ): Promise<void> {
-  if (!hasRemote(workspacePath)) {
+  if (!(await hasRemote(workspacePath))) {
     return; // Empty workspace, no remote
   }
 
@@ -690,6 +747,11 @@ export async function syncPush(
     return;
   }
 
+  // D38(6): serialized with this workspace's pull and self-heal on this host.
+  return withWorkspaceGitLock(workspacePath, () => pushLocked(userId, workspacePath, service, workspaceId));
+}
+
+async function pushLocked(userId: string, workspacePath: string, service: SupabaseClient, workspaceId: string): Promise<void> {
   const ctx = { userId, workspaceId };
   // #12714 (D29(1)): set by the publish's `onHeldFiles` hook, before its isolated dir is disposed; written from the
   // `finally`, so held returns and the catch path write too. Null (no dir, no remote tip, no count): nothing is written.
@@ -697,23 +759,24 @@ export async function syncPush(
   let held = null as HeldCount | null;
   try {
     // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
-    const status = readStatus(workspacePath, "syncPush");
+    const status = await readStatus(workspacePath, "syncPush");
     // A conflicted session-start merge: committing would publish conflict markers (matrix 17).
     if (mergeInProgress(workspacePath, status)) {
+      await pinInterruptedAutostash(workspacePath); // D36(c)
       reportPushHeld("merge_in_progress", "held", ctx);
       return;
     }
 
     // Auto-commit any uncommitted changes before pushing.
     // Path-scoped to `knowledge-base/` — see #2905.
-    autoCommit(workspacePath, allowlisted(status), "push", userId);
+    await autoCommit(workspacePath, allowlisted(status), "push", userId);
 
-    if (!hasLocalCommits(workspacePath)) {
+    if (!(await hasLocalCommits(workspacePath))) {
       log.debug({ userId }, "No local commits to push");
       return;
     }
 
-    const installationId = await getInstallationId(userId);
+    const installationId = await getInstallationId(userId, workspaceId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync push");
       return;
@@ -809,7 +872,7 @@ export async function syncPush(
     try {
       await recordKbSyncHistory(userId, workspacePath);
     } catch (err) {
-      log.warn({ err, userId }, "KB sync history recording failed");
+      log.warn({ userId, errName: err instanceof Error ? err.name : typeof err }, "KB sync history recording failed");
       reportSilentFallback(err, {
         feature: "session-sync",
         op: "recordKbSyncHistory",
@@ -841,11 +904,15 @@ export async function syncPush(
       );
       return;
     }
-    log.warn({ err, userId }, "Sync push failed — next session will retry");
     // D8: null error, the closed reason and push class in tags. A non-KbSyncError carries only its class name and (D20) its
-    // first app code frame as `file:line`: its message is git's argv (the URL and the refspec, R2), so it never reaches Sentry.
+    // first app code frame as `file:line`: its message is git's argv (the URL and the refspec, R2), so it reaches neither
+    // Sentry nor the pino line (pattern P3-16, gdpr: no raw `err` key).
     const kbErr = err instanceof KbSyncError ? err : null;
     const frame = kbErr ? undefined : firstAppFrame(err);
+    log.warn(
+      { userId, errName: err instanceof Error ? err.name : typeof err, ...(kbErr ? { reason: kbErr.reason } : {}), ...(frame ? { frame } : {}) },
+      "Sync push failed — next session will retry",
+    );
     reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPush",

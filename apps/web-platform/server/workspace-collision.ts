@@ -2,8 +2,9 @@
 // Workspace collision precheck: would moving the workspace to `target` replace or remove an on-disk entry HEAD does not
 // track (CTO ruling D15(a))?
 //
-// Extracted unchanged from server/workspace-sync.ts (review Phase 0) so the pull's writer can run the same check (D35).
-// The git runner is injected: the self-heal passes its token-free local runner; the check itself spawns nothing.
+// Extracted from server/workspace-sync.ts (review Phase 0) so the pull's writer runs the same check (D35): the self-heal
+// passes its token-free local runner, the pull writer (server/connected-repo-git.ts) the guarded connected-repo runner,
+// whose argv guard pins exactly the two reads below. The check itself spawns nothing.
 // ---------------------------------------------------------------------------
 
 import { lstat } from "node:fs/promises";
@@ -53,7 +54,7 @@ function leadingDirs(p: Buffer): Buffer[] {
 /**
  * CTO ruling D15(a): true when the reset to `target` would replace or remove an on-disk entry that HEAD does not track.
  * The tracked tree is already clean (D6b), so the index equals HEAD and every entry the reset can touch is a path that
- * `diff --name-status -z --no-renames --diff-filter=AD HEAD <target>` lists (`--name-status` rather than `--name-only`
+ * `diff --name-status -z --no-renames --no-ext-diff --no-textconv --diff-filter=AD HEAD <target>` lists (`--name-status` rather than `--name-only`
  * so one call tells an added path from a deleted one). Three shapes refuse:
  *  1. an existing entry (lstat, no symlink follow) at an added path, unless it is a tracked directory the target turns
  *     into a file, which is shape 3;
@@ -73,7 +74,8 @@ export async function hasUntrackedCollision(
   workspacePath: string,
   target: string,
 ): Promise<boolean> {
-  const listing = await run(["diff", "--name-status", "-z", "--no-renames", "--diff-filter=AD", "HEAD", target, "--"]);
+  // The pinned listing shape (D35: the connected-repo guard accepts exactly this argv for a 40-hex target).
+  const listing = await run(["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-filter=AD", "HEAD", target, "--"]);
   const { added, deleted } = parseNameStatusZ(Buffer.isBuffer(listing) ? listing : Buffer.from(String(listing)));
   if (added.length === 0) return false;
   const deletedPaths = new Set(deleted.map((p) => p.toString("latin1")));

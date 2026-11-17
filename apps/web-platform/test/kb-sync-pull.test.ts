@@ -211,3 +211,62 @@ describe("TX1-j (D26(5)): an option-shaped or malformed default branch from ls-r
     });
   }
 });
+
+// Review fix round 1, WP1: the budget's merge-start gate (D38(3)), the catch-all's diagnostics (obs F3), the side-conflict
+// warning (D44) and the remote sub-cause (obs F8).
+describe("WP1: budget, catch-all and closed sub-causes", { timeout: 30_000 }, () => {
+  test("D38(3): with less than mergeStartMinMs left the merge never starts -> pull_deadline (ref=default)", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer, calls } = recordingWriter(f);
+    const r = await mergeVerifiedDefault({
+      isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer,
+      budget: { remaining: () => 19_999, mergeStartMinMs: 20_000 },
+    });
+    expect(r).toEqual(expect.objectContaining({ reason: "pull_deadline", ref: "default" }));
+    expect(calls.find((c) => c[0] === "merge")).toBeUndefined();
+  });
+
+  test("D38(2): a spent budget starts no network step -> pull_deadline, no ls-remote", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer, calls } = recordingWriter(f);
+    const r = await mergeVerifiedDefault({
+      isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer,
+      budget: { remaining: () => 0, mergeStartMinMs: 20_000 },
+    });
+    expect(r.reason).toBe("pull_deadline");
+    expect(H.calls).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  test("obs F3: a writer that throws is pull_unexpected with its class name, never its message", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer } = recordingWriter(f);
+    class WriterBroke extends Error {
+      override name = "WriterBroke";
+    }
+    writer.merge = async () => {
+      throw new WriterBroke(`git merge ${f.T} at ${f.ws}`);
+    };
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
+    expect(r.reason).toBe("pull_unexpected");
+    expect(r.errName).toBe("WriterBroke");
+    expect(JSON.stringify({ ...r, remote: undefined })).not.toMatch(/[0-9a-f]{40}|\/tmp\//);
+  });
+
+  test("obs F8: an unreadable ls-remote answer is remote_state with remote_cause remote_state_invalid", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    H.lsRemote = "garbage\n";
+    const { writer } = recordingWriter(f);
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
+    expect(r.reason).toBe("remote_state");
+    expect(["remote_state_invalid", "remote_head_absent"]).toContain(r.remoteCause);
+  });
+
+  test("D44: side_conflict is a warning reason (a static message)", () => {
+    expect(typeof KB_PULL_HELD_MESSAGES.side_conflict).toBe("string");
+  });
+});

@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
-import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
+import { parseConnectedRepo } from "./github-repo-parse";
+import { ISOLATED_LOCAL_TIMEOUT_MS, runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
 import type { IsolatedPushDirHandle } from "./git-isolated-push-dir";
 
 /** The durable side branch of the protected-branch fallback (#5426), in the user's own repo. */
@@ -22,7 +23,15 @@ export const SIDE_REF = `refs/heads/${KB_SYNC_SIDE_BRANCH}`;
 
 const LS_REMOTE_TIMEOUT_MS = 30_000;
 /** Upper bound of one isolated fetch: a stalled transfer costs at most this long (X1). */
-export const FETCH_TIMEOUT_MS = 120_000;
+const FETCH_TIMEOUT_MS = 120_000;
+
+/**
+ * A child's timeout under a caller's remaining budget (D38(2)): `min(own cap, remaining)`, never below 1 ms (a 0 timeout
+ * would mean "no timeout" to `execFile`). No budget: the own cap.
+ */
+export function cappedTimeout(ownMs: number, budgetMs: number | undefined): number {
+  return budgetMs === undefined ? ownMs : Math.max(1, Math.min(ownMs, Math.floor(budgetMs)));
+}
 
 /** A failed remote read, with a closed reason and a static message: never git's error, whose argv names the URL. */
 export type KbRemoteErrorReason = "ls_remote_failed" | "remote_state_invalid";
@@ -102,12 +111,13 @@ export async function readRemoteState(
   isolated: IsolatedPushDirHandle,
   installationId: number,
   url: string,
+  opts: { readonly timeoutMs?: number } = {},
 ): Promise<RemoteState | null> {
   let out: Buffer;
   try {
     out = await gitWithInstallationAuth(["ls-remote", "--symref", url, "HEAD", SIDE_REF], installationId, {
       hardened: isolated,
-      timeout: LS_REMOTE_TIMEOUT_MS,
+      timeout: cappedTimeout(LS_REMOTE_TIMEOUT_MS, opts.timeoutMs),
     });
   } catch {
     throw new KbRemoteError("ls_remote_failed");
@@ -117,28 +127,13 @@ export async function readRemoteState(
   return parsed === null ? null : { ...parsed, readAt };
 }
 
-// GitHub owner/repo charset (the same as the `GITHUB_NAME_RE` owner/repo check in server/agent-runner.ts).
-const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
-
 /**
- * Parse `{owner, repo}` from a connected-repo URL using the same shape as agent-runner.ts (URL pathname split +
- * GITHUB_NAME_RE guard, ADR-044 canonical workspace read). `getCurrentRepoUrl` already strips a trailing `.git` via
- * `normalizeRepoUrl`; the defensive strip here tolerates an un-normalized row. Empty strings when the URL is null or
- * malformed.
+ * `{owner, repo}` from a connected-repo URL through the ONE shared parser (`parseConnectedRepo`, server/github-repo-parse.ts,
+ * pattern P3-12), so the KB sync and the c4 gate never disagree on the same workspace. Empty strings when the URL is null
+ * or malformed.
  */
 export function parseOwnerRepo(repoUrl: string | null): { owner: string; repo: string } {
-  if (!repoUrl) return { owner: "", repo: "" };
-  let owner = "";
-  let repo = "";
-  try {
-    const segments = new URL(repoUrl).pathname.split("/").filter(Boolean);
-    owner = segments[0] ?? "";
-    repo = (segments[1] ?? "").replace(/\.git$/i, "");
-  } catch {
-    return { owner: "", repo: "" };
-  }
-  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) return { owner: "", repo: "" };
-  return { owner, repo };
+  return parseConnectedRepo(repoUrl) ?? { owner: "", repo: "" };
 }
 
 /** The literal `https://github.com/<owner>/<repo>.git` URL (R2) from the workspace row: never `remote.origin.url`. */
@@ -150,9 +145,9 @@ export async function resolveRepoUrl(userId: string, workspaceId: string): Promi
 }
 
 /** Why an isolated fetch did not yield the expected, verified tip (the `fetch-stage` reasons of the pull, X1). */
-export type KbFetchRefusal = "fetch_failed" | "tip_mismatch" | "shallow_changed";
+type KbFetchRefusal = "fetch_failed" | "tip_mismatch" | "shallow_changed";
 
-export interface FetchSpec {
+interface FetchSpec {
   /** The remote branch, already checked by `parseRemoteState` (`D`, or `soleur/kb-sync`). */
   readonly branch: string;
   /** The isolated destination branch: `fetched` (the default branch) or `fetched-side` (the side tip). */
@@ -190,9 +185,10 @@ export async function fetchIntoIsolated(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: KbFetchRefusal }> {
   if (!HEX40.test(spec.expected) || !isSafeBranchName(spec.branch)) return { ok: false, reason: "fetch_failed" };
   let i = 0;
+  const local = (): { timeoutMs: number } => ({ timeoutMs: cappedTimeout(ISOLATED_LOCAL_TIMEOUT_MS, opts.timeoutMs) });
   for (const have of new Set(spec.haves)) {
     if (!HEX40.test(have)) return { ok: false, reason: "fetch_failed" };
-    const r = await runIsolatedGitLocal(isolated, ["update-ref", "--no-deref", `refs/heads/have-${spec.dest}-${i++}`, have]);
+    const r = await runIsolatedGitLocal(isolated, ["update-ref", "--no-deref", `refs/heads/have-${spec.dest}-${i++}`, have], local());
     if (r.code !== 0) return { ok: false, reason: "fetch_failed" };
   }
   const shallowBefore = readShallow(isolated);
@@ -200,14 +196,14 @@ export async function fetchIntoIsolated(
     await gitWithInstallationAuth(
       ["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", url, `refs/heads/${spec.branch}:refs/heads/${spec.dest}`],
       installationId,
-      { hardened: isolated, timeout: opts.timeoutMs ?? FETCH_TIMEOUT_MS },
+      { hardened: isolated, timeout: cappedTimeout(FETCH_TIMEOUT_MS, opts.timeoutMs) },
     );
   } catch (err) {
     const stderr = String((err as { stderr?: unknown } | null)?.stderr ?? "");
     return { ok: false, reason: /shallow roots are not allowed to be updated/.test(stderr) ? "shallow_changed" : "fetch_failed" };
   }
   if (readShallow(isolated) !== shallowBefore) return { ok: false, reason: "shallow_changed" };
-  const tip = await runIsolatedGitLocal(isolated, ["rev-parse", "--verify", "--quiet", `refs/heads/${spec.dest}^{commit}`]);
+  const tip = await runIsolatedGitLocal(isolated, ["rev-parse", "--verify", "--quiet", `refs/heads/${spec.dest}^{commit}`], local());
   if (tip.code === -1) return { ok: false, reason: "fetch_failed" };
   if (tip.code !== 0) return { ok: false, reason: "shallow_changed" };
   if (tip.stdout.toString("utf8").trim() !== spec.expected) return { ok: false, reason: "tip_mismatch" };

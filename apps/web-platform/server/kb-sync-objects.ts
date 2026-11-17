@@ -3,8 +3,9 @@
 //
 // Every read here runs in the server-owned isolated directory (`runIsolatedGitLocal`, the workspace object store as the
 // only alternate) and parses exactly the bytes whose id it recomputed. A leaf: it imports neither kb-sync-publish.ts nor
-// push-branch.ts, so the pull (server/kb-sync-pull.ts) and the self-heal (server/workspace-sync.ts) reach it without the
-// push. Errors are a neutral `KbObjectsError` with a closed reason; each caller maps it to its own held reason.
+// push-branch.ts, so importing it never pulls in the push (the census checks this module's own imports; whether every
+// importer is push-free transitively is the census's job, not this header's claim). Errors are a neutral `KbObjectsError`
+// with a closed reason; each caller maps it to its own held reason.
 // ---------------------------------------------------------------------------
 
 import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME } from "./agent-git-identity";
@@ -36,7 +37,7 @@ export interface TreeEntry {
 }
 
 /** Parse raw tree object bytes (`<mode> <name>\0<20-byte id>`, repeated); `null` on any malformed entry. */
-export function parseTree(bytes: Buffer): TreeEntry[] | null {
+function parseTree(bytes: Buffer): TreeEntry[] | null {
   const out: TreeEntry[] = [];
   let i = 0;
   while (i < bytes.length) {
@@ -52,7 +53,7 @@ export function parseTree(bytes: Buffer): TreeEntry[] | null {
   return out;
 }
 
-export interface CommitHeader {
+interface CommitHeader {
   readonly tree: string;
   readonly parents: readonly string[];
   readonly author: string;
@@ -60,7 +61,7 @@ export interface CommitHeader {
   readonly message: string;
 }
 
-export function parseCommit(bytes: Buffer): CommitHeader | null {
+function parseCommit(bytes: Buffer): CommitHeader | null {
   const text = bytes.toString("latin1");
   const end = text.indexOf("\n\n");
   if (end < 0) return null;
@@ -129,7 +130,7 @@ export async function isAncestor(isolated: IsolatedPushDirHandle, ancestor: stri
   throw new KbObjectsError("local_git_failed");
 }
 
-export const IDENTITY_ARGS = ["-c", `user.name=${AGENT_AUTHOR_NAME}`, "-c", `user.email=${AGENT_AUTHOR_EMAIL}`] as const;
+const IDENTITY_ARGS = ["-c", `user.name=${AGENT_AUTHOR_NAME}`, "-c", `user.email=${AGENT_AUTHOR_EMAIL}`] as const;
 export const IDENTITY_PREFIX = `${AGENT_AUTHOR_NAME} <${AGENT_AUTHOR_EMAIL}> `;
 
 export function mktreeInput(entries: readonly TreeEntry[]): Buffer {
@@ -161,12 +162,9 @@ export async function commitTree(
   return sha;
 }
 
-/**
- * The one workspace write the hand-over needs: `unpack-objects -q` with the pack on stdin (throws or rejects on failure).
- * Sync for the push writer, async for the pull writer (review Phase 0 frozen contract); the hand-over awaits either.
- */
+/** The one workspace write the hand-over needs: `unpack-objects -q` with the pack on stdin (rejects on failure; D38(1) async). */
 export interface KbUnpacker {
-  unpack(pack: Buffer): void | Promise<void>;
+  unpack(pack: Buffer): Promise<void>;
 }
 
 /**
@@ -177,12 +175,13 @@ export async function handOver(
   isolated: IsolatedPushDirHandle,
   writer: KbUnpacker,
   objects: readonly string[],
-  opts: { readonly maxBufferBytes?: number } = {},
+  opts: { readonly maxBufferBytes?: number; readonly timeoutMs?: number } = {},
 ): Promise<void> {
   if (!objects.every((o) => HEX40.test(o))) throw new KbObjectsError("unpack_failed");
   const pack = await runIsolatedGitLocal(isolated, ["pack-objects", "--stdout", "-q"], {
     input: `${objects.join("\n")}\n`,
     ...(opts.maxBufferBytes === undefined ? {} : { maxBufferBytes: opts.maxBufferBytes }),
+    ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
   });
   if (pack.code !== 0) throw new KbObjectsError("unpack_failed");
   try {
@@ -199,6 +198,7 @@ export async function handOver(
  * protection. A child that could not run is `local_git_failed`.
  */
 export async function isKbOnlySide(isolated: IsolatedPushDirHandle, T: string, P: string): Promise<boolean> {
+  // The first, cheap refusal of D28(2); the pull adds the D34 effect gate (`mergeEffectIsKbOnly`) on what it will apply.
   const base = await runIsolatedGitLocal(isolated, ["merge-base", T, P]);
   const mergeBase = base.stdout.toString("utf8").trim();
   if (base.code === 1) return false;
@@ -207,4 +207,29 @@ export async function isKbOnlySide(isolated: IsolatedPushDirHandle, T: string, P
   if (diff.code === 1) return false;
   if (diff.code !== 0) throw new KbObjectsError("local_git_failed");
   return true;
+}
+
+/**
+ * D34, the side tip's EFFECT gate (pull only), token-free: the tree the workspace merge will produce (`merged`, the one
+ * `merge-tree --write-tree HEAD P` the pre-check already ran) differs from HEAD's tree only inside `knowledge-base/`:
+ * `diff --quiet --no-renames --no-ext-diff --no-textconv <headTree> <merged> -- . ':(exclude)knowledge-base/'`. The
+ * D28(2) gate diffs from `merge-base(T, P)`, so a `P` built on the workspace's own commit `L` that puts the code back to
+ * `T`'s passes it, yet the merge (3-way from `L`, or a fast-forward) reverts `L`; this gate refuses exactly that. A child
+ * that could not run is `local_git_failed`.
+ */
+export async function mergeEffectIsKbOnly(
+  isolated: IsolatedPushDirHandle,
+  headTree: string,
+  merged: string,
+  opts: { readonly timeoutMs?: number } = {},
+): Promise<boolean> {
+  if (!HEX40.test(headTree) || !HEX40.test(merged)) throw new KbObjectsError("local_git_failed");
+  const diff = await runIsolatedGitLocal(
+    isolated,
+    ["diff", "--quiet", "--no-renames", "--no-ext-diff", "--no-textconv", headTree, merged, "--", ".", KB_EXCLUDE_PATHSPEC],
+    opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs },
+  );
+  if (diff.code === 0) return true;
+  if (diff.code === 1) return false;
+  throw new KbObjectsError("local_git_failed");
 }

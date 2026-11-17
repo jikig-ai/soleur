@@ -11,7 +11,7 @@
 // ONLY the literal fixture URL to the local remote. Synthesized data only (cq-test-fixtures-synthesized-only): the token
 // is built by concatenation.
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -48,6 +48,12 @@ const H = vi.hoisted(() => ({
   /** Extra transports for the isolated arm and the legacy arm (TX1-f adds http). */
   extraProtocols: "file",
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  resolveInstallationId: vi.fn(async (_userId: string, _workspaceId?: string | null) => 1),
+  /** WP1 (D36(b)): when set, every workspace `status` after a merge child fails (an unreadable post-merge status). */
+  failStatusAfterMerge: false,
+  /** WP1 (D38(1)): an interval counter and its value at each host git call (the event-loop row). */
+  ticks: 0,
+  hostTicks: [] as number[],
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -59,7 +65,7 @@ vi.mock("@/server/observability", () => ({
 }));
 vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.log }));
 vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeld }));
-vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: async () => 1 }));
+vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: H.resolveInstallationId }));
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: async () => ["ghs", "_", "PULLSENTINEL", "q".repeat(24)].join(""),
@@ -117,9 +123,11 @@ vi.mock("@/server/host-git", async (importOriginal) => {
   return {
     ...actual,
     hostGitInvocation: (args: readonly string[], opts: import("@/server/host-git").HostGitOpts) => {
+      const failStatus = H.failStatusAfterMerge && args[0] === "status" && H.host.some((a) => a.includes("merge"));
       H.host.push([...args]);
+      H.hostTicks.push(H.ticks);
       return actual.hostGitInvocation(
-        args,
+        failStatus ? ["status", "--no-such-option-wp1"] : args,
         opts.allowProtocol === actual.ALLOW_PROTOCOL_NONE ? opts : { ...opts, allowProtocol: `${opts.allowProtocol}:${H.extraProtocols}` },
       );
     },
@@ -233,7 +241,7 @@ const status = (r: Row): string =>
   execFileSync("git", ["status", "--porcelain"], { cwd: r.ws, encoding: "utf8", env: fixtureEnv(r.ws) }).replace(/\n$/, "");
 const pullLines = (): Array<{ reason: string; ref?: string }> =>
   H.log.info.mock.calls.filter(([o]) => (o as { op?: string })?.op === "kb-sync.pull-held").map(([o]) => o as { reason: string; ref?: string });
-const pullWarn = (reason: string): unknown[] =>
+const pullWarn = (reason: string): unknown[][] =>
   H.mirrorWarnWithDebounce.mock.calls.filter(([, , , cls]) => cls === `kb-sync-pull-held:${reason}`);
 const stamps = (): number =>
   H.writeRepoCols.mock.calls.filter((c) => Object.prototype.hasOwnProperty.call((c as unknown[])[2] ?? {}, "repo_last_synced_at")).length;
@@ -247,6 +255,7 @@ const pull = (r: Row, opts?: Parameters<typeof syncPull>[4]) => syncPull(USER, r
 const resetTurn = (): void => {
   H.calls.length = 0;
   H.host.length = 0;
+  H.hostTicks.length = 0;
   H.iso.length = 0;
   for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.writeHeld, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
 };
@@ -256,6 +265,8 @@ beforeEach(() => {
   row = undefined as unknown as Row;
   H.trace = null;
   H.extraProtocols = "file";
+  H.failStatusAfterMerge = false;
+  H.writeRepoCols.mockImplementation(async () => undefined);
   H.prListFails = false;
   resetTurn();
   H.prs.length = 0;
@@ -462,7 +473,7 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     expect(existsSync(join(r.ws, ".git", "rr-cache"))).toBe(false);
   });
 
-  test("TX1-i (--no-overwrite-ignore): an ignored local file at an upstream-added tracked path -> merge_refused, the file byte-identical", async () => {
+  test("TX1-i (D35): an ignored local file at an upstream-added tracked path (fast-forward) -> untracked_collision, the file byte-identical", async () => {
     const r = newRow();
     write(join(r.ws, "build", "out.txt"), "local ignored bytes\n");
     upstreamCommit(r, (d) => {
@@ -470,7 +481,8 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
       git(d, "add", "-f", "build/out.txt");
     });
     const before = head(r);
-    expect((await pull(r)).pullReason).toBe("merge_refused");
+    expect((await pull(r)).pullReason).toBe("untracked_collision");
+    expect(hostRan("merge")).toEqual([]);
     expect(read(join(r.ws, "build", "out.txt"))).toBe("local ignored bytes\n");
     expect(head(r)).toBe(before);
     expect(stamps()).toBe(0);
@@ -512,6 +524,9 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     expect((await pull(r)).pullReason).toBe("remote_state");
     expect(tokenVerbs()).toEqual(["ls-remote"]);
     expect(stamps()).toBe(0);
+    // obs F8: the closed sub-cause rides on the line and the warning
+    expect(pullLines()).toEqual([expect.objectContaining({ reason: "remote_state", remote_cause: "ls_remote_failed" })]);
+    expect(pullWarn("remote_state")[0][1]).toEqual(expect.objectContaining({ tags: { reason: "remote_state", remote_cause: "ls_remote_failed" } }));
   });
 });
 
@@ -875,7 +890,10 @@ describe("TX6 (D28): side-tip adoption, step 6b", { timeout: 30_000 }, () => {
     expect(head(r)).toBe(before);
     expect(mergeHead(r)).toBe(false);
     expect(read(join(r.ws, "knowledge-base", "a.md"))).toBe("a\nlocal kb\n");
-    expect(H.mirrorWarnWithDebounce).not.toHaveBeenCalled();
+    // D44: a warning (D25(6)), debounced per workspace and reason, tagged ref=side
+    expect(pullWarn("side_conflict")).toHaveLength(1);
+    expect(pullWarn("side_conflict")[0]).toEqual([null, expect.objectContaining({ tags: { reason: "side_conflict", ref: "side" } }), WS_ID, "kb-sync-pull-held:side_conflict"]);
+    expect(pullLines()).toEqual([expect.objectContaining({ reason: "side_conflict", ref: "side" })]);
   });
 
   test("the PR GET fails -> side_pr_unknown, zero creates and zero writes", async () => {
@@ -899,4 +917,353 @@ describe("TX6 (D28): side-tip adoption, step 6b", { timeout: 30_000 }, () => {
     expect(hasObject(r, P)).toBe(false);
     expect(lstatSync(join(r.ws, ".git")).isDirectory()).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Review fix round 1, WP1 (rulings D34-D38, D44, D45(a)(h)).
+// ---------------------------------------------------------------------------
+
+/** A filter whose smudge runs `cmd` on checkout of `*.<ext>` (workspace-local config and attributes, the D26(3) residual). */
+function plantSmudge(r: Row, ext: string, cmd: string): void {
+  git(r.ws, "config", `filter.${ext}.smudge`, cmd);
+  mkdirSync(join(r.ws, ".git", "info"), { recursive: true });
+  appendFileSync(join(r.ws, ".git", "info", "attributes"), `*.${ext} filter=${ext}\n`);
+}
+
+/** The workspace's unpublished code commit L (src changed, a new file), also on GitHub as a pushed branch (github_push_branch). */
+function localCodeCommit(r: Row): string {
+  write(join(r.ws, "src", "s.ts"), "export const s = 2; // local L\n");
+  write(join(r.ws, "src", "new.ts"), "export const fresh = 1;\n");
+  git(r.ws, "add", "-A");
+  git(r.ws, "commit", "-q", "-m", "L local code");
+  git(r.ws, "push", "-q", `file://${r.remote}`, "HEAD:refs/heads/held-L");
+  return head(r);
+}
+
+/** P on top of L that puts `src/` back to T's state (reverting L) and edits a KB file. */
+const revertingSide = (r: Row, L: string): string =>
+  sideCommit(
+    r,
+    (d) => {
+      write(join(d, "src", "s.ts"), "export const s = 1;\n");
+      rmSync(join(d, "src", "new.ts"));
+      write(join(d, "knowledge-base", "a.md"), "a\nside kb\n");
+    },
+    L,
+  );
+
+const localCodeIntact = (r: Row): void => {
+  expect(read(join(r.ws, "src", "s.ts"))).toBe("export const s = 2; // local L\n");
+  expect(read(join(r.ws, "src", "new.ts"))).toBe("export const fresh = 1;\n");
+};
+
+describe("WP1 D34: the side-tip effect gate decides on what the workspace merge applies", { timeout: 30_000 }, () => {
+  test("TX6-g: P (parent L) restores T's code and edits KB -> side_not_kb_only, src intact, no PR created, no merge", async () => {
+    const r = newRow();
+    const L = localCodeCommit(r);
+    revertingSide(r, L); // no PR on P: a passed gate would create one
+    const result = await pull(r);
+    expect(result.pullReason).toBe("side_not_kb_only");
+    expect(head(r)).toBe(L);
+    localCodeIntact(r);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(hostRan("merge")).toEqual([]);
+    expect(hostRan("unpack-objects")).toEqual([]);
+    expect(pullWarn("side_not_kb_only")).toHaveLength(1);
+  });
+
+  test("TX6-h: HEAD at L2 past L, an open PR -> the 3-way revert of L is refused (side_not_kb_only)", async () => {
+    const r = newRow();
+    const L = localCodeCommit(r);
+    write(join(r.ws, "README.md"), "readme L2\n");
+    git(r.ws, "commit", "-q", "-am", "L2");
+    const L2 = head(r);
+    const P = revertingSide(r, L);
+    openPr(P);
+    expect((await pull(r)).pullReason).toBe("side_not_kb_only");
+    expect(head(r)).toBe(L2);
+    localCodeIntact(r);
+    expect(read(join(r.ws, "README.md"))).toBe("readme L2\n");
+    expect(hostRan("merge")).toEqual([]);
+  });
+
+  test("TX6-i (positive control): L reached main (T = L), HEAD at L2, a KB-only P on L -> adopted by a real 3-way merge", async () => {
+    const r = newRow();
+    const L = localCodeCommit(r);
+    git(r.remote, "update-ref", "refs/heads/main", L);
+    write(join(r.ws, "README.md"), "readme L2\n");
+    git(r.ws, "commit", "-q", "-am", "L2");
+    const P = sideCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nside kb\n"), L);
+    openPr(P);
+    expect((await pull(r)).pullReason).toBe("merged");
+    expect(isAncestor(r, P, "HEAD")).toBe(true);
+    expect(parentsOf(r, "HEAD")).toHaveLength(2);
+    expect(read(join(r.ws, "knowledge-base", "a.md"))).toBe("a\nside kb\n");
+    localCodeIntact(r);
+    expect(read(join(r.ws, "README.md"))).toBe("readme L2\n");
+  });
+
+  test("tests F1: a merged PR on P (T's KB later differs) adopts nothing: no merge of P, no create, the deleted file stays deleted", async () => {
+    const r = newRow();
+    const P = sideCommit(r, (d) => write(join(d, "knowledge-base", "x.md"), "x\n"));
+    // the Owner squash-merged the PR (P is not in main's history) and main's KB moved on without x.md
+    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nmain moved\n"));
+    H.prs.push({ number: 4, htmlUrl: "https://github.com/acme/widget/pull/4", url: "", state: "closed", merged: true, headSha: P });
+    expect((await pull(r)).pullReason).toBe("merged");
+    expect(isAncestor(r, P, "HEAD")).toBe(false);
+    expect(existsSync(join(r.ws, "knowledge-base", "x.md"))).toBe(false);
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+    expect(hostRan("merge")).toHaveLength(1); // the default-branch merge only
+  });
+
+  test("tests F2: P already an ancestor of HEAD (after an adoption and a later local commit) -> up_to_date, no PR read, no link", async () => {
+    const r = newRow();
+    const P = sideCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nside kb\n"));
+    openPr(P);
+    expect((await pull(r)).pullReason).toBe("merged");
+    write(join(r.ws, "knowledge-base", "later.md"), "later\n"); // the auto-commit puts HEAD past P
+    resetTurn();
+    expect((await pull(r)).pullReason).toBe("up_to_date");
+    expect(parentsOf(r, "HEAD")).toEqual([P]);
+    expect(H.listPullRequestsForHead).not.toHaveBeenCalled();
+    expect(hostRan("merge")).toEqual([]);
+    expect(hostRan("update-ref").filter((a) => a.some((x) => x.startsWith("refs/heads/")))).toEqual([]);
+  });
+
+  for (const evil of ["src/knowledge-base/evil.ts", "knowledge-base-tools/run.ts"]) {
+    test(`tests F3: a path that only CONTAINS knowledge-base (${evil}) is not KB -> side_not_kb_only`, async () => {
+      const r = newRow();
+      const P = sideCommit(r, (d) => {
+        write(join(d, "knowledge-base", "a.md"), "a\nside kb\n");
+        write(join(d, evil), "export const evil = true;\n");
+      });
+      openPr(P);
+      expect((await pull(r)).pullReason).toBe("side_not_kb_only");
+      expect(existsSync(join(r.ws, evil))).toBe(false);
+    });
+  }
+
+  test("tests F4: an unrelated-history side tip (code + KB) -> side_not_kb_only, HEAD unchanged", async () => {
+    const r = newRow();
+    const orphan = join(r.root, "orphan-side");
+    mkdirSync(orphan);
+    git(orphan, "init", "-q", "-b", "side");
+    write(join(orphan, "knowledge-base", "a.md"), "a\norphan\n");
+    write(join(orphan, "evil.ts"), "export const evil = 1;\n");
+    git(orphan, "add", "-A");
+    git(orphan, "commit", "-q", "-m", "orphan");
+    git(orphan, "push", "-q", "--force", `file://${r.remote}`, "side:refs/heads/soleur/kb-sync");
+    openPr(git(orphan, "rev-parse", "HEAD"));
+    const before = head(r);
+    expect((await pull(r)).pullReason).toBe("side_not_kb_only");
+    expect(head(r)).toBe(before);
+    expect(existsSync(join(r.ws, "evil.ts"))).toBe(false);
+  });
+
+  test("D45(h): the PR is created only after the gates; a create failure is side_pr_create_failed (warning), no merge", async () => {
+    const r = newRow();
+    sideCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nside kb\n"));
+    H.createPullRequest.mockImplementationOnce(async () => {
+      throw new Error("403 from the create endpoint");
+    });
+    const before = head(r);
+    expect((await pull(r)).pullReason).toBe("side_pr_create_failed");
+    expect(head(r)).toBe(before);
+    expect(hostRan("merge")).toEqual([]);
+    expect(pullWarn("side_pr_create_failed")).toHaveLength(1);
+  });
+
+  test("D45(h): a side conflict creates no PR (the create runs after the merge-tree decision)", async () => {
+    const r = newRow();
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal kb\n");
+    git(r.ws, "commit", "-q", "-am", "local kb");
+    sideCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nside kb\n"));
+    expect((await pull(r)).pullReason).toBe("side_conflict");
+    expect(H.createPullRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("WP1 D35: the pull writer's collision check guards every merge (non-ff included)", { timeout: 30_000 }, () => {
+  test("TX1-i2: a non-ff merge (a KB auto-commit) and an ignored file at an upstream-added path -> untracked_collision, bytes intact", async () => {
+    const r = newRow();
+    write(join(r.ws, "build", "out.txt"), "local ignored bytes\n");
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal kb\n");
+    upstreamCommit(r, (d) => {
+      write(join(d, "build", "out.txt"), "upstream tracked\n");
+      git(d, "add", "-f", "build/out.txt");
+    });
+    const result = await pull(r);
+    expect(result.pullReason).toBe("untracked_collision");
+    expect(read(join(r.ws, "build", "out.txt"))).toBe("local ignored bytes\n");
+    expect(parentsOf(r, "HEAD")).toHaveLength(1);
+    expect(git(r.ws, "log", "-1", "--format=%s")).toBe("Auto-commit before sync pull");
+    expect(hostRan("merge")).toEqual([]);
+    expect(stamps()).toBe(0);
+    expect(pullWarn("untracked_collision")).toHaveLength(1);
+  });
+
+  test("TX1-i3: an ignored directory where upstream adds a file -> untracked_collision, the directory intact", async () => {
+    const r = newRow();
+    write(join(r.ws, "build", "cache", "data.bin"), "USER-BYTES\n");
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal kb\n");
+    upstreamCommit(r, (d) => write(join(d, "build"), "upstream file\n"));
+    expect((await pull(r)).pullReason).toBe("untracked_collision");
+    expect(read(join(r.ws, "build", "cache", "data.bin"))).toBe("USER-BYTES\n");
+  });
+
+  test("TX1-i4: the side merge: a locally ignored KB file at a path P adds -> untracked_collision, bytes intact", async () => {
+    const r = newRow();
+    appendFileSync(join(r.ws, ".git", "info", "exclude"), "knowledge-base/x.md\n");
+    write(join(r.ws, "knowledge-base", "x.md"), "LOCAL-ONLY\n");
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal kb\n");
+    const P = sideCommit(r, (d) => write(join(d, "knowledge-base", "x.md"), "side\n"));
+    openPr(P);
+    const result = await pull(r);
+    expect(result.pullReason).toBe("untracked_collision");
+    expect(read(join(r.ws, "knowledge-base", "x.md"))).toBe("LOCAL-ONLY\n");
+    expect(isAncestor(r, P, "HEAD")).toBe(false);
+  });
+});
+
+describe("WP1 D36: the merge outcome fails closed", { timeout: 30_000 }, () => {
+  test("TX4-e: a concurrent write during the merge parks the autostash in refs/stash -> autostash_conflict, never merged", async () => {
+    const r = newRow();
+    plantSmudge(r, "race", `printf 'CONCURRENT\\n' > '${join(r.ws, "src", "x.ts")}'; cat`);
+    write(join(r.ws, "src", "x.ts"), "USER-DIRTY\n");
+    upstreamCommit(r, (d) => write(join(d, "src", "z.race"), "incoming\n"));
+    const result = await pull(r);
+    expect(result.pullReason).toBe("autostash_conflict");
+    expect(git(r.ws, "stash", "list")).not.toBe("");
+    expect(git(r.ws, "stash", "show", "-p")).toContain("USER-DIRTY");
+    expect(status(r)).not.toMatch(/^(UU|AA|DD|AU|UA|DU|UD) /m);
+    // the merge exited 0 and HEAD holds T: the X1 stamp rule (as TX1-h); see the WP1 report for this deviation
+    expect(stamps()).toBe(1);
+    expect(pullWarn("autostash_conflict")).toHaveLength(1);
+  });
+
+  test("TX4-f: the post-merge status cannot be read -> merge_unverified (warning), no stamp", async () => {
+    const r = newRow();
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
+    H.failStatusAfterMerge = true;
+    expect((await pull(r)).pullReason).toBe("merge_unverified");
+    expect(stamps()).toBe(0);
+    expect(pullWarn("merge_unverified")).toHaveLength(1);
+  });
+
+  test("TX4-g: SIGKILL mid-merge pins MERGE_AUTOSTASH under refs/soleur/autostash/, it survives gc --prune=now, and the pin is idempotent", async () => {
+    const r = newRow();
+    plantSmudge(r, "kill", "kill -9 $PPID; cat");
+    write(join(r.ws, "src", "x.ts"), "USER-DIRTY\n");
+    upstreamCommit(r, (d) => write(join(d, "src", "z.kill"), "incoming\n"));
+    expect((await pull(r)).pullReason).toBe("merge_refused");
+    expect(mergeHead(r)).toBe(false);
+    const stash = read(join(r.ws, ".git", "MERGE_AUTOSTASH")).trim();
+    const pins = (): string => git(r.ws, "for-each-ref", "--format=%(refname) %(objectname)", "refs/soleur/autostash/");
+    expect(pins()).toBe(`refs/soleur/autostash/${stash} ${stash}`);
+    rmSync(join(r.ws, ".git", "index.lock"), { force: true });
+    git(r.ws, "gc", "-q", "--prune=now");
+    expect(git(r.ws, "show", `${stash}:src/x.ts`)).toBe("USER-DIRTY");
+    resetTurn();
+    expect((await pull(r)).pullReason).toBe("unresolved_merge");
+    expect(pins()).toBe(`refs/soleur/autostash/${stash} ${stash}`);
+  });
+
+  test("TX4-a addendum: a syncPull refusal on MERGE_AUTOSTASH alone pins it", async () => {
+    const r = newRow();
+    writeFileSync(join(r.ws, ".git", "MERGE_AUTOSTASH"), `${head(r)}\n`);
+    expect((await pull(r)).pullReason).toBe("unresolved_merge");
+    expect(git(r.ws, "rev-parse", `refs/soleur/autostash/${head(r)}`)).toBe(head(r));
+  });
+
+  test("tests F6 (falsifiable rr-cache): a CONFLICTING merge with a planted rerere.enabled=true records nothing", async () => {
+    const r = newRow();
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal side\n");
+    git(r.ws, "commit", "-q", "-am", "local kb");
+    git(r.ws, "config", "rerere.enabled", "true");
+    git(r.ws, "config", "rerere.autoUpdate", "true");
+    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nupstream side\n"));
+    expect((await pull(r)).pullReason).toBe("merge_conflict");
+    expect(existsSync(join(r.ws, ".git", "rr-cache"))).toBe(false);
+  });
+});
+
+describe("WP1 D38: the async writer, the pull budget and the same-host lock", { timeout: 60_000 }, () => {
+  test("event loop: a merge slowed by a 2 s smudge filter does not block the loop", async () => {
+    const r = newRow();
+    plantSmudge(r, "slow", "sleep 2; cat");
+    upstreamCommit(r, (d) => write(join(d, "src", "big.slow"), "slow\n"));
+    const timer = setInterval(() => H.ticks++, 50);
+    let result: Awaited<ReturnType<typeof pull>>;
+    try {
+      result = await pull(r);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(result.pullReason).toBe("merged");
+    const i = H.host.findIndex((a) => a.includes("merge"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(H.hostTicks[i + 1] - H.hostTicks[i]).toBeGreaterThanOrEqual(10);
+  });
+
+  test("budget spent before the first step -> pull_deadline (ref=default), no token, no stamp", async () => {
+    const r = newRow();
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
+    const before = head(r);
+    const result = await pull(r, { budget: { remaining: () => 0, mergeStartMinMs: 20_000 } });
+    expect(result.pullReason).toBe("pull_deadline");
+    expect(tokenVerbs()).toEqual([]);
+    expect(head(r)).toBe(before);
+    expect(stamps()).toBe(0);
+    expect(pullLines()).toEqual([expect.objectContaining({ reason: "pull_deadline", ref: "default" })]);
+  });
+
+  test("a merge never starts with less than its start minimum left -> pull_deadline, no merge child", async () => {
+    const r = newRow();
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
+    const result = await pull(r, { budget: { remaining: () => 19_999, mergeStartMinMs: 20_000 } });
+    expect(result.pullReason).toBe("pull_deadline");
+    expect(hostRan("merge")).toEqual([]);
+  });
+
+  test("a started merge is not killed when the budget runs out during it", async () => {
+    const r = newRow();
+    plantSmudge(r, "slow", "sleep 2; cat");
+    upstreamCommit(r, (d) => write(join(d, "src", "big.slow"), "slow\n"));
+    const budget = { mergeStartMinMs: 20_000, remaining: () => (H.host.some((a) => a.includes("merge")) ? -1 : 30_000) };
+    expect((await pull(r, { budget })).pullReason).toBe("merged");
+    expect(read(join(r.ws, "src", "big.slow"))).toBe("slow\n");
+    expect(mergeHead(r)).toBe(false);
+  });
+
+  test("two concurrent syncPull on one workspace serialize: the second is up_to_date, never a false unresolved_merge", async () => {
+    const r = newRow();
+    plantSmudge(r, "slow", "sleep 1; cat");
+    write(join(r.ws, "src", "x.ts"), "export const x = 9; // dirty member edit\n"); // the autostash holds MERGE_AUTOSTASH
+    upstreamCommit(r, (d) => write(join(d, "src", "big.slow"), "slow\n"));
+    const [a, b] = await Promise.all([pull(r), pull(r)]);
+    expect([a.pullReason, b.pullReason]).toEqual(["merged", "up_to_date"]);
+    expect(read(join(r.ws, "src", "x.ts"))).toBe("export const x = 9; // dirty member edit\n");
+  });
+
+  test("D45(a): syncPull and syncPush resolve the installation with (userId, workspaceId)", async () => {
+    const r = newRow();
+    H.resolveInstallationId.mockClear();
+    await pull(r);
+    write(join(r.ws, "knowledge-base", "a.md"), "a\npush me\n");
+    await syncPush(USER, r.ws, {} as never, WS_ID);
+    expect(H.resolveInstallationId.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of H.resolveInstallationId.mock.calls) expect(call).toEqual([USER, WS_ID]);
+  });
+
+  test("quality P3-3: a rejected stamp write does not abort the pull result", async () => {
+    const r = newRow();
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
+    H.writeRepoCols.mockRejectedValueOnce(new Error("db blip"));
+    const result = await pull(r);
+    expect(result.pullReason).toBe("merged");
+    expect(result.heldFiles).toBe(0);
+    expect(pullLines()).toEqual([expect.objectContaining({ reason: "merged" })]);
+  });
+  // obs F4 (isolated_reason) is pinned in test/server/session-sync-sentry-mirror.test.ts: a refusal real git reaches only
+  // after host git accepted the `.git` shape is not constructible here (host git refuses the same shapes first).
 });

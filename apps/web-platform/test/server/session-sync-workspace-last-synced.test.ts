@@ -108,15 +108,18 @@ vi.mock("@/server/observability", () => ({
 // git helpers used inside syncPull/syncPush — stub the child_process surface so
 // hasRemote/hasLocalCommits report a remote with local commits and the
 // auto-commit sweep no-ops cleanly.
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_bin: string, rawArgv: string[]) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("../helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((_bin: string, rawArgv: string[]) => {
     const argv = stripHostGitBlock(rawArgv);
     if (argv[0] === "remote") return Buffer.from("origin\tgit@x (fetch)\n");
     if (argv[0] === "rev-list") return Buffer.from("1\n"); // hasLocalCommits → push
     if (argv[0] === "status") return Buffer.from(""); // no allowlisted changes
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
@@ -243,8 +246,8 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     mockWriteRepoCols.mockResolvedValue(undefined);
     await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: "merged", checkedAt: null });
     mockWriteRepoCols.mockRejectedValueOnce(new Error("0 rows"));
-    // a write that throws lands in the pull's outer catch: reported, and the pull still resolves
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null });
+    // quality P3-3: a stamp write that throws is caught at the stamp (best effort); the merge's result stands
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: "merged", checkedAt: null });
   });
 
   // Scenario 10 (pull side) — team-active member stamps the TEAM workspace, never userId.

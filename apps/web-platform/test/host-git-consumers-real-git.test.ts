@@ -992,7 +992,8 @@ describe("census: every host-side git exec site is classified (consistency with 
     const src = code(join(SERVER, "session-sync.ts"));
     expect(src.match(GIT_EXEC) ?? []).toEqual([]);
     expect(src).not.toMatch(/\bexecFile(Sync)?\b|\bhostGitInvocation\(/);
-    expect(src).toMatch(/import \{[^}]*\brunConnectedRepoGit\b[^}]*\} from "\.\/connected-repo-git"/);
+    // D38(1): the one runner is now the async `runConnectedRepoGitAsync` (the sync one is gone)
+    expect(src).toMatch(/import \{[^}]*\brunConnectedRepoGitAsync\b[^}]*\} from "\.\/connected-repo-git"/);
   });
 
   it("production call sites pass only the three allowProtocol constants, each with its pinned value", () => {
