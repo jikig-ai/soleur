@@ -38,6 +38,6 @@ Plan: `knowledge-base/project/plans/2026-11-16-fix-changed-paths-no-match-exit-4
 
 ## Phase 5 - Ship
 
-- [ ] 5.1 Run the repo meta-guards; push and check the exit code.
-- [ ] 5.2 PR body: `Ref #12246`, `Filed: none`, `## Changelog`, `semver:patch`, the RED-first rows, the mutation results, the decision-challenges rulings.
-- [ ] 5.3 Required checks green; mark ready; stop at ready-for-merge and report. Do not enqueue, never `--admin`.
+- [x] 5.1 Run the repo meta-guards; push and check the exit code.
+- [x] 5.2 PR body: `Ref #12246`, `Filed: none`, `## Changelog`, `semver:patch`, the RED-first rows, the mutation results, the decision-challenges rulings. (As shipped: `Filed: #12818`, the residual tracker, with a net-issue-flow override.)
+- [ ] 5.3 Required checks green; mark ready; stop at ready-for-merge and report. Do not enqueue, never `--admin`. (Left unticked in-tree: this file is archived before CI reports; the PR's required checks are the record.)
