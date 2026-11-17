@@ -116,7 +116,8 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 
-import { assertConnectedRepoArgv, syncPull, syncPush } from "../server/session-sync";
+import { assertConnectedRepoArgv, MERGE_CONFIG_PINS, mergeArgv, syncPull, syncPush } from "../server/session-sync";
+import { AUTO_MERGE_MSG_PULL } from "../server/kb-sync-pull";
 
 // ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
 // workspace id. A minimal stub satisfies writeRepoColsToWorkspace's chain.
@@ -358,5 +359,53 @@ describe("connected-repo argv guard: update-ref --no-deref and unpack-objects -q
     expect(() => assertConnectedRepoArgv(["checkout", "main"])).toThrow();
     expect(() => assertConnectedRepoArgv(["commit", "--amend"])).toThrow();
     expect(() => assertConnectedRepoArgv(["status", "--porcelain=v1", "-z"])).not.toThrow();
+  });
+});
+
+// TX1-e, shape half (#12718, D26(2), D26(5)): the session-start merge is ONE exact argv. Equality with the in-memory `T` is
+// the kb-sync-pull row (test/kb-sync-pull.test.ts); here only the shape.
+describe("connected-repo argv guard: the pinned session-start merge (#12718)", () => {
+  const T = "c".repeat(40);
+  const MERGE = ["merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_PULL, T];
+  test("the pins, then the merge of a 40-hex target, pass", () => {
+    expect(mergeArgv(T)).toEqual([...MERGE_CONFIG_PINS, ...MERGE]);
+    expect(() => assertConnectedRepoArgv(mergeArgv(T))).not.toThrow();
+  });
+  test("every D26(2) pin is present, each behind its own -c", () => {
+    const pins = MERGE_CONFIG_PINS.filter((_, i) => i % 2 === 1);
+    expect(MERGE_CONFIG_PINS.filter((_, i) => i % 2 === 0).every((c) => c === "-c")).toBe(true);
+    expect(pins).toEqual([
+      "merge.verifySignatures=false",
+      "gpg.program=/bin/false",
+      "gpg.ssh.program=/bin/false",
+      "gpg.x509.program=/bin/false",
+      "merge.renormalize=false",
+      "merge.default=text",
+      "rerere.enabled=false",
+      "rerere.autoUpdate=false",
+      "merge.stat=false",
+      "maintenance.auto=false",
+      "gc.auto=0",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+  const without = (drop: string): string[] => mergeArgv(T).filter((a) => a !== drop);
+  test.each([
+    ["the merge without its pins", MERGE],
+    ["a missing pin", [...MERGE_CONFIG_PINS.slice(2), ...MERGE]],
+    ["an extra -c pin", ["-c", "core.fsmonitor=x", ...MERGE_CONFIG_PINS, ...MERGE]],
+    ["a -c pin on another verb", [...MERGE_CONFIG_PINS, "commit", "-m", "x"]],
+    ["--ff-only", [...MERGE_CONFIG_PINS, "merge", "--ff-only", T]],
+    ["merge --abort", [...MERGE_CONFIG_PINS, "merge", "--abort"]],
+    ["a bare merge --abort", ["merge", "--abort"]],
+    ["no --no-overwrite-ignore", without("--no-overwrite-ignore")],
+    ["no --autostash", without("--autostash")],
+    ["another message", [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", "x", T]],
+    ["a ref name target", [...MERGE_CONFIG_PINS, ...MERGE.slice(0, -1), "refs/remotes/origin/main"]],
+    ["an all-zero target", mergeArgv("0".repeat(40))],
+    ["a second target", [...mergeArgv(T), T]],
+    ["an option-shaped target", [...MERGE_CONFIG_PINS, ...MERGE.slice(0, -1), "--strategy=ours"]],
+  ])("refuses %s", (_name, argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow(/pinned session-start merge/);
   });
 });

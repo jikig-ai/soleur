@@ -438,6 +438,9 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
 
   test("TX1-i (D26(2)): planted merge.verifySignatures + gpg.program marker and a post-merge hook never run", async () => {
     const r = newRow();
+    // the local KB commit is made BEFORE the plant: the auto-commit's own `commit` would honour rerere.enabled (out of D26(2))
+    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal\n");
+    git(r.ws, "commit", "-q", "-am", "local kb");
     const marker = join(r.root, "marker");
     const script = join(r.root, "evil.sh");
     write(script, `#!/bin/sh\necho ran >> ${marker}\nexit 0\n`);
@@ -448,9 +451,9 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     git(r.ws, "config", "rerere.enabled", "true");
     write(join(r.ws, ".git", "hooks", "post-merge"), `#!/bin/sh\necho hook >> ${marker}\n`);
     chmodSync(join(r.ws, ".git", "hooks", "post-merge"), 0o755);
-    write(join(r.ws, "knowledge-base", "a.md"), "a\nlocal\n");
     upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
     expect((await pull(r)).pullReason).toBe("merged");
+    expect(parentsOf(r, "HEAD")).toHaveLength(2); // a real merge ran
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(join(r.ws, ".git", "rr-cache"))).toBe(false);
   });

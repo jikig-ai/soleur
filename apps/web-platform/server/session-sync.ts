@@ -22,10 +22,25 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { firstAppFrame } from "./error-frame";
-import { gitWithInstallationAuth } from "./git-auth";
+import { disposeIsolated } from "./git-isolated-dispose";
+import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle } from "./git-isolated-push-dir";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import { KB_ROOT } from "./kb-root";
 import { KbSyncError, publishKbOnly, reportPushHeld, type KbWorkspaceWriter } from "./kb-sync-publish";
+import {
+  adoptSideTip,
+  AUTO_MERGE_MSG_PULL,
+  KB_PULL_HELD_MESSAGES,
+  KB_PULL_HELD_OP,
+  mergeVerifiedDefault,
+  type KbMergeOutcome,
+  type KbPullHeldReason,
+  type KbPullLimits,
+  type KbPullRef,
+  type KbPullStep,
+  type KbPullWriter,
+} from "./kb-sync-pull";
+import { KbRemoteError, resolveRepoUrl } from "./kb-sync-remote";
 import { HEX40, readWorkspaceHeadRef } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
@@ -60,7 +75,50 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   // in the isolated GIT_DIR (server/git-isolated-local.ts).
   "update-ref",
   "unpack-objects",
+  // #12718 (rulings X1, D26(2)): the session-start merge of the verified remote tip, ONE exact argv (`assertMergeArgv`).
+  "merge",
 ]);
+
+/**
+ * D26(2): the config pins of the session-start merge. Each closes a workspace-config route to a host-side program or a
+ * silent content change: signature verification and its gpg programs, renormalization, a configured merge default, rerere
+ * (a replayed resolution), the diffstat, auto-maintenance and gc, and hooks. `filter.*` and an attribute-selected merge
+ * driver still run on the host (D26(3), same-uid residual; the closure is an isolated `merge-tree`, a follow-up).
+ */
+export const MERGE_CONFIG_PINS: readonly string[] = [
+  "merge.verifySignatures=false",
+  "gpg.program=/bin/false",
+  "gpg.ssh.program=/bin/false",
+  "gpg.x509.program=/bin/false",
+  "merge.renormalize=false",
+  "merge.default=text",
+  "rerere.enabled=false",
+  "rerere.autoUpdate=false",
+  "merge.stat=false",
+  "maintenance.auto=false",
+  "gc.auto=0",
+  "core.hooksPath=/dev/null",
+].flatMap((pin) => ["-c", pin]);
+
+/** The pinned merge argv for `target` (a 40-hex id the caller verified, D26(5)). */
+export function mergeArgv(target: string): string[] {
+  return [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_PULL, target];
+}
+
+/**
+ * Shape only (D26(5)): a `-c`-led argv must be exactly the pins then the merge, and the merge exactly
+ * `merge --no-edit --autostash --no-overwrite-ignore -m <AUTO_MERGE_MSG_PULL> <40hex>`. No `--ff-only`, no `--abort`, no
+ * second target. That the target is the in-memory `T` is checked in server/kb-sync-pull.ts, not here.
+ */
+function assertMergeArgv(argv: readonly string[]): void {
+  const refuse = (): never => {
+    throw new Error("connected-repo git: 'merge' argv is not the pinned session-start merge");
+  };
+  const target = argv[argv.length - 1];
+  if (argv.length !== MERGE_CONFIG_PINS.length + 7 || !guardedSha(target)) refuse();
+  const expected = mergeArgv(target);
+  if (!expected.every((a, i) => argv[i] === a)) refuse();
+}
 
 /** An object id the guarded `update-ref` shapes accept: 40 lowercase hex, never all-zero (git reads it as "delete" / "must not exist"). */
 function guardedSha(sha: string | undefined): boolean {
@@ -145,6 +203,11 @@ function autoCommitFailure(err: unknown, stage: "pull" | "push"): Error | null {
 export function assertConnectedRepoArgv(argv: readonly string[]): void {
   if (argv.length === 0) {
     throw new Error("connected-repo git: argv must include a subcommand");
+  }
+  // Only the session-start merge may carry `-c` pins, and only exactly them (D26(2)).
+  if (argv[0] === "-c" || argv[0] === "merge") {
+    assertMergeArgv(argv);
+    return;
   }
   const subcmd = argv[0];
   if (!ALLOWED_GIT_SUBCOMMANDS.has(subcmd)) {
@@ -623,8 +686,43 @@ async function updateLastSynced(
 // ---------------------------------------------------------------------------
 
 /**
- * Pull latest changes from remote before an agent session.
- * Best-effort: failures are logged but never throw.
+ * One `kb-sync.pull-held` line per session-start pull (D25(6)): an info pino line for every reason, plus a debounced
+ * warning mirror (per workspace and reason) for the warning reasons. Tags carry the closed reason and, for a fetch-stage
+ * reason, which fetch; no URL, sha, path or branch name.
+ */
+export function reportPullHeld(reason: KbPullHeldReason, ctx: { userId: string; workspaceId: string }, ref?: KbPullRef): void {
+  log.info({ op: KB_PULL_HELD_OP, reason, ...(ref ? { ref } : {}), workspaceId: ctx.workspaceId }, "KB sync pull outcome");
+  const message = KB_PULL_HELD_MESSAGES[reason];
+  if (message === null) return;
+  mirrorWarnWithDebounce(
+    null,
+    { feature: "session-sync", op: KB_PULL_HELD_OP, message, tags: { reason, ...(ref ? { ref } : {}) }, extra: { userId: ctx.userId } },
+    ctx.workspaceId,
+    `kb-sync-pull-held:${reason}`,
+  );
+}
+
+/** What `syncPull` hands its caller (D29(4)): the held-files count (wired by #12714; null here) and the run's reason. */
+export interface SyncPullResult {
+  readonly heldFiles: number | null;
+  readonly pullReason: KbPullHeldReason | null;
+}
+
+/** The reasons after which the workspace is in sync with GitHub's default branch, so `repo_last_synced_at` is stamped (X1). */
+const PULL_STAMPS = new Set<KbPullHeldReason>(["up_to_date", "merged", "autostash_conflict"]);
+/** The default-branch reasons after which step 6b (side-tip adoption, D28) runs. */
+const PULL_ADOPTS = new Set<KbPullHeldReason>(["up_to_date", "merged"]);
+
+/**
+ * Pull GitHub's default branch into the workspace before an agent session (#12718, rulings X1, X4, X5, D25-D28).
+ * Best-effort: failures are logged and reported, and it never throws.
+ *
+ * Order: ONE status run; the shared `mergeInProgress` (a half-done merge refuses `unresolved_merge` BEFORE any auto-commit,
+ * with no token minted, D26(1)); the KB auto-commit from the same status; the frozen HEAD; then, in ONE isolated directory,
+ * `mergeVerifiedDefault` (server/kb-sync-pull.ts) and, after `merged` or `up_to_date`, the side-tip adoption. The token
+ * reaches only the hardened `ls-remote` and fetches against the literal URL; no workspace config, ref or hook takes part.
+ * `repo_last_synced_at` is stamped after `up_to_date`, `merged` and `autostash_conflict` (a merge that exited 0). One
+ * `kb-sync.pull-held` report per run.
  */
 export async function syncPull(
   userId: string,
@@ -635,69 +733,96 @@ export async function syncPull(
   // re-resolves the workspace (forbids the #5435 dual-resolver divergence).
   service: SupabaseClient,
   workspaceId: string,
-): Promise<void> {
+  opts: { readonly limits?: KbPullLimits } = {},
+): Promise<SyncPullResult> {
+  const none: SyncPullResult = { heldFiles: null, pullReason: null };
   if (!hasRemote(workspacePath)) {
-    return; // Empty workspace, no remote
+    return none; // Empty workspace, no remote
   }
 
   // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
   // `authProbe` doc-comment for the load-bearing rationale.
   if (!(await authProbe(userId, "syncPull"))) {
     log.warn({ userIdHash: hashUserId(userId) }, "Sync pull aborted — auth probe failed");
-    return;
+    return none;
   }
 
+  const ctx = { userId, workspaceId };
+  let isolated: IsolatedPushDirHandle | undefined;
   try {
+    // D26(1): ONE status run feeds the unmerged scan and the auto-commit allowlist, and the scan runs first.
+    const status = readStatus(workspacePath, "syncPull");
+    if (mergeInProgress(workspacePath, status)) {
+      reportPullHeld("unresolved_merge", ctx);
+      return { heldFiles: null, pullReason: "unresolved_merge" };
+    }
+
     const installationId = await getInstallationId(userId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync pull");
-      return;
+      return none;
     }
 
     // Auto-commit any uncommitted changes before pulling to avoid conflicts.
     // Path-scoped to `knowledge-base/` — see #2905.
+    autoCommit(workspacePath, allowlisted(status), "pull", userId);
+
+    const head = readWorkspaceHeadRef(workspacePath);
+    let result: KbPullStep;
+    let repo: { url: string; owner: string; repo: string } | null = null;
     try {
-      const allowed = getAllowlistedChanges(workspacePath);
-      if (allowed.length === 0) {
-        log.info(
-          { userId },
-          "No allowlisted changes to commit — skipping auto-commit",
-        );
-      } else {
-        runConnectedRepoGit(["add", "--", ...allowed], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PULL], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-      }
+      repo = await resolveRepoUrl(userId, workspaceId);
     } catch (err) {
-      log.warn({ err, userId }, "Auto-commit before pull failed");
-      const failure = autoCommitFailure(err, "pull");
-      if (failure) {
-        reportSilentFallback(failure, {
-          feature: "session-sync",
-          op: "auto-commit-pull",
-          extra: { userId },
-          message: "Auto-commit before sync pull failed",
+      if (!(err instanceof KbRemoteError)) throw err;
+    }
+    if (repo === null) {
+      result = { reason: "remote_state" };
+    } else {
+      try {
+        isolated = createIsolatedPushDir(workspacePath);
+      } catch (err) {
+        if (!(err instanceof IsolatedPushDirRefusal)) throw err;
+      }
+      if (!isolated) {
+        result = { reason: "isolated_refused" };
+      } else {
+        const writer = kbPullWriter(workspacePath);
+        const limits = opts.limits ? { limits: opts.limits } : {};
+        const merged = await mergeVerifiedDefault({
+          isolated,
+          installationId,
+          url: repo.url,
+          headSha: head.sha,
+          refName: head.refName,
+          writer,
+          ...limits,
         });
+        result = merged;
+        if (PULL_STAMPS.has(merged.reason)) await updateLastSynced(service, workspaceId);
+        if (PULL_ADOPTS.has(merged.reason) && merged.remote) {
+          const side = await adoptSideTip({
+            isolated,
+            installationId,
+            url: repo.url,
+            owner: repo.owner,
+            repo: repo.repo,
+            remote: merged.remote,
+            headSha: readWorkspaceHeadRef(workspacePath).sha,
+            writer,
+            ...limits,
+          });
+          if (side) result = side;
+        }
       }
     }
-
-    // Use merge (not rebase) — shallow clones lack sufficient history for rebase
-    await gitWithInstallationAuth(
-      ["pull", "--no-rebase", "--autostash"],
-      installationId,
-      { cwd: workspacePath, timeout: 60_000 },
-    );
-
-    await updateLastSynced(service, workspaceId);
-    log.info({ userId }, "Sync pull completed");
+    reportPullHeld(result.reason, ctx, result.ref);
+    return { heldFiles: null, pullReason: result.reason };
   } catch (err) {
-    log.warn({ err, userId }, "Sync pull failed — continuing with local state");
-    reportSilentFallback(err, {
+    // D25(7): no raw error reaches Sentry (git's argv names the URL and shas): the class name and the first app frame only.
+    const errName = err instanceof Error ? err.name : typeof err;
+    const frame = firstAppFrame(err);
+    log.warn({ userId, errName, ...(frame ? { frame } : {}) }, "Sync pull failed — continuing with local state");
+    reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPull",
       // workspacePath omitted intentionally — it embeds the raw userId
@@ -705,9 +830,41 @@ export async function syncPull(
       // hashExtraUserId boundary's top-level rename (Recital 26 +
       // ADR-029 rename-at-boundary). The pseudonymous userId carries the
       // diagnostic value; the path adds no information.
-      extra: { userId },
+      extra: { userId, errName, ...(frame ? { frame } : {}) },
       message: "Sync pull failed — continuing with local state",
     });
+    return none;
+  } finally {
+    disposeIsolated(isolated);
+  }
+}
+
+/**
+ * The path-scoped auto-commit (#2905) of `allowed` (the status run's `knowledge-base/` entries). Best-effort: a failure
+ * is logged and reported (stage, exit status and a closed bucket only), never thrown.
+ */
+function autoCommit(workspacePath: string, allowed: string[], stage: "pull" | "push", userId: string): void {
+  try {
+    if (allowed.length === 0) {
+      log.info({ userId }, "No allowlisted changes to commit — skipping auto-commit");
+      return;
+    }
+    runConnectedRepoGit(["add", "--", ...allowed], { cwd: workspacePath, stdio: "pipe" });
+    runConnectedRepoGit(["commit", "-m", stage === "pull" ? AUTO_COMMIT_MSG_PULL : AUTO_COMMIT_MSG_PUSH], {
+      cwd: workspacePath,
+      stdio: "pipe",
+    });
+  } catch (err) {
+    log.warn({ err, userId }, `Auto-commit before ${stage} failed`);
+    const failure = autoCommitFailure(err, stage);
+    if (failure) {
+      reportSilentFallback(failure, {
+        feature: "session-sync",
+        op: `auto-commit-${stage}`,
+        extra: { userId },
+        message: stage === "pull" ? "Auto-commit before sync pull failed" : "Auto-commit before sync push failed",
+      });
+    }
   }
 }
 
@@ -727,23 +884,63 @@ function kbWorkspaceWriter(workspacePath: string): KbWorkspaceWriter {
   };
 }
 
+/** Upper bound of the session-start merge child (a large checkout is slower than the other guarded writes). */
+const MERGE_TIMEOUT_MS = 60_000;
+
+/**
+ * The pull's workspace writes (#12718, D25(2)): the push writer's three guarded verbs plus the pinned merge. The merge's
+ * outcome is read from its exit status, `MERGE_HEAD` and one status run: exit 0 with an unmerged entry is an autostash pop
+ * that conflicted (`autostash_conflict`, D26(4)); exit 1 with `MERGE_HEAD` is a content conflict; anything else (an
+ * unrelated history, an ignored file in the way, a refused argv) is `refused`. Exported for the self-heal
+ * (server/workspace-sync.ts imports it lazily).
+ */
+export function kbPullWriter(workspacePath: string): KbPullWriter {
+  const base = kbWorkspaceWriter(workspacePath);
+  return {
+    ...base,
+    merge: (target): KbMergeOutcome => {
+      try {
+        runConnectedRepoGit(mergeArgv(target), {
+          cwd: workspacePath,
+          stdio: "pipe",
+          timeout: MERGE_TIMEOUT_MS,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+      } catch (err) {
+        const code = (err as { status?: unknown } | null)?.status;
+        return code === 1 && mergeHeadPresent(workspacePath) ? "conflict" : "refused";
+      }
+      const after = readStatus(workspacePath, "syncPull-merge");
+      return (after ?? []).some((e) => UNMERGED_XY.has(e.xy)) ? "autostash_conflict" : "clean";
+    },
+  };
+}
+
 /** `git status --porcelain=v1` XY codes of an unmerged (conflicted) index entry. */
 const UNMERGED_XY = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
-/**
- * A merge is in progress, so neither commit nor push (R11): `.git/MERGE_HEAD` present (any type, or unreadable), OR the
- * index holds an unmerged entry without one (a conflicted `stash pop`, `cherry-pick` or `rebase`; D13), which an auto-commit
- * `add` would resolve by committing the conflict markers. `entries` is the turn's one status run (D21); a status that could
- * not run (`null`) is not a merge (the auto-commit then has nothing to stage).
- */
-function mergeInProgress(workspacePath: string, entries: readonly PorcelainEntry[] | null): boolean {
+/** `.git/<name>` is present (lstat: a symlink counts and is never followed), or could not be checked (fail closed). */
+function gitFilePresent(workspacePath: string, name: "MERGE_HEAD" | "MERGE_AUTOSTASH"): boolean {
   try {
-    lstatSync(join(workspacePath, ".git", "MERGE_HEAD"));
+    lstatSync(join(workspacePath, ".git", name));
     return true;
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") return true;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
+}
+
+const mergeHeadPresent = (workspacePath: string): boolean => gitFilePresent(workspacePath, "MERGE_HEAD");
+
+/**
+ * A merge is in progress, so no auto-commit, no pull and no push (R11, X4, D26(1)): `.git/MERGE_HEAD` or
+ * `.git/MERGE_AUTOSTASH` present (any type, or unreadable), OR the index holds an unmerged entry without either (a
+ * conflicted `stash pop`, `cherry-pick` or `rebase`; D13), which an auto-commit `add` would resolve by committing the
+ * conflict markers. `entries` is the turn's one status run (D21); a status that could not run (`null`) is not a merge (the
+ * auto-commit then has nothing to stage). The ONE check both `syncPull` and `syncPush` run before their auto-commit.
+ */
+function mergeInProgress(workspacePath: string, entries: readonly PorcelainEntry[] | null): boolean {
+  if (mergeHeadPresent(workspacePath) || gitFilePresent(workspacePath, "MERGE_AUTOSTASH")) return true;
   return (entries ?? []).some((e) => UNMERGED_XY.has(e.xy));
 }
 
@@ -783,35 +980,7 @@ export async function syncPush(
 
     // Auto-commit any uncommitted changes before pushing.
     // Path-scoped to `knowledge-base/` — see #2905.
-    try {
-      const allowed = allowlisted(status);
-      if (allowed.length === 0) {
-        log.info(
-          { userId },
-          "No allowlisted changes to commit — skipping auto-commit",
-        );
-      } else {
-        runConnectedRepoGit(["add", "--", ...allowed], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PUSH], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-      }
-    } catch (err) {
-      log.warn({ err, userId }, "Auto-commit before push failed");
-      const failure = autoCommitFailure(err, "push");
-      if (failure) {
-        reportSilentFallback(failure, {
-          feature: "session-sync",
-          op: "auto-commit-push",
-          extra: { userId },
-          message: "Auto-commit before sync push failed",
-        });
-      }
-    }
+    autoCommit(workspacePath, allowlisted(status), "push", userId);
 
     if (!hasLocalCommits(workspacePath)) {
       log.debug({ userId }, "No local commits to push");
