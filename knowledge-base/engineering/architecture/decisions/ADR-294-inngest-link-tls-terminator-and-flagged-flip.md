@@ -20,6 +20,8 @@ The status flips to `accepted` in the later ledger-and-legal-wording PR, on two 
 
 This ADR covers **leg 1 only** of the three legs the legal ruling names (the app-to-Inngest send path on `:8288`). Leg 2 (the Inngest server polling the app's `sdk_url` over plain HTTP) is a dated disposition to 2026-12-10, tracked as #10538. Leg 3 (step calls through Cloudflare, with the Cloudflare-to-origin hop plain for `app.soleur.ai`, whose host rule sets SSL mode `flexible`; the Addendum below records what the repository does and does not show about the zone default) is blocked on #10479. Neither is solved here, and #10136 does not close with this PR.
 
+> **Superseded 2026-11-13 (#10479/#10538, PR #12737):** leg 3 is TLS under `strict` since 2026-11-07T23:43:43Z UTC (the strict rule's write; first proven 23:44:39Z), and the adopted rule itself becomes `strict` at PR #12737's merge apply (ADR-321 item 13). Leg 2: remedy (c) (the poll moves to the public serve URL, ADR-100 Decision 1 amendment) is declared at PR #12737's merge and live only at the owner's `inngest-host-replace` (#12742); the acceptance runs to 2026-11-20, and the 2026-12-10 extension is dead (it lapsed when #10538 did not merge by 2026-11-12).
+
 ## Context
 
 The web-platform app talks to the dedicated Inngest host (`10.0.1.40`, ADR-100) over plain HTTP on the Hetzner private network. ADR-100's 2026-09-15 addendum recorded that as a conscious acceptance: "transport confidentiality on this link is accepted, not provided" (encryption-posture ledger row, exception tracked on #6897 and then #10136). That hop carries `INNGEST_EVENT_KEY` (in the `/e/<key>` path), the hashed signing key as a Bearer on run-list reads, and event payloads: user prompts and agent output. Any peer on `10.0.1.0/24` can read it.
@@ -129,6 +131,9 @@ see what moved.
   `ssl = "full"` rules only for the two marketing hosts. So the plain hop is established for the `app.soleur.ai` host, which is the
   host #10479 names. The zone-level SSL mode is not set in Terraform (the `cloudflare_zone_settings_override` in `cloudflare-settings.tf` sets no `ssl`
   attribute) and was not read live; "the zone default is strict" rests on that comment.
+
+  > **Superseded 2026-11-13 (#10479/#10538, PR #12737):** the `flexible` app-host rule is no longer the operative match: the hop has been TLS under `strict` since 2026-11-07T23:43:43Z UTC, and at PR #12737's merge apply the rule itself becomes `strict` on `app.soleur.ai` only (ADR-321 items 10 and 13). The zone mode was read live as `strict` on 2026-11-05 (ADR-321).
+
 - **Leg 2, what the `sdk_url` poll carries.** The CLO ruling's phrase "only an HMAC-signed request and public function metadata" is
   incomplete for the SDK this repository pins (`inngest` 3.54.2, `components/InngestCommHandler.js`). The in-band sync response
   (`inBandRegisterBody`) embeds an `inspection` object, and once the request signature validates in cloud mode it carries

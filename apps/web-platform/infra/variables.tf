@@ -93,10 +93,22 @@ variable "web_hosts" {
   description = "Web-host cluster (multi-host /workspaces, ADR-068 Phase 3). web-1 = pre-existing host; keys immutable post-migration; EU-location-pinned (CLO T-1)."
   # (The former `monitored` per-host flag was removed with the #5933 per-host uptime
   # probe/monitor — uptime is now monitored at app.soleur.ai, see uptime-alerts.tf.)
+  # Keyed role fields (#9421 Part 2a, ADR-327): every role a host holds is a field here, never a
+  # `key == "web-N"` predicate, so a new host is one map entry. lb_weight is the host's declared GA
+  # pool weight (a gated drain can only lower it, cloudflare-lb.tf); exactly one host carries each of
+  # luks_monitor_profile = "primary", jump (the ssh. ingress target) and tunnel_connector (ADR-114 I1).
+  # luks_monitor_profile is not yet wired into a host: cloud-init.yml writes LUKS_MONITOR_PROFILE=standby
+  # for every birth, and web-1, the primary, is never re-born. The PR that first births a primary wires it
+  # into the render. Today one thing reads it: the GA pool's ungated-host precondition (cloudflare-lb.tf),
+  # which lets only the primary serve outside the drain gate.
   type = map(object({
-    location    = string
-    private_ip  = string
-    server_type = optional(string, "cx33")
+    location             = string
+    private_ip           = string
+    server_type          = optional(string, "cx33")
+    lb_weight            = optional(number, 0)
+    luks_monitor_profile = optional(string, "standby")
+    jump                 = optional(bool, false)
+    tunnel_connector     = optional(bool, false)
   }))
   # web-2 RE-ADDED 2026-07-24 as a FRESH cattle out-of-band standby (ADR-143, #6459) — a
   # different host from the fsn1/10.0.1.11 warm standby RETIRED 2026-07-17 (#6538, which cost
@@ -185,8 +197,8 @@ variable "web_hosts" {
   # pre-flip hit the empty /workspaces (the sole copy is web-1's volume) = workspace-gone.
   # Keys are IMMUTABLE (moved-block for_each; never rename web-1 — 29 refs / 6 files, ADR-143 D4).
   default = {
-    "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }
+    "web-1" = { location = "hel1", private_ip = "10.0.1.10", lb_weight = 1, luks_monitor_profile = "primary", jump = true }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22", lb_weight = 1, tunnel_connector = true }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
@@ -195,6 +207,32 @@ variable "web_hosts" {
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))])
     error_message = "web_hosts private_ip must be a host address in the 10.0.1.0/24 private subnet (network.tf)."
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : tonumber(split(".", h.private_ip)[3]) >= 2 && tonumber(split(".", h.private_ip)[3]) <= 254])
+    error_message = "web_hosts private_ip last octet must be 2-254 (.0 is the network, .1 the Hetzner gateway, .255 broadcast)."
+  }
+  validation {
+    condition     = length(distinct([for h in values(var.web_hosts) : h.private_ip])) == length(var.web_hosts)
+    error_message = "web_hosts private_ip values must be unique."
+  }
+  # The next two use == rather than contains(): test-eu-location-allowset-parity.sh reads every
+  # contains() allow-set in this file as an EU location set.
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : h.lb_weight == 0 || h.lb_weight == 1])
+    error_message = "web_hosts lb_weight must be 0 (drained member) or 1 (serving)."
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : h.luks_monitor_profile == "primary" || h.luks_monitor_profile == "standby"]) && length([for h in values(var.web_hosts) : h if h.luks_monitor_profile == "primary"]) == 1
+    error_message = "web_hosts luks_monitor_profile must be primary or standby, with exactly one primary host."
+  }
+  validation {
+    condition     = length([for h in values(var.web_hosts) : h if h.jump]) == 1
+    error_message = "web_hosts must mark exactly one host jump = true (the ssh. ingress target)."
+  }
+  validation {
+    condition     = length([for h in values(var.web_hosts) : h if h.tunnel_connector]) == 1
+    error_message = "web_hosts must mark exactly one host tunnel_connector = true (ADR-114 I1: one connector)."
   }
 }
 
@@ -395,33 +433,6 @@ variable "cf_api_token_rulesets" {
 variable "adopt_seo_config_entrypoint" {
   type    = bool
   default = true
-}
-
-# ADR-321 / #10479: the origin-TLS CANARY RULE switch (seo-config-rules.tf). The rule is ALWAYS present in the ruleset; this
-# variable only sets its `enabled` flag, so turning the canary off is an in-place update with the rule count constant (a
-# removed rule would trip the destroy guard, which cannot be acked on a workflow_dispatch). Default FALSE: disabled. It is
-# enabled only while a Doppler prd_terraform secret ENABLE_ORIGIN_TLS_CANARY_RULE=true is present when an apply runs
-# (`doppler run --name-transformer tf-var` turns it into TF_VAR_enable_origin_tls_canary_rule). Only a lowercase
-# `true`/`false` converts to bool: any other value aborts the whole root's plan. The default is the safe state, so an
-# unprovisioned secret does not fail the merge-triggered apply (the no-default-variable hazard above).
-variable "enable_origin_tls_canary_rule" {
-  description = "Enable the header-scoped strict-SSL canary rule for /health on app.soleur.ai (ADR-321). The rule is always present and disabled unless the owner sets ENABLE_ORIGIN_TLS_CANARY_RULE=true (lowercase) in Doppler prd_terraform."
-  type        = bool
-  default     = false
-}
-
-# ADR-321 / #10479: the host-wide STRICT FLIP switch (seo-config-rules.tf). The rule is ALWAYS present (disabled by default)
-# and this variable only sets its `enabled` flag, so merging the code adds one inert rule and changes no edge behaviour, and
-# the rollback is an in-place update the destroy guard accepts on a dispatch (a removed rule is refused unless a PUSH commit
-# message carries [ack-destroy]). It is enabled only while a Doppler prd_terraform secret ENABLE_ORIGIN_TLS_STRICT=true is
-# present when an apply runs (TF_VAR_enable_origin_tls_strict via `--name-transformer tf-var`). The ORDER is the whole point:
-# ORIGIN_TLS_REQUIRED=1 must be in Doppler prd and BOTH hosts restarted on it before this is set, because after it a bad
-# certificate-material deploy that slips past the canary is a 525/526 for every user. See runbooks/origin-tls-strict-flip.md.
-# Only a lowercase `true`/`false` is valid; anything else aborts the whole root's plan.
-variable "enable_origin_tls_strict" {
-  description = "Enable the host-wide strict-SSL rule for app.soleur.ai (the ADR-321 flip). The rule is always present and disabled unless the owner sets ENABLE_ORIGIN_TLS_STRICT=true (lowercase) in Doppler prd_terraform, after ORIGIN_TLS_REQUIRED=1 is live on both hosts."
-  type        = bool
-  default     = false
 }
 
 variable "cf_api_token_bot_management" {

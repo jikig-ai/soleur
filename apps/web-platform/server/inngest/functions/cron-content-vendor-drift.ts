@@ -55,6 +55,7 @@ import {
   safeCommitAndPr,
   type SafeCommitResult,
 } from "./_cron-safe-commit";
+import { CRON_GIT_CONFIG_PIN, withCronGitConfigPin } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -485,16 +486,17 @@ function gitIsolatedEnv(): NodeJS.ProcessEnv {
 
 function spawnGit(
   args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts?: { cwd?: string },
 ): Promise<{
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   stderr: string;
 }> {
   return new Promise((resolve) => {
+    // #12757 (CTO F-A) — the /dev/null pins win by construction: no caller env is merged.
     const child = spawn("git", args, {
       ...opts,
-      env: { ...gitIsolatedEnv(), ...opts?.env },
+      env: gitIsolatedEnv(),
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
@@ -513,13 +515,13 @@ function spawnGit(
 /** Spawn git and capture stdout (rejects on non-zero exit or spawn error). */
 async function spawnGitStdout(
   args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts?: { cwd?: string },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...opts,
-      env: { ...gitIsolatedEnv(), ...opts?.env },
+      env: gitIsolatedEnv(),
     });
     let stdout = "";
     let stderr = "";
@@ -686,7 +688,7 @@ async function spawnScriptCapture(
     const child = spawn("bash", [script, ...args], {
       stdio: [opts.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
       cwd: opts.cwd,
-      env: opts.env,
+      env: withCronGitConfigPin(opts.env),
     });
     let stdout = "";
     let stderr = "";
@@ -1038,6 +1040,7 @@ export async function cronContentVendorDriftHandler({
         NODE_ENV: process.env.NODE_ENV,
         HOME: process.env.HOME,
         GH_TOKEN: installationToken,
+        ...CRON_GIT_CONFIG_PIN,
       };
       return discoverBundles(repoRoot, env, logger);
     });
@@ -1249,6 +1252,7 @@ async function runBundleArm(deps: {
       HOME: process.env.HOME,
       GH_TOKEN: installationToken,
       NOTICE_FILE: noticeAbs,
+      ...CRON_GIT_CONFIG_PIN,
     };
 
     const upstream = bundle.upstream;

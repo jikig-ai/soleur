@@ -78,8 +78,9 @@ resource "hcloud_server_network" "registry" {
 
 # #6178 (ADR-100) — attach the dedicated Inngest singleton host at a stable private
 # IP. web backends reach it over the private net for /api/inngest registration; the
-# host reaches each web backend's private interface via a single stable --sdk-url
-# (inngest-host.tf local.web_host_private_ips). Same ADDITIVE online-attach shape as
+# host polls the apps through a single stable --sdk-url, the PUBLIC serve URL in
+# inngest-host.tf (ADR-100 Decision 1 as amended, #10538; live at the owner's
+# inngest-host-replace). Same ADDITIVE online-attach shape as
 # registry above. web = .10/.11, git-data = .20, registry = .30, inngest = .40.
 resource "hcloud_server_network" "inngest" {
   server_id = hcloud_server.inngest.id
