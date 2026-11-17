@@ -362,6 +362,20 @@ describe("POST /api/repo/setup — install resolution", () => {
     // synchronous `await POST` does not await — asserting its value would race).
   });
 
+  test("#12714 (D29(1)): the cloning flip nulls both held columns, so a reconnect never shows the old connection's count", async () => {
+    storedInstallationId = 999;
+    mockResolveReachable.mockResolvedValue([999]);
+    mockResolveOwning.mockResolvedValue(999);
+
+    await POST(makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }));
+
+    const flip = workspacesUpdateCalls.find((c) => c.patch.repo_status === "cloning");
+    expect(flip).toBeDefined();
+    expect(flip!.patch).toMatchObject({ kb_sync_held_files: null, kb_sync_held_checked_at: null });
+    expect(flip!.patch).toHaveProperty("kb_sync_held_files", null);
+    expect(flip!.patch).toHaveProperty("kb_sync_held_checked_at", null);
+  });
+
   test("T11: personal happy path — stored id present, owning probe 'ok' → clones with stored id", async () => {
     storedInstallationId = 999;
     mockResolveReachable.mockResolvedValue([999]);

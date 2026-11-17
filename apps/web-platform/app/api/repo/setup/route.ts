@@ -279,6 +279,9 @@ export async function POST(request: Request) {
       repo_status: "cloning",
       repo_error: null,
       repo_last_synced_at: cloningAt,
+      // #12714 (D29(1)): a (re)connect starts with no held count; the first sync of the new clone writes it.
+      kb_sync_held_files: null,
+      kb_sync_held_checked_at: null,
     })
     .eq("id", activeWorkspaceId)
     .neq("repo_status", "cloning")
@@ -423,6 +426,8 @@ export async function POST(request: Request) {
           repo_status: "not_connected",
           repo_last_synced_at: null,
           repo_error: null,
+          kb_sync_held_files: null,
+          kb_sync_held_checked_at: null,
         });
         return;
       }

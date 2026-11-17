@@ -256,6 +256,8 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
       repo_status: "not_connected",
       repo_last_synced_at: null,
       repo_error: null,
+      kb_sync_held_files: null,
+      kb_sync_held_checked_at: null,
     });
     expect(writes.some((w) => w.repo_status === "error")).toBe(false);
   });

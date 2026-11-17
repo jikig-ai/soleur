@@ -150,6 +150,9 @@ export async function DELETE(request: Request) {
         repo_status: "not_connected",
         repo_last_synced_at: null,
         repo_error: null,
+        // #12714 (D29(1)): the held count describes this connection; it must not reappear after a reconnect.
+        kb_sync_held_files: null,
+        kb_sync_held_checked_at: null,
       },
       { throwOnError: true },
     );
