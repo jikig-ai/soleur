@@ -672,7 +672,7 @@ counsel_rows() { # <fixture B dir: a legal change plus one branch spec that is n
   local gt gc
   gt="$(fg "$de" rev-parse 'refs/remotes/origin/main^{tree}')" && gc="$(fg "$de" commit-tree -m orphan-base "$gt")" \
     && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not build counsel row G"; return; }
-  if ! fg "$de" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 && fg "$de" ls-tree -r --name-only refs/remotes/origin/main -- docs/legal/ | grep -q .; then
+  if ! fg "$de" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 && grep -q . < <(fg "$de" ls-tree -r --name-only refs/remotes/origin/main -- docs/legal/); then
     h_ok "precondition counsel G: origin/main resolves, has no merge base with HEAD, and its tree tracks docs/legal/"
   else h_bad "precondition counsel G: origin/main has a merge base with HEAD or tracks no legal doc"; fi
   counsel_run "$de" . "$ok"
