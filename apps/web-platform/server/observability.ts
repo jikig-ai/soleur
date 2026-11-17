@@ -446,14 +446,19 @@ export function infoSilentFallback(
  *   reject (`shallow update not allowed`) that the next turn hits again.
  *   Also `kb-sync-pull-held:<reason>` (#12718, warn-level via `mirrorWarnWithDebounce`, op `kb-sync.pull-held`, workspace-id
  *   key, tags `reason` and, for a fetch-stage reason, `ref` = default | side; D25(6)): the session-start pull on the hardened
- *   arm did not simply merge. Reasons with a Sentry event: `remote_state`, `fetch_failed`, `isolated_refused`,
- *   `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`, `handover_too_large`, `unresolved_merge`,
- *   `merge_conflict`, `merge_refused`, `autostash_conflict`, `side_not_kb_only`, `side_pr_unknown` (and
- *   `merge_conflict_precheck`, the self-heal's, which reports on `self-heal-aborted-held-commits` instead). The info-only
- *   reasons (`up_to_date`, `merged`, `non_default_branch`, `side_declined`, `side_pr_created`, `side_linked`,
- *   `side_conflict`) never reach this map; the `KB_PULL_HELD_MESSAGES` Record in kb-sync-pull.ts holds an explicit `null`
+ *   arm did not simply merge. Reasons with a Sentry event: `remote_state` (tag `remote_cause`, obs F8), `fetch_failed`,
+ *   `isolated_refused` (tag `isolated_reason`, obs F4), `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`,
+ *   `handover_too_large`, `unresolved_merge`, `merge_conflict`, `merge_refused`, `autostash_conflict`, `side_not_kb_only`,
+ *   `side_pr_unknown`, `side_conflict` (D44, tag `ref=side`), `untracked_collision` (D35), `merge_unverified` (D36(b)),
+ *   `pull_deadline` (D38(2)(3), tag `ref`), `side_pr_create_failed` (D45(h)), `pull_unexpected` (obs F3: extra `errName`,
+ *   `frame`) (and `merge_conflict_precheck`, the self-heal's only, which reports on `self-heal-aborted-held-commits`
+ *   instead). The info-only reasons (`up_to_date`, `merged`, `non_default_branch`, `side_declined`, `side_pr_created`,
+ *   `side_linked`) never reach this map; the `KB_PULL_HELD_MESSAGES` Record in kb-sync-pull.ts holds an explicit `null`
  *   for each. Every reason writes its pino line (layer 2) before the debounce (`reportPullHeld` in session-sync.ts), one
- *   per run.
+ *   per run. Also `kb-sync-autostash-pin:<cause>` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.autostash-pin`,
+ *   key the workspace PATH (an in-process token, never emitted), tag `cause` = not_regular | too_large | malformed |
+ *   unreadable | pin_failed; D36(c)): an interrupted merge's `MERGE_AUTOSTASH` could not be pinned under
+ *   `refs/soleur/autostash/`, so `gc` may prune the only copy of the user's uncommitted edits.
  * - `kb-route-helpers` self-heal family (#12600, CTO rulings D7, D15(e), D20; server/workspace-sync.ts
  *   `selfHealNonFastForward`). The dedup key is the WORKSPACE PATH, an in-process token only, never emitted. Warn-level via
  *   `mirrorWarnWithDebounce` (designed holds the next session-start pull resolves): `self-heal-aborted-dirty-tracked`,

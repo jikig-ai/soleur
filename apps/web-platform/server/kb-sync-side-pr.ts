@@ -9,9 +9,9 @@
 
 import { KB_SYNC_SIDE_BRANCH } from "./kb-sync-remote";
 
-export const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
+const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
 
-export function kbSyncPrBody(defaultBranch: string): string {
+function kbSyncPrBody(defaultBranch: string): string {
   return [
     "Soleur keeps your knowledge-base in sync after every session.",
     "",
