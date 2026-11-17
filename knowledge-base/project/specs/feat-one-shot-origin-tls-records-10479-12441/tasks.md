@@ -18,13 +18,13 @@ Plan: `knowledge-base/project/plans/2026-11-17-docs-origin-tls-closing-records-1
 
 ## 3. Part B: runbook (#12441)
 
-- [ ] 3.1 File issue (i), the SOLEUR_HEALTH_TIMING marker revival, and issue (ii), the site-split host-filtered query. Use Ref only, with a milestone.
-- [ ] 3.2 Insert `##### Addendum 2026-11-16: ...` after the 2026-11-11 addendum: source line, Table 1, consistency note, Table 2, laptop samples, limitation, CTO 2026-11-16 and 2026-11-17 rulings, durable-path line.
+- [ ] 3.1 File issue (i), the SOLEUR_HEALTH_TIMING marker revival (labels `domain/engineering`, `observability`; quote the runbook shape sentence verbatim), and issue (ii), the site-split host-filtered query (label `domain/engineering`). Both: milestone `Post-MVP / Later`, Ref only, no priority label.
+- [ ] 3.2 Insert `##### Addendum 2026-11-16: ...` after the 2026-11-11 addendum: source line, Table 1, consistency note, Table 2 (every day 11-07 to 11-16; days without a row read "no rows"), laptop samples, limitation, CTO 2026-11-16 and 2026-11-17 rulings, durable-path line.
 - [ ] 3.3 Add the issue numbers to the decision-challenges rows "p90 step" and "Marker revive trigger (2)".
 
 ## 4. Verify
 
-- [ ] 4.1 AC1-AC8 checks (YAML parse, verbatim count, marker counts, numstat 2/0/0 plus span-removed equality, legal lints, doc-SHA check, markdownlint).
+- [ ] 4.1 AC1-AC8 checks (YAML parse, verbatim count, marker counts, numstat deletions 2/0/0 plus span-removed equality; verbatim check via python `str.count`, legal lints, doc-SHA check, markdownlint).
 - [ ] 4.2 `prepush-secret-scan.sh` before every push.
 
 ## 5. PR #12843

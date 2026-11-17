@@ -19,6 +19,21 @@ pr: 12843
 
 A records-only change on epic #10205. It appends the CLO-owed closing addendum for the origin-TLS thread (#10479) to the counsel-review audit, adds Superseded markers to two auto-close predictions that proved false, and records the second Cloudflare analytics read of the /health series (#12441) with the CTO ruling on it in the strict-flip runbook. No code, infrastructure or published legal page changes.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-17
+**Sections enhanced:** 4 (Research Insights, Phase 3, Acceptance Criteria, Sharp Edges)
+**Research agents used:** none newly spawned at deepen time. This is a proportional pass: the plan is records-only (MINIMAL), and plan time had already run learnings-researcher, CLO, CTO and code-simplicity-reviewer. Every halt gate (4.6, 4.8, 4.12) was run mechanically. 4.5, 4.55, 4.7, 4.9, 4.10, 4.11 and 4.13 do not trigger: there are no network-outage keywords in the plan's own scope, no infra, no code, no UI, no store, no guard and no new task. The quality checks were run live (below).
+
+### Key Improvements
+1. Re-verified the cause the markers cite, live, from PR #12737's GraphQL `userContentEdits`: the body edit that dropped `Closes` happened at 2026-11-16T12:59:10Z. Every earlier edit still had `Closes #10538`.
+2. Issue (i) now carries the runbook's own full marker shape, including "emitted AFTER the response is written, inside try/catch", which the CTO summary left out. Labels and the milestone for both issues are verified to exist.
+3. The removed-line and verbatim checks were changed from grep forms, which could pass on a broken diff, to forms that cannot (numstat deletions, span-removed equality, exact `str.count`).
+
+### New Considerations Discovered
+- The brief's "only surviving pre-flip comparison" is too broad: the committed 2026-11-11 evidence files still hold 126 pre-flip hourly rows. The record is bounded to say so (Research Reconciliation).
+- The brief's 07:00Z "left the window" time and its "8 h before the flip" label do not match the wrapper's window arithmetic (`gql_window`). The CTO set the wording.
+
 ## Research Reconciliation — Brief vs. Codebase
 
 | Brief claim | Reality (read 2026-11-17 in this worktree) | Plan response |
@@ -56,6 +71,25 @@ A records-only change on epic #10205. It appends the CLO-owed closing addendum f
 **Facts the CLO found at plan time (2026-11-17).** The body of PR #12737 said `Closes #10479` and `Closes #10538` when the review was written on 2026-11-15. It was changed to `Ref` at 2026-11-16T12:59:10Z (GraphQL `userContentEdits`), about 11 minutes before the 13:10:30Z merge. So the review's "This PR's body says `Closes #10538`" was true when it was written. Only the prediction that the issues would close at merge is false, and every marker gives this cause. The Q-1 measurement itself is #10479 comment 6917496007 (2026-11-16T13:16:31Z): ruleset v8, last_updated 13:12:15Z, 3 rules, `dcb85b75` strict and the only rule matching app.soleur.ai, no flexible rule, `--require-tls` 20/20. Comment 6946870123 holds the ruling. Cite both.
 
 **Facts the CTO found at plan time (2026-11-17).** `cloudflare-readonly.sh` `gql_window` sets `end` to the current time rounded down to the hour, and `start = end - HOURS*3600`, over the half-open range `[start, end)`. In the committed file `evidence/2026-11-11-analytics-health-216h.json`, hourly p90 is 472 ms at 11-07T22Z, 450 ms at 23Z and 826 ms at 11-08T00Z. The lowest p90 after the flip is 778 ms. No open issue tracks `SOLEUR_HEALTH_TIMING` or a site-split (coloCode) host-filtered query (`gh issue list` searches, 2026-11-17).
+
+**Deepen-time live verification (2026-11-17).**
+
+```text
+$ gh api graphql ... pullRequest(number:12737){userContentEdits{nodes{editedAt diff}}}
+2026-11-16T12:59:10Z closes=false ref=true    <- the edit that dropped Closes
+2026-11-16T10:26:22Z closes=true  ref=false
+2026-11-15T23:02:19Z closes=true  ref=false   (and three earlier 11-15 edits, all closes=true)
+$ gh pr view 12737 --json closingIssuesReferences,mergedAt,mergeCommit
+closes=[]  2026-11-16T13:10:30Z  233c690996010931a31835b22b49cf43949b0fb3
+$ gh api .../issues/comments/6917496007 --jq .created_at   -> 2026-11-16T13:16:31Z (Q-1 re-measure)
+$ gh api .../issues/comments/6946870123 --jq .created_at   -> 2026-11-17T11:34:10Z (CLO + CTO rulings)
+$ gh label list | grep -E '^(domain/engineering|observability)$'   -> both exist
+$ gh api repos/jikig-ai/soleur/milestones --jq '.[].title' | grep Post-MVP   -> "Post-MVP / Later"
+$ git ls-files | grep health-keyword-monitor-contract   -> apps/web-platform/test/server/health-keyword-monitor-contract.test.ts
+$ grep -n legal/audits apps/web-platform/lib/legal/legal-doc-shas.ts   -> (no output: these files are not SHA-pinned)
+```
+
+Verify-the-negative pass: "no published legal surface is edited" is confirmed, because Files to Edit holds only `knowledge-base/` paths. "LEGAL_DOC_SHAS does not pin these files" is confirmed by the grep above. "The ledger cites the A7 file by path only" is confirmed: `scripts/encryption-posture-ledger.json` connection 6 holds the path string, and the A7 file is not renamed.
 
 ## Files to Edit
 
@@ -95,8 +129,9 @@ All marker dates are **2026-11-17** (CLO Q3). The addendum heading keeps **2026-
 ### Phase 3 — Part B: runbook addendum (#12441)
 
 9. **File the two follow-up issues first**, so that the addendum can cite their numbers. Each uses `--milestone` from `knowledge-base/product/roadmap.md` (fallback "Post-MVP / Later"). Each references `Ref #12441` / `Ref #10479` / `Ref #10205`, with no closing keywords.
-   - (i) `origin-tls: revive the SOLEUR_HEALTH_TIMING marker (trigger (2) of the 2026-11-08 marker ruling met)`. The body carries the marker shape as the runbook states it: a warn-level line with fields `total_ms`, `supabase_ms`, `tls` and `protocol`, emitted only when `total_ms > 500` plus a 1-in-50 sample, at most 6 lines/min, with the /health body and status unchanged (pinned by `health-keyword-monitor-contract.test.ts`). The marker does not wait for (ii). (CTO 2026-11-17 Q1.)
-   - (ii) `origin-tls: site-split (coloCode), host-filtered (app.soleur.ai) /health analytics query with an end-time offset in cloudflare-readonly.sh`. This confirms or rejects the provisional p90 attribution (CTO 2026-11-16).
+   - (i) `origin-tls: revive the SOLEUR_HEALTH_TIMING marker (trigger (2) of the 2026-11-08 marker ruling met)`. Labels `domain/engineering` and `observability`. The body quotes the runbook's shape sentence verbatim (the "If revived, the shape is: ..." line under "Marker ruling"): a `warn`-level line with fields `total_ms`, `supabase_ms`, `tls` and `protocol`, emitted AFTER the response is written, inside try/catch, only when `total_ms > 500` plus a 1-in-50 sample, at most 6 lines per minute, with the response body and status unchanged (`apps/web-platform/test/server/health-keyword-monitor-contract.test.ts`). The marker does not wait for (ii). (CTO 2026-11-17 Q1.) No priority label: priority is the owner's call.
+   - Both issues: milestone `Post-MVP / Later` (verified to exist), and no `Closes`/`Fixes` keyword in the body.
+   - (ii) `origin-tls: site-split (coloCode), host-filtered (app.soleur.ai) /health analytics query with an end-time offset in cloudflare-readonly.sh`. Label `domain/engineering`. The wrapper is a closed read-only subcommand set (ADR-289), so the issue names a new subcommand or a flag. It is not a manual GraphQL path. This confirms or rejects the provisional p90 attribution (CTO 2026-11-16).
 10. **Insert `##### Addendum 2026-11-16: second wrapper reads and the CTO ruling (Cloudflare analytics, Ref #12441)`** at the position given in Files to Edit, mirroring the 2026-11-11 addendum's register (additions-only, `Unverified:` lines, every figure sampled, no cause claimed beyond the CTO ruling). Content:
     - **Opening.** Additions-only. The read supersedes nothing above, except that the p90 status line "**Status: unexplained.**" at the head of the p90 section is now read together with the CTO ruling below (the line itself stays as written).
     - **Source line.** `cloudflare-readonly.sh analytics-health 216` and `analytics-edge-errors 216`, read 2026-11-16 at about 17:00Z, from origin/main. Do not invent a SHA: if none was recorded, say "checkout SHA not recorded". Cloudflare-side origin response time for `/health`, sampled. The health read is path-filtered and not host-scoped; the edge read is host-filtered (`app.soleur.ai`, all paths). The two do not cover the same requests.
@@ -114,7 +149,7 @@ All marker dates are **2026-11-17** (CLO Q3). The addendum heading keeps **2026-
 11. `python3 -c` with `yaml.safe_load` on the counsel-review frontmatter: it parses, `addenda` is a one-item list, and `open_follow_ups` still has 6 items.
 12. `git diff --numstat origin/main -- knowledge-base/legal/audits/2026-11-counsel-review-10479.md knowledge-base/legal/audits/2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md`: the deletions column reads `2`, `0`, `0` (the counsel-review `open_follow_ups:` line and the Artifact 5 row are each replaced by one insertion). For each of the two, the new line with the inserted `[Superseded 2026-11-17 ...]` span removed equals the old line byte for byte. (Do not use `grep '^-[^-]'`: it cannot see removed bullet lines, which diff as `-- `.)
 13. Verbatim check: save the brief's addendum paragraph to the scratchpad, then run `python3 -c 'import sys; t=open(sys.argv[1]).read(); p=open(sys.argv[2]).read().rstrip("\n"); assert t.count(p)==1' <counsel-review file> <paragraph file>`.
-14. Run `bash scripts/lint-legal-registers.sh`, `python3 scripts/lint-encryption-posture.py`, `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main`, `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` and `bash apps/web-platform/scripts/check-tc-document-sha.sh`. All exit 0. `npx markdownlint` (the repo pins `markdownlint-cli`) on the three edited files passes (MD028 in particular).
+14. Run `bash scripts/lint-legal-registers.sh`, `python3 scripts/lint-encryption-posture.py`, `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main`, `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` and `bash apps/web-platform/scripts/check-tc-document-sha.sh`. All exit 0. `node_modules/.bin/markdownlint -c .markdownlint.json` on the three edited files passes. The base is clean for the counsel-review file at plan time. `knowledge-base/project/` is in `.markdownlintignore`, so the plan itself is not linted. `lint-infra-no-human-steps.py` fails on the base with 10 hits, all in other files and none in this change's files, so judge it by new hits only (MD028 in particular).
 15. Before every push, run `bash plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh`.
 
 ### Phase 5 — PR #12843 (no merge)
@@ -207,4 +242,5 @@ Product/UX Gate: not applicable. No UI surface is touched.
 - The Artifact 5 bracket goes inside a table cell. A `|` in the appended text would split the row.
 - Do not reconstruct a substitute for the lost raw file from the 2026-11-11 evidence (CTO Q2 rejected this). Record the brief's figures as given.
 - The verbatim addendum says `origin-tls-probe --require-tls` "returned HTTP 200 over TLSv1.3". Leave it as it stands. The 20/20 count lives in comment 6917496007 and is cited on the `Written` line, not edited into the paragraph.
+- The 5xx Table 2 must list every day from 11-07 to 11-16. Days with no row (11-09, 11-10, 11-13, 11-14, 11-15) read "no rows", so a reader cannot take a blank row as zero errors.
 - `ship` Phase 5.5 may route a `knowledge-base/legal/` diff to a counsel-review gate. The CLO rulings of 2026-11-16 and 2026-11-17 are the attestation inputs, so cite them rather than re-spawning.
