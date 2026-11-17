@@ -29,9 +29,22 @@
 #                   under the canonical vendor name from `prd_terraform` (#7797 class, #7946).
 #   BOOT_TRAIL_SINCE epoch seconds; events older than this are ignored (run anchor, see below)
 #   GITHUB_STEP_SUMMARY  runner-provided; every summary write appends to it (REQUIRED)
+#   BOOT_TRAIL_STRICT    unset/0 = the web path above, unchanged; 1 = STRICT (the bastion route,
+#                   #12866); any other value is refused (verdict=skipped, exit 2)
+#   BOOT_TRAIL_HOST_NAME the exact host_name tag to read in strict mode (e.g. soleur-bastion)
 #
 # Exit: 0 on a clean boot, a skipped read, or a non-success job; 1 on a proven dark boot
 # (fatal stage, or no terminal event inside the host's own boot window).
+#
+# STRICT MODE (#12866). The web exit code above is 0 on a SKIPPED read, so a caller cannot decide
+# "ready" from it. Strict mode is for a caller that must: it reads by BOOT_TRAIL_HOST_NAME (the web
+# key and its web-1 -> soleur-web-platform mapping are not consulted), an event matches only when its
+# host_name tag EQUALS that name (an untagged event no longer matches), a missing or non-epoch run
+# anchor is refused before any read (AP-027), and the run ends on exactly one stdout line
+# `verdict=ready|not_ready|skipped` with exit 0|1|2. ready means a fresh_boot_ready for that host
+# after the anchor, no fatal, and a successful job; everything else is not_ready (the boot was read
+# and is not good) or skipped (it could not be read). The web callers never set the switch, and
+# fresh-host-boot-trail.test.sh pins their output byte for byte.
 
 set +e
 
@@ -50,6 +63,18 @@ _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
 DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
+# STRICT switch. A value other than unset/0/1 is refused by name: a typo must never fall back to the
+# lax web path, whose exit 0 a strict caller would otherwise read as nothing at all.
+strict_verdict() {  # <ready|not_ready|skipped> <reason>: the ONE verdict line, then exit 0|1|2
+  echo "boot-trail strict: $2"
+  echo "verdict=$1"
+  case "$1" in ready) exit 0 ;; not_ready) exit 1 ;; *) exit 2 ;; esac
+}
+case "${BOOT_TRAIL_STRICT:-0}" in
+  0) BT_STRICT=0 ;;
+  1) BT_STRICT=1 ;;
+  *) strict_verdict skipped "BOOT_TRAIL_STRICT='${BOOT_TRAIL_STRICT}' is not 0 or 1; refusing to guess a mode" ;;
+esac
 # RUN ANCHOR (#6969 review). Sentry is queried with statsPeriod=1h and host attribution is by
 # host_name, which is IDENTICAL for a destroyed host and its replacement (soleur-<key>). Without
 # a lower bound, iteration 1 reads the PREDECESSOR's terminal event: a healthy predecessor
@@ -130,6 +155,18 @@ if [[ "${1:-}" == "--image-origin" ]]; then
   [[ "$IO" == stage=none* ]] && exit 1
   exit 0
 fi
+if [[ "$BT_STRICT" == 1 ]]; then
+  if [[ ! "${BOOT_TRAIL_HOST_NAME:-}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    strict_verdict skipped "BOOT_TRAIL_HOST_NAME='${BOOT_TRAIL_HOST_NAME:-}' is not a host name ([a-z0-9-]); nothing was read"
+  fi
+  # A missing anchor is refused, not warned: membership over a same-named predecessor's events is
+  # exactly what the anchor excludes (AP-027), and strict mode exists to be the arm that cannot pass.
+  if [[ "$SINCE_OK" != 1 || "$BOOT_TRAIL_SINCE" == "0" ]]; then
+    strict_verdict skipped "BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not a set epoch anchor; nothing was read"
+  fi
+  # Prose only: the label the summary prints. Host matching below uses BOOT_TRAIL_HOST_NAME.
+  WEB_HOST_KEY="${WEB_HOST_KEY:-$BOOT_TRAIL_HOST_NAME}"
+fi
 if [[ "$SINCE_OK" != 1 ]]; then
   echo "::error::BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch — the boot-trail read did NOT run (this is NOT a 'host emitted nothing' result)."
   exit 0
@@ -162,6 +199,7 @@ if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
   [[ "${JOB_STATUS}" == "success" ]] && level=error
   echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
   echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"
+  [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the Sentry token is not bound (unbound token)"
   exit 0
 fi
 if ! _bearer_ok "$SENTRY_ACTIONS_RO_TOKEN"; then
@@ -173,6 +211,7 @@ if ! _bearer_ok "$SENTRY_ACTIONS_RO_TOKEN"; then
   [[ "${JOB_STATUS}" == "success" ]] && level=error
   echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
   echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"
+  [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the Sentry token failed the token-shape check"
   exit 0
 fi
 # Lockstep with the emit MESSAGE literals in soleur-host-bootstrap.sh and
@@ -192,6 +231,7 @@ MSG_RE=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"
 # test("") match EVERY event and list arbitrary ones as boot stages. Refuse.
 if [[ -z "$MSG_RE" ]]; then
   echo "_Sentry query skipped: QUERY message-literal extraction produced an empty regex — refusing to match-all (would mislabel arbitrary events as boot stages)._" | tee -a "$GITHUB_STEP_SUMMARY"
+  [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the QUERY message-literal extraction was empty"
   exit 0
 fi
 # POLLED, not sampled once. The earlier form issued a single curl immediately
@@ -233,7 +273,9 @@ fi
 # event" was previously whichever host emitted most recently — the ambiguity that made
 # the web-2 dark boot require a separate Hetzner API lookup to resolve host_id
 # 155488316 into a name. Mirrors server.tf's host_name expression exactly.
-if [[ "${WEB_HOST_KEY}" == "web-1" ]]; then
+if [[ "$BT_STRICT" == 1 ]]; then
+  EXPECT_HOST="$BOOT_TRAIL_HOST_NAME"
+elif [[ "${WEB_HOST_KEY}" == "web-1" ]]; then
   EXPECT_HOST="soleur-web-platform"
 else
   EXPECT_HOST="soleur-${WEB_HOST_KEY}"
@@ -243,6 +285,12 @@ fi
 # does not. So the filter can only ever exclude events provably from another host.
 JQ_HOSTDEF='def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh);
 def sincok($s): if $s <= 0 then true else ((.dateCreated // "") | if . == "" then false else (((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) >= $s) end) end;'
+# STRICT: the tag must be PRESENT and EQUAL. A later def of the same name and arity shadows the lax
+# one for every program below, so the web text above stays byte-identical.
+if [[ "$BT_STRICT" == 1 ]]; then
+  JQ_HOSTDEF="${JQ_HOSTDEF}"'
+def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn != null and $hn == $eh);'
+fi
 TERMINAL=""
 # (#6995) `cloud_init_complete` is necessary but NOT sufficient — see the terminal block.
 # CC_SEEN records when the marker first appeared; CC_GRACE must exceed the 180s
@@ -271,6 +319,7 @@ while :; do
   if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
     echo "::warning::fresh-host Sentry read FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result."
     echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
+    [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the Sentry read failed (HTTP ${HTTP})"
     exit 0
   fi
   # TRUNCATION GUARD. This is a SHARED project (web-1 traffic, app errors,
@@ -403,6 +452,7 @@ case "$TERMINAL" in
     # the newest), so the asymmetry had to go.
     if [[ "${JOB_STATUS}" != "success" ]]; then
       echo "_A clean boot trail was surfaced, but this job did not complete its apply — the trail above may belong to an earlier attempt or another host, so no boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
+      [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "the job did not succeed (job=${JOB_STATUS})"
       exit 0
     fi
     if [[ "$TERMINAL" == "complete_no_readiness" ]]; then
@@ -422,10 +472,17 @@ case "$TERMINAL" in
       echo "::warning::${WEB_HOST_KEY} booted clean but RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${RETRY_DETAIL:-<none captured>}"
       echo "_**Booted clean, but retried.** A \`doppler_retry\` breadcrumb was observed for \`${EXPECT_HOST}\`. Detail: \`${RETRY_DETAIL:-<none captured>}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     fi
+    if [[ "$BT_STRICT" == 1 ]]; then
+      # Readiness unconfirmed is NOT ready here: the web path tolerates a lost readiness event, a
+      # strict caller exists to refuse exactly that.
+      [[ "$TERMINAL" == "complete" ]] && strict_verdict ready "fresh_boot_ready observed for ${EXPECT_HOST}"
+      strict_verdict not_ready "cloud_init_complete without a fresh_boot_ready verdict for ${EXPECT_HOST}"
+    fi
     ;;
   fatal)
     if [[ "${JOB_STATUS}" != "success" ]]; then
       echo "_A fatal boot-stage event was surfaced, but this job did not complete its apply — the trail above may belong to an earlier attempt or another host._" | tee -a "$GITHUB_STEP_SUMMARY"
+      [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "a fatal boot stage and a failed job (job=${JOB_STATUS})"
       exit 0
     fi
     # (#6969) the annotation names the CAUSE, not just the stage. The annotation — not
@@ -437,11 +494,13 @@ case "$TERMINAL" in
     echo "_**The host booted dark.** Host \`${LAST_HOST:-unknown}\`, stage \`${FATAL_STAGE:-${LAST_STAGE:-unknown}}\`._" | tee -a "$GITHUB_STEP_SUMMARY"
     echo "_Cause: \`${FATAL_DETAIL:-<no detail captured>}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     echo "_A reboot cannot repair it (runcmd re-runs only on the one kernel-settle reboot) — replace the host._" | tee -a "$GITHUB_STEP_SUMMARY"
+    [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "fatal boot stage ${FATAL_STAGE:-unknown} for ${EXPECT_HOST}"
     exit 1
     ;;
   timeout)
     if [[ "${JOB_STATUS}" != "success" ]]; then
       echo "_No terminal boot event; this job did not complete its apply, so no dark-boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
+      [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "no terminal boot event and a failed job (job=${JOB_STATUS})"
       exit 0
     fi
     echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within ${BOOT_TRAIL_DEADLINE_S}s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 1140). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
@@ -463,7 +522,11 @@ case "$TERMINAL" in
     if [[ -n "$LAST_DETAIL" ]]; then
       echo "_Last detail: \`${LAST_DETAIL}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     fi
+    [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "no terminal boot event for ${EXPECT_HOST} inside the boot window"
     exit 1
     ;;
 esac
+# Unreachable by construction (every loop break sets one of the four terminals above); a strict
+# caller still gets its one line rather than a bare exit 0.
+if [[ "$BT_STRICT" == 1 ]]; then strict_verdict not_ready "no terminal state was reached (TERMINAL='${TERMINAL}')"; fi
 
