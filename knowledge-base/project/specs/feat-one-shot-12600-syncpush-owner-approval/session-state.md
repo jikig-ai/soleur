@@ -59,3 +59,6 @@ None
   PULL (Phase 9), DB+UI (10.1-10.3, 11.1, 11.4, 11.4b, 11.7, disconnect/setup nulls), AGENT-LINE (11.3 + shared strings).
 - Still owed after those land: 11.2 wiring (onHeldFiles -> write from syncPush finally, syncPull count, W5 stamp removal),
   11.3b legacy-runner line, 10.4 dev apply when PR is ready, 11.5 e2e, then the review/fix round on the new range.
+- 2026-11-17 implementation landed: PULL b3376cbaeb..b12f967d0d; AGENT-LINE 0784090ec1, e349fdb4b0, 16a55ad193; DB+UI f428544602..beef612052,
+  c4f7cfa014, d9ccfbd87c, cad5bd5fd9; lead bb6393a7e5 (tsc rc=0). Rulings D32 (route predicate legacy arm), D33 (fail-soft held columns).
+- WIRING agent running: 11.2 sync write (onHeldFiles, syncPull count, W5) + 11.3b legacy-runner line. Then: review/fix round on the extension range, 10.4 dev apply at ready, 11.5 e2e, QA, compound, ship.

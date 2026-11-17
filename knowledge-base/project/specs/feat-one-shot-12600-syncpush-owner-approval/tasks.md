@@ -124,29 +124,29 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 9: Session-start pull on the hardened arm (#12718; X1, X4, X5, D25-D28)
 
-- [ ] 9.1 Rerun `probe1.sh`-`probe5.sh` (`probes-12718-12714/` in this spec dir) in the built `runner` image; record
+- [x] 9.1 Rerun `probe1.sh`-`probe5.sh` (`probes-12718-12714/` in this spec dir) in the built `runner` image; record
   `git --version`; any differing M/F/T row stops the phase (R10 applies). Also measure the `--no-overwrite-ignore`
   refusal and the `merge-tree --write-tree` exit codes there.
-- [ ] 9.2 Write the failing tests first, RED recorded: `test/session-sync-pull-isolated-real-git.test.ts` (TX1-a..m,
+- [x] 9.2 Write the failing tests first, RED recorded: `test/session-sync-pull-isolated-real-git.test.ts` (TX1-a..m,
   TX2 with `GIT_DIR` / `GIT_INDEX_FILE` / `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` in the env, TX4-a..d,
   TX5, TX5-b, TX6-a..f), the D27 rows in `test/workspace-sync-self-heal-real-git.test.ts`, `test/kb-sync-pull.test.ts`
   (TX1-e equality half). TX1-a uses a real shallow bare store, not a seam; a fresh bare remote per row that moves the
   remote.
-- [ ] 9.3 Leaves (D25(1), D25(4)): `server/kb-sync-objects.ts` (verified reads, `isAncestor`, `kbOf`, `commitTree`,
+- [x] 9.3 Leaves (D25(1), D25(4)): `server/kb-sync-objects.ts` (verified reads, `isAncestor`, `kbOf`, `commitTree`,
   `handOver`) and `server/kb-sync-remote.ts` (`readRemoteState` moved out of `kb-sync-publish.ts` with a neutral error;
   the NEW hardened `fetchIntoIsolated`: refspec `refs/heads/<D>:refs/heads/fetched`, no `+`, no glob,
   `--no-recurse-submodules --no-write-fetch-head`, an explicit timeout, the tip read with
   `rev-parse --verify refs/heads/fetched^{commit}`, equal to `T` and `verifyObject`-checked before any hand-over).
   Neither imports `kb-sync-publish.ts` or `push-branch.ts`. Move `AGENT_AUTHOR_*` and `disposeIsolated` out of
   `push-branch.ts` into leaves; collapse `SideFallbackInput`.
-- [ ] 9.4 `server/kb-sync-pull.ts` (D25(2), D25(6)-(8)): pure-git `mergeVerifiedDefault` and `adoptSideTip` over an
+- [x] 9.4 `server/kb-sync-pull.ts` (D25(2), D25(6)-(8)): pure-git `mergeVerifiedDefault` and `adoptSideTip` over an
   injected `KbPullWriter` (`unpack`, `setTracking`, `casBranch`, `merge`); no stamping, reporting or isolated-dir
   lifecycle; never throws raw. `KbPullHeldReason` with a full `Record` of static messages (adds `fetch_failed`,
   `isolated_refused`, `handover_too_large`, `autostash_conflict`, `merge_conflict_precheck`, `side_not_kb_only`,
   `side_conflict`, `side_pr_unknown`, `side_declined`, `side_pr_created`, `side_linked`; fetch-stage reasons tagged
   `ref=default|side`). `PULL_HANDOVER_MAX_BYTES`; the walk cap (its own constant, not `OBJECT_WALK_ENTRY_CAP`) checked
   before `pack-objects`. A `D` with a leading `-` or failing `validateBranchFormat` is `remote_state`.
-- [ ] 9.5 `session-sync.ts` (D26): one `readStatus`, then the ONE shared `mergeInProgress` (`MERGE_HEAD` or
+- [x] 9.5 `session-sync.ts` (D26): one `readStatus`, then the ONE shared `mergeInProgress` (`MERGE_HEAD` or
   `MERGE_AUTOSTASH`, lstat, no symlink follow, fail-closed, or an unmerged entry) BEFORE the auto-commit in both
   `syncPull` and `syncPush`; `unresolved_merge` with no auto-commit. The writer with `merge` behind a shape-only
   exact-argv guard (TX1-e shape rows in `test/session-sync-path-allowlist.test.ts`): the D26(2) `-c` pins
@@ -155,17 +155,17 @@ phase, and record that phase's RED runs with it.
   `maintenance.auto=false`, `gc.auto=0`, `core.hooksPath=/dev/null`) and `--no-overwrite-ignore`. `syncPull`
   orchestrates the isolated dir, the default merge, `autostash_conflict` after rc 0, adoption, the held count, one
   `kb-sync.pull-held` report and dispose, and returns `{ heldFiles, pullReason }`.
-- [ ] 9.6 Side-tip adoption, pull half (D28): step 6b after `merged` and after `up_to_date`; fetch `P` if absent
+- [x] 9.6 Side-tip adoption, pull half (D28): step 6b after `merged` and after `up_to_date`; fetch `P` if absent
   (have-refs `T` and HEAD, `ref=side` refusals), `verifyObject(P)`; the KB-only gate
   `diff --quiet --no-renames <merge-base(T,P)> <P> -- . ':(exclude)knowledge-base/'` (`side_not_kb_only`, no
   hand-over); the D17 table moved to `server/kb-sync-side-pr.ts` (open: adopt; none: create, then adopt; closed
   unmerged: `side_declined`; GET failure: `side_pr_unknown`, no write); the link arm (`side_linked`) when `P`'s KB tree
   equals a first-parent commit's; else a `merge-tree` pre-check (`side_conflict`) and the merge with `P`.
-- [ ] 9.7 Side-tip adoption, push half (D28(2), D28(6)): the two interim `side_ahead` throws in `deliverAndLinkSide`
+- [x] 9.7 Side-tip adoption, push half (D28(2), D28(6)): the two interim `side_ahead` throws in `deliverAndLinkSide`
   stay for an absent `P`, with comments saying the next session-start pull adopts it; a present `P` that fails the
   KB-only check holds `side_not_kb_only`; `recheckSidePr` uses `kb-sync-side-pr.ts`. Row in
   `test/session-sync-kb-only-push-real-git.test.ts`.
-- [ ] 9.8 Self-heal wiring (D27): the `selfHealNonFastForward` held-commits branch calls `mergeVerifiedDefault` after
+- [x] 9.8 Self-heal wiring (D27): the `selfHealNonFastForward` held-commits branch calls `mergeVerifiedDefault` after
   the D15 untracked pre-check and behind a token-free `merge-tree --write-tree` pre-check (`merge_conflict_precheck`,
   workspace untouched), with `--no-overwrite-ignore`; no stamp, no adoption, one report (op
   `self-heal-aborted-held-commits`, tag `reason`); delete `HELD_COMMITS_REASON_INTERIM`. `syncWorkspace` gains
@@ -173,27 +173,27 @@ phase, and record that phase's RED runs with it.
   `app/api/kb/upload/route.ts`, `server/c4-writer.ts`, `server/kb-route-helpers.ts`,
   `server/inngest/functions/cron-workspace-sync-health.ts`, `server/inngest/functions/workspace-reconcile-on-push.ts`).
   X3 still covers only the legacy `pull --ff-only` and `fetch origin`.
-- [ ] 9.9 Checkpoint (D26(7)): TX5-b (`stale-base` after a pull merge); correct the stale comment in
+- [x] 9.9 Checkpoint (D26(7)): TX5-b (`stale-base` after a pull merge); correct the stale comment in
   `server/inflight-checkpoint.ts` ("git pull --autostash runs on every startAgentSession").
-- [ ] 9.10 Census and repo-wide registration (D25(3), D25(5)): in `test/census-git-push-sites.test.ts`, drop
+- [x] 9.10 Census and repo-wide registration (D25(3), D25(5)): in `test/census-git-push-sites.test.ts`, drop
   `server/session-sync.ts pull legacy` from `GIT_AUTH_SITES`, add the hardened fetch site, extend the all-hardened
   assertion, assert zero `gitWithInstallationAuth` sites and no literal git exec in `kb-sync-held.ts`,
   `kb-sync-objects.ts` and `kb-sync-pull.ts` with known call-site counts per file, and add the import-census row (no
   import of `kb-sync-publish.ts` or `push-branch.ts` from `kb-sync-pull.ts`, `kb-sync-remote.ts`, `kb-sync-objects.ts`
   or `workspace-sync.ts`). Register the new real-git suites in `test/repo-wide-suites.ts`; pull in D24(10)'s app-local
   `gitFixtureEnv` re-export and import it from the new suites.
-- [ ] 9.11 Update `test/host-git-consumers-real-git.test.ts` driver rows (the new modules absent from `CENSUS_ONLY` and
+- [x] 9.11 Update `test/host-git-consumers-real-git.test.ts` driver rows (the new modules absent from `CENSUS_ONLY` and
   `IN_SCOPE`) and `test/server/session-sync-sentry-mirror.test.ts` (`kb-sync.pull-held` rows, the never-throws row).
 
 ## Phase 10: Held-files column (#12714, own commit; W2, D29)
 
-- [ ] 10.1 Migration 187 (+ down): `kb_sync_held_files integer null` with the named range check,
+- [x] 10.1 Migration 187 (+ down): `kb_sync_held_files integer null` with the named range check,
   `kb_sync_held_checked_at timestamptz null`, a `COMMENT ON COLUMN` for each, no `GRANT` / `REVOKE` on `workspaces`;
   the down drops both columns and the RPC, and its header says to revert the code first. `WorkspaceRepoCols` gains both
   columns.
-- [ ] 10.2 The RPC (D29(3)): `get_workspace_kb_sync_held(p_workspace_id)` in 187, member-checked `SECURITY DEFINER`,
+- [x] 10.2 The RPC (D29(3)): `get_workspace_kb_sync_held(p_workspace_id)` in 187, member-checked `SECURITY DEFINER`,
   `search_path` pinned with `pg_temp` (precedent 158 `get_workspace_web_egress`).
-- [ ] 10.3 Tests (D29(10)): `test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts` (the AC21 offline shape)
+- [x] 10.3 Tests (D29(10)): `test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts` (the AC21 offline shape)
   and `supabase/verify/187_workspace_kb_sync_held_files.sql` (`authenticated` has no SELECT on the new columns; the RPC
   is definer with a pinned path). State in the PR what the grants do: column-split SELECT, table-level INSERT/UPDATE
   from 174, RLS as the barrier.
@@ -204,9 +204,9 @@ phase, and record that phase's RED runs with it.
 
 ## Phase 11: Held signal, Settings card, agent line (#12714; W1, W3-W5, V1-V6, D29, D30)
 
-- [ ] 11.0 Gate: the wireframe `knowledge-base/product/design/settings/kb-sync-held-commits.pen` is committed and
+- [x] 11.0 Gate: the wireframe `knowledge-base/product/design/settings/kb-sync-held-commits.pen` is committed and
   linked in the PR (row W7; Pencil available since the 2026-11-17 plan upgrade); no component code before it.
-- [ ] 11.1 `server/kb-sync-held.ts`: `computeHeldFiles` -> `{ total, onRecovered }` over `<T>...<headSha>` (HEX40 only);
+- [x] 11.1 `server/kb-sync-held.ts`: `computeHeldFiles` -> `{ total, onRecovered }` over `<T>...<headSha>` (HEX40 only);
   `readRecoveredKbSyncTips` (lstat, refuses symlinks, at most 20 files of at most 64 B, `packed-refs` lines from a file
   of at most 1 MiB). TW1, TW1-b and TW4-a/b/c real-git rows first.
 - [ ] 11.2 Wire and write the count (D29(1), D29(9)): the `onHeldFiles` hook in `publishKbOnly` (before the isolated
@@ -216,7 +216,7 @@ phase, and record that phase's RED runs with it.
   `app/api/repo/setup/route.ts`) null both columns. Remove the push-side `updateLastSynced` (W5) and delete the two
   push-stamp assertions in `test/server/session-sync-workspace-last-synced.test.ts`; TW2, AC17 and the readers census
   over every reader of `repo_last_synced_at`.
-- [ ] 11.3 Route predicate and agent lines (D29(3)-(7)): `isCcGithubPushRouteAvailable` in `cc-github-push.ts`
+- [x] 11.3 Route predicate and agent lines (D29(3)-(7)): `isCcGithubPushRouteAvailable` in `cc-github-push.ts`
   (legacy always; cc flag, entitlement, installation and persona under its own deadline, no default-branch lookup, the
   viewer's `userId`, a transient result). `cc-dispatcher.ts`: the RPC in the same `Promise.all`, keyed on the
   `activeWorkspaceId` passed to `resolveCcGithubPushRegistration` (a failure: no line, one warning); the line in the
@@ -226,12 +226,12 @@ phase, and record that phase's RED runs with it.
   D29(6) (counted until merged into the main branch; check `github_list_pull_requests` before pushing again; recovered
   branches and the checkout; an "as of" time, no line when null; a `git diff --name-only` command), in agreement with
   `ccPushPromptAddendum` and the push tool description (grep row), never "not on GitHub".
-- [ ] 11.4 `lib/kb-sync-held-copy.ts` with the V6 strings verbatim (route available, no route, transient; Owner and
+- [x] 11.4 `lib/kb-sync-held-copy.ts` with the V6 strings verbatim (route available, no route, transient; Owner and
   member; singular and plural); Settings page select (service client, `resolveActiveWorkspace`'s id) + predicate,
   `SettingsContent`, `ProjectSetupCard` (reconnect: `ReconnectNotice` only; `{n}` an integer in 1..10000 as a text
   child); unit rows; the readers census test (no tenant select carries the new columns); `vi.mock` for any new server
   import in the orphan route tests.
-- [ ] 11.4b Final KB notice (V6(5)): in `lib/kb-workspace-sync-notice.ts`, set `detail` to "Your workspace has local
+- [x] 11.4b Final KB notice (V6(5)): in `lib/kb-workspace-sync-notice.ts`, set `detail` to "Your workspace has local
   changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show
   the files as they were. You don't need to try again." and remove the header's "Interim copy; the #12714 wireframe may
   refine it" sentence; the four `lead` clauses and `kbWorkspaceSyncResyncPendingNotice` stay as shipped.
@@ -246,7 +246,7 @@ phase, and record that phase's RED runs with it.
   - D30: the stale tree row after the KB pending notice is dismissed;
   - D26(3): an isolated `merge-tree` merge that reads no workspace config (closes the `filter.*` / `merge.<d>.driver`
     residual).
-- [ ] 11.7 Settings team icon (V6(6), D24): in `components/settings/conversation-names-settings.tsx`, on
+- [x] 11.7 Settings team icon (V6(6), D24): in `components/settings/conversation-names-settings.tsx`, on
   `workspace_sync: "pending"` show "Saved to GitHub. Your workspace has local changes that aren't on your repository's
   main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon.
   You don't need to try again."; on a 409 from the upload show "An icon with this file name is already on GitHub, so
