@@ -46,15 +46,15 @@ const sources = new Map(files.map((f) => [path.relative(APP, f).split(path.sep).
 
 type Role = { role: string; required: boolean };
 
-// Every app file whose code names a held column or the RPC. `required: false` rows are owned by sibling Phase 11
-// tasks (the writer in session-sync and the cc agent line); they are allowed now and must flip to `true` when they land.
+// Every app file whose code names a held column or the RPC. A `required: false` row is owned by a sibling Phase 11
+// task (the writer in session-sync, task 11.2); it is allowed now and flips to `true` when it lands.
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
   "server/workspace-repo-mirror.ts": { role: "type: WorkspaceRepoCols", required: true },
   "app/api/repo/disconnect/route.ts": { role: "writer: nulls both columns on disconnect", required: true },
   "app/api/repo/setup/route.ts": { role: "writer: nulls both columns on (re)connect", required: true },
   "server/session-sync.ts": { role: "writer: separate service-client UPDATE after each sync", required: false },
-  "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC (cc agent line)", required: false },
+  "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
 };
 
 describe("kb-sync held columns: readers census (#12714, AC20)", () => {
