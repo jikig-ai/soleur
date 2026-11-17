@@ -136,6 +136,13 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     }
   });
 
+  it("server/agent-runner.ts reads the count only through syncPull's return (task 11.3b, AC20)", () => {
+    const src = sources.get("server/agent-runner.ts") ?? "";
+    expect(src).toMatch(/const pull: SyncPullResult \| undefined = await syncPull\(userId, workspacePath, supabase\(\), activeWorkspaceId\)/);
+    expect(src).toMatch(/buildKbSyncHeldAgentLine\(\{\s*heldFiles: pull\?\.heldFiles \?\? null,\s*checkedAt: pull\?\.checkedAt \?\? null,/);
+    expect(src).toMatch(/buildKbSyncMergeBlockedAgentLine\(pull\?\.pullReason \?\? null\)/);
+  });
+
   it("server/agent-runner.ts and server/current-repo-url.ts name no held column", () => {
     for (const f of ["server/agent-runner.ts", "server/current-repo-url.ts"]) {
       expect(sources.has(f), f).toBe(true);

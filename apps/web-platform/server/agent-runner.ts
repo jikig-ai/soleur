@@ -51,7 +51,8 @@ import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
-import { syncPull, syncPush } from "./session-sync";
+import { syncPull, syncPush, type SyncPullResult } from "./session-sync";
+import { buildKbSyncHeldAgentLine, buildKbSyncMergeBlockedAgentLine } from "./kb-sync-held-agent-line";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -87,7 +88,7 @@ import {
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
 import { resolveInstallationId } from "./resolve-installation-id";
-import { buildGithubTools } from "./github-tools";
+import { buildGithubTools, GITHUB_PUSH_BRANCH_TOOL_FQN } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
 import { createApprovalGateDeps } from "./approval/gate";
@@ -1351,7 +1352,11 @@ async function startAgentSessionInner(
     // `users.repo_status` would skip the pull for an invited member whose ACTIVE
     // (shared) workspace is connected — the exact #4543 divergence the converged
     // `workspacePath` above fixes, re-created one branch away.
-    await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
+    //
+    // #12714 (task 11.3b, D29(4)): its result is this session's fresh held-files count and pull reason, the input of the
+    // agent lines appended below (this runner never reads the stored columns). `| undefined`: a void result (a mocked or
+    // older shape) gives no line.
+    const pull: SyncPullResult | undefined = await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
 
     // Create vision.md on first message if it doesn't exist (fire-and-forget).
     // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
@@ -1706,6 +1711,8 @@ says the request is waiting for the Owner, say so and follow its instructions.`;
     // Hoisted for canUseTool audit logging — set inside the installationId guard
     let repoOwner = "";
     let repoName = "";
+    // #12714: the repo's default branch when the lookup below succeeded (the held line's `git diff` base); null = unknown.
+    let knownDefaultBranch: string | null = null;
 
     // Session-scoped rate limiter for workflow triggers (#1928)
     const workflowRateLimiter = createRateLimiter();
@@ -1746,6 +1753,7 @@ says the request is waiting for the Owner, say so and follow its instructions.`;
             `/repos/${owner}/${repo}`,
           );
           defaultBranch = repoData.default_branch;
+          knownDefaultBranch = repoData.default_branch;
         } catch (err) {
           // Fall back to "main" — still protected by the hardcoded list.
           // Mirror to Sentry: a token revocation or repo rename surfacing here
@@ -1801,6 +1809,21 @@ user asks you to work on an issue, the issue's description and acceptance criter
 are the requirements to implement.`;
       }
     }
+
+    // #12714 (task 11.3b, D29(4), D29(6), D32): the held-files line from this session's `syncPull` count, and the
+    // merge-blocked line on `merge_conflict` / `unresolved_merge` (the agent is the only party that can finish that merge).
+    // The route is "registered" exactly when this runner registered `github_push_branch` for the session; the legacy runner
+    // registers it whenever a repo and an installation resolve. Null or 0, or no time: no held line.
+    const heldLine = buildKbSyncHeldAgentLine({
+      heldFiles: pull?.heldFiles ?? null,
+      checkedAt: pull?.checkedAt ?? null,
+      route: platformToolNames.includes(GITHUB_PUSH_BRANCH_TOOL_FQN) ? "registered" : "not-registered",
+      onRecovered: pull?.onRecovered ?? null,
+      defaultBranch: knownDefaultBranch,
+    });
+    if (heldLine) systemPrompt += `\n\n${heldLine}`;
+    const mergeBlockedLine = buildKbSyncMergeBlockedAgentLine(pull?.pullReason ?? null);
+    if (mergeBlockedLine) systemPrompt += `\n\n${mergeBlockedLine}`;
 
     // Service tools: registered independently of GitHub installation.
     // Users with stored API keys get tools even without a connected repo.
