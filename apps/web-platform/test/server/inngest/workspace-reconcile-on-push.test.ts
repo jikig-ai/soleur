@@ -328,7 +328,9 @@ describe("reconcile — happy path (single workspace)", () => {
       42,
       wsPath("77777777-7777-4777-8777-777777777777"),
       expect.anything(),
-      expect.objectContaining({ userId: "55555555-5555-4555-8555-555555555555", op: "push" }),
+      // review D43: a system job keyed on the workspace (the owner is not the acting principal; an owner-less
+      // workspace must heal too), never a userId
+      { system: true, workspaceId: "77777777-7777-4777-8777-777777777777", op: "push" },
     );
     const rows = APPENDS.get("55555555-5555-4555-8555-555555555555")!;
     expect(rows.at(-1)).toEqual(
@@ -492,7 +494,9 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
       42,
       wsPath("77777777-7777-4777-8777-777777777777"),
       expect.anything(),
-      expect.objectContaining({ userId: "55555555-5555-4555-8555-555555555555", op: "push" }),
+      // review D43: a system job keyed on the workspace (the owner is not the acting principal; an owner-less
+      // workspace must heal too), never a userId
+      { system: true, workspaceId: "77777777-7777-4777-8777-777777777777", op: "push" },
     );
     expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
@@ -1030,8 +1034,10 @@ describe("reconcile — cross-tenant isolation (fan-out per workspace)", () => {
     const handler = await importHandler();
     await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "55555555-5555-4555-8555-555555555555")!;
-    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "66666666-6666-4666-8666-666666666666")!;
+    // D43: the sync context is keyed on the workspace (a system job), so each call's path must match its own workspaceId
+    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].workspaceId === "77777777-7777-4777-8777-777777777777")!;
+    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].workspaceId === "88888888-8888-4888-8888-888888888888")!;
+    expect(syncWorkspaceSpy.mock.calls.every((c) => c[3].system === true && c[3].userId === undefined)).toBe(true);
     expect(aCall[1]).toBe(wsPath("77777777-7777-4777-8777-777777777777"));
     expect(bCall[1]).toBe(wsPath("88888888-8888-4888-8888-888888888888"));
     expect(aCall[1]).not.toBe(bCall[1]);

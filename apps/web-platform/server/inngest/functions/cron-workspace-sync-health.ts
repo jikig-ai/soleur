@@ -323,9 +323,9 @@ export async function cronWorkspaceSyncHealthHandler({
             // (re-entrancy: the row leaves arm-1's ready+NULL-install scan, so a
             // failed sync is never re-backfilled and arm-1 does NOT re-sync it —
             // push + arm-2 stale-sync-failed own the failure loudness). syncWorkspace
-            // pulls the live default-branch HEAD; solo invariant f.workspaceId ===
-            // users.id (ADR-038 N2) → userId and the workspace-keyed audit writer
-            // both take f.workspaceId. Truthful `reconcile_backfill` trigger (never
+            // pulls the live default-branch HEAD as a system job (D43: no acting user,
+            // the repo row keyed on f.workspaceId); the workspace-keyed audit writer
+            // takes f.workspaceId too. Truthful `reconcile_backfill` trigger (never
             // webhook_push); op "manual" = the system-resync convention (no op-union
             // widening). No Inngest event — ADR-033 I6 preserved.
             const workspacePath = workspacePathForWorkspaceId(f.workspaceId);
@@ -348,7 +348,9 @@ export async function cronWorkspaceSyncHealthHandler({
                 decision.installId,
                 workspacePath,
                 moduleLogger,
-                { userId: f.workspaceId, workspaceId: f.workspaceId, op: "manual" },
+                // D43: a system job, so the self-heal reads the repo by the finding's own workspace id through the
+                // service client (a tenant mint for a workspace id that is not a user returns no row: remote_state).
+                { system: true, workspaceId: f.workspaceId, op: "manual" },
               );
               if (syncResult.ok) {
                 await appendKbSyncRowForWorkspace(service, f.workspaceId, {

@@ -472,8 +472,10 @@ export async function workspaceReconcileOnPushHandler({
       }
 
       // VALID .git — preserve the existing pull/reset sync path unchanged.
+      // D43: a system job. The owner is not the acting principal (and an owner-less workspace must heal too), so the
+      // self-heal reads the repo by this workspace's id through the service client, never by a minted user token.
       const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
-        userId: ownerId ?? ws.id,
+        system: true,
         workspaceId: ws.id,
         op: "push",
       });

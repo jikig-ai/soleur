@@ -1051,8 +1051,12 @@ describe("cron-workspace-sync-health — arm-1 immediate re-sync after backfill 
       501,
       "/workspaces/solo-1",
       expect.anything(),
-      { userId: "solo-1", op: "manual", workspaceId: "solo-1" }, // #12718 D27: the self-heal merge resolves the repo by workspace id
+      // #12718 D27 + review D43: a system job, so the self-heal merge reads the repo by workspace id through the service
+      // client (no tenant mint for a non-user), and no userId is passed at all
+      { system: true, op: "manual", workspaceId: "solo-1" },
     );
+    expect(syncWorkspaceSpy.mock.calls[0]).toHaveLength(4);
+    expect((syncWorkspaceSpy.mock.calls[0] as unknown[])[3]).not.toHaveProperty("userId");
     // truthful, workspace-keyed audit row (solo: workspaceId === users.id, ADR-038 N2).
     expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
       expect.anything(),
