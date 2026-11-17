@@ -41,7 +41,7 @@
 # time. Durations from the #12089 tracker table (dispatch 42231989547),
 # rounded UP to the next minute; margin 0.30 unchanged.
 #
-# oracle-review-required seeded 2026-11-17: the check went required via
+# ROW SEED (2026-11-17, oracle-review-required, #12329): the check went required via
 # #12329 (2026-11-08) without a bound row — every scheduled watch run
 # flagged `unbound` until this landed. Seed = measured p90 of the last ~30
 # completed+success ci.yml runs per surface (probe dry-run 2026-11-17):

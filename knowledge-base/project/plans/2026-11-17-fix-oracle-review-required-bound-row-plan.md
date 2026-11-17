@@ -286,7 +286,7 @@ the only writers/readers of the file are the probe and its fixture tests).
 
 ## Files to Edit
 
-- `scripts/required-check-wallclock-bounds.tsv` — +1 data row (+1 header comment line)
+- `scripts/required-check-wallclock-bounds.tsv` — +1 data row (+7 comment lines as-built)
 - `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md` — +1 measured-history bullet
 
 ## Files to Create
