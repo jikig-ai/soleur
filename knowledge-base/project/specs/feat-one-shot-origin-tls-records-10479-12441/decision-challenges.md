@@ -1,6 +1,6 @@
 # Decision challenges: origin-TLS closing records (#10479, #12441)
 
-These are agent rulings, not the owner's signature. The 2026-11-16 rows are quoted from #10479 comment 6946870123 and were not re-spawned. The 2026-11-17 rows were ruled at plan time for PR #12843.
+These are agent rulings, not the owner's signature. The 2026-11-16 rows record the CLO and CTO rulings relayed in the 2026-11-16 session brief and were not re-spawned. #10479 comment 6946870123 holds the CLO ruling and the p90 and p50 parts of the CTO ruling; the `coloCode`, host and end-time-offset detail, the restart and Supabase candidates, the 500s row and the evidence bar are not in it. The 2026-11-17 rows were ruled at plan time for PR #12843.
 
 ## Decision Classes
 

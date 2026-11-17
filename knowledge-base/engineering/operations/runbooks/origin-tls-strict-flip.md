@@ -22,6 +22,8 @@ acked by the merge message). Post-apply re-measure: **pending** (record here `cl
 ref dcb85b75 `ssl=strict`, a new `version` and `last_updated`; and 20 runs of `origin-tls-probe.sh --require-tls`, all `TLS-ON-ORIGIN-HOP`). Until both rows are filled,
 the 2026-11-13 pre-merge readings (`knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`, "Pre-merge evidence readings (F3)") are the latest.
 
+> **Superseded 2026-11-17 (#10479), as to "Merge apply: **pending**", "Post-apply re-measure: **pending**" and "the PR that closes #10479":** PR #12737 merged 2026-11-16T13:10:30Z as 233c690996. Merge apply run [43873266059](https://github.com/jikig-ai/soleur/actions/runs/43873266059): its `Terraform apply` step succeeded, and the run as a whole ended red on a later SSH step that this PR did not cause (#12823). The re-measure ran 2026-11-16 13:12-13:16Z and is recorded in #10479 comment 6917496007: `config-entrypoint` version 8, 3 rules, `dcb85b75` `ssl=strict`, and 20/20 `origin-tls-probe.sh --require-tls` runs over TLSv1.3. #12737's body used Ref, so #10479 stays OPEN until the owner closes it. The 2026-11-13 readings are no longer the latest.
+
 | Act | State | Evidence |
 |---|---|---|
 | 0. Read-only preconditions | **DONE before act 3**, with three exceptions stated in "What was NOT run" below | the Act 0 table's expectations are the PRE-FLIP state (they are historical now; see "Act 0" for what holds today) |
@@ -348,9 +350,9 @@ Not separated by these reads: candidates 1 to 4 of the table above, and any link
 
 ##### Addendum 2026-11-16: second wrapper reads and the CTO ruling (Cloudflare analytics, Ref #12441)
 
-Additions-only: the 2026-11-09 and 2026-11-11 addenda above are left as written, and this read supersedes nothing in them. The one exception is a reading note, not an edit: the line "**Status: unexplained.**" at the head of this p90 section stays as written, and is now read together with the CTO ruling of 2026-11-16 below. No cause is claimed beyond that ruling. Every figure is a sampled estimate, so the results are `Unverified:` lines, as in the 2026-11-11 addendum.
+Written 2026-11-17; records the 2026-11-16 reads, a 2026-11-17 laptop sample, and the CTO rulings of 2026-11-16 and 2026-11-17. Additions-only: the 2026-11-09 and 2026-11-11 addenda above are left as written, and this read supersedes nothing in them. The one exception is a reading note, not an edit: the line "**Status: unexplained.**" at the head of this p90 section stays as written, and is now read together with the CTO ruling of 2026-11-16 below. No cause is claimed beyond that ruling. Every figure is a sampled estimate, so the results are `Unverified:` lines, as in the 2026-11-11 addendum.
 
-Source: `cloudflare-readonly.sh analytics-health 216` and `cloudflare-readonly.sh analytics-edge-errors 216`, read 2026-11-16 at about 17:00Z from `origin/main` (checkout SHA not recorded). The health read is Cloudflare-side origin response time for the `/health` path; it is path-filtered and not host-scoped. The edge read is filtered to the host `app.soleur.ai` (all paths). The two reads do not cover the same requests.
+Source: `cloudflare-readonly.sh analytics-health 216` and `cloudflare-readonly.sh analytics-edge-errors 216`, read 2026-11-16 at about 17:00Z from `origin/main` (checkout SHA not recorded). The 8 hourly health rows dated 11-07 put the window start at 2026-11-07T16Z if the series had no gaps, which places the reads in the 16Z hour. The health read is Cloudflare-side origin response time for the `/health` path; it is path-filtered and not host-scoped. The edge read is filtered to the host `app.soleur.ai` (all paths). The two reads do not cover the same requests.
 
 Unverified: Cloudflare analytics-health (F) #12441, read 2026-11-16 about 17:00Z. Daily medians of the hourly p50 and p90:
 
@@ -392,17 +394,19 @@ Unverified: laptop corroboration, client-side `GET /health` x30 (n=30 each; a di
 
 **Limitation.** The raw hourly file from this read was lost to a session-scratchpad wipe, so no evidence file exists for it and the figures above cannot be re-derived. The wrapper's window ends at the current hour and starts 216 h before it (`gql_window`: `[floor(now to the hour) - 216 h, floor(now to the hour))`). By the window arithmetic, the last pre-flip hour (2026-11-07T22Z) is outside the window for every read from 2026-11-16T23:00Z on, and the straddling 23Z hour is outside it from 2026-11-17T00:00Z. So the daily medians above are the only surviving pre-flip comparison from the 2026-11-16 read. The committed `evidence/2026-11-11-analytics-health-216h.json` and `evidence/2026-11-11-analytics-edge-errors-216h.json` are the only surviving hourly pre-flip record (126 pre-flip hourly rows, 2026-11-02T17Z to 2026-11-07T22Z).
 
-Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the p90 step at the 11-08 strict flip (about 470 ms to about 850 ms) is "provisionally attributed" to the strict TLS origin hop. Confirming it needs a site-split (`coloCode`), host-filtered (`app.soleur.ai`) query with an end-time offset, as a later wrapper change, tracked in #12846.
+Provenance of the four 2026-11-16 CTO lines below: #10479 comment 6946870123 records the p90 "provisionally attributed" and p50 "unexplained" rulings and the need for a site-split, host-filtered query. The rest of the detail (the `coloCode`, host and end-time-offset shape, the restart and Supabase candidates, the 500s line and the evidence bar) was relayed from the same CTO ruling in the 2026-11-16 session brief. It is recorded in PR #12843's `decision-challenges.md` and is not in that comment.
 
-Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the p50 rise from 11-10 to 11-16 08:00Z is "unexplained". It ended at the 08:55Z release, before the web-2 replaces at 11:51Z and 12:01Z, so the replace is ruled out. The candidates are process state cleared by a restart, or Supabase latency (candidate 4 in the table above).
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123, detail per PR #12843): the p90 step at the 11-08 strict flip (about 470 ms to about 850 ms) is "provisionally attributed" to the strict TLS origin hop. Confirming it needs a site-split (`coloCode`), host-filtered (`app.soleur.ai`) query with an end-time offset, as a later wrapper change, tracked in #12846 (filed 2026-11-17).
 
-Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123): the 500s on 11-11 and 11-12 map to no known incident (unverified).
+Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123, candidates per PR #12843): the p50 rise from 11-10 to 11-16 08:00Z is "unexplained". It ended at the 08:55Z release, before the web-2 replaces at 11:51Z and 12:01Z, so the replace is ruled out. The candidates are process state cleared by a restart, or Supabase latency (candidate 4 in the table above).
 
-Ruled by CTO agent, 2026-11-16 (#10479 comment 6946870123), evidence bar: "attributed" needs a change point within ±1 h, a matching mechanism read, and no alternative event in the window. "Noise" means the values stay within the pre-event hourly range. Anything else is "unexplained".
+Ruled by CTO agent, 2026-11-16 (per PR #12843; not in #10479 comment 6946870123): the 500s on 11-11 and 11-12 map to no known incident (unverified).
 
-Ruled by CTO agent, 2026-11-17 (marker): trigger (2) of the 2026-11-08 marker ruling ("Cloudflare origin duration shows a step change aligned with the flip") was first met by the 2026-11-11 read, and was not acted on then. The marker is revived as #12845, in the shape the marker ruling gives. No code is added here.
+Ruled by CTO agent, 2026-11-16 (per PR #12843; not in #10479 comment 6946870123), evidence bar: "attributed" needs a change point within ±1 h, a matching mechanism read, and no alternative event in the window. "Noise" means the values stay within the pre-event hourly range. Anything else is "unexplained".
 
-Save every analytics read's line 2 to `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-<subcommand>-216h.json` and commit it; never leave it in a session scratchpad.
+Ruled by CTO agent, 2026-11-17 (marker; per PR #12843 and #12845): trigger (2) of the 2026-11-08 marker ruling ("Cloudflare origin duration shows a step change aligned with the flip") was first met by the 2026-11-11 read, and was not acted on then. The marker is revived as #12845, in the shape the marker ruling gives. No code is added here.
+
+Save every analytics read with the Handoff step 2 loop above and commit the file it writes; never leave a read in a session scratchpad.
 
 #### What was NOT run before the flip
 
