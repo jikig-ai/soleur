@@ -889,7 +889,8 @@ One commit per phase (devex review item 8), each with its RED runs recorded.
 - `syncPush`: Proposed Solution steps 1-4. One `try/finally` around everything from `createIsolatedPushDir` on, with
   `disposeIsolated`. `updateLastSynced` and `recordKbSyncHistory` run only after a push succeeded (CPO condition C4).
 - Every hardened-git failure is wrapped in a static-message `KbSyncError` with a closed `reason` (`ls_remote_failed`,
-  `fetch_failed`, `push_rejected`, `push_transient`) and a stderr class only: never the raw `err.message`, which now
+  `push_rejected`, `push_transient`, `isolated_refused`, `remote_state_invalid`, `local_git_failed`, `head_unreadable`;
+  as built, server/kb-sync-publish.ts `KbSyncErrorReason`; the push side never fetches) and a stderr class only: never the raw `err.message`, which now
   embeds the literal URL, owner, repo and sha in argv.
 
 ### Phase 3 — Local branch update (P7)
