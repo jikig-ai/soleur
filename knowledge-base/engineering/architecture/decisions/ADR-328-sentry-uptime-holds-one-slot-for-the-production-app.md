@@ -61,7 +61,9 @@ Stack" as a consequence. This decision ends that for the marketing site, so it n
    to a free Better Stack slot, so the "root 200, deep pages 404" check stays at $0) and the three
    sampled redirect probes of ADR-204's 2026-09-20 amendment. The Sentry monitors `soleur_apex`,
    `soleur_www_reachability`, `soleur_changelog_deep` and `soleur_acme_probe` are deleted.
-   Better Stack goes from 7 to 8 of its 10 included uptime monitors.
+   Better Stack goes from 7 to 8 of its 10 included uptime monitors, and to 9 with
+   `soleur_legal_terms` (added at review): the terms page the signup and accept-terms links reach,
+   which no vendor checked for a 200 before.
 4. **Vendor split rule.** New uptime monitors go to Better Stack while it has included slots.
    Dead-man and cron signals go to Sentry whenever the next Better Stack $20 heartbeat pack would be
    crossed; the first case is the four paused `soleur-host-kernel-*` heartbeats, which page from
@@ -84,8 +86,9 @@ exists; that gap is one apply on a static page and is accepted. 1422253 is delet
 before the merge, not after it: the post-apply live-fidelity probe in `apply-sentry-infra.yml` runs
 under `set -e` and fails on any live uptime monitor that is not manual, so a delete after the apply
 would turn that merge's run red. The app has no Sentry uptime monitor from the delete until the
-apply creates `sentry_uptime_monitor.app`, minutes later; Better Stack pages for the app through
-that window (Decision 2). The new monitor is read back after the apply (mode 1, url
+apply creates `sentry_uptime_monitor.app`. `main` merges through a merge queue, so that window is
+the queue's run plus the apply; a tracking issue opened at the delete records it until the
+read-back. Better Stack pages for the app through that window (Decision 2). The new monitor is read back after the apply (mode 1, url
 `https://app.soleur.ai`). The Better Stack changelog entry
 in `cutover-verify.sh` CUT8 and its baseline row land together in the follow-up PR (ruling D-F-F),
 and the host-kernel cron monitors land in #12386.
@@ -98,8 +101,8 @@ and the host-kernel cron monitors land in #12386.
 - **Dissent, recorded:** a Better Stack outage leaves soleur.ai (apex, www and the deep path)
   unwatched. This is accepted because the marketing site holds no user data. It does carry the
   terms and privacy pages a signed-in user opens from the accept-terms and signup screens; their
-  final URL was already unwatched by either vendor before this decision, and a follow-up issue adds
-  a Better Stack monitor for it. A hard 522 on www is
+  final URL was unwatched by either vendor before this decision, and this change adds
+  `soleur_legal_terms` on Better Stack, so the terms page is now watched there. A hard 522 on www is
   now detected only by `soleur_www_redirect`, in about 23 min worst case instead of about 15 min
   through the deleted Sentry www monitor.
 - **Dissent, recorded (D4):** after #12386 arms the host-kernel monitors on Sentry, one outage of
@@ -122,7 +125,8 @@ and the host-kernel cron monitors land in #12386.
   the accrued $4.00 is refunded (unverified). Steady state is $50.06/mo, and $53.18/mo after #12386
   adds four cron monitors. The 2026-11-17 invoice of $84.48 is billing lag from the 2026-10-29
   monitor prune, not a figure from this decision.
-- Better Stack: $0. Uptime goes from 7 to 8 of 10 included monitors.
+- Better Stack: $0. Uptime goes from 7 to 9 of 10 included monitors (the changelog deep path and
+  the legal terms page).
 - The host-kernel re-route costs $3.12/mo on Sentry instead of a second $20.00 Better Stack
   heartbeat pack: $16.88/mo avoided, realized in #12386.
 - Ledger: `knowledge-base/operations/expenses.md` (Sentry Team and Better Stack rows) and

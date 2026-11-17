@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # that has never been driven red is a reading, not a test.
 WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=35
+EXPECTED_TESTS=36
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -617,6 +617,43 @@ t_w14_drift_probe_pins_fixture_uptime() {
     _report "W14 the drift probe step pins SENTRY_FIXTURE_UPTIME: \"\" beside SENTRY_FIXTURE_RULES: \"\"" ok
   else _report "W14 drift probe fixture pin" fail "$why"; fi
 }
+# W18 (#12844 review, user-impact F3): the APPLY job's post-apply probe step
+# fails closed on uptime. The script's rc does not move on an unavailable uptime
+# check, so the step parses the marker itself; drive that real `run:` block
+# against four stubs. Only a real, line-anchored `clean` marker may go green.
+_apply_probe_run() {
+  python3 - "$APPLY_WF" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+m = [s for j in d["jobs"].values() for s in j.get("steps", [])
+     if "bash scripts/sentry-alert-live-fidelity.sh" in (s.get("run") or "")
+     and "post-apply-probe.txt" in (s.get("run") or "")]
+if len(m) != 1:
+    sys.exit(f"expected exactly one post-apply probe step, found {len(m)}")
+print(m[0]["run"])
+PYEOF
+}
+_drive_apply() { # $1 = stub body; prints the step's rc
+  local dir="$TMPD/apply.$RANDOM"
+  mkdir -p "$dir/scripts"
+  printf '%s' "$1" > "$dir/scripts/sentry-alert-live-fidelity.sh"
+  ( cd "$dir" && RUNNER_TEMP="$dir" bash "$TMPD/apply-probe-step.sh" >/dev/null 2>&1 ); echo "$?"
+}
+t_w18_apply_probe_uptime_fails_closed() {
+  local run why=() rc
+  run=$(_apply_probe_run 2>&1) || { _report "W18 apply post-apply probe" fail "$run"; return; }
+  printf '%s\n' "$run" > "$TMPD/apply-probe-step.sh"
+  rc=$(_drive_apply "$STUB_CLEAN");            [[ "$rc" == "0" ]] || why+=("clean marker: rc=$rc (want 0)")
+  rc=$(_drive_apply "$STUB_UP_NOMARKER");      [[ "$rc" != "0" ]] || why+=("no marker went green")
+  rc=$(_drive_apply '#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1"
+echo "sentry_alert live fidelity: PASS (all 28 in-scope rules match the committed reference field-for-field)"
+exit 0');                                      [[ "$rc" != "0" ]] || why+=("unavailable marker went green")
+  rc=$(_drive_apply "$STUB_FORGED_INDENTED");  [[ "$rc" != "0" ]] || why+=("an indented forged clean marker went green")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "W18 the apply job's post-apply probe greens only on a line-anchored clean uptime marker (no marker, unavailable and a forged indented marker all red)" ok
+  else _report "W18 apply post-apply probe fails closed" fail "${why[*]}"; fi
+}
 t_w15_apply_probe_pins_fixture_uptime() {
   local why
   if why=$(_pin_ok "$APPLY_WF" apply 'bash scripts/sentry-alert-live-fidelity.sh' 2>&1); then
@@ -627,9 +664,10 @@ t_w16_drift_body_names_uptime_unmanaged() {
   local run
   run=$(_step_field "$WF" id file_drift run 2>&1) || { _report "W16 drift body" fail "$run"; return; }
   # shellcheck disable=SC2016 # literal Markdown backticks matched with grep -F
-  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it' <<<"$run" \
+  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'did not finish, re-run it first' <<<"$run" \
+     && grep -qF -- 'Otherwise DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running a finished apply does not fix it' <<<"$run" \
      && ! grep -qF -- 'Import = ' <<<"$run"; then
-    _report "W16 the drift issue body explains UPTIME UNMANAGED (DELETE through the API; an apply does not fix it)" ok
+    _report "W16 the drift issue body explains UPTIME UNMANAGED (re-run an unfinished apply first, else DELETE through the API)" ok
   else _report "W16 drift body names UPTIME UNMANAGED" fail "bullet absent from the file_drift run block, or it still offers the import recipe the D2 re-ruling removed"; fi
 }
 t_g1_mutants() {
@@ -677,6 +715,7 @@ t_w14_drift_probe_pins_fixture_uptime
 t_w15_apply_probe_pins_fixture_uptime
 t_w16_drift_body_names_uptime_unmanaged
 t_w17_indented_marker_is_not_read
+t_w18_apply_probe_uptime_fails_closed
 t_g1_mutants
 
 echo "=== $pass passed, $fail failed ==="

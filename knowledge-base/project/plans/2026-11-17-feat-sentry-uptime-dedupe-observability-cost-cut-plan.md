@@ -88,7 +88,8 @@ Savings, stated honestly (CFO review):
 - Sentry uptime: $4.00/mo PAYG becomes $0. That is the whole direct saving of this PR.
 - The current billing period (2026-11-17 to 2026-12-16) already shows $4.00 of uptime
   accrued. Whether removal refunds it is unverified, so the 2026-12-16 invoice is $50.06 to
-  $54.06. From the following period the steady state is $50.06/mo ($29 base + 27 billable
+  $55.06 (the top end if the new app monitor bills as a sixth uptime monitor this period;
+  widened 2026-11-17 at review). From the following period the steady state is $50.06/mo ($29 base + 27 billable
   cron seats x $0.78).
 - Host-kernel routing: arming on Sentry costs $3.12/mo, against $20/mo for a second Better
   Stack pack. That is $16.88/mo avoided, realized in the #12386 arming PR, not here.
@@ -469,7 +470,9 @@ only in learnings, post-mortems and archived plans (`git grep`), never in script
      so a rule drift cannot close an open uptime-unavailable issue.
    - Pin `SENTRY_FIXTURE_UPTIME: ""` in the probe step env, next to `SENTRY_FIXTURE_RULES: ""`.
    - Drift issue: keep the title (pinned by W9); add an `UPTIME UNMANAGED` bullet to the body:
-     "import the monitor or DELETE it; re-running the apply does not fix it".
+     "import the monitor or DELETE it; re-running the apply does not fix it". (Amended 2026-11-17
+     at review: no import, D2 re-ruling; re-run an unfinished apply first, else DELETE through the
+     API; the bullet's exact text lives in the workflow and is pinned by W16.)
 4. `.github/workflows/apply-sentry-infra.yml`: pin `SENTRY_FIXTURE_UPTIME: ""` in the post-apply
    probe step env, next to `SENTRY_FIXTURE_RULES: ""`. (That post-apply probe runs under
    `set -e`, so an unmanaged uptime monitor reds the merge's own apply: a synchronous signal.)
@@ -502,13 +505,14 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
 1. `knowledge-base/operations/expenses.md`, Sentry Team row: Amount `73.56` becomes `54.06`
    (live-measured 2026-11-17: $29 + $21.06 cron + $4.00 uptime accrued); renewal column
    `2026-12-16`; append a `**2026-11-17 (#12844):**` note with the live counts (28 cron monitors,
-   27 billable; uptime 5 -> 1 after this PR), the projection (2026-12-16 invoice $50.06-$54.06
+   27 billable; uptime 5 -> 1 after this PR), the projection (2026-12-16 invoice $50.06-$55.06
    depending on whether the accrued $4 is refunded; $50.06/mo steady state; $53.18/mo after
    #12386 adds 4 host-kernel cron monitors), the note that the 2026-11-17 $84.48 invoice was
    billing lag, and the re-read command. The Amount moves to 50.06 only after a post-period
    API re-read or invoice read (tracked on the Phase 7 issue).
 2. Same file, Better Stack row: Amount stays `20.60`; append a `**2026-11-17 (#12844):**` note:
-   uptime monitors 7 -> 8 of 10 included ($0), heartbeats 17 active of 21, the 4 paused
+   uptime monitors 7 -> 8 of 10 included ($0; 9 of 10 with the legal-terms monitor added at
+   review, #12844), heartbeats 17 active of 21, the 4 paused
    host-kernel heartbeats are re-routed to Sentry at arming (avoids a second $20 pack, $16.88/mo
    net). The Responder row is not edited: the 2->1 cut stays an operator billing action tracked
    in #12827.
@@ -528,12 +532,23 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    2026-11-17 for exactly this command. Preconditions on the final head SHA: every required check
    green, `plan_pr` shows `1 to add, 0 to change, 4 to destroy`, `sentry-destroy-required` green,
    and `[ack-destroy]` in a branch commit body. Then, with `U=https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/1422253/`:
-   GET (expect 200, `uptime_domain_failure`, `config.mode` 3, url `https://app.soleur.ai`,
+   first, `doppler run -p soleur -c prd_terraform --command 'printf "%s %s\n" "$SENTRY_API_HOST" "$SENTRY_ORG"'`
+   must print exactly `jikigai-eu.sentry.io jikigai-eu`, so the DELETE below resolves to `U`
+   (its host and org come from that config); and
+   `gh pr view 12844 --json mergeStateStatus --jq .mergeStateStatus` must print `CLEAN`
+   immediately before the DELETE, so the merge cannot be refused after it (review FR-DI-3/4).
+   GET: `doppler run -p soleur -c prd_terraform --command 'printf "Authorization: Bearer %s\n" "$SENTRY_IAC_AUTH_TOKEN" | curl --disable --noproxy "*" -sS --max-time 15 -H @- "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/1422253/"'`
+   (expect 200, `uptime_domain_failure`, `config.mode` 3, url `https://app.soleur.ai`,
    `workflowIds` `[]`, read 2026-11-17), then
    `doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$SENTRY_IAC_AUTH_TOKEN" | curl --disable --noproxy "*" -sS --max-time 15 -H @- -X DELETE -w "\nHTTP %{http_code}\n" "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/1422253/"'`
-   (expect 2xx), then GET (expect 404). Any other result stops the merge. On 403, the token's
-   scope does not cover the detectors path: stop and report. Then merge directly
-   (`gh pr merge --squash`, not `--auto`), so the gap is the apply's duration. If the apply then
+   (expect 2xx), then the same GET with `-o /dev/null -w "%{http_code}"` (expect 404). Any other result stops the merge. On 403, the token's
+   scope does not cover the detectors path: stop and report. Then `gh pr merge --squash`. `main`
+   has a merge queue (ruleset `merge_queue`), so this enqueues the PR: the gap is the queue's run
+   plus the apply, not the apply alone (review FR-UI-1). Tripwire, so the gap is never silent:
+   right after the DELETE, file the step 7 tracking issue with the DELETE's timestamp and a
+   checkbox "PR merged and `sentry_uptime_monitor.app` read back"; the open issue is the record
+   if the session ends. Watch the PR with Monitor until it is merged; if the queue ejects it, fix
+   the cause and re-enqueue, and say so on the tracking issue. If the apply then
    refuses to create `.app`, Better Stack keeps paging for the app and the apply is fixed in a
    follow-up PR.
 1. Watch `apply-sentry-infra.yml` and `apply-web-platform-infra.yml` on the merge commit to
@@ -546,11 +561,13 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    so it detects and does not page), and at least one passing check (a non-2xx final response,
    such as a Cloudflare challenge, would open false downtime issues); 1422253 and
    1221114-1221117 are gone (404). Better Stack
-   lists `soleur dot ai changelog deep path` and it is up.
+   lists `soleur dot ai changelog deep path` and `soleur dot ai legal terms page` (added at
+   review) and both are up.
 3. Run `doppler run -p soleur -c prd_terraform --command 'SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_ORG=jikigai-eu bash scripts/sentry-alert-live-fidelity.sh'`:
    expect `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1` and a clean verdict.
-4. **Superseded 2026-11-17** (the delete of 1422253 is now Phase 7 step 0, before the merge).
-   Kept for the record: **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
+4. **Superseded 2026-11-17 — do not execute** (the delete of 1422253 is now Phase 7 step 0,
+   before the merge; the legacy `projects/.../uptime/` path below was never checked against
+   detector ids). Kept for the record: **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
    D3a): in a new PR, replace the `import` with a multi-line
    `removed { from = sentry_uptime_monitor.app` / `lifecycle { destroy = false } }` block, declare
    a new `sentry_uptime_monitor.app_reachability` on the same URL, and commit with `[ack-destroy]`
@@ -562,12 +579,15 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    URL `https://app.soleur.ai`), `DELETE /api/0/projects/jikigai-eu/web-platform/uptime/1422253/`
    (expect 202), GET (expect 404). Re-run step 3.
 5. Re-read billing: `.categories.uptime.usage` is informational in this period (the accrued $4
-   may not refund). Paste it into the PR.
-6. Follow-up PR (agent-run, auto-merge): append `"soleur dot ai changelog deep path"` to
+   may not refund). Paste it into the PR. The step 7 tracking issue carries the check that
+   counts: on the 2026-12-16 read, `.categories.uptime.usage == 1` (a higher value means a
+   deleted detector is still billed).
+6. Follow-up PR (agent-run, auto-merge): append `"soleur dot ai changelog deep path"` and
+   `"soleur dot ai legal terms page"` (added at review) to
    `BETTERSTACK_MONITORS` in `cutover-verify.sh` and regenerate
    `cutover-monitor-baseline.txt` with
    `doppler run -p soleur -c prd_terraform -- bash apps/web-platform/infra/cutover-verify.sh --capture-monitor-baseline apps/web-platform/infra/cutover-monitor-baseline.txt`.
-   Expect no Sentry rows and a `soleur dot ai changelog deep path	healthy` row.
+   Expect no Sentry rows, and a `healthy` row for each of the two new monitors.
 7. File one tracking issue (agent-run `gh issue create`) listing the post-merge ACs with their
    cited output, the follow-up PR, and the 2026-12-16 ledger re-read (`expenses.md` Sentry Amount
    54.06 -> 50.06 on a post-period read), with a resume prompt. Tick each AC only with cited
@@ -667,7 +687,7 @@ single slot, the production app; Better Stack owns marketing-site uptime." Decis
 - Better Stack pages for the app; Sentry's monitor detects (opens an issue) and has no route.
 - Marketing-site reachability, redirect health and the deep path are Better Stack only.
 - Vendor split rule (CTO devex review): uptime goes to Better Stack while it has included
-  slots (8 of 10 after this PR); dead-man and cron signals go to Sentry when the next Better
+  slots (9 of 10 after this PR, with the legal-terms monitor added at review); dead-man and cron signals go to Sentry when the next Better
   Stack $20 heartbeat pack would be crossed; the app always stays on two vendors. Every
   further Sentry uptime monitor costs $1.00/mo and the uptime check reports it.
 
@@ -719,8 +739,10 @@ delete lands later (Phase 7 step 4); the ADR states that order.
   the app, keeps both vendors (amended 2026-11-17: through a new monitor id that replaces 1422253,
   whose check history is lost); the surfaces that lose a vendor are static marketing pages, where
   harm comes from a pattern of unnoticed downtime, not from one user. A legal page that is down
-  while Better Stack is also down is a double fault; the legal pages' final 200 URL was already
-  unwatched by either vendor before this PR (follow-up issue).
+  while Better Stack is also down is a double fault. The legal pages' final 200 URL was unwatched
+  by either vendor before this PR; review added `betteruptime_monitor.soleur_legal_terms` on
+  `https://soleur.ai/legal/terms-and-conditions/` (the page the signup and accept-terms links
+  reach after their 301), so it is now watched by Better Stack.
 
 ## Observability
 
@@ -747,6 +769,9 @@ failure_modes:
     alert_route: "existing terraform drift issue path; layer: GitHub Actions workflow run log"
   - mode: "changelog deep path starts returning 404 or 5xx"
     detection: "Better Stack monitor soleur dot ai changelog deep path goes down"
+    alert_route: "Better Stack email + Slack integration; layer: external synthetic probe, outside the app's layers 1-7 by design (ADR-328)"
+  - mode: "the terms page a signing user opens stops serving 200 (added at review)"
+    detection: "Better Stack monitor soleur dot ai legal terms page goes down"
     alert_route: "Better Stack email + Slack integration; layer: external synthetic probe, outside the app's layers 1-7 by design (ADR-328)"
   - mode: "Better Stack changelog monitor never applied (missing -target)"
     detection: "heartbeat-live-reconcile reports the declared monitor absent-live"

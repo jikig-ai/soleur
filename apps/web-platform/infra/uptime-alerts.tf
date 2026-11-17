@@ -19,8 +19,9 @@
 # ── BetterStack: multi-region apex uptime monitor ───────────────────────────
 #
 # Better Stack owns marketing-site uptime (ADR-328): the apex (soleur_apex), the
-# www 301 (soleur_www_redirect), the /changelog/ deep path (soleur_changelog_deep)
-# and the 3 sampled redirect probes (seo_redirect_*). Sentry watches no marketing
+# www 301 (soleur_www_redirect), the /changelog/ deep path (soleur_changelog_deep),
+# the legal terms page (soleur_legal_terms) and the 3 sampled redirect probes
+# (seo_redirect_*). Sentry watches no marketing
 # URL; its one included uptime slot watches the production app. Paid-tier
 # features are gated on var.betterstack_paid_tier (defaults false → email-only on
 # free tier), same as the inngest heartbeat and policy (inngest.tf).
@@ -149,6 +150,36 @@ resource "betteruptime_monitor" "soleur_changelog_deep" {
   monitor_type       = "status"
   url                = "https://soleur.ai/changelog/"
   pronounceable_name = "soleur dot ai changelog deep path"
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 60
+  recovery_period     = 60
+  follow_redirects    = true
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+# ── Legal-page monitor: https://soleur.ai/legal/terms-and-conditions/ (#12844) ─
+#
+# The signup and accept-terms screens link to /pages/legal/terms-and-conditions.html,
+# which 301s here. seo_redirect_bulk_item watches only that 301 (follow_redirects =
+# false), so before this block no monitor on either vendor checked that the page a
+# user signs actually serves 200: a build that dropped the legal pages while the apex
+# and the changelog stayed up went unnoticed. Same keys and order as soleur_apex.
+resource "betteruptime_monitor" "soleur_legal_terms" {
+  monitor_type       = "status"
+  url                = "https://soleur.ai/legal/terms-and-conditions/"
+  pronounceable_name = "soleur dot ai legal terms page"
 
   check_frequency     = 180
   request_timeout     = 10

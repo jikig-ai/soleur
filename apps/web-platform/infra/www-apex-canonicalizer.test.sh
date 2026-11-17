@@ -643,9 +643,9 @@ SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
 ')"
 sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
 # 7 = soleur_apex, app, app_health (#7884) + the three sampled seo_redirect_*
-# deep-URL probes (#8364) + soleur_changelog_deep (moved from Sentry at ADR-328).
-# Exact, so a sibling losing its name fails here.
-eq_case '7' "$sib_n" \
+# deep-URL probes (#8364) + soleur_changelog_deep (moved from Sentry at ADR-328)
+# + soleur_legal_terms (#12844). Exact, so a sibling losing its name fails here.
+eq_case '8' "$sib_n" \
   "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
 
 pn_rc=1
