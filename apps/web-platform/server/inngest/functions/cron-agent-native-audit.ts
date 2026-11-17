@@ -147,8 +147,9 @@ Idempotency: before filing, check
 and skip if any existing issue (open or closed within 30 days)
 matches. Prevents reopen-loops on stable findings.
 
-Injection safety: write each finding's body to a file (the Write
-tool) and pass it via \`--body-file <path>\` BEFORE \`gh issue
+Injection safety: write each finding's body to a file at a relative
+path under the working directory (the Write tool; writes outside it are
+denied) and pass it via \`--body-file <path>\` BEFORE \`gh issue
 create\` — never interpolate agent output into bash commands
 directly (env-var assignment prefixes are denied by the
 containment hook).

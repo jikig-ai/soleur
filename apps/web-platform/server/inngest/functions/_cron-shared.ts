@@ -1433,7 +1433,13 @@ export async function resolveOutputAwareOk(args: {
   // #9272 — passthrough to verifyScheduledIssueCreated's bounded retry; tests
   // inject `verifyRetryDelayMs: 0` so the empty-read path does not sleep.
   verifyRetryDelayMs?: number;
+  // #12847 fix round — the run loaded a plugin tree that was reseeded mid-run (SpawnResult.pluginReseeded).
+  // Its output came from a mixed tree, so it is red even when the issue exists: the caller's
+  // persistence step (safe-commit-pr) is gated on this verdict. The tagged Sentry event is the
+  // substrate's `plugin-reseeded-mid-run`.
+  pluginReseeded?: boolean;
 }): Promise<boolean> {
+  if (args.pluginReseeded) return false;
   const {
     spawnOk,
     label,

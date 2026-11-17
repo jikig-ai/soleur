@@ -327,6 +327,20 @@ describe("Bash — argument injection via allowlisted verbs (P0-B)", () => {
   it.each(["/home/soleur/.bashrc", "/root/x", "/etc/passwd", "/home"])("denies --body-file %s", (p) => {
     expect(verdict(bash(`gh issue create --body-file ${p}`))).toBe("deny");
   });
+  // #12847 fix round (security P1) — gh reads the body file itself: a path the Read gate refuses is refused here.
+  it.each([
+    "/workspaces/soleur-cron-ux-audit-A/workspace/storage-state.json",
+    "/workspaces/soleur-cron-x-A/home-abc123/.claude/projects/s/1.jsonl",
+    "/workspaces/soleur-cron-x-A/home-abc123/.config/gh/hosts.yml",
+    "/workspaces/soleur-cron-ux-audit-A/workspace/playwright-mcp-profile/Default/Cookies",
+    "/run/secrets/doppler",
+    ".claude/settings.json",
+  ])("denies --body-file of a Read-gate secret path %s", (p) => {
+    expect(verdict(bash(`gh issue create --title t --body-file ${p} --label meta/machinery`))).toBe("deny");
+  });
+  it("allows --body-file of ux-audit's own issue body under tmp/ux-audit (SKILL file mode)", () => {
+    expect(verdict(bash("gh issue create --title t --body-file tmp/ux-audit/body-abc.md --label meta/machinery"))).toBe("allow");
+  });
   it("#12824 — allows --body-file in the per-spawn TMPDIR (a `home-*` segment is not `/home`)", () => {
     expect(
       verdict(bash("gh issue create --title t --body-file /workspaces/soleur-cron-x-A/home-abc123/tmp/b.md --label meta/machinery")),
@@ -1611,7 +1625,9 @@ const GUARD1_MUST_PASS = [
   "/x/repo/apps/.gitconfig-notes",
 ];
 const GUARD1_NO_MATCH_OUTSIDE_ROOTS = ["/usr/local/share/soleurx/y"];
-const GUARD1_CLONE = join(mkdtempSync(join(tmpdir(), "soleur-guard1-")), "repo");
+const GUARD1_BASE = mkdtempSync(join(tmpdir(), "soleur-guard1-"));
+afterAll(() => rmSync(GUARD1_BASE, { recursive: true, force: true }));
+const GUARD1_CLONE = join(GUARD1_BASE, "repo");
 mkdirSync(GUARD1_CLONE);
 const GUARD1_OPTS = { writeRoots: [GUARD1_CLONE] };
 const inGuard1Clone = (p: string) => p.replace(/^\/x\/repo(?=\/)/, GUARD1_CLONE);
@@ -2139,6 +2155,7 @@ describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
     ["the CLI's ~/.claude.json", join(HOME, ".claude.json")],
     ["a sibling whose name extends the clone's", join(RUN, "repo-evil", "x")],
     ["a sibling whose name extends the HOME's", join(RUN, "home-abc123x", "tmp", "y")],
+    ["a HOME child whose name extends the TMPDIR root's", join(HOME, "tmp-evil", "y")],
     ["a write through a symlink to a dir outside", join(SPAWN, "link", "x")],
     ["a write to a dangling symlink pointing outside", join(SPAWN, "dang")],
   ];
@@ -2155,7 +2172,9 @@ describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
     expect(out.permissionDecision).toBe("deny");
     expect(out.permissionDecisionReason).toMatch(OUTSIDE_REASON);
     expect(out.permissionDecisionReason).toContain("write outside run roots");
-    expect(out.permissionDecisionReason).toContain("write under the working directory or $TMPDIR instead");
+    // #12847 fix round — the literal temp root: the Write tool does not expand `$TMPDIR`.
+    expect(out.permissionDecisionReason).toContain(`write under the working directory or under ${join(HOME, "tmp")} instead`);
+    expect(out.permissionDecisionReason).not.toContain("$TMPDIR");
   });
 
   it.each(WRITE_TOOLS)("%s: an in-clone symlink aliasing a protected name is denied on the path it lands on", (tool) => {
@@ -2169,6 +2188,18 @@ describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
     const out = decideOn(writeCall(tool, join(alias, "notes.txt")), RR_LINES, OPTS); // the raw path names no protected segment
     expect(out.permissionDecision).toBe("deny");
     expect(out.permissionDecisionReason).toMatch(/protected-path write: .*resolves to a protected path/);
+  });
+
+  it("classifyNewRuleDeny mirrors the realpath re-check: an in-clone link to a .gitconfig counts as protected-gitconfig", () => {
+    writeFileSync(join(SPAWN, ".gitconfig"), "");
+    const link = join(SPAWN, "cfg-link");
+    try {
+      symlinkSync(join(SPAWN, ".gitconfig"), link);
+    } catch {
+      // created by an earlier run of this row
+    }
+    expect(decideOn(writeCall("Write", link), RR_LINES, OPTS).permissionDecision).toBe("deny");
+    expect(classifyNewRuleDeny("Write", { file_path: link }, ROOTS)).toBe("protected-gitconfig");
   });
 
   it("classifyNewRuleDeny names write-outside-roots only when given the run's roots (id only)", () => {

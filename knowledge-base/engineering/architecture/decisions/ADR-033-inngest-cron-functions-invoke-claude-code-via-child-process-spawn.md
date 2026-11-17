@@ -556,7 +556,8 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
 1. **The substrate owns `--plugin-dir`.** `SpawnArgs.loadPlugin` is required. When it is `true`, `spawnClaudeEval`
    resolves the deployed plugin through `resolveCronPluginRoot()` before any side effect, and `buildClaudeArgv` inserts
    `--plugin-dir <root>` ahead of every caller flag. Only the twelve crons in `CRON_PLUGIN_LOADERS` may pass `true`
-   (census-pinned); setup resolves the root for them, so a refused root turns the heartbeat red before any spawn. The root is `getPluginPath()` (`/app/shared/plugins/soleur`, the
+   (census-pinned); setup resolves the root for them, so a refused root fails the run before any spawn (the heartbeat
+   goes red for every one except event-ship-merge, which posts none). The root is `getPluginPath()` (`/app/shared/plugins/soleur`, the
    `:ro` bind ADR-093 owns). It must pass `assertTrustedPluginPath`, carry its manifest and `.seed-complete` (retried
    once after 30 s), and probe not-writable (`EROFS`/`EACCES` only) at the root and at `hooks/`. A refusal reports op
    `cron-plugin-root-untrusted` and throws `NonRetriableError`. A caller flag `--plugin-dir X` or `--plugin-dir=X`
@@ -570,7 +571,8 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
    two server-cwd spawns (`cron-daily-triage`, `cron-follow-through-monitor`) have no ephemeral root; they get
    `<CRON_WORKSPACE_ROOT>/soleur-home-*`, which no write root admits (they run without the hook and without Write).
    The seed tag is compared at exit; a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
-   (`pluginReseeded`), which `classifyEvalFatal` treats as fatal.
+   (`pluginReseeded`): `classifyEvalFatal` treats it as fatal for best-effort crons, and `resolveOutputAwareOk`
+   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run.
 4. **Writes are confined to the run (CTO S1).** `decide()` in `cron-bash-allowlist-hook.mjs` denies Write, Edit and
    MultiEdit outside two roots: the run's clone, derived from the hook's own path, and the `tmp/` (TMPDIR) of a
    `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
@@ -582,7 +584,10 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
 5. **Memory files cannot import secrets (CTO S3).** A nested `CLAUDE.md` the agent writes is loaded lazily, and its
    `@`-imports reach Anthropic-bound context (Phase 0.7g), so `@../.git/config` would carry the clone's token. The
    cron `settings.json` carries `claudeMdExcludes` (`cronClaudeMdExcludes()`): nested memory files, any import under
-   `.git/` and the pseudo-filesystems are not loaded, while the clone's root `CLAUDE.md` still is (Phase 0.7h). The
+   `.git/`, the pseudo-filesystems and the secret paths the hook's Read gate refuses (`/run/secrets`, `.env*`,
+   `.ssh`, `.aws`, `.config`, `.netrc`, `.npmrc`, `storage-state.json`, the ux-audit dirs and others) are not
+   loaded, while the clone's root `CLAUDE.md` still is. Only the `.git` entry was measured against the CLI (Phase
+   0.7h); the others are checked with picomatch, the CLI's matcher. The
    self-test refuses a spawn whose `settings.json` lacks the list. This uses the CLI's own exclusion, so no
    `CLAUDE.md` write-deny was added.
 6. **No cron holds a code-exec verb.** Bug-fixer loses `./node_modules/.bin/vitest run` and sets

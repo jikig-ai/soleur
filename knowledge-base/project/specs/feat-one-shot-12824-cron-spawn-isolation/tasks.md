@@ -49,8 +49,10 @@ Decisions: `knowledge-base/project/specs/feat-one-shot-12824-cron-spawn-isolatio
 
 ## Phase 4 — Records and follow-ups
 
-- [ ] 4.1a File F3 (atomic versioned seed), F4 (mount canary readiness gate), F5 if 0.6 shows the browser unreachable; no priority labels.
-- [ ] 4.1 File F1 (token out of agent env; p1, `single-user incident`, active milestone; re-evaluation: no cron regains a test runner/install until tokenless; mention `npm_config_ignore_scripts` and moving the hook `.mjs` to the `:ro` root) and F2 (Dockerfile chowns only `.next/cache`; ISR measurement first; CPO recommendation recorded; no priority label — operator sets it). F6: CI runs agent-committed code with secrets.
+<!-- lint-infra-ignore start: follow-up issue specs to file, not steps a person runs -->
+- [x] 4.1a (#12856 #12857 #12860) File F3 (atomic versioned seed), F4 (mount canary readiness gate), F5 if 0.6 shows the browser unreachable; no priority labels.
+- [x] 4.1 (#12854 #12855 #12858) File F1 (token out of agent env; p1, `single-user incident`, active milestone; re-evaluation: no cron regains a test runner/install until tokenless; mention `npm_config_ignore_scripts` and moving the hook `.mjs` to the `:ro` root) and F2 (Dockerfile chowns only `.next/cache`; ISR measurement first; CPO recommendation recorded; no priority label — operator sets it). F6: CI runs agent-committed code with secrets.
+<!-- lint-infra-ignore end -->
 - [ ] 4.2 Put F1/F2 numbers in the census exemption map and the ADR.
 - [ ] 4.3 Amend ADR-033 (cron spawn) with the 2026-11-17 amendment; update the #12757 residual bullet.
 - [ ] 4.4 Read all three `.c4` files in full; record actors/systems/stores/relationships checked; run `bash plugins/soleur/test/c4-count-parity.test.sh`.

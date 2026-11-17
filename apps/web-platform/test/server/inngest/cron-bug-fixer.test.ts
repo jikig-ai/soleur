@@ -800,6 +800,7 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     const skill = realFs.readFileSync(resolve(__dirname, "../../../../../plugins/soleur/skills/fix-issue/SKILL.md"), "utf-8");
     expect(skill).toMatch(/elif tokens\[i\] == "--no-local-tests":/);
     expect(skill).toMatch(/If `NO_LOCAL_TESTS` is set, skip this phase and Phase 4/);
+    expect(skill).toMatch(/## Phase 4: Run Tests\n\nIf `NO_LOCAL_TESTS` is set, skip this phase/);
 
     // #12824 — the substrate inserts `--plugin-dir <read-only root>` right
     // after the `--append-system-prompt <preamble>` pair, before the caller's

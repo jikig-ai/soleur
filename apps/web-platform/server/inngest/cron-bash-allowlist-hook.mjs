@@ -52,7 +52,7 @@ import { fileURLToPath } from "node:url";
 
 // --- Write confinement (#12824, CTO S1) ------------------------------------
 // Write/Edit/MultiEdit are ALLOW-BY-ROOT: the target must resolve inside the run's clone (spawnCwd) or
-// its per-spawn HOME. Before #12824 the branch allowed any path no WRITE_PROTECTED_PATTERNS entry hit,
+// the TMPDIR (`<HOME>/tmp`) of its per-spawn HOME, never HOME itself. Before #12824 the branch allowed any path no WRITE_PROTECTED_PATTERNS entry hit,
 // so a prompt-injected cron could write `/app/.next/server/*.js` (code the web server runs) or a
 // founder's `/workspaces/<uuid>/…`. This is an allow-list, not another deny pattern.
 //
@@ -119,10 +119,12 @@ function realpathOfNearestExisting(abs) {
 
 /** null when `p` may be written; otherwise the deny reason. Relative paths resolve against spawnCwd. */
 export function writeOutsideRootsReason(p, roots) {
-  const shown =
-    `write outside run roots: ${String(p).slice(0, 60)} -- write under the working directory or $TMPDIR instead, ` +
-    "or report the failure";
   if (!Array.isArray(roots) || roots.length === 0) return "write roots unresolvable (fail-closed)";
+  // #12847 fix round — name the literal temp root: the Write tool does not expand `$TMPDIR`.
+  const shown =
+    `write outside run roots: ${String(p).slice(0, 60)} -- write under the working directory` +
+    (roots[1] ? ` or under ${roots[1]}` : "") +
+    " instead";
   const real = realpathOfNearestExisting(resolve(roots[0], p));
   if (!real) return shown;
   for (const root of roots) {
@@ -487,6 +489,7 @@ const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
 // Read, Glob, Grep). Matched as substrings against the resolved path argument.
 // `.git` is load-bearing: `buildAuthenticatedCloneUrl` writes the GH_TOKEN into
 // remote.origin.url → .git/config (SECURITY PANEL P0-A).
+const UX_AUDIT_OUTPUT_DIR_RE = /(^|\/)tmp\/ux-audit(\/|$)/;
 const SECRET_PATH_PATTERNS = [
   /(^|\/)\.git(\/|$)/, // .git/config, .git/logs/HEAD, packed-refs
   /(^|\/)proc(\/|$)/, // /proc/self/environ, /proc/*/cmdline
@@ -511,9 +514,13 @@ const SECRET_PATH_PATTERNS = [
   // else the relaxed cron could Read the session then encode it into an
   // allowlisted `gh`/`browser_navigate` egress call.
   /(^|\/)storage-state\.json$/,
-  /(^|\/)tmp\/ux-audit(\/|$)/,
+  UX_AUDIT_OUTPUT_DIR_RE,
   /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
+// #12847 fix round — the secret paths a `--body-file` may not name. ux-audit's own issue bodies live in
+// UX_AUDIT_OUTPUT_DIR (`tmp/ux-audit/body-<hash>.md`, SKILL "File mode"), so that directory is the one
+// read-secret entry left out; the session file and browser profile in it stay denied by their own entries.
+const BODY_FILE_SECRET_PATTERNS = SECRET_PATH_PATTERNS.filter((re) => re !== UX_AUDIT_OUTPUT_DIR_RE);
 
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
 // settings file would neuter containment on the NEXT tool call (D-new-2).
@@ -750,6 +757,15 @@ function argumentInjectionReason(tokens) {
       const v = tokens[i + 1] || "";
       if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
         return `file-as-arg via ${t}`;
+      // #12847 fix round (security P1) — gh reads the body file itself, so the paths the Read gate
+      // refuses are refused here too (storage-state.json, a spawn HOME's .claude/ transcripts,
+      // hosts.yml, /run/secrets), on the raw value and on the path it resolves to from the clone.
+      if (
+        t === "--body-file" &&
+        (pathPatternMatches(BODY_FILE_SECRET_PATTERNS, v).length ||
+          pathPatternMatches(BODY_FILE_SECRET_PATTERNS, resolve(hookSpawnCwd() ?? "/", v)).length)
+      )
+        return `secret-path body file via ${t}`;
     }
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
     if (/=@/.test(t) || /^@/.test(t)) return "@file argument";
@@ -1371,8 +1387,10 @@ export function decide(input, allowPrefixes, opts = {}) {
 // The deny reason never leaves the host (permission_denials[] carries only the tool input), so
 // the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
 // function, which runs the same predicates decide() gates on (commandWordShapeReason,
-// protectedWriteMatches), so the metric cannot drift from the gate. Pure; never throws; never
-// returns any part of the command or path.
+// protectedWriteMatches, writeOutsideRootsReason, the realpath re-check), so the metric cannot drift
+// from the gate; `write-outside-roots` and the realpath re-check are named only when the caller passes
+// the run's write roots. Reads the filesystem (realpath) for Write rows; never throws; never returns any
+// part of the command or path.
 //
 // Bash mirrors decide()'s allowlist-independent order: a command decide() refuses earlier
 // (length, metachar, unbalanced quote, argument injection, or a git-verb / dot-segment deny on
@@ -1411,8 +1429,12 @@ export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
       const matches = protectedWriteMatches(p);
       if (matches.length) return newWriteRule(matches);
       // #12824 — decide()'s next gate. Id only: the path never leaves this function.
-      if (Array.isArray(writeRoots) && writeRoots.length && writeOutsideRootsReason(p, writeRoots))
-        return "write-outside-roots";
+      if (Array.isArray(writeRoots) && writeRoots.length) {
+        if (writeOutsideRootsReason(p, writeRoots)) return "write-outside-roots";
+        const landed = resolvedWriteTarget(p, writeRoots); // decide()'s realpath re-check
+        const landedMatches = landed ? protectedWriteMatches(landed) : [];
+        if (landedMatches.length) return newWriteRule(landedMatches);
+      }
       return null;
     }
     return null;

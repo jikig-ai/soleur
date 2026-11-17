@@ -114,6 +114,7 @@ import {
   PLUGIN_ROOT_TOKEN,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { NonRetriableError } from "inngest";
 import { safeCommitAndPr } from "./_cron-safe-commit";
 import {
   COMMUNITY_DIGEST_DIR_PATH,
@@ -385,7 +386,8 @@ You have no file-writing or issue-creating tools; do not try to use any.
 /** The prompt with the resolved plugin root in every router command. Throws without one (fail closed). */
 export function renderCommunityMonitorPrompt(pluginRoot: string | null | undefined): string {
   if (!pluginRoot) {
-    throw new Error("cron-community-monitor: no plugin root from setup-workspace; refusing to spawn (#12824)");
+    // A missing root is a wiring fault, not a transient: retrying cannot produce one.
+    throw new NonRetriableError("cron-community-monitor: no plugin root from setup-workspace; refusing to spawn (#12824)");
   }
   return COMMUNITY_MONITOR_PROMPT.replaceAll(PLUGIN_ROOT_TOKEN, pluginRoot);
 }
@@ -922,7 +924,7 @@ export async function cronCommunityMonitorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           const result = await spawnClaudeEval({
-            loadPlugin: false, // #12824 — the substrate owns --plugin-dir (read-only root)
+            loadPlugin: false, // #12824 — no plugin loaded; only CRON_PLUGIN_LOADERS crons may pass true
             spawnCwd: spawnCwd,
             installationToken: readToken,
             flags: CLAUDE_CODE_FLAGS,

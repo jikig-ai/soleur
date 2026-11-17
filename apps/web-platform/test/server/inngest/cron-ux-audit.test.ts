@@ -109,7 +109,7 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
 
   it("runs the image's pinned @playwright/mcp binary (no @latest, no npx fetch) — #12824", () => {
     expect(SUT_SOURCE).not.toContain("@playwright/mcp@latest");
-    expect(SUT_SOURCE).toContain('command: "/app/node_modules/.bin/playwright-mcp"');
+    expect(stripComments(SUT_SOURCE)).toContain('command: "/app/node_modules/.bin/playwright-mcp"');
     const pkg = JSON.parse(readFileSync(resolve(__dirname, "../../../package.json"), "utf-8"));
     expect(pkg.dependencies["@playwright/mcp"]).toBe("0.0.75");
   });

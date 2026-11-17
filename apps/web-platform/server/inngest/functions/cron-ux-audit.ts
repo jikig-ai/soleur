@@ -25,7 +25,7 @@
 // SHAPE DIFF vs cron-legal-audit.ts:
 //   - --allowedTools adds Playwright MCP tools for authenticated screenshots.
 //   - Bot-fixture lifecycle: seed → signin → writeStorageState → eval → reset.
-//   - Per-fire .mcp.json overlay with --user-data-dir (NOT --isolated).
+//   - Per-fire MCP overlay (<ephemeralRoot>/workspace/mcp.json) with --user-data-dir (NOT --isolated).
 //   - Upload findings to Supabase ux-audit-artifacts bucket.
 //   - Monthly cron 0 9 1 * * (vs quarterly).
 
@@ -310,9 +310,11 @@ export async function cronUxAuditHandler({
       const base = await setupEphemeralWorkspace({ installationToken, cronName: "cron-ux-audit" });
       const wDir = join(base.ephemeralRoot, "workspace");
 
-      // Per-fire .mcp.json overlay for Playwright MCP
+      // Per-fire MCP overlay (workspace/mcp.json) for Playwright MCP. The workspace dir is created
+      // first so its 0700 mode applies (a recursive mkdir of the profile would create it 0755).
+      await mkdir(wDir, { recursive: true, mode: 0o700 });
       const playwrightProfileDir = join(wDir, "playwright-mcp-profile");
-      await mkdir(playwrightProfileDir, { recursive: true });
+      await mkdir(playwrightProfileDir, { recursive: true, mode: 0o700 });
       const mcpConfig = {
         mcpServers: {
           playwright: {
@@ -347,8 +349,7 @@ export async function cronUxAuditHandler({
           },
         },
       };
-      // Workspace dir for storageState, findings output and the MCP overlay (outside the write roots).
-      await mkdir(wDir, { recursive: true, mode: 0o700 });
+      // The workspace dir (created above) holds storageState and the MCP overlay, outside the write roots.
       await writeFile(join(wDir, "mcp.json"), JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
 
       return { ...base, workspaceDir: wDir };
@@ -391,7 +392,7 @@ export async function cronUxAuditHandler({
           cronName: "cron-ux-audit",
           buildSpawnEnv: (token) => buildSpawnEnv(token, {
             // #12824 (CTO S1) — the containment hook now allows Write/Edit only under the clone and the
-            // spawn HOME. The skill writes findings and issue bodies to ${GITHUB_WORKSPACE}/tmp/ux-audit/,
+            // spawn TMPDIR (<HOME>/tmp). The skill writes findings and issue bodies to ${GITHUB_WORKSPACE}/tmp/ux-audit/,
             // which with GITHUB_WORKSPACE unset was /tmp/ux-audit (outside both); point it at the clone.
             GITHUB_WORKSPACE: spawnCwd!,
             // #5199 — restored to LIVE issue-filing. Defaults to "false" (files

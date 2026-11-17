@@ -378,6 +378,7 @@ export async function cronGrowthAuditHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-growth-audit",

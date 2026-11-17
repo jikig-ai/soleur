@@ -319,7 +319,7 @@ export async function cronRoadmapReviewHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            loadPlugin: false, // #12824 — the substrate owns --plugin-dir (read-only root)
+            loadPlugin: false, // #12824 — no plugin loaded; only CRON_PLUGIN_LOADERS crons may pass true
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,

@@ -311,13 +311,26 @@ function classifyLines(cron: string, lines: string[], cronSource: string): Class
  * judge it, so it is reported rather than skipped.
  */
 function mcpCommands(src: string): (string | null)[] {
-  const code = stripComments(src);
-  const block = code.indexOf("mcpServers");
-  if (block === -1) return [];
-  return [...code.slice(block).matchAll(/\bcommand:\s*([^,\n}]+)/g)].map((m) => {
-    const lit = /^"([^"]+)"$/.exec(m[1].trim());
-    return lit ? lit[1] : null;
-  });
+  // #12847 fix round — an AST walk, so a quoted key (`"command": "npx"`) and a commented-out literal
+  // are seen for what they are; a regex over source saw neither.
+  const sf = ts.createSourceFile("cron.ts", src, ts.ScriptTarget.Latest, true);
+  const out: (string | null)[] = [];
+  const keyName = (n: ts.PropertyName): string | null =>
+    ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : null;
+  const visit = (n: ts.Node, inMcp: boolean): void => {
+    if (ts.isPropertyAssignment(n)) {
+      const k = keyName(n.name);
+      if (k === "mcpServers") return ts.forEachChild(n, (c) => visit(c, true));
+      if (inMcp && k === "command") {
+        const v = n.initializer;
+        out.push(ts.isStringLiteral(v) || ts.isNoSubstitutionTemplateLiteral(v) ? v.text : null);
+        return;
+      }
+    }
+    ts.forEachChild(n, (c) => visit(c, inMcp));
+  };
+  visit(sf, false);
+  return out;
 }
 
 /** The `--mcp-config` file a cron's flags name, resolved against the spawn cwd (null when none). */
@@ -421,21 +434,45 @@ describe("Guard 1 — population (identity map)", () => {
     expect([...CRON_PLUGIN_LOADERS].sort()).toEqual(loaders);
   });
 
-  it("a cron whose prompt invokes a /soleur: skill loads the plugin (AC8 survivor G1-12b)", () => {
-    for (const [file, { cronName, loadPlugin }] of Object.entries(POPULATION)) {
-      const code = stripComments(readFileSync(join(SERVER, file), "utf-8"));
-      if (/[`"']\/soleur:[a-z][a-z-]*/.test(code)) expect(loadPlugin, `${cronName} invokes a /soleur: skill`).toBe(true);
-    }
+  it("the crons whose prompt invokes a /soleur: skill are exactly CRON_PLUGIN_LOADERS (AC8 survivor G1-12b)", () => {
+    // #12847 fix round — any position (`Run /soleur:x`), not only after a quote, which matched 1 of 12.
+    const invokes = Object.entries(POPULATION)
+      .filter(([file]) => /(?:^|[\s`"'(])\/soleur:[a-z][a-z-]*/m.test(stripComments(readFileSync(join(SERVER, file), "utf-8"))))
+      .map(([, p]) => p.cronName)
+      .sort();
+    expect(invokes.length).toBeGreaterThanOrEqual(11); // non-vacuous: the regex finds the skill-running crons
+    for (const name of invokes) expect(CRON_PLUGIN_LOADERS.has(name), `${name} invokes a /soleur: skill`).toBe(true);
+  });
+
+  it("an MCP `command` is read by key, quoted or not, and a commented-out literal does not count", () => {
+    expect(mcpCommands('const c = { mcpServers: { p: { "command": "npx", args: [] } } };')).toEqual(["npx"]);
+    expect(mcpCommands('const c = { mcpServers: { p: { command: CMD } } }; // command: "/abs"')).toEqual([null]);
+    expect(mcpCommands("const c = { other: { command: \"x\" } };")).toEqual([]);
+  });
+
+  it("an unknown gh/git subcommand is UNCLASSIFIED (negative control for GH_KNOWN / GIT_KNOWN)", () => {
+    const c = classifyLines("cron-x", ["gh extension install x/y", "git rebase -x sh", "gh issue list"], "");
+    expect(c.unclassified).toHaveLength(2);
+    expect(c.unclassified.join("\n")).toMatch(/gh extension install/);
+    expect(c.unclassified.join("\n")).toMatch(/git rebase/);
   });
 
   it("every allowlist key is a spawning cron, and setupEphemeralWorkspace uses the same cronName as the spawn", () => {
+    let setupCalls = 0;
     const crons = new Set(Object.values(POPULATION).map((p) => p.cronName));
     for (const key of Object.keys(CRON_BASH_ALLOWLISTS)) expect(crons.has(key), `allowlist key ${key}`).toBe(true);
     for (const [file, { cronName }] of Object.entries(POPULATION)) {
       const sf = ts.createSourceFile(file, readFileSync(join(SERVER, file), "utf-8"), ts.ScriptTarget.Latest, true);
       const names: (string | null)[] = [];
       const visit = (n: ts.Node): void => {
-        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "setupEphemeralWorkspace") {
+        const callee = ts.isCallExpression(n)
+          ? ts.isIdentifier(n.expression)
+            ? n.expression.text
+            : ts.isPropertyAccessExpression(n.expression)
+              ? n.expression.name.text
+              : null
+          : null;
+        if (ts.isCallExpression(n) && callee === "setupEphemeralWorkspace") {
           const arg = n.arguments[0];
           let name: string | null = null;
           if (arg && ts.isObjectLiteralExpression(arg)) {
@@ -450,7 +487,9 @@ describe("Guard 1 — population (identity map)", () => {
       };
       visit(sf);
       for (const n of names) expect(n, `${file}: setupEphemeralWorkspace cronName`).toBe(cronName);
+      setupCalls += names.length;
     }
+    expect(setupCalls, "non-vacuous: the clone-based crons call setupEphemeralWorkspace").toBeGreaterThanOrEqual(12);
   });
 
   it("every call passes loadPlugin as a boolean LITERAL and the flags carry no --plugin-dir", () => {
@@ -565,6 +604,7 @@ describe("Guard 1 — write confinement probes through the real decide() (CTO S1
   it("denies a sibling whose name starts with a root's name (repo-evil, home-abc123x)", () => {
     expect(verdict(join(EPHEMERAL, "repo-evil", "x"))).toBe("deny");
     expect(verdict(join(EPHEMERAL, "home-abc123x", "tmp", "x"))).toBe("deny");
+    expect(verdict(join(HOME, "tmp-evil", "x"))).toBe("deny"); // extends the TMPDIR root's name
   });
 
   it("a HOME that is not a home-* child of dirname(spawnCwd) does not widen the area", () => {

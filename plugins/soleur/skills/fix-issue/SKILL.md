@@ -160,6 +160,8 @@ Read the issue body, understand the bug, locate the relevant file, and make the 
 
 ## Phase 4: Run Tests
 
+If `NO_LOCAL_TESTS` is set, skip this phase (see Phase 2); a skipped phase is not a failure.
+
 Run the test suite after the fix using the same literal command from Phase 2:
 
 ```bash

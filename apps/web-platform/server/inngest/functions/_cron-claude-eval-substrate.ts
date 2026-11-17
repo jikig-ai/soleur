@@ -1015,8 +1015,10 @@ export function cronClaudeMdExcludes(spawnCwd: string): string[] {
     g("", "proc", "**"),
     g("", "sys", "**"),
     g("", "dev", "**"),
-    // #12847 review (architecture P2) — an `@`-import is a read the containment hook never sees, so every
-    // secret path its Read gate refuses (SECRET_PATH_PATTERNS) is excluded here too.
+    // #12847 review (architecture P2) — an `@`-import is a read the containment hook never sees, so the
+    // secret paths an import can reach are excluded here too. These globs approximate SECRET_PATH_PATTERNS
+    // (picomatch globs cannot express every regex suffix form; `.claude/` stays loadable for the clone's
+    // own rules); only the `.git` entry was measured against the CLI (Phase 0.7h).
     g("", "run", "secrets", "**"),
     g("**", ".env"),
     g("**", ".env.*"),
@@ -2221,7 +2223,7 @@ async function spawnClaudeEvalUnguarded(args: {
         "claude-eval spawned",
       );
     });
-    // Before the finally removes HOME, and only on a settled run: a reseed downgrades the verdict.
+    // Only on a settled run, and inside the try so the downgrade shapes the returned verdict.
     return pluginReseededDuringRun(plugin, cronName) ? { ...result, ok: false, pluginReseeded: true } : result;
   } finally {
     clearTimeout(timer);
@@ -2264,7 +2266,15 @@ function pluginReseededDuringRun(plugin: CronPluginRoot | null, cronName: string
       extra: { cron: cronName, seedTagAtSpawn: plugin.seedTag, seedTagAtExit: tagNow },
     });
     return true;
-  } catch {
+  } catch (err) {
+    // review: swallowed — an unreadable sentinel cannot prove a reseed; the run keeps its verdict, visibly.
+    warnSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "plugin-reseed-check-failed",
+      message: "the mid-run reseed check could not read the plugin sentinel; the verdict is unchanged",
+      tags: { cron: cronName },
+      extra: { cron: cronName, detail: err instanceof Error ? err.message : String(err) },
+    });
     return false;
   }
 }

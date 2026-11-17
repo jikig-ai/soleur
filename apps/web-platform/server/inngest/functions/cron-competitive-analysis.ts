@@ -439,6 +439,7 @@ export async function cronCompetitiveAnalysisHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-competitive-analysis",

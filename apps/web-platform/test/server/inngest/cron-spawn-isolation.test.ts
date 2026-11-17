@@ -46,6 +46,7 @@ vi.mock("@/server/inngest/functions/_cron-spawn-fs", async (importOriginal) => (
 
 import { NonRetriableError } from "inngest";
 import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
+import { deriveWriteRoots } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 import {
   CRON_GIT_HARDENING,
   CronPluginRootError,
@@ -178,6 +179,8 @@ describe("Guard 2 — per-spawn HOME (AC3)", () => {
     expect(seen[0].tmpExisted).toBe(true);
     expect(seen[0].tmpMode).toBe(0o700);
     expect(seen[0].homeAtExit, "HOME must survive while the child runs").toBe(true);
+    // The layout the substrate builds is the one the hook derives its write roots from (repo/ + home-*).
+    expect(deriveWriteRoots(spawnCwd, home)).toEqual([spawnCwd, join(home, "tmp")]);
     expect(seen[0].tmpAtExit, "TMPDIR must survive while the child runs").toBe(true);
     expect(existsSync(home), "HOME must be removed after the spawn resolves").toBe(false);
   });

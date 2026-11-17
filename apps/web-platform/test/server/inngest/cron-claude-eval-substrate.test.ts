@@ -1559,6 +1559,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
         { tool_name: "Edit", tool_input: { file_path: "/home/soleur/.config/git/ignore" } },
         { tool_name: "Write", tool_input: { file_path: "/usr/local/share/soleur/agent.gitconfig", content: "x" } },
         { tool_name: "Bash", tool_input: { command: "git status" } },
+        { tool_name: "Write", tool_input: { file_path: "/app/.next/server/x.js", content: "x" } }, // #12847 fix round
       ],
     });
     const cwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
@@ -1573,6 +1574,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       "protected-gitconfig": 1,
       "protected-xdg-git": 1,
       "protected-trust-root": 1,
+      "write-outside-roots": 1, // the spawn passes the run's write roots to the classifier
     });
     for (const c of calls) {
       expect(c[1].feature).toBe("cron-claude-eval");

@@ -43,7 +43,11 @@ export function createSpawnHome(parent: string, prefix: string): string {
   try {
     mkdirSync(join(home, "tmp"), { mode: 0o700 });
   } catch (err) {
-    rmSync(home, { recursive: true, force: true }); // never orphan a half-made HOME (ENOSPC)
+    try {
+      rmSync(home, { recursive: true, force: true }); // never orphan a half-made HOME (ENOSPC)
+    } catch {
+      // the workspace teardown or the GC sweep removes it; the mkdir error is the one to report
+    }
     throw err;
   }
   return home;

@@ -414,6 +414,7 @@ export async function cronSeoAeoAuditHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-seo-aeo-audit",

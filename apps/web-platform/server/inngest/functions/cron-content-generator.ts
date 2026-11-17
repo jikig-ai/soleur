@@ -418,6 +418,7 @@ export async function cronContentGeneratorHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-content-generator",
