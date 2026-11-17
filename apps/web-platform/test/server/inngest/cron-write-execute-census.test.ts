@@ -48,6 +48,7 @@ import {
   buildCronEvalSettings,
   CRON_BASH_ALLOWLISTS,
   CRON_PLUGIN_LOADERS,
+  cronUsesPluginRoot,
   PLUGIN_ROOT_TOKEN,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import { SOLEUR_PLUGIN_PATH_DEFAULT } from "@/server/plugin-path";
@@ -506,7 +507,14 @@ describe("Guard 1 — population (identity map)", () => {
     );
     expect(outputAware.map(([, p]) => p.cronName).sort()).toHaveLength(7);
     for (const [f] of outputAware) expect(src(f), f).toMatch(/pluginReseeded: spawnResult!?\.pluginReseeded/);
-    expect(src("inngest/functions/cron-community-monitor.ts")).toMatch(/if \(spawnResult\?\.pluginReseeded\)\s*heartbeatOk = false;/);
+    // Every cron that runs plugin scripts without loading the plugin gets a reseed baseline; each applies it, and
+    // right after the collector gate (itself order-pinned after persistence and outside the try).
+    const scriptOnly = Object.entries(POPULATION).filter(
+      ([, p]) => cronUsesPluginRoot(p.cronName) && !CRON_PLUGIN_LOADERS.has(p.cronName),
+    );
+    expect(scriptOnly.map(([, p]) => p.cronName)).toEqual(["cron-community-monitor"]);
+    for (const [f] of scriptOnly)
+      expect(src(f), f).toMatch(/if \(collectorSignalRed\)\s*heartbeatOk = false;\s*if \(spawnResult\?\.pluginReseeded\)\s*heartbeatOk = false;/);
   });
 
   it("every call passes loadPlugin as a boolean LITERAL and the flags carry no --plugin-dir", () => {

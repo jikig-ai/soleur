@@ -1807,7 +1807,8 @@ async function spawnClaudeEvalUnguarded(args: {
   const plugin = loadPlugin ? await resolveCronPluginRootOrFail(cronName) : null;
   // #12847 fix round 2 — a cron that runs plugin scripts without loading the plugin (community-monitor) gets
   // the same reseed baseline, read without the resolver's sentinel wait: setup already resolved the root.
-  const reseedBaseline = plugin ?? (cronUsesPluginRoot(cronName) ? pluginSeedSnapshot() : null);
+  const reseedBaseline =
+    plugin ?? (cronUsesPluginRoot(cronName) && !CRON_PLUGIN_LOADERS.has(cronName) ? pluginSeedSnapshot() : null);
 
   // Child output is redacted for the installation token AND the operator Anthropic key the child
   // runs with, so a model answer that quotes its environment never reaches logs or Sentry.
@@ -2256,11 +2257,12 @@ async function spawnClaudeEvalUnguarded(args: {
  * #12824 (CTO T1) — ci-deploy.sh reseeds the :ro mount source in place; a tag change during the run means the
  * child may have loaded files from two plugin versions. Reports once and returns true. Never throws.
  */
-function pluginReseededDuringRun(plugin: CronPluginRoot | null, cronName: string): boolean {
+function pluginReseededDuringRun(plugin: ReseedBaseline | null, cronName: string): boolean {
   if (!plugin) return false;
-  // An unreadable sentinel reads as null, which differs from a spawn-time tag: counted as a reseed (fail closed).
+  // An unreadable sentinel at exit reads as null and counts as a reseed (fail closed). A snapshot taken with no
+  // sentinel at spawn (seedPending) means a reseed was under way when the child started.
   const tagNow = seedTagOf(spawnFs.readTextOrNull(join(plugin.root, ".seed-complete")));
-  if (tagNow === plugin.seedTag) return false;
+  if (!plugin.seedPending && tagNow === plugin.seedTag) return false;
   try {
     reportSilentFallback(null, {
       feature: "cron-claude-eval",
@@ -2275,11 +2277,14 @@ function pluginReseededDuringRun(plugin: CronPluginRoot | null, cronName: string
   return true;
 }
 
+type ReseedBaseline = CronPluginRoot & { seedPending?: boolean };
+
 /** The reseed baseline for a cron that runs plugin scripts without `--plugin-dir`; null when unresolvable. */
-function pluginSeedSnapshot(): CronPluginRoot | null {
+function pluginSeedSnapshot(): ReseedBaseline | null {
   try {
     const root = assertTrustedPluginPath(getPluginPath());
-    return { root, seedTag: seedTagOf(spawnFs.readTextOrNull(join(root, ".seed-complete"))) };
+    const text = spawnFs.readTextOrNull(join(root, ".seed-complete"));
+    return { root, seedTag: seedTagOf(text), seedPending: text === null };
   } catch {
     // review: swallowed — setup already refused an untrusted root (reported); this spawn is then unreachable
     return null;

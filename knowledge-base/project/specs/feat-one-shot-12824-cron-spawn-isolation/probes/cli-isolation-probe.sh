@@ -22,6 +22,14 @@
 # decision branches (plan Phase 0); 1 when any arm is MISMATCH/inconclusive; 2 on a guard
 # refusal or usage error.
 set -euo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}${GH_TOKEN:+x}${PROBE_GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 CLI_VERSION=2.1.321 # the prod pin (apps/web-platform/package.json, Dockerfile). Keep in ONE place.
 CLI_PKG="@anthropic-ai/claude-code@${CLI_VERSION}"

@@ -557,6 +557,11 @@ export const HOOK_NEW_RULE_IDS = Object.freeze([
   "write-outside-roots",
   "body-file-secret-path",
 ]);
+// gh flags whose next token is always their value (pflag), so a `-F…` there is text, not a flag.
+const GH_VALUE_FLAGS = new Set([
+  "--title", "-t", "--body", "-b", "--search", "-S", "--jq", "-q", "--json", "--label", "-l",
+  "--add-label", "--remove-label", "--comment", "--milestone", "-m", "--assignee", "-a",
+]);
 // The deny-reason prefix classifyNewRuleDeny maps to `body-file-secret-path`.
 const BODY_FILE_SECRET_REASON = "secret-path body file via";
 
@@ -778,9 +783,16 @@ function argumentInjectionReason(tokens) {
       pathPatternMatches(BODY_FILE_SECRET_PATTERNS, tokens[i + 1] || "").length
     )
       return `${BODY_FILE_SECRET_REASON} ${t} -- write the body under the working directory instead`;
+    const eqFile = /^--(input|recover)=(.*)$/s.exec(t);
+    if (eqFile && pathPatternMatches(BODY_FILE_SECRET_PATTERNS, eqFile[2]).length)
+      return `${BODY_FILE_SECRET_REASON} --${eqFile[1]}= -- write the body under the working directory instead`;
     // An attached or clustered short -F (`-F<path>`, `-F=<path>`, `-wF <path>`) would skip every check above.
-    if (ghBody && /^-[A-Za-z]*F./.test(t)) return "file-as-arg via attached -F";
-    if (ghBody && /^-[A-Za-z]+F$/.test(t)) return "file-as-arg via clustered -F";
+    // Not on the value of a gh value flag (`--title "-Fix x"`): gh never reads a file from a flag's value.
+    // These are refused whatever the path, so the off-host metric does not count them as body-file-secret-path.
+    if (ghBody && !GH_VALUE_FLAGS.has(tokens[i - 1])) {
+      if (/^-[A-Za-z]*F./.test(t)) return "file-as-arg via attached -F";
+      if (/^-[A-Za-z]+F$/.test(t)) return "file-as-arg via clustered -F";
+    }
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
     if (/=@/.test(t) || /^@/.test(t)) return "@file argument";
     // VAR=val prefix (env indirection before the verb) — leading token only

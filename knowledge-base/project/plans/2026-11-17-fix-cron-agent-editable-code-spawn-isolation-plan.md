@@ -649,7 +649,7 @@ The bullets above are the plan-time statement and are kept as written. The revie
 
 ```yaml
 liveness_signal:
-  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path, except for cron-legal-audit and cron-agent-native-audit, whose try/finally has no catch, so for them it is a missed check-in. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
+  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (a refusal at spawn time is a missed check-in for cron-legal-audit and cron-agent-native-audit) (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path, except for cron-legal-audit and cron-agent-native-audit, whose try/finally has no catch, so for them it is a missed check-in. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
   cadence: "per cron run, on each cron's own schedule"
   alert_target: "each cron's Sentry heartbeat monitor (ok:false; not routed to email until #12859 declares the monitors) and the Sentry issue for op cron-plugin-root-untrusted"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (resolveCronPluginRoot, spawnClaudeEvalUnguarded); apps/web-platform/server/inngest/functions/_cron-shared.ts (heartbeat)"
@@ -659,7 +659,7 @@ error_reporting:
 failure_modes:
   - mode: "the plugin mount is absent, half-seeded or writable (drifted SOLEUR_PLUGIN_PATH, missing :ro)"
     detection: "in-surface: resolveCronPluginRoot runs inside the step before the child spawns and reports op cron-plugin-root-untrusted with a closed reason enum, which separates the four causes in one event"
-    alert_route: "Sentry issue (op cron-plugin-root-untrusted) + heartbeat ok:false"
+    alert_route: "Sentry issue (op cron-plugin-root-untrusted) + heartbeat ok:false (a missed check-in for cron-legal-audit and cron-agent-native-audit when the refusal comes at spawn time)"
   - mode: "a skill's own script call is denied after the move (CLAUDE_PLUGIN_ROOT substitution differs from the allowlist line)"
     detection: "in-surface: the hook's deny reason names the exact command; the run's permission_denials carry it; Phase 0.5 records the expected form"
     alert_route: "none off-host (corrected in the #12847 fix round): a deny does not fail the run, so it can end green with less output; the deny is visible only in the run's permission_denials"

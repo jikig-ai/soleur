@@ -414,6 +414,45 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     expect(result.pluginReseeded).toBe(true);
   });
 
+  it("row 7c: a cron that neither loads the plugin nor runs its scripts has no reseed baseline", async () => {
+    spawnSpy.mockImplementation(
+      fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded tag=v9\n")),
+    );
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { cronName: "cron-roadmap-review", loadPlugin: false });
+    expect(reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run")).toHaveLength(0);
+    expect(result.ok).toBe(true);
+  });
+
+  it("row 7d: a sentinel removed while the child runs counts as a reseed (fail closed)", async () => {
+    spawnSpy.mockImplementation(fakeSpawnImpl(() => rmSync(join(pluginRoot, ".seed-complete"))));
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { loadPlugin: true });
+    expect(result.pluginReseeded).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
+  it("row 7e: a failing reseed report still leaves the run not-ok", async () => {
+    spawnSpy.mockImplementation(
+      fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded tag=v9\n")),
+    );
+    reportSpy.mockImplementation((_e: unknown, o: { op?: string }) => {
+      if (o?.op === "plugin-reseeded-mid-run") throw new Error("sentry down");
+    });
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { loadPlugin: true });
+    expect(result.ok).toBe(false);
+    expect(result.pluginReseeded).toBe(true);
+  });
+
+  it("row 7f: community-monitor spawned while the sentinel is absent (a reseed under way) is downgraded", async () => {
+    rmSync(join(pluginRoot, ".seed-complete"));
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { cronName: "cron-community-monitor", loadPlugin: false });
+    expect(result.pluginReseeded).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
   it("row 7 control: an unchanged tag reports nothing and keeps the verdict", async () => {
     const { spawnCwd } = workspace();
     const result = await run(spawnCwd, { loadPlugin: true });

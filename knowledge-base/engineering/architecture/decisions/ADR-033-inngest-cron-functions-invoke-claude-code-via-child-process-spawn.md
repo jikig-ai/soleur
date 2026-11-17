@@ -572,7 +572,9 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
    `<CRON_WORKSPACE_ROOT>/soleur-home-*`, which no write root admits (they run without the hook and without Write).
    The seed tag is compared at exit; a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
    (`pluginReseeded`): `classifyEvalFatal` treats it as fatal for best-effort crons, and `resolveOutputAwareOk`
-   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run.
+   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run. The exception is
+   `cron-community-monitor`, which runs plugin scripts without loading the plugin: its heartbeat goes red after
+   persistence, so its digest is still committed, as on a collector failure.
 4. **Writes are confined to the run (CTO S1).** `decide()` in `cron-bash-allowlist-hook.mjs` denies Write, Edit and
    MultiEdit outside two roots: the run's clone, derived from the hook's own path, and the `tmp/` (TMPDIR) of a
    `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
