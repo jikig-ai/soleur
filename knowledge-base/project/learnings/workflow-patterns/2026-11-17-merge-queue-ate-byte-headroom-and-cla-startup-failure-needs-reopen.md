@@ -74,7 +74,8 @@ re-fired check attaches to depends on the event that fired it, so pick the event
 1. **Queue build failed on the skill-body budget (48006 > 48000) after an unrelated
    PR (#12736) added 8 bytes on main.** Recovery: trimmed and re-enqueued. —
    **Prevention:** keep at least 50 bytes of headroom at ready time (added to
-   `plan/references/plan-sharp-edges.md`, next to the existing measure-first bullet).
+   `plugins/soleur/skills/plan/references/plan-sharp-edges.md`, next to the existing
+   measure-first bullet).
 2. **`CLA Assistant` and `cla-evidence` ended in `startup_failure`; a re-run is not
    allowed, and a comment re-run attached the checks to main's commit.** Recovery:
    closed and reopened the PR, which re-fired both on the head. — **Prevention:**
@@ -87,6 +88,14 @@ re-fired check attaches to depends on the event that fired it, so pick the event
 4. **This session: `worktree-manager.sh --help` is not a command** (it printed usage
    after "Unknown command"). One-off, no impact. — **Prevention:** none needed; the
    usage text prints anyway.
+5. **This session: the `durable-reminder-prefer-inngest` hook blocked a CronCreate
+   reminder for #12820.** The Inngest path needs `INNGEST_MANUAL_TRIGGER_SECRET`, a prd
+   secret, and the brief forbade reading live secrets. Recovery: re-sent with the
+   hook's `gate-override` comment and the reason. — **Prevention:** when the brief
+   forbids live-secret reads, take the override path on the first call and state why.
+6. **This session: the PR body shipped the template placeholder "undo PR #N".**
+   Recovery: replaced it with #12848 and ran `gh pr edit`. — **Prevention:** after
+   `gh pr create` returns the number, grep the body for `#N` before moving on.
 
 ## Tags
 
