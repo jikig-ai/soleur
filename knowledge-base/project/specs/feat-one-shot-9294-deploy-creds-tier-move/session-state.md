@@ -44,3 +44,21 @@ no ci-is-the-gate token written (silent brief)
 - Remaining pipeline: gate completion → QA → compound → mark ready → `gh pr merge --squash --auto` → post-merge verify `postmerge verification complete!` → `<promise>DONE</promise>`.
 - This run ships PR-A ONLY (carrier). PR-B (consumers, sweeper partition, #6178 deletion) waits on operator seed (tasks 1.6/2.0 precondition) — a separate one-shot after operator acts.
 - Operator-reserved, unchanged: seed/mint DOPPLER_TOKEN_DEPLOY_CHANNEL on deploy-channel + inngest-cutover; trio rotation; prd_terraform deletions; drill dispatch; signing-key rotation; CF Terraform-state reconcile.
+
+## 2026-11-17 — CI fix round 5 (wipe-access mutator anchor)
+
+- `deploy-script-tests (3/4)` red was DIFF-CAUSED: `M-g1-10-mask-blob`'s
+  mutator `'while IFS= read -r line; do'` matched twice in
+  `infra-credentials/action.yml` once the narrow arm added its byte-similar
+  mask loop. Anchored each arm's loop by indent (broad 8sp, narrow 10sp),
+  added narrow-arm twin `g1-10b-narrow-mask-blob` (new mask site gets its
+  own bypass coverage), MUTANT_FLOOR 184->185. Suite: 633/0, both mutants
+  land and red G1-loader-mask. Commit `18e11c1048`, pushed.
+- Prior pushed fix `280274d4ae` keeps apply-web-platform-infra.yml at
+  488,580 B on-branch (merged ~489,447 B) under the 490 KB gate.
+- Affected gate final tally (persisted run): 774 suite rows; only non-ok
+  logs were the lint suite (fixed `ed1848e66e`, standalone-verified), the
+  environmental c4-render/likec4 prefix failure (pre-existing on main,
+  filed as #12874), a stale-branch cloud-init headroom artifact (passes
+  on current main), and the ANSI-redaction contention flake (3.4s
+  standalone). Gate substantively green.
