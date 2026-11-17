@@ -2696,6 +2696,9 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 **Preconditions, in order** (the CLO's conditions; each is a recorded measurement, not an assumption):
 
 1. The #10479 cleanup apply is measured (`strict` on the adopted rule) and #10479 is closed.
+
+   > **Superseded 2026-11-17 (#10479), as to "#10479 is closed":** this means the legal-record closure, not the GitHub issue state. The CLO ruling of 2026-11-13 ("Remedy (c) legality") defines it as "(cleanup apply measured, wording merged, row 7 converted)". Q-1 is recorded as discharged in 'Addendum — 2026-11-16 (post-merge, Q-1)' of `knowledge-base/legal/audits/2026-11-counsel-review-10479.md`, from the 2026-11-16 13:12-13:16Z read (#10479 comment 6917496007) and the CLO ruling of 2026-11-16 (#10479 comment 6946870123). Item 1 is met. Check it against that addendum, never against `gh issue view`: an OPEN issue does not block the replace, and a closed issue without that addendum does not meet item 1. On GitHub #10479 is OPEN (read 2026-11-17), and the owner closes it. Items 2 to 4 are unchanged, and so is the 2026-11-20 limit in item 4.
+
 2. #12742's sync-evidence probe field is merged (the registry-empty alert above cannot see a stale non-zero registry).
 3. Hop 1 (the Inngest server to the Cloudflare edge, certificate check) is measured against the deployed build.
 4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner

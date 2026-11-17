@@ -165,6 +165,6 @@ Any of the `re_evaluation_triggers` in the frontmatter re-opens this review. Whe
 
 ## Addendum — 2026-11-16 (post-merge, Q-1)
 
-Written 2026-11-17; records the 2026-11-16 13:12-13:16Z measurement (#10479 comment 6917496007) and the 2026-11-16 CLO ruling (#10479 comment 6946870123).
+Written 2026-11-17; records the 2026-11-16 13:12-13:16Z measurement and the 2026-11-16 CLO ruling. The measurement is #10479 comment 6917496007 and the ruling is #10479 comment 6946870123.
 
 **Addendum — 2026-11-16 (post-merge, Q-1).** Q-1 is discharged. After the cleanup apply of the origin-TLS cleanup PR (merged 2026-11-16 as 233c690996), the read-only `config-entrypoint` read shows version 8 (last_updated 2026-11-16T13:12:15Z) with 3 rules. The only rule matching app.soleur.ai is the adopted rule `dcb85b75`, `ssl = strict`. No flexible rule exists. The zone SSL mode is `strict`. `origin-tls-probe --require-tls` returned HTTP 200 over TLSv1.3. The 2026-11-19 hard stop (CLO ruling 2026-10-27) is discharged by the fix, not renewed: ledger connection 7 carries no exception.

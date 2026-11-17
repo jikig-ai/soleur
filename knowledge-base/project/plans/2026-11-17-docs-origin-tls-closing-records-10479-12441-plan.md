@@ -119,7 +119,7 @@ All marker dates are **2026-11-17** (CLO Q3). The addendum heading keeps **2026-
 6. **Line ~115 (R1 "New:").** Leave the text exactly as it is. Add a sub-bullet indented under the "New:" line: `[Superseded 2026-11-17 (#10479), as to "(#10538 closes on the merge of PR #12737)":]`, with the same cause and OPEN state.
 7. **Closing section.** Append at end of file:
    - the heading `## Addendum — 2026-11-16 (post-merge, Q-1)`;
-   - the first body line: `Written 2026-11-17; records the 2026-11-16 13:12-13:16Z measurement (#10479 comment 6917496007) and the 2026-11-16 CLO ruling (#10479 comment 6946870123).`;
+   - the first body line: `Written 2026-11-17; records the 2026-11-16 13:12-13:16Z measurement and the 2026-11-16 CLO ruling. The measurement is #10479 comment 6917496007 and the ruling is #10479 comment 6946870123.`;
    - then the owner's addendum paragraph **verbatim, byte for byte**, starting `**Addendum — 2026-11-16 (post-merge, Q-1).** Q-1 is discharged.` and ending `ledger connection 7 carries no exception.`
 
 ### Phase 2 — Part A(b): the A7 record
