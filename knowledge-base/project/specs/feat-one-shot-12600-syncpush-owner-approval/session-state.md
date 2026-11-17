@@ -50,3 +50,12 @@ None
 - Review complete 2026-11-16: trailers f9672b592f (main), 2cffe77877 and 64f21eb17c (fix rounds); Review-Evidence comment posted on #12704. True seat count: 14 + 12 + 12 + 1 = 39; the tally shows 51 (the round-1 double count).
 - Lead-run environment note: 13 c4-render tenant-config tests fail on this host from the local likec4 install (mise shim, "install prefix too shallow to bind"); the PR does not touch c4-render.
 - Next: Phases 9-11 (#12718 pull side, #12714 UI; the D5e/D6c seams; the D21 Phase 9 items). The #12714 wireframe waits on the pen.dev upgrade (W7).
+
+## 2026-11-17: deepen-plan on the #12718/#12714 extension complete
+- All 7 seats reported (scratchpad deepen-ext-*.md). Rulings D25-D30 (9b4644fdf7), CPO V6 (eb8eff018e), D31 (b16c1dc18f).
+- Wireframe committed 496551a4f9 (15 frames, V6 copy; fileToken removed per the ux-design-lead procedure). Gate 4.9 passes.
+- Plan and tasks merged b8fcd31894; self-audit fix b1b70171af (pushed).
+- Implementation launched in parallel, disjoint ownership (brief: scratchpad impl-ext-brief.md):
+  PULL (Phase 9), DB+UI (10.1-10.3, 11.1, 11.4, 11.4b, 11.7, disconnect/setup nulls), AGENT-LINE (11.3 + shared strings).
+- Still owed after those land: 11.2 wiring (onHeldFiles -> write from syncPush finally, syncPull count, W5 stamp removal),
+  11.3b legacy-runner line, 10.4 dev apply when PR is ready, 11.5 e2e, then the review/fix round on the new range.
