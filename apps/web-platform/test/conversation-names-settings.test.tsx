@@ -185,3 +185,109 @@ describe("ConversationNamesSettingsPage (route reachability, demoted from e2e)",
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #12714 task 11.7 (V6(6), D31(1)/(3)): the leader-icon upload's two non-error outcomes render as a full-width NEUTRAL
+// status row under the leader row; "Upload failed. Please try again." stays (red, under the input) for every other
+// failure. Strings verbatim from V6(6).
+// ---------------------------------------------------------------------------
+
+const PENDING =
+  "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again.";
+const CONFLICT =
+  "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub.";
+const FAILED = "Upload failed. Please try again.";
+
+describe("ConversationNamesSettingsContent — leader icon upload outcomes (#12714)", () => {
+  const teamNamesBody = { names: {}, nudgesDismissed: [], namingPromptedAt: null };
+  let uploadResponse: { ok: boolean; status: number; body: unknown };
+  const calls: Array<{ url: string; method: string }> = [];
+
+  beforeEach(() => {
+    calls.length = 0;
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (url === "/api/kb/upload") {
+        return {
+          ok: uploadResponse.ok,
+          status: uploadResponse.status,
+          json: () => Promise.resolve(uploadResponse.body),
+        };
+      }
+      return { ok: true, status: 200, json: () => Promise.resolve(teamNamesBody) };
+    });
+    // jsdom has no image decoding: the dimension check resolves through a stub that "loads" a 64x64 image.
+    vi.stubGlobal(
+      "Image",
+      class {
+        width = 64;
+        height = 64;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        set src(_v: string) {
+          setTimeout(() => this.onload?.(), 0);
+        }
+        get src() {
+          return "blob:stub";
+        }
+      },
+    );
+    URL.createObjectURL = vi.fn(() => "blob:stub");
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  async function uploadCmoIcon() {
+    renderTeamSettings();
+    await waitFor(() => expect(screen.getByText("Chief Marketing Officer")).toBeInTheDocument());
+    const input = document.querySelectorAll('input[type="file"]')[0] as HTMLInputElement;
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "icon.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+  }
+
+  it("workspace_sync: 'pending' shows the V6 pending notice as a neutral status row, and still saves the icon path", async () => {
+    uploadResponse = { ok: true, status: 201, body: { path: "settings/team-icons/cmo.png", workspace_sync: "pending" } };
+    await uploadCmoIcon();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toBe(PENDING);
+    expect(status.className).not.toMatch(/red/);
+    expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+    // The path is saved so the icon appears once the workspace updates (until then the avatar falls back to default).
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/team-names" && c.method !== "GET")).toBe(true));
+  });
+
+  it("a plain success shows no notice", async () => {
+    uploadResponse = { ok: true, status: 201, body: { path: "settings/team-icons/cmo.png" } };
+    await uploadCmoIcon();
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/team-names" && c.method !== "GET")).toBe(true));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+  });
+
+  it("a 409 shows the V6 409 notice (neutral, not red) instead of 'Upload failed', and saves nothing", async () => {
+    uploadResponse = { ok: false, status: 409, body: { error: "File already exists" } };
+    await uploadCmoIcon();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toBe(CONFLICT);
+    expect(status.className).not.toMatch(/red/);
+    expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url === "/api/team-names" && c.method !== "GET")).toBe(false);
+  });
+
+  it.each([400, 403, 500, 503])("any other failure (%i) keeps 'Upload failed. Please try again.' and no status row", async (status) => {
+    uploadResponse = { ok: false, status, body: { error: "nope" } };
+    await uploadCmoIcon();
+    expect(await screen.findByText(FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("a network error keeps 'Upload failed. Please try again.'", async () => {
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url === "/api/kb/upload") throw new TypeError("network");
+      return { ok: true, status: 200, json: () => Promise.resolve(teamNamesBody) };
+    });
+    await uploadCmoIcon();
+    expect(await screen.findByText(FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
