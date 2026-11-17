@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
 # default-weight-ms=4000
-# generated-at=2026-11-05T14:23:52Z
+# generated-at=2026-11-10T20:52:15Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -70,6 +70,8 @@ apps/web-platform/infra/git-data-wipe-access.test.sh	128500	measured
 apps/web-platform/infra/git-data-wipe-assert.test.sh	263000	measured
 apps/web-platform/infra/git-data-wipe.test.sh	46500	measured
 apps/web-platform/infra/git-lock-chardevice-sweep.test.sh	500	measured
+apps/web-platform/infra/host-kernel-marker-delivery.test.sh	6000	floor
+apps/web-platform/infra/host-kernel-marker.test.sh	6000	floor
 apps/web-platform/infra/htpasswd-stdin.test.sh	18000	measured
 apps/web-platform/infra/infra-config-apply.test.sh	40500	measured
 apps/web-platform/infra/infra-config-gate.test.sh	23000	measured
@@ -94,6 +96,7 @@ apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
 apps/web-platform/infra/inngest-flip-token.test.sh	10000	measured
 apps/web-platform/infra/inngest-gate-witness-classify.test.sh	1000	measured
 apps/web-platform/infra/inngest-host-replace-preflight.test.sh	4000	floor
+apps/web-platform/infra/inngest-host-replace-liveness-gate.test.sh	1500	measured
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	8000	measured
 apps/web-platform/infra/inngest-host.test.sh	7000	measured
 apps/web-platform/infra/inngest-inventory.test.sh	8000	measured
@@ -118,6 +121,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	1000	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	3500	measured
 apps/web-platform/infra/inngest.test.sh	9500	measured
 apps/web-platform/infra/journald-config.test.sh	1000	measured
+apps/web-platform/infra/kernel-currency.test.sh	4000	floor
 apps/web-platform/infra/key-rotate-workflow.test.sh	420000	estimate
 apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	9000	measured
 apps/web-platform/infra/lb-weight-gate.test.sh	2000	measured
@@ -172,6 +176,7 @@ apps/web-platform/infra/web-git-data-probe.test.sh	1000	measured
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	319000	measured
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	3000	measured
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	2000	measured
+apps/web-platform/infra/web-hosts-generic.test.sh	4000	floor
 apps/web-platform/infra/web-platform-release-peer-gate.test.sh	1000	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	18000	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	17000	measured

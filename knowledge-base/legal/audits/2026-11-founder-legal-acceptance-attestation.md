@@ -8,6 +8,10 @@ signed_off_at: null
 signed_off_by: null
 disposition: "OPEN. This record must exist before the first real row; it is not a sign-off. The sign-off block in section 6 is blank and no reviewer or date is recorded."
 gates: "The first real row in `legal_acceptance`. Not the merge of PR-B (dark) or PR-C (behind the `approval-queue` flag, PROVISIONAL)."
+addendum_2026_11_09: "2026-11-09 addendum at the end (#12365, PR #12438; fires on its merge): markers on the retention line and the published-text line, the approval-queue flag is global in production, sign-off block still blank"
+addendum_2026_11_09_round4: "2026-11-09 round-4 addendum at the end (#12365, PR #12438; fires on its merge): the flag listing was written 2026-11-08 23:51 +01:00; the published monitoring sentence, counts-reader sentence and notices changed again; the attestation still attests only that the text says what the rulings say; sign-off block still blank"
+addendum_2026_11_10: "2026-11-10 addendum at the end (#12197, PR #12567; fires on its merge): property 10 marked; the founder surface is gated by the configured founder id alone and does not read the approval-queue flag; sign-off block still blank"
+sign_off_stand_in: "2026-11-07 addendum at the end: the CLO agent ruling of 2026-11-07 stands in for counsel on the operator's instruction (v1 internal position, human-lawyer review owed); this block stays blank; ruling in 2026-11-07-clo-ruling-founder-acceptance-record-12197.md (fires on the merge of PR #12342)"
 open_follow_ups: ["Register Maintenance item 17 (a) to (g)", "external anchor (deferred)", "deletion path at the end of retention (not built)", "challenge-table purge on erasure (not built; opportunistic 30-day purge is built)"]
 re_evaluation_triggers: "First founder other than the Jikigai operator OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept."
 ---
@@ -38,6 +42,8 @@ Design properties, as ADR-319 states them. Each is a property of the **design as
 | 12 | (PR-C) A Yes needs an emailed code confirmed within 5 minutes on a throwaway client; the email address comes from the session only, never the request, so the send step has no address-enumeration surface; a per-user attempt ceiling applies on top of the 5 per challenge (in-process, per host, resets on restart; the database bounds (5 per challenge, 3 challenges per 15 minutes) are the hard limit); the session id used is the one the recording function reads. | the reauth and decide routes in `apps/web-platform/app/api/legal-acceptance/` |
 | 13 | (PR-C) The card states that an answer is final and that changing it needs a new text version; it has no undo. | the card copy |
 
+> **Superseded 2026-11-05 (#12187, PR-D; fires on its merge), as to design property 9 ("Nothing in the product reads the table to enforce anything"):** from that merge the check endpoint and the ship hold gate read the table. Property 9 describes the state at PR-B and PR-C. The re-evaluation trigger is met and recorded in the LIA Addendum 2026-11-05; the sign-off block stays blank.
+
 Property 3 of the CTO ruling (a holder of production credentials can mint a founder session) is carried as a residual (section 3), not a property.
 
 ## 2. What is NOT attested
@@ -49,9 +55,9 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 - **That keeping the row after erasure is lawful** under Art. 17(3)(e) and Art. 6(1)(f). Proposed basis only.
 - **That the founder id is anonymous.** It is pseudonymous.
 - **That the free-text note is free of personal data.** The notice reduces the risk.
-- **That the intent and challenge table is handled correctly after its 30 minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure.
+- **That the intent and challenge table is handled correctly after its 30 minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure. **[Clarified 2026-11-08 (#12197; fires on the merge of the pull request that carries it): "challenge" includes the intent opened for a Decline or Request changes, so the purge runs on every decision intent.]**
 - **The wording of the card.** The card copy is PROVISIONAL and has not been reviewed by counsel; the retention period it shows is not decided. This record says what the card shows, not that the wording is sufficient notice.
-- **That the Request changes note reaches anyone.** It has no delivery path to the team until PR-D, although the card says it is saved with the decision.
+- **That the Request changes note reaches anyone.** It has no delivery path to the team until PR-D, although the card says it is saved with the decision. **Superseded (PR-D, takes effect on the merge of the pull request that carries it, drafted, not counsel-reviewed):** the note is read by pull only, by the operator personally through their own database login, following `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`; nothing pushes it to anyone, and the card copy is unchanged. This narrows the line above to: the note is not delivered to anyone and is read only by the operator, by the operator's own query. Still not attested: that a named reader, a response expectation or a count-only signal exists (required before any founder other than the operator), and that the card wording matches this behaviour.
 - **That the screen behaves as described in production.** The card has not been run in production by a founder; the component and route tests are the engineering evidence.
 - **Customer founders.** Not assessed. Admitting one is outside this record.
 - **Published privacy text.** A short disclosure marked `[DRAFT — pending CLO/counsel review per #12011]` was added to the Privacy Policy, GDPR Policy and Data Protection Disclosure (canonical and mirror) in PR-B because the CI DSAR lockstep gate requires it. Its wording is not attested as final; the markers remain until external counsel clears item 17. The full update before any other founder is posed in the DSAR and notice note (part d).
@@ -104,6 +110,44 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 
 *The in-repo v1 CLO-agent review of this record and its sibling artifacts is `knowledge-base/legal/audits/2026-11-counsel-review-12011.md`. It is not external counsel and does not fill this block.*
 
+## Addendum 2026-11-07 (#12197, PR #12342)
+
+> Drafted, not counsel-reviewed. Fires on the merge of PR #12342. Nothing above this addendum is edited; the sign-off block in section 6 stays blank, because it is for counsel and filling it with an agent would contradict the status `DRAFTED, NOT COUNSEL-REVIEWED`.
+
+**Stand-in.** On 2026-11-07 the operator ruled that the company has no external counsel, so the ruling of the CLO agent (`soleur:legal:clo`) stands in for counsel sign-off on the first committed text, `founder-acceptance-record`. The ruling is persisted in `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`. It is a v1 internal position, not a lawyer's opinion. No human lawyer has read the text, the period or the card.
+
+**Closed as v1 positions only (register Maintenance item 17):** (a) the retention period is 5 years from the date of the decision, extended only while a legal claim, a complaint or an official inquiry about the record is open; (b) the operator-first reading of Art. 13(4) and the Art. 17(3)(e) with Art. 6(1)(f) framing for keeping the row after erasure; (c) the note is kept for the same period as the row and deleted with it; (f) the 30-day value for request records. The re-evaluation trigger "retention period confirmed or changed" has fired and is recorded here. The text states plainly that the deletion step is not built; #12080 carries the deletion path and its trigger.
+
+**Expressly deferred (the operator's act under Condition 3 of the 2026-11-04 audit, not the CLO's):** 17(d), 17(e), 17(g), the DPIA screening and the final-form published Privacy Policy, GDPR Policy and Data Protection Disclosure (tracked in #12365). A human lawyer's review of every position above is still owed before any non-Jikigai founder.
+
+**What this addendum does not change.** Section 2 still holds: nothing was measured on a running system, and the card wording stays PROVISIONAL (`LEGAL_COPY.PROVISIONAL` is true; the CPO has not signed off the deck). The twelve residual risks of an agent standing in for counsel are listed in the ruling file. **[Superseded 2026-11-08 (review round 1): the ruling file now lists thirteen; residual risk 13 (same-label hash drift, with its per-hash pre-flight query) was added after the panel review.]**
+
 ---
 
 > **DRAFT — This document was generated by AI and requires professional legal review before use. It does not constitute legal advice. Drafted, not counsel-reviewed.**
+
+## Addendum 2026-11-08 (#12197, review round 1; fires on the merge of the pull request that carries it)
+
+Monitoring copies. Each recorded decision also produces a Sentry event and a log line (copied to Better Stack) with a keyed hash of the founder id, the key, the choice, the version and the time. The text now says so (under "Who can read it") and says they are outside the 5-year period. This record attests only that the text says it; it does not attest the monitoring providers' retention, which is stated in the Privacy Policy and not measured here. The sign-off block above stays blank.
+
+## Addendum 2026-11-09 (#12365, PR #12438; fires on the merge of the pull request that carries it)
+
+> Drafted, not counsel-reviewed. The sign-off block in section 6 stays blank, because it is for counsel.
+
+- **[Superseded 2026-11-09, as to section 2, "That the retention period is lawful. The life of the instrument plus 5 years, cap 10 years, is an unconfirmed proposal.":]** this line was left unmarked when the period was ruled; the period is 5 years from the date of the decision, extended while a legal claim, a complaint or an official inquiry about the record is open (v1 CLO position of 2026-11-07, addendum above). It is still not attested that the period is lawful.
+- **[Superseded 2026-11-09, as to section 2, "Published privacy text. A short disclosure ... was added ... in PR-B ... the markers remain until external counsel clears item 17.":]** the published text now carries a dated status paragraph, the 5-year retention, the monitoring list, the counts reader and a correction of the approval-queue statement (rulings of 2026-11-08 and 2026-11-09). Its wording is still not attested as final; the draft markers remain.
+- **[Superseded 2026-11-09, as to the front-matter `gates` ("PR-C (behind the `approval-queue` flag, PROVISIONAL)"):]** the `approval-queue` flag is ON for every production workspace as of the flag listing of 2026-11-09 (Doppler prd `FLAG_APPROVAL_QUEUE=1`; Flagsmith segment `role-prd` enabled for the feature; every server read evaluates with role `prd` in `isApprovalQueueEnabled`, so the segment matches every production identity). The flag is no longer a restriction on who sees the card; the configured-founder gate is.
+- **What this record attests about the new text:** only that the published text says what the rulings say. It does not attest the production facts the text states (the flag state of 2026-11-09, a record for the operator's account, the configured status check), which were read by others and not re-measured by the CLO. It does not attest the counts reader beyond what the route and the migration were read to do.
+
+## Addendum 2026-11-09, review round 4 (#12365, PR #12438; fires on the merge of the pull request that carries it)
+
+> Drafted, not counsel-reviewed. The sign-off block in section 6 stays blank, because it is for counsel. The Addendum 2026-11-09 above is not edited.
+
+- **[Superseded 2026-11-09, as to "as of the flag listing of 2026-11-09" in the third bullet of the Addendum 2026-11-09:]** the listing was written 2026-11-08 23:51 +01:00 (22:51 UTC); the CLO did not re-read it.
+- **What this record now attests about the new text:** only that the published text says what the round-4 rulings say (`knowledge-base/project/specs/archive/20261109-161719-feat-one-shot-founder-acceptance-followups-12365/clo-fixround-rulings.md`): the monitoring sentence says that which fields an event carries depends on the event; the counts-reader sentence names what the counts check returns and how it differs from the status check; the Privacy Policy and Data Protection Disclosure notices say only what each document itself promised. It still does not attest the production facts the text states.
+
+## Addendum 2026-11-10 (#12197, PR #12567; fires on the merge of the pull request that carries it)
+
+> Drafted, not counsel-reviewed. The sign-off block in section 6 stays blank, because it is for counsel.
+
+- **[Superseded 2026-11-10, as to section 1, property 10 ("The card is shown only behind the `approval-queue` flag; with the flag off the page still renders existing rows but creates nothing and cannot record a Yes."):]** from that merge, `isLegalSurfaceEnabled` gates the card pages, the Inbox row and the decide and reauth routes on the configured founder id (`LEGAL_ACCEPTANCE_FOUNDER_ID`) alone and does not read the `approval-queue` flag; the flag's state does not stop the configured founder recording a Yes. This record does not attest property 10 as written.

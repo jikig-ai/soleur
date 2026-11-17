@@ -3,7 +3,7 @@ title: "Launch readiness check can now file its gaps as GitHub tasks, opt-in"
 type: feature-launch
 publish_date: 2026-11-06
 channels: x
-status: scheduled
+status: stale
 pr_reference: "#11949"
 ---
 

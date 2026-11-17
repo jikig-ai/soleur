@@ -145,7 +145,7 @@ for i in 1 2 3; do
 done
 n_reports=$(ls "$TMP4"/sentry-migration-audit-*.md 2>/dev/null | wc -l)
 report=$(ls "$TMP4"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-n_headers=$(grep -c '^# Sentry Monitors/Alerts Migration Audit' "$report" 2>/dev/null || echo 99)
+n_headers=$(grep -c '^# Sentry Monitors/Alerts Migration Audit' "$report" 2>/dev/null || true)
 if [[ "$n_reports" == "1" ]] && [[ "$n_headers" == "1" ]]; then
   pass "exactly one report, exactly one header (no double-render)"
 else
@@ -175,8 +175,8 @@ SENTRY_AUTH_TOKEN=fake \
   AUDIT_OUT_DIR="$TMP5" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP5"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-n_dup1=$(grep -cE '^\| dup-1 ' "$report" 2>/dev/null || echo 0)
-n_dup2=$(grep -cE '^\| dup-2 ' "$report" 2>/dev/null || echo 0)
+n_dup1=$(grep -cE '^\| dup-1 ' "$report" 2>/dev/null || true)
+n_dup2=$(grep -cE '^\| dup-2 ' "$report" 2>/dev/null || true)
 if [[ "$n_dup1" == "1" ]] && [[ "$n_dup2" == "1" ]]; then
   pass "both slugs present as distinct rows"
 else

@@ -1,0 +1,11 @@
+# Criterion 7 overlay (#12517, CTO R4): one new GitHub verb added with policy data only. The second pass of the
+# suite merges this file over policy.yaml and restarts only the hook; approval-hook.mjs and policy.mjs are
+# unchanged (their sha256 is asserted equal across passes). The claim is limited to REST verbs that fit the
+# generic `rest` recipe; nothing is claimed for new GraphQL or git verb shapes.
+
+writes:
+  - id: rest-create-issue
+    host: api.github.com
+    methods: [POST]
+    path: /repos/{owner}/{repo}/issues
+    recipe: rest

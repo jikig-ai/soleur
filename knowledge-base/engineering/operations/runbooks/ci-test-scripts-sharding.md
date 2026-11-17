@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=582 → 1-193/194-386/387-582) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -165,11 +165,13 @@ and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
 --timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
 `src=floor` or `src=estimate` durations row that finally measured —
 `FLOOR_UNMEASURED` counts both src classes; the token stays literal because
-the watcher greps it), `LEG_PREDICTED`,
+the watcher greps it), `PRICE_DRIFT_ROW` (a `src=measured` row whose fresh
+median diverges >=4x committed in either direction AND |delta| >= 120000 ms,
+timed >=3 sampled runs — the bound lives generator-side, #12016), `LEG_PREDICTED`,
 `LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
 `BOUND_PERFECT` (light only), and `FLOOR_UNMEASURED` rows against the committed tables.
 `scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
-leg ratio > 1.30) and manages ONE watch-owned tracker issue
+leg ratio > 1.30; `PRICE_DRIFT_ROW` arrives pre-gated) and manages ONE watch-owned tracker issue
 (`ci-shard-balance-watch: manifest drift findings`, sentinel
 `<!-- shard-balance-watch:v1 drift=<set-sha1> -->`): comment only when the
 flagged-set hash changes, resolution comment + close on all-clear.
@@ -345,11 +347,11 @@ span to the NEXT registered mark.
   PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
   `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
   spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
-  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  the retired replay battery's median 1,322,511 ms (~22 min) and
   `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
   green runs, both on legs already holding ~10 min of other work. Suite
   sums ≈ wall clock (queue time was not the driver). Split to
-  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  the retired replay triple's `--rows` arms (1-158/159-316/317-473 of 473)
   and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
   inside the same relevance gates; arm prices seeded at CI-median × local
   arm-share — the first green run carrying real arm timings is the
@@ -429,6 +431,44 @@ span to the NEXT registered mark.
   artifact); evidence posted as an issue comment. 1 floor row in the
   measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
   staged runs — no CI timing yet).
+- **2026-11-12 post-#12654 re-price + Lever-A re-rank (epic #11556 AC
+  chain):** five fresh green `merge_group` runs — 43308874521,
+  43286327218 (post-`34634d7431`), 43278615612, 43185108804, 43138951876 —
+  all 8 light + 3 heavy legs present per run (runs 43275115845 and
+  43272862450 had already lost their timing artifacts to expiry and
+  contribute nothing). `--drift-report`: 140 floor→measured rows and 2
+  measured-price breaches — `followthroughs/pr-battery-gate-saving-9323`
+  11,826→149,646 ms (12.6×) and `test/sync-pr-behind.test.sh`
+  32,366→161,367 ms (5.0×). Incumbent-manifest leg sums observed
+  371–2,469 s vs the 1,789 s perfect-bound — the skew the committed
+  prices hid. `--write --allow-growth` (32 violations acknowledged, the
+  gate's recorded channel): total measured weight 9.45 M→14.32 M ms,
+  42 rows re-seated, predicted legs 1,761–1,817 s (spread 89 s). The
+  stale `ci-push-dedupe-soak-9512` row reconciled 185,400→**81,308 ms**
+  (run medians 63,170 / 69,116 / 81,308 / 81,427 / 97,965 — the earlier
+  single-run observation of 80,676 ms was within noise of the median).
+  Heavy group: zero drift rows, no write. **Fresh top-15 suite medians
+  (ms):** test-all-group-affected 424,950; real-sdk-ask-probe-workflow
+  397,520; monitor-pr-checks 394,189; ci-head-verdict 357,205;
+  launch-check/issues-resume 296,569; git-commit-secret-scan 250,950;
+  test-all-infra-coverage-notice 231,458; destructive-command-guard-mutation
+  195,532; ci-push-dedupe 191,818; check-web-host-escrow-config 191,632;
+  git-data-birth-readiness-gate 184,390; playwright-mcp-redact-proxy
+  179,156; betterstack-roundtrip-latency 166,467; ship-phase-7-poll-fixtures
+  163,409; sync-pr-behind 161,367.
+- **2026-11-08 post-#12296 re-price (replay-a only, exemption dropped):**
+  after the observation-window retirement, 3 green merge_group runs
+  42447940669 / 42442159415 / 42439386564 carried arm medians (ms):
+  replay-a **160004** (was 1033094 — now the fastest arm), replay-b
+  225993, replay-c 165824. Committed: `-a` re-seated 1033094→160004 with a
+  provenance comment naming the run ids; the `-a`
+  `suite-weight-exemptions.tsv` row (cap 1343022) was DELETED — 160004
+  fits the default 600000 cap, so both the minimal-ledger and the ~1.3x
+  slack invariants forbade keeping or adjusting it. `-b`/`-c` rows are
+  stale the same direction but violate no invariant; their re-price is
+  deferred to the #11679 umbrella. Headers refreshed by a real
+  `--incremental --durations` pass (no `--runs 5`: same drifter trap as
+  the 2026-10-31 entry).
 
 ## Runner-availability data (why extra legs are not free)
 
@@ -499,8 +539,7 @@ cannot execute.
 2. **Relevance**: shared `<NAME>_PATHS` array in
    `scripts/lib/test-relevance-paths.sh` + `RELEVANCE_ARRAYS` row in
    `scripts/lint-orphan-test-suites.sh`; `AFFECTED_CONSUMED_EDGES` rows per
-   arm label in `scripts/lib/test-affected-paths.sh`; `is_pr_gated_decline`
-   in `scripts/ci-pr-selection.sh`; `GATED` rows in
+   arm label in `scripts/lib/test-affected-paths.sh`; `GATED` rows in
    `scripts/test-all-infra-coverage-notice.test.sh`; pr-battery-gate
    constants (`L_*`/`ARRAYS`/`own_file`/`add_arm`/`arm_id`) in
    `scripts/test-all-pr-battery-gate.test.sh`.
@@ -513,9 +552,9 @@ cannot execute.
    --write` for both TSVs — the distinct-legs post-pass must pin each
    `-<letter>` sibling on a different leg.
 5. **Guards**: re-pin totality-mutations' verbatim `run_suite … --rows`
-   anchors if the argv lines moved; run the affected-index ratchet and add
-   declared edges or accept rows for every newly flagged (suite, path)
-   pair.
+   anchors if the argv lines moved; add declared edges in
+   `scripts/lib/test-affected-paths.sh` for every newly flagged (suite, path)
+   pair (the accept-table path retired with S4, 2026-11-09).
 6. **Seeding prices**: a hand-seeded arm price stamps `src=estimate` in
    `scripts/suite-durations.tsv` — never `measured`. An estimate supplies
    weight but stays out of the floor median and the measured-only drift

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import {
   escapeRegExp,
@@ -70,12 +70,21 @@ const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
 
 /**
  * The pre-existing dashboard-created rule this resource had to ADOPT, and the
- * ID of the ruleset it lives in. Not this PR's work: a `kind = "zone"` ruleset
- * owns its phase entrypoint as a whole-list replacement, so leaving this rule
- * out of the config would have DELETED it from production rather than left it
- * alone, dropping app.soleur.ai to the zone-level SSL mode. See #6767.
+ * ID of the ruleset it lives in. A `kind = "zone"` ruleset owns its phase
+ * entrypoint as a whole-list replacement, so leaving this rule out of the
+ * config would DELETE it from production rather than leave it alone (#6767).
+ *
+ * Adopted `flexible` on `app.soleur.ai` + `lb-staging.soleur.ai` on 2026-07-20;
+ * made `strict` on `app.soleur.ai` only by the origin-TLS cleanup (ADR-321
+ * item 13, #10479), which also removed the canary and strict-flip rules. The
+ * rule is selected by its pinned `ref`, never by its `ssl` value: the value is
+ * what a rollback changes, so it cannot also be the selector. A rollback to
+ * `flexible` is a reviewed forward PR that edits these constants in the same
+ * diff (runbooks/origin-tls-strict-flip.md "Rollback").
  */
-const ADOPTED_SSL_EXPRESSION = '(http.host in {"app.soleur.ai" "lb-staging.soleur.ai"})';
+const ADOPTED_SSL_EXPRESSION = '(http.host eq "app.soleur.ai")';
+const ADOPTED_SSL_DESCRIPTION = "Strict SSL for app.soleur.ai (ADR-321, #10479)";
+const ADOPTED_SSL_MODE = "strict";
 const ADOPTED_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
 const ADOPTED_SSL_REF = "dcb85b75bc3c4f4aa2a8c13a080bf854";
 
@@ -125,9 +134,9 @@ function obfuscationRule(): string {
   return ruleWithParam(/email_obfuscation\s*=/);
 }
 
-/** The adopted pre-existing rule: Flexible SSL on app.soleur.ai. */
-function flexibleSslRule(): string {
-  return ruleWithParam(/ssl\s*=\s*"flexible"/);
+/** The adopted pre-existing rule (strict SSL on app.soleur.ai), selected by its pinned ref. */
+function adoptedSslRule(): string {
+  return ruleWithParam(new RegExp(`ref\\s*=\\s*"${ADOPTED_SSL_REF}"`));
 }
 
 /**
@@ -135,7 +144,7 @@ function flexibleSslRule(): string {
  * edge accepts the expired GitHub Pages origin cert.
  *
  * Selected on `"full"` specifically, never on a bare /ssl\s*=/ — that would also
- * match the adopted `"flexible"` rule and make `ruleWithParam`'s
+ * match the adopted `"strict"` rule and make `ruleWithParam`'s
  * exactly-one assertion fail confusingly. It also means a mutant that widens
  * this to `"off"` (plaintext to origin) does not silently satisfy this helper:
  * it fails the exactly-one assertion instead of passing under a laxer regex.
@@ -165,6 +174,31 @@ function importBlockBody(): string | null {
     }
   }
   return null;
+}
+
+/** The resource body, comment-stripped. */
+function body(): string {
+  return extractResourceBody(stripHclComments(readFileSync(TF_PATH, "utf-8")), RESOURCE_NAME);
+}
+/** The `ssl` value a rule sets, or null when it sets none. */
+function sslValue(rule: string): string | null {
+  return rule.match(/^\s*ssl\s*=\s*"([^"]*)"\s*$/m)?.[1] ?? null;
+}
+/** Every .tf / .tftest.hcl file under apps/web-platform/infra (recursive; .terraform and node_modules skipped). */
+function infraTerraformFiles(): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== ".terraform" && e.name !== "node_modules") walk(full);
+      } else if (/\.tf$|\.tftest\.hcl$/.test(e.name)) {
+        out.push(full);
+      }
+    }
+  };
+  walk(path.join(REPO_ROOT, "apps/web-platform/infra"));
+  return out;
 }
 
 describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () => {
@@ -198,7 +232,11 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // serving 526. This count is the guard that forced this update to be
   // deliberate rather than incidental — working as designed. When the Pages cert
   // is valid again and that rule is removed, this goes back to 2.
-  test("ruleset declares exactly three rules", () => {
+  // The two ORIGIN-TLS rules (ADR-321 canary and strict flip) made it FIVE from #10479's flip PRs until the
+  // cleanup (ADR-321 item 13, 2026-11-13) removed both and made the adopted rule itself strict: back to THREE.
+  // An exact count is also the dispatch guard: a renamed resource yields 0 rules and must fail here, never
+  // pass "0 checked" through the per-rule property rows below.
+  test("ruleset declares exactly three rules (adopted strict SSL, email obfuscation, apex full)", () => {
     expect(allRuleBlocks()).toHaveLength(3);
   });
 
@@ -220,7 +258,7 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   test("each rule's action_parameters set exactly one expected setting", () => {
     const cases: ReadonlyArray<readonly [string, string, string]> = [
       ["obfuscation", obfuscationRule(), "email_obfuscation"],
-      ["adopted Flexible SSL", flexibleSslRule(), "ssl"],
+      ["adopted strict SSL", adoptedSslRule(), "ssl"],
       ["apex Full SSL mitigation", apexFullSslRule(), "ssl"],
     ];
     for (const [label, rule, expected] of cases) {
@@ -277,23 +315,48 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(quotedAttr(apexFullSslRule(), "description")).toMatch(/TEMPORARY/);
   });
 
-  // Guards the adoption itself. This rule is NOT this PR's work — it is a live
-  // production rule reproduced verbatim so that applying this resource does not
-  // delete it. The failure mode being pinned is a future edit "tidying up" a
-  // rule that looks unrelated to this file's stated purpose; doing so would
-  // drop app.soleur.ai to the zone-level SSL mode. Both the expression and the
-  // action parameter are pinned, because silently changing `flexible` to
-  // `full`/`strict` breaks the origin just as effectively as deleting it.
-  test("the adopted Flexible SSL rule is preserved verbatim", () => {
-    const rule = flexibleSslRule();
+  // Guard 1 (ADR-321 item 13, #10479): the adopted rule is strict, enabled,
+  // ref-pinned, and its expression and description are exact. Deleting it
+  // drops app.soleur.ai to the zone-level SSL mode; changing its `ssl` value
+  // changes the origin transport for every user. Both are reviewed acts that
+  // must edit the constants above in the same diff.
+  test("the adopted rule is strict, enabled, ref-pinned, expression and description exact", () => {
+    const rule = adoptedSslRule();
     expect(quotedAttr(rule, "expression")).toBe(ADOPTED_SSL_EXPRESSION);
+    expect(quotedAttr(rule, "description")).toBe(ADOPTED_SSL_DESCRIPTION);
     expect(rule).toMatch(/action\s*=\s*"set_config"/);
-    expect(rule).toMatch(/ssl\s*=\s*"flexible"/);
-    expect(rule).toMatch(/enabled\s*=\s*true/);
+    expect(sslValue(rule)).toBe(ADOPTED_SSL_MODE);
+    expect(rule).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
     // `ref` is the live rule's existing ref. The v4 provider preserves rule IDs
     // across a whole-list PUT by matching on it, so dropping it re-randomises
-    // both rules' IDs on every future edit — and makes "verbatim" untrue.
+    // every rule's ID on every future edit.
     expect(quotedAttr(rule, "ref")).toBe(ADOPTED_SSL_REF);
+  });
+
+  // Guard 1 property, position-agnostic. `set_config` is non-terminating and the
+  // LAST match wins, so a later ssl rule that matches app.soleur.ai would
+  // override the adopted one whatever the adopted rule says. Hence: exactly one
+  // rule sets `ssl = "strict"` and it is the adopted rule; every other
+  // ssl-setting rule is the apex `full` rule on the canonical marketing
+  // expression. Order between the obfuscation and apex rules is not pinned.
+  // Keyed on ADOPTED_SSL_MODE ("strict") rather than a second literal, so the
+  // reviewed rollback to `flexible` edits the constants only (simulated
+  // 2026-11-13, runbooks/origin-tls-strict-flip.md "Rollback").
+  test(`exactly one rule sets ssl = "${ADOPTED_SSL_MODE}", and it is the adopted rule`, () => {
+    const same = allRuleBlocks().filter((r) => sslValue(r) === ADOPTED_SSL_MODE);
+    expect(same).toHaveLength(1);
+    expect(quotedAttr(same[0], "ref")).toBe(ADOPTED_SSL_REF);
+  });
+
+  test("every other ssl-setting rule is the apex full rule on the canonical marketing expression", () => {
+    const others = allRuleBlocks().filter(
+      (r) => sslValue(r) !== null && quotedAttr(r, "ref") !== ADOPTED_SSL_REF,
+    );
+    expect(others).toHaveLength(1);
+    for (const r of others) {
+      expect(sslValue(r)).toBe("full");
+      expect(quotedAttr(r, "expression")).toBe(CANONICAL_EXPRESSION);
+    }
   });
 
   // Without a REACHABLE import block Terraform CREATES this resource, and
@@ -367,7 +430,7 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // specific host that was gained or lost.
   //
   // Scoped to the obfuscation rule ONLY. It cannot iterate every rule any more:
-  // the adopted Flexible SSL rule legitimately targets app.soleur.ai, which is
+  // the adopted strict SSL rule legitimately targets app.soleur.ai, which is
   // in OUT_OF_SCOPE_HOSTS. Running this over both rules would fail on the rule
   // it is not about — a false positive that would push someone toward
   // "fixing" it by deleting the adopted rule, which is the production
@@ -410,5 +473,343 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
       liveLines,
       `${RESOURCE_ADDRESS} must appear in the -target allow-list`,
     ).toMatch(targetRe);
+  });
+});
+
+// ORIGIN-TLS CLEANUP TOMBSTONES (ADR-321 item 13, #10479). The canary and strict-flip rules, and the two Doppler-backed
+// switches that set their `enabled` flags, were deleted by the cleanup that made the adopted rule strict. The rows below keep
+// them deleted: a re-introduced switch or ORIGIN-TLS rule is a second app-host SSL path that Guard 1 above would have to
+// reason about, and a rollback is a reviewed forward PR on the adopted rule, never a switch.
+describe("seo-config-rules.tf origin-TLS cleanup tombstones (ADR-321 item 13)", () => {
+  test("the resource declares NO dynamic rules block", () => {
+    expect(body()).not.toMatch(/\bdynamic\s+"rules"/);
+  });
+
+  test("the resource carries no count/for_each of its own", () => {
+    expect(body()).not.toMatch(/^\s*(count|for_each)\s*=/m);
+  });
+
+  test("no var.enable_origin_tls_ reference anywhere under apps/web-platform/infra/", () => {
+    const offenders = infraTerraformFiles().filter((f) =>
+      /var\.enable_origin_tls_/.test(stripHclComments(readFileSync(f, "utf-8"))),
+    );
+    expect(offenders.map((f) => path.relative(REPO_ROOT, f))).toEqual([]);
+  });
+
+  // The infraTerraformFiles walk includes variables.tf, so no separate VARIABLES_PATH read is needed.
+  test("neither origin-TLS switch variable is declared (variables.tf or any other .tf)", () => {
+    expect(infraTerraformFiles()).toContain(VARIABLES_PATH);
+    const offenders = infraTerraformFiles().filter((f) =>
+      /variable\s+"enable_origin_tls_/.test(stripHclComments(readFileSync(f, "utf-8"))),
+    );
+    expect(offenders.map((f) => path.relative(REPO_ROOT, f))).toEqual([]);
+  });
+
+  test("no rule description starts with ORIGIN-TLS", () => {
+    const offenders = allRuleBlocks().filter((r) => /^ORIGIN-TLS/.test(quotedAttr(r, "description") ?? ""));
+    expect(offenders).toEqual([]);
+  });
+
+  // PLUMBING. Kept after the cleanup: they still guard a RE-INTRODUCED switch. A tfvars file or a workflow line that sets an
+  // origin-TLS variable would let an SSL-mode change reach production without the reviewed rule edit Guard 1 pins.
+  test("no tfvars file under apps/web-platform/infra can set a switch", () => {
+    const dir = path.join(REPO_ROOT, "apps/web-platform/infra");
+    const offenders: string[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== ".terraform" && e.name !== "node_modules") walk(full);
+        } else if (/(^|\.)(auto\.)?tfvars(\.json)?$/.test(e.name) || /\.auto\.tfvars(\.json)?$/.test(e.name)) {
+          offenders.push(path.relative(REPO_ROOT, full));
+        }
+      }
+    };
+    walk(dir);
+    expect(offenders, "a tfvars file could set enable_origin_tls_* without a Doppler change").toEqual([]);
+  });
+
+  test("no workflow sets either switch (TF_VAR_enable_origin_tls_* or -var enable_origin_tls_*)", () => {
+    const dir = path.join(REPO_ROOT, ".github/workflows");
+    const offenders: string[] = [];
+    for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
+      const live = readFileSync(path.join(dir, f), "utf-8")
+        .split("\n")
+        .filter((l) => !/^\s*#/.test(l));
+      live.forEach((l, i) => {
+        if (/TF_VAR_enable_origin_tls_|-var[ =]["']?enable_origin_tls_|ENABLE_ORIGIN_TLS_/.test(l)) {
+          offenders.push(`${f}:${i + 1}`);
+        }
+      });
+    }
+    expect(offenders, "a workflow must not set the origin-TLS switches; they are Doppler-only").toEqual([]);
+  });
+
+  // The archived plan's "Guard 1 - strict-flip precondition test" (knowledge-base/project/plans/archive/20261105-200240-...-plan.md)
+  // asked for a tree-level property: a tree with an app-host strict rule also contains the preconditions that make strict safe.
+  // The adopted rule is strict in every tree since the cleanup, so the property is asserted unconditionally. The 443 publish at the
+  // prod and first-boot docker-run sites is already mutation-pinned by infra/docker-run-tuple.test.sh (K24e, K27i); what was
+  // unpinned was the LB monitor: an http/:80 monitor stays green on a broken :443 and the B1 fallback hides it.
+  test("strict-flip precondition: the LB monitor probes https/443 with certificate validation", () => {
+    const lb = stripHclComments(
+      readFileSync(path.join(REPO_ROOT, "apps/web-platform/infra/cloudflare-lb.tf"), "utf-8"),
+    );
+    const m = lb.match(/resource\s+"cloudflare_load_balancer_monitor"\s+"web"\s*\{([\s\S]*?)\n\}/);
+    expect(m, "cloudflare_load_balancer_monitor.web must exist").not.toBeNull();
+    expect(m![1]).toMatch(/^\s*type\s*=\s*"https"\s*$/m);
+    expect(m![1]).toMatch(/^\s*port\s*=\s*443\s*$/m);
+    expect(m![1]).toMatch(/^\s*allow_insecure\s*=\s*false\s*$/m);
+  });
+
+  // The canary header is retired with the canary rule (`origin-tls-probe.sh --canary` now exits 64 and sends nothing).
+  test("origin-tls-probe.sh no longer sends x-origin-tls-probe, and no rule expression matches it", () => {
+    const probe = readFileSync(path.join(REPO_ROOT, "apps/web-platform/infra/origin-tls-probe.sh"), "utf-8");
+    expect(probe).not.toContain("x-origin-tls-probe");
+    const offenders = allRuleBlocks().filter((r) => (quotedAttr(r, "expression") ?? "").includes("x-origin-tls-probe"));
+    expect(offenders).toEqual([]);
+  });
+});
+
+// The committed cleanup plan fixture (tests/scripts/fixtures/tfplan-origin-tls-cleanup.json) is what the plan-shape gate
+// reads; if it drifts from the .tf it certifies a tree that no longer exists. The two rule lists are compared IN ORDER
+// (set_config is last-match-wins, so order is part of the certified state) on ref, description, expression, enabled,
+// action, ssl and email_obfuscation. A duplicated or missing rule breaks the ordered key list.
+describe("tfplan-origin-tls-cleanup.json fixture matches the .tf rule blocks", () => {
+  test("after.rules agrees with seo-config-rules.tf rule for rule", () => {
+    const plan = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "tests/scripts/fixtures/tfplan-origin-tls-cleanup.json"), "utf-8"),
+    ) as { resource_changes: Array<{ address: string; change: { after: { rules: FixtureRule[] } | null } }> };
+    const rc = plan.resource_changes.filter((r) => r.address === RESOURCE_ADDRESS);
+    expect(rc).toHaveLength(1);
+    const fixtureRules = rc[0].change.after?.rules ?? [];
+    const tfRules = allRuleBlocks();
+    const boolAttr = (r: string, k: string) => {
+      const v = r.match(new RegExp(`^\\s*${k}\\s*=\\s*(true|false)\\s*$`, "m"))?.[1];
+      return v === undefined ? null : v === "true";
+    };
+    const fromTf = tfRules.map((r) => ({
+      ref: quotedAttr(r, "ref"),
+      description: quotedAttr(r, "description"),
+      expression: quotedAttr(r, "expression"),
+      enabled: boolAttr(r, "enabled"),
+      action: quotedAttr(r, "action"),
+      ssl: sslValue(r),
+      email_obfuscation: boolAttr(r, "email_obfuscation"),
+    }));
+    const fromFixture = fixtureRules.map((fr, i) => ({
+      // A rule the .tf leaves ref-less shows a stand-in ref in a plan; compare ref only where the .tf pins one.
+      ref: fromTf[i]?.ref === null ? null : fr.ref,
+      description: fr.description,
+      expression: fr.expression,
+      enabled: fr.enabled,
+      action: fr.action,
+      ssl: fr.action_parameters?.[0]?.ssl ?? null,
+      email_obfuscation: fr.action_parameters?.[0]?.email_obfuscation ?? null,
+    }));
+    expect(fromFixture.map((r) => r.ref ?? r.description)).toEqual(fromTf.map((r) => r.ref ?? r.description));
+    expect(fromFixture).toEqual(fromTf);
+  });
+});
+
+interface FixtureRule {
+  ref: string | null;
+  description: string;
+  expression: string;
+  enabled: boolean;
+  action: string;
+  action_parameters?: Array<{ ssl: string | null; email_obfuscation?: boolean | null }>;
+}
+
+// ROLLBACK COUPLING (C5 + Security seat, #10479; widened in fix round 1). The published wording, the DPA template, the
+// Article 30 register, the ledger and the public sdk_url all assume the adopted rule is strict. A rollback to any other
+// mode is a reviewed forward PR that must, in the same diff, correct every document below (canonical and mirror), set
+// ledger row 7 cert_verification off, and re-point sdk_url off every soleur.ai host. Two claim classes: a CERT claim
+// is false under every non-strict mode (`full` encrypts but does not verify); a TLS claim is false only when the origin
+// hop is plaintext (`flexible`, `off`, or the ssl attribute dropped). A PAST-TENSE correction note `*(Corrected …)*`
+// (also Added / Updated / Changed / Removed) describes what a document USED to say, so it is stripped (paren-depth
+// aware) before matching. A present-tense note such as the Last Updated line's "*(Section 11 now says …)*" is a live
+// claim and is matched like body text (verifier round).
+const CERT_CLAIM =
+  /verif(?:ies|ying) (?:our|the) (?:servers'|web hosts' origin ca) certificate|fulfilled as to the cloudflare-to-origin connection/g;
+const TLS_CLAIM =
+  /forwards requests to [a-z']+ web servers over tls|tls (?:is used )?from cloudflare to our web servers|tls covers the cloudflare-to-origin connection/g;
+const COUPLED_DOCS = [
+  "docs/legal/privacy-policy.md",
+  "plugins/soleur/docs/pages/legal/privacy-policy.md",
+  "docs/legal/data-protection-disclosure.md",
+  "plugins/soleur/docs/pages/legal/data-protection-disclosure.md",
+  "knowledge-base/legal/data-processing-agreement-template.md",
+  "knowledge-base/legal/article-30-register.md",
+];
+const LEDGER_DISCLOSED_AS = "docs/legal/privacy-policy.md:Encryption in transit";
+
+/**
+ * True unless sdk_url is provably private: a literal URL whose host is loopback or on the Inngest private network
+ * 10.0.1.0/24. Allowlist, not denylist (verifier round): a public IP or any other name is as exposed as soleur.ai.
+ * An interpolated or unparseable value fails closed.
+ */
+function sdkUrlIsPublic(sdkUrl: string): boolean {
+  if (sdkUrl.includes("${")) return true;
+  let host: string;
+  try {
+    host = new URL(sdkUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return true;
+  }
+  const isPrivate = host === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.0\.1\.\d{1,3}$/.test(host);
+  return !isPrivate;
+}
+
+/**
+ * Remove every past-tense `*(Corrected|Added|Updated|Changed|Removed … )*` span, tracking paren depth so a nested
+ * `(UTC)` does not end the note early. Unbalanced: kept. Any other `*( … )*` (a present-tense note) is kept.
+ */
+const PAST_NOTE = /^\*\((?:Corrected|Added|Updated|Changed|Removed)\b/;
+function stripCorrectionNotes(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("*(", i) && PAST_NOTE.test(text.slice(i, i + 16))) {
+      let depth = 0;
+      let end = -1;
+      for (let j = i + 1; j < text.length; j++) {
+        if (text[j] === "(") depth++;
+        else if (text[j] === ")") {
+          depth--;
+          if (depth === 0) {
+            if (text[j + 1] === "*") end = j + 2;
+            break;
+          }
+        }
+      }
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+function rollbackCouplingViolations(input: {
+  mode: string | null;
+  docs: Record<string, string>;
+  row7Cert: string | null;
+  sdkUrl: string | null;
+}): string[] {
+  if (input.mode === "strict") return [];
+  const plaintextOrigin = input.mode !== "full";
+  const v: string[] = [];
+  const norm = (t: string) => stripCorrectionNotes(t).replace(/\s+/g, " ").toLowerCase();
+  for (const [name, text] of Object.entries(input.docs)) {
+    const t = norm(text);
+    for (const m of t.matchAll(CERT_CLAIM)) v.push(`${name}: cert claim "${m[0]}" while mode=${input.mode}`);
+    if (plaintextOrigin) for (const m of t.matchAll(TLS_CLAIM)) v.push(`${name}: TLS claim "${m[0]}" while mode=${input.mode}`);
+  }
+  if (input.row7Cert === "on") v.push(`ledger row (${LEDGER_DISCLOSED_AS}): cert_verification=on while mode=${input.mode}`);
+  if (input.sdkUrl !== null && sdkUrlIsPublic(input.sdkUrl)) v.push(`inngest-host.tf sdk_url=${input.sdkUrl} while mode=${input.mode}`);
+  return v;
+}
+
+describe("rollback coupling: published wording, ledger and sdk_url follow the adopted SSL mode", () => {
+  const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), "utf-8");
+
+  test("the REAL tree has no violations (mode read from seo-config-rules.tf)", () => {
+    const ledger = JSON.parse(read("scripts/encryption-posture-ledger.json")) as {
+      connections: Array<{ in_transit?: { disclosed_as?: string; cert_verification?: string } }>;
+    };
+    const rows = ledger.connections.filter((c) => c.in_transit?.disclosed_as === LEDGER_DISCLOSED_AS);
+    expect(rows, `exactly one ledger row disclosed_as ${LEDGER_DISCLOSED_AS}`).toHaveLength(1);
+    const sdk = [...stripHclComments(read("apps/web-platform/infra/inngest-host.tf")).matchAll(/^\s*sdk_url\s*=\s*"([^"]*)"/gm)];
+    expect(sdk, "exactly one sdk_url in inngest-host.tf").toHaveLength(1);
+    const input = {
+      mode: sslValue(adoptedSslRule()),
+      docs: Object.fromEntries(COUPLED_DOCS.map((rel) => [rel, read(rel)])),
+      row7Cert: rows[0].in_transit?.cert_verification ?? null,
+      sdkUrl: sdk[0][1],
+    };
+    if (input.mode !== "strict") {
+      // A rollback PR: it is correct exactly when it corrected every coupled surface in the same diff.
+      expect(rollbackCouplingViolations(input)).toEqual([]);
+      return;
+    }
+    // Positive controls (strict): the guard is only meaningful while the inputs it would fire on are present.
+    expect(input.row7Cert).toBe("on");
+    expect(sdkUrlIsPublic(input.sdkUrl)).toBe(true);
+    // flexible, per doc x2 (canonical+mirror) unless noted: PP body (cert+TLS) + Last Updated note (cert+TLS) = 8;
+    // DPD body (2 cert+TLS) + Last Updated note (2 cert+TLS) = 12; DPA x2 lines (cert+TLS) = 4; Art 30 x5 lines
+    // (cert+TLS) = 10; row 7; sdk_url. Total 36.
+    expect(rollbackCouplingViolations({ ...input, mode: "flexible" }).length).toBe(36);
+    // full: the cert claims only (PP 4 + DPD 8 + DPA 2 + Art 30 5 = 19), row 7, sdk_url.
+    expect(rollbackCouplingViolations({ ...input, mode: "full" }).length).toBe(21);
+    for (const rel of COUPLED_DOCS) {
+      expect(rollbackCouplingViolations({ ...input, mode: "flexible", docs: { [rel]: input.docs[rel] }, row7Cert: null, sdkUrl: null }).length, rel).toBeGreaterThan(0);
+    }
+    expect(rollbackCouplingViolations(input)).toEqual([]);
+  });
+
+  const none = { docs: {}, row7Cert: null, sdkUrl: null };
+  const NON_STRICT = ["flexible", "off", "full", null] as const;
+  test.each([
+    ["PP cert phrase", { docs: { pp: "TLS and verifies our servers' certificate." } }],
+    ["DPD verifying phrase", { docs: { dpd: "TLS, with Cloudflare verifying the servers' certificate, and" } }],
+    ["DPD FULFILLED phrase", { docs: { dpd: "**FULFILLED as to the Cloudflare-to-origin connection**" } }],
+    ["DPA cert phrase", { docs: { dpa: "and verifies the servers' certificate" } }],
+    ["Art 30 cert phrase", { docs: { a30: "with Cloudflare verifying the web hosts' Origin CA certificate" } }],
+    ["row 7 cert on", { row7Cert: "on" }],
+    ["public sdk_url (https)", { sdkUrl: "https://app.soleur.ai/api/inngest" }],
+    ["public sdk_url (http)", { sdkUrl: "http://app.soleur.ai/api/inngest" }],
+    ["public sdk_url (uppercase, trailing dot)", { sdkUrl: "https://APP.soleur.ai./api/inngest" }],
+    ["public sdk_url (apex)", { sdkUrl: "https://soleur.ai/api/inngest" }],
+    ["interpolated sdk_url", { sdkUrl: "https://${local.app_host}/api/inngest" }],
+  ])("every non-strict mode + %s -> exactly one violation", (_label, over) => {
+    for (const mode of NON_STRICT) expect(rollbackCouplingViolations({ ...none, ...over, mode }), String(mode)).toHaveLength(1);
+  });
+
+  test.each([
+    ["PP TLS phrase", "Cloudflare forwards requests to our web servers over TLS."],
+    ["DPA TLS phrase", "Cloudflare forwards requests to Jikigai's web servers over TLS."],
+    ["DPD TLS phrase", "and TLS from Cloudflare to our web servers"],
+    ["Art 30 TLS phrase", "TLS covers the Cloudflare-to-origin connection"],
+  ])("%s -> violation under a plaintext origin hop, none under full", (_label, text) => {
+    for (const mode of ["flexible", "off", null]) expect(rollbackCouplingViolations({ ...none, docs: { d: text }, mode }), String(mode)).toHaveLength(1);
+    expect(rollbackCouplingViolations({ ...none, docs: { d: text }, mode: "full" })).toEqual([]);
+  });
+
+  test("a private sdk_url is not a violation in any mode; a public IP or other name is", () => {
+    for (const mode of NON_STRICT) {
+      for (const ok of ["http://10.0.1.10:3000/api/inngest", "http://127.0.0.1:3000/api/inngest", "http://localhost:3000/api/inngest"]) {
+        expect(rollbackCouplingViolations({ ...none, sdkUrl: ok, mode }), ok).toEqual([]);
+      }
+      for (const bad of ["http://203.0.113.7:3000/api/inngest", "http://10.0.2.10:3000/api/inngest", "https://example.com/api/inngest", "not a url"]) {
+        expect(rollbackCouplingViolations({ ...none, sdkUrl: bad, mode }), bad).toHaveLength(1);
+      }
+    }
+  });
+
+  test("mode flexible + phrase only inside a PAST-TENSE *(Corrected ...)* note (with nested parens) -> no violation", () => {
+    const phrase = "verifies our servers' certificate";
+    const pp = `Body: plain HTTP to origin. *(Corrected 2026-11-20 (UTC), ref #1: this bullet previously read "Cloudflare ${phrase} (see 5.8)".)*`;
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp } })).toEqual([]);
+    // Control: the same phrase after the note closes still fires.
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp: `${pp} ${phrase}` } })).toHaveLength(1);
+  });
+
+  test("mode flexible + phrase inside a PRESENT-TENSE note (the Last Updated line) -> violation", () => {
+    const pp = `**Last Updated:** November 15, 2026 *(Section 11 now says that, since November 8, 2026 (UTC), Cloudflare verifies our servers' certificate.)*`;
+    expect(rollbackCouplingViolations({ ...none, mode: "flexible", docs: { pp } })).toHaveLength(1);
+  });
+
+  test("mode strict + everything present -> no violation", () => {
+    expect(
+      rollbackCouplingViolations({
+        mode: "strict",
+        docs: { pp: "forwards requests to our web servers over TLS and verifies our servers' certificate" },
+        row7Cert: "on",
+        sdkUrl: "https://app.soleur.ai/api/inngest",
+      }),
+    ).toEqual([]);
   });
 });

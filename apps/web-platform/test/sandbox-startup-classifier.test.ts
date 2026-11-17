@@ -320,7 +320,8 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
 });
 
 // #10455 e — every step line the vendored helper can print is classified or deliberately excluded (Guard 2).
-// Step list MEASURED on claude-agent-sdk 0.3.311 (strings of the embedded helper; runtime order recorded with an
+// Step list MEASURED on claude-agent-sdk 0.3.311 and re-read unchanged on 0.3.321 (2026-11-10, #12514) (strings of the
+// embedded helper; runtime order recorded with an
 // LD_PRELOAD interposer on 2026-10-19, re-recorded 2026-11-04): 19 `<step>: <strerror>` literals + two errno-less lines
 // (`observe sendmsg failed` and the `user.max_user_namespaces` warning). 0.3.284 carried 16 steps + one errno-less line.
 describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", () => {

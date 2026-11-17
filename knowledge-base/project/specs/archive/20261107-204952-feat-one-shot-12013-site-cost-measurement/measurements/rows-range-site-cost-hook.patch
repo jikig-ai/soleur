@@ -1,0 +1,32 @@
+diff --git i/scripts/lib/rows-range.sh w/scripts/lib/rows-range.sh
+index 54f36a50f5..20ea35513f 100644
+--- i/scripts/lib/rows-range.sh
++++ w/scripts/lib/rows-range.sh
+@@ -127,11 +127,19 @@ rows_parse_args() {
+     echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared ${ROWS_UNIT:-rows}." >&2
+     exit 2
+   fi
++  _sc_stamp 0
++}
++
++# SITE-COST HOOK (measurement only, never committed to the tree): append "<tag>\t<EPOCHREALTIME>" to SITE_COST_LOG.
++_sc_stamp() {
++  [[ -n "${SITE_COST_LOG:-}" ]] || return 0
++  printf '%s\t%s\n' "$1" "${EPOCHREALTIME:?bash 5 required}" >>"$SITE_COST_LOG"
+ }
+ 
+ in_range() {
+   local _ord="${1-}"
+   _site_seq=$(( _site_seq + 1 ))
++  _sc_stamp "$_site_seq"
+   if [[ -n "$_ord" && ! "$_ord" =~ ^[0123456789]+$ ]]; then
+     echo "FATAL(harness): in_range ordinal '${_ord}' is not a non-negative integer — the ordinal form pins a gated site to its declared position" >&2
+     exit 2
+@@ -160,6 +168,7 @@ in_range() {
+ 
+ rows_gate_floor() {
+   local _expected _i _lo _hi _actual _declared
++  _sc_stamp EOF
+   if (( _site_seq != DECLARED_TOTAL )); then
+     printf 'FATAL: range gate — %d gated %s reached in_range, expected %d — a gated site was added or deleted without bumping the declared total and re-splitting the registered --rows ranges\n' \
+       "$_site_seq" "${ROWS_UNIT:-rows}" "$DECLARED_TOTAL" >&2

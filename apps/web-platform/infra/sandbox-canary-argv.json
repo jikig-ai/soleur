@@ -3,7 +3,7 @@
   "status": "captured",
   "schema": "canonical-bwrap-v1",
   "sdkPackage": "@anthropic-ai/claude-agent-sdk",
-  "sdkVersion": "0.3.311",
+  "sdkVersion": "0.3.321",
   "bwrapSetupArgv": [
     "--new-session",
     "--die-with-parent",
@@ -158,7 +158,7 @@
   ],
   "droppedForDeterminism": {
     "setenv": 26,
-    "hostBind": 6,
+    "hostBind": 7,
     "randomSocket": 1,
     "randomEmptyDirBind": 0
   }

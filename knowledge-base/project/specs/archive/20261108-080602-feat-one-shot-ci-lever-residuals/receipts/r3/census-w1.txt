@@ -1,0 +1,86 @@
+REPO=jikig-ai/soleur
+WINDOW_START=2026-11-07T20:00:00Z
+WINDOW_END=2026-11-08T08:00:00Z
+FETCHED_AT=2026-11-08T22:36:41Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=18984.6
+TOTAL_JOB_SECONDS=1139074
+RUNS_COMPLETED=154
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=2
+RUNS_NOJOBS=7
+JOBS_COUNTED=2761
+JOBS_SKIPPED=909
+JOBS_RUNNERLESS=223
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	merge_group	18	529	6530.6
+BY_WORKFLOW	ci.yml	pull_request	118	2088	12318.4
+BY_WORKFLOW	ci.yml	push	18	144	135.6
+STEM	ci.yml	merge_group	affected-index-ratchet	18	0	0	18	75.1	4.17
+STEM	ci.yml	merge_group	cla-check	0	0	3	0	0.0	0.00
+STEM	ci.yml	merge_group	cla-evidence	0	0	3	0	0.0	0.00
+STEM	ci.yml	merge_group	critical-css-gate	18	0	0	18	19.3	1.07
+STEM	ci.yml	merge_group	detect-changes	18	0	0	18	6.2	0.35
+STEM	ci.yml	merge_group	draft-light	0	18	0	0	0.0	0.00
+STEM	ci.yml	merge_group	e2e	18	0	0	18	67.5	3.75
+STEM	ci.yml	merge_group	encryption-posture	18	0	0	18	5.2	0.29
+STEM	ci.yml	merge_group	guards-advisory	18	0	0	18	13.4	0.74
+STEM	ci.yml	merge_group	guards-ruleset	18	0	0	18	15.9	0.88
+STEM	ci.yml	merge_group	lint-bot-statuses	18	0	0	18	40.8	2.27
+STEM	ci.yml	merge_group	lint-webplat	18	0	0	18	33.4	1.85
+STEM	ci.yml	merge_group	oracle-index-check	18	0	0	18	0.9	0.05
+STEM	ci.yml	merge_group	oracle-review-required	4	0	0	4	1.2	0.06
+STEM	ci.yml	merge_group	oracle-selection	3	15	0	3	1.0	0.06
+STEM	ci.yml	merge_group	pr-selection	0	18	0	0	0.0	0.00
+STEM	ci.yml	merge_group	push-dedupe	0	18	0	0	0.0	0.00
+STEM	ci.yml	merge_group	shard-totality-mutations	18	0	0	54	229.0	12.72
+STEM	ci.yml	merge_group	test	18	0	0	18	1.0	0.05
+STEM	ci.yml	merge_group	test-bun	18	0	0	18	73.4	4.08
+STEM	ci.yml	merge_group	test-scripts	18	0	0	144	4534.0	251.89
+STEM	ci.yml	merge_group	test-scripts-heavy	18	0	0	54	541.1	30.06
+STEM	ci.yml	merge_group	test-webplat	18	0	0	36	821.4	45.63
+STEM	ci.yml	merge_group	web-platform-build	18	0	0	18	50.8	2.82
+STEM	ci.yml	pull_request	affected-index-ratchet	103	0	8	103	343.4	2.91
+STEM	ci.yml	pull_request	critical-css-gate	25	47	39	25	25.9	0.22
+STEM	ci.yml	pull_request	detect-changes	102	0	9	102	37.0	0.31
+STEM	ci.yml	pull_request	draft-light	102	0	9	102	7.0	0.06
+STEM	ci.yml	pull_request	e2e	101	0	10	101	369.0	3.13
+STEM	ci.yml	pull_request	encryption-posture	102	0	9	102	29.4	0.25
+STEM	ci.yml	pull_request	guards-advisory	101	0	10	101	73.6	0.62
+STEM	ci.yml	pull_request	guards-ruleset	101	0	10	101	83.5	0.71
+STEM	ci.yml	pull_request	lint-bot-statuses	102	0	9	102	194.3	1.65
+STEM	ci.yml	pull_request	lint-webplat	104	0	7	104	179.9	1.52
+STEM	ci.yml	pull_request	oracle-index-check	99	0	12	99	174.2	1.48
+STEM	ci.yml	pull_request	oracle-review-required	46	0	4	46	13.4	0.11
+STEM	ci.yml	pull_request	oracle-selection	31	46	34	31	10.9	0.09
+STEM	ci.yml	pull_request	pr-selection	0	61	50	0	0.0	0.00
+STEM	ci.yml	pull_request	push-dedupe	0	61	50	0	0.0	0.00
+STEM	ci.yml	pull_request	shard-totality-mutations	44	37	30	127	475.4	4.03
+STEM	ci.yml	pull_request	test	108	0	3	108	5.6	0.05
+STEM	ci.yml	pull_request	test-bun	91	0	20	91	344.9	2.92
+STEM	ci.yml	pull_request	test-scripts	44	37	30	337	7541.0	63.91
+STEM	ci.yml	pull_request	test-scripts-heavy	44	37	30	127	591.0	5.01
+STEM	ci.yml	pull_request	test-webplat	44	37	30	86	1574.1	13.34
+STEM	ci.yml	pull_request	web-platform-build	93	0	18	93	245.1	2.08
+STEM	ci.yml	push	affected-index-ratchet	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	critical-css-gate	18	0	0	18	18.4	1.02
+STEM	ci.yml	push	detect-changes	18	0	0	18	6.7	0.37
+STEM	ci.yml	push	draft-light	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	e2e	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	encryption-posture	18	0	0	18	5.1	0.28
+STEM	ci.yml	push	guards-advisory	18	0	0	18	13.7	0.76
+STEM	ci.yml	push	guards-ruleset	18	0	0	18	16.2	0.90
+STEM	ci.yml	push	lint-bot-statuses	18	0	0	18	40.8	2.27
+STEM	ci.yml	push	lint-webplat	18	0	0	18	33.4	1.86
+STEM	ci.yml	push	oracle-index-check	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	oracle-review-required	0	2	0	0	0.0	0.00
+STEM	ci.yml	push	oracle-selection	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	pr-selection	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	push-dedupe	18	0	0	18	1.4	0.08
+STEM	ci.yml	push	shard-totality-mutations	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	test	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	test-bun	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	test-scripts	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	test-scripts-heavy	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	test-webplat	0	18	0	0	0.0	0.00
+STEM	ci.yml	push	web-platform-build	0	18	0	0	0.0	0.00

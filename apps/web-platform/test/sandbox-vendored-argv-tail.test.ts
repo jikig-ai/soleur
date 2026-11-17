@@ -10,10 +10,11 @@
 // the sdk-bump ack trailer or any git state (guard row at the bottom).
 //
 // Counts below were MEASURED on 2026-11-04 against the installed binaries (python3 -I mmap
-// reads, then re-derived by the helper); each pin names the version it was measured on. A new
+// reads, then re-derived by the helper) and re-measured unchanged on 2026-11-10 at 0.3.321 / 2.1.321 (#12514);
+// each pin names the version it was measured on. A new
 // procfs-mount site in a bump reds `PROC_SITE_COUNT`; a changed tail reds `TAIL_LITERALS`.
-// At claude-agent-sdk 0.3.311 / claude-code 2.1.311 the two platform packages ship ONE byte-identical binary
-// (sha256 86dc1fcc...), so both pin rows carry the same measured shape; the scan still examines both packages so they
+// At claude-agent-sdk 0.3.321 / claude-code 2.1.321 the two platform packages ship ONE byte-identical binary
+// (sha256 426c3381...; at 0.3.311 / 2.1.311 it was 86dc1fcc...), so both pin rows carry the same measured shape; the scan still examines both packages so they
 // can diverge again. That binary embeds Bun 1.4.4 (CVE-2026-111497 fix); the floor itself is asserted by
 // claude-cli-pin-knows-models.test.ts.
 
@@ -62,7 +63,8 @@ const SKIP_REAL = shouldSkipRealBinaryRows(process.platform, process.arch, proce
 // A scan of a ~250 MB binary is I/O bound; the vitest default (16 s) is too tight on a cold cache.
 const REAL_BINARY_TIMEOUT_MS = 90_000;
 
-// Measured 2026-11-04. `measuredVersion` is the installed package version the numbers were taken
+// Measured 2026-11-04 (0.3.311 / 2.1.311); re-measured 2026-11-10 (0.3.321 / 2.1.321, #12514), every count unchanged.
+// `measuredVersion` is the installed package version the numbers were taken
 // on; a different installed version is reported in every failure message, never silently accepted.
 // Two proc sites (the per-command builder plus the `/run/claude-hook` sandbox), one of them in the hook
 // function; two `--unshare-pid` literals (builder and hook); one root bind, one `--cap-drop ALL`, one `--cap-add CAP_SETFCAP`.
@@ -78,12 +80,12 @@ const MEASURED_SHAPE: LiteralPins = {
   capAddTotal: 1,
   hookAnchors: 2,
 };
-// Mount-table raw literal counts (all callers in the binary), measured 2026-11-04 on both packages: the per-command builder's prefix is an
+// Mount-table raw literal counts (all callers in the binary), measured 2026-11-04 on both packages (re-measured unchanged 2026-11-10 at 0.3.321 / 2.1.321): the per-command builder's prefix is an
 // opaque spread the tail parser cannot read, so these counts are what makes a new mount site there a reviewed re-pin.
 const MEASURED_MOUNT_TABLE: MountTablePins = { tmpfs: 3, bind: 9, roBind: 15, devBind: 2 };
 const PINS: Record<"claude-agent-sdk" | "claude-code", LiteralPins & { measuredVersion: string }> = {
-  "claude-agent-sdk": { measuredVersion: "0.3.311", ...MEASURED_SHAPE },
-  "claude-code": { measuredVersion: "2.1.311", ...MEASURED_SHAPE },
+  "claude-agent-sdk": { measuredVersion: "0.3.321", ...MEASURED_SHAPE },
+  "claude-code": { measuredVersion: "2.1.321", ...MEASURED_SHAPE },
 };
 type Pkg = keyof typeof PINS;
 const PKGS = Object.keys(PINS) as Pkg[];
@@ -586,7 +588,8 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
   });
 });
 
-// Measured 2026-11-04 (claude-agent-sdk 0.3.311, claude-code 2.1.311 -- the versions in PINS above) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
+// Measured 2026-11-04 (claude-agent-sdk 0.3.311, claude-code 2.1.311) and re-measured unchanged 2026-11-10 (0.3.321 / 2.1.321 --
+// the versions in PINS above, #12514) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
 // The settings->builder mapping is a content-anchored tripwire (SETTINGS_MAPPING_NEEDLES, >= 1 hit each), not a count: the
 // wrapped-command arm is the proof. (Before 0.3.311 only the SDK package carried the optional-chain mapping, count 2; the CLI 0.)
 const HELPER_PINS: Record<"claude-agent-sdk" | "claude-code", HelperSelectionPins> = {

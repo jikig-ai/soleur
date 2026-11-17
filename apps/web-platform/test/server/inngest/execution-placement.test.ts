@@ -20,6 +20,11 @@ import { join, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { EXECUTION_PLACEMENT, EXECUTION_PLACEMENTS } from "@/server/inngest/execution-placement";
+import {
+  INNGEST_APP_ID_PREFIX,
+  INNGEST_FAILURE_SUFFIX,
+  classifyFnId,
+} from "@/server/inngest/exec-placement";
 import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
 import {
   type GraphFs,
@@ -956,6 +961,27 @@ describe("execution placement — the real tree (#7230)", () => {
 
   it("Guard 1: EXECUTION_PLACEMENT has exactly one valid row per served function", () => {
     expect(manifestViolations(real.served, EXECUTION_PLACEMENT, REAL_FS)).toEqual([]);
+  });
+
+  // #9137 (task 2.2): the forwarder's classifier is the consumer of this
+  // manifest — every served id must resolve through it to its manifest class,
+  // and the SDK's `<id>-failure` onFailure wire ids must inherit the parent's
+  // class. The deeper parity matrix (copy-vs-import identity, per-class
+  // verdicts, prefix shapes) lives in exec-placement-forward.test.ts Guard 1.
+  it("Guard 1 (#9137): every served id resolves through the forwarder's classifier, and -failure ids inherit the parent's class", () => {
+    expect(real.offenders).toEqual([]);
+    expect(real.served.length).toBeGreaterThan(0);
+    for (const s of real.served) {
+      const wireId = `${INNGEST_APP_ID_PREFIX}${s.id}`;
+      expect(
+        classifyFnId(wireId),
+        `${s.id} must resolve to its manifest class through classifyFnId`,
+      ).toBe(EXECUTION_PLACEMENT[s.id]?.placement);
+      expect(
+        classifyFnId(`${wireId}${INNGEST_FAILURE_SUFFIX}`),
+        `${s.id}-failure must inherit the parent's class`,
+      ).toBe(EXECUTION_PLACEMENT[s.id]?.placement);
+    }
   });
 
   it("the manifest leaf imports nothing", () => {

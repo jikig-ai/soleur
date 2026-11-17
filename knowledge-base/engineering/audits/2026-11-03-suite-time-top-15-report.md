@@ -43,6 +43,10 @@ Artifacts live 14 days; 11 `suite-timings-*` artifacts per run; 726 distinct lab
 4. **No sleep-wait or lock-contention class dominates** — the top-15's cost is fixture-build/spawn-per-case and soak-API-walk shapes, plus one real-HTTP suite. The epic's hypothesized causes (sleep-based waits, shared-lock contention) are absent from the top 15; repeated tool installs appear only as `npm ci` contract assertions, not live installs.
 5. **Caveat — `merge_group` medians ≠ PR-surface medians** — per the Oct-29 learning, PR runs select a reduced battery; this table prices the canonical full-matrix surface, which is also what `wallclock-p90-watch` reports on.
 
+## Postscript 2026-11-08 — `ci-pr-affected-replay-a` is retired as pace-setter (#12015)
+
+The `-a` outlier this report prices was measured pre-retirement. PR #12296 (merged 2026-11-07T13:45Z) removed the 129 `row_ow_*` gated sites — ordinals 1-129 of the then-602-site file, ~993s of arm `-a`'s gated work per the committed site-cost measurement. Post-retirement green `merge_group` suite-timings (runs 42447940669, 42442159415, 42439386564): `-a` medians ~160s — now the **fastest** arm — vs `-b` ~226s and `-c` ~166s. A guarded three-arm site-cost reading on tree `f0c3bb8656` (476-site file) agrees: gated site seconds a=98.8, b=188.6, c=136.5. Neither remedy sketched above (4th `--rows` leg, fixture-corpus bound) is warranted; evidence record: `knowledge-base/project/specs/feat-one-shot-12015-replay-a-pacer/measurements.md`. Arm `-b` (~226s) is the mildest of successors if a future pace-setter emerges.
+
 ## Pre-staged next slice (filed as issues)
 
 - `ci-pr-affected-replay-a`: 4th leg or fixture-corpus bound (the 21-min pace-setter).

@@ -150,6 +150,11 @@ function setupSupabaseMock(
   serviceTokenRows?: Record<string, unknown>[],
 ) {
   createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows, mockRpc });
+  // The legacy no-verdict card is Owner-only (#12597); the shared rpc mock answers null for this RPC.
+  const base = mockRpc.getMockImplementation()!;
+  mockRpc.mockImplementation((fnName: string, ...rest: unknown[]) =>
+    fnName === "is_workspace_owner" ? Promise.resolve({ data: true, error: null }) : base(fnName, ...rest),
+  );
 }
 
 function setupQueryMockImmediate() {

@@ -141,6 +141,7 @@ vi.mock("../server/observability", () => ({
 
 import { startAgentSession } from "../server/agent-runner";
 import { configureInstallationRpc } from "./helpers/agent-runner-mocks";
+import { APPROVAL_UNAVAILABLE_DENY } from "../server/approval/gate-flow";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -175,7 +176,11 @@ function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_RO
   return { select: () => createChain() };
 }
 
-function setupSupabaseMock(userData: Record<string, unknown>) {
+/** The fixture user, who owns its own (solo) workspace: `resolveActiveWorkspace` falls back to it (no current workspace). */
+const FIXTURE_USER_ID = "11111111-1111-4111-8111-111111111111";
+const FIXTURE_WORKSPACE_ID = FIXTURE_USER_ID;
+
+function setupSupabaseMock(userData: Record<string, unknown>, opts: { owner?: boolean } = {}) {
   mockFrom.mockImplementation((table: string) => {
     if (table === "api_keys") {
       return createApiKeysMock();
@@ -259,6 +264,18 @@ function setupSupabaseMock(userData: Record<string, unknown>) {
     mockRpc,
     (userData.github_installation_id as number | null) ?? null,
   );
+  // The legacy no-verdict card is Owner-only (#12597); the shared rpc mock answers null for this RPC. Strict: true only for
+  // the fixture workspace and user, so a wrong workspace or user handed to the role read is a member (and is denied).
+  const base = mockRpc.getMockImplementation()!;
+  const owner = opts.owner ?? true;
+  mockRpc.mockImplementation((fnName: string, args?: Record<string, unknown>) =>
+    fnName === "is_workspace_owner"
+      ? Promise.resolve({
+          data: owner && args?.p_workspace_id === FIXTURE_WORKSPACE_ID && args?.p_user_id === FIXTURE_USER_ID,
+          error: null,
+        })
+      : base(fnName, args),
+  );
 }
 
 function setupQueryMockImmediate() {
@@ -272,13 +289,16 @@ function setupQueryMockImmediate() {
   } as any);
 }
 
-async function getCanUseTool() {
-  setupSupabaseMock({
-    workspace_path: "/tmp/test-workspace",
-    repo_status: "ready",
-    github_installation_id: 12345,
-    repo_url: "https://github.com/alice/my-repo",
-  });
+async function getCanUseTool(opts: { owner?: boolean } = {}) {
+  setupSupabaseMock(
+    {
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    },
+    opts,
+  );
   setupQueryMockImmediate();
 
   await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
@@ -371,6 +391,22 @@ describe("canUseTool tiered gating (#1926)", () => {
         expect.objectContaining({ type: "review_gate" }),
       );
       expect(mockAbortableReviewGate).toHaveBeenCalled();
+    });
+
+    test("create_pull_request is denied for a workspace member when the approval flow gives no verdict (#12597)", async () => {
+      mockAbortableReviewGate.mockResolvedValue("Approve");
+      const canUseTool = await getCanUseTool({ owner: false });
+
+      const result = await canUseTool(
+        "mcp__soleur_platform__create_pull_request",
+        { head: "feat-branch", base: "main", title: "test PR" },
+        { signal: new AbortController().signal },
+      );
+
+      expect(result).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+      expect(mockSendToClient).not.toHaveBeenCalledWith(FIXTURE_USER_ID, expect.objectContaining({ type: "review_gate" }));
+      expect(mockAbortableReviewGate).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", { p_workspace_id: FIXTURE_WORKSPACE_ID, p_user_id: FIXTURE_USER_ID });
     });
 
     test("create_pull_request denied when user rejects gate", async () => {

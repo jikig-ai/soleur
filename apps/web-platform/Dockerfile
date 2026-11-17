@@ -66,7 +66,7 @@ FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fd
 # pins agree and that the installed bundle knows every tier model id.
 # No `--before` on this line: the tree is the package plus its exact-pinned platform
 # packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
-RUN npm install -g @anthropic-ai/claude-code@2.1.311
+RUN npm install -g @anthropic-ai/claude-code@2.1.321
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —
@@ -144,6 +144,25 @@ FROM cli-tools AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# #9600 build-time floor: `safe.bareRepository=explicit` (the agent-env config-carrier pin,
+# server/agent-env.ts GIT_CARRIER_ENV_PIN) needs git 2.38 or later and is silently INERT below it, so
+# a base-image change that lowers git would reopen the committed-bare-repository carrier with every
+# test green. Fail the build instead. The awk END rule fails closed when `git --version` printed nothing
+# (a pipeline's status is awk's, and awk exits 0 on empty input). Guarded by
+# test/dockerfile-git-version-floor.test.ts.
+RUN git --version | awk '{ split($3, v, "."); exit !(v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 38)) } END { if (NR == 0) exit 1 }' \
+    || { echo "$(git --version 2>&1): git older than 2.38 or unreadable, the safe.bareRepository pin would be inert (#9600)" >&2; exit 1; }
+
+# #9600 agent session identity. The agent env pins GIT_CONFIG_GLOBAL (server/agent-env.ts) so HOME's
+# writable ~/.gitconfig is never read; this root-owned, read-only (bound under /usr) identity-only file
+# is what it points at, restoring the fallback commit identity the HOME global used to supply. Local
+# workspace identity still wins. Identity ONLY: no safe.directory, credential.*, core.*, include, url.*
+# or filter.* may ever be added here. The last step proves git derives THIS identity from the file (not an auto-detected host identity).
+RUN mkdir -p /usr/local/share/soleur \
+    && printf '[user]\n\tname = github-actions[bot]\n\temail = 41898282+github-actions[bot]@users.noreply.github.com\n' > /usr/local/share/soleur/agent.gitconfig \
+    && chmod 0644 /usr/local/share/soleur/agent.gitconfig \
+    && [ "$(cd / && GIT_CONFIG_GLOBAL=/usr/local/share/soleur/agent.gitconfig GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT | sed 's/ <.*//')" = "github-actions[bot]" ]
 
 # #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
 # --unshare-* flags: the vendored inner sandbox unconditionally unshares
@@ -393,6 +412,9 @@ COPY --from=builder \
   /app/infra/web-bash-synthetic.service \
   /app/infra/web-bash-synthetic.timer \
   /app/infra/sdk-bash-verdict.sh \
+  /app/infra/host-kernel-marker.sh \
+  /app/infra/host-kernel-marker.service \
+  /app/infra/host-kernel-marker.timer \
   /app/infra/web-zot-consumer-probe.sh \
   /app/infra/web-zot-consumer-probe.service \
   /app/infra/web-zot-consumer-probe.timer \
@@ -439,6 +461,9 @@ RUN useradd --no-log-init --uid 1001 -m soleur \
     && mkdir -p /var/lib/soleur/worktrees \
     && chown 1001:1001 /var/lib/soleur/worktrees
 USER soleur
+# Both the agent's git and the server's host-side git (server/host-git.ts) read the identity in
+# /usr/local/share/soleur/agent.gitconfig (#9600; host-side git runs with HOME set to a temp dir). This HOME global
+# identity is kept equal to it for any other process in the image (asserted in test/dockerfile-git-version-floor.test.ts).
 RUN git config --global user.name "github-actions[bot]" \
     && git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 

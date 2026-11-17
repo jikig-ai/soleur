@@ -20,12 +20,12 @@ import { execFile, spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { lstat, open, readFile, readlink, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 import { reportSilentFallback } from "@/server/observability";
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "@/server/inngest/functions/_git-hardening";
 import { createPathList } from "@/server/compound-promote-create";
+import { buildScrubbedEnv, type BaseEnv } from "@/server/host-git";
 
 /** The Sentry feature name of the create arm and its gates (the arm re-exports it as `CREATE_ARM_FEATURE`; a leaf constant here avoids an import cycle). */
 export const CREATE_FEATURE_NAME = "cron-compound-promote";
@@ -81,34 +81,9 @@ export function createSyntheticCheckNames(): readonly string[] {
 // Scrubbed environment and the shared spawn helper
 // =============================================================================
 
-type BaseEnv = Readonly<Record<string, string | undefined>>;
-
-// Names an extra may never carry: anything secret-shaped, a GitHub/Anthropic/Doppler credential namespace, or a git
-// location variable (a git child honours GIT_DIR over cwd and -C).
-const FORBIDDEN_EXTRA_RE = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE|^GH_|^GITHUB_|^ANTHROPIC|^DOPPLER|^GIT_/i;
-const EXTRA_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
-
-/**
- * The environment of every gate child. An ALLOWLIST from the base environment (PATH, LANG, LC_ALL, TMPDIR, HOME) plus
- * explicit extras; nothing else is inherited, so no installation token, API key or Doppler credential can reach a
- * script that runs in a clone. HOME is NOT the real home (no `~/.config/gh`, no git config): it is the temp dir.
- */
-export function buildScrubbedEnv(extra: Readonly<Record<string, string>>, base: BaseEnv = process.env): Record<string, string> {
-  const env: Record<string, string> = {
-    PATH: base.PATH ?? "/usr/bin:/bin",
-    LANG: base.LANG ?? "C.UTF-8",
-    LC_ALL: "C.UTF-8",
-    TMPDIR: tmpdir(),
-    HOME: tmpdir(),
-  };
-  for (const [name, value] of Object.entries(extra)) {
-    if (!EXTRA_NAME_RE.test(name) || FORBIDDEN_EXTRA_RE.test(name) || typeof value !== "string" || value.includes("\u0000")) {
-      throw new Error("scrubbed env: refused an extra variable");
-    }
-    env[name] = value;
-  }
-  return env;
-}
+// `buildScrubbedEnv` and `BaseEnv` live in the shared leaf (`./host-git`, one definition for every host-side git
+// consumer); re-exported so existing importers of this module are unchanged.
+export { buildScrubbedEnv };
 
 export type SpawnScriptResult =
   | { kind: "exit"; code: number | null; signal: string | null; stdout: string; stderr: string }

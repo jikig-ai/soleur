@@ -609,7 +609,8 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         ".claude/sessions/<pid>.json",
         ".claude/shell-snapshots/snapshot-bash-<ts>-<id>.sh",
       ];
-      // `plugins/store/cc-plugin-agents-md_builtin-<hash>.json` (claude-code 2.1.311 / SDK 0.3.311, reviewed 2026-11-04): a 92-byte
+      // `plugins/store/cc-plugin-agents-md_builtin-<hash>.json` (claude-code 2.1.311 / SDK 0.3.311, reviewed 2026-11-04; the same
+      // name at 2.1.321 / 0.3.321, 2026-11-10, this suite green, content not re-reviewed): a 92-byte
       // usage-telemetry queue entry, `{"usage-rows-queued": "<cli session id> <instructionFiles setting> <kind>"}` (static read of the bundle). The session id is the
       // same value already readable in sessions/<pid>.json (a transcript is tmpfs-masked, so the id alone resumes nothing), the
       // middle token is a CLI setting, only the trailing kind reflects how the writing tenant's workspace lays out CLAUDE.md /

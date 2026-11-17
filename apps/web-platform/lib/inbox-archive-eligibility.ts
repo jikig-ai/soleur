@@ -94,9 +94,20 @@ export function inboxRowEligibility(row: {
   return "ok";
 }
 
+/** A merged row the bulk-archive wire can name: an email or a native inbox row. */
+export type ArchivableInboxItem = Exclude<MergedInboxItem, { kind: "legal" }>;
+
+/**
+ * True for the rows that have an archive path at all. The founder's legal text (Ref #12197) is derived data with no stored
+ * row: it is never selectable, never archivable and never sent to /api/inbox/bulk-archive (which answers 400 for its kind).
+ */
+export function isArchiveCandidate(item: MergedInboxItem): item is ArchivableInboxItem {
+  return item.kind === "email" || item.kind === "inbox";
+}
+
 /** Client-side adapter over the merged feed row. */
 export function archiveEligibility(
-  item: MergedInboxItem,
+  item: ArchivableInboxItem,
 ): ArchiveEligibilityReason {
   return item.kind === "email"
     ? emailRowEligibility(item.email)

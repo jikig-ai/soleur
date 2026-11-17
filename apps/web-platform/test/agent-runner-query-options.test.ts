@@ -34,6 +34,13 @@ vi.mock("@/server/agent-env", async (importOriginal) => {
       // (egress handles surface as GH_TOKEN / HTTPS_PROXY in the real env).
       ...(opts?.ghToken ? { GH_TOKEN: opts.ghToken } : {}),
       ...(opts?.egressProxy ? { HTTPS_PROXY: "http://proxy.invalid" } : {}),
+      // #11764: mirror the real contract — claudeTmpDir exports
+      // CLAUDE_CODE_TMPDIR and routes TMPDIR at the same per-tenant base, so
+      // the pass-through pin below can assert TMPDIR survives into the final
+      // options.env (catches a downstream drop, same class as AC3).
+      ...(opts?.claudeTmpDir
+        ? { CLAUDE_CODE_TMPDIR: opts.claudeTmpDir, TMPDIR: opts.claudeTmpDir }
+        : {}),
     })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
   };
 });
@@ -332,6 +339,23 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
     expect(
       (opts.env as Record<string, string>).CLAUDE_PLUGIN_ROOT,
     ).toBe("/app/shared/plugins/soleur");
+  });
+
+  // #11764: TMPDIR is the lever every spawned-agent descendant mktemp reads.
+  // Asserting the returned options.env (not the buildAgentEnv call args —
+  // those are pinned above as claudeTmpDir) catches any downstream drop or
+  // ambient-allowlist overwrite after buildAgentEnv returns: on the real env
+  // builder an ambient process.env.TMPDIR is copied first, and the
+  // claudeTmpDir injection must beat it.
+  it("threads TMPDIR + CLAUDE_CODE_TMPDIR (the per-tenant .cs base) into options.env", () => {
+    const opts = buildAgentQueryOptions(minArgs);
+    const env = opts.env as Record<string, string>;
+    const csDir = expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/);
+    expect(env.TMPDIR).toEqual(csDir);
+    expect(env.CLAUDE_CODE_TMPDIR).toEqual(csDir);
+    // Both names must carry the SAME base: a TMPDIR pointing elsewhere than
+    // CLAUDE_CODE_TMPDIR would split agent scratch across two trees.
+    expect(env.TMPDIR).toBe(env.CLAUDE_CODE_TMPDIR);
   });
 
   it("omits the askpass path when gitAskpassScriptPath is absent (legacy runner parity)", () => {

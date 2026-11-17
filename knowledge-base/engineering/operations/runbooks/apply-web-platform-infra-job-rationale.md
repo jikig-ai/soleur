@@ -486,6 +486,109 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 > entry, every merge's per-merge apply halts until the owner repairs state (see ADR-282 and the runbook
 > `inngest-luks-cutover-6894.md` section 5c). The text above is kept as the dated record.
 
+**The relay hello-key HALT in `apply` (PR A of #8211 / #12167, CTO ruling F1).** A second, separate non-ackable counter,
+`relay_hello_key_changes` (same jq file), covers `random_bytes.proxy_hello_hmac` and
+`doppler_secret.proxy_hello_hmac_key`, the pair in `apps/web-platform/infra/proxy-hello-hmac.tf` that mints
+`PROXY_HELLO_HMAC_KEY`.
+
+- **What it stops.** A planned `update`, `delete`, `forget`, a state move off either address (`previous_address`, any verb) or an unreadable action list at either address, and a `create` of
+  `random_bytes.proxy_hello_hmac`. A lone `create` of the Doppler copy reads 0 (it restores the state-held value and a
+  missing copy must stay repairable), and the routine merge shape (both `no-op`) reads 0. Both addresses are
+  `[0]`-indexed in a real plan, so the match goes through `luks_passphrase_base`, like the LUKS lists.
+- **Why a dedicated counter and not two more LUKS rows.** The LUKS set protects data already encrypted under the old
+  value, and its HALT wording, the parity test's six-address grep form and the destroy-guard suite's exact floor are all
+  LUKS-worded. A change to this pair is a different failure: since the signed relay hello the key is read, and both web
+  hosts take it from Doppler at container start, so a replaced or edited value leaves the hosts disagreeing on the key
+  and every relayed session whose lease sits on the other host is refused. That is a **relay outage**, not data loss, and
+  the HALT text says so (no LUKS wording).
+- **Why non-ackable.** The counter is read before and outside the `destroy_count` sum, exactly like the LUKS HALT:
+  a replace also trips `resource_deletes`, and `[ack-destroy]` cannot tell it from an unrelated delete in the same merge.
+- **UNWEDGE.** `[skip-web-platform-apply]` on the merge commit is the only bypass. It skips the apply and performs
+  nothing. The HALT's "Intended rotation" remediation says escalate, not here: an intended rotation has no per-merge
+  route, so stop and escalate on #12538. The rotation route and its rationale are ADR-323 Decision 9 (as amended
+  2026-11-10).
+- **Retiring the relay.** Turning `host_proxy_tls_enabled` off plans a destroy of this pair, so that route is **closed on
+  the per-merge path** by this HALT (ADR-118 states it). Retiring the relay needs a separately reviewed route, and
+  `PROXY_HELLO_HMAC_KEY` must leave `apps/web-platform/scripts/verify-required-secrets.sh` (the release-time presence
+  gate) in the same change, or every deploy is blocked on a key that no longer exists.
+- **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
+  (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
+
+## Comment prose relocated from the apply step
+
+The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
+comments lives here. Verbatim, as it stood above the `host_creates` read (#6416):
+
+```text
+host_creates (#6416): a pure `+ create` of an hcloud_server
+(hcloud_volume dropped #6919/T55 — a for_each volume fan-out for a
+legitimate new web host is not a host birth). INVISIBLE to all three
+counters above (no delete, no
+nested-block shrinkage, not an ["update"]). This apply path must
+NEVER birth a host: `-target` is transitive at the RESOURCE level, so
+cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
+(firewall.tf) each pull the whole hcloud_server.web for_each map —
+but the map's hcloud_server_network attachments are NOT
+target-reachable. That asymmetry is exactly how soleur-web-2 came up
+with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
+still serving as a CF tunnel connector replica (ADR-114 I1). Such a host
+also boots with NO firewall (hcloud provider 1.63.0:
+hcloud_firewall_attachment does not attach before first boot, unlike
+hcloud_server.firewall_ids). Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above the numeric validation line (counters must all be listed there):
+
+```text
+Validate counters parsed correctly — empty values from a jq
+failure would silently evaluate false in the `-gt 0` test and
+let destructive plans slip past the guard.
+
+BOTH new counters are listed. This `if` is the one place two concurrent branches each
+added a counter, and a merge that keeps only one side's list leaves the other counter
+unvalidated — it would then read empty on a jq failure and evaluate false in its own
+`-gt 0` HALT, which is precisely the fail-open this validation exists to prevent.
+```
+
+Verbatim, the comment above the `plan_ok` read:
+
+```text
+plan_ok: false means the plan JSON carried no resource_changes ARRAY,
+so every counter above is 0 because nothing was read — not because
+there is nothing to do. Without this, an empty or error plan document
+passes every gate in this step.
+```
+
+Verbatim, the comment above the `undecidable_entries` read (#7695 review F1):
+
+```text
+undecidable_entries (#7695 review F1): any entry, at ANY address, whose actions array is
+empty or not an array. `[] | any(...)` is false and `[] | index("delete")` is null, so
+such an entry is invisible to every other counter in the filter — a destroy of the
+inngest AOF volume or of hcloud_volume.workspaces (every user's repo tree) reads as a
+clean plan with destroy_count 0, which never even demands [ack-destroy].
+```
+
+Verbatim, the comment above the `apex_move_orphans` read (#7640 PR4b, plan AC72):
+
+```text
+apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
+against absent state. The ONLY counter here that is about STATE rather
+than about the text of dns.tf. Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above the `reboot_updates` read (#5911):
+
+```text
+reboot_updates (#5911): reboot-forcing in-place update on
+hcloud_server.* (placement_group_id / server_type change →
+power-off reboot of the running host, 0 destroys — invisible to
+the two counters above). Source of truth:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
@@ -1031,10 +1134,25 @@ LUKS alert drift guard — is NOT a required context, so a PR that reverts
 that guard's subject with the guard red is mergeable (#6480, open).
 
 Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
-commit message to skip auto-apply for that merge.
+commit message to skip auto-apply for that merge. Any-commit reach (CTO-ruled
+2026-11-09): the token counts on its own line in ANY of the push's commit
+messages, not only the tip — a merge-queue coalesce cannot bury it. A
+wrongly-suppressed apply is recoverable via the `manual-rerun` dispatch (on
+dispatch `head_commit` is absent so the token cannot arm). Note the carrier is
+the whole message: a bare token line inside a code fence DOES fire (only
+`>`-quoted lines and mid-line text are protected by the own-line anchor).
 
 Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
-commit message to acknowledge planned destroys (otherwise apply halts).
+commit message to acknowledge planned destroys (otherwise apply halts). Same
+any-commit reach — parity with `deploy_policy_gate` (#12404). Bounded residual:
+an ack authored for one commit's destroys arms every destroy in the same
+coalesced push — merge-queue reviewers are the control for that, and the ack's
+own warning already scopes it to "the WHOLE intended change".
+
+Residual (both tokens): `event.commits` is capped at 20 entries, so a token
+older than the window in a giant coalesced push still misses — fail-OPEN for
+the skip (the apply runs), fail-CLOSED for the ack (the apply refuses; re-merge
+carrying the token inside the window, or run the supervised apply).
 
 Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
 failure or for ad-hoc applies (still target-scoped to the allow-list below).
@@ -1291,3 +1409,39 @@ STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line containing exactly '
 
 The safe resolution is to skip THAT merge's apply and let the supervised operator-local full-scope apply complete the retirement. `[ack-destroy]` is still offered (it remains correct for an ordinary intentional delete) but never bare — it carries the partial warning. (Relocated from the workflow file's inline comment, 2026-11-06, per the 490,000-byte workflow-size gate.)
 <!-- lint-infra-ignore end -->
+
+## inngest_host_replace
+
+(Relocated from the workflow file's inline comments, 2026-11-13, per the 490,000-byte workflow-size gate.)
+
+**Why this job exists.** A cloud-init/bootstrap change (e.g. the arm64 Vector wiring, #6197) that force-replaces `hcloud_server.inngest` needs THIS scoped -replace path — the same gated, scoped -replace shape the registry-host-replace and git-data-host-replace jobs use. The sourced `inngest_host_replace_gate` permits EXACTLY the server + its 2 id-referencing dependents and PRESERVES the durable Redis AOF volume (`hcloud_volume.inngest_redis_luks`). ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
+
+**`timeout-minutes: 40`, not 20.** The post-apply liveness gate polls up to 20min for the new host's first `SOLEUR_INNGEST_SERVER_PROBE` row (#12708) — the born-dark failure class (#12695) is exactly an apply that succeeded while the host never emitted, and the gate's window is what turns that class into a run failure instead of a silent dark host.
+
+**The `deploy-inngest-restart` concurrency group is a SHARED inngest mutex (#7695):** the group `cutover-inngest.yml`, `deploy-inngest-image.yml` and `restart-inngest-server.yml` serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
+
+**HCL evaluates `file()` at plan-time regardless of `-target=`** — the userdata render must parse even for scoped targets.
+
+**INHERITED-`done` PREFLIGHT (#8252, 2026-09-17).** A replace of this host strands the scheduler when `INNGEST_CUTOVER_FLIP` is `done` (the root-disk marker is destroyed, the Doppler flag is not). This step does not block that; it makes the recovery known BEFORE the outage. It does FAIL CLOSED when it cannot measure (empty token, blind instrument, failed read of a present key): a skipped guard is not a cleared one (#9927). Rationale, the rc-capture reasoning and the non-`done` stranding values live in runbook inngest-server.md, inherited-done section; the token is inngest-flip-read-token.tf.
+
+**Pre-destroy user_data size gate (CTO N9).** On the first replace after the flip-token split both token keys are unknown at plan time, so the user_data length precondition is deferred to APPLY (after the destroy). This offline step is the only pre-destroy size gate; see runbooks/inngest-server.md.
+
+**Warn if SENTRY_DSN is absent (#6500).** Advisory, and it degrades open, like the #7228 strand warning above. This job is also a RECOVERY route for the sole scheduler, and the boot does not need the DSN (the precondition in inngest-host.tf admits `""`), so a hard fail here would block restoring the sole scheduler over a missing observability value, or over a transient Doppler read. Decision T2 in #6500's decision-challenges.md. This host bakes SENTRY_DSN and its Sentry event is what `zot-soak-6122.sh` counts; an empty or unreadable value means the replacement reports nothing to the soak — the step says so BEFORE the plan and proceeds (the shape is the precondition's job). The value is never printed.
+
+**Scoped -replace of the inngest server + its 3 id-referencing dependents** (`hcloud_server_network.inngest` and `hcloud_volume_attachment.inngest_redis_luks`; both interpolate the NEW server id → ForceNew replace). `hcloud_volume.inngest_redis_luks` is NOT -targeted, so the durable volume is preserved by OMISSION (the retired plaintext pair is no longer declared or targeted here, #8285). The additive VOLUME joins `inngest-host` (it must be creatable) and never this one. Its ATTACHMENT must be here, though, because `inngest_host_replace_gate` interpolates the server id and a replace therefore forces the attachment into the plan; without admitting it the gate aborts `out_of_scope` and a routine dispatch becomes a dead end. The sourced `inngest_host_replace_gate` (no `[ack-destroy]` bypass) reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
+
+**#6453 STOCK preflight — TRIPWIRE, not a routine gate** (posture matches :447). The guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails `resource_unavailable`, and the fleet strands with no rollback (#6393 -> ~10h prod deploy freeze, #6400). The account CAP never engages — a -replace frees its own slot. Full rationale + the available-vs-supported trap: the gate lib's header. HCLOUD_TOKEN: this step's `env:` is DOPPLER_TOKEN only and the sourced gate runs OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent: cutover-inngest.yml:359.
+
+**Doppler-fetched secrets are NOT auto-masked by Actions** (unlike `secrets.*`): the apply runs through `tf_redact_random_ids` so plan-time random ids cannot reach the log.
+
+**Apply the saved, guarded plan.** Post-apply: prove from the SAVED plan (the exact plan we applied) that the Redis AOF volume carries no delete action (backstop to the guard). Mid-replace failure: the destroy ran first, so name the fresh stock class before the operator acts — stock-caused vs config/contract/apply failures take different arms. `stock_recovery_report` is a diagnostic annotation only; it always returns 0 (#9510).
+
+**IID resolve arm.** The `::error::` echo sanitizes `IID` before it reaches the workflow-command parser: the non-digit arm fires precisely when IID is NOT digits, so raw bytes (a newline = a forged `::command::` line) must never reach it.
+
+**POST-REPLACE LIVENESS GATE (#12708, #12695).** Apply success means Hetzner created the server and cloud-init returned — it says nothing about whether the provision unit reached bootstrap. The Nov-11 host FATAL'd the credential isolation check on every attempt for ~17h while run 43115757996 read as a success. The proof that the whole chain ran (provision -> zot pull -> bootstrap -> vector -> probe timer) is the first `SOLEUR_INNGEST_SERVER_PROBE` row carrying THIS host's `instance_id`; the `--instance-id` pin keeps the destroyed host's rows inside the window from masking the replacement's silence. Exit classes: 0 = a row for this iid landed; 4 = query healthy, window empty (the host is not shipping — the gate's failure signal); 6 = the READ failed (a Better Stack/Doppler fault — never a host verdict, so it retries within the window rather than failing on an instrument blip; a window that ends on rc=6 reports INSTRUMENT, not dark). 20min bounded poll: bootstrap on a healthy replace lands its first probe row inside ~5min. One strictness to know: a host whose IMDS read failed emits `instance_id=unknown`, which can never satisfy the pin — the gate fails there too, and that is deliberate (an unidentified row is not a per-host liveness claim).
+
+**`set +e` in the gate step:** Actions runs a bare `run:` block as `bash -e {0}` (ADR-170), and errexit dies AT the doppler line on the first non-zero read — rc=4 is the EXPECTED state for the first minutes of every healthy replace, so the whole poll is unreachable without this. (Measured: lint-workflow-errexit-capture.py flags the bare form.)
+
+**`timeout 90` per read** keeps one stalled Doppler API call from eating the whole window — a timeout surfaces as rc=124 via doppler, counted as a non-verdict read. **`env -u` strips the reader's override seams:** `doppler run` injects EVERY key of prd_terraform into the env, and `INNGEST_STATE_QUERY` / `INNGEST_PROBE_ROW_LIB` / `INNGEST_STATE_SINCE` can substitute a fabricated row source for the real query — a green without a row. The gate's green must be exactly as trustworthy as the config it reads, so the seams cannot arrive through it.
+
+**PUBLIC-SDK-URL confirm gate (#10538, CTO rulings D2 and fix-round F1, PR #12737).** The step right after checkout, before any credential loads and with no `if:`, runs `tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL`, which refuses unless `confirm` is exactly that token. The `inngest_host` (birth) job runs the same script with its own token, `PUBLIC-SDK-URL-BIRTH` (distinct, so a birth token never authorizes this destroy). Since #12737 the host's `--sdk-url` is the public serve URL (`https://app.soleur.ai/api/inngest`), and that value reaches a host through this replace, a fresh birth (the disaster-recovery row "server absent" in `inngest-server.md`), or a local untargeted `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass that the HALT messages print, for example the pinned-image chain or `luks_key_touched=1`): `hcloud_server.inngest` has no `ignore_changes = [user_data]`, so a full apply plans its replace. That third path has no gate. While #12742 is open, read that apply's plan first and abort, or add `-target`s that exclude `hcloud_server.inngest`, if it replaces the Inngest host. Until #12742 item 1 lands, the replace carries three known risks: (1) the registry persists in Postgres across a replace, so a failing public poll most likely shows a stale non-zero `registry_fns` that the registry-empty alert cannot see; (2) the first sync after boot can double-fire functions (#7228); (3) the stale private-URL app row keeps being polled over plaintext. The token is a typo-guard, not the authorization: the `infra-privileged` environment and the replace gate are. It does not read the live Cloudflare mode (CTO fix-round F2): the #12742 item-1 PR must replace the script with a fail-closed live-mode preflight in the same PR, never delete it bare. Pinned by B10 in `plugins/soleur/test/terraform-target-parity.test.ts`, which also sweeps every copy-paste dispatch recipe for its token.

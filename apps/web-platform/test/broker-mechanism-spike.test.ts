@@ -487,7 +487,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     const options: Record<string, unknown> = {
       abortController: controller,
       // Haiku 5.5 (same ground as sandbox-credential-deny-runtime.test.ts): this drives the REAL
-      // Agent SDK query(), whose bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.311
+      // Agent SDK query(), whose bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.321
       // (the bundle has known the id since 0.3.293).
       model: "claude-haiku-5-5",
       maxTurns: 3,
@@ -621,10 +621,10 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     return classifyOutcome({ probe, observedEvents: events, scan: [], substitutionObserved: issuer.includes("sandbox-runtime") });
   }
 
-  it("harness: the declared and the installed SDK version are the pinned 0.3.311 the ADR names", () => {
-    expect(SDK_PKG.dependencies?.["@anthropic-ai/claude-agent-sdk"]).toBe("0.3.311");
+  it("harness: the declared and the installed SDK version are the pinned 0.3.321 the ADR names", () => {
+    expect(SDK_PKG.dependencies?.["@anthropic-ai/claude-agent-sdk"]).toBe("0.3.321");
     const installed = JSON.parse(readFileSync(join(APP_ROOT, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json"), "utf8")) as { version?: string };
-    expect(installed.version).toBe("0.3.311");
+    expect(installed.version).toBe("0.3.321");
   });
 
   it("harness: every server this suite starts binds loopback", () => {

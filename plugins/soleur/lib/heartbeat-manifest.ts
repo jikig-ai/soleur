@@ -394,6 +394,27 @@ export const MANIFEST: ManifestEntry[] = [
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly, dispatched by the web-server watchdog clock): it queries the Better Stack Logs archive for web-1's passing luks-monitor row and beats only when one exists, so no host change and no host replace applies (a host-side ping would need a user_data change = a web-1 replace, which web-1 cannot take). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
+    name: "inngest_luks_key_probe_deadman",
+    // #12230 (c1, CTO ruling 2026-11-07) — the LUKS key-continuity probe's dead-man. Heartbeat form
+    // chosen after the measured 422s killed every query_period rung; fed archive-side over the
+    // 93600 s measured-rows window, born paused, owner-armed after two consecutive
+    // qualifying_row_heartbeat_paused runs (same #11631 discipline).
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml",
+        pattern: "bash scripts/deadman-heartbeat-feeder.sh",
+      },
+    },
+    // Fed but paused until the owner arms post-#11266 promotion + two qualifying runs: without this,
+    // heartbeat-live-reconcile reports fed-but-paused on every twice-daily drift run (seat P2, PR #12331).
+    arming_pending: { tracking_issue: 12230 },
+    exempt_reason:
+      "archive-reading repo-side feeder over the probe's measured rows (verdict=ok|fail_ on either channel); no host change applies — the probe rows ship off the dedicated host already. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
     name: "claude_cost_capture",
     // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.claude_cost_capture_dark.
     // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker
@@ -412,5 +433,53 @@ export const MANIFEST: ManifestEntry[] = [
     },
     exempt_reason:
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly): it queries the Better Stack Logs archive for Inngest cron cost markers and beats only when one exists in the last 24 h, so the signal is independent of any single host and no host replace applies. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "host_kernel_web_1",
+    // #12007 - the per-host dead-man for the periodic SOLEUR_HOST_KERNEL marker (web-1). Fed by
+    // scripts/deadman-heartbeat-feeder.sh (target host-kernel-web-1, literal 36 h window) once the owner
+    // arms it; born paused. The feeder is NOT a workflow loop member yet (CTO ruling H1), so this row declares
+    // `none` and names the issue that owns the rollout and the arming change, which flips it to the cron form.
+    arming: "external-probe",
+    paused: true,
+    feeder: { kind: "none", url_secret: null, tracking_issue: 12386 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scripts/deadman-heartbeat-feeder.sh target host-kernel-web-1): it queries the Better Stack Logs archive for this host's own SOLEUR_HOST_KERNEL row and beats only when one exists inside the 36 h window, so no host change and no host replace applies to the heartbeat itself (the emitter's delivery is a separate held step, #12386). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "host_kernel_web_2",
+    // #12007 - the per-host dead-man for the periodic SOLEUR_HOST_KERNEL marker (web-2). Fed by
+    // scripts/deadman-heartbeat-feeder.sh (target host-kernel-web-2, literal 36 h window) once the owner
+    // arms it; born paused. The feeder is NOT a workflow loop member yet (CTO ruling H1), so this row declares
+    // `none` and names the issue that owns the rollout and the arming change, which flips it to the cron form.
+    arming: "external-probe",
+    paused: true,
+    feeder: { kind: "none", url_secret: null, tracking_issue: 12386 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scripts/deadman-heartbeat-feeder.sh target host-kernel-web-2): it queries the Better Stack Logs archive for this host's own SOLEUR_HOST_KERNEL row and beats only when one exists inside the 36 h window, so no host change and no host replace applies to the heartbeat itself (the emitter's delivery is a separate held step, #12386). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "host_kernel_inngest",
+    // #12007 - the per-host dead-man for the periodic SOLEUR_HOST_KERNEL marker (inngest). Fed by
+    // scripts/deadman-heartbeat-feeder.sh (target host-kernel-inngest, literal 36 h window) once the owner
+    // arms it; born paused. The feeder is NOT a workflow loop member yet (CTO ruling H1), so this row declares
+    // `none` and names the issue that owns the rollout and the arming change, which flips it to the cron form.
+    arming: "external-probe",
+    paused: true,
+    feeder: { kind: "none", url_secret: null, tracking_issue: 12386 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scripts/deadman-heartbeat-feeder.sh target host-kernel-inngest): it queries the Better Stack Logs archive for this host's own SOLEUR_HOST_KERNEL row and beats only when one exists inside the 36 h window, so no host change and no host replace applies to the heartbeat itself (the emitter's delivery is a separate held step, #12386). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "host_kernel_registry",
+    // #12007 - the per-host dead-man for the periodic SOLEUR_HOST_KERNEL marker (registry). Fed by
+    // scripts/deadman-heartbeat-feeder.sh (target host-kernel-registry, literal 36 h window) once the owner
+    // arms it; born paused. The feeder is NOT a workflow loop member yet (CTO ruling H1), so this row declares
+    // `none` and names the issue that owns the rollout and the arming change, which flips it to the cron form.
+    arming: "external-probe",
+    paused: true,
+    feeder: { kind: "none", url_secret: null, tracking_issue: 12386 },
+    exempt_reason:
+      "archive-reading repo-side feeder (scripts/deadman-heartbeat-feeder.sh target host-kernel-registry): it queries the Better Stack Logs archive for this host's own SOLEUR_HOST_KERNEL row and beats only when one exists inside the 36 h window, so no host change and no host replace applies to the heartbeat itself (the emitter's delivery is a separate held step, #12386). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];

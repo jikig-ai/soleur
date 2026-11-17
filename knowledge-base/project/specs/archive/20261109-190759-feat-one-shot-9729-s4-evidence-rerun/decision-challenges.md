@@ -1,0 +1,9 @@
+# Decision Challenges — feat-one-shot-9729-s4-evidence-rerun
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| ADR-276 amendment appended with the re-ruling (parent brief lists receipts + §2 line only) | technical | Ruled by CTO agent, 2026-11-09: append the dated `## Amendment 2026-11-09 (S4 go/no-go re-ruling, #9729)` to ADR-276 with a dated `### Stage status` line and a `Go/no-go receipt:` line pointing at this PR's receipt - Decision 3(g) makes the amendment the stage's record vehicle; the preactivation gate reads the receipt path with last-line-wins semantics, so skipping leaves it pointing at the superseded R3 receipt |
+| `gh issue comment 9729` with the verdict (not in the parent's deliverable list) | technical | Ruled by CTO agent, 2026-11-09: post one `gh issue comment 9729` carrying the computed verdict, criterion table and remaining blockers - a non-closing status comment is record-keeping, not operator-only; the epic stays open |
+| Receipt `ruled=` token on the `SOLEUR_PR_AFFECTED_VERDICT` line | technical | Ruled by CTO agent, 2026-11-09: write `ruled=confirmed` once the ruling confirms the computed verdict; `ruled=pending` only if confirmation is declined - `ruled` records whether a ruling stands behind the computed value; confirmed is the prior-receipt form (R3) |
+| Disposition on a non-zero pinned audit (stale/gap/unaudited rows) | technical | Ruled by CTO agent, 2026-11-09: on a non-zero pinned-tree audit, record rows verbatim, rule criterion (b) `fail`, drain nothing in this PR - the audit exit code IS criterion (b); drains are separate s4-drain-labelled PRs per the drain rubric |
+| `--chunk` factor for collect (4-way parallel legs) | taste | K=4, matching the 2026-11-08 rerun — identical output to serial collect with per-unit resumability; ~40 min wall vs ~2.5 h |

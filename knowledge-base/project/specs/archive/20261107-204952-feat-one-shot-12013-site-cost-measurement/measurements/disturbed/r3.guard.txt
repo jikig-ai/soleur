@@ -1,0 +1,9 @@
+rep=r3 tree=c7c1c0b98b2664e96adb27707bff7114ebaa601c
+loadavg_start=8.09 13.01 16.12 load1_used=8.09 max_load1=9.0
+2026-11-07T15:23:12Z
+foreign_runs_start: none
+loadavg_end=6.47 8.26 14.08
+max_load1_during=55.21
+2026-11-07T15:50:36Z
+foreign_runs_end: 1030110 /var/tmp/m12013/r2/clone
+DISTURBED

@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "./host-git";
 import { rm } from "node:fs/promises";
 
 import { reportSilentFallback } from "./observability";
@@ -67,8 +68,8 @@ type PlumbingResult = { ok: boolean; stdout: string; stderr: string };
  * `_cron-safe-commit.ts runGit`: async `promisify(execFile)`, no-throw
  * `{ ok, stdout, stderr }` return, host-config isolation.
  *
- * Identity is supplied via env (config is nulled) so `commit-tree` works in the
- * isolated environment without depending on the clone's user.name/email.
+ * Identity is supplied via env (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`) so `commit-tree` works without depending on the
+ * clone's user.name/email; the global config is the image identity file, not a nulled one.
  */
 async function runPlumbingGit(
   cwd: string,
@@ -82,19 +83,23 @@ async function runPlumbingGit(
   const { execFile } = await import("node:child_process");
   const execFileP = promisify(execFile);
   try {
-    const { stdout, stderr } = await execFileP("git", args, {
+    // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox. It goes through
+    // the shared host-git invocation (hardening arguments + a SCRUBBED environment). NOT covered: `filter.*` drivers,
+    // `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
+    const h = hostGitInvocation(args, {
       cwd,
-      env: {
-        ...process.env,
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
+      allowProtocol: ALLOW_PROTOCOL_NONE,
+      extraEnv: {
         GIT_AUTHOR_NAME: "Soleur Checkpoint",
         GIT_AUTHOR_EMAIL: "checkpoint@soleur.local",
         GIT_COMMITTER_NAME: "Soleur Checkpoint",
         GIT_COMMITTER_EMAIL: "checkpoint@soleur.local",
         ...extraEnv,
       },
+    });
+    const { stdout, stderr } = await execFileP("git", h.args, {
+      cwd,
+      env: h.env,
       maxBuffer: 32 * 1024 * 1024,
     });
     return { ok: true, stdout, stderr };

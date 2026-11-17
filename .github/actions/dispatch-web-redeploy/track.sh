@@ -43,6 +43,10 @@
 #                           jobs override it per job budget — pin_load=1200, the
 #                           cutover redeploy=2400, the finalizer=900.
 #   REDEPLOY_DRY_RUN          (none — the workflow's proof mode never calls this script)
+#   TRACK_PREFLIGHT           1 = validate the three credentials above and exit 0 BEFORE any request or
+#                           side effect (#9294: the cutover job runs this right after the Tier-B loader, ahead of
+#                           the freeze and the first flag write, so a missing trio is a named precondition and
+#                           never a failure discovered after production was written)
 #
 # Exit: 0 confirmed swap (frame ok, start_ts>PRIOR_START, tag==TARGET); 1 terminal
 # failure/timeout; 2 usage; 78 xtrace refusal.
@@ -87,6 +91,10 @@ for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
     exit 2
   fi
 done
+if [[ "${TRACK_PREFLIGHT:-}" == "1" ]]; then
+  echo "dispatch-web-redeploy: preflight ok — the HMAC key and the Cloudflare Access pair are present and well-formed (nothing was sent)."
+  exit 0
+fi
 for v in INTERVAL TIMEOUT; do
   if [[ ! "${!v}" =~ ^[0-9]+$ ]] || (( ${!v} < 1 )); then
     echo "::error::dispatch-web-redeploy: ${v} must be a positive integer (got '${!v}')."

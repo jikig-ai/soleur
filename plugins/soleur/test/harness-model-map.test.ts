@@ -3,8 +3,11 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { detectHarness } from "../lib/harness";
 import {
+  FALLBACK_TIER_GRAPH,
+  isSaturationError,
   resolveAdvisorFallback,
   resolveAdvisorTier,
+  resolveFallbackTier,
   resolveModelTier,
   SEMANTIC_TIERS,
   TIER_MAPS,
@@ -169,6 +172,44 @@ describe("harness-model-map (ADR-110)", () => {
     expect(TIER_MAPS.claude.standard).toBe("sonnet");
     expect(TIER_MAPS.grok.standard).toBe("grok-4.7");
     expect(TIER_MAPS.opencode.standard).toBe("opencode/big-pickle");
+  });
+
+  test("resolveFallbackTier follows the strict never-downgrade invariant (Issue #12529)", () => {
+    // Mechanical steps can downgrade: standard -> cheap
+    expect(resolveFallbackTier("standard")).toBe("cheap");
+    // Advisor falls back to strong (ADR-083 Fable -> Opus)
+    expect(resolveFallbackTier("advisor")).toBe("strong");
+    // Cheap has no lower tier
+    expect(resolveFallbackTier("cheap")).toBeNull();
+    // Strict never-downgrade invariant: judgment tiers (strong, inherit) NEVER downgrade
+    expect(resolveFallbackTier("strong")).toBeNull();
+    expect(resolveFallbackTier("inherit")).toBeNull();
+    // Unknown tier throws
+    expect(() => resolveFallbackTier("invalid" as SemanticTier)).toThrow(/unknown semantic tier/);
+    expect(FALLBACK_TIER_GRAPH.standard).toBe("cheap");
+    expect(FALLBACK_TIER_GRAPH.strong).toBeNull();
+  });
+
+  test("isSaturationError classifies HTTP 429/529/503 and rate limit error shapes", () => {
+    expect(isSaturationError(null)).toBe(false);
+    expect(isSaturationError(undefined)).toBe(false);
+    expect(isSaturationError("something else")).toBe(false);
+    expect(isSaturationError(new Error("Generic error"))).toBe(false);
+
+    // Status code checks
+    expect(isSaturationError({ status: 429 })).toBe(true);
+    expect(isSaturationError({ statusCode: 429 })).toBe(true);
+    expect(isSaturationError({ status: 529 })).toBe(true);
+    expect(isSaturationError({ status: 503 })).toBe(true);
+    expect(isSaturationError({ status: 500 })).toBe(false);
+
+    // Error message / string checks
+    expect(isSaturationError("Rate limit exceeded")).toBe(true);
+    expect(isSaturationError("rate_limit_error")).toBe(true);
+    expect(isSaturationError(new Error("RESOURCE_EXHAUSTED: quota reached"))).toBe(true);
+    expect(isSaturationError(new Error("Overloaded"))).toBe(true);
+    expect(isSaturationError("Too Many Requests")).toBe(true);
+    expect(isSaturationError("Model capacity reached")).toBe(true);
   });
 });
 

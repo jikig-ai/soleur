@@ -99,6 +99,9 @@ infra/
 !infra/web-bash-synthetic.service
 !infra/web-bash-synthetic.timer
 !infra/sdk-bash-verdict.sh
+!infra/host-kernel-marker.sh
+!infra/host-kernel-marker.service
+!infra/host-kernel-marker.timer
 !infra/web-zot-consumer-probe.sh
 !infra/web-zot-consumer-probe.service
 !infra/web-zot-consumer-probe.timer

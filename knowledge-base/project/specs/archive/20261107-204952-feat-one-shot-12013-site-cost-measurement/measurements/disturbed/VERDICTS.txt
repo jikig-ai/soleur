@@ -1,0 +1,4 @@
+Verdicts of the readings that are NOT used (the guard files in this directory are the audit trail; a guard file's last line is what the runner saw, this file is what happened):
+r1  DISTURBED  a sibling worktree's test-all.sh was live at the end (guard file: foreign_runs_end).
+r2  DISTURBED  its guard file says CLEAN, but it overlapped r3: the .wall epochs show both readings running at once from 15:23 to 15:50 UTC. Both started within two seconds, both passed the start guard, and r2 looked at the end after r3 had finished. An exclusive lock now prevents it, and site_cost_table.py refuses reps whose time spans intersect.
+r3  DISTURBED  overlapped r2 (r2's clone was live when r3 looked at the end); max load1 55; arm a exited 1.

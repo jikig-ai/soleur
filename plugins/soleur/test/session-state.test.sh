@@ -391,20 +391,19 @@ source_helper "$ROOT"
 
 T9_WT="wt-dead-acquirer-$$"
 # Acquire from a SEPARATE process which then exits — the real CLI shape.
-bash -c "
+if bash -c "
   export SOLEUR_SESSION_STATE_ROOT='$ROOT'
   # shellcheck source=/dev/null
   source '$HELPER'
   acquire_lease '$T9_WT' one-shot 240
-" >/dev/null 2>&1
-t9_acq_rc=$?
+" >/dev/null 2>&1; then t9_acq_rc=0; else t9_acq_rc=$?; fi
 
 if [[ "$t9_acq_rc" -ne 0 ]]; then
   fail "T9 setup: child could not acquire the lease (rc=$t9_acq_rc)"
 elif [[ ! -f "$ROOT/leases/$T9_WT.lease" ]]; then
   fail "T9 setup: no lease file was written"
 else
-  t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+  t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2) || true
   # PRECONDITION, asserted rather than assumed: if the recorded pid were
   # somehow still alive this fixture would exercise the happy path and pass
   # vacuously against the very bug it exists to pin.
@@ -764,7 +763,7 @@ t17 "ceiling binds on overflow"       99999999999999999999 86400
 # sweep is the backstop' TRUE rather than merely claimed" — nothing verified
 # that, so the two 86400s could drift apart silently.
 T17_CEIL=$(_lease_window_seconds 525600)
-T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
+T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1) || true
 if [[ "$T17_CEIL" == "$T17_MTIME" ]]; then
   pass "T17b: window ceiling ($T17_CEIL) == sweep mtime cap ($T17_MTIME) — the backstop claim holds"
 else

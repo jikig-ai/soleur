@@ -126,12 +126,16 @@ function invocationLines(region: string): string[] {
  * Every non-comment line inside a fenced block that invokes the plugin gate —
  * the dispatch the skills now prescribe (#9307 PR 2). Spelling-agnostic for the
  * same reason invocationLines is: `bash`, env prefixes and indentation all
- * count.
+ * count. Since #12247 work §9 dispatches through `gate-or-skip.sh`, the
+ * token-aware wrapper that `exec`s `affected-tests.sh` for every status but the
+ * reader's 42, so `allowWrapper` admits that spelling for work §9 ONLY — ship
+ * Phase 4 keeps the strict form (it calls the reader bare, then the gate).
  */
-function gateLines(region: string): string[] {
+function gateLines(region: string, allowWrapper = false): string[] {
+  const re = allowWrapper ? /(affected-tests|gate-or-skip)\.sh/ : /affected-tests\.sh/;
   return fencedBodies(region)
     .split("\n")
-    .filter((l) => /affected-tests\.sh/.test(l) && !/^\s*#/.test(l));
+    .filter((l) => re.test(l) && !/^\s*#/.test(l));
 }
 
 /**
@@ -309,7 +313,7 @@ describe("FLOOR — /work Phase 2 exits on the affected gate, not the battery", 
     );
 
   test("§9 prescribes the plugin gate", () => {
-    const gates = gateLines(workGate());
+    const gates = gateLines(workGate(), true);
     expect(
       gates.length,
       "work §9 no longer prescribes affected-tests.sh — the #9307 dispatch was reverted",
@@ -317,7 +321,7 @@ describe("FLOOR — /work Phase 2 exits on the affected gate, not the battery", 
   });
 
   test("§9's gate invocation is the affected run — never --full at implementation exit", () => {
-    for (const line of gateLines(workGate())) {
+    for (const line of gateLines(workGate(), true)) {
       expect(
         /--full(\s|$|'|")/.test(line),
         `work §9 prescribes --full at implementation exit — that is the pre-#8322 state: ${line.trim()}`,

@@ -1164,6 +1164,40 @@ want_rc 0 "D2: mixed diff exits 0 via real selection"
 want_no_out "D2: mixed diff is never inert" 'NO_TESTS_AFFECTED'
 want_call "D2: the code file was selected" 'related.*util\.ts'
 
+# D2r [rename-away]: `git mv src/a.ts docs/a.md` under default rename detection lists
+# only the destination (inert docs) and exits NO_TESTS_AFFECTED although a code file
+# left the tree; --no-renames lists the OLD path too, so the diff is no longer inert.
+R_RENC="$(mk_repo rename-away-committed)"; seed_js "$R_RENC"; seal_base "$R_RENC"
+mkdir -p "$R_RENC/docs"
+assert_fixture_dir "$R_RENC"; git -C "$R_RENC" mv src/a.ts docs/a.md
+git -C "$R_RENC" commit -q -m "move code under docs"
+reset_fakes; run_gate "$R_RENC" gate
+want_no_out "D2r: a committed code->docs rename is never inert" 'NO_TESTS_AFFECTED'
+R_RENS="$(mk_repo rename-away-staged)"; seed_js "$R_RENS"; seal_base "$R_RENS"
+mkdir -p "$R_RENS/docs"
+assert_fixture_dir "$R_RENS"; git -C "$R_RENS" mv src/a.ts docs/a.md
+reset_fakes; run_gate "$R_RENS" gate
+want_no_out "D2r: a staged code->docs rename is never inert" 'NO_TESTS_AFFECTED'
+
+# D2g [hidden gitlink]: under a .gitmodules `ignore = all` a plain diff omits a gitlink
+# change, so README.md + a bumped submodule pointer read as docs-only and exit
+# NO_TESTS_AFFECTED. --ignore-submodules=none lists the gitlink, so the diff is not inert.
+R_GL="$(mk_repo gitlink-hidden)"; seed_js "$R_GL"; seal_base "$R_GL"
+assert_fixture_dir "$R_GL"
+printf '[submodule "sub"]\n\tpath = sub\n\turl = ./nowhere\n\tignore = all\n' > "$R_GL/.gitmodules"
+printf 'readme\n' > "$R_GL/README.md"
+git -C "$R_GL" add .gitmodules README.md
+git -C "$R_GL" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
+git -C "$R_GL" commit -q -m "gitlink base"
+git -C "$R_GL" update-ref refs/remotes/origin/main HEAD
+mkdir -p "$R_GL/sub"
+printf 'readme two\n' > "$R_GL/README.md"
+git -C "$R_GL" add README.md
+git -C "$R_GL" update-index --cacheinfo 160000,2222222222222222222222222222222222222222,sub
+git -C "$R_GL" commit -q -m "bump sub and readme"
+reset_fakes; run_gate "$R_GL" gate
+want_no_out "D2g: README.md plus a hidden gitlink bump is never inert" 'NO_TESTS_AFFECTED'
+
 # D3 [G1-1]: the native selector returns nothing for a code diff → full fallback,
 # never a zero-test green. rc 0 is acceptable ONLY with mode=full and a named
 # reason; rc 4 is an acceptable loud refusal.
@@ -2478,6 +2512,6 @@ unset _kind _rc _of _xfail _badword
 
 # Floor = the full count less a little slack for the rows that
 # depend on a host binary (jq): it is a floor, so a deleted block of rows reddens it.
-print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-496}"
+print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-499}"
 
 

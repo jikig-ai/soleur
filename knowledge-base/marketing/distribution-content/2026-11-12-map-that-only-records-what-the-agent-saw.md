@@ -3,7 +3,7 @@ title: "The Map That Only Records What the Agent Saw"
 type: pillar
 publish_date: 2026-11-12
 channels: x, bluesky, discord, linkedin-personal
-status: scheduled
+status: published
 issue_reference: "#10737"
 ---
 

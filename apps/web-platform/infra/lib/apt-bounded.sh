@@ -77,8 +77,9 @@
 #
 # KNOWN LIMITS (accepted, recorded in the ADR-188 amendment). `timeout -k 5` signals the process GROUP
 # with TERM but tracks only its direct child for the KILL, so an apt that ignores TERM is not reaped
-# (real apt dies on TERM). A cap kill landing mid-dpkg can leave "dpkg was interrupted" for the next attempt;
-# no `dpkg --configure -a` repair is run because the unit suite executes this on the host. An OOM kill (137)
+# (real apt dies on TERM). A cap kill landing mid-dpkg leaves "dpkg was interrupted" for the next attempt, so
+# every retry first runs a `dpkg --configure -a` repair INSIDE the same attempt timeout (the unit suite stubs
+# `dpkg` on PATH because it executes this on the host). An OOM kill (137)
 # that lands at or after the cap is indistinguishable from a timeout kill by rc and is classed as one.
 #
 # Discipline: `return`, not `exit` (the one exception is assert_fixture_dir below); no option changes; rc
@@ -241,11 +242,16 @@ _gd_apt_install_bounded_cycle() {
     # The shared cache options come from the SAME $dir (GD_APT_STATE_DIR) as the budget, not a second literal, and
     # sit BEFORE Acquire::Retries on both calls.
     timeout -k 5 "$allot" bash -c '
-      d="$1"; shift
+      d="$1"; t="$2"; shift 2
+      # A cap kill landing mid-configure leaves dpkg half-configured, and every later apt-get exits
+      # 100 on "dpkg was interrupted" — without a repair the retry loop just re-pays the poison.
+      # Run it BEFORE the retry, inside this attempt timeout, so a wedged repair burns its own
+      # allotment and stays charged to spent by the outer dt measurement.
+      [ "$t" -le 1 ] || { echo GD_APT_STAGE=repair; dpkg --configure -a || true; }
       echo GD_APT_STAGE=update
       apt-get update -qq -o "Dir::State::lists=$d/lists" -o "Dir::Cache::archives=$d/archives" -o Acquire::Retries=5 \
         && { echo GD_APT_STAGE=install; apt-get install -y -qq -o "Dir::State::lists=$d/lists" -o "Dir::Cache::archives=$d/archives" -o Acquire::Retries=5 "$@"; }
-    ' _ "$dir" "$@" >> "$log" 2>&1 || rc=$?
+    ' _ "$dir" "$try" "$@" >> "$log" 2>&1 || rc=$?
     dt=$(( $(date +%s) - started )); [ "$dt" -lt 0 ] && dt=0   # a backward clock step must not refund budget
     printf '%s\n' "$dt" >> "$dir/spent"   # charge the attempt whatever its outcome
     [ "$rc" -eq 0 ] && return 0

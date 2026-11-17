@@ -51,6 +51,7 @@ case "$ep" in
     fi ;;
   repos/*/actions/workflows/ci.yml/runs?event=pull_request*) f="$FX/runs.json" ;;
   repos/*/actions/workflows/ci.yml/runs?event=push*) f="$FX/push-${ep##*head_sha=}.json" ;;
+  repos/*/actions/workflows/ci.yml/runs?event=merge_group*) f="$FX/mg-${ep##*head_sha=}.json" ;;
   repos/*/actions/runs/*/jobs*) r="${ep#*runs/}"; f="$FX/jobs-${r%%/*}.json" ;;
   repos/*/actions/runs/*/artifacts*) r="${ep#*runs/}"; f="$FX/arts-${r%%/*}.json" ;;
   repos/*/actions/artifacts/*/zip) a="${ep#*artifacts/}"; a="${a%%/*}"; f="$FX/art-$a.zip"; [ -f "$f" ] || f="$FX/art-any.zip" ;;
@@ -58,13 +59,25 @@ case "$ep" in
   *) exit 64 ;;
 esac
 [ -f "$f" ] || exit 1
+# KILL-JOBS: kill the WORKER unit behind this read to simulate a worker dying mid-flight with no
+# result file (the missing-row → CANNOT ESTABLISH contract). Verified tree on bash 5.3:
+# gh -> timeout -> `$(api)` cmdsub -> `( fn )`-spawned subshells -> worker — the row-owning unit is
+# THREE /proc/<pid>/stat field-4 hops above gh's parent (fewer hops only kill the api read, which
+# correctly surfaces as a `fail` row instead). Linux-only (/proc); the row is pool-mode only.
+if [ -f "$FX/KILL-JOBS" ] && [[ "$ep" == */jobs\?* ]]; then
+  wp="$PPID"; hops=0
+  while [[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && (( hops < 3 )); do
+    hops=$((hops + 1)); wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
+  done
+  [[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && kill -KILL "$wp" 2>/dev/null
+fi
 if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
 FAKE
 chmod +x "$TMP/bin/gh"
 
 # build_fx <dir> <n-runs> <minutes-per-run> [bot-count] [machinery-count] [escape-pr] [tsv-mode] [arts-per-run]
-# tsv-mode: full = every gated skip_suite label (realized ~49 suite-min, PASS), lite = one cheap label
-# (realized ~0.24, FAIL under the bar), none = an empty artifact listing (evidence_absent → NOT YET).
+# tsv-mode: full = every gated skip_suite label (realized ~61 suite-min, PASS), lite = one cheap label
+# (realized ~0.19, FAIL under the bar), none = an empty artifact listing (evidence_absent → NOT YET).
 # arts-per-run: how many suite-timings-(scripts|scripts-heavy)-N artifacts each run carries (a real run has ~11).
 build_fx() {
   local fx="$1" n="$2" mins="$3" bots="${4:-0}" mach="${5:-0}" esc="${6:-}" tsv_mode="${7:-full}" arts_n="${8:-1}"
@@ -75,7 +88,7 @@ build_fx() {
   {   # the run's suite-timings artifact: gated skip rows priced by the committed durations TSVs
     local rows=""
     case "$tsv_mode" in
-      full) for L in "apps/web-platform [unit]" ".github/scripts/test/run-all.sh" "plugins/soleur/test/c4-from-components.test.sh" "scripts/battery-tag-authorship-mutations" "scripts/cf-tunnel-liveness-gate-mutations" "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b" "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d" "tests/scripts/registry-gate-mutation-battery"; do rows+="$L\t0\tskip=relevance\n"; done ;;
+      full) for L in "apps/web-platform [unit]" ".github/scripts/test/run-all.sh" "plugins/soleur/test/c4-from-components.test.sh" "scripts/battery-tag-authorship-mutations" "scripts/cf-tunnel-liveness-gate-mutations" "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b" "scripts/orphan-process-reaper-mutations" "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d" "tests/scripts/registry-gate-mutation-battery"; do rows+="$L\t0\tskip=relevance\n"; done ;;
       lite) rows="plugins/soleur/test/c4-from-components.test.sh\t0\tskip=relevance\n" ;;
       none) : ;;
     esac
@@ -92,7 +105,13 @@ build_fx() {
     printf '%s\n' "$files" > "$fx/files-$pr.json"
     printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"%s","state":"closed"}\n' "$sha" > "$fx/pr-$pr.json"
     conc="success"; [ "$esc" = "$pr" ] && conc="failure"
-    printf '{"workflow_runs":[{"conclusion":"%s"}]}\n' "$conc" > "$fx/push-$sha.json"
+    # the push run carries an id so the escape arm can read its jobs (a distinct id from the
+    # pull_request run $i — the jobs fixtures are keyed by run id and the two runs are different)
+    printf '{"workflow_runs":[{"id":%s,"conclusion":"%s"}]}\n' "$((500000 + i))" "$conc" > "$fx/push-$sha.json"
+    # an escape fixture's push run is red on a GATED job — the classifier must find it
+    if [ "$esc" = "$pr" ]; then
+      jq -n '{jobs:[{name:"test-scripts (3/7)",conclusion:"failure",created_at:"2026-10-02T00:00:00Z",started_at:"2026-10-02T00:00:00Z",completed_at:"2026-10-02T00:30:00Z"}]}' > "$fx/jobs-$((500000 + i)).json"
+    fi
     # the run's artifact listing: an empty one for tsv-mode none (evidence_absent), else <arts_n> exactly-named
     # suite-timings-(scripts|scripts-heavy)-N artifacts (the strict selector the probe shares with watch-shard-balance)
     local aj="" an anm
@@ -120,8 +139,9 @@ expect() {
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
-build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~49.3 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
-build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
+build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~61.1 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
+if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the jobs read is red-run-only"; else pass "a green push run issues no jobs read (the need_min listing bound holds)"; fi
+build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.19 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
 build_fx "$TMP/s4" 5 40;            expect "NOT YET: 5 qualifying runs (< 20)" 2 "NOT YET" "$TMP/s4"
 build_fx "$TMP/s5" 25 40; printf '{"merged_at":null}\n' > "$TMP/s5/pr-9324.json"
@@ -132,17 +152,100 @@ build_fx "$TMP/s7" 25 40 0 10;      expect "machinery-touching PRs are excluded 
 build_fx "$TMP/s8" 25 40 10;        expect "bot PRs are excluded (25 - 10 = 15 < 20)" 2 "NOT YET: 15" "$TMP/s8"
 build_fx "$TMP/s9" 25 40;           expect "an unset GH_TOKEN is CANNOT ESTABLISH, never a pass" 3 "GH_TOKEN is not set" "$TMP/s9" GH_TOKEN=
 # --- boundaries and the qualification rules a reviewer found unpinned -----------------------------------
-build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~49 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
-build_fx "$TMP/b2" 20 56.1 0 0 "" lite; expect "realized saving under the bar FAILs honestly (0.24 suite-min, never a baseline pass)" 1 "FAIL: mean realized saving" "$TMP/b2"
+build_fx "$TMP/b1" 20 56;           expect "realized saving at the full gated skip set (~61 suite-min) meets the 20-min bar" 0 "PASS" "$TMP/b1"
+build_fx "$TMP/b2" 20 56.1 0 0 "" lite; expect "realized saving under the bar FAILs honestly (0.19 suite-min, never a baseline pass)" 1 "FAIL: mean realized saving" "$TMP/b2"
 build_fx "$TMP/b3" 19 40;           expect "boundary: 19 qualifying runs is NOT YET" 2 "NOT YET: 19" "$TMP/b3"
 build_fx "$TMP/b4" 25 2; sed -i 's/"conclusion":"success"/"conclusion":"failure"/g' "$TMP/b4/runs.json"
                                     expect "red runs are excluded: 25 cheap FAILED runs must not read as a saving" 2 "NOT YET: 0" "$TMP/b4"
 build_fx "$TMP/b5" 25 40; for i in $(seq 1 25); do sed -i 's/test-scripts (1\/7)/lint/' "$TMP/b5/jobs-$i.json"; done
                                     expect "a run with no test-scripts job measures nothing and is excluded" 2 "NOT YET: 0" "$TMP/b5"
 build_fx "$TMP/b6" 25 40; rm -f "$TMP/b6/push-sha101.json"; printf '{"workflow_runs":[]}\n' > "$TMP/b6/push-sha101.json"
-                                    expect "an absent push run is NOT YET, never 'no escape'" 2 "no completed push run" "$TMP/b6"
-build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/b6/mg-sha101.json"   # absent push AND absent merge_group: genuinely pending
+                                    expect "an absent push run is NOT YET, never 'no escape'" 2 "no completed push or merge_group run" "$TMP/b6"
+build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"id":500777,"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
+printf '{"jobs":[{"name":"test-scripts (5/7)","conclusion":"timed_out"}]}' > "$TMP/b7/jobs-500777.json"
                                     expect "a timed_out push run on a green PR is an escape" 1 "ESCAPE: PR 102" "$TMP/b7"
+build_fx "$TMP/b7b" 25 40; printf '{"workflow_runs":[{"id":500778,"conclusion":"action_required"}]}\n' > "$TMP/b7b/push-sha103.json"
+printf '{"jobs":[{"name":"test-scripts (1/7)","conclusion":"failure"}]}' > "$TMP/b7b/jobs-500778.json"
+                                    expect "an action_required push run on a green PR is an escape (the conclusive list's membership is pinned)" 1 "ESCAPE: PR 103" "$TMP/b7b"
+# --- Guard Contract rows 2-5 (#9323, Arm A ruling 2026-11-08): a red push run is an ADR-262 R1
+# escape only when >=1 failed job is a gated test-scripts* leg; a run red solely on unrelated
+# infra jobs is reported, never counted; a jobs read that cannot be established is pending, never ok.
+build_fx "$TMP/e2" 25 40 0 0 112; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"tenant-integration","conclusion":"failure"}]}' > "$TMP/e2/jobs-500012.json"
+                                    expect "a red push run on unrelated jobs only is reported, never an escape" 0 "never an escape" "$TMP/e2"
+build_fx "$TMP/e3" 25 40 0 0 115; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (2/7)","conclusion":"failure"}]}' > "$TMP/e3/jobs-500015.json"
+                                    expect "a gated test-scripts failure beside unrelated reds is still an escape" 1 "ESCAPE: PR 115" "$TMP/e3"
+build_fx "$TMP/e4" 25 40 0 0 113; rm -f "$TMP/e4/jobs-500013.json"
+                                    expect "a red push run whose jobs read fails is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e4"
+build_fx "$TMP/e5" 25 40 0 0 114; printf '{"jobs":[]}' > "$TMP/e5/jobs-500014.json"
+                                    expect "a red push run with an empty jobs read is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e5"
+build_fx "$TMP/e6" 25 40 0 0 116; printf '{"workflow_runs":[{"conclusion":"failure"}]}\n' > "$TMP/e6/push-sha116.json"
+                                    expect "a red push run with no run id is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e6"
+build_fx "$TMP/e7" 25 40 0 0 117; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":"cancelled"}]}' > "$TMP/e7/jobs-500017.json"
+                                    expect "a red push run whose gated job is cancelled (inconclusive) is NOT YET, never ok and never an escape" 2 "no completed push or merge_group run" "$TMP/e7"
+out="$(env FX="$TMP/e7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"cancelled/inconclusive"* ]]; then pass "the inconclusive-gated pending row echoes its detail"; else fail "inconclusive-gated pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+build_fx "$TMP/e8" 25 40 0 0 118; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":null}]}' > "$TMP/e8/jobs-500018.json"
+                                    expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e8"
+# --- Guard Contract: merge_group fallback (#12478, Arm A ruling 2026-11-09) --------------------------------
+# A merged qualifying PR whose merge commit carries no conclusive `push` run is classified by the
+# `merge_group` ci.yml run on that commit through the SAME classifier — a queue-merged PR's merge
+# commit never gets a push run, so push-only evidence pends forever (the shipped defect). The
+# `push-*.json` overrides below write the empty list (absent run), never a deleted file (transport
+# failure) — matching the b6 idiom.
+build_fx "$TMP/mg1" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg1/push-sha101.json"
+printf '{"workflow_runs":[{"id":600101,"conclusion":"success"}]}\n' > "$TMP/mg1/mg-sha101.json"
+expect "a queue-merged PR with a green merge_group run is ok — verified via the mg run, counted on the note line" 0 "verified via merge_group" "$TMP/mg1"
+rm -f "$TMP/mg1/requests.log"   # single-run log for the read-count assertion (expect already ran one sweep)
+out="$(env FX="$TMP/mg1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) verified via merge_group run(s)"* ]]; then
+  pass "the via_mg note names the count and the evidence source"
+else fail "via_mg note line: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if [ "$(grep -c 'event=merge_group.*head_sha=sha101' "$TMP/mg1/requests.log")" = "1" ] && [ "$(grep -c 'event=merge_group' "$TMP/mg1/requests.log")" = "1" ]; then
+  pass "an absent-push merged PR issues exactly one merge_group read (sha-scoped and sweep-total)"
+else fail "mg read count for the absent-push PR: $(grep -c 'event=merge_group' "$TMP/mg1/requests.log") total mg reads"; fi
+if grep -q 'event=merge_group' "$TMP/s1/requests.log"; then
+  fail "a conclusive push arm issued a merge_group read — the fallback is inconclusive-only"
+else pass "conclusive push runs issue no merge_group read (the +1 read is inconclusive-arm only)"; fi
+build_fx "$TMP/mg2" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg2/push-sha103.json"
+printf '{"workflow_runs":[{"id":600103,"conclusion":"failure"}]}\n' > "$TMP/mg2/mg-sha103.json"
+printf '{"jobs":[{"name":"test-scripts (6/7)","conclusion":"failure"}]}' > "$TMP/mg2/jobs-600103.json"
+expect "a queue-merged PR whose mg run is red on a gated test-scripts* leg is an escape" 1 "merge-commit merge_group run" "$TMP/mg2"
+build_fx "$TMP/mg3" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg3/push-sha104.json"
+printf '{"workflow_runs":[{"id":600104,"conclusion":"failure"}]}\n' > "$TMP/mg3/mg-sha104.json"
+printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"tenant-integration","conclusion":"failure"}]}' > "$TMP/mg3/jobs-600104.json"
+expect "a queue-merged PR whose mg run is red on non-gated jobs only is unrelated, never an escape" 0 "never an escape" "$TMP/mg3"
+build_fx "$TMP/mg4" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg4/push-sha105.json"
+# no mg-sha105.json — a MISSING mg fixture is a transport failure (fake gh exits 1), not an empty
+# list: the fail row is CANNOT ESTABLISH, never folded into pending (the transport-vs-absent
+# distinction the suite already enforces at b6/t1; absent-both pending is pinned at b6 + d3).
+expect "absent push AND a failed merge_group read is CANNOT ESTABLISH, never pending" 3 "merge_group run" "$TMP/mg4"
+build_fx "$TMP/mg5" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg5/push-sha106.json"
+printf '{"workflow_runs":[{"id":600106,"conclusion":"failure"}]}\n' > "$TMP/mg5/mg-sha106.json"
+# no jobs-600106.json — the jobs read fails; unreadable red evidence is pending, never ok
+expect "a red merge_group run whose jobs read fails is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/mg5"
+out="$(env FX="$TMP/mg5" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"jobs read of red merge_group"* ]]; then pass "the mg jobs-read pending row echoes its event and detail"; else fail "mg5 pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+build_fx "$TMP/mg6" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg6/push-sha107.json"
+printf '{"workflow_runs":[{"id":600107,"conclusion":null}]}\n' > "$TMP/mg6/mg-sha107.json"
+expect "an in-flight merge_group run (null conclusion) is NOT YET, never 'no escape'" 2 "no completed push or merge_group run" "$TMP/mg6"
+build_fx "$TMP/mg7" 25 40
+printf '{"workflow_runs":[]}\n' > "$TMP/mg7/push-sha108.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/mg7/push-sha109.json"
+printf '{"workflow_runs":[{"id":600108,"conclusion":"success"}]}\n' > "$TMP/mg7/mg-sha108.json"
+printf '{"workflow_runs":[{"id":600109,"conclusion":"failure"}]}\n' > "$TMP/mg7/mg-sha109.json"
+printf '{"jobs":[{"name":"test-scripts (2/7)","conclusion":"failure"}]}' > "$TMP/mg7/jobs-600109.json"
+expect "two queue-merged PRs, first mg-green second mg-red-gated: the escape still fires on the second" 1 "ESCAPE: PR 109" "$TMP/mg7"
+out="$(env FX="$TMP/mg7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 1 && "$out" == *"verified via merge_group"* ]]; then
+  pass "the green mg member counts via_mg beside the escaping second member"
+else fail "mg7 via_mg beside escape: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/b8" 25 40; bash -c 'FX="'"$TMP/b8"'" PATH="'"$TMP/bin"':$PATH" GH_TOKEN=x bash "'"$PROBE"'"' >/dev/null 2>&1
 if grep -q 'created=%3E2026-10-01T00:00:00Z' "$TMP/b8/requests.log" && grep -q 'status=completed' "$TMP/b8/requests.log" && grep -q 'event=pull_request' "$TMP/b8/requests.log"; then
   pass "the runs query is windowed after the merge time, completed and pull_request-only"
@@ -227,11 +330,23 @@ build_fx "$TMP/d1" 20 40
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"closed"}\n' > "$TMP/d1/pr-105.json"
 expect "a closed-unmerged qualifying PR drops out of the escape check" 0 "closed unmerged" "$TMP/d1"
 build_fx "$TMP/d2" 20 40
-# the twin state that must NOT drop: an OPEN qualifying PR — its merge_commit_sha is the test merge, no
-# push run can exist for it yet, so it pends (it may merge) rather than disappearing from the arm.
+# the twin state that must NOT drop and (#12360) must NOT pend either: an OPEN qualifying PR — its
+# merge_commit_sha is the test merge and no push run can exist for it, but that absence is EXPECTED
+# for an unmerged PR, not missing evidence. It lands in the `open` bucket mirroring `dropped`: a
+# note line, pending==0, the verdict stays reachable — and it costs ZERO extra reads (state rides
+# the same pulls/N meta read), so no push-run request may be issued for it.
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d2/pr-105.json"
-printf '{"workflow_runs":[]}\n' > "$TMP/d2/push-tms105.json"
-expect "an open qualifying PR still pends on its future merge-commit push run" 2 "no completed push run" "$TMP/d2"
+expect "an open qualifying PR lands in the open bucket (note line, pending==0) and the sweep still PASSes" 0 "qualifying PR(s) still open" "$TMP/d2"
+out="$(env FX="$TMP/d2" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) still open"* && "$out" != *"no completed push or merge_group run"* ]]; then
+  pass "the open bucket removes the PR from pending entirely (no NOT YET line for open PRs)"
+else fail "open-PR re-scope: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if grep -q 'head_sha=tms105' "$TMP/d2/requests.log"; then
+  fail "an open PR must not issue a push-run read — its merge_commit_sha is a test merge"
+else pass "an open PR issues no push-run read (state rides the existing pulls/N meta read)"; fi
+if grep -q 'event=merge_group' "$TMP/d2/requests.log"; then
+  fail "an open PR must not issue a merge_group read either — its merge_commit_sha is a test merge"
+else pass "an open PR issues no merge_group read (the open bucket's zero-extra-reads contract survives)"; fi
 if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must not trigger a second-page fetch"; else pass "a short page 1 (<100 runs) does not paginate"; fi
 # --- realized-skip evidence arms (the re-instrument) ----------------------------------------------------
 build_fx "$TMP/q1" 25 40; printf '{"resources":{"core":{"remaining":5}}}' > "$TMP/q1/rate_limit.json"
@@ -242,20 +357,20 @@ build_fx "$TMP/e1" 25 40 0 0 "" none; expect "missing suite-timings artifact evi
 build_fx "$TMP/m11" 25 40 0 0 "" full 11
                                     expect "11 suite-timings artifacts per run (the real shape, 12 reads/run): 21 fully evidenced under the 260 cap — the old 60 cap starved this to ~5" 0 "qualifying_runs=25 evidenced_runs=21" "$TMP/m11"
 out="$(env FX="$TMP/m11" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 0 && "$out" == *"realized_saving_min=49.3"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
-  pass "11-artifact fixture: cross-artifact dedupe holds (49.3 suite-min, not ~540) and the unpriced gated label is named on the status line"
+if [[ "$rc" == 0 && "$out" == *"realized_saving_min=61.1"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
+  pass "11-artifact fixture: cross-artifact dedupe holds (61.1 suite-min, not ~670) and the unpriced gated label is named on the status line"
 else fail "multi-artifact dedupe/unpriced: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/dx" 25 40 0 0 "" full 2
 mkdir -p "$TMP/dx/zd1" "$TMP/dx/zd2"
 # one gated label priced twice in a run — once inside a single artifact and once across two artifacts: dedupe must
-# count it once either way (b+b+c / c+d unions to b+c+d = 27.2 suite-min; without dedupe it reads 35.8 or 44.2)
+# count it once either way (b+b+c / c+d unions to b+c+d = 32.1 suite-min; without dedupe it reads 42.9 or 52.6)
 printf 'scripts/test-all-affected-b\t0\tskip=relevance\nscripts/test-all-affected-b\t0\tskip=relevance\nscripts/test-all-affected-c\t0\tskip=relevance\n' > "$TMP/dx/zd1/suite-timings.tsv"
 printf 'scripts/test-all-affected-c\t0\tskip=relevance\nscripts/test-all-affected-d\t0\tskip=relevance\n' > "$TMP/dx/zd2/suite-timings.tsv"
 for i in $(seq 1 25); do
   ( cd "$TMP/dx/zd1" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 1)).zip" suite-timings.tsv )
   ( cd "$TMP/dx/zd2" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 2)).zip" suite-timings.tsv )
 done
-expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=27.2" "$TMP/dx"
+expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=32.1" "$TMP/dx"
 build_fx "$TMP/t1" 25 40; rm -f "$TMP/t1/arts-1.json"
                                     expect "a failed artifact LISTING is CANNOT ESTABLISH, never folded into evidence_absent" 3 "CANNOT ESTABLISH" "$TMP/t1"
 build_fx "$TMP/n1" 25 40; for i in $(seq 1 25); do printf '{"artifacts":[{"id":%s,"name":"suite-timings-ts"}]}' "$((5000 + i))" > "$TMP/n1/arts-$i.json"; done
@@ -269,12 +384,63 @@ build_fx "$TMP/w1" 25 40; : > "$TMP/w1/SLOW"
 expect "the wall deadline cuts mid-sweep (1 s per call, 10 s budget): NOT YET naming the deadline" 2 "wall deadline" "$TMP/w1" PBG_BUDGET_S=10 SLOW_S=1
 out="$(env FX="$TMP/w1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_BUDGET_S=10 SLOW_S=1 bash "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 2 && "$out" != *"CANNOT ESTABLISH"* ]]; then pass "the deadline cut stays NOT YET, never CANNOT ESTABLISH"; else fail "deadline cut: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+# --- the PBG_UNBOUNDED operator seam (#9323): the local verdict run replaces the wall deadline ------
+build_fx "$TMP/u0" 5 40; : > "$TMP/u0/SLOW"
+expect "the budgeted path still binds: PBG_BUDGET_S=1 + slow fixture (no PBG_UNBOUNDED) is a wall-deadline NOT YET" 2 "wall deadline" "$TMP/u0" PBG_BUDGET_S=1 SLOW_S=1
+# PBG_BUDGET_S=1 pins the distinguishing power: a seam that leaves END at the
+# budgeted deadline (or never reads the variable) yields "wall deadline" on
+# the first slow read — the negative assertion below fails it.
+build_fx "$TMP/u1" 5 40; : > "$TMP/u1/SLOW"
+out="$(env FX="$TMP/u1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_UNBOUNDED=1 PBG_BUDGET_S=1 SLOW_S=1 bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$out" != *"wall deadline ("* && "$out" == *"operator-local"* ]]; then pass "PBG_UNBOUNDED=1 on the slow fixture: deadline replaced, override marker printed"; else fail "unbounded still cut on the deadline (or no marker): $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if [[ "$rc" =~ ^[0-2]$ && -n "$out" ]]; then pass "PBG_UNBOUNDED=1 runs the slow sweep to a verdict-path exit (rc=$rc)"; else fail "unbounded exit off the verdict contract: rc=$rc"; fi
+build_fx "$TMP/u2" 5 40
+expect "PBG_UNBOUNDED=1 bypasses budget validation: PBG_BUDGET_S=301 proceeds to a verdict" 2 "NOT YET: 5" "$TMP/u2" PBG_UNBOUNDED=1 PBG_BUDGET_S=301
+expect "the sweeper contract still guards: PBG_BUDGET_S=301 without PBG_UNBOUNDED is CANNOT ESTABLISH" 3 "PBG_BUDGET_S is not an integer" "$TMP/u2" PBG_UNBOUNDED= PBG_BUDGET_S=301
+expect "the seam refuses under the sweeper channel: SOLEUR_FT_EARLIEST set-but-empty still reads sweeper-side" 3 "operator-local only" "$TMP/u2" PBG_UNBOUNDED=1 SOLEUR_FT_EARLIEST=
 if grep -q 'rate_limit' "$TMP/s1/requests.log"; then pass "the quota preflight reads rate_limit"; else fail "no rate_limit preflight issued"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
+# --- #12360: open-bucket composition + the bounded-parallel read phases --------------------------------
+build_fx "$TMP/d3" 20 40
+# an open qualifying PR beside a MERGED one whose push run is absent: the open bucket must not mask
+# real pending — the merged PR still NOT YETs while the open one only notes.
+printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d3/pr-105.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/d3/push-sha106.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/d3/mg-sha106.json"   # absent push AND absent merge_group: still pending
+expect "open bucket does not mask pending: a merged PR with an absent push run still NOT YETs beside an open PR" 2 "no completed push or merge_group run" "$TMP/d3"
+out="$(env FX="$TMP/d3" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"qualifying PR(s) still open"* && "$out" == *"no completed push or merge_group run"* ]]; then
+  pass "the open note prints beside a real pending NOT YET (open excluded, merged still pends)"
+else fail "d3 open+pending mix: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+# parallel-mode wall row: the SLOW fixture (1 s per fake-gh call) is ~123 serial reads — serial cannot
+# fit 60 s; the bounded pool must converge to a real verdict inside the same budget, and the forced-
+# serial control (PBG_JOBS=1) must still die on the deadline as NOT YET.
+build_fx "$TMP/pw1" 20 40; : > "$TMP/pw1/SLOW"
+expect "parallel reads converge under the budget where serial cannot: SLOW fixture PASSes inside PBG_BUDGET_S=60" 0 "PASS" "$TMP/pw1" PBG_BUDGET_S=60 SLOW_S=1
+expect "the same fixture forced serial (PBG_JOBS=1) still hits the wall deadline: NOT YET, never a partial verdict" 2 "wall deadline" "$TMP/pw1" PBG_BUDGET_S=60 SLOW_S=1 PBG_JOBS=1
+expect "forced serial (PBG_JOBS=1) aggregates identically to the pool: same qualifying/evidenced counts" 0 "qualifying_runs=25 evidenced_runs=25" "$TMP/s1" PBG_JOBS=1
+# a worker killed mid-read leaves no result file: the parent must CANNOT ESTABLISH, never silently
+# treat the unit as skipped/absent evidence.
+build_fx "$TMP/mr1" 20 40; : > "$TMP/mr1/KILL-JOBS"
+if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+  expect "a worker dying without writing its result row is CANNOT ESTABLISH, never a silent skip" 3 "produced no result" "$TMP/mr1"
+else
+  pass "worker-kill row not applicable on this bash: the pool needs bash>=5.1 (wait -n -p); serial path runs the worker in-process"
+fi
+# --- PBG_JOBS knob: integer validation (same refuse shape as PBG_BUDGET_S) + the 1-16 clamp -----------
+expect "PBG_JOBS=abc is not an integer: CANNOT ESTABLISH" 3 "PBG_JOBS is not an integer" "$TMP/s4" PBG_JOBS=abc
+expect "PBG_JOBS=99 clamps to the 16-worker ceiling and the sweep still converges" 0 "16-worker ceiling" "$TMP/s1" PBG_JOBS=99
+expect "PBG_JOBS=0 clamps to the serial floor and still converges" 0 "PASS" "$TMP/s1" PBG_JOBS=0
+# 08/09 are VALID per the ^[0-9]+$ accept but octal-ambiguous in (( )): the normalize step must make them width 8, never a silent serial degrade
+expect "PBG_JOBS=08 normalizes to width 8 (no octal trap) and converges" 0 "PASS" "$TMP/s1" PBG_JOBS=08
+out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_JOBS=08 bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" != *"value too great for base"* && "$out" != *"serial fallback"* ]]; then
+  pass "PBG_JOBS=08 emits no octal error and no serial-fallback banner (it runs the pool at width 8)"
+else fail "PBG_JOBS=08 octal normalization: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
-PBGS_MIN_ASSERTIONS=44
+PBGS_MIN_ASSERTIONS=50
 if (( asserted < PBGS_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PBGS_MIN_ASSERTIONS=%d\n' "$asserted" "$PBGS_MIN_ASSERTIONS" >&2
   exit 1

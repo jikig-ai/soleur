@@ -25,7 +25,7 @@ Issue: #11772 (closes). Deferral tracker: #11783 (upstream-fix adoption watch).
 
 ## Phase 4: Guard rows + test arms
 
-- [x] 4.1 `scripts/assert-dependabot-drain.py`: add `"next"` to `WATCHED_PACKAGES`; add `("web-platform", "next", 16, "16.4.1")` to REQUIRED beside the 2026-10-31 batch comment (update that comment's "lands in its own PR" line); add `("next", 16): "16.4.1"` to `FLOOR_ANCHORS` citing GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr (CRITICAL) + GHSA-p3m5-59mp-jv5r (HIGH); `MIN_ROWS` 35→36; `MIN_RESOLVED` 35→36.
+- [x] 4.1 `scripts/assert-dependabot-drain.py`: add `"next"` to `WATCHED_PACKAGES`; add `("web-platform", "next", 16, "16.4.1")` to REQUIRED beside the 2026-10-31 batch comment (update that comment's "lands in its own PR" line); add `("next", 16): "16.4.1"` to `FLOOR_ANCHORS` citing the two CRITICAL and one HIGH `next` advisories of that batch; `MIN_ROWS` 35→36; `MIN_RESOLVED` 35→36.
 - [x] 4.2 `scripts/assert-dependabot-drain.test.sh`: add `"next:16:16.4.1"` to the FLOOR_ANCHORS spec-grep loop; `MIN_ASSERTIONS` 33→34.
 - [x] 4.3 Run `bash scripts/assert-dependabot-drain.test.sh` (34 assertions) and `python3 scripts/assert-dependabot-drain.py` live (36 resolved rows on the bumped lockfile).
 

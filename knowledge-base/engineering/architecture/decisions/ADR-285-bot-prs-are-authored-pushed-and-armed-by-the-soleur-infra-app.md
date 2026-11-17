@@ -110,6 +110,12 @@ it expires in an hour, like the pin-bump caller's. The three-job split exists to
 - `scripts/audit-bot-codeql-coverage.sh` filtered `--author app/github-actions` and would have stopped sampling new digest
   PRs; it now samples both `app/github-actions` and the `ci/` branches of `app/soleur-infra`, with a test row.
 - Revisit trigger: if a lower-grant App for digest-class PRs is created, this caller moves to it.
+- 2026-11-07 — first `WM_COMPOSITE_PIN` re-pin (#12276): the run body gained a `waiver-discipline`
+  earned-green block (added `gitleaks:allow` lines must carry `issue:#NNN <reason>`), replacing an
+  unreachability argument that leaned on the generator-emitted digest's output format. Pin moved
+  `6162bd69…f25e` → `5f736544…40fe`; the change itself was deliberate and is logged in the composite
+  CHANGELOG. The pin mechanism worked as designed — CI refused the drifted composite until the
+  re-pin landed in the same PR.
 
 ## Verification
 
@@ -123,3 +129,11 @@ can fire on a healthy slow build. A run that prints "No changes to commit" is no
 a human pushed. If the runs are still held although the push, the PR and the auto-merge all ran as the App, this record's
 premise is wrong and it is reopened rather than patched. Recovery on a same-day re-run: the composite stops with the delete
 command for the leftover branch; otherwise the next scheduled run takes a new date-suffixed branch.
+
+- 2026-11-08 — second `WM_COMPOSITE_PIN` re-pin (Ref #10479): the gitleaks download `curl` gained `--fail --retry 5
+  --retry-all-errors` (the pinned installs elsewhere got the same flags; `sha256sum -c` unchanged). Pin moved
+  `5f736544…40fe` → `5f6a943e…71c1`; the change is logged in the composite CHANGELOG. CI refused the drifted composite
+  until the re-pin landed in the same PR, as designed.
+- 2026-11-10 — third `WM_COMPOSITE_PIN` re-pin (PR #12561, #12348): the run body gained a
+  `python3 -I scripts/lint-cve-safe-status.py --paths` earned-green block over the staged paths (ADR-322). Pin moved
+  `5f6a943e…71c1` → `8d799113…3758`; the change is logged in the composite CHANGELOG.

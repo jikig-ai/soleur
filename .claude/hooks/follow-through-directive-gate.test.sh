@@ -65,8 +65,7 @@ run() {
   TOTAL=$((TOTAL + 1))
   _case="$1"
   local out rc
-  out=$(printf '%s' "$input" | "$HOOK" 2>&1)
-  rc=$?
+  if out=$(printf '%s' "$input" | "$HOOK" 2>&1); then rc=0; else rc=$?; fi
   printf '[T%d] %s — rc=%d\n' "$TOTAL" "$label" "$rc"
   if [[ -n "$out" ]]; then
     printf '       output: %s\n' "$out" | head -c 300

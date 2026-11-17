@@ -138,7 +138,9 @@
 # reported a clean "1 to add, 0 to change, 0 to destroy" throughout.
 #
 # Both halves of the fix are now in this file:
-#   1. the rule is reproduced verbatim as the FIRST rules block below, and
+#   1. the rule is represented as the FIRST rules block below (reproduced
+#      verbatim at adoption; made `strict` on app.soleur.ai only by the
+#      2026-11-13 origin-TLS cleanup, ADR-321 item 13, #10479), and
 #   2. the `import` block adopts the existing ruleset into state, so Terraform
 #      UPDATES the entrypoint rather than creating it.
 # Neither half is sufficient alone: (1) without (2) still creates and clobbers;
@@ -163,14 +165,16 @@
 #
 # Once applied, this resource is in state, so `git revert` of the PR removes the
 # resource AND the import block and Terraform plans a DESTROY of the entrypoint
-# — deleting BOTH rules and dropping app.soleur.ai to the zone SSL mode (live
-# zone setting is `strict`). That is strictly worse than the bug this file
+# — deleting ALL rules (the apex `full` rule included -> the apex falls to the
+# zone default `strict`: HTTP 526 while the Pages origin cert is still invalid)
+# and dropping app.soleur.ai to the zone SSL mode (live zone setting is
+# `strict`). That is strictly worse than the bug this file
 # fixes, and the destroy-guard makes it look survivable: a full resource delete
 # increments `resource_deletes`, so the gate prints "Add [ack-destroy] to
 # acknowledge" — inviting exactly the bypass, under outage pressure, that
 # completes the outage. Recovery from a bad apply is ROLL-FORWARD ONLY: fix the
 # `rules` blocks and re-apply. If the entrypoint is ever emptied, the adopted
-# rule is reproduced verbatim below and can be PUT back through the same
+# rule is written out in full below and can be PUT back through the same
 # `zones/$ZONE/rulesets/phases/http_config_settings/entrypoint` endpoint the
 # ADR-130 probe set already curls — no dashboard needed.
 #
@@ -251,31 +255,42 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   kind        = "zone"
   phase       = "http_config_settings"
 
-  # ── ADOPTED RULE — pre-existing, NOT part of this change ───────────────────
+  # ── ADOPTED RULE — strict SSL for app.soleur.ai (ADR-321 item 13, #10479) ──
   #
-  # Created in the Cloudflare dashboard on 2026-03-17, never represented in
-  # Terraform. It is reproduced here verbatim because a `kind = "zone"` ruleset
-  # owns its phase entrypoint as a whole-list replacement: omitting it does not
-  # leave it alone, it DELETES it, dropping app.soleur.ai to the zone-level SSL
-  # mode. test/seo-config-rules.test.ts pins this block for exactly that reason
-  # — the regression it guards is a future edit quietly dropping it.
+  # HISTORY. Created in the Cloudflare dashboard on 2026-03-17 as "Flexible SSL
+  # for web platform" (`flexible` on app.soleur.ai + lb-staging.soleur.ai),
+  # never represented in Terraform until it was adopted from the dashboard on
+  # 2026-07-20 (PREREQUISITE 2 above). It must stay in this list because a
+  # `kind = "zone"` ruleset owns its phase entrypoint as a whole-list
+  # replacement: omitting it does not leave it alone, it DELETES it, dropping
+  # app.soleur.ai to the zone-level SSL mode.
   #
-  # Ordered first to match its live position. Order is not semantically
-  # load-bearing here (both rules are set_config over disjoint host sets), but
-  # matching live keeps the import diff empty.
-  # `ref` is pinned to the live rule's existing ref, not omitted. The v4 provider
-  # preserves rule IDs across a whole-list PUT by matching on `ref` — without it
-  # the original ref is lost on first apply and BOTH rules re-randomise their IDs
-  # on every future rule add/remove. Pinning it is what makes "reproduced
-  # verbatim" literally true and removes the `(known after apply)` churn.
+  # STRICT SINCE THE ORIGIN-TLS CLEANUP (2026-11-13). This change made it
+  # `strict` (Cloudflare validates the Origin CA certificate and the hostname
+  # on every request to the origin) and narrowed it to app.soleur.ai: the
+  # lb-staging host has no DNS record and the certificate does not name it. The
+  # same change deleted the ORIGIN-TLS canary and strict-flip rules and their
+  # two Doppler switches, so this rule is the ONLY one that sets `ssl` for the
+  # app host (Guard 1 in test/seo-config-rules.test.ts; `set_config` is
+  # non-terminating and the LAST match wins, so a later app-host ssl rule would
+  # override it whatever it says here).
+  #
+  # ROLLBACK: a forward PR, never `git revert`; see runbooks/
+  # origin-tls-strict-flip.md "Rollback" (incl. the legal and sdk_url coupling).
+  #
+  # Ordered first to match its live position. `ref` is pinned to the live
+  # rule's existing ref, not omitted, and is what the test selects it by. The
+  # v4 provider preserves rule IDs across a whole-list PUT by matching on `ref`
+  # — without it the original ref is lost on apply and every rule re-randomises
+  # its ID on every future rule add/remove.
   rules {
     action      = "set_config"
-    description = "Flexible SSL for web platform"
+    description = "Strict SSL for app.soleur.ai (ADR-321, #10479)"
     enabled     = true
-    expression  = "(http.host in {\"app.soleur.ai\" \"lb-staging.soleur.ai\"})"
+    expression  = "(http.host eq \"app.soleur.ai\")"
     ref         = "dcb85b75bc3c4f4aa2a8c13a080bf854"
     action_parameters {
-      ssl = "flexible"
+      ssl = "strict"
     }
   }
 
@@ -316,7 +331,7 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # WHY NOT THE ZONE TOGGLE. Flipping the zone-level SSL mode would drop EVERY
   # proxied host off strict at once. This rule is scoped to the same two
   # marketing hosts as the rule above; `app.soleur.ai` is untouched (it carries
-  # its own `flexible` rule, first block in this ruleset) and the zone default
+  # its own adopted rule, first block in this ruleset) and the zone default
   # stays `strict` for `deploy.`/`ssh.`/`registry.` and anything added later.
   #
   # WHY THIS IS AN ACCEPTABLE RISK HERE, AND WOULD NOT BE ELSEWHERE. The origin

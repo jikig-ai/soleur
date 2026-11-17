@@ -129,6 +129,7 @@ EXCLUDED|apps/web-platform/server/sandbox.ts|workspace path containment helper f
 EXCLUDED|apps/web-platform/server/support-directive.ts|support-persona skill allowlist, not in the probe wiring
 EXCLUDED|apps/web-platform/server/support-escalation.ts|support-persona denial helper, not in the probe wiring
 EXCLUDED|apps/web-platform/server/tool-path-checker.ts|file-tool path checks, not the Bash lane
+EXCLUDED|apps/web-platform/server/git-carrier-guard.ts|file-tool refusal of writes into .git paths (#9600), not the Bash lane; its own unit tests pin it
 EXCLUDED|apps/web-platform/server/tool-pattern-checker.ts|file-tool glob checks, not the Bash lane
 EXCLUDED|apps/web-platform/server/tool-tiers.ts|not a Bash-lane decider (assertAllowedToolsPreApprovalSafe blocks the Bash family independently); the sibling gated-tier probe dev-probe-approval-gate.ts is NOT scheduled anywhere (out of scope for #10111)
 EXCLUDED|apps/web-platform/server/approval/gate-flow.ts|durable-approval slice (ADR-309), flag-gated, separate from the destroy-ask lane

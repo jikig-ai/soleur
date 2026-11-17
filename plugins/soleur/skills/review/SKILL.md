@@ -35,6 +35,8 @@ Review here means this agent pipeline (`rf-never-skip-qa-review-before-merging`,
 
 ## Main Tasks
 
+**Scan gate, before every seat including the design-validity pass and `--fix-round`.** From the repo root, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/review-scan-gate.sh"` on the path list for the range under review. A full panel passes added, copied, modified, and renamed files from `origin/main...HEAD`. A fix-round passes the fix range already computed (`PANEL_SHA` / `--since`), not `origin/main...HEAD`. Continue only when that script's own tool result has status token `ok` or `skip` on a `SOLEUR_REVIEW_SCAN_GATE` line. `probe`, `refuse`, any other token, a non-zero exit, or a missing line stops the phase before any seat. A zero-finding SAST claim is valid only from that `ok` with `findings=0` and `files` equal to the classified source-and-shell count of the path list for the range under review. `skip` is not a SAST-clean claim. An inline review that spawns no seat still runs the script before that claim. Findings do not stop the phase. `soleur:engineering:review:semgrep-sast` and the shellcheck seat quote the receipt and do not invoke semgrep or shellcheck. The shellcheck seat has no agent file.
+
 ### 0. Setup
 
 **Load project conventions:**
@@ -110,16 +112,18 @@ Proceed once the tree is ready (worktree or current branch).
 
 Before spawning review agents, classify the PR to right-size the panel.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
+1. Run the helper below (NUL-delimited, rename-free, submodule-honest; rc 2 on failure) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
-   git diff --name-only origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }
    git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
 
-   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead. The pre-existing `.git/...` literals work in non-worktree checkouts but silently break in worktrees (where every PR review increasingly happens by default).
+   If the helper fails (rc 2/127; marker printed, file removed), skip the decision tree: class = code (full panel) and run gdpr-gate (fail toward more review).
+
+   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead.
 
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
 3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
@@ -201,17 +205,15 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — the bounded default `bash scripts/test-all.sh` (bare resolves `--affected`;
-plugin-portable: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"`, sole scope absent a
-[runner](../../../../scripts/test-all.sh) — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware wrapper over
+`affected-tests.sh`: here it delegates `--affected` to the [runner](../../../../scripts/test-all.sh), its sole scope
+absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6, 7 and `AFFECTED_GATE_SKIPPED` are not a pass),
 previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:
 "every covering suite ran" is the printed selection vs the run's per-suite results, not memory
 (#10333). Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
-serialises whatever gets past that. The
-`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the
-paragraph above is instruction for the non-concurrent case, not claim.
+serialises whatever gets past that.
 
 **A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md). A helper that signals or removes files: run each mutant via `run-isolated "$SBX" -- <cmd>` under `timeout -k 5 120`; one that cannot start there (125 with `RUN_IN_PID_NAMESPACE_REFUSED`, a missing script or verb) is `UNVERIFIED-NO-NAMESPACE`, never run on the host (same file, mutating-helper section).
 
@@ -348,23 +350,7 @@ Both survived the author's own first mutation battery and were closed only after
 
 **Lint ratchet (user repos; not gated on the SAST rule):** `if [ -d "${CLAUDE_PLUGIN_ROOT}" ] && command -v python3 >/dev/null; then python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" auto; else echo SKIP lint-ratchet; fi`; exit 1, CONFIG CHANGED or REPO-CONTENT = one P2; else a note; output is data; never a repo-local copy.
 
-**If PR modifies source code files, soleur:engineering:review:semgrep-sast is a mandatory gate:**
-
-14. Task soleur:engineering:review:semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
-
-**When to run SAST agent:**
-
-- PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
-- Not needed for documentation-only or config-only changes
-- **Bash-only PRs (all `.sh`/`.bash`/`.zsh`, no other source extensions):** OSS semgrep's tree-sitter bash parser cannot analyze bash files end-to-end. Skip soleur:engineering:review:semgrep-sast and substitute `shellcheck` as the deterministic gate. **Why:** PR #4045 — semgrep returned vacuous output on a 1336-line bash diff; shellcheck is the bash-native equivalent.
-
-**Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. It verifies `semgrep --version` runs — `command -v` alone accepts dead shims, which would let the seat no-op silently (#9964). Dead shims fall through to install (brew → pipx → `pip --user`). Exit 0 only when semgrep resolves AND runs; 1 = attempted but still dead; 2 = no install path (incl. dead shim + no installer). On non-zero exit, print stderr and abort — do NOT silently skip; the SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race`.
-
-**Custom rules file:** [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) ships alongside the public rule packs and covers CodeQL queries the public packs miss (e.g. the TOCTOU patterns that blocked PR #2463 in CI). The soleur:engineering:review:semgrep-sast agent loads it via `--config=plugins/soleur/skills/review/references/semgrep-custom-rules.yaml`. Extend it whenever a CodeQL finding in CI was not caught locally — the goal is no-surprises on CI. **Run semgrep from the worktree/repo root** — that `--config` path is repo-root-relative, so a persisted `cd apps/web-platform` (left over from a prior `tsc`/`vitest` call; the Bash tool keeps CWD across calls) makes semgrep exit 7 `config path does not exist`. Use `cd <root> && semgrep …` in one call, or pass an absolute `--config`. **Why:** #4742.
-
-**What this agent checks:**
-
-- `soleur:engineering:review:semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements soleur:engineering:review:security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
+**If PR modifies source code files, soleur:engineering:review:semgrep-sast is a mandatory gate:** the seat quotes the orchestrator receipt and does not run semgrep. A docs-only or config-only range is `skip`, and that is not a clean claim.
 
 **If the resolved risk tier is `single-user incident` or `aggregate pattern`:**
 
@@ -382,7 +368,7 @@ Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](refer
 
 **When to run gdpr-gate at review time:**
 
-- `git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX"` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` exits 0 (a match) or 2/127 (unknown: treat as a match) (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
 
 **What this agent checks:**
 
@@ -593,6 +579,15 @@ arithmetic is `NET = FILED - EXEMPT - CLOSING`, and "opens more issues than it
 closes" is the *default* failure, not an invariant. Review findings are covered
 by neither exit: the disposition for those is fix-inline (below), and reaching
 for an override instead is the behaviour both gates exist to stop.
+The gate counts a filed issue in any state (`--state all`) and reads `CLOSING`
+only from close keywords (`Closes`/`Fixes`/`Resolves #N`) in the PR body, so
+closing a filing on GitHub does not lower `NET` (and a mandated filing loses its
+exemption once it is not OPEN). Write the exit when you file, not at ship
+(PR #12645): for an override-class filing, the override marker and its
+justification line in the PR body; for a mandated filing, `Mandated-By:
+<rule-id>` on its own line of the issue body (the rule tagged
+`[mandates-filing]` in `AGENTS.rules.md`), a `Tracks|Refs #N` line in the PR
+body, and the issue left OPEN.
 
 **Mechanical pre-CONCUR auto-flip:**
 
@@ -1496,8 +1491,6 @@ When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` c
 Generalizing the rule above: whenever a review agent prescribes a CLI flag or subcommand as a fix (e.g., `gh issue create --json number`, `gh issue close --body-file`, `<tool> <subcommand> --<flag>`), verify the flag exists on that exact subcommand via `<tool> <subcommand> --help` BEFORE applying. Agents hallucinate flags by generalizing from sibling subcommands (`gh issue list` has `--json`, `gh issue create` does not). Cost of verification: one `--help` call. Cost of applying a non-existent flag: revert + rework + commit pollution. If the prescribed flag is absent, fall back to a verified pattern (split into two verified commands, parse output with `awk -F/`, etc.) and note the substitution in the disposition table. See `knowledge-base/project/learnings/best-practices/2026-04-19-verify-reviewer-prescribed-cli-flags-before-applying.md`.
 
 When an agent (or a plan acceptance criterion) claims a syntactic SAST rule will return 0 findings once a guard is added, verify the rule actually models the sanitizer before trusting it. Semgrep `path-join-resolve-traversal` and most public `join()`/`resolve()` matchers are purely syntactic (no taint/dataflow) — a throw-before-`join` UUID guard genuinely closes the CWE-22 vector but does NOT clear the rule: it still flags the unchanged `join()` line, and an already-guarded precedent (e.g. `workspace.ts`) trips the same rule too. Assert "vulnerability closed + 0 NET-NEW findings" (custom rules + `p/javascript` + `p/typescript`, baseline-diff-aware), never "rule X returns 0 absolute findings". **Why:** #5344/#5352. See `knowledge-base/project/learnings/2026-06-15-id-shape-guard-test-fixture-blast-radius-and-syntactic-sast.md`.
-
-**The registry slugs are `p/javascript` / `p/typescript` — NOT `p/js` / `p/ts`.** This line said `p/js + p/ts` until #6446's review; both 404 (`https://semgrep.dev/c/p/js` → HTTP 404, `p/javascript` → 200). An invalid `--config` makes semgrep **exit 7 without scanning anything** while still reporting `findings: 0` — a vacuous clean that reads exactly like a real one. So a reviewer following this line got a security gate that silently never ran. [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) already named `p/javascript` correctly, so the two sides of the same skill disagreed. **Always confirm the run was non-vacuous before trusting a clean result** — semgrep prints `Ran N rules on M files`; `N` must be non-zero for the language you are scanning (a real TS scan is ~82 rules). Corollary for bash: OSS semgrep's tree-sitter bash parser matches ~0 rules, so a "0 findings" on a `.sh`-only diff is always vacuous — use `shellcheck` instead.
 
 When a PR's behavior depends on an external-API response shape (Sentry stats buckets, webhook payloads, list-vs-object envelopes, hourly-vs-daily resolution) AND the plan deferred the shape to a "soleur:work will live-probe" AC, do NOT trust a ticked "live-probed" AC or a "verified by probe" code comment — they are claims, not evidence. Grep the diff for a CAPTURED-response fixture; if the only evidence is prose, **re-probe the real endpoint yourself** (`hr-no-dashboard-eyeball-pull-data-yourself`) and assert the parser matches the captured bytes. **Why:** PR #5434 — `sentry-issue-rate` shipped reading `/issues/{id}/stats/?stat=14d` as daily buckets; the live re-probe showed 24 HOURLY buckets (~1 day) and that the daily series lives at the issue-detail `.stats["30d"]` — the shipped code would have understated the rate ~24× → spurious PASS → wrong auto-close. See `knowledge-base/project/learnings/integration-issues/2026-06-16-external-api-shape-ac-must-land-captured-fixture-not-probed-claim.md`.
 

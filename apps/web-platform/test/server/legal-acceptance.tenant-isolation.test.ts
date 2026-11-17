@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import postgres from "postgres";
+import { UTC_ISO_RE, isUtcIsoTimestamp } from "@/server/legal-acceptance/service";
 
 // Behavioural proof of migration 184 against a REAL database (#12011 PR-B, ADR-319): every Guard 3 mutation row,
 // the server-issued intent that backs EVERY decision, the single-use email-code challenge behind a Yes, the write-once
@@ -256,6 +257,8 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
   for (const [col, kind, setClause, pre] of tamperCases) {
     test(`Guard 3 row 4: the checksum covers ${col} (a changed value reads as invalid, never accepted)`, async () => {
       await scenario(async (t, c) => {
+        // First statement: concurrent runs of the trigger-disabling tests serialise here instead of deadlocking on the lock upgrade.
+        await t`lock table public.legal_acceptance in share row exclusive mode`;
         if (kind === "yes") {
           await verifiedIntent(t, c.userA, c.sessionA);
           await record(t, web(c));
@@ -266,6 +269,10 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
         const before = await verifyFn(t, c.userA);
         expect(before).toMatchObject({ row_ok: true });
         expect(before.status).toBe(kind === "yes" ? "accepted" : "changes_requested");
+        // The real database renders decided_at in a form the endpoint's strict check (service.ts) accepts.
+        expect(typeof before.decided_at).toBe("string");
+        expect(before.decided_at, before.decided_at).toMatch(UTC_ISO_RE);
+        expect(isUtcIsoTimestamp(before.decided_at)).toBe(true);
         await t.unsafe("alter table public.legal_acceptance disable trigger legal_acceptance_guard");
         if (pre) await t.unsafe(pre);
         const upd = await t.unsafe(`update public.legal_acceptance set ${setClause} where founder_id = '${c.userA}' returning founder_id, key, text_hash`);
@@ -580,6 +587,322 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       await failsWith(t, /184 down refused/, () => t.unsafe(down));
       const [n] = await t`select count(*)::int n from public.legal_acceptance where founder_id = ${c.userA}`;
       expect(n.n).toBe(1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 185 (#12011 PR-D, ADR-319): the acknowledgement table and its two service-role RPCs (Guard 3).
+// ---------------------------------------------------------------------------------------------------------------
+const ackFn = (t: Txn, user: string, hash = H1, key = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.ack_legal_acceptance(${user}::uuid, ${key}::text, ${hash}::text) as r`;
+    return r.r;
+  });
+const ackState = (t: Txn, user: string, hash = H1, key = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.legal_acceptance_ack_state(${user}::uuid, ${key}::text, ${hash}::text) as r`;
+    return r.r;
+  });
+const ackRows = async (t: Txn) => (await t`select * from public.legal_acceptance_ack`) as any[];
+
+describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () => {
+  test("no decision row: ack answers not_found and writes nothing; ack_state answers none", async () => {
+    await scenario(async (t, c) => {
+      expect(await ackState(t, c.userA)).toEqual({ outcome: "none" });
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "not_found" });
+      expect(await ackRows(t)).toHaveLength(0);
+    });
+  });
+
+  test("a decision row starts unacked with a database-computed age; ack marks it once and is idempotent (first time kept)", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      const before = await ackState(t, c.userA);
+      expect(before).toMatchObject({ outcome: "row", acked: false });
+      expect(Number.isInteger(before.age_seconds)).toBe(true);
+      expect(before.age_seconds).toBeGreaterThanOrEqual(0);
+
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "acked" });
+      const first = (await ackRows(t))[0];
+      expect(await ackState(t, c.userA)).toMatchObject({ outcome: "row", acked: true });
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "acked" });
+      const after = await ackRows(t);
+      expect(after).toHaveLength(1);
+      expect(after[0].acked_at).toEqual(first.acked_at); // ON CONFLICT DO NOTHING keeps the first time
+    });
+  });
+
+  test("age is computed in the database, in whole seconds, from the decision row's own created_at (a row backdated 200 s reads 199..201)", async () => {
+    await scenario(async (t, c) => {
+      // First statement: concurrent runs of the trigger-disabling tests serialise here instead of deadlocking on the lock upgrade.
+      await t`lock table public.legal_acceptance in share row exclusive mode`;
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      // now() is frozen inside one transaction, so a row written here is 0 s old. The write-once guard refuses UPDATE for
+      // everyone (it is ENABLE ALWAYS, so session_replication_role does not bypass it), so the owner switches that one
+      // trigger off INSIDE this rolled-back transaction, backdates the row and never turns it back on: the rollback
+      // restores both the trigger and the row, and no row is persisted on the shared database.
+      await t`alter table public.legal_acceptance disable trigger legal_acceptance_guard`;
+      expect(await ackState(t, c.userA)).toMatchObject({ outcome: "row", age_seconds: 0 });
+      await t`update public.legal_acceptance set created_at = now() - interval '200 seconds' where founder_id = ${c.userA}`;
+      const s = await ackState(t, c.userA);
+      expect(s).toMatchObject({ outcome: "row", acked: false });
+      expect(Number.isInteger(s.age_seconds)).toBe(true);
+      expect(s.age_seconds).toBeGreaterThanOrEqual(199);
+      expect(s.age_seconds).toBeLessThanOrEqual(201);
+      // Floor, not round: 200.6 s old reads 200 (a rounding implementation would say 201).
+      await t`update public.legal_acceptance set created_at = now() - interval '200.6 seconds' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(200);
+      // Units and offset: an hour is 3600 (not 60 or 3600000), and a row stamped in the future floors at 0.
+      await t`update public.legal_acceptance set created_at = now() - interval '1 hour' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(3600);
+      await t`update public.legal_acceptance set created_at = now() + interval '5 minutes' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(0);
+    });
+  });
+
+  test("the ack carries the acceptance id and a time only, and is bound to the founder's own row (another founder's ack does not mark it)", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      expect(await ackFn(t, c.userB)).toEqual({ outcome: "not_found" });
+      expect(await ackState(t, c.userA)).toMatchObject({ acked: false });
+      await ackFn(t, c.userA);
+      const [acc] = await rows(t, c.userA);
+      const acks = await ackRows(t);
+      expect(Object.keys(acks[0]).sort()).toEqual(["acceptance_id", "acked_at"]);
+      expect(acks[0].acceptance_id).toBe(acc.id);
+      // A different text hash of the same founder and key is a different row: still unacked / absent.
+      expect(await ackState(t, c.userA, H2)).toEqual({ outcome: "none" });
+    });
+  });
+
+  test("Guard 3 row 8: neither function opens the write door of legal_acceptance, and the record stays write-once", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      await ackFn(t, c.userA);
+      await ackState(t, c.userA);
+      const [g] = await t`select current_setting('app.legal_acceptance_rpc', true) as v`;
+      expect(g.v ?? "").not.toBe("on");
+      await failsWith(t, /write-once/, () => t`update public.legal_acceptance set choice = 'decline' where founder_id = ${c.userA}`);
+    });
+  });
+
+  test("Guard 3 row 7: the ack table has no founder id, no foreign key, RLS on, and no api role can touch it", async () => {
+    await scenario(async (t, c) => {
+      const cols = await t`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'legal_acceptance_ack' order by ordinal_position`;
+      expect(cols.map((r: any) => r.column_name)).toEqual(["acceptance_id", "acked_at"]);
+      const [fk] = await t`select count(*)::int n from pg_constraint where conrelid = 'public.legal_acceptance_ack'::regclass and contype = 'f'`;
+      expect(fk.n).toBe(0);
+      const [rls] = await t`select relrowsecurity r from pg_class where oid = 'public.legal_acceptance_ack'::regclass`;
+      expect(rls.r).toBe(true);
+      for (const role of ["anon", "authenticated", "service_role"] as const) {
+        await failsWith(t, /permission denied/, () => as(t, role, role === "authenticated" ? { sub: c.userA } : null, () => t`select * from public.legal_acceptance_ack`));
+        await failsWith(t, /permission denied/, () => as(t, role, role === "authenticated" ? { sub: c.userA } : null, () => t`insert into public.legal_acceptance_ack (acceptance_id) values (${randomUUID()})`));
+      }
+    });
+  });
+
+  test("both functions refuse a user identity (42501), raise 22023 on a malformed key or hash, and EXECUTE is service_role only", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      for (const fn of ["ack_legal_acceptance", "legal_acceptance_ack_state"]) {
+        await failsWith(t, /42501|service role only/, () =>
+          as(t, "authenticated", { sub: c.userA }, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, KEY, H1])));
+        await failsWith(t, /permission denied/, () => as(t, "anon", null, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, KEY, H1])));
+        for (const [k, h] of [["Bad Key", H1], [KEY, "xyz"], [KEY, H1.toUpperCase()], ["", H1]] as const) {
+          await failsWith(t, /22023|invalid input/, () =>
+            as(t, "service_role", null, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, k, h])));
+        }
+        await failsWith(t, /22023|invalid input/, () =>
+          as(t, "service_role", null, () => t.unsafe(`select public.${fn}(null::uuid, $1::text, $2::text)`, [KEY, H1])));
+      }
+      expect(await ackRows(t)).toHaveLength(0);
+    });
+  });
+
+  test("AC6: the 185 down file refuses while an acknowledgement exists, and drops nothing", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      await ackFn(t, c.userA);
+      const down = readFileSync(path.join(__dirname, "../../supabase/migrations/185_legal_acceptance_ack.down.sql"), "utf8");
+      await failsWith(t, /185 down refused/, () => t.unsafe(down));
+      expect(await ackRows(t)).toHaveLength(1);
+    });
+  });
+
+  test("AC6: the 185 verify sentinel reports bad = 0 on the live catalog", async () => {
+    await scenario(async (t) => {
+      const verify = readFileSync(path.join(__dirname, "../../supabase/verify/185_legal_acceptance_ack.sql"), "utf8");
+      const out = (await t.unsafe(verify)) as any[];
+      expect(out.length).toBeGreaterThan(20);
+      expect(out.filter((r) => Number(r.bad) !== 0).map((r) => r.check_name)).toEqual([]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 186 (#12429, ADR-319 amendment 2026-11-08): the credential-free pre-flag aggregate (Guard 2).
+// ---------------------------------------------------------------------------------------------------------------
+const countsFn = (t: Txn, key: string = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.legal_acceptance_hash_counts(${key}::text) as r`;
+    return r.r;
+  });
+
+describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () => {
+  test("a key with no rows answers total 0 and an empty by_hash", async () => {
+    await scenario(async (t) => {
+      expect(await countsFn(t, "no-rows-for-this-key")).toEqual({ total: 0, by_hash: [] });
+    });
+  });
+
+  test("two founders on two hashes are both counted, ordered by hash, and the answer carries no per-row field", async () => {
+    await scenario(async (t, c) => {
+      const sessionB = randomUUID();
+      await verifiedIntent(t, c.userA, c.sessionA, { hash: H1 });
+      await record(t, web(c), { hash: H1 });
+      await verifiedIntent(t, c.userB, sessionB, { hash: H2 });
+      await record(t, web(c, c.userB, sessionB), { hash: H2 });
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 2,
+        by_hash: [
+          { text_hash: H1, count: 1 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      // Guard 2 row 4: nothing about who decided, what they decided, when, or the note.
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+      for (const r of out.by_hash) expect(Object.keys(r).sort()).toEqual(["count", "text_hash"]);
+      expect(JSON.stringify(out)).not.toMatch(new RegExp(`${c.userA}|${c.userB}|accept|decline|request_changes|requested_edit`));
+    });
+  });
+
+  // One fresh founder per decision row: the shape is what the product writes (a founder decides once per key and hash).
+  const decideAsNewFounder = async (t: Txn, hash: string) => {
+    const user = randomUUID();
+    const session = randomUUID();
+    await t`insert into auth.users (id, email) values (${user}, ${`n-${user}@example.test`})`;
+    await verifiedIntent(t, user, session, { hash });
+    await record(t, { sub: user, session_id: session }, { hash });
+  };
+
+  test("two rows under H1 and one under H2 are counted 2 and 1 (total 3), ordered by hash, with no per-row field", async () => {
+    await scenario(async (t) => {
+      await decideAsNewFounder(t, H2);
+      await decideAsNewFounder(t, H1);
+      await decideAsNewFounder(t, H1);
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 3,
+        by_hash: [
+          { text_hash: H1, count: 2 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+    });
+  });
+
+  // Set-based seeding for the cap case: the question there is how the counts function behaves over 21 distinct hashes, not how
+  // a decision is made (the cases above drive the product write path). Twenty-one product-path decisions are about 130 round
+  // trips to the dev database and exceeded the runner's 16 s default. The write-door setting is the one the product function
+  // sets around its own INSERT, and each row gets the consumed, confirmed intent the guard trigger demands (same user, key,
+  // hash, version, session; verified_at = reauth_at). The trigger still computes row_hash. now() is fixed inside the
+  // transaction, so verified_at and reauth_at match.
+  const seedRows = async (t: Txn, hashes: string[]) => {
+    const csv = hashes.join(",");
+    await t`insert into public.legal_reauth_event (id, user_id, key, text_hash, version, session_id, expires_at, verified_at, consumed_at)
+            select md5('e' || h)::uuid, md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'seed-session',
+                   now() + interval '30 minutes', now(), now()
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'on', true)`;
+    await t`insert into public.legal_acceptance (founder_id, key, text_hash, version, choice, reauth_method, reauth_at, session_id, event_id)
+            select md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'accept', 'email-code', now(), 'seed-session', md5('e' || h)::uuid
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'off', true)`;
+  };
+
+  test("exactly 20 distinct hashes are answered in full; a 21st is refused (54000) with a static message, never truncated", async () => {
+    await scenario(async (t) => {
+      const hashes = Array.from({ length: 21 }, (_, i) => (i + 1).toString(16).padStart(64, "0"));
+      await seedRows(t, hashes.slice(0, 20));
+      const full = await countsFn(t);
+      expect(full.total).toBe(20);
+      expect(full.by_hash.map((r: { text_hash: string }) => r.text_hash)).toEqual(hashes.slice(0, 20));
+      await seedRows(t, [hashes[20]]);
+      let err: { code?: string; message?: string } | null = null;
+      try {
+        await t.savepoint(async () => {
+          await countsFn(t);
+        });
+      } catch (e) {
+        err = e as { code?: string; message?: string };
+      }
+      expect(err?.code).toBe("54000");
+      expect(err?.message ?? "").toMatch(/too many distinct hashes/);
+      expect(err?.message ?? "").not.toContain(KEY);
+    });
+  }, 60_000);
+
+  test("a different key's rows are not counted", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      expect(await countsFn(t, "some-other-key")).toEqual({ total: 0, by_hash: [] });
+      expect((await countsFn(t)).total).toBe(1);
+    });
+  });
+
+  test("a user identity is refused (42501) and so are anon; EXECUTE is service_role only", async () => {
+    await scenario(async (t, c) => {
+      await failsWith(t, /42501|service role only|permission denied/, () =>
+        as(t, "authenticated", { sub: c.userA }, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+      await failsWith(t, /permission denied/, () => as(t, "anon", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+    });
+  });
+
+  test("a malformed key raises 22023 with a static message that does not echo the key", async () => {
+    await scenario(async (t) => {
+      for (const k of ["Bad Key", "", "UPPER", "a".repeat(64)]) {
+        let err: { code?: string; message?: string } | null = null;
+        try {
+          await t.savepoint(async () => {
+            await as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [k]));
+          });
+        } catch (e) {
+          err = e as { code?: string; message?: string };
+        }
+        expect(err?.code).toBe("22023");
+        if (k.length > 0) expect(err?.message ?? "").not.toContain(k);
+      }
+      await failsWith(t, /22023|invalid input/, () => as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts(null::text)")));
+    });
+  });
+
+  test("the 186 verify sentinel reports bad = 0 on the live catalog", async () => {
+    await scenario(async (t) => {
+      const verify = readFileSync(path.join(__dirname, "../../supabase/verify/186_legal_acceptance_hash_counts.sql"), "utf8");
+      const out = (await t.unsafe(verify)) as any[];
+      expect(out.length).toBeGreaterThanOrEqual(6);
+      expect(out.filter((r) => Number(r.bad) !== 0).map((r) => r.check_name)).toEqual([]);
+    });
+  });
+
+  test("the 186 down file drops only the function: the record table and the 185 objects remain", async () => {
+    await scenario(async (t) => {
+      const down = readFileSync(path.join(__dirname, "../../supabase/migrations/186_legal_acceptance_hash_counts.down.sql"), "utf8");
+      await t.unsafe(down);
+      const [f] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'legal_acceptance_hash_counts'`;
+      expect(f.n).toBe(0);
+      const [kept] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('legal_acceptance_ack_state', 'ack_legal_acceptance', 'verify_legal_acceptance')`;
+      expect(kept.n).toBe(3);
     });
   });
 });

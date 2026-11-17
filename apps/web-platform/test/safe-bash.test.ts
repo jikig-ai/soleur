@@ -17,7 +17,7 @@
  * behavior is covered by `permission-callback-safe-bash.test.ts`.
  */
 import { describe, test, expect } from "vitest";
-import { EXACT_LITERAL_SAFE_COMMANDS, isBashCommandSafe } from "../server/safe-bash";
+import { EXACT_LITERAL_SAFE_COMMANDS, firstRejectedGitFlag, isBashCommandSafe } from "../server/safe-bash";
 import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
 
 const WT = "bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh";
@@ -262,6 +262,129 @@ describe("review PR #4868 — git arg-pattern hardening", () => {
     const elapsedMs = performance.now() - start;
     expect(result).toBe(false); // `!` is outside PATH_TOKEN → no match
     expect(elapsedMs).toBeLessThan(50);
+  });
+});
+
+describe("#9600 — git log|diff|show closed flag grammar (exec-requesting flags fall through to the gate)", () => {
+  // Measured with real git in safe-bash-git-config-exec.test.ts; each flag below asks git to run a
+  // repo-config helper (diff.external / textconv / gpg.program) or to read a file.
+  const EXEC_FLAGS = [
+    "git diff --ext-diff",
+    "git diff --ext-diff=x",
+    "git log -p --ext-diff",
+    "git show --ext-diff HEAD",
+    "git diff --textconv",
+    "git diff HEAD~1 --textconv --stat",
+    "git log -p",
+    "git log --patch",
+    "git log -u",
+    "git diff -U3",
+    "git diff --word-diff",
+    "git log -S needle",
+    "git log -Sneedle",
+    "git log -G needle",
+    "git log -Gneedle",
+    "git log --show-signature",
+    "git show --show-signature HEAD",
+    "git diff -O/etc/hostname",
+    "git diff -Oorder",
+    "git log -c",
+    "git log --cc",
+    "git diff --ext",
+    "git diff --textc",
+    "git diff --no-ext-diff",
+    "git log --pretty=format:%H", // unknown flag family: card, not hard deny
+    "git log --oneline && git diff --ext-diff", // one bad segment denies the chain
+    "git status && git log -p",
+  ];
+  test.each(EXEC_FLAGS)("falls through: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(false);
+  });
+
+  const STILL_APPROVED = [
+    "git status",
+    "git log --oneline -5",
+    "git log -n 5",
+    "git log --stat",
+    "git log --name-only --oneline",
+    "git log --graph --all --decorate",
+    "git log --since=2026-01-01 --author=alice",
+    "git log --oneline -5 HEAD~2..HEAD",
+    "git diff",
+    "git diff HEAD~1",
+    "git diff HEAD~1 --stat",
+    "git diff main...HEAD --name-only",
+    "git diff --cached --stat",
+    "git diff -- src/index.ts",
+    "git show HEAD",
+    "git show HEAD --name-only",
+    "git show HEAD:apps/web-platform/package.json",
+    "git show --stat",
+    "pwd && git diff HEAD~1 --stat",
+  ];
+  test.each(STILL_APPROVED)("stays approved: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(true);
+  });
+
+  // Env-prefix and global-option forms never reached the read patterns (they start at `git <verb>`);
+  // pinned here so a future widening of the leading token cannot silently admit them.
+  const NOT_VERB_LEADING = [
+    "GIT_EXTERNAL_DIFF=/tmp/x git diff",
+    "GIT_CONFIG_COUNT=0 git status",
+    "GIT_DIR=x git log",
+    "git -c core.fsmonitor=x status",
+    "git -c diff.external=/tmp/x diff",
+    "git --git-dir=x log",
+    "git --bare log",
+    "git --no-pager log",
+  ];
+  test.each(NOT_VERB_LEADING)("not verb-leading: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(false);
+  });
+
+  // firstRejectedGitFlag walks the SAME flag source as the allowlist pattern, so the telemetry names the
+  // flag that fell through. Parity: a command is allowlisted by the pattern exactly when the walk finds
+  // no rejected flag (for tails that otherwise contain only flags and non-dash positionals).
+  test("firstRejectedGitFlag agrees with the allowlist pattern", () => {
+    const tails = [
+      "", "--oneline -5", "-n 5", "-n 5 HEAD~1", "--stat HEAD~1", "--since=2026-01-01 --author=a", "-- src/x.ts",
+      "-p", "--oneline -p", "--stat --ext-diff", "-n 5 --textconv", "-n", "-n x", "-Sneedle", "-w", "--follow f",
+      "--ext", "--no-ext-diff", "--first-parent --all --decorate", "--diff-filter=AM", "--max-count=3",
+      "-n5", "-n 5x", "-n  5", "--author=a --since=b",
+    ];
+    for (const t of tails) {
+      const allowed = isBashCommandSafe(`git log ${t}`.trimEnd());
+      expect(firstRejectedGitFlag(t) === null, `tail ${JSON.stringify(t)}`).toBe(allowed);
+    }
+    expect(tails.length).toBeGreaterThanOrEqual(24);
+  });
+
+  // A QUOTED value of an admitted value-flag misses the allowlist (the quote is not a PATH_TOKEN char) but is
+  // not a rejected FLAG: the telemetry must not name `--author` / `--since` / `--grep` for it.
+  test("firstRejectedGitFlag does not blame an admitted value-flag for its quoted value", () => {
+    for (const t of ['--author="John Smith"', "--grep='fix bug' --oneline", '--since="2 weeks ago"']) {
+      expect(isBashCommandSafe(`git log ${t}`), t).toBe(false);
+      expect(firstRejectedGitFlag(t), t).toBeNull();
+    }
+    expect(firstRejectedGitFlag('--author="a b" -p')).toBe("-p");
+  });
+
+  test("firstRejectedGitFlag returns the rejected token itself", () => {
+    expect(firstRejectedGitFlag("--oneline -p")).toBe("-p");
+    expect(firstRejectedGitFlag("-n 5 --textconv")).toBe("--textconv");
+    expect(firstRejectedGitFlag("-n x")).toBe("-n");
+    expect(firstRejectedGitFlag("--oneline -5 HEAD~1")).toBeNull();
+  });
+
+  test("no catastrophic backtracking on a long failing tail of listed flags", () => {
+    const evil = "git log " + "--oneline ".repeat(300) + "!";
+    const t0 = Date.now();
+    expect(isBashCommandSafe(evil)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(250);
+    const evil2 = "git diff " + "HEAD~1 ".repeat(300) + "--textconv";
+    const t1 = Date.now();
+    expect(isBashCommandSafe(evil2)).toBe(false);
+    expect(Date.now() - t1).toBeLessThan(250);
   });
 });
 

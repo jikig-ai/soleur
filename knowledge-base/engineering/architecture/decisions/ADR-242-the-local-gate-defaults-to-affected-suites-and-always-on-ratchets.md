@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#12247 (2026-11-07) — the ci-is-the-gate token is also honoured at work Phase 2, review's lead gate and the Grok pre-push gate through `battery-owed.sh --token-only` (wrapper `gate-or-skip.sh` for work and review, inline for Grok); see ## Amendment — 2026-11-07 (#12247)"
   - "#12246 (2026-11-06) — exit 42 of battery-owed.sh also means the operator declared CI the gate (session-state.md token); reconciled with ADR-196; see ## Amendment — 2026-11-06 (#12246)"
   - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
@@ -130,7 +131,8 @@ commit hook.
   `battery-owed.sh` first; OWED (or any non-42 verdict) runs `--affected`,
   and `--full` is an explicit operator opt-in that outranks even a SKIPPABLE
   verdict — the operator who typed `--full` asked for the battery itself, not
-  a dedup decision.
+  a dedup decision. The operator token also applies at work, review and the
+  Grok gate (see Amendment 2026-11-07).
 - **ADR-196's Decision 6 is stale in one direction.** It asserted the two
   git-hook invokers "invoke the full gate deliberately and both set
   `SOLEUR_ALLOW_FULL_GATE=1`". Post-#8322 both invoke `--affected` with no
@@ -1013,3 +1015,56 @@ A scheduler-level priority or weight-ordered buffering (a priority cannot start 
 ### Known limits and next levers (unchanged by this decision)
 
 Finished workers are reaped only when the pool saturates or at drain (evidence bar on #12013); edge narrowing for the replay arms is #12151 and narrowing the `lock:test-all` derivation is #12152. Both are still deferred. New from the treatment reading: `replay-a` ends at +1765 s but the run ends at +2134 s, and the last suites to finish (`operator-script`, `ship-phase-7-poll-fixtures`, `dev-ledger-parity`) register after the `*` barrier at `test-all-capacity-signal`, so the arms are no longer the tail and #12231 is now the larger lever. The arms are also unbalanced (pooled 1513 s, 570 s and 530 s for 193, 193 and 213 rows), so a pooled run cannot finish before about 252 + 1513 s; rebalancing the `--rows` split by weight is the next lever after that and needs a re-split and a manifest re-pin. The pool-phase floor (sum of walls / 4) is about 1546 s here, so the 600 s bar needs roughly 2.5 times less work, not only better ordering.
+
+## Amendment — 2026-11-06 (#12231)
+
+Measurements, method and the mutant outcomes live in `knowledge-base/project/specs/archive/20261107-113626-feat-one-shot-12231-star-suites-last/measurements/summary.txt`; this amendment records only the decision. Rulings by the CTO agent on 2026-11-06 are in that spec's `decision-challenges.md`.
+
+### Decision 30: park the `*` (drain-barrier) suites until the drain
+
+In the pooled backfill scheduler, a suite whose lane token set contains `*` is parked. The decision "is a star" is made once, at submit, by
+`lane_tokens_has_star` in `scripts/lib/test-suite-lanes.sh` (the tokenizer `lane_tokens_conflict` uses, so the park and the conflict rule cannot
+disagree). `_pj_fill` does not launch a parked job, add it to the skipped set, or let it hold anything back; `_pj_drain` sets a flag once, and from
+then on a fill that finds the pool empty after its pass launches the head of the parked queue. The `*` suites therefore run alone, after every
+non-`*` suite has been launched and reaped, in registration order among themselves. Suites that share a non-`*` token keep registration order as before.
+
+What does not change: registration, the rendered order, the verdict lines, the `TEST_TIMING_LOG` rows, the terminal marker and the exit code (launch
+timing is the only thing that moves), and `SOLEUR_PJ_FIFO=1` and the serial fallbacks, which keep the old registration-position behaviour. Parking is a
+single-class launch deferral. It is not the scheduler-level priority or weight-ordered buffering that Decision 29 rejected: registration, streaming and
+the lock-holder stamping (which fires at registration, so a waiter's `holder_progress_age` climbs through the serial star tail) are untouched.
+
+Consequences, recorded:
+
+- A budget kill before the drain leaves every `*` suite unrun, so a red `*` suite that has not yet launched can only defer to CI (it never reaches the
+  provisional-red sidecar, so it cannot become `failed-before-budget`); a `*` that was released and reaped red before the kill is recorded like any suite.
+  The `*` suites include an always-on ratchet (`scripts/test-all-capacity-signal`), which a late kill now guarantees is unevaluated locally.
+- The runtime ceiling is checked at registration only, so a star registered before it lapses still starts at the end of the run.
+- A reap fill that runs after the interrupt flag is set can release a parked star; `_pj_drain`'s signal branch then TERMs it, as for any suite. No
+  `_pj_sig` conjunct was added (CTO ruling); a signal that lands before the drain releases no parked star.
+- Evidence and open residuals: `knowledge-base/project/specs/archive/20261107-113626-feat-one-shot-12231-star-suites-last/measurements/summary.txt`. On the pinned diff (one selected `*`
+  suite) the park moved the pool phase by 40 s against the clean control, inside the run-to-run spread, where the #12013 amendment modelled about 300 s; the
+  gain is not resolved on that diff, and the property is carried by the scheduler fixtures and the mutant table. The sixth declared `*` suite,
+  `apps/web-platform/infra/run-registered-suites.sh`, was never run on the parked order (declined in the full-battery run, and CI forces serial mode).
+
+This supersedes, by name, sentences of earlier amendments, which stay as written: the 2026-11-05 amendment's "a queued `*` still blocks everything after it" and
+its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the conflict by keeping the `*` invisible to backfill); and, in the
+2026-11-06 amendment (Decision 29), "a queued `*` (drain barrier) suite blocks every later launch" (Decision 29 text), "The kill now lands on suites queued
+behind the `*` barrier" and "Every `*` suite now waits for the arms to drain" (its "What this does not claim" bullets).
+
+## Amendment — 2026-11-07 (#12247)
+
+Supersedes the closing sentence of the 2026-11-06 amendment ("Work Phase 2, review's local gate and the Grok pre-push gate ... do not read the token (#12247)"). The `ci-is-the-gate` token is now read at four moments of a run, all through the one reader and its exit contract (42 skips; 0, 2 and anything else run the gate). Ship Phase 4 still calls `battery-owed.sh` bare (token, then CI evidence). Work Phase 2 (step 9 and the fan-out lead's consolidation run) and review's lead gate call `plugins/soleur/scripts/gate-or-skip.sh`, which on a bare invocation runs `battery-owed.sh --token-only` and skips only on 42, printing `affected gate: SKIPPED (NOT run, NOT passed); CI test is the gate` and the machine line `AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate`; any argument (`--full`, `--explain`, `--base`) bypasses the token. The Grok pre-push gate makes the same `--token-only` call inline and waives only its affected-tests step (fast jobs, build and grok-fidelity still run; a waive also makes grok-fidelity run the AGENTS rule-budget lint, which it skips only when the affected gate ran test-all; an affected step ending rc 6 or 7 can leave that lint unrun locally, a pre-existing residual with CI `test-scripts` as the backstop), ending in a distinct `PASS WITH SKIPPED GATE` banner instead of "safe to git push". `--token-only` returns OWED at once when no valid token exists, with no CI state read; with a token it runs the existing arm unchanged, so the infra surface, a merge in progress and an unmeasurable diff still refuse. The channels named on 2026-11-06 are unchanged in kind: the operator-intent channel (the token) now applies at four moments of a run, not one, and is still one channel with one reader.
+
+Not consumers, on purpose: `soleur:test-fix-loop` (a fix loop reacting to red must run tests), `lefthook.yml`'s per-commit bun-test hook (deferred, tracked in #12297 with its re-evaluation criterion), and every gate after Phase 6.45 archival. Measured for the archival question: no gate needs the token afterwards except a Grok push made after archival (the archive push, a CI-fix push), which then runs the affected gate in full, the stricter outcome; the reader is not extended to `specs/archive/` because that would read an older run of the same branch name and widen the trust surface.
+
+Residuals, stated once. With a valid token a commit that fails the local suites can reach `git push` with no local test run at three sites, bounded by the required `test` check and the merge queue. Review-time skipping trusts the branch under review (the token is a hint the same commit can write; the bound is the one named on 2026-11-06). The Grok skip note is log-only and ship deletes the log on green, while Phase 4 already printed the verdict for the same token; when `--full` outranked the token at Phase 4 the full battery already ran, so waiving the Grok step is coherent. The declaration is the operator's assertion that a CI test gate exists. The two lead-gate sentences in work and review changed command, not only wiring: the bare runner call became the plugin gate, which adds `.soleur-test-gate.json` budget and content-trigger semantics and the contract's rc mapping (rc 6 and 7 are never reported as passed).
+
+Alternatives. Per-site inline branches (runner-up: no shared front door, but each SKILL.md would carry the branch and the byte ceilings forbid it). A token consult inside `affected-tests.sh` mapped to a new rc (rejected: it widens a contract `soleur:test-fix-loop` and ship's OWED arm consume and must stay token-blind). Bare reader calls with CI-evidence conditions at these sites (rejected: the head is usually unpushed there). Rulings: the plan's `decision-challenges.md` rows F1-F5 and F12 (archived with the branch). Issue #12251 (C-quoted paths in the no-token infra refusal) is tracked there and ships as its own PR.
+
+## Amendment — 2026-11-07 (#12013, #12231)
+
+Decision 30's "Evidence and open residuals" bullet left two residuals: the pool-phase gain of parking the `*` suites was not resolved on the pinned diff (inside the run-to-run spread, as Decision 30 records), and the sixth declared `*` suite, `apps/web-platform/infra/run-registered-suites.sh`, was never run on the parked order. This amendment closes the first by decision, not by a new reading, and leaves the second open. The structural change is the deliverable: after Decision 30 the `*` suites run alone, last, and are invisible to backfill, and the scheduler fixtures and the mutant table carry that property. No pool-phase figure is claimed for it, and none is owed: a cold pair occupies the host for the better part of an hour and cannot resolve a gain smaller than its own spread. A later claim of a gain from the park needs its own reading; a diff that selects several long `*` suites is the case in which one would be worth taking.
+
+This supersedes, by name, five sentences that stay as written. "Running the `*` suites last is the next lever" (2026-11-06 #12013 amendment, Decision 29) is implemented by Decision 30. The others rank levers on premises the measurements cited below do not carry on the readings they cover (`replay-a` as the run's tail; and a re-split of the replay arms as a lever whose gain is robust, where the measured pole was the retired `row_ow_*` sites and the nominal-best re-splits failed the robustness check): "This is the next lever: start the longest suites first" (2026-11-05 amendment), "rebalancing the `--rows` split by weight is the next lever after that" and "The arms are also unbalanced (pooled 1513 s, 570 s and 530 s ...)" (2026-11-06 amendment, Known limits), and "#12231 is now the larger lever". On the t1 reading the pool ended on `approval-guard1-mutation`, 358 s after `replay-a`; on control2 the approval suite ended 293 s after `replay-a` and the run's last suite was `dev-ledger-parity` (1891 s), so whether #12263 is still a lever is read from `summary.txt` (about 300 s on one reading, not re-priced since the replay arms shrank), not from those sentences.
+
+What this does not claim: that the cold local gate is anywhere near the 600 s bar of #12013. It was not re-measured cold here. On the two archived readings, the packing floor plus the cold derive was about 1.6 to 1.7 ks; ordering the long suites first recovered about 300 s of it on paper, and the nominal-best re-splits of the replay arms did not survive the robustness check (no search was made for a modest but robust split). Those figures, the per-site measurement they rest on and the verdict are in `measurements/summary.txt` of the spec `feat-one-shot-12013-site-cost-measurement`, archived under `knowledge-base/project/specs/archive/<timestamp>-feat-one-shot-12013-site-cost-measurement/`. They describe the 602-site tree the readings were taken on; the observation-window retirement has since removed 129 of those sites, and the replay arms on main were not re-measured. The work-reduction levers named in #12013 are the open path.

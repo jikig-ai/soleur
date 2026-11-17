@@ -1215,6 +1215,14 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
 - Plan: `knowledge-base/project/plans/2026-11-04-chore-ci-infra-hygiene-batch-plan.md`.
   Ref #8780, epic #10390.
 
+### 2026-11-13 (#12158, #9927 step D2-2): the inngest write path moves to an `inngest-cutover` environment secret
+
+No status change (D1 `adopting`, D2 `proposed`). Per CTO rulings D1/D1b/D1c of 2026-11-06 (arm-token-replacement-design-12158).
+
+- **A second read/write credential arrives in conforming form.** `doppler_service_token.inngest_cutover_write` (read/write on the isolated `soleur-inngest/prd`) is delivered to `cutover-inngest.yml`'s rollback and resume ops as the `inngest-cutover` **environment secret** `DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE` — the D2 boundary (main-only deployment policy plus required-reviewer gate), not a repo secret. This removes the advisory-deviation class the repo-scoped arm secret carries for the write path; the arm secret itself stays until the step-4 revoke change. `inngest-cutover` is one of the four D2 environments, and the census gains an environment-scoped-name clause (G1k): the name may appear only in that workflow, only on rollback/resume-gated steps, and never in the shared Tier-B loader. D3 is not engaged (same reasoning as the ADR-282 addendum of 2026-11-05: the token is not a member of the privileged project).
+- **Carrier.** The Terraform GitHub App cannot write environment secrets (the 403 recorded in `inngest-arm-write-token.tf`), so a staged `soleur:operator-bootstrap` script relays the sensitive Terraform output over stdin to `gh secret set --env`; the workflow's first credential step refuses `write_token_stale` when the secret is unset or stale — a `-replace` mints a new key and strands it, so the runbook order is replace, then re-run the relay.
+- **Revisit.** The new token is a standing read/write credential on `soleur-inngest/prd` with the same per-config blast radius as the arm token (the gain is delivery, not scope); tracker #12738 and `scripts/followthroughs/inngest-write-token-revisit-12738.sh` carry its revisit coverage from 2027-01-08.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1232,7 +1240,19 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
   loudly), ADR-065 (Terraform variables exist before an IaC merge), ADR-231 (workflow byte budget),
   ADR-228 (generated operator scripts), ADR-237 (host keys are pinned; its #8209 residual is in
   scope here)
+
+### 2026-10-23 (#9294 PR-2): `git-data-cutover.yml::cutover` joins the Tier-B loader, and the deploy token leaves state
+
+No status change (D1 `adopting`, D2 `proposed`). Ruled by CTO agent, 2026-10-23.
+
+- **A correction of the 2026-10-14 entry.** That entry says `cutover` "only checks" the Tier-B token and never calls the loader, and pins "the single loader call and its single input" for the file. Both are per-job statements now: the `cutover` job has ONE loader call (id `tiered_creds`, modes flip, rollback and redeploy only, with BOTH token inputs, the legacy one being the loud-failure verifier), and the `wipe` job keeps its own. `proof` and `unfreeze` never load it (they dispatch no redeploy, so a revoked Tier-B token must not stop an unfreeze).
+- **Why.** The same-version redeploy (and the finalizer's unwind of a flipped store) needs the webhook HMAC key and the Cloudflare Access pair, which are Tier-B reads after #9294. A `Webhook trio preflight` step (the loader's `source` output must be `tier_b`, then `track.sh` in `TRACK_PREFLIGHT=1` mode applies its own credential checks and sends nothing) runs BEFORE the freeze and every flag write, so a missing trio is a named precondition (`precondition_trio_absent`) and never a failure discovered after production was written. A rollback whose flag-off landed and whose redeploy never confirmed (`redeploy_confirmed` marker absent) now ends `RECOVERY_FAILED` instead of "unwind complete".
+- **The accepted residual.** The loader exports the whole privileged project into the job env for every later step (the plain and `TF_VAR_` names including `HCLOUD_TOKEN` read/write, `DOPPLER_TOKEN_TF`, `CF_API_TOKEN_R2`, the infra GitHub App key and `TF_STATE_AWS_*`, aliased to `AWS_*`). This job is reviewer-gated and, by a grep of its steps on 2026-10-23, no post-loader step reads those names. It is NOT contained by the `exec env -i` convention the `wipe` job follows: rewriting the steps of a roughly 1,700-line job on the certified flip path was judged the larger risk. The exposure is recorded, not closed. The follow-up is to move the job to the narrow carrier (three names) once the narrow loader mode exists (PR-1d); the pin on the job's `uses:` set (now the bridge, the loader and the notifier) is the only bounded check until then.
+- **Two Doppler CLIs in one job.** The pre-loader reads use the unpinned `DopplerHQ/cli-action`; the loader installs the pinned 3.75.3 and prepends it to `PATH`, so the flag write, the Better Stack readback and the finalizer run the pinned one.
+- **The deploy Access token leaves Terraform state, forward-fix only.** `cloudflare_zero_trust_access_service_token.deploy` becomes `removed { destroy = false }`; the policy admits the committed constant `local.deploy_service_token_ids` (a `locals` value, not a variable, because a root variable is overridable through `TF_VAR_*` and the web-platform plan runs under `--name-transformer tf-var` against `prd_terraform`). The web-platform apply gains a deploy-policy gate OUTSIDE the `[ack-destroy]` sum (`tests/scripts/lib/deploy-policy-gate.sh`: an unsafe policy or a stray Access-token forget is refused, an in-place include change needs an own-line `[ack-deploy-policy]`). A targeted apply does not prune the two deleted root outputs, so their stored values may remain in state until an untargeted apply: the apply job warns when they do, and the old token is then treated as exposed and rotated first. Runbook: `cloudflare-service-token-rotation.md`.
+
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
+- Cutover joins the Tier-B loader; deploy token leaves state (2026-10-23): #9294, #10300, #8211
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
 - D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
 - D5 apply-path note (2026-10-01): #9360, #9361, #9362

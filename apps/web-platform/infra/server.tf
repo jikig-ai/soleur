@@ -270,6 +270,13 @@ locals {
     "web-bash-synthetic.service",
     "web-bash-synthetic.timer",
     "sdk-bash-verdict.sh",
+    # SOLEUR_HOST_KERNEL periodic marker (#12007): the collector and its plain (non-template) unit pair. Baked for the same reason as the
+    # probes above (the SSH installers below reach running hosts only); the inngest host carries its own copy of the collector
+    # (inngest-bootstrap.sh heredocs), pinned byte-equal to this file by host-kernel-marker-delivery.test.sh. The registry host is EXEMPT from
+    # this PR (#12386): a cloud-init-registry.yml change auto-fires the registry host replace, so its emitter ships in a follow-up PR.
+    "host-kernel-marker.sh",
+    "host-kernel-marker.service",
+    "host-kernel-marker.timer",
     "web-zot-consumer-probe.sh",
     "web-zot-consumer-probe.service",
     "web-zot-consumer-probe.timer",
@@ -422,8 +429,9 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
-    # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
+    # The predicate is the keyed `tunnel_connector` field (#9421 Part 2a, ADR-327), validated
+    # exactly-one in variables.tf so a second connector cannot be declared; web-2 holds it. It
+    # replaced an `each.key == "web-2"` literal, and the reasoning below still holds. At the time:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
     # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
@@ -455,7 +463,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-2"
+    web_tunnel_connector = each.value.tunnel_connector
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
@@ -536,10 +544,9 @@ resource "hcloud_server" "web" {
     #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
     #   - Worst case before the seed fatal: ~150 s NIC wait + ~190 s zot login (3 x 60 s + 2 x 5 s),
     #     or ~150 s + a fast login + 180 s pull when zot authenticates but hangs (a timed-out
-    #     attempt stops the retries). soleur-host-bootstrap.sh's
-    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
-    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
-    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #     attempt stops the retries). soleur-host-bootstrap.sh's SOLEUR_FRESH_BOOT_WINDOW_SECONDS
+    #     (1140 since ADR-326's kernel-settle reboot) is derived there, not here.
+    #     fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
     #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
     #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
     zot_pull_user  = local.zot_pull_user
@@ -624,8 +631,8 @@ resource "hcloud_server" "web" {
   # separate runtime-bind probe passes. The rebuilt gate is a fail-closed serving-weight TOP-GUARD:
   # web-2 weight==0/not-in-rotation PASSES (the standby state a correct pre-flip config is in — the
   # #6575 polarity flaw is fixed); web-2 weight>0 pre-flip runs the flip-authorization shape and
-  # FAILS unless (1) owner-side relay active (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST /
-  # SOLEUR_HOST_ROSTER), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
+  # FAILS unless (1) owner-side relay config-shape holds (SOLEUR_PROXY_PEER_ALLOWLIST /
+  # SOLEUR_HOST_ROSTER; the bind is a literal in ci-deploy.sh, not a gate input), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
   # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-143 D3
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
@@ -1124,6 +1131,119 @@ resource "terraform_data" "web_bash_synthetic_install_web2" {
       "systemctl daemon-reload",
       "systemctl enable --now web-bash-synthetic.timer",
       "systemctl list-timers web-bash-synthetic.timer --no-pager",
+    ]
+  }
+}
+
+# SOLEUR_HOST_KERNEL periodic marker (#12007) on the RUNNING web-1: the collector (host-kernel-marker.sh) plus its plain unit pair, one
+# row at boot+2min and every 6 hours (ADR-322 amendment; read by plugins/soleur/skills/cve-exposure/scripts/host-state.sh and the
+# host-kernel dead-man feeder). Shape of web_bash_synthetic_install, minus any credential: the collector needs no env file and no token.
+# A fresh host gets the same files from the image bake (host_script_files) + soleur-host-bootstrap.sh + cloud-init.yml.
+# OPERATOR_APPLIED_EXCLUSIONS (terraform-target-parity.test.ts) and NOT in the SSH-stage -target list of apply-web-platform-infra.yml:
+# a merge installs no collector on a running web host (the merge still re-delivers vector.toml). No dispatch mode targets the installers either: delivery requires an operator edit to the SSH-stage -target list
+# of apply-web-platform-infra.yml AND to both exclusion sets (EXCLUSION_ALLOWLIST and OPERATOR_APPLIED_EXCLUSIONS in terraform-target-parity.test.ts), then an apply (#12386,
+# decision-challenges.md last operator row).
+resource "terraform_data" "host_kernel_marker_install" {
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/host-kernel-marker.sh"),
+      file("${path.module}/host-kernel-marker.service"),
+      file("${path.module}/host-kernel-marker.timer"),
+    ]))
+    # Re-fires on a replaced VM (hr-fresh-host-provisioning), as the nonlocal_bind_sysctl pair does.
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it, so a stale script body must never be replayed under a fresh hash.
+    script_path = "/root/tf-host-kernel-marker-install-web-1-%RAND%.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.sh"
+    destination = "/usr/local/bin/host-kernel-marker.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.service"
+    destination = "/etc/systemd/system/host-kernel-marker.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.timer"
+    destination = "/etc/systemd/system/host-kernel-marker.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /usr/local/bin/host-kernel-marker.sh /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "chmod 0755 /usr/local/bin/host-kernel-marker.sh",
+      "chmod 0644 /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "systemctl daemon-reload",
+      "systemctl enable --now host-kernel-marker.timer",
+      # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.
+      "systemctl start host-kernel-marker.service || echo \"warn: host-kernel-marker first run non-zero (the timer retries in 6h)\"",
+      "systemctl list-timers host-kernel-marker.timer --no-pager",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (twin of host_kernel_marker_install; dialed through the web-1 bastion in CI, ADR-220). Carries no
+# credential material (web-host-provisioner-parity.test.sh W2_CRED_RE); W2_ALLOWED admits it. OPERATOR_APPLIED_EXCLUSIONS like its twin.
+resource "terraform_data" "host_kernel_marker_install_web2" {
+  depends_on = [terraform_data.journald_persistent_web2]
+
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/host-kernel-marker.sh"),
+      file("${path.module}/host-kernel-marker.service"),
+      file("${path.module}/host-kernel-marker.timer"),
+    ]))
+    # Re-fires on a replaced VM (hr-fresh-host-provisioning), as the nonlocal_bind_sysctl pair does.
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_2_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it, so a stale script body must never be replayed under a fresh hash.
+    script_path = "/root/tf-host-kernel-marker-install-web-2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.sh"
+    destination = "/usr/local/bin/host-kernel-marker.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.service"
+    destination = "/etc/systemd/system/host-kernel-marker.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/host-kernel-marker.timer"
+    destination = "/etc/systemd/system/host-kernel-marker.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /usr/local/bin/host-kernel-marker.sh /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "chmod 0755 /usr/local/bin/host-kernel-marker.sh",
+      "chmod 0644 /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "systemctl daemon-reload",
+      "systemctl enable --now host-kernel-marker.timer",
+      # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.
+      "systemctl start host-kernel-marker.service || echo \"warn: host-kernel-marker first run non-zero (the timer retries in 6h)\"",
+      "systemctl list-timers host-kernel-marker.timer --no-pager",
     ]
   }
 }
@@ -3168,6 +3288,9 @@ resource "terraform_data" "egress_gateway" {
 #     to the journal every 5 min and dropped at the Vector filter for days)
 #   terraform_data.nonlocal_bind_sysctl_web2 — /etc/sysctl.d/99-soleur-nonlocal-bind.conf
 #     + `sysctl -w` now (#12167 PR-G; the private-NIC publish must survive a reboot)
+#   terraform_data.host_kernel_marker_install_web2 — host-kernel-marker.{sh,service,timer}
+#     + enable the timer and start the oneshot once (#12007; no credential material;
+#     OPERATOR_APPLIED_EXCLUSIONS, so a merge does not run it, a dispatched run does)
 # Everything else reaches a running web-2 only via -replace (birth set) or
 # not at all by role. web-host-provisioner-parity.test.sh forces every new
 # web-1 SSH provisioner through this classification — add the twin here or

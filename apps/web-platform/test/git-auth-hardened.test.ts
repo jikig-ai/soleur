@@ -18,6 +18,16 @@ import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env"
 const h = vi.hoisted(() => ({ mint: vi.fn(async () => `ghs_${"a".repeat(40)}`), allowFile: true }));
 vi.mock("../server/github-app", () => ({ generateInstallationToken: h.mint }));
 vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
+// The legacy (non-hardened) form now rides the shared host-git invocation, whose `GIT_ALLOW_PROTOCOL=https` forbids the local file
+// transport these fixtures push to. Widen through the helper's OWN `allowProtocol` parameter (never a separate seam).
+vi.mock("../server/host-git", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/host-git")>();
+  return {
+    ...actual,
+    hostGitInvocation: (args: readonly string[], opts: import("../server/host-git").HostGitOpts) =>
+      actual.hostGitInvocation(args, { ...opts, allowProtocol: `${opts.allowProtocol}:file` }),
+  };
+});
 vi.mock("../server/git-hardened-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/git-hardened-env")>();
   return {
@@ -103,10 +113,23 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     }
   });
 
-  test("control: the legacy form runs a planted .git/hooks/pre-push", async () => {
+  /**
+   * The control is RAW git: before the host-git hardening the legacy form of `gitWithInstallationAuth` was the control (it ran the
+   * planted hook). The legacy form now carries the shared hardening arguments, so the control that proves the hook WOULD have run
+   * is plain git, and the legacy form is asserted to no longer run it.
+   */
+  function rawPush(args: string[]): void {
+    execFileSync("git", args, { cwd: work, env: gitFixtureEnv(root), stdio: "pipe" });
+  }
+
+  test("control: raw git runs a planted .git/hooks/pre-push (the legacy form of gitWithInstallationAuth no longer does)", async () => {
     plantHook(join(work, ".git", "hooks"), marker);
-    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work });
+    rawPush(["push", remote, "HEAD:refs/heads/feat-x"]);
     expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    git(remote, "branch", "-D", "feat-x");
+    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work });
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("hardened: the push succeeds and a planted .git/hooks/pre-push does NOT run", async () => {
@@ -131,10 +154,10 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     chmodSync(hook, 0o755);
   }
 
-  test("control: the legacy form, pushing to a remote that REJECTS the push, fails AND runs the planted pre-push hook", async () => {
+  test("control: raw git, pushing to a remote that REJECTS the push, fails AND runs the planted pre-push hook", async () => {
     rejectingRemote();
     plantHook(join(work, ".git", "hooks"), marker);
-    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work })).rejects.toBeTruthy();
+    expect(() => rawPush(["push", remote, "HEAD:refs/heads/feat-x"])).toThrow();
     expect(existsSync(marker)).toBe(true);
   });
 
@@ -155,8 +178,8 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
   test("control + hardened: a repo-config protocol.ext.allow=always does not let an ext:: URL run a command under the hardened form", async () => {
     git(work, "config", "protocol.ext.allow", "always");
     const url = `ext::touch ${marker}`;
-    // Control: the legacy form honours the repo config and runs the command, so the absence below is meaningful.
-    await expect(gitWithInstallationAuth(["push", url, "HEAD:refs/heads/feat-x"], 1, { cwd: work })).rejects.toBeTruthy();
+    // Control: raw git honours the repo config and runs the command, so the absence below is meaningful.
+    expect(() => rawPush(["push", url, "HEAD:refs/heads/feat-x"])).toThrow();
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
     h.allowFile = false;

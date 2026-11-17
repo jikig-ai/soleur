@@ -273,7 +273,7 @@ EOF
   out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
-  reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
+  reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2) || true
   assert_exit "T8 frontmatter tree exit 0" "0" "$rc"
   if [[ "$reported" == "$expected" ]]; then
     pass "T8 B_ALWAYS excludes frontmatter (=$expected)"

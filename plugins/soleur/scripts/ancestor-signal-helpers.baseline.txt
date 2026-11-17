@@ -9,6 +9,7 @@
 apps/web-platform/infra/arm-heartbeats.test.sh	P	if [[ "$seen" -ge "$FAKE_CUT_AFTER" ]]; then kill -9 "$PPID" 2>/dev/null; exit 0; fi
 apps/web-platform/infra/git-data-luks-reopen.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
 apps/web-platform/infra/git-data-refs-assert.test.sh	W	p="$(awk '/^PPid:/ {print $2}' "/proc/$p/status")"
+apps/web-platform/infra/kernel-currency.test.sh	P	c=$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null) || c=; case "$c" in *"$KC_RUN"*) kill -KILL "$PPID" ;; *) echo "REFUSED reboot parent-not-run.sh" >> "$KC_CAP"; exit 65 ;; esac
 apps/web-platform/infra/run-registered-suites.test.sh	P	kill -9 "$_shim" 2>/dev/null
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	P	[ -f "$FX/luksopen_kill" ] && kill -TERM "$PPID"
 apps/web-platform/infra/workspaces-luks-provision.test.sh	P	[ -f "$st/crash_after_luksFormat" ] && kill -9 "$PPID"
@@ -17,3 +18,7 @@ plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	W	p=$(awk '{print $
 plugins/soleur/test/roadmap-reconcile.test.sh	W	top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
 plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if (( n > 400 )); then kill -KILL "$PPID"; exit 0; fi
 plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if [[ -f "$d/die_after" && "$n" -ge "$(cat "$d/die_after")" ]]; then kill -KILL "$PPID"; exit 0; fi
+scripts/followthroughs/pr-battery-gate-saving-9323.test.sh	P	[[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && kill -KILL "$wp" 2>/dev/null
+scripts/followthroughs/pr-battery-gate-saving-9323.test.sh	W	hops=$((hops + 1)); wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
+scripts/rotate-sentry-actions-ro-token.test.sh	P	kill -TERM "$PPID"
+scripts/rotate-sentry-actions-ro-token.test.sh	P	kill -TERM "$spid"

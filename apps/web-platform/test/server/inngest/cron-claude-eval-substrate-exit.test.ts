@@ -35,8 +35,20 @@ vi.mock("@/server/claude-cost-marker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/claude-cost-marker")>()),
   emitClaudeCostMarker: vi.fn(),
 }));
+// #12757 row 6 — this file's own partial mock (over setup-node.ts's) so the probes can be flipped per row. Defaults read
+// healthy, like the shared mock, so every other row here reports nothing new.
+const { identityReadableMock, xdgPresentMock } = vi.hoisted(() => ({
+  identityReadableMock: vi.fn(() => true),
+  xdgPresentMock: vi.fn(() => false),
+}));
+vi.mock("@/server/host-git", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/host-git")>()),
+  agentGitConfigReadable: identityReadableMock,
+  xdgGitResidualPresent: xdgPresentMock,
+}));
 
-import { spawnClaudeEval } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { AGENT_GIT_GLOBAL_CONFIG } from "@/server/host-git";
+import { resetCronGitProbeLatchesForTest, spawnClaudeEval, spawnSimple } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 const FAKE_PID = 4_242_424;
 const TOKEN = "ghs_FAKEtoken0123456789ABCDEFghijklmnop";
@@ -320,6 +332,142 @@ describe("spawnClaudeEval — child end (#7122 P2-1, P2-2)", () => {
   });
 });
 
+// #12757 Guard 3 — the two runtime chokepoints carry CRON_GIT_CONFIG_PIN LAST (rows 1 and 3), and the identity / XDG
+// probes report on a transition only, never blocking the spawn (row 6 wiring). Spawn calls are picked by their command,
+// never by position; reportSilentFallback calls are filtered by op, never counted in total.
+describe("chokepoints pin the git global config (#12757 Guard 3)", () => {
+  const ORIGINAL_CLAUDE_BIN = process.env.CLAUDE_BIN;
+  const PIN = { GIT_CONFIG_GLOBAL: AGENT_GIT_GLOBAL_CONFIG, GIT_CONFIG_NOSYSTEM: "1" };
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    spawnMock.mockReset();
+    reportFallbackMock.mockReset();
+    identityReadableMock.mockReset().mockReturnValue(true);
+    xdgPresentMock.mockReset().mockReturnValue(false);
+    resetCronGitProbeLatchesForTest();
+    process.env.CLAUDE_BIN = process.execPath;
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    // Every spawn gets a fresh child that exits cleanly on the next tick.
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChild();
+      setTimeout(() => {
+        child.emit("exit", 0, null);
+        child.stdout.end();
+        child.stderr.end();
+      }, 5);
+      return child;
+    });
+  });
+  afterEach(() => {
+    killSpy.mockRestore();
+    identityReadableMock.mockReset().mockReturnValue(true);
+    xdgPresentMock.mockReset().mockReturnValue(false);
+    if (ORIGINAL_CLAUDE_BIN === undefined) delete process.env.CLAUDE_BIN;
+    else process.env.CLAUDE_BIN = ORIGINAL_CLAUDE_BIN;
+  });
+
+  const envOf = (cmd: string): NodeJS.ProcessEnv => {
+    const calls = spawnMock.mock.calls.filter((c: unknown[]) => c[0] === cmd);
+    expect(calls.length, `expected exactly one spawn of ${cmd}`).toBe(1);
+    return (calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+  };
+  const reportsFor = (op: string) =>
+    reportFallbackMock.mock.calls.filter((c: unknown[]) => (c[1] as { op?: string } | undefined)?.op === op);
+  const runClaude = () =>
+    run({ buildSpawnEnv: () => ({ PATH: process.env.PATH, HOME: "/home/x", GIT_CONFIG_GLOBAL: "/tmp/evil", GIT_CONFIG_NOSYSTEM: "0" }) as unknown as NodeJS.ProcessEnv });
+
+  it("row 1: spawnClaudeEval's env carries the pin LAST — a buildSpawnEnv /tmp/evil + NOSYSTEM=0 is overridden", async () => {
+    await runClaude();
+    const env = envOf(process.execPath);
+    expect(env.GIT_CONFIG_GLOBAL).toBe(PIN.GIT_CONFIG_GLOBAL);
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe(PIN.GIT_CONFIG_NOSYSTEM);
+    expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
+    expect(env.HOME).toBe("/home/x");
+  });
+
+  it("row 3: spawnSimple with no env spawns the inherited process.env plus the pin", async () => {
+    await spawnSimple("git", ["status"]);
+    const env = envOf("git");
+    expect(env.GIT_CONFIG_GLOBAL).toBe(PIN.GIT_CONFIG_GLOBAL);
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe(PIN.GIT_CONFIG_NOSYSTEM);
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
+  it("row 3: spawnSimple with a caller env carrying GIT_CONFIG_GLOBAL=/tmp/evil still spawns with the pin", async () => {
+    await spawnSimple("git", ["status"], { env: { PATH: "/bin", GIT_CONFIG_GLOBAL: "/tmp/evil", GIT_CONFIG_NOSYSTEM: "0" } as unknown as NodeJS.ProcessEnv });
+    const env = envOf("git");
+    expect(env.GIT_CONFIG_GLOBAL).toBe(PIN.GIT_CONFIG_GLOBAL);
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe(PIN.GIT_CONFIG_NOSYSTEM);
+    expect(env.PATH).toBe("/bin");
+  });
+
+  it("row 3b: spawnSimple keeps a caller's stricter GIT_CONFIG_GLOBAL=/dev/null and still sets NOSYSTEM", async () => {
+    await spawnSimple("git", ["status"], { env: { PATH: "/bin", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "0" } as unknown as NodeJS.ProcessEnv });
+    const env = envOf("git");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  it("row 6: an unreadable identity file reports once (op cron-git-config-pin) across both chokepoints, blocks neither, and re-arms", async () => {
+    identityReadableMock.mockReturnValue(false);
+    const res = await runClaude();
+    await spawnSimple("git", ["status"]);
+    expect(res.exitCode).toBe(0);
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === process.execPath).length, "the claude spawn was blocked").toBe(1);
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === "git").length, "the git spawn was blocked").toBe(1);
+    expect(reportsFor("cron-git-config-pin")).toHaveLength(1);
+    const [err, opts] = reportsFor("cron-git-config-pin")[0] as [unknown, { message: string; extra?: unknown }];
+    expect(opts.message).toMatch(/agent git identity file missing or unreadable/);
+    expect(JSON.stringify([err, opts])).not.toContain(AGENT_GIT_GLOBAL_CONFIG);
+    // ok again → re-armed; bad again → a second report.
+    identityReadableMock.mockReturnValue(true);
+    await spawnSimple("git", ["status"]);
+    expect(reportsFor("cron-git-config-pin")).toHaveLength(1);
+    identityReadableMock.mockReturnValue(false);
+    await spawnSimple("git", ["status"]);
+    expect(reportsFor("cron-git-config-pin")).toHaveLength(2);
+  });
+
+  it("row 6: a present XDG ignore/attributes file reports once (op cron-git-xdg-config-present), blocks neither, and re-arms", async () => {
+    xdgPresentMock.mockReturnValue(true);
+    await runClaude();
+    await spawnSimple("git", ["status"]);
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === process.execPath).length).toBe(1);
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === "git").length).toBe(1);
+    expect(reportsFor("cron-git-xdg-config-present")).toHaveLength(1);
+    const [err, opts] = reportsFor("cron-git-xdg-config-present")[0] as [unknown, { message: string }];
+    expect(opts.message).toMatch(/\.config\/git\/ignore or attributes exists/);
+    expect(JSON.stringify([err, opts])).not.toMatch(/\/home\/|\/tmp\//);
+    xdgPresentMock.mockReturnValue(false);
+    await spawnSimple("git", ["status"]);
+    xdgPresentMock.mockReturnValue(true);
+    await spawnSimple("git", ["status"]);
+    expect(reportsFor("cron-git-xdg-config-present")).toHaveLength(2);
+    expect(reportsFor("cron-git-config-pin")).toHaveLength(0);
+  });
+
+  // The claude chokepoint on its own: most cron sites only ever spawn claude, so its probe must report without spawnSimple.
+  it.each([
+    ["cron-git-config-pin", () => identityReadableMock.mockReturnValue(false)],
+    ["cron-git-xdg-config-present", () => xdgPresentMock.mockReturnValue(true)],
+  ] as const)("row 6c: the claude chokepoint alone reports %s", async (op, arm) => {
+    arm();
+    await runClaude();
+    expect(spawnMock.mock.calls.filter((c: unknown[]) => c[0] === "git")).toHaveLength(0);
+    expect(reportsFor(op)).toHaveLength(1);
+  });
+
+  it("row 6 control: healthy probes report neither op", async () => {
+    await runClaude();
+    await spawnSimple("git", ["status"]);
+    expect(reportsFor("cron-git-config-pin")).toHaveLength(0);
+    expect(reportsFor("cron-git-xdg-config-present")).toHaveLength(0);
+    expect(identityReadableMock, "the identity probe was never consulted").toHaveBeenCalled();
+    expect(xdgPresentMock, "the XDG probe was never consulted").toHaveBeenCalled();
+  });
+});
+
 // A REAL process group (no mocked `process.kill`): the fake `claude` backgrounds a
 // SIGTERM-ignoring sleeper in its own group, prints a result line and exits 0. The group
 // kill on exit is the only thing that ends the sleeper; with `detached` removed `-pid` is
@@ -466,10 +614,19 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
   // succeeds.
   describe("isAlive oracle controls", () => {
     const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
-    // Only a standalone sleep binary can be copied under another name (a multicall binary
-    // such as busybox would reject the unknown applet name).
     const hasProc = existsSync("/proc/self/stat");
+    // The "sleep" row runs a copy of the sleep binary under its own name. That works for a
+    // standalone binary and for a multicall one (uutils on ubuntu-26.04, busybox), because the
+    // name it dispatches on is still "sleep". The basename check rejects a busybox-style link.
     const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && hasProc;
+    // The odd-name row cannot copy sleep: a multicall binary picks its command from its own file
+    // name and exits on an unknown one (`coreutils: unknown program 'x) Z y'`, #12783), and the
+    // basename check above does not see that. It runs a /bin/sh script instead. The kernel names a
+    // script's process after the script file, so comm still reads "x) Z y" on GNU and uutils hosts.
+    // After the SIGKILL, the script's current `sleep 1` child is orphaned for at most about 1s. The
+    // loop is bounded at 120 iterations, like the copied `sleep 120`, so a script orphaned by a killed
+    // worker still ends. It calls SLEEP_BIN by path, so a host with no sleep on PATH skips the row.
+    const canRunScript = SLEEP_BIN !== undefined && existsSync("/bin/sh") && hasProc;
     const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const child = actual.spawn(...args);
@@ -477,16 +634,23 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
       return child;
     };
 
-    for (const name of ["sleep", "x) Z y"]) {
-      it.skipIf(!canCopySleep)(
+    for (const [name, runnable] of [
+      ["sleep", canCopySleep],
+      ["x) Z y", canRunScript],
+    ] as const) {
+      it.skipIf(!runnable)(
         `a live process reads alive and a killed one dead (comm "${name}")`,
         async () => {
           const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
           dirs.push(dir);
           const exe = join(dir, name);
-          copyFileSync(SLEEP_BIN as string, exe);
+          if (name === "sleep") {
+            copyFileSync(SLEEP_BIN as string, exe);
+          } else {
+            writeFileSync(exe, `#!/bin/sh\ni=0; while [ "$i" -lt 120 ]; do ${SLEEP_BIN as string} 1; i=$((i+1)); done\n`);
+          }
           chmodSync(exe, 0o755);
-          const child = await spawnReal(exe, ["120"], { stdio: "ignore" });
+          const child = await spawnReal(exe, name === "sleep" ? ["120"] : [], { stdio: "ignore" });
           try {
             const pid = child.pid as number;
             expect(Number.isInteger(pid) && pid > 1).toBe(true);

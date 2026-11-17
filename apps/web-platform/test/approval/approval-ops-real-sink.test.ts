@@ -282,6 +282,7 @@ describe("approval-key-unavailable: an unset SENTRY_USERID_PEPPER", () => {
       send,
       client: () => client,
       viewerRole: async () => "owner",
+      requesterLabel: async () => undefined,
       isEnabled: async () => true,
     });
     expect(sent).toBe(0);

@@ -95,6 +95,9 @@ cat > "$STUBS/git" <<'STUB'
 #!/usr/bin/env bash
 # Delegates to the real git; fails (128) any invocation whose argv contains $FAIL_GIT_MATCH.
 if [[ -n "${FAIL_GIT_MATCH:-}" && "$*" == *"$FAIL_GIT_MATCH"* ]]; then exit 128; fi
+# Argv-recording mode (#12332): fails (128) a read whose argv contains $REQUIRE_FLAG_MATCH but lacks
+# --ignore-submodules=none, so one dropped flag turns that read (and only that read) into "unresolved".
+if [[ -n "${REQUIRE_FLAG_MATCH:-}" && "$*" == *"$REQUIRE_FLAG_MATCH"* && "$*" != *"--ignore-submodules=none"* ]]; then exit 128; fi
 exec "$REAL_GIT" "$@"
 STUB
 chmod +x "$STUBS/date" "$STUBS/sleep" "$STUBS/git"
@@ -235,7 +238,7 @@ assert_eq "1" "$([[ "$SIB1" == *"1 sibling full-gate run(s) already in flight"* 
 # run_wait <work> <args...>: sets OUT, RC, V (verdict word), W (waited_s). RUN_CWD overrides the cwd.
 run_wait() {
   local work="$1"; shift
-  OUT="$( cd "${RUN_CWD:-$work}" && git_fixture_env "$work" >/dev/null 2>&1; PATH="$STUBS:$PATH" REAL_GIT="$REAL_GIT" FAIL_GIT_MATCH="${FAIL_GIT_MATCH:-}" CAP_DIR="$CAPD" timeout 25 bash "$SCRIPT" "$@" 2>&1 )"
+  OUT="$( cd "${RUN_CWD:-$work}" && git_fixture_env "$work" >/dev/null 2>&1; PATH="$STUBS:$PATH" REAL_GIT="$REAL_GIT" FAIL_GIT_MATCH="${FAIL_GIT_MATCH:-}" REQUIRE_FLAG_MATCH="${REQUIRE_FLAG_MATCH:-}" CAP_DIR="$CAPD" timeout 25 bash "$SCRIPT" "$@" 2>&1 )"
   RC=$?
   V="$(sed -n 's/.*verdict=\([A-Z_]*\).*/\1/p' <<<"$OUT" | tail -1)"
   W="$(sed -n 's/.*waited_s=\([0-9]*\).*/\1/p' <<<"$OUT" | tail -1)"
@@ -434,6 +437,9 @@ infra_fixture IW_SUBSTR_OUT 'printf x > apps/web-platform/infra-notes.md && git 
 infra_fixture IW_EMPTY 'git reset -q --hard origin/main'
 infra_fixture IW_CIYML 'mkdir -p .github/workflows && printf x > .github/workflows/ci.yml && git add -A && git commit -qm ci'
 infra_fixture IW_NEAR 'mkdir -p docs/web-platform/infra && printf x > docs/web-platform/infra/notes.md && git add -A && git commit -qm near'
+# A gitlink under the infra tree with the effective config HIDING submodule changes (defensive: this repo carries no gitlinks).
+infra_fixture IW_GITLINK 'git config diff.ignoreSubmodules all && git update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,apps/web-platform/infra/sm && git commit -qm gitlink'
+infra_fixture IW_GITLINK_OUT 'git config diff.ignoreSubmodules all && git update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,docs-sm && git commit -qm gitlink-out'
 infra_fixture IW_IGNORED 'printf "build.log\n" > .gitignore && git add .gitignore && git commit -qm ignore && printf x > apps/web-platform/infra/build.log'
 infra_row() { # <label> <fixture-path> <expected-rc/verdict>
   start_arm; cap "$CAP_BUSY"
@@ -457,6 +463,14 @@ infra_row "a gitignored file under infra is not a change" "$IW_IGNORED" "42/CI_I
 RUN_CWD="$IW_UNTRACKED/apps"; infra_row "an untracked infra file is seen from a subdirectory cwd (repo-root git)" "$IW_UNTRACKED" "12/QUEUE_IN_LOCK"; RUN_CWD=""
 for fm in 'diff --name-only HEAD' 'diff --name-status -M HEAD' 'diff --name-status -M origin/main...HEAD' 'ls-files --others'; do
   FAIL_GIT_MATCH="$fm"; infra_row "a failing git read ($fm) fails closed to QUEUE_IN_LOCK" "$W0" "12/QUEUE_IN_LOCK"; FAIL_GIT_MATCH=""
+done
+
+infra_row "a gitlink under infra is seen although diff.ignoreSubmodules=all hides it -> QUEUE_IN_LOCK" "$IW_GITLINK" "12/QUEUE_IN_LOCK"
+infra_row "a gitlink OUTSIDE infra under the same config stays clean (control)" "$IW_GITLINK_OUT" "42/CI_IS_THE_GATE"
+# Argv-recording rows (#12332): each of the four `git diff` reads must carry --ignore-submodules=none. A gitlink fixture
+# cannot kill one read (a sibling read still shows it), so the shim fails ONLY the read named here when its flag is absent.
+for fm in 'diff --name-only origin/main...HEAD' 'diff --name-only HEAD' 'diff --name-status -M HEAD' 'diff --name-status -M origin/main...HEAD'; do
+  REQUIRE_FLAG_MATCH="$fm"; infra_row "the read ($fm) carries --ignore-submodules=none (a flagless read fails closed)" "$W0" "42/CI_IS_THE_GATE"; REQUIRE_FLAG_MATCH=""
 done
 
 start_arm; cap "$CAP_BUSY"
@@ -663,6 +677,12 @@ scn_gf_a() { scn_gitfail 'diff --name-only HEAD'; }
 scn_gf_b() { scn_gitfail 'diff --name-status -M HEAD'; }
 scn_gf_c() { scn_gitfail 'diff --name-status -M origin/main...HEAD'; }
 scn_gf_d() { scn_gitfail 'ls-files --others'; }
+scn_flag() { REQUIRE_FLAG_MATCH="$1"; scn_infra "$W0"; REQUIRE_FLAG_MATCH=""; }
+scn_fl_a() { scn_flag 'diff --name-only origin/main...HEAD'; }
+scn_fl_b() { scn_flag 'diff --name-only HEAD'; }
+scn_fl_c() { scn_flag 'diff --name-status -M HEAD'; }
+scn_fl_d() { scn_flag 'diff --name-status -M origin/main...HEAD'; }
+scn_gitlink() { scn_infra "$IW_GITLINK"; }
 scn_midline() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_MIDLINE"; res; }
 scn_zero()   { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_ZERO"; res; }
 scn_fb_index() { start_arm; cap "$CAP_BUSY"; wait_small "$LOG_FB_INDEX"; res; }
@@ -691,6 +711,7 @@ real REAL_FULL scn_full; real REAL_GARB scn_garbage; real REAL_STALE scn_stale; 
 real REAL_BOUND scn_boundary; real REAL_MID scn_midkill; real REAL_WF scn_infra_wf; real REAL_RN scn_infra_rn
 real REAL_UN scn_infra_unres; real REAL_EMPTY scn_infra_empty; real REAL_CWD scn_infra_cwd
 real REAL_GFA scn_gf_a; real REAL_GFB scn_gf_b; real REAL_GFC scn_gf_c; real REAL_GFD scn_gf_d
+real REAL_FLA scn_fl_a; real REAL_FLB scn_fl_b; real REAL_FLC scn_fl_c; real REAL_FLD scn_fl_d; real REAL_GITLINK scn_gitlink
 real REAL_MIDLINE scn_midline; real REAL_ZERO scn_zero; real REAL_FBI scn_fb_index; real REAL_FBF scn_fb_force
 real REAL_DETAIL scn_detail; real REAL_OKBUSY scn_okbusy; real REAL_ZEROPAD scn_zeropad; real REAL_TWOLINE scn_twoline
 real REAL_IDLEFAIL scn_idlefail
@@ -698,6 +719,7 @@ real REAL_FBM scn_fb_malformed; real REAL_RRFOO scn_rr_foo; real REAL_CNF scn_cn
 real REAL_IDLEFINAL scn_idle_final; real REAL_OKAY scn_okay; real REAL_STDERR scn_stderr; real REAL_STALEEDGE scn_stale_edge
 real REAL_BIG scn_big; real REAL_CIYML scn_ciyml; real REAL_NEAR scn_near; real REAL_IGNORED scn_ignored
 assert_eq "1" "$([[ "$REAL_DEFER" == 42/CI_IS_THE_GATE/3/3/* ]] && echo 1 || echo 0)" "G0 the unmutated control defers as designed (a red control voids every row)"
+assert_eq "1" "$([[ "$REAL_FLA" == 42/CI_IS_THE_GATE/3/3/* && "$REAL_FLD" == 42/CI_IS_THE_GATE/3/3/* && "$REAL_GITLINK" == 12/QUEUE_IN_LOCK/3/3/* ]] && echo 1 || echo 0)" "G0c the unmutated flag-shim controls defer and the gitlink fixture queues"
 assert_eq "1" "$([[ "$REAL_WF" == 12/QUEUE_IN_LOCK/3/3/* ]] && echo 1 || echo 0)" "G0b the unmutated control keeps the workflow-file diff out of the deferral"
 
 # 1 classifier shape edited so the real sibling text no longer matches
@@ -726,10 +748,15 @@ mutate M8b 2 'diff --name-status -M' 'diff --name-only' && mrow M8b "the rename-
 mutate M8c 1 'git -C "$top" ls-files' 'git ls-files' && mrow M8c "the untracked-file row from a subdirectory" "$REAL_CWD" scn_infra_cwd
 mutate M8d 1 '[[ -n "${names//[[:space:]]/}" ]] || { echo unresolved; return 0; }' ':' && mrow M8d "the empty change set" "$REAL_EMPTY" scn_infra_empty
 # 8e..h each failing git read must fail closed
-mutate M8e 1 'diff --name-only HEAD 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-only HEAD 2>/dev/null)" || true' && mrow M8e "a failing HEAD name-only read" "$REAL_GFA" scn_gf_a
-mutate M8f 1 'diff --name-status -M HEAD 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-status -M HEAD 2>/dev/null)" || true' && mrow M8f "a failing HEAD name-status read" "$REAL_GFB" scn_gf_b
-mutate M8g 1 'diff --name-status -M origin/main...HEAD 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-status -M origin/main...HEAD 2>/dev/null)" || true' && mrow M8g "a failing range name-status read" "$REAL_GFC" scn_gf_c
+mutate M8e 1 'diff --name-only HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-only HEAD --ignore-submodules=none 2>/dev/null)" || true' && mrow M8e "a failing HEAD name-only read" "$REAL_GFA" scn_gf_a
+mutate M8f 1 'diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null)" || true' && mrow M8f "a failing HEAD name-status read" "$REAL_GFB" scn_gf_b
+mutate M8g 1 'diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }' 'diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null)" || true' && mrow M8g "a failing range name-status read" "$REAL_GFC" scn_gf_c
 mutate M8h 1 'ls-files --others --exclude-standard 2>/dev/null)" || { echo unresolved; return 0; }' 'ls-files --others --exclude-standard 2>/dev/null)" || true' && mrow M8h "a failing untracked-file read" "$REAL_GFD" scn_gf_d
+# 8i..l each `git diff` read must carry --ignore-submodules=none (argv-recording shim; one read per mutant)
+mutate M8i 1 'diff --name-only origin/main...HEAD --ignore-submodules=none' 'diff --name-only origin/main...HEAD' && mrow M8i "the committed-range name-only read without the flag" "$REAL_FLA" scn_fl_a
+mutate M8j 1 'diff --name-only HEAD --ignore-submodules=none' 'diff --name-only HEAD' && mrow M8j "the worktree name-only read without the flag" "$REAL_FLB" scn_fl_b
+mutate M8k 1 'diff --name-status -M HEAD --ignore-submodules=none' 'diff --name-status -M HEAD' && mrow M8k "the worktree name-status read without the flag" "$REAL_FLC" scn_fl_c
+mutate M8l 1 'diff --name-status -M origin/main...HEAD --ignore-submodules=none' 'diff --name-status -M origin/main...HEAD' && mrow M8l "the committed-range name-status read without the flag" "$REAL_FLD" scn_fl_d
 # 9 the declared-env SUBAGENT refusal becomes waitable (shape widened AND exclusion removed)
 mutate M9 1 "'^ERROR: refusing a full-gate run .* [1-9][0-9]* sibling full-gate run\(s\) already in flight'" "'refusing a full-gate run'" 'SOLEUR_SUBAGENT=1 is set' 'SOLEUR_SUBAGENT=1 is setX' && mrow M9 "the SUBAGENT-only row" "$REAL_SUB" scn_sub
 # 10 state bounds, classifier anchoring, fallback reasons, capacity anchoring
@@ -823,4 +850,4 @@ assert_eq "$(( PASS + FAIL + 1 ))" "$H1_FLOOR" "H1b the numeric PASS floor equal
 
 # The floor counts the instrument self-test's two rows plus every row above. Set EQUAL to the
 # current count, not below it: slack is budget for a silently deleted row.
-print_results 215
+print_results 226

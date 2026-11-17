@@ -36,6 +36,11 @@ process.env.INNGEST_SIGNING_KEY =
 process.env.INNGEST_EVENT_KEY =
   "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 process.env.INNGEST_DEV = "0";
+// #9137: POST is placement-dispatched. `?fnId=noop` is unclassifiable (no
+// soleur-runtime- prefix) → the pinned direction — so the request only reaches
+// the SDK handler on the exec host. Simulate it: the signature gate these
+// tests assert is the SDK's, which runs AFTER the exec-host check.
+process.env.SOLEUR_HOST_PRIVATE_IP = "10.0.1.10";
 
 async function importRoute() {
   return await import("@/app/api/inngest/route");

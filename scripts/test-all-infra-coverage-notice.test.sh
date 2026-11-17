@@ -416,6 +416,15 @@ GATED=(
   "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
   "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/orphan-process-reaper-mutations|AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS"
+  # #9340 / ADR-262 (2026-11-12 addendum): the six newly admitted --pr-gated suites. Same row
+  # shape — label byte-identical to skip_suite's $1 at the call site, the array it dereferences.
+  "plugins/soleur/test/monitor-pr-checks.test.sh|MONITOR_PR_CHECKS_PATHS"
+  "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh|PLAYWRIGHT_MCP_REDACT_PROXY_PATHS"
+  "tests/scripts/git-data-birth-readiness-gate|GIT_DATA_BIRTH_READINESS_GATE_PATHS"
+  "tests/scripts/betterstack-roundtrip-latency|BETTERSTACK_ROUNDTRIP_LATENCY_PATHS"
+  "scripts/test-contention|TEST_CONTENTION_PATHS"
+  "tests/scripts/sentry-alert-live-fidelity|SENTRY_ALERT_LIVE_FIDELITY_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
@@ -669,7 +678,13 @@ fi
 # A targeted negative fixture is the cheap pin: scripts/ is where this runner and its libraries
 # live, it is touched constantly, and no c4 dependency sits there except the predicate data file
 # itself -- which is named in full, so a whole-path element still declines on a sibling file.
-run_gate_arm scripts-only 'scripts/test-all.sh' || true
+#
+# The fixture is scripts/lint-orphan-test-suites.sh, NOT scripts/test-all.sh: since the 2026-11-12
+# ADR-262 addendum every admitted array spreads PR_GATE_MACHINERY_PATHS, and scripts/test-all.sh is
+# a declared machinery element, so a diff naming it MUST re-arm c4 — that is the machinery
+# self-test clause working, not a widened predicate. A sibling scripts/ file that is neither a
+# machinery element nor a c4 dependency is the surviving honest negative.
+run_gate_arm scripts-only 'scripts/lint-orphan-test-suites.sh' || true
 if [[ "$(gate_ran 'plugins/soleur/test/c4-from-components.test.sh')" == 0 ]]; then
   pass "a scripts-only diff still declines the c4 suite (the predicate has not been widened)"
 else
@@ -782,7 +797,7 @@ fi
 # deleted, or the prefix list it is scoped to can lose an entry. The second is what makes
 # plugins/soleur load-bearing: without that prefix, a brand-new UNTRACKED fixture corpus is
 # invisible to C4_PRODUCER_PATHS and the c4 suite declines on the diff that added it.
-if grep -qF 'git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}"' "$TARGET"; then
+if grep -qF 'git -c core.quotePath=false ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}"' "$TARGET"; then
   pass "the runner feeds untracked files into the diff blob, scoped to the declared prefixes"
 else
   fail "the runner no longer asks git for untracked files, so a new UNTRACKED target is invisible"
@@ -847,6 +862,48 @@ if [[ -d "$REAL_REPO/.git" ]]; then
     pass "the assembly really feeds UNTRACKED files into the blob"
   else
     fail "an untracked file under a declared prefix does not reach _diff_names -- the gate is blind to uncommitted work"
+  fi
+
+  # --- ARGV-RECORDING SHIM (#12332): every one of the SIX `git diff` reads carries --ignore-submodules=none. ----
+  # A gitlink fixture cannot kill one read when a sibling read also lists the gitlink, so this records the argv of
+  # every `diff` the extracted assembly issues (branch scope: four reads, staged scope: the two --cached reads plus the
+  # two branch name-only reads that scope keeps) and asserts the flag per read. A read that loses the flag leaves its
+  # own pattern line without it, and no sibling can mask that.
+  SHIM_BIN="$TMP/argvshim"; SHIM_LOG="$TMP/argvshim.log"
+  mkdir -p "$SHIM_BIN"
+  : > "$SHIM_LOG"
+  cat > "$SHIM_BIN/git" <<'SHIM'
+#!/usr/bin/env bash
+# Records every `diff` argv, then delegates to the real git.
+case " $* " in *" diff "*) printf '%s\n' "$*" >> "$SHIM_LOG" ;; esac
+exec "$SHIM_REAL_GIT" "$@"
+SHIM
+  chmod +x "$SHIM_BIN/git"
+  SHIM_REAL_GIT="$(command -v git)"
+  for _scope in branch staged; do
+    (cd "$REAL_REPO" && env -u GIT_DIR _AFF_SCOPE="$_scope" SHIM_LOG="$SHIM_LOG" SHIM_REAL_GIT="$SHIM_REAL_GIT" PATH="$SHIM_BIN:$PATH" bash -c "
+      source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+      $(cat "$ASSEMBLY")
+      printf '%s' \"\$_diff_names\"" >/dev/null 2>&1 || true)
+  done
+  if [[ "$(wc -l < "$SHIM_LOG")" -ge 6 ]]; then
+    pass "the argv shim recorded the assembly's diff reads (branch and staged scope)"
+  else
+    fail "the argv shim recorded fewer than 6 diff reads -- the per-read flag rows below certify nothing"
+  fi
+  for _read in 'diff --cached --name-only' 'diff --cached --name-status -M' 'diff --name-only HEAD' \
+               'diff --name-only origin/main...HEAD' 'diff --name-status -M HEAD' 'diff --name-status -M origin/main...HEAD'; do
+    _read_lines="$(grep -F -- "$_read" "$SHIM_LOG" || true)"
+    if [[ -z "$_read_lines" ]] || grep -vqF -- '--ignore-submodules=none' <<<"$_read_lines"; then
+      fail "the read '$_read' is issued without --ignore-submodules=none (a config- or ignore=all-hidden gitlink would be invisible)"
+    else
+      pass "the read '$_read' carries --ignore-submodules=none"
+    fi
+  done
+  if grep -vqF -- '--ignore-submodules=none' "$SHIM_LOG"; then
+    fail "some assembly diff read lacks --ignore-submodules=none: $(grep -vF -- '--ignore-submodules=none' "$SHIM_LOG" | head -3 | tr '\n' '|')"
+  else
+    pass "no diff read in the assembly lacks --ignore-submodules=none"
   fi
 fi
 
@@ -959,7 +1016,7 @@ fi
 # the undeterminable / force-all / ci-set arms) + 12 fixed assertions added since (the force-all
 # lever count; dir-child; infra-suite-added; the two source anchors; the two pass()/fail() controls;
 # the docs-only summary parse; the counted-verdict check; the real-state extraction control; and the
-# real-state rename and untracked arms; the cross-arm denominator check; the lever-silent-when-inert check; and the widening guard) = 53.
+# real-state rename and untracked arms; the cross-arm denominator check; the lever-silent-when-inert check; and the widening guard) = 53, + 8 argv-shim rows (#12332: the recorded-reads control, one per read of the six, the none-lacks-the-flag row) = 61.
 #
 # KNOWN, AND DELIBERATE: this floor cannot certify the predicate ARRAYS, because ELEM_TOTAL is
 # derived from the same arrays the element loop walks — trim one and both the observed count and the
@@ -967,7 +1024,7 @@ fi
 # which reads the arrays independently (a per-array cardinality floor plus the this-file
 # self-inclusion check). Do not try to fix it here; a floor derived from its own subject is a
 # tautology whichever way it is written.
-MIN_FIXED=53
+MIN_FIXED=61
 MIN_ASSERTIONS=$(( MIN_FIXED + (6 * ${#GATED[@]}) + ELEM_TOTAL + ${#W7_FILES[@]} ))
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2

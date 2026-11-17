@@ -8,7 +8,7 @@
  * the agent subprocess never sees GitHub tokens.
  */
 
-import { githubApiGet, githubApiGetText } from "./github-api";
+import { githubApiGet, githubApiGetText, type GithubGetOpts } from "./github-api";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("ci-tools");
@@ -114,6 +114,7 @@ export async function readCiStatus(
   owner: string,
   repo: string,
   options?: { branch?: string; per_page?: number },
+  fetchOpts?: GithubGetOpts,
 ): Promise<CiRunSummary[]> {
   const params = new URLSearchParams();
   if (options?.branch) params.set("branch", options.branch);
@@ -122,7 +123,9 @@ export async function readCiStatus(
   const queryString = params.toString();
   const path = `/repos/${owner}/${repo}/actions/runs${queryString ? `?${queryString}` : ""}`;
 
-  const data = await githubApiGet<WorkflowRunsResponse>(installationId, path);
+  const data = fetchOpts
+    ? await githubApiGet<WorkflowRunsResponse>(installationId, path, fetchOpts)
+    : await githubApiGet<WorkflowRunsResponse>(installationId, path);
 
   return data.workflow_runs.map((run) => ({
     id: run.id,

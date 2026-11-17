@@ -1,6 +1,11 @@
 import { basename, dirname, isAbsolute, join } from "path";
 import { realpathSync } from "fs";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  awaitChain,
+  resolveCurrentWorkspaceId,
+  type SupabaseLike,
+} from "./current-workspace-id";
 
 // Pure JWT-claim readers live in the client-safe `@/lib/session-claims` module
 // (so "use client" components can read the active-workspace claim without
@@ -9,6 +14,11 @@ export {
   getCurrentOrganizationId,
   getCurrentWorkspaceId,
 } from "@/lib/session-claims";
+
+// Pure-DB helpers live in the filesystem-free `./current-workspace-id` leaf
+// (#9137 — placement-aware consumers such as byok-resolver must not reach the
+// WORKSPACES_ROOT-bearing module). Re-exported here for import-site stability.
+export { resolveCurrentWorkspaceId } from "./current-workspace-id";
 
 // Resolver for user → current/default workspace mapping (feat-team-workspace-multi-user).
 //
@@ -126,13 +136,6 @@ export async function resolveCurrentOrganizationId(
   return result.data.current_organization_id;
 }
 
-// Minimal structural type for the test-injected supabase client. We only need
-// `.from(table)` returning a thenable query chain. This avoids dragging the
-// full `SupabaseClient<Database>` generic into the resolver signature.
-interface SupabaseLike {
-  from: (table: string) => unknown;
-}
-
 /**
  * True when the user has at least one `workspace_members` row.
  *
@@ -227,48 +230,6 @@ export async function userIsSharedWorkspaceMember(
   // workspace_id !== user_id and be misclassified as a shared member — that
   // flow must classify by role/ownership, not id-equality. See #2778.
   return (result.data ?? []).some((r) => r.workspace_id !== userId);
-}
-
-/**
- * Resolve the user's CURRENT workspace id from `user_session_state`
- * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
- * be stale on an un-refreshed session). Falls back to the user's SOLO
- * workspace (`= userId` per ADR-038 N2) when the claim is null/absent or on
- * transient error — NEVER an arbitrary sibling workspace (the cross-tenant
- * read this whole feature is designed to prevent). Always returns a
- * workspace id; never null.
- *
- * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`, so a
- * tenant client reads only its own row.
- */
-export async function resolveCurrentWorkspaceId(
-  userId: string,
-  supabase: SupabaseLike,
-): Promise<string> {
-  type ChainShape = {
-    select: (cols: string) => ChainShape;
-    eq: (col: string, val: string) => ChainShape;
-    maybeSingle: () => ChainShape;
-  } & PromiseLike<{
-    data: { current_workspace_id: string | null } | null;
-    error: unknown;
-  }>;
-
-  const chain = supabase.from("user_session_state") as ChainShape;
-  const result = await awaitChain<{
-    data: { current_workspace_id: string | null } | null;
-    error: unknown;
-  }>(chain.select("current_workspace_id").eq("user_id", userId).maybeSingle());
-
-  if (result.error) {
-    reportSilentFallback(result.error, {
-      feature: "workspace-resolver",
-      op: "resolveCurrentWorkspaceId",
-      extra: { userId },
-    });
-    return userId; // fail to solo workspace, never a sibling
-  }
-  return result.data?.current_workspace_id ?? userId;
 }
 
 /**
@@ -690,11 +651,6 @@ export async function resolveActiveWorkspaceRepoMeta(
   }
 
   return { ok: true, repoUrl, githubInstallationId };
-}
-
-async function awaitChain<T>(chain: unknown): Promise<T> {
-  // The chain is a thenable; await coerces it without explicit .then chaining.
-  return (await (chain as PromiseLike<T>)) as T;
 }
 
 /**

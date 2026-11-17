@@ -22,17 +22,18 @@
 #     intervals, or one late row would page.
 #   * The paging semantics (lower_than 1, check 300, query 900, confirmation 0, recovery 900,
 #     treat_as_zero, email only, critical_alert=false, the free/paid escalation ternary).
-#   * The alert is PAUSED (`paused = true`) with the `#11869` pointer on the line above it (false
-#     positive: the evaluator reads 0 for a window the query API shows holding rows). The pause is
-#     pinned so it cannot be flipped back, or lose its issue pointer, without this guard going red;
-#     re-arming means changing that row in the same diff as the measured evaluator fix.
+#   * The alert is ARMED (`paused = false`): it sat paused under #11869 (false positive: the
+#     evaluator reads 0 for a window the query API shows holding rows) and was re-armed under #9927
+#     step D2-1a once the #12221 decision-2 precondition — the first post-replace `noop-*` row on
+#     the new host — was measured met. The armed state is pinned so it cannot be re-paused without
+#     this guard going red.
 #   * Both resources are in the apply workflow's MAIN plan -target= allowlist (terraform-target-parity
 #     covers terraform_data only, so this guard is the only enforcement for logtail resources).
 #   * The incident text says the alert is EXPECTED during an owner-authorized replace (no suppression
 #     is built; it stays open on #11820), the runbook section names the alert, the standing-alarms table
 #     names it, and infra-validation.yml runs this guard in a blocking step.
 #
-# WHAT THIS FILE DOES NOT PROVE: that the alert is paused IN PRODUCTION (set by the merge apply), why the
+# WHAT THIS FILE DOES NOT PROVE: that the alert is unpaused IN PRODUCTION (set by the merge apply), why the
 # evaluator reads 0 (#11869; `JSONType` is the first use in the file but the sibling `egress_gw_probe_silent`
 # showed the same stuck-at-0 without it, until #12180 inverted it to a missing-host count), nor that a real row reaches Better Stack. It compares values one diff can edit together — consistency, not
 # integrity.
@@ -186,11 +187,9 @@ top_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
 top_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
   && ok "treat_as_zero, so a fully dark window reads 0 and an open incident can observe recovery" \
   || no "on_missing_data is not treat_as_zero"
-top_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*true' \
-  && grep -qE '^  # Paused pending #11869' <<< "$ALERT" \
-  && grep -qF 'PAUSED PENDING #11869' "$TF" \
-  && ok "paused = true on its own line, with the #11869 pointer in the alert block and the explanation above the locals (the false-positive pause)" \
-  || no "the alert is not paused (paused = true on its own line with the #11869 pointer) - re-arm only with the measured evaluator fix in the same diff"
+top_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
+  && ok "paused = false on its own line — the alert is armed (re-armed under #9927 step D2-1a / #12221 decision 2; was paused under the #11869 false positive)" \
+  || no "the alert is not armed (paused = false on its own line) — the #9927 D2-1a re-arm must not be lost silently"
 top_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
   && top_in "$ALERT" 'push[[:space:]]*=[[:space:]]*false' \
   && top_in "$ALERT" 'call[[:space:]]*=[[:space:]]*false' \
@@ -456,13 +455,13 @@ s = s.replace(old, "possible during a host change")'
     'old = "sed -i \x27s|@@HOST_NAME@@|soleur-inngest-prd|g\x27"
 assert s.count(old) == 1
 s = s.replace(old, "sed -i \x27s|@@HOST_NAME@@|soleur-inngest-prod|g\x27")'
-  # A13 - the pause is flipped back to false without the measured evaluator fix: the false positive returns.
-  mutate RED "A13 paused flips back to false (the #11869 false positive would re-open)" TF \
-    "the alert is not paused" \
+  # A13 - the alert is re-paused: the armed declaration this guard pins is lost silently.
+  mutate RED "A13 paused flips back to true (the #9927 D2-1a re-arm is silently lost)" TF \
+    "the alert is not armed" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent\" \{.*?\n  paused\s*=\s*)true", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent\" \{.*?\n  paused\s*=\s*)false", s, re.S)
 assert m
-s = s[:m.end(1)] + "false" + s[m.end():]'
+s = s[:m.end(1)] + "true" + s[m.end():]'
   # Must-PASS: layout is not part of the contract (the resource flattens the predicate with
   # replace(…, "/\\s+/", " ")).
   mutate PASS "A6 every heredoc line is re-indented far deeper (layout is not part of the contract)" TF \

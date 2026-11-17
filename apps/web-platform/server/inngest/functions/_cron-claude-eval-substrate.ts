@@ -1,15 +1,19 @@
 import { RUN_REPORT_CRONS } from "./_cron-run-reports";
 import {
   countFilingDenials,
+  countNewRuleDenials,
   countPermissionDenials,
   emitCronFilingDenyMarker,
+  type NewRuleId,
 } from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CRON_GIT_CONFIG_PIN, agentGitConfigReadable, withCronGitConfigPin, xdgGitResidualPresent } from "@/server/host-git";
 import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
@@ -138,6 +142,9 @@ export interface ParsedEvalResult {
   filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
   // #7122 — all denials, by closed tool class (see SpawnResult.permissionDenialCount).
   allDenials: { permissionDenialCount: number; deniedTools: string[] };
+  // #12757 — denials by the rules #12757 added (closed rule ids and counts only; never
+  // the command or the path, which can carry tokens). Only rules with a count appear.
+  newRuleDenials: Partial<Record<NewRuleId, number>>;
   // #7122 — the `result` text ONLY when the event carried a string; `resultText`
   // above stands in `""` (two characters) for an absent one, which a strict consumer
   // must not mistake for a message.
@@ -187,6 +194,7 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
       fieldPresent: Array.isArray(r.permission_denials),
     },
     allDenials: countPermissionDenials(r.permission_denials),
+    newRuleDenials: countNewRuleDenials(r.permission_denials),
     finalMessage: typeof r.result === "string" ? r.result : undefined,
     cost: {
       costUsd:
@@ -277,6 +285,46 @@ export function resolveClaudeBin(): string {
   );
 }
 
+// #12757 (CTO H1/H4) — transition latches for the two git-config probes, shared by both chokepoints (spawnSimple and
+// the spawnClaudeEval env). A latch fires once on ok→bad and re-arms when the probe reads ok again, so a cached "ok"
+// never outlives the file (learning 2026-10-12). Module-level: one report per transition per process, not per spawn.
+let cronGitIdentityBad = false;
+let cronGitXdgPresent = false;
+/** Test seam: a vitest retry or a failed row must not inherit a latch left set by an earlier row. */
+export function resetCronGitProbeLatchesForTest(): void {
+  cronGitIdentityBad = false;
+  cronGitXdgPresent = false;
+}
+
+/**
+ * Probe the identity file and the XDG residual before a cron spawn; report a transition to Sentry. Never blocks the
+ * spawn and never throws. The payload carries no path and no file contents.
+ */
+function probeCronGitConfig(): void {
+  try {
+    const readable = agentGitConfigReadable();
+    if (!readable && !cronGitIdentityBad) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "cron-git-config-pin",
+        message: "agent git identity file missing or unreadable; cron git commits will fail with Author identity unknown",
+      });
+    }
+    cronGitIdentityBad = !readable;
+    const xdg = xdgGitResidualPresent();
+    if (xdg && !cronGitXdgPresent) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "cron-git-xdg-config-present",
+        message: "$HOME/.config/git/ignore or attributes exists; git reads it whatever the pin says",
+      });
+    }
+    cronGitXdgPresent = xdg;
+  } catch {
+    // A probe must never block a spawn (both probes catch internally; this guards the report path).
+  }
+}
+
 export function spawnSimple(
   cmd: string,
   args: string[],
@@ -286,6 +334,7 @@ export function spawnSimple(
   signal: NodeJS.Signals | null;
   stderr: string;
 }> {
+  probeCronGitConfig();
   return new Promise((resolve) => {
     // Capture stderr (stdin/stdout stay ignored). Without this, a non-zero
     // exit — e.g. `git clone` exit 128 — discarded the only line that says
@@ -295,7 +344,8 @@ export function spawnSimple(
     const child = spawn(cmd, args, {
       stdio: ["ignore", "ignore", "pipe"],
       cwd: opts.cwd,
-      env: opts.env ?? process.env,
+      // #12757 — no caller env can name another global gitconfig; a caller's stricter /dev/null is kept (F-A).
+      env: withCronGitConfigPin(opts.env ?? process.env),
     });
     let stderr = "";
     if (child.stderr) {
@@ -545,7 +595,7 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git status", // SKILL Phase 5 — git status --porcelain
     "git add", // SKILL Phase 5 — git add -- <literal-path> (blanket forms hook-denied)
     "git commit", // SKILL Phase 5 — git commit -m …
-    "git checkout", // SKILL Phase 3 — worktree-add fallback path
+    "git checkout", // branch creation only: gitVerbReason admits `git checkout [-q] -b <branch>` (#11076 K1')
     "git worktree", // SKILL Phase 3/6 — git worktree add … / remove …
     "git branch", // SKILL Phase 6 — git branch -D … (cleanup)
     "git push", // SKILL Phase 5 — git push -u origin … (origin-only via gitVerbReason)
@@ -686,6 +736,9 @@ export const DEFAULT_CLAUDE_SETTINGS = {
 const HOOK_REL_PATH =
   "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
 const ALLOWLIST_REL_PATH = ".claude/cron-allow.txt";
+// #11076 — the opt-in PostToolUse(Bash) gh-output framing hook (ADR-287 addendum 2026-11-12).
+export const FRAMING_HOOK_REL_PATH =
+  "apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs";
 
 // Resolve `node` by ABSOLUTE path for the hook command. Relying on PATH lookup
 // risks a PATH-drift fail-open (a cron whose buildSpawnEnv trims PATH → node not
@@ -700,23 +753,125 @@ export function resolveNodeBin(): string {
   return "node";
 }
 
+// #11076 — the single PostToolUse entry for the gh-output framing hook. The builder and
+// runFramingHookSelfTest both use it, so the registered command and the probed binary
+// match by construction.
+function framingHookEntry(
+  spawnCwd: string,
+  nodeBin: string = resolveNodeBin(),
+): { matcher: string; hooks: Array<{ type: string; command: string }> } {
+  return {
+    matcher: "Bash",
+    hooks: [{ type: "command", command: `${nodeBin} ${join(spawnCwd, FRAMING_HOOK_REL_PATH)}` }],
+  };
+}
+
 // Build the per-spawn settings overlay: the inert base + the deny-by-default
 // hook under a `*` catch-all matcher (so NO tool class is unhooked — an unhooked
 // class fails open per probe). The hook command is `<node> <hook> <allowlist>`,
 // all absolute, so it is independent of the hook's runtime CWD.
+//
+// #11076 — `frameGhOutput === true` (strict) adds the PostToolUse(Bash) framing hook,
+// which annotates gh read output as untrusted. Default off, and no caller passes it, so
+// the default output is byte-identical to the builder before this option existed. The key
+// is added conditionally: `PostToolUse: undefined` would serialise the same but leave an
+// own key on the object.
 export function buildCronEvalSettings(
   spawnCwd: string,
+  opts: { frameGhOutput?: boolean } = {},
 ): Record<string, unknown> {
   const command = `${resolveNodeBin()} ${join(spawnCwd, HOOK_REL_PATH)} ${join(
     spawnCwd,
     ALLOWLIST_REL_PATH,
   )}`;
+  const hooks: Record<string, unknown> = {
+    PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+  };
+  if (opts.frameGhOutput === true) hooks.PostToolUse = [framingHookEntry(spawnCwd)];
   return {
     ...DEFAULT_CLAUDE_SETTINGS,
-    hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
-    },
+    hooks,
   };
+}
+
+// #11076 — spawn-time self-test of a REGISTERED gh-output framing hook. Keyed on the
+// file: with no PostToolUse key (every cron today) it returns at once, reading nothing and
+// running nothing. With the key it (i) deep-equals the registration against the one
+// expected entry, (ii) runs a gh-read probe that must print exactly the framed object, and
+// (iii) runs an `ls` probe that must print nothing. The probes are deterministic (fixed
+// payloads, no network), so any failure is a defect in the registered hook and throws,
+// which aborts the cron like every containment probe. It cannot see the file being
+// changed during the run. Containment denies Write, Edit and MultiEdit to the file and admits
+// only branch forms of checkout/switch; ADR-287 (addendum 2026-11-12, item 3) says what that
+// does not cover.
+export function runFramingHookSelfTest(args: {
+  spawnCwd: string;
+  cronName: string;
+  nodeBin: string;
+  settings: { hooks?: Record<string, unknown> } | undefined;
+}): void {
+  const { spawnCwd, cronName, nodeBin, settings } = args;
+  const hooks = settings?.hooks ?? {};
+  if (!Object.hasOwn(hooks, "PostToolUse")) return;
+  const fail = (what: string): never => {
+    throw new Error(`[${cronName}] gh-output framing hook self-test FAILED: ${what}. Aborting cron.`);
+  };
+  const expected = [framingHookEntry(spawnCwd, nodeBin)];
+  if (!isDeepStrictEqual(hooks.PostToolUse, expected)) {
+    fail(
+      `registration mismatch; expected ${JSON.stringify(expected).slice(0, 400)} got ${String(JSON.stringify(hooks.PostToolUse)).slice(0, 400)}`,
+    );
+  }
+  const framingAbs = join(spawnCwd, FRAMING_HOOK_REL_PATH);
+  // Its own exec: the containment `run` helper is hard-wired to that binary and its
+  // allowlist argument. A non-zero exit, a timeout or a missing binary fails as `exec-error`.
+  const exec = (probe: string, command: string): string => {
+    try {
+      return execFileSync(nodeBin, [framingAbs], {
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          tool_response: { stdout: "x", stderr: "" },
+        }),
+        encoding: "utf-8",
+        timeout: 10_000,
+      });
+    } catch (err) {
+      return fail(`${probe} probe exec-error: ${(err as Error).message.slice(0, 200)}`);
+    }
+  };
+  const ghStdout = exec("gh-read", "gh issue view 1");
+  const framed = {
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: UNTRUSTED_PREAMBLES.github },
+  };
+  if (ghStdout.trim() === "") fail("gh-read probe empty-stdout");
+  let ghGot: unknown;
+  try {
+    ghGot = JSON.parse(ghStdout);
+  } catch {
+    fail(`gh-read probe non-json (stdout length ${ghStdout.length})`);
+  }
+  if (!isDeepStrictEqual(ghGot, framed)) {
+    // Name the failure kind and where it diverges; never echo the whole payload.
+    const out = (ghGot as { hookSpecificOutput?: Record<string, unknown> })?.hookSpecificOutput;
+    const keys = out && typeof out === "object" ? Object.keys(out).sort().join(",").slice(0, 80) : "none";
+    if (keys !== "additionalContext,hookEventName" || Object.keys(ghGot as object).join(",") !== "hookSpecificOutput") {
+      fail(`gh-read probe key-set-mismatch (hookSpecificOutput keys: ${keys})`);
+    }
+    if (out!.hookEventName !== "PostToolUse") {
+      fail(`gh-read probe event-mismatch (hookEventName ${JSON.stringify(String(out!.hookEventName).slice(0, 40))})`);
+    }
+    if (typeof out!.additionalContext !== "string") {
+      fail(`gh-read probe preamble-not-string (${typeof out!.additionalContext})`);
+    }
+    const got = out!.additionalContext as string;
+    const want = UNTRUSTED_PREAMBLES.github;
+    let at = 0;
+    while (at < got.length && at < want.length && got[at] === want[at]) at++;
+    fail(`gh-read probe preamble-mismatch (length ${got.length} vs ${want.length}, first difference at ${at})`);
+  }
+  if (exec("ls", "ls").trim() !== "") fail("ls probe framed a non-gh command");
 }
 
 // Spawn-time hook self-test (D2 — mitigates the probe D-new-1 fail-open: a
@@ -934,18 +1089,22 @@ export function runHookSelfTest(args: {
     );
   }
   let matcherOk = false;
+  // Hoisted out of the try (#11076) so the framing self-test below reads the same parse.
+  let settings:
+    | {
+        hooks?: {
+          PreToolUse?: Array<{
+            matcher?: string;
+            hooks?: Array<{ command?: string }>;
+          }>;
+        } & Record<string, unknown>;
+      }
+    | undefined;
   try {
-    const settings = JSON.parse(
+    settings = JSON.parse(
       readFileSync(join(spawnCwd, ".claude", "settings.json"), "utf-8"),
-    ) as {
-      hooks?: {
-        PreToolUse?: Array<{
-          matcher?: string;
-          hooks?: Array<{ command?: string }>;
-        }>;
-      };
-    };
-    matcherOk = (settings.hooks?.PreToolUse ?? []).some(
+    ) as typeof settings;
+    matcherOk = (settings?.hooks?.PreToolUse ?? []).some(
       (entry) =>
         entry.matcher === "*" &&
         (entry.hooks ?? []).some((h) =>
@@ -1025,6 +1184,9 @@ export function runHookSelfTest(args: {
       );
     }
   }
+
+  // #11076 — only does work when settings.json registers a PostToolUse key.
+  runFramingHookSelfTest({ spawnCwd, cronName, nodeBin, settings });
 }
 
 export async function setupEphemeralWorkspace(args: {
@@ -1371,6 +1533,11 @@ async function spawnClaudeEvalUnguarded(args: {
   // #7122 — all denials (not only filings) and the run's final message, from the same
   // result event. Both stay undefined until a `result` event parses.
   let evalAllDenials: ParsedEvalResult["allDenials"] | undefined;
+  // #12757 — new-rule deny telemetry fires at most once per rule per run.
+  const newRuleDenyReported = new Set<string>();
+  // #12757 fix round — a positive identity, not a list of hookless crons: the file the hook reads its allowlist from.
+  const hookCountsNewRules =
+    existsSync(join(spawnCwd, ".claude", "cron-allow.txt")) && !CRON_NO_FILE_TOOLS.includes(cronName);
   let evalFinalMessage: string | undefined;
   let evalFinalMessageTruncated: boolean | undefined;
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
@@ -1420,6 +1587,7 @@ async function spawnClaudeEvalUnguarded(args: {
       const outputFormatFlags = flags.some((f) => f === "--output-format")
         ? []
         : ["--output-format", "json"];
+      probeCronGitConfig();
       const child = spawn(
         claudeBin,
         [
@@ -1443,6 +1611,9 @@ async function spawnClaudeEvalUnguarded(args: {
         env: {
           ...buildSpawnEnv(installationToken),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+          // #12757 — LAST, so a cron's buildSpawnEnv cannot replace it. Unlike spawnSimple this keeps no /dev/null:
+          // the agent commits, and needs the identity the pinned file carries.
+          ...CRON_GIT_CONFIG_PIN,
         },
       });
 
@@ -1471,6 +1642,23 @@ async function spawnClaudeEvalUnguarded(args: {
             evalCost = parsedResult.cost;
             evalFilingDenials = parsedResult.filingDenials;
             evalAllDenials = parsedResult.allDenials;
+            // #12757 (CTO H3) — the deny reason never leaves the host, so report how
+            // often each new containment rule fired. One event per rule per run; rule
+            // id and count only.
+            // Counted only where the containment hook really judged the denials: its allowlist file exists in the
+            // spawn cwd (daily-triage / follow-through-monitor spawn in the server cwd, where --allowedTools denies),
+            // and the cron is not no-file-tools (decide() refuses there before any #12757 rule).
+            for (const [rule, count] of hookCountsNewRules ? Object.entries(parsedResult.newRuleDenials) : []) {
+              if (newRuleDenyReported.has(rule)) continue;
+              newRuleDenyReported.add(rule);
+              warnSilentFallback(null, {
+                feature: "cron-claude-eval",
+                op: "cron-containment-new-rule-deny",
+                message: "cron containment denied a tool call under a #12757 rule",
+                tags: { cron: cronName, rule },
+                extra: { count, rule, cron: cronName }, // tags do not reach the Better Stack mirror
+              });
+            }
             // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut
             // must not survive as a partial prefix, and a front-cut tail is not parseable.
             if (!captureFinalMessage || parsedResult.finalMessage === undefined) {

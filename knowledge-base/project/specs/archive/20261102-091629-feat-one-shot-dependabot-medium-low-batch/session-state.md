@@ -11,7 +11,7 @@ None. (Planning subagent reported: no Task/agent-spawn capability inside its own
 
 ### Decisions
 - Pillow alert #302 already `state: fixed` (Pillow==13.0.0 via merged PR #11646) — verify-only, batch scope is the 15 npm alerts.
-- hono 2.x migration NOT needed — GHSA-5r4p patches on 4.x (4.13.11); @hono/node-server 1→2 upstream-sanctioned. Dependabot's open PR #11468 (@hono/node-server 1.19.17→2.1.5, apps/web-platform/package-lock.json) is SUPERSEDED by this batch — close it as superseded at ship time per scripts/close-superseded-dependabot-prs.sh convention.
+- hono 2.x migration NOT needed — the hono advisory patches on 4.x (4.13.11); @hono/node-server 1→2 upstream-sanctioned. Dependabot's open PR #11468 (@hono/node-server 1.19.17→2.1.5, apps/web-platform/package-lock.json) is SUPERSEDED by this batch — close it as superseded at ship time per scripts/close-superseded-dependabot-prs.sh convention.
 - minimatch/glob require `overrides` (advisories cover every installed major, no backports).
 - roster-entry-gate.test.ts verified GREEN 23/23 on current main — brief's "KNOWN MAIN BREAKAGE" does not reproduce; work phase re-verifies (AC-12).
 - Drain-guard ratchet enumerated: WATCHED_PACKAGES 14→17, REQUIRED 36→41, FLOOR_ANCHORS 4 updates + 3 adds + 1 delete, `MIN_ROWS` 36→41 / `MIN_RESOLVED` 36→38.

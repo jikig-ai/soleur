@@ -9,8 +9,11 @@ import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
-import { logProxyCertExpiryAtStartup } from "./proxy-tls";
-import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
+import { startInngestExecReceiver } from "./inngest-exec-receiver";
+import { loadProxyHelloKeys, logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { denyReporter } from "./proxy-deny-report";
+import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
+import { applyPlainHttpTimeouts } from "./http-timeouts";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -84,6 +87,11 @@ const log = createChildLogger("startup");
 // an un-attributable churn. sentry.server.config.ts disables Sentry's auto
 // OnUncaughtException/OnUnhandledRejection integrations so these report once.
 installCrashHandlers();
+
+// #12289 — read the relay hello keys (current and the verify-only slot, ADR-323 Decision 9) into module memory and
+// delete both from process.env NOW, before the server can spawn any child process (a child spawned with the
+// default or a spread environment would inherit them). Null values when the relay is not configured (dev / single host).
+loadProxyHelloKeys();
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -161,11 +169,15 @@ app.prepare().then(() => {
 
   // #10479 (review of #12181): idle keep-alive must outlast Cloudflare's reuse of pooled origin connections.
   // Node's 5 s default closes them first, and Cloudflare then reuses a dead socket (intermittent 502/520) or
-  // re-handshakes constantly. Same constant as the :443 listener; headersTimeout stays above it. The
-  // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
-  // rate after the deploy.
+  // re-handshakes constantly. Same keep-alive constant as the :443 listener. The header phase is bounded explicitly by
+  // applyPlainHttpTimeouts: 60 s for the headers inside a 300 s whole-request window (ADR-321 item 12, ruled by CTO agent
+  // 2026-11-08). The earlier `headersTimeout = keepAlive + 5 s` assignment was inert: Node bounds the header phase by
+  // min(headersTimeout, requestTimeout), so the operative cutoff was the inherited 300 s. The :443 listener keeps Node's
+  // own 60 s default and assigns neither property (ruling R-A). Node sweeps on a 30 s interval, so the real cutoff is the
+  // timeout plus up to 30 s. The canary is a health gate and does not exercise Cloudflare's connection reuse, so watch
+  // the 502/520 rate after the deploy.
   server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
-  server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000;
+  applyPlainHttpTimeouts(server);
 
   const wss = setupWebSocket(server, dev);
 
@@ -178,8 +190,8 @@ app.prepare().then(() => {
   // proxy listener. A session that lands on a non-owning web host is relayed
   // here (session-proxy.ts) and attached as a PRE-AUTHENTICATED native session
   // via `attachProxiedSession`. `createProxyServer` returns null in dev/
-  // single-host (no PROXY_TLS material, or SOLEUR_PROXY_BIND unset) — entirely
-  // inert, no throw. Log the long-lived cert's expiry once at startup (the only
+  // single-host (no PROXY_TLS material, SOLEUR_PROXY_BIND unset, no peer allowlist,
+  // no usable hello key, a bad port, or a failed listen) — entirely inert, no throw. Log the long-lived cert's expiry once at startup (the only
   // expiry signal besides the Better Stack monitor).
   logProxyCertExpiryAtStartup();
   const proxyServer = createProxyServer({
@@ -193,6 +205,13 @@ app.prepare().then(() => {
       });
     },
   });
+
+  // #9137 (ADR-033 amendment 2026-11-10) — the exec host's private-TLS ingress
+  // for forwarded Inngest step calls: sibling https listener on :8445 sharing
+  // the app's own request handler (the origin-tls transport pattern — marked
+  // POSTs to /api/inngest are re-emitted on `server`). Inert when the relay's
+  // TLS material, private bind, or peer allowlist is absent — never throws.
+  const execReceiver = startInngestExecReceiver({ httpServer: server });
 
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
@@ -330,6 +349,10 @@ app.prepare().then(() => {
     if (process.env.SOLEUR_EGRESS_REAPER === "1") {
       reapOrphanEgressForwarders();
     }
+    // A REQUIRED start whose material is absent or invalid has already begun exiting (flush, then process.exit; a bind error
+    // on :443 can still exit later, from its own handler): skip the ready log, startup event and probes on a process that is
+    // dying, so they cannot report a healthy start. The reaper above stays first: it is idempotent cleanup the next boot needs.
+    if (originTls === null && process.env[ORIGIN_TLS_REQUIRED_ENV] === "1") return;
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,
@@ -466,6 +489,12 @@ app.prepare().then(() => {
     // (null) in dev/single-host. In-flight proxied sessions drain via the wss
     // client-close loop below, same as native ones.
     if (proxyServer) proxyServer.close();
+    // #9137 — stop accepting forwarded step calls from peer hosts. Inert
+    // (null) wherever the receiver never started.
+    if (execReceiver) execReceiver.close();
+    // Emit the open deny-window summary events and the relay_hello_window line before the process goes
+    // away: a deploy (docker stop) lands exactly while a roll-stagger burst of denies is in flight.
+    denyReporter.flush();
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {

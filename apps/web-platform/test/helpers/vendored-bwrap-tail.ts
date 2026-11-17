@@ -165,7 +165,8 @@ export interface BuilderTail {
 
 /**
  * `[--dev /dev] [--unshare-pid] [--unshare-user ...caps] then the two exclusive proc branches, then
- * `--unsetenv <var>` and the conditional `--disable-userns` (claude-code 2.1.311 / SDK 0.3.311). Both new calls sit AFTER
+ * `--unsetenv <var>` and the conditional `--disable-userns` (added in claude-code 2.1.311 / SDK 0.3.311; unchanged at 2.1.321 /
+ * 0.3.321, re-measured 2026-11-10). Both new calls sit AFTER
  * the proc branch: the mask is still the last mount the builder emits. `--unsetenv` takes an identifier (opaque);
  * `--disable-userns` is pushed only when no seccomp helper is in use AND nested user namespaces are not allowed AND the
  * bubblewrap it probes supports it (>= 0.8.0, not setuid). Measured 2026-11-04: ABSENT from the production-image capture and
@@ -603,7 +604,7 @@ export function assertHelperSelection(
       lines.push(`HELPER_SELECTION ${k} want ${pins[k]} got ${counts[k]} (${JSON.stringify(HELPER_SELECTION_NEEDLES[k])})`);
     }
   }
-  // At least one hit per mapping anchor (a tripwire, not a census: the key also appears in the settings schema, destructures and the managed-policy list, so its count moves with unrelated edits; measured 12 and 4 hits at 2.1.311).
+  // At least one hit per mapping anchor (a tripwire, not a census: the key also appears in the settings schema, destructures and the managed-policy list, so its count moves with unrelated edits; measured 12 and 4 hits at 2.1.311, and again 12 and 4 at 2.1.321 on 2026-11-10).
   const mappingKeys = Object.keys(SETTINGS_MAPPING_NEEDLES);
   if (mappingKeys.length === 0) lines.push("HELPER_SELECTION settingsMapping has no anchors (a tripwire over zero needles cannot fire)");
   for (const k of mappingKeys) {
@@ -624,7 +625,8 @@ export function assertHelperSelection(
 // The SDK's command-side helper (the multicall embedded in the same `claude` binary) prints
 // `apply-seccomp: <step>: <strerror>` for each failing step. The step literal sits in the binary's string
 // pool as `apply-seccomp: <step>` followed by NUL. Measured on claude-agent-sdk 0.3.311 (the same binary as
-// claude-code 2.1.311): 21 distinct strings, one occurrence each. 19 are `<step>` literals that take a
+// claude-code 2.1.311): 21 distinct strings, one occurrence each; re-measured 2026-11-10 on 0.3.321 / 2.1.321 (one
+// byte-identical binary): the same 21. 19 are `<step>` literals that take a
 // `: <strerror>` suffix; `observe sendmsg failed` and the `user.max_user_namespaces` warning are fixed messages with no
 // errno suffix. (0.3.284 / 2.1.293 carried 17: 16 steps and `observe sendmsg failed`.)
 
@@ -696,7 +698,8 @@ export function assertHelperStepCensus(found: readonly string[], pins: HelperSte
 // what an egress session reaches its proxy through; under the variant they fail to open their AF_UNIX client and the
 // no-egress session simply has no working proxy, which it must not have anyway). The source-form of both functions is
 // embedded in the binary (minified names differ per release), so they are matched with name-agnostic regexes.
-// Measured 2026-11-04 on claude-agent-sdk 0.3.311 and claude-code 2.1.311 (one byte-identical binary): one source-form occurrence.
+// Measured 2026-11-04 on claude-agent-sdk 0.3.311 and claude-code 2.1.311 (one byte-identical binary): one source-form occurrence;
+// re-measured 2026-11-10 on 0.3.321 / 2.1.321 (one byte-identical binary): still one.
 // (0.3.284 / 2.1.293 anchored on `TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${`, which the IPv6-first rewrite removed.)
 
 export const BRIDGE_WRAPPER_ANCHOR = "TCP6-LISTEN:${";
@@ -769,7 +772,7 @@ export function assertBridgeStructure(scan: BridgeScan, label: string): void {
 // compared (numeric, never lexicographic), so a later lower occurrence after a compliant first cannot hide.
 
 export const BUN_FLOOR: readonly [number, number, number] = [1, 4, 4];
-/** Both packages are examined by the same code path, so they can diverge again (they are one byte-identical binary at 0.3.311 / 2.1.311). */
+/** Both packages are examined by the same code path, so they can diverge again (they are one byte-identical binary at 0.3.321 / 2.1.321, as at 0.3.311 / 2.1.311). */
 export const BUN_FLOOR_PACKAGES: readonly ("claude-agent-sdk" | "claude-code")[] = ["claude-agent-sdk", "claude-code"];
 const BUN_BANNER_PREFIX = "Bun v";
 const BUN_BANNER_READ_BYTES = 40;

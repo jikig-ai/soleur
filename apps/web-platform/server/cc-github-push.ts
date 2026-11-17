@@ -45,9 +45,10 @@ import {
   SAFE_SEGMENT_RE,
 } from "./resolve-protected-branches";
 import type { Persona } from "./workspace-mode";
+import { GITHUB_PUSH_BRANCH_TOOL } from "./approval/tools";
 
 /** The soleur_platform FQN of the tool. Kept equal to `GITHUB_PUSH_BRANCH_TOOL_FQN` in github-tools.ts by a test. */
-const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
+const PUSH_FQN = GITHUB_PUSH_BRANCH_TOOL;
 
 /**
  * The approval-required tools a cc builder is wired for (grants-aware, registered ONLY through this module's registrar).

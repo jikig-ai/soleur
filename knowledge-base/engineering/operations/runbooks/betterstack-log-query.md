@@ -85,6 +85,17 @@ Live standing alarms over this source:
   then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
   an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
   check, so the `detail=''` disjunct is what carries it), not a healthy skip.
+- **`logtail_exploration_alert.inngest_registry_empty`** (#10538, `higher_than 0` over 900 s, checked every 300 s,
+  missing data counts as zero, recovery 7200 s): `soleur-inngest-registry-empty-prd`. Pages (email and push) when a
+  dedicated Inngest host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row is serving (`server_active=active`, `http_code=200`),
+  past the uptime floor (`uptime_s` above 900), and its `registry_fns` is NOT a positive integer (0, `__UNREADABLE__`, or
+  the field missing): the server answers but owns no functions, so nothing is planned. Leg B reads the same field row on the
+  vector-down phone-home envelope (`shipper='cloud-init-phone-home'`, `stage='inngest-server-probe-vector-down'`) from
+  `.detail`. A not-serving row is the probe heartbeat's (`betteruptime_heartbeat.inngest_server_probe`), not this alert's.
+  It does NOT see a stale non-zero registry (#12742). Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift
+  guard `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`. Runbook:
+  [`inngest-server.md`](./inngest-server.md) "Registry-empty alert (#10538)". Readback: `--grep SOLEUR_INNGEST_SERVER_PROBE`,
+  decode, keep `host_role=dedicated` rows, read `registry_fns=` / `uptime_s=` / `http_code=` per row.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -203,7 +214,7 @@ Live standing alarms over this source:
   same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
   `message.sandboxErrorCode IN ('helper_userns_eperm', 'helper_step_eperm')`. That is the live-session mirror of a
   hosted agent's Bash `tool_result` whose line is exactly `apply-seccomp: <step>: Operation not permitted` (or the
-  `EPERM` spelling; line-anchored, nothing trailing) for one of the step strings (19 at SDK 0.3.311) of the SDK's command-side helper
+  `EPERM` spelling; line-anchored, nothing trailing) for one of the step strings (19 at SDK 0.3.311; re-read 2026-11-10 on 0.3.321, unchanged, #12514) of the SDK's command-side helper
   (exact allowlist read from the vendored binary, `HELPER_STEPS` in `server/sandbox-startup-classifier.ts`).
   `helper_userns_eperm` is the `unshare(CLONE_NEWUSER)` step (the helper could not create its user namespace, so EVERY
   Bash call in that session fails); `helper_step_eperm` is any other step (the #10455 e regression net: while
@@ -329,13 +340,13 @@ Live standing alarms over this source:
   incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
   evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
   unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
-  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, runs the same
-  query against an identifier no host emits; it must fire. Until it has fired, a green production
-  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here; the
+  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, ran the same
+  query against an identifier no host emits; it fired (2026-11-06) and was retired by #12189. An
+  evaluator error also reads 0 (a quiet failure here; the
   sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
   or journal).
-  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary decision
-  table:
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary's retirement
+  record:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
   An open incident does not by itself mean a host is silent: read `rows_in_window` from
   `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which
@@ -369,10 +380,12 @@ Live standing alarms over this source:
 
 - **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
-  **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
-  `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
-  stuck-at-0 showed on `egress_gw_probe_silent` (no `JSONType`) before #12180 inverted it, so the cause is not yet isolated and no
-  replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
+  **ARMED** (re-armed 2026-11-12 under #9927 step D2-1a, on #12221 decision 2). It was paused pending
+  #11869: its first evaluation opened an incident and it read `Current value: 0` while the query API
+  showed the rows arriving every ~5 min; the same stuck-at-0 showed on `egress_gw_probe_silent` (no
+  `JSONType`) before #12180 inverted it. The cause was never isolated and the predicate is UNCHANGED,
+  so the stuck-at-0 can recur — an open incident while rows arrive is that failure mode, not a real
+  silence; the evaluated response is a #12180-class predicate change, not a silent re-pause. Armed behaviour:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
   row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
@@ -419,6 +432,205 @@ Live standing alarms over this source:
     egress so every other signal here stays green.
 - **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
   `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
+- **`logtail_exploration_alert.relay_listener_down`** (#12167 / epic #8211, `higher_than 3` over 300 s, checked every 60 s,
+  missing data counts as zero): `soleur-relay-listener-down-prd`. Emails (team email on the free tier) when four or more
+  `relay_probe proxy_state=<X>` lines in the window have X other than `listening` (`disabled`, `no_bind`, `no_allowlist`,
+  `error`) on either web host. Decode and the host-attributed query: [Session relay probe alerts (#12167)](#session-relay-probe-alerts-12167).
+- **`logtail_exploration_alert.relay_probe_silent`** (#12167, `higher_than 0` over 600 s, checked every 300 s, missing data
+  counts as zero): `soleur-relay-probe-silent-prd`. The value is the number of roster hosts that did NOT ship a `relay_probe`
+  line in 10 minutes (the `egress_gw_probe_silent` shape). Same section for the decode, including what a silent host means.
+- **`logtail_exploration_alert.relay_peer_probe_failed`** (#12167, `higher_than 0` over 300 s, checked every 60 s, missing data
+  counts as zero): `soleur-relay-peer-probe-failed-prd`. Emails on the FIRST `ci-deploy` row `relay_peer_probe peer=<ip>
+  result=<R>` with R in `refused`, `timeout`, `tls`, `denied`. `result=ok` and `skipped=` never match. Deploy-time only. Same
+  section for the decode.
+
+## Session relay probe alerts (#12167)
+
+Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts.tf`, drift guard
+`apps/web-platform/test/infra/relay-probe-alerts.test.sh`) read the session relay's own evidence off-host, with no SSH. The
+`host_name` field separates the hosts: `soleur-web-platform` is web-1, `soleur-web-2` is web-2.
+
+- **The listener line.** `server/proxy-listener-status.ts` logs ONE warn-level pino line per minute per host:
+  `relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>`.
+  `addr=0.0.0.0` is the expected bound address now. `disabled` is a relay switched off, `no_bind` and `no_allowlist` are a
+  missing `SOLEUR_PROXY_BIND` / peer allowlist, `error` is a recorded server that is not listening (the listen failed or the
+  server closed). It is an app-container row: `CONTAINER_NAME = 'soleur-web-platform'` and the sentence is in
+  `message.msg`, with `message.proxyState` / `message.addr` / `message.port` alongside.
+- **The peer line.** `ci-deploy.sh` `relay_peer_probe` journals `relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>`
+  (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
+  `tls` is a failed handshake or certificate pin, or (since #12288, ADR-323) a source the peer's allowlist does not carry: the
+  peer resets it before the handshake, so the probe sees a reset before `secureConnect`. `timeout` is no answer in time, `denied`
+  is a peer that closed right after the upgrade, which can no longer happen for a missing allowlist entry (the pre-TLS check runs
+  first); the receiver-side bounded `createProxyServer.peer-deny` Sentry event is what separates an allowlist deny from a certificate
+  fault. `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
+  probe could not run" and never pages. The serve-evidence reader (`scripts/lib/web2-relay-rows.sh` `wrr_peer_sql`) reads this row from the hot table
+  UNION ALL the S3 archive, because it is written once per deploy and is usually older than the ~40-minute hot window.
+- **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host,
+            JSONExtractString(raw,'message','msg') AS line, count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')
+     GROUP BY host, line ORDER BY host, last DESC FORMAT JSONEachRow"
+  ```
+
+  The same query with `JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'` and `startsWith(JSONExtractString(raw,'message'),
+  'relay_peer_probe peer=')` over a day reads the peer dials. A host with ~60 rows an hour and only `proxy_state=listening` is healthy.
+- **`relay_listener_down` fired.** Read the host and the state. `disabled` / `no_bind` / `no_allowlist` mean the relay was never
+  configured on that host: `disabled` is no TLS material (`PROXY_TLS_CERT` / `PROXY_TLS_KEY` absent or unparseable), `no_bind` is no
+  `SOLEUR_PROXY_BIND`, `no_allowlist` is no `SOLEUR_PROXY_PEER_ALLOWLIST`; read the host's `ci-deploy` lines for the same deploy
+  (`relay_publish degraded=...`), not SSH; `error` means the listener failed or closed after boot. It sums rows across BOTH hosts, so confirm one host carries
+  the four rows. It auto-resolves after 10 quiet minutes, which does not mean the relay was fixed.
+- **`relay_probe_silent` fired.** The value is the count of silent hosts. Read the query above: no row for a host means its app
+  container is down, runs a build older than #12167 (no reporter yet), or its app-container log path is broken (Vector or journald
+  on that host). Rows from every host in the window while the alert is open means suspect the evaluator (the
+  `egress_gw_probe_silent` open question, #12190), not the fleet; verify with the query before acting.
+- **`relay_peer_probe_failed` fired.** Read `peer` and `result`. A `refused` or `timeout` seconds after the peer's own deploy can be
+  its container mid-swap: re-read the peer's `relay_probe` line (it must say `listening`) and the next deploy's peer line before
+  treating it as a defect. A `tls` is the pinned certificate OR an allowlist that lacks this host's source address (read the peer's
+  `createProxyServer.peer-deny` events to tell them apart); a `denied` is a peer that closed right after the upgrade.
+- **Verified when this shipped.** The nested `message.msg` row shape of the relay line and the plain-string peer row were
+  live-probed 2026-11-07 (rows from both hosts, `CONTAINER_NAME` = `soleur-web-platform`).
+- **Not verified when this shipped (REQUIRED post-merge check).** That the evaluator delivers a value for the silence shape
+  (`relay_probe_silent`, the `egress_gw_probe_silent` open question #12190) was not measured, and this change ships no canary for
+  it. After the merge's apply, read the alert in Better Stack: with both hosts reporting its value must be 0 and it must not be
+  open. If it is open while the query above shows rows from every host, the evaluator is the suspect (#12190), not the fleet.
+
+## Signed hello rollout (#12289, #12288, #12290; ADR-323)
+
+The owner's relay listener now admits a peer on the raw TCP stream (before TLS) and only accepts a signed hello. This section is what
+a reader needs to verify the rollout and to read a refusal, without SSH.
+
+- **Wire format and check order.** `{type, userId, workspaceId, ts, nonce, mac}`; `mac` = HMAC-SHA256 under `PROXY_HELLO_HMAC_KEY`
+  over `"soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce`. Order: allowlist (pre-TLS) -> 1 KiB cap ->
+  shape -> MAC -> ts within 30 s -> replay (about 61 s) -> AP-2 membership. Every verifier refusal closes with the single reason
+  `relay refused` (then the owner terminates the socket); the hello deadline and the pre-hello byte guard drop it without a close frame (1006, which the
+  sender maps to 4014), and a protocol error is terminated right after `ws` queues its own close frame (1002/1007/1009). The discriminator is the bounded Sentry event's `reason` enum, never the close text.
+- **Rolling deploy.** The container swap is sequential (the ingress host first, then the fan-out to the peer). New sender -> old
+  receiver works (the old parser ignores the extra hello keys). Old sender -> new receiver is refused with `reason=shape` for the
+  stagger, a few minutes; a user whose lease sits on the lagging host sees close code 4014 and the generic reconnect loop. Live users
+  are 0 today; the merge is itself the release trigger, so the release is named only after `agent_sessions_live=0` has been read on
+  both hosts (two reporter rows per host at least 90 s apart, newest under 2 minutes old). If it is not 0, the CTO is asked again
+  (ruling on #12289). Rolling back to a pre-PR image re-opens unsigned hellos until the roll-forward.
+- **Per-stage verification (read-only).** After the first host: `relay_probe proxy_state=listening` for that host (query above) and no
+  `createProxyServer.no-hello-key` issue in Sentry. After the second host: both hosts listening. Once a real proxied session exists, a
+  `relay_hello_window accepted=<n>` row with `n>0` on the OWNER host is the positive signed-round-trip signal; the serve-gate probe
+  (`relay_peer_probe`) sends no hello and cannot show it:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, JSONExtractString(raw,'message','msg') AS line, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_hello_window ')
+     GROUP BY host, line ORDER BY last DESC FORMAT JSONEachRow"
+  ```
+
+- **What a refusal looks like.** Sentry ops `createProxyServer.peer-deny` (reason `peer`, with the peer address),
+  `createProxyServer.hello-deny` (reason `hello_timeout|size|shape|mac|skew|replay|full|internal`; `hello_timeout` is an admitted peer that sent nothing for 10 s, `internal` a thrown error with its class in `errName`), `createProxyServer.ap2-deny` (reason `membership`, with the
+  authenticated id pair). At most 5 events per reason per 60 s window, then one `-summary` event with `{reason, denied, suppressed}`.
+  A sustained `reason=mac` stream after a deploy means the two hosts hold different keys; `reason=skew` means a clock problem (the
+  window needs NTP on both hosts); `reason=shape` right after a deploy is the old-sender stagger; `reason=full` means the 4096-entry replay cache
+  holds live entries and refuses new ones (it never evicts); entries are only inserted after a valid MAC and timestamp, so it is 4096
+  validly signed hellos inside about 61 s, never an attacker without the key. Read it as a reconnect storm or a key holder flooding.
+- **Reading the reporter events in Better Stack.** The Sentry-mirrored events also reach the shipped log as pino rows; filter on
+  `message.op` (for example `JSONExtractString(raw,'message','op') = 'createProxyServer.hello-deny'`) and read `message.reason` and
+  `message.peer` (extras are spread flat into the pino row, there is no `extra` object), a fixed enum; a row for an unauthenticated reason
+  never carries a hello-derived byte (the `ap2-deny` row carries the authenticated id pair). The `-summary` and `peer-deny`/`ap2-deny` ops
+  need their own `op` value in the filter.
+- **Key absent or malformed.** With relay TLS enabled and no usable `PROXY_HELLO_HMAC_KEY` the relay stays down: `relay_probe
+  proxy_state=error` (`relay_listener_down` after about 5 minutes), one `createProxyServer.no-hello-key` event on the first host that
+  starts, and the app keeps serving 80/443/3000. The release itself is blocked earlier by `verify-required-secrets.sh` in the
+  `verify-doppler-secrets` job (presence only; the shape is checked by the app startup guard).
+- **Bad port.** A `SOLEUR_PROXY_PORT` that is not 1-5 ASCII digits in 1..65535 stops only the relay (`createProxyServer.bad-port`,
+  `proxy_state=error`); the sender never dials with it (`proxyClientToOwner.bad-port`). Production pins the literal 8443.
+- **Rotation and leak response (#8211).** Neither is a runnable route until #12538 lands: the route, its rationale and the leak
+  requirements are ADR-323 Decision 9 (as amended 2026-11-10). A replace, update, delete or forget of the key pair is blocked by the
+  non-ackable `relay_hello_key_changes` HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak
+  as an incident for the owner, and do NOT restore the previous value for a leak: that re-installs the leaked key.
+- **Key fingerprint line (#8211).** Each web host's relay listener prints one warn row per listener start (once per boot), right
+  after its key check: `relay_hello_key_fp current=<8hex> accept_also=<8hex|none>`. The values are domain-separated HMAC prefixes of
+  the keys (never key bytes); equal `current=` values mean the hosts hold the same key. The row proves the key state loaded, not a
+  serving relay (read `relay_probe proxy_state=listening` for that), and the canary prints none. Read each host's newest row over
+  30 days (the row is written once per boot, so a short window misses a host that has not restarted recently). The query can
+  also return a host that left the roster inside the window; ignore that row, and read the result for each roster host:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host,
+            argMax(JSONExtractString(raw,'message','msg'), dt) AS line, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_hello_key_fp ')
+     GROUP BY host ORDER BY host FORMAT JSONEachRow"
+  ```
+
+  For each roster host, the newest row must be newer than that host's deploy time, and the newest rows must all show the same
+  `current=` and `accept_also=none`. **The deploy time** is the host's newest `CRON_DRAIN: waited ... before prod stop` row.
+  `ci-deploy.sh` journals it on every web-platform swap, right before it stops the old container and starts the new one. A row
+  from the new boot is newer than it by a margin of seconds, not by construction: ci-deploy rows are timestamped per shipped
+  batch, so separate lines logged up to about 1.2 s apart can carry one identical `dt`, set a few tenths of a second after
+  the batch's last line (measured 2026-11-10 over three days of rows, read against each row's `_SOURCE_REALTIME_TIMESTAMP`:
+  the `SDK_BASH_SMOKE` and both `CRON_DRAIN` rows of one swap share a microsecond `dt`, and the first `relay_probe` row
+  after it came 4 to 5 s later). If the host's newest fingerprint row ties the deploy time, count it as newer: the old
+  container logged its fingerprint row once, when it booted at an earlier deploy, so only a restart of the old container in
+  the seconds before the swap could put a stale row at the deploy time:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, max(dt) AS deployed
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
+       AND startsWith(JSONExtractString(raw,'message'), 'CRON_DRAIN: waited ')
+     GROUP BY host ORDER BY host FORMAT JSONEachRow"
+  ```
+
+  Do not take the deploy time from the release run or from the time of the read. The deploy-arm run's job logs say when
+  ci-deploy finished on a host, which comes after the new container has started, so a healthy host's row would read as older
+  than it.
+
+  **Reading rule:** `accept_also!=none` outside a recorded rotation is an alarm, because the slot sits outside Terraform and a
+  planted value causes no drift and no HALT. This is a manual read: no automated alert exists until #12538 requirement (e) adds one. The slot's
+  other signal is one warn-level `loadProxyHelloKeys.accept-also-active` event per boot. Failure branches:
+  - **Two `current=` values differ:** stop and file an issue referencing #8211. Do not roll back: a release that adds this line
+    does not change the key value, so the split is pre-existing drift (a sustained `reason=mac` stream is its other symptom).
+  - **A host has no row newer than its deploy time (or no row):** a newest row older than the host's deploy is a row from an
+    earlier boot, so read it as no row. Read the host's `relay_probe proxy_state=` line (query above), then:
+    - `listening` with no fingerprint row: the host runs an image older than this line.
+    - `disabled`, `no_bind`, `no_allowlist` or `error`: no fingerprint row is expected, because the line comes after those checks.
+      For `error`, look for `createProxyServer.no-hello-key` (the key check refused).
+    - No `relay_probe` row at all: the container is down or its log path is broken; see `relay_probe_silent` above.
+  - **`accept_also!=none` on any host:** a slot is set outside any rotation. Treat it as the alarm above and escalate on #12538.
+    `accept_also` equal to `current` is the same mistake made visible (one `loadProxyHelloKeys.accept-also-equals-current` event),
+    and a malformed slot reads `accept_also=none` with one `loadProxyHelloKeys.accept-also-ignored` event.
+- **The loader's slot events in Better Stack.** The three `loadProxyHelloKeys.accept-also-*` events are also pino rows (warn for
+  `active` and `equals-current`, error for `ignored`). Only the serving container's rows ship (Vector reads
+  `CONTAINER_NAME = soleur-web-platform`); the canary's copies reach Sentry only:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, JSONExtractString(raw,'message','op') AS op,
+            count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','op'), 'loadProxyHelloKeys.accept-also-')
+     GROUP BY host, op ORDER BY host, last DESC FORMAT JSONEachRow"
+  ```
+
+- **Restart and clocks.** The replay cache is per process, so a container restart clears it for up to about 61 s (a hello captured before
+  the restart stays skew-valid). A backward clock step can re-admit a purged nonce.
 
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 
@@ -715,6 +927,27 @@ outcomes by joining the marker's `run_id` to the Sentry tag `inngest.run_id`
 
 The marker is the deny-side half of that join; the Sentry event is the
 outcome-side half. Neither alone is the answer.
+
+### `cron-containment-new-rule-deny` — a #12757 containment rule refused a cron tool call
+
+Emitted by `_cron-claude-eval-substrate.ts` through `warnSilentFallback` (pino WARN plus a Sentry warning) once per
+rule per run, from the result event's `permission_denials[]` re-classified by the hook's `classifyNewRuleDeny`. Fields:
+`op` = `cron-containment-new-rule-deny`, `rule` (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`,
+`protected-trust-root`), `cron`, `count`. No command or path text is ever carried. Skipped for the `no-file-tools`
+crons. It is an attribution metric: a `git -C dir status` that was never allowlisted now counts as `git-gh-shape`, so
+read the run before calling a non-zero count an over-deny.
+
+Sentry: search `op:cron-containment-new-rule-deny` and group by the `rule` tag (or `cron`). Better Stack (the pino row
+carries `rule`/`cron`/`count` as fields; tags are Sentry-only):
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep cron-containment-new-rule-deny \
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .op == "cron-containment-new-rule-deny") | [.cron, .rule, .count] | @tsv'
+```
+
+A sustained `git-gh-shape` count on `cron-bug-fixer` with no bot-fix PR is the over-deny signature (plan
+`## User-Brand Impact`); check for a `bot-fix/attempted` label on the issue and remove it after a revert.
 
 ### `SOLEUR_COMPOUND_PROMOTE_OUTCOME` — what the weekly self-improvement run DID
 
@@ -1525,12 +1758,37 @@ confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 
 One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
 `.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
-`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionId`. Never
-content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it.
+`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionIdHash`. Never
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId` of
+the conversation id (the app's `conversationId`, passed verbatim, no trimming or re-casing), the same keyed hash as `workspaceIdHash`. With the
+pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a filter on that literal matches every
+session, and a miss is not "no such session"). A pepper rotation changes the hash of every id, so lines emitted before the rotation need the
+previous pepper.
+To find one session, follow `recover-userid-from-pino-stdout.md` Flow 1 steps 2 and 3 with the conversation id in place of `$UUID`,
+including its `prd`-config check (the helper needs the `prd` config for the pepper, in addition to the `prd_terraform` read credentials); its
+`jq` filter already matches `.sessionIdHash`. Never put the pepper on a command line. Lines emitted by builds from before this change was
+deployed carry the raw `sessionId` key until retention expires.
 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
 lines is the expected state. The alerts themselves are tracked on #10195.
+
+## `op:"untrusted-gh-frame"` (gh Bash framing note, ADR-287 addendum 2026-11-08 / #11076)
+
+One WARN line per `gh` command the framing hook sees through the Bash tool, in sessions with web egress and the `untrusted-content-classify`
+flag on. The pino payload sits under `.message` in the stored row, with fields `op`, `source` (always `github`), `outcome`
+(`annotated`, `skipped`, `shape` or `error`), `verb` (a closed enum, absent when none was parsed), `stdoutLength`, `stderrLength` (each null
+when not measured: always on `skipped`, `shape` and `error`; `stderrLength` also for a bare-string or block-array response, where
+`stdoutLength` is the combined output), `persisted`, `fallback`, `workspaceIdHash`, `sessionIdHash`. Never the command, the output or any path. `annotated` means the
+hook returned a note, not that the model saw it; `skipped` is a `gh` command with no read verb; `fallback: true` means the bounded scan decided.
+`fallback: true` can also mark a multi-line command that merely mentions `gh` in prose, or any command over 64 KiB; exclude those lines from
+the `annotated` denominator. A `shape` line is also logged when the Bash `command` is not a string. A `shape` or `error` line comes with a debounced Sentry event (ops `gh-frame-shape`, `gh-frame-error`) and means the hook did nothing for that call.
+
+Read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-gh-frame` (counts only). With the flag
+off (the default) zero lines is the expected state. Zero lines while flag-on sessions run `gh` is NOT an all-clear: in web-egress sessions the
+sandbox is denied its gh credentials (see the ADR addendum, item 3), so `gh` calls there normally fail at auth and the expected `annotated`
+volume is near zero; a low count cannot tell "working" from "inert". The alerts are not provisioned; they are
+tracked with #10195.
 
 ## Egress audit rollup markers (#9545, ADR-288)
 
@@ -1550,3 +1808,99 @@ Table freshness and retention are checked without SSH by `bash scripts/egress-au
 With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
 the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
 enabling collection (ADR-288).
+
+## Querying `SOLEUR_HOST_KERNEL` (periodic host kernel marker, #12007, ADR-322 addendum 2026-11-08)
+
+Each running prod host reports its kernel every 6 hours and once per boot as one plain-text line. The marker feeds the
+`soleur:cve-exposure` host-state helper (`observed` / `stale` / `unknown`) and the per-host dead-man heartbeats
+`soleur-host-kernel-<role>-prd` (`<role>` is `web-1`, `web-2`, `inngest` or `registry`). It rides the log path each host already
+has: journald through Vector for the web hosts and the inngest host, all into the shared Logs source. The registry's direct post
+is future state: its emitter ships in a separate owner-approved follow-up PR (#12386, because that merge replaces the registry
+host), so until then the registry has no rows and reads `unknown`. Rollout is operator-held (#12386): until a host has been delivered it emits nothing and reads as `unknown`, which is the
+expected state and not a fault. How the marker reaches each host class (carrier, precondition, expected drift) is one table, the
+delivery matrix in the host-kernel section of `workspaces-luks-cutover-6604.md`; it is not restated here.
+
+**Interim state.** Until the arming change (#12386) no feeder verdict line and no page can exist for these hosts: the four
+targets are not in the feeder loop and the four heartbeats are paused. Interim: the only read is the credentialed query below or
+the credentialed helper (`host-state.sh`).
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 12h --grep SOLEUR_HOST_KERNEL --limit 20
+```
+
+The reader needs the injected query credential and has no unauthenticated substitute (see the "no creds" section above).
+`--grep` is an unanchored literal `LIKE`, so one grep per term; issue and PR text that quotes the marker name also matches, which
+is why the identity rules below decide whether a row counts. A 12 hour window holds about two rows per host in steady state; widen
+to `--since 48h` to see the freshness boundary and `--since 7d` for the helper's own window.
+
+### Decoding a line
+
+`raw` is double-encoded JSON, so decode before reading fields (`jq -r '.raw | fromjson'`).
+
+```text
+journald host (web or inngest), decoded object:
+  host_name           = <Vector-stamped host name>
+  SYSLOG_IDENTIFIER   = host-kernel-marker
+  _SYSTEMD_UNIT       = host-kernel-marker.service
+  message             = SOLEUR_HOST_KERNEL v=1 role=<web|inngest> kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown>
+
+registry row (future state once the follow-up PR delivers it; posted directly, no Vector stamp, so no host_name and an empty SYSLOG_IDENTIFIER):
+  message             = SOLEUR_HOST_KERNEL v=1 role=registry kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown> host=<registry host id>
+```
+
+- `v=1` is the format version. A row with another or a missing version token is ignored, never attributed.
+- `kernel=` must match the anchored kernel shape (a release string such as `<major>.<minor>.<patch>-<abi>-<flavour>`); `unreadable` or
+  anything else does not qualify, so the host reads `unknown` and the heartbeat is withheld.
+- `reboot_required`, `sec_updates` and `uptime_s` are best-effort and print `unknown` when unmeasurable. They are display only and
+  never feed `kernel_state`.
+
+### Identity rules (which row counts for which host)
+
+- **Journald hosts** (web-1, web-2, inngest): the identity is the Vector-stamped `host_name` plus the exact `SYSLOG_IDENTIFIER`
+  `host-kernel-marker` plus `_SYSTEMD_UNIT` equal to `host-kernel-marker.service` (a local process can forge the identifier with
+  `logger -t`, not the unit). There is no `_HOSTNAME` requirement, an accepted residual. `role=` is only a cross-check: if it
+  disagrees with the `host_name`, the row is dropped and the host stays `unknown`. A journald-path row whose message contains the
+  substring `host=` anywhere is rejected outright, in both readers.
+- **Registry** (future state; the readers already decode it, no row exists until the follow-up PR delivers the emitter): no Vector
+  stamp exists, so the identity is the in-message pair `role=registry` plus `host=<registry host id>`. Both must match; either one
+  alone does not qualify.
+- Both the helper and the feeder apply the same table, and a test pins the two copies together.
+- The residuals are the ones the ADR-322 addendum of 2026-11-08 (#12007 review) states. Journald path: with the unit pin a local
+  process cannot forge a row, so what remains is root on the host. Registry path: the identity is declared inside the message, so
+  the holder of the shared Logs ingest token can post a row that passes both checks. Freshness is measured on Better Stack
+  ingestion time (`dt`), not on a time the host wrote. A single valid row at most 48 hours old can ground `Affected=no` for the
+  kernel question; these residuals are what that costs.
+- The newest mapped periodic row of a host decides: if it is unreadable the host reads `stale` (the older valid row's kernel
+  and age stay visible), never `observed`.
+
+### Three empty-read states (do not collapse them)
+
+1. **The read itself failed.** A non-zero exit, a `TRANSIENT` classification or a credential refusal is not an answer about the
+   host. Fix the invocation (wrap it in `doppler run`) and read again; never report "no rows" from a failed read.
+2. **No row for a host at all.** Either the host has not been delivered yet (the expected rollout state, #12386), or its timer or
+   unit is dead, or the Vector allowlist drops the tag on that host. Treat it as a dark host only after the rollout for that host is
+   recorded as done; that record lives in the comments of the rollout issue (`gh issue view 12386 --comments`). A positive control from the SAME host and window (for example a `host_metrics` or journald row) proves the
+   window is covered; without one the answer is inconclusive, not zero.
+3. **Rows exist but none qualify.** The newest rows fail the identity rules, carry an unknown version, have an unreadable kernel
+   or are older than the window. The helper prints `stale` when a valid periodic row is older than 48 hours, and `unknown` when
+   there is no valid row.
+
+### The 36 hour window and how a page is read
+
+The heartbeat for a host is fed hourly by `scripts/deadman-heartbeat-feeder.sh` only while that host's own valid row exists inside
+a literal 36 hour window (hot table UNION archive). With period 3600 and grace 7200, the worst case from a host going dark to a
+page is about 40 hours, before the skill stops trusting a report at 48 hours. A native log alert cannot be used: its
+`query_period` is capped at 900 seconds, which is blind to a 6-hourly row.
+
+A page on `soleur-host-kernel-<role>-prd` means that host has had no qualifying row for about 36 hours. Read it in this order:
+
+1. Check the feeder first: the Sentry monitor `scheduled-deadman-heartbeat-feeder` and the workflow run list. A feeder fault
+   (`query_failed` or `beat_failed`) is distinct from the host being dark and is not a host problem.
+2. Read the feeder verdict for the target in the run log (`deadman-feeder: target=host-kernel-<role> verdict=...`).
+   `no_qualifying_row` names the dark host or source; `qualifying_row_heartbeat_paused` means the heartbeat is still unarmed.
+3. Run the query above and apply the three empty-read states to that host. A planned replace of the inngest or registry host goes
+   dark for up to the window on purpose, so its heartbeat is paused first (see the arming section of
+   `workspaces-luks-cutover-6604.md`).
+
+Remediation of a dark production host (restarting a unit, re-delivering the collector, a host replace) is operator-reserved and
+tracked in #12386; this section only reads.

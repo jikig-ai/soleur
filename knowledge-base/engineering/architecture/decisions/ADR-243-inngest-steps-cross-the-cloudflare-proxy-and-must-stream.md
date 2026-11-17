@@ -91,6 +91,19 @@ deploy-lease check and the containment hook. Their bash surface is bounded only 
 balancing, ADR-143 web-2 serving weight) breaks this guard and must reopen this section (shared
 state, or host affinity for `/api/inngest`). ADR-068 and ADR-143 carry the back-pointer.
 
+**Addendum — 2026-11-10 (#9137): the premise is restored by the exec-placement forwarder.** The
+reopening named above happened: `app.soleur.ai` has been LB-steered randomly across web-1 and web-2
+since the 2026-11-08 serve flip (#12167), so for a window the "one web host executes steps" premise
+was false and a retried step could land beside the live child on the other host. The `?fnId`-keyed
+forwarder (ADR-033 amendment 2026-11-10) restores it **at request time**: `host-affine` and
+`volume-bound` calls execute only on the exec host regardless of which origin the LB selects —
+a pinned call that lands on web-2 is forwarded verbatim over pinned TLS to web-1's private listener,
+so the `spawnClaudeEval` single-flight map still sits in the one process where the spawn runs and a
+retry joins (or takes the `SETTLED_TTL_MS` settled result) exactly as this section defines.
+`portable` calls run on either host by design — they carry no process-local state the map protects.
+Fail-closed holds the premise under degradation: a host that cannot prove exec identity refuses the
+pinned call (503) rather than executing it on the wrong host.
+
 ### 3. Bound what a run and a function can spend
 
 - **Per-run ceiling, owned by the substrate.** `spawnClaudeEval` appends

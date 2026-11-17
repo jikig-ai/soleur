@@ -195,7 +195,7 @@ import path from "path";
  * cannot interleave commands within a single tool invocation.
  *
  * @see https://cwe.mitre.org/data/definitions/59.html (CWE-59: Improper Link Resolution)
- * @see CVE-2025-55130 (Node.js Permissions Model symlink bypass)
+ * @see the Node.js Permissions Model symlink-bypass advisory
  */
 function resolveRealPath(filePath: string): string | null {
   const resolved = path.resolve(filePath);

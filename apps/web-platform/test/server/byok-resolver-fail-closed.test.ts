@@ -54,6 +54,12 @@ vi.mock("@/server/workspace-resolver", () => ({
   resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 
+// byok-resolver imports from the filesystem-free leaf (#9137); the workspace-resolver
+// re-export resolves to the same binding.
+vi.mock("@/server/current-workspace-id", () => ({
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
+}));
+
 import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
 
 const CALLER = "caller-uuid";

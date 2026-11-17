@@ -13,6 +13,17 @@
 #                                 dead owner + no live handles + stale tree →
 #                                 tmpfs-class base: delete (prompt RAM reclaim);
 #                                 disk-class base: mv to soleur-quarantine.
+#   4. reap_owned_cs_base       — owned-base age arm over $TMP_ROOT/.cs
+#                                 (added #11764): the spawned-agent CLI temp
+#                                 root is a REPO-OWNED base, so ADR-250's
+#                                 shared-/tmp heuristic-reap rejection does
+#                                 not apply. Reaps aged top-level entries and
+#                                 fully-stale tenant dirs past the 48h floor,
+#                                 with the same liveness map as Reaper 2, the
+#                                 same .soleur-owned marker deference and a
+#                                 per-run cap — and is PINNED to the owned
+#                                 base (a user-set CS_BASE never arms it over
+#                                 shared /tmp).
 #   drain_scratch_quarantine    — TTL drain of quarantine dirs (the ONLY place
 #                                 deletion is permitted inside them).
 #
@@ -79,7 +90,8 @@
 #   TMPFS_GUARD_HEARTBEAT_FILE, TMPFS_GUARD_LOCKFILE, TMPFS_GUARD_NO_FLOCK,
 #   TMPFS_GUARD_WATERMARK_FILE,
 #   TMPFS_GUARD_SCRATCH_BASES, TMPFS_GUARD_QUAR_TTL_MIN,
-#   TMPFS_GUARD_QUAR_WT_TTL_MIN
+#   TMPFS_GUARD_QUAR_WT_TTL_MIN,
+#   TMPFS_GUARD_CS_BASE, TMPFS_GUARD_CS_AGE_MIN, TMPFS_GUARD_CS_MAX_REAP
 #
 # Every name above is read by the code below. Keep this list exact: a seam that
 # is documented but unimplemented produces a test that sets it, observes no
@@ -167,6 +179,29 @@ CLAUDE_TMP="$TMP_ROOT/claude-$(id -u)"
 SCRATCH_BASES="${TMPFS_GUARD_SCRATCH_BASES-/tmp /var/tmp}"
 QUAR_TTL_MIN="${TMPFS_GUARD_QUAR_TTL_MIN:-10080}"     # 7d scratch/prefix drain
 QUAR_WT_TTL_MIN="${TMPFS_GUARD_QUAR_WT_TTL_MIN:-43200}"  # 30d worktree drain
+
+# Owned-base age arm (#11764). $TMP_ROOT/.cs is the spawned-agent CLI temp root
+# (apps/web-platform/server/agent-session-tmp.ts AGENT_SESSION_TMP_ROOT): a
+# REPO-OWNED base, not a shared one, so ADR-250's measured rejection of
+# heuristic reaping over shared /tmp does not apply — every entry beneath it
+# exists because a platform dispatch routed TMPDIR there. The producers under
+# it (hooks, skill scripts, srt fixtures, subagent scratch) are largely
+# EXTERNAL to this repo — traps cannot reach them — so age is the only reclaim
+# dimension left, and on an owned base age alone is sound: there is no
+# "old-but-precious authored work" class inside a machine-assigned tmp root.
+# The floor defaults to 48h — above the longest plausible session lifetime and
+# well below the measured accumulation horizon.
+# TMPFS_GUARD_CS_BASE is a TEST seam only: the arm re-verifies the resolved
+# base IS $TMP_ROOT/.cs before reaping (the pin in reap_owned_cs_base) — the
+# age-alone soundness argument holds on the owned base alone, so a user-set
+# value must never arm age-only deletion over shared /tmp.
+CS_BASE="${TMPFS_GUARD_CS_BASE:-$TMP_ROOT/.cs}"
+CS_BASE="${CS_BASE%/}"
+CS_AGE_MIN="${TMPFS_GUARD_CS_AGE_MIN:-2880}"
+# Per-run reap cap — Reaper 2's cap idiom. Bounds blast radius AND wall clock:
+# the leak this arm exists for is count-shaped, so an uncapped pass over a
+# flooded owned base could not finish inside the 5-minute cron interval.
+CS_MAX_REAP="${TMPFS_GUARD_CS_MAX_REAP:-500}"
 
 # The classifier lib owns the shared marker/schema/liveness definitions so the
 # guard, the purge, and the session-start sweep cannot drift. Repo-side path —
@@ -393,6 +428,11 @@ _GUARD_BASES="$TMP_ROOT"
 for _b in $SCRATCH_BASES; do
   case " $_GUARD_BASES " in *" $_b "*) ;; *) _GUARD_BASES="$_GUARD_BASES $_b" ;; esac
 done
+# The .cs owned base joins as a SECOND-level in-use key source (#11764): a
+# live handle under $CS_BASE/<tenant>/… marks BOTH $TMP_ROOT/.cs (via the
+# $TMP_ROOT arm above — protecting the base itself) AND $CS_BASE/<tenant>,
+# which is the granularity the owned-base age arm reaps at.
+case " $_GUARD_BASES " in *" $CS_BASE "*) ;; *) _GUARD_BASES="$_GUARD_BASES $CS_BASE" ;; esac
 
 _mark_inuse() {
   local target="$1" rest top b
@@ -829,6 +869,159 @@ reap_scratch_entries() {
   return 0
 }
 
+# --- Owned-base age arm: $TMP_ROOT/.cs (#11764) ------------------------------
+# The .cs root is a machine-assigned, repo-owned base: TMPDIR=<base>/<tenant>
+# is injected at dispatch (apps/web-platform/server/agent-env.ts), so every
+# descendant mktemp of a spawned agent — including producers EXTERNAL to this
+# repo that no repo-side trap can reach (srt-ca-*, claude-http-*, subagent
+# scratch) — lands here instead of at shared-/tmp top level. What turns the
+# pile into a bounded one is THIS arm: age reaping over the owned base.
+#
+# Why age alone is sound HERE and rejected for shared /tmp (ADR-250): the
+# shared-/tmp dry run marked ~1,500 entries of "old-but-precious authored
+# work" — files a human put at top level. Nothing human-authored lives under
+# a per-tenant hash dir; a stale entry under .cs is producer residue by
+# construction. The gates that remain are the ones that protect LIVE work,
+# identical to Reaper 2's: own-uid, no live handle (the same _INUSE_TOP map —
+# _GUARD_BASES carries $CS_BASE so a handle under <tenant>/… marks it),
+# nothing in the tree modified inside the floor, never a symlink, and the
+# same .soleur-owned marker deference (a declared owner is Reaper 3's
+# jurisdiction, judged by dead-owner conjuncts — never by this arm's age
+# heuristic). A per-run cap (CS_MAX_REAP, default 500) bounds a count-shaped
+# flood's wall clock — the size floor's old job here. The one deliberate
+# OMISSION vs Reaper 2 is the size floor itself — the leak this arm
+# exists for is count-shaped (thousands of sub-MB entries), exactly the class
+# the size floor could never see.
+reap_owned_cs_base() {
+  # All globals initialised before any early return — same contract as the
+  # sibling reapers (a sourced caller reads them under set -u).
+  CS_REAPED=0
+  CS_RETAINED=0
+  # Base pin: the arm runs ONLY on the repo-owned $TMP_ROOT/.cs. The header's
+  # age-alone soundness argument holds there because nothing human-authored
+  # lives under a machine-assigned tmp root — ADR-250's shared-/tmp rejection
+  # applies to every other base, so a user-set TMPFS_GUARD_CS_BASE (e.g.
+  # =/tmp) must never arm age-only deletion over shared space. Fail closed
+  # and say so: a silently-skipped arm is invisible decay.
+  if [[ "$CS_BASE" != "$TMP_ROOT/.cs" ]]; then
+    guard_log "cs-reap: resolved base $CS_BASE is not the owned $TMP_ROOT/.cs — arm skipped (fail closed)"
+    return 0
+  fi
+  [[ -d "$CS_BASE" ]] || return 0
+  local uid; uid="$(id -u)"
+  local max_reap="$CS_MAX_REAP"
+
+  # Fail closed on a missing liveness map — identical to Reaper 2: "couldn't
+  # look" can never read as "nothing is live". The map is built once per run
+  # inside reap_scratch_entries, which main always invokes first; a sourced
+  # caller must build it (or call reap_scratch_entries) beforehand.
+  if [[ -z "${_INUSE_TOP[__built__]:-}" ]]; then
+    guard_log "cs-reap: liveness map unbuilt — arm skipped (fail closed)"
+    return 0
+  fi
+
+  local reaped=0 retained=0 e
+  # Candidates: own-uid entries under the owned base whose TOP-level mtime is
+  # past the floor. For a directory this is only the candidacy test — the
+  # recursive staleness check below is the real gate, same as Reaper 2's.
+  # NUL-delimited end to end; newline-bearing names are skipped rather than
+  # reaped (the Arm-11b lesson — a split record could misattribute a path).
+  local skipped_odd=0
+  local -a cands=()
+  while IFS= read -r -d '' e; do
+    if [[ "$e" == *$'\n'* ]]; then
+      skipped_odd=$((skipped_odd + 1))
+      continue
+    fi
+    cands+=("$e")
+  done < <(
+    find "$CS_BASE" -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${CS_AGE_MIN}" -print0 2>/dev/null || true
+  )
+  if (( skipped_odd > 0 )); then
+    guard_log "cs-reap: skipped $skipped_odd candidate(s) whose name contains a newline — not reapable safely"
+  fi
+  ((${#cands[@]})) || { guard_log "SOLEUR_CS_REAP base=$CS_BASE reaped=0 retained=0"; return 0; }
+
+  # Second-level freshness map: _build_fresh_top with $CS_BASE as the base
+  # marks $CS_BASE/<tenant> when ANYTHING in its tree is inside the floor —
+  # the same "a dir's own mtime does not see nested writes" gate Reaper 2
+  # applies at top level. Built only when candidates exist; the walk is over
+  # the owned base alone (typically a handful of tenant dirs), never /tmp.
+  _build_fresh_top "$CS_AGE_MIN" "$CS_BASE"
+  # Fail closed on an unbuilt freshness map — the same contract the liveness
+  # map carries above. A mid-walk find/awk abort (e.g. the tmpfs-full
+  # condition this arm exists for) leaves an empty map that reads as
+  # "nothing is fresh", silently disarming the recursive-age gate over a
+  # mass-delete path: "couldn't look" can never read as "nothing is fresh".
+  if [[ -z "${_FRESH_TOP[__built__]:-}" ]]; then
+    guard_log "cs-reap: freshness map unbuilt — arm skipped (fail closed)"
+    return 0
+  fi
+
+  for e in "${cands[@]}"; do
+    # Never follow a symlink out of the owned base.
+    [[ -L "$e" ]] && { retained=$((retained + 1)); continue; }
+
+    # Ownership-keyed marker dirs are Reaper 3's jurisdiction — Reaper 2's
+    # marker deference, mirrored: a declared owner is judged by the dead-owner
+    # conjuncts in tc_reap_decide, never by the age heuristic this arm runs.
+    [[ -f "$e/.soleur-owned" ]] && { retained=$((retained + 1)); continue; }
+
+    # TRUNCATED map ⇒ a miss can't prove dead: a dropped environ token may be
+    # the only live handle. Per-candidate walk fallback — Reaper 2's idiom.
+    if [[ -z "${_INUSE_TOP[$e]:-}" && -n "${_INUSE_TOP[__truncated__]:-}" && "$_TC_LIB_OK" == "1" ]]; then
+      tc_tree_has_live_handles_now "$e" && { retained=$((retained + 1)); continue; }
+    fi
+
+    # LIVENESS — the same O(1) map Reaper 2 consults (cwd, open fds, mmap,
+    # unix-socket paths, environ). For loose files at the base's top level a
+    # live fd marks the entry itself; for tenant dirs a handle anywhere
+    # inside marks the dir.
+    [[ -n "${_INUSE_TOP[$e]:-}" ]] && { retained=$((retained + 1)); continue; }
+
+    # AGE (recursive) — a fully-stale tenant dir is one whose ENTIRE tree is
+    # past the floor. _FRESH_TOP keys are $CS_BASE/<name>; a dir with a fresh
+    # nested file is marked and retained. Loose files are their own mtime.
+    [[ -n "${_FRESH_TOP[$e]:-}" ]] && { retained=$((retained + 1)); continue; }
+
+    # Per-run cap — Reaper 2's cap idiom, placed after the gates so a retained
+    # entry never spends it. Bounds blast radius and wall clock on a
+    # count-shaped flood; hitting it means an automated mass-delete ran AND
+    # did not finish, which must be said aloud, not read as a completed run.
+    if (( max_reap > 0 && reaped >= max_reap )); then
+      guard_log "cs-reap: per-run cap reached ($max_reap entries) — stopping this run"
+      alarm_record "cs-reap hit the per-run cap ($max_reap entries) in $CS_BASE — the owned base is accumulating faster than one run can reclaim"
+      break
+    fi
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+      guard_log "cs-reap: would reap $e"
+      reaped=$((reaped + 1))
+      continue
+    fi
+    guard_log "cs-reap: reaping $e"
+    # `find -depth -delete`, never `rm -rf` — the same constitution idiom
+    # Reaper 2 and the scratch cleanup honour; -xdev stays on one filesystem.
+    # Count only a VERIFIED delete (Reaper 3's shape): a failed find must not
+    # abort the loop and must not read as reclaimed space — it is a retain,
+    # and it says so in the log rather than vanishing into `|| true`.
+    if find "$e" -xdev -depth -delete 2>/dev/null; then
+      reaped=$((reaped + 1))
+    else
+      guard_log "cs-reap: delete FAILED for $e — retained"
+      retained=$((retained + 1))
+    fi
+  done
+
+  if (( reaped > 0 )); then
+    guard_log "cs-reap: reaped $reaped aged entries from $CS_BASE (floor ${CS_AGE_MIN}m, retained $retained)"
+  fi
+  CS_REAPED="$reaped"
+  CS_RETAINED="$retained"
+  guard_log "SOLEUR_CS_REAP base=$CS_BASE reaped=$CS_REAPED retained=$CS_RETAINED"
+  return 0
+}
+
 # --- Reaper 3: orphaned ownership-keyed scratch roots (#7004) ------------------
 # Reclaims only entries that DECLARE an owner — `soleur-run.<pid>.*` schema
 # dirs or `.soleur-owned` marker dirs — and whose owner is provably dead. The
@@ -959,6 +1152,8 @@ main() {
   CLEANED_COUNT=0
   REAP_COUNT=0
   REAP_MB=0
+  CS_REAPED=0
+  CS_RETAINED=0
   COUNT_PRESSURE_SEEN=0
   COUNT_DEGRADED=0
   COUNT_ENTRIES=-1
@@ -967,6 +1162,10 @@ main() {
 
   reap_output_files "$usage_pct"
   reap_scratch_entries "$usage_pct"
+  # Ordered AFTER reap_scratch_entries: the .cs arm consumes the same
+  # _INUSE_TOP map that reaper builds once per run, and skips fail-closed
+  # when the map could not be built.
+  reap_owned_cs_base
   reap_orphan_scratch_roots
   drain_scratch_quarantine
 
@@ -979,7 +1178,7 @@ main() {
   # whose watermark cannot be persisted reports growth=0 forever and is
   # otherwise indistinguishable from a clean /tmp. `-1` means "not measured
   # this run" (the enumeration failed).
-  local summary="run complete: $TMP_ROOT at ${usage_pct}%, cleaned=${CLEANED_COUNT}, reaped=${REAP_COUNT} (${REAP_MB} MB), count_pressure=${COUNT_PRESSURE_SEEN}, entries=${COUNT_ENTRIES}, floor=${COUNT_FLOOR}, growth=${COUNT_GROWTH}, count_degraded=${COUNT_DEGRADED}"
+  local summary="run complete: $TMP_ROOT at ${usage_pct}%, cleaned=${CLEANED_COUNT}, reaped=${REAP_COUNT} (${REAP_MB} MB), cs_reaped=${CS_REAPED}, count_pressure=${COUNT_PRESSURE_SEEN}, entries=${COUNT_ENTRIES}, floor=${COUNT_FLOOR}, growth=${COUNT_GROWTH}, count_degraded=${COUNT_DEGRADED}"
   guard_log "$summary"
   # The journal line above has no consumer. The heartbeat does: SessionStart
   # compares its mtime against the 5-minute cadence, which is what makes "the

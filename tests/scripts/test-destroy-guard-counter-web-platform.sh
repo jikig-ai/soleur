@@ -14,6 +14,10 @@
 #   6. cloudflare_list.*                                 .item (#8364)
 #   7. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
+#   8. relay hello-key pair (PR A of #8211 / #12167, F1)  relay_hello_key_changes:
+#                                                        random_bytes.proxy_hello_hmac +
+#                                                        doppler_secret.proxy_hello_hmac_key,
+#                                                        rows T66a-T66o (15; floor tally at the foot)
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
 # real `terraform show -json` baseline (redacted).
@@ -333,6 +337,55 @@ t_ruleset_rule_addition_passes() {
   else
     _report "T9 cloudflare_ruleset rule addition is ignored" fail "got '$out' want '0:0:0:0:0'"
   fi
+}
+
+# T65 (ADR-321 items 10 and 13, #10479): the origin-TLS rules were ALWAYS PRESENT until the cleanup, and only `enabled` toggled,
+# because the documented rollback was a workflow_dispatch apply and `github.event.head_commit.message` is EMPTY there, so a rule
+# REMOVAL (nested_deletes >= 1) can never be acked on that path. These fixtures are REAL `terraform plan` + `terraform show -json`
+# documents (provider config stripped), planned against a prior state built from the "before" configuration's own planned values
+# (no live apply, no credentials); the filter under test is the real one. Empty head message = a dispatch. The five toggle
+# fixtures and the dynamic-block hazard are kept as historical filter regressions after the cleanup.
+#
+# tfplan-origin-tls-cleanup.json was REGENERATED 2026-11-13 for the cleanup PR as an offline real plan: Terraform 1.9.8 with
+# cloudflare/cloudflare 4.52.7 from the local plugin cache (`init -plugin-dir`, no registry), a scratch root holding only
+# cloudflare_ruleset.seo_config_settings with a dummy token and zone id. "before" = the pre-cleanup 5-rule list with both
+# ORIGIN-TLS rules enabled, planned from empty state; the prior state is that plan's `after` with synthetic rule ids filled
+# in; "after" = this PR's 3-rule list, planned against it with -refresh=false; only format_version, terraform_version and
+# resource_changes are kept. The filter reads counts only, so T65 also asserts the fixture's `after` shape (3 rules, the
+# dcb85b75 rule strict on the app host): that row anchors Guard 1 of the cleanup plan to the plan Terraform actually produced.
+t_origin_tls_rules_toggle_not_remove() {
+  local n out want
+  for spec in \
+    "merge:tfplan-origin-tls-merge.json:0:0:0:0:0:the merge adds ONE disabled rule to the live four-rule list" \
+    "flip-on:tfplan-origin-tls-flip-on.json:0:0:0:0:0:flip on = enabled false->true in place" \
+    "rollback:tfplan-origin-tls-rollback.json:0:0:0:0:0:ROLLBACK = enabled true->false in place, acceptable on a dispatch" \
+    "canary-off:tfplan-origin-tls-canary-off.json:0:0:0:0:0:canary off = enabled true->false in place" \
+    "canary-off-strict-on:tfplan-origin-tls-canary-off-strict-on.json:0:0:0:0:0:canary off while strict stays on"; do
+    IFS=: read -r n f a b c d e label <<<"$spec"
+    out=$(_run_gate "$FIXTURES/$f" "")
+    want="$a:$b:$c:$d:$e"
+    if [[ "$out" == "$want" ]]; then _report "T65 origin-TLS $n: $label (dispatch, empty message -> $want)" ok
+    else _report "T65 origin-TLS $n: $label" fail "got '$out' want '$want'"; fi
+  done
+  # The cleanup change REMOVES two rules: a deliberate, reviewed removal that needs a PUSH apply whose merge commit acks it.
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-cleanup.json" "")
+  if [[ "$out" == "0:2:0:2:1" ]]; then _report "T65 origin-TLS cleanup (-2 rules) is REFUSED without an ack (0:2:0:2:1)" ok
+  else _report "T65 origin-TLS cleanup refused without ack" fail "got '$out' want '0:2:0:2:1'"; fi
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-cleanup.json" $'chore: cleanup\n\n[ack-destroy]\n')
+  if [[ "$out" == "0:2:0:2:0" ]]; then _report "T65 origin-TLS cleanup passes with an [ack-destroy] line on a push (0:2:0:2:0)" ok
+  else _report "T65 origin-TLS cleanup acked" fail "got '$out' want '0:2:0:2:0'"; fi
+  out=$(jq -r '.resource_changes[] | select(.address == "cloudflare_ruleset.seo_config_settings") | .change
+    | [(.after.rules | length),
+       ([.after.rules[] | select(.ref == "dcb85b75bc3c4f4aa2a8c13a080bf854")
+         | "\(.action_parameters[0].ssl)|\(.expression)|\(.enabled)"] | join(","))] | map(tostring) | join(":")' \
+    "$FIXTURES/tfplan-origin-tls-cleanup.json" 2>/dev/null)
+  want='3:strict|(http.host eq "app.soleur.ai")|true'
+  if [[ "$out" == "$want" ]]; then _report "T65 origin-TLS cleanup fixture: after = 3 rules, the dcb85b75 rule strict on (http.host eq \"app.soleur.ai\")" ok
+  else _report "T65 origin-TLS cleanup fixture after-shape" fail "got '$out' want '$want'"; fi
+  # The hazard the always-present shape avoids: the first design (dynamic blocks) rolled back by REMOVING a rule.
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-old-dynamic-rollback.json" "")
+  if [[ "$out" == "0:1:0:1:1" ]]; then _report "T65 origin-TLS dynamic-block rollback (-1 rule) is REFUSED on a dispatch (0:1:0:1:1): the hazard" ok
+  else _report "T65 origin-TLS dynamic-block rollback hazard" fail "got '$out' want '0:1:0:1:1'"; fi
 }
 
 # T10: regression anchor against captured real baseline plan.
@@ -1117,6 +1170,7 @@ t_no_changes_passes
 t_ruleset_resource_delete_no_double_count
 t_mixed_delete_and_nested
 t_ruleset_rule_addition_passes
+t_origin_tls_rules_toggle_not_remove
 t_real_baseline_zero
 t_ack_destroy_allows_nested
 t_ack_destroy_substring_rejected
@@ -1221,6 +1275,12 @@ t_luks_passphrase_first_create_halts() {
 # is needed: the password create ALONE halts; the Doppler copy create ALONE stays legal (the documented recovery for a
 # lost Doppler copy, restoring the same state-held value); an UPDATE of either member still halts; and the pair as
 # no-op (the per-merge plan shape, Phase 0 evidence plan: no creates) reads 0.
+# #9294 PR-2: the web-platform apply's deploy-policy gate treats a plan WITHOUT the deploy Access policy entry as a changed policy
+# (the policy is always in the -target list, so a real plan always carries it as a no-op). A synthetic plan driven through the REAL
+# apply step must therefore carry it, or the step halts on the policy gate and never reaches the case under test.
+_with_deploy_policy() { # stdin plan JSON -> stdin plus the policy no-op entry
+  jq 'if any(.resource_changes[]?; .address == "cloudflare_zero_trust_access_policy.deploy_service_token") then . else .resource_changes += [{"address":"cloudflare_zero_trust_access_policy.deploy_service_token","mode":"managed","type":"cloudflare_zero_trust_access_policy","name":"deploy_service_token","change":{"actions":["no-op"],"before":{"include":[{"service_token":["00000000-0000-4000-8000-000000000001"]}]},"after":{"include":[{"service_token":["00000000-0000-4000-8000-000000000001"]}]}}}] end'
+}
 _inngest_pair_plan() { # <password-actions-json|null> <key-actions-json|null> -> plan JSON on stdout (a `null` omits that entry)
   jq --argjson p "${1:-null}" --argjson k "${2:-null}" '
     .resource_changes |= [ .[]
@@ -1726,7 +1786,7 @@ _run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
   printf '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n' > "$w/bin/doppler"
   printf '#!/bin/sh\ncase "$1 $2" in\n  "plan -no-color") : > tfplan ;;\n  "show -no-color") cat "$STUB_TXT" ;;\n  "show -json") cat "$STUB_JSON" ;;\n  *) echo "stub terraform: unexpected: $*" >&2; exit 97 ;;\nesac\n' > "$w/bin/terraform"
   chmod +x "$w/bin/doppler" "$w/bin/terraform"
-  cp "$fixture" "$w/plan.json"; cp "$txt" "$w/plan.txt"
+  _with_deploy_policy < "$fixture" > "$w/plan.json"; cp "$txt" "$w/plan.txt"
   printf '%s\n' "$span" > "$w/span.sh"
   APPLY_SPAN_RC=0
   APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" INFRA_DIR="$w" \
@@ -1760,7 +1820,7 @@ t_apply_job_luks_halt_executes() {
   _run_apply_halt_span "$FIXTURES/tfplan-inngest-luks-passphrase-first-create.json" "$txt"
   [[ "$APPLY_SPAN_RC" == "1" ]] || detail="${detail} inngest-create-pair-rc=${APPLY_SPAN_RC}(want 1):${APPLY_SPAN_OUT:0:200};"
   grep -q 'LUKS passphrase resource' <<<"$APPLY_SPAN_OUT" || detail="${detail} inngest-create-pair-halt-message-missing;"
-  local keyplan; keyplan="$(mktemp)"; _inngest_pair_plan null '["create"]' > "$keyplan"
+  local keyplan; keyplan="$(mktemp)"; _inngest_pair_plan null '["create"]' | _with_deploy_policy > "$keyplan"
   _run_apply_halt_span "$keyplan" "$txt"
   [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} inngest-key-copy-create-alone-rc=${APPLY_SPAN_RC}(want 0):${APPLY_SPAN_OUT:0:200};"
   rm -f "$keyplan"
@@ -1845,6 +1905,341 @@ t_apply_job_luks_halt_names_workspaces() {
     _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, the CREATE halt with the retired route and the no-supported-recovery statement, and widens the plan-line grep" ok
   else
     _report "T64g the apply job's LUKS HALT names the workspaces pair and its remediation" fail "missing:${missing}"
+  fi
+}
+
+# ── Hello-key destroy-guard counter (F1, PR A of #8211 / #12167): `relay_hello_key_changes` ─────────────────────────
+#
+# random_bytes.proxy_hello_hmac[0] and doppler_secret.proxy_hello_hmac_key[0] (apps/web-platform/infra/proxy-hello-hmac.tf)
+# mint PROXY_HELLO_HMAC_KEY, the secret every relayed (proxied) session hello is signed with. Both are -target-reachable from
+# the per-merge apply, and since the signed-hello change the key is READ, so a replace, update, delete or forget of the pair
+# is a relay outage (the two hosts disagree on the key), not a no-op. `[ack-destroy]` cannot tell a key replace from any
+# other delete in the same merge, so the counter is read OUTSIDE the destroy_count sum. A dedicated counter, not an edit to
+# luks_passphrase_addrs: the LUKS set protects data already encrypted under the old value, its HALT text and its exact
+# floor are LUKS-worded, and this failure is a rolling-deploy outage, not data loss (CTO ruling F1, 2026-11-09).
+# Both addresses are `[0]`-indexed in a real plan (count-gated on host_proxy_tls_enabled), so the match goes through
+# luks_passphrase_base. A CREATE halts at random_bytes only: a lone CREATE of the Doppler copy re-derives the state-held
+# value and stays legal.
+_run_relay_hello_gate() { # <fixture> [filter file] -> "n:rc"; ack-INDEPENDENT (no head_msg parameter, same shape as the LUKS gate)
+  local fixture="$1" filter="${2:-$FILTER}" counts n rc=0
+  if ! counts=$(jq -f "$filter" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  n=$(echo "$counts" | jq -r '.relay_hello_key_changes')
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$n" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$n:$rc"
+}
+
+# TEST-SIDE literals: never derived from the filter, or emptying the filter's own list would shrink the expectation with it.
+RH_ADDRS=(random_bytes.proxy_hello_hmac doppler_secret.proxy_hello_hmac_key)
+RH_CREATE_HALT=(random_bytes.proxy_hello_hmac)
+_rh_create_want() { # <bare address> -> 1 when a CREATE there must count, else 0
+  local x
+  for x in "${RH_CREATE_HALT[@]}"; do [[ "$x" == "$1" ]] && { printf 1; return; }; done
+  printf 0
+}
+
+# One entry at ONE address, every verb shape: update/delete/forget/unreadable always score, create scores only where
+# <create-want> is 1, no-op never scores. Prints a detail string of mismatches (empty = all as wanted).
+_rh_shape_check() { # <filter file> <address> <create-want 0|1>
+  local filter="$1" addr="$2" cw="${3:-0}" shape want got detail='' tmp; tmp="$(mktemp)"
+  for shape in '[]:1' '["delete"]:1' '["delete","create"]:1' '["create","delete"]:1' '["create","update"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' "[\"create\"]:${cw}"; do
+    want="${shape##*:}"
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "${shape%:*}" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "$want" ]] || detail="${detail} ${addr} actions=${shape%:*} got=${got} want=${want};"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_relay_hello_replace_halts() { # T66a
+  local out; out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-replace.json")
+  if [[ "$out" == "2:1" ]]; then
+    _report "T66a a REPLACE of the hello-key pair HALTs (both addresses counted, rc=1)" ok
+  else
+    _report "T66a a REPLACE of the hello-key pair HALTs" fail "got '$out' want '2:1'"
+  fi
+}
+
+t_relay_hello_no_ack_bypass() { # T66b
+  local msg=$'chore: unrelated delete\n\n[ack-destroy]\n\nRef #12289.'
+  local legacy out
+  legacy=$(_run_gate "$FIXTURES/tfplan-proxy-hello-replace.json" "$msg")
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-replace.json")
+  if [[ "$legacy" == "2:0:0:2:0" && "$out" == "2:1" ]]; then
+    _report "T66b [ack-destroy] cannot bypass the hello-key HALT (legacy rc=0, relay rc=1)" ok
+  else
+    _report "T66b [ack-destroy] cannot bypass the hello-key HALT" fail \
+      "got legacy='$legacy' (want '2:0:0:2:0') relay='$out' (want '2:1')"
+  fi
+}
+
+t_relay_hello_forget_halts() { # T66c
+  local legacy out
+  legacy=$(_run_gate "$FIXTURES/tfplan-proxy-hello-forget.json" "chore: drop from state")
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-forget.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "2:1" ]]; then
+    _report "T66c a state-drop (forget) of the hello-key pair HALTs although the legacy gate is silent" ok
+  else
+    _report "T66c a state-drop (forget) of the hello-key pair HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') relay='$out' (want '2:1')"
+  fi
+}
+
+t_relay_hello_random_bytes_create_halts() { # T66d
+  local legacy out
+  legacy=$(_run_gate "$FIXTURES/tfplan-proxy-hello-create.json" "chore: create")
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-create.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T66d a CREATE of random_bytes.proxy_hello_hmac HALTs (one counted: the secret create alongside it is not), legacy gate silent" ok
+  else
+    _report "T66d a CREATE of random_bytes.proxy_hello_hmac HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') relay='$out' (want '1:1')"
+  fi
+}
+
+t_relay_hello_secret_create_alone_legal() { # T66e
+  local out; out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-secret-create-only.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T66e a lone CREATE of doppler_secret.proxy_hello_hmac_key reads 0 (restores the state-held value, stays legal)" ok
+  else
+    _report "T66e a lone CREATE of doppler_secret.proxy_hello_hmac_key reads 0" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_relay_hello_noop_reads_zero() { # T66f
+  local out; out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-noop.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T66f the no-op pair (the routine per-merge shape after the key exists) reads 0" ok
+  else
+    _report "T66f the no-op pair reads 0" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_relay_hello_update_only_halts() { # T66g
+  local legacy out
+  legacy=$(_run_gate "$FIXTURES/tfplan-proxy-hello-secret-update.json" "chore: update")
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-secret-update.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T66g a bare UPDATE of the Doppler copy HALTs although no destroy counter moves" ok
+  else
+    _report "T66g a bare UPDATE of the Doppler copy HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') relay='$out' (want '1:1')"
+  fi
+}
+
+t_relay_hello_indexed_forms_counted() { # T66h
+  local a f detail='' d
+  for a in "${RH_ADDRS[@]}"; do
+    for f in "$a" "${a}[0]" "${a}[\"web-2\"]" "module.x.${a}" "module.x[\"k.j\"].${a}[0]" "module.a.module.b.${a}" \
+             "module.x[\"a\\\".b\"].${a}"; do
+      d="$(_rh_shape_check "$FILTER" "$f" "$(_rh_create_want "$a")")"; detail="${detail}${d}"
+    done
+  done
+  # previous_address sub-case: a state move off a key address (verb no-op) counts; a move onto one from elsewhere reads 0.
+  local tmp got; tmp="$(mktemp)"
+  for a in "${RH_ADDRS[@]}"; do
+    printf '{"resource_changes":[{"address":"x.moved","previous_address":"%s[0]","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' "$a" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "1" ]] || detail="${detail} previous_address=${a} got=${got} want=1;"
+  done
+  printf '{"resource_changes":[{"address":"x.moved","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+  [[ "$got" == "0" ]] || detail="${detail} previous_address=unrelated got=${got} want=0;"
+  # a key address that merely carries an UNRELATED previous_address (no-op) is still the routine merge reading
+  for a in "${RH_ADDRS[@]}"; do
+    printf '{"resource_changes":[{"address":"%s","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' "$a" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "0" ]] || detail="${detail} key-address+unrelated-previous_address=${a} got=${got} want=0;"
+  done
+  # mutation (control green above): a filter that never reads previous_address must miss the moved-off-the-key case
+  local mut; mut="$(mktemp)"
+  sed '/^  relay_hello_key_changes: (/,/^  ),/ s/\.previous_address?/.previous_address_x?/g' "$FILTER" > "$mut"
+  printf '{"resource_changes":[{"address":"x.moved","previous_address":"random_bytes.proxy_hello_hmac","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  if cmp -s "$FILTER" "$mut"; then detail="${detail} previous_address mutation did not land;"
+  elif [[ "$(jq -f "$mut" "$tmp" | jq -r '.relay_hello_key_changes')" != "0" ]]; then detail="${detail} previous_address mutant still counts the move;"; fi
+  # mutation 2: the clause counts ANY previous_address (drops the key-membership test) -> the unrelated-previous_address row must go red
+  local mut2; mut2="$(mktemp)"
+  sed '/^  relay_hello_key_changes: (/,/^  ),/ s/| IN(\.; relay_hello_key_addrs\[\]) \] | any)/| true ] | any)/g' "$FILTER" > "$mut2"
+  printf '{"resource_changes":[{"address":"random_bytes.proxy_hello_hmac","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  if cmp -s "$FILTER" "$mut2"; then detail="${detail} previous_address membership mutation did not land;"
+  elif [[ "$(jq -f "$mut2" "$tmp" | jq -r '.relay_hello_key_changes')" != "1" ]]; then detail="${detail} previous_address membership mutant not counting an unrelated previous_address;"; fi
+  rm -f "$tmp" "$mut" "$mut2"
+  if [[ -z "$detail" ]]; then
+    _report "T66h indexed and module-prefixed forms of each hello-key address score like the bare address (create only at random_bytes)" ok
+  else
+    _report "T66h indexed and module-prefixed forms of each hello-key address are counted" fail "$detail"
+  fi
+}
+
+_rh_neighbour_check() { # <filter file> <address> -> mismatch detail (empty = scored 0 on every mutating verb)
+  local filter="$1" addr="$2" shape got detail='' tmp; tmp="$(mktemp)"
+  for shape in '["update"]' '["delete","create"]' '["delete"]' '["forget"]' '[]'; do
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "$shape" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "0" ]] || detail="${detail} ${addr} actions=${shape} got=${got} want=0;"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_relay_hello_decoys_read_zero() { # T66i
+  local out a detail='' d
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-decoys.json")
+  [[ "$out" == "0:0" ]] || detail=" decoy fixture got '${out}' want '0:0';"
+  for a in tls_private_key.proxy_server 'tls_private_key.proxy_server[0]' doppler_secret.proxy_tls_key doppler_secret.proxy_tls_cert \
+           'doppler_secret.proxy_tls_cert[0]' random_bytes.other random_bytes.proxy_hello_hmac_x doppler_secret.proxy_hello_hmac_key_x \
+           'random_bytes.proxy_hello_hmac_x[0]'; do
+    d="$(_rh_neighbour_check "$FILTER" "$a")"; detail="${detail}${d}"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T66i near-name neighbours of the hello-key pair (proxy TLS key and cert, other random_bytes) score ZERO on update, replace, delete, forget" ok
+  else
+    _report "T66i near-name neighbours of the hello-key pair score zero" fail "$detail"
+  fi
+}
+
+t_relay_hello_undecidable_counts() { # T66j
+  local out a detail=''
+  out=$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-undecidable.json")
+  [[ "$out" == "2:1" ]] || detail=" undecidable fixture got '${out}' want '2:1';"
+  for a in "${RH_ADDRS[@]}"; do
+    local tmp; tmp="$(mktemp)"
+    printf '{"resource_changes":[{"address":"%s[0]","type":"x","change":{"actions":[],"before":{"id":"x"},"after":null}}]}' "$a" > "$tmp"
+    [[ "$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')" == "1" ]] || detail="${detail} empty-actions@${a} did not count;"
+    rm -f "$tmp"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T66j an entry at the hello-key pair whose action list cannot be read (actions: []) counts, and the pair fixture HALTs" ok
+  else
+    _report "T66j an undecidable action list at the hello-key pair counts" fail "$detail"
+  fi
+}
+
+# MUTANT ROWS (instrument checks): each edits a COPY of the filter, asserts the edit landed, and requires the control (the
+# real filter) green and the mutant red on the row that exists to catch it.
+t_relay_hello_mutant_random_bytes_removed() { # T66k
+  local a=random_bytes.proxy_hello_hmac mut; mut="$(mktemp)"
+  sed "/^def relay_hello_key_addrs: \\[/,/^\\];/ s/\"${a}\"/\"${a}-mutant-removed\"/" "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T66k mutant: removing ${a} from relay_hello_key_addrs" fail "the mutation did not land"
+  elif [[ -z "$(_rh_shape_check "$FILTER" "$a" 1)" && -n "$(_rh_shape_check "$mut" "$a" 1)" ]]; then
+    _report "T66k mutant: removing ${a} from relay_hello_key_addrs is caught by the per-address row (control green)" ok
+  else
+    _report "T66k mutant: removing ${a} from relay_hello_key_addrs is caught by the per-address row" fail "control or mutant verdict wrong"
+  fi
+  rm -f "$mut"
+}
+
+t_relay_hello_mutant_doppler_secret_removed() { # T66l
+  local a=doppler_secret.proxy_hello_hmac_key mut; mut="$(mktemp)"
+  sed "/^def relay_hello_key_addrs: \\[/,/^\\];/ s/\"${a}\"/\"${a}-mutant-removed\"/" "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T66l mutant: removing ${a} from relay_hello_key_addrs" fail "the mutation did not land"
+  elif [[ -z "$(_rh_shape_check "$FILTER" "$a" 0)" && -n "$(_rh_shape_check "$mut" "$a" 0)" ]]; then
+    _report "T66l mutant: removing ${a} from relay_hello_key_addrs is caught by the per-address row (control green)" ok
+  else
+    _report "T66l mutant: removing ${a} from relay_hello_key_addrs is caught by the per-address row" fail "control or mutant verdict wrong"
+  fi
+  rm -f "$mut"
+}
+
+t_relay_hello_mutant_normalization_dropped() { # T66m
+  local mut ctl got; mut="$(mktemp)"
+  sed 's/^          IN(\.address | strings | luks_passphrase_base; relay_hello_key_addrs\[\])$/          IN(.address; relay_hello_key_addrs[])/' "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T66m mutant: dropping the index/module normalization" fail "the mutation did not land"
+    rm -f "$mut"; return
+  fi
+  ctl="$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-replace.json")"
+  got="$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-replace.json" "$mut")"
+  if [[ "$ctl" == "2:1" && "$got" == "0:0" && -n "$(_rh_shape_check "$mut" 'random_bytes.proxy_hello_hmac[0]' 1)" ]]; then
+    _report "T66m mutant: dropping the index/module normalization is caught (the [0]-indexed replace fixture reads 0, the indexed row reds, control green)" ok
+  else
+    _report "T66m mutant: dropping the index/module normalization is caught" fail "control '${ctl}' (want 2:1), mutant '${got}' (want 0:0)"
+  fi
+  rm -f "$mut"
+}
+
+t_relay_hello_mutant_create_list_removed() { # T66n
+  local a=random_bytes.proxy_hello_hmac mut ctl got; mut="$(mktemp)"
+  sed "/^def relay_hello_key_create_halt_addrs: \\[/,/^\\];/ s/\"${a}\"/\"${a}-mutant-removed\"/" "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T66n mutant: removing ${a} from the create-halt list" fail "the mutation did not land"
+    rm -f "$mut"; return
+  fi
+  ctl="$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-create.json")"
+  got="$(_run_relay_hello_gate "$FIXTURES/tfplan-proxy-hello-create.json" "$mut")"
+  if [[ "$ctl" == "1:1" && "$got" == "0:0" && -n "$(_rh_shape_check "$mut" "$a" 1)" && -z "$(_rh_shape_check "$FILTER" "$a" 1)" ]]; then
+    _report "T66n mutant: removing ${a} from the create-halt list is caught (the create fixture reads 0, the create row reds, control green)" ok
+  else
+    _report "T66n mutant: removing ${a} from the create-halt list is caught" fail "control '${ctl}' (want 1:1), mutant '${got}' (want 0:0)"
+  fi
+  rm -f "$mut"
+}
+
+# EXECUTED, not text-pinned (the T64m shape for the hello-key HALT): the REAL apply-step text from the step start through the
+# line before the destroy_count sum, under bash -e with the real ack env. A replace plan and a random_bytes create plan exit
+# 1 and print the offending plan lines from the explicit two-address grep (30 unrelated lines precede them in the stub
+# tfplan.txt, so a generic grep | head -20 would hide them); the lone secret create, the no-op pair and the real baseline fall
+# through (rc 0); and the executor sees each way of skipping or neutering the HALT.
+t_apply_job_relay_hello_halt_executes() { # T66o
+  local txt i detail='' rc_rep out_rep
+  txt="$(mktemp)"
+  for i in $(seq 1 30); do printf '  # hcloud_volume.proxy_hello_noise%s will be created\n' "$i"; done > "$txt"
+  printf '  # random_bytes.proxy_hello_hmac[0] must be replaced\n  # doppler_secret.proxy_hello_hmac_key[0] must be replaced\n' >> "$txt"
+  printf 'Plan: 2 to add, 0 to change, 2 to destroy.\n' >> "$txt"
+
+  _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-replace.json" "$txt"
+  rc_rep="$APPLY_SPAN_RC"; out_rep="$APPLY_SPAN_OUT"
+  [[ "$rc_rep" == "1" ]] || detail="${detail} replace-rc=${rc_rep}(want 1);"
+  grep -q 'relay hello key resource' <<<"$out_rep" || detail="${detail} replace-halt-message-missing;"
+  grep -q 'LUKS' <<<"$out_rep" && detail="${detail} halt-text-carries-LUKS-wording;"
+  grep -qE '^  # random_bytes\.proxy_hello_hmac\[0\] must be replaced$' <<<"$out_rep" || detail="${detail} grep-output-lacks-random_bytes;"
+  grep -qE '^  # doppler_secret\.proxy_hello_hmac_key\[0\] must be replaced$' <<<"$out_rep" || detail="${detail} grep-output-lacks-doppler_secret;"
+  grep -q 'noise' <<<"$out_rep" && detail="${detail} grep-printed-unrelated-lines;"
+  grep -q '^Plan: ' <<<"$out_rep" || detail="${detail} grep-output-lacks-Plan-line;"
+  grep -qF '[skip-web-platform-apply]' <<<"$out_rep" || detail="${detail} UNWEDGE-text-missing;"
+
+  _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-create.json" "$txt"
+  [[ "$APPLY_SPAN_RC" == "1" ]] || detail="${detail} random_bytes-create-rc=${APPLY_SPAN_RC}(want 1):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-secret-update.json" "$txt"
+  [[ "$APPLY_SPAN_RC" == "1" ]] || detail="${detail} secret-update-rc=${APPLY_SPAN_RC}(want 1):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-secret-create-only.json" "$txt"
+  [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} secret-create-alone-rc=${APPLY_SPAN_RC}(want 0):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-noop.json" "$txt"
+  [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} noop-pair-rc=${APPLY_SPAN_RC}(want 0):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-web-platform-real-baseline.json" "$txt"
+  [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} real-baseline-rc=${APPLY_SPAN_RC}(want 0):${APPLY_SPAN_OUT:0:200};"
+
+  # Instrument check: the executor must SEE each way of skipping or neutering the HALT (each turns the replace plan's rc
+  # into 0, otherwise the rows above cannot red). Keyed on HEAD_MSG / SKIP_GUARD, the variables the harness really sets.
+  local -a MUTS=(
+    '/relay_hello_key_changes" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ "$HEAD_MSG" == *"[ack-destroy]"* ]] \&\& exit 0\n\1exit 1/'
+    '/relay_hello_key_changes" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/'
+    's/^( *)(relay_hello_key_changes=.*)$/\1\2\n\1[[ "$HEAD_MSG" == *"[ack-destroy]"* ]] \&\& relay_hello_key_changes=0/'
+    's/^( *)(relay_hello_key_changes=.*)$/\1\2\n\1echo x; [[ -n "${SKIP_GUARD:-}" ]] \&\& exit 0/'
+    's/^( *)(set -euo pipefail)$/\1\2\n\1[[ -n "${SKIP_GUARD:-}" ]] \&\& exit 0/'
+    's/^( *)(if \[\[ "\$relay_hello_key_changes" -gt 0 \]\]; then)$/\1exit $rc\n\1\2/'
+    's/"\$relay_hello_key_changes" -gt 0 \]\]/"$relay_hello_key_changes" -gt 999 ]]/'
+  )
+  local -a MUT_NAMES=(HEAD_MSG-before-exit-1 exit-1-flipped-to-0 HEAD_MSG-counter-rewrite echo-prefixed-SKIP_GUARD-exit step-start-short-circuit exit-rc-before-HALT threshold-raised)
+  for i in "${!MUTS[@]}"; do
+    _run_apply_halt_span "$FIXTURES/tfplan-proxy-hello-replace.json" "$txt" "${MUTS[$i]}"
+    [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} instrument-${MUT_NAMES[$i]}-rc=${APPLY_SPAN_RC}(want 0);"
+  done
+  rm -f "$txt"
+  if [[ -z "$detail" ]]; then
+    _report "T66o the REAL apply step, run from its start with the real ack env under bash -e, exits 1 on a hello-key replace, a random_bytes create and a secret update (explicit two-address grep, no LUKS wording), falls through on a lone secret create, the no-op pair and the real baseline, and the executor sees each of 7 skip/neuter mutations" ok
+  else
+    _report "T66o the real apply step executes the hello-key HALT as a hard stop" fail "$detail"
   fi
 }
 
@@ -2055,7 +2450,7 @@ _halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf"
 # pattern matched zero lines in the workflow (inside single quotes grep saw a BRE
 # with a literal backslash), so it was dead code that read as protective while a
 # fallback silently did all the work.
-_ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
+_ack_line=$(grep -n 'ALL_MSGS.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
 if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
   _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
 else
@@ -2119,6 +2514,109 @@ t_workspaces_passphrase_indexed_forms_counted
 t_workspaces_passphrase_indexed_fixture_halts
 t_workspaces_passphrase_normalization_mutant_caught
 t_apply_job_luks_halt_executes
+# Hello-key counter (F1): one invocation per row id, T66a-T66o.
+t_relay_hello_replace_halts
+t_relay_hello_no_ack_bypass
+t_relay_hello_forget_halts
+t_relay_hello_random_bytes_create_halts
+t_relay_hello_secret_create_alone_legal
+t_relay_hello_noop_reads_zero
+t_relay_hello_update_only_halts
+t_relay_hello_indexed_forms_counted
+t_relay_hello_decoys_read_zero
+t_relay_hello_undecidable_counts
+t_relay_hello_mutant_random_bytes_removed
+t_relay_hello_mutant_doppler_secret_removed
+t_relay_hello_mutant_normalization_dropped
+t_relay_hello_mutant_create_list_removed
+t_apply_job_relay_hello_halt_executes
+
+# ── T67 — coalesced-commit feed for the kill-switch + [ack-destroy] gates (#12403). ────
+#
+# The merge-queue coalesce that buried [ack-deploy-policy] one squash below the tip
+# (#12404) left the same tip-only blind spot on two sibling readers of
+# github.event.head_commit.message: the preflight kill-switch (fail-UNSAFE — a buried
+# [skip-web-platform-apply] is silently ignored and the apply runs inside the window the
+# token was holding open) and the apply step's [ack-destroy] test (fail-closed — a buried
+# ack refuses the apply). Both now read ALL_MSGS = tip + every event.commits[*].message,
+# the identical idiom #12404 shipped for deploy_policy_gate (any-commit reach, CTO-ruled
+# 2026-11-09).
+
+_t67_kill_switch_run() {
+  awk '
+    /^      - id: kill_switch/ { instep = 1; next }
+    instep && /^        run: \|/ { inrun = 1; next }
+    inrun && /^          / { print; next }
+    inrun { exit }
+    instep && /^      [^ ]/ { instep = 0 }
+  ' "$WORKFLOW_YML"
+}
+
+t67_coalesced_gate_feeds() {
+  local blk
+  blk="$(_job_block "$WORKFLOW_YML" "preflight" | grep -vE '^[[:space:]]*#' || true)"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && _report "T67a: the preflight job carries the EVENT_MSGS_JSON feed env" ok \
+    || _report "T67a: the preflight job carries the EVENT_MSGS_JSON feed env" FAIL \
+       "env line absent in comment-stripped preflight block"
+  grep -nE '\$ALL_MSGS.*skip-web-platform-apply' <<<"$blk" >/dev/null \
+    && _report "T67b: the kill_switch token test reads ALL_MSGS" ok \
+    || _report "T67b: the kill_switch token test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-skip-token line in comment-stripped preflight block"
+  blk="$(_job_block "$WORKFLOW_YML" "apply" | grep -vE '^[[:space:]]*#' || true)"
+  grep -nE '\$ALL_MSGS.*ack-destroy' <<<"$blk" >/dev/null \
+    && _report "T67c: the [ack-destroy] test reads ALL_MSGS" ok \
+    || _report "T67c: the [ack-destroy] test reads ALL_MSGS" FAIL \
+       "no ALL_MSGS-reads-ack-token line in comment-stripped apply block"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && grep -qF 'jq -r '"'"'join("\n")'"'"'' <<<"$blk" \
+    && grep -qE 'ALL_MSGS=.*more_msgs' <<<"$blk" \
+    && _report "T67h: the apply job carries the EVENT_MSGS_JSON feed + concat" ok \
+    || _report "T67h: the apply job carries the EVENT_MSGS_JSON feed + concat" FAIL \
+       "apply block lost the feed env, the jq concat, or the append line — consumer name alone reverts to tip-only"
+}
+
+t67_executed_kill_switch_span() {
+  local run_body out log rc
+  run_body="$(_t67_kill_switch_run)"
+  out="$(mktemp -t t66-goutput.XXXXXX)"
+  log="$(mktemp -t t66-runlog.XXXXXX)"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: infra\n\n[skip-web-platform-apply]"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
+    && _report "T67d executed: a line-anchored token buried in event.commits arms the kill-switch" ok \
+    || _report "T67d executed: a line-anchored token buried in event.commits arms the kill-switch" FAIL \
+       "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' \
+    EVENT_MSGS_JSON='["feat: see [skip-web-platform-apply] note"]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
+    && _report "T67e executed: a mid-line token does not arm (anchor preserved through the concat)" ok \
+    || _report "T67e executed: a mid-line token does not arm" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
+    && _report "T67f executed: EVENT_MSGS_JSON absent (dispatch shape) degrades to tip-only" ok \
+    || _report "T67f executed: EVENT_MSGS_JSON absent degrades to tip-only" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  : > "$out"; rc=0
+  HEAD_MSG=$'chore\n\n[skip-web-platform-apply]' \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
+    && _report "T67g executed: a tip-carried token still arms (baseline preserved)" ok \
+    || _report "T67g executed: a tip-carried token still arms" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
+
+  rm -f "$out" "$log"
+}
+
+t67_coalesced_gate_feeds
+t67_executed_kill_switch_span
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -2144,15 +2642,18 @@ _ran=$((pass + fail))
 # indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the retirement change for #9372:
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
 # T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
-# T47c roster-change cert replace is ackable) = 113. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 112 assertions ran, floor is 113". The floor sits at the
+# T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 15 relay hello-key counter rows (PR A of #8211 / #12167, F1: T66a-T66o, one
+# _report call per id: a-j behaviour, k-n the four mutant rows, o the executed HALT segment) = 136, + 8 coalesced-feed rows (#12403:
+# T67a-c feed pins + T67d-g executed kill-switch span + T67h apply-side feed pin; renumbered from T66 on the
+# hello-key merge collision) = 144, + 1 T65 cleanup-fixture after-shape row (ADR-321 item 13, #10479) = 145. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 144 assertions ran, floor is 145". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 113 ]]; then
+if [[ "$_ran" -lt 145 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 113. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 145. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 113)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 145)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

@@ -480,6 +480,16 @@ def _git(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def _git_z(args: list[str]) -> list[str] | None:
+    """Run git, split its NUL-separated stdout; None on a non-zero status.
+
+    Bytes are decoded with surrogateescape so a non-UTF-8 name cannot raise."""
+    res = subprocess.run(["git", *args], capture_output=True, check=False)
+    if res.returncode != 0:
+        return None
+    return res.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+
+
 def _resolve_base(base: str) -> str | None:
     """Return a merge-base SHA against `base` (with sensible fallbacks)."""
     for candidate in (base, "origin/main", "main"):
@@ -499,15 +509,18 @@ def changed_files(base_ref: str) -> list[Path] | None:
     """Files changed vs `base_ref` + new untracked files, under scan dirs.
 
     Returns None on a git error (fail-closed → the caller exits 2)."""
-    diff = _git(["diff", "--name-only", base_ref, "--"])
-    if diff.returncode != 0:
+    # NUL-separated: the newline form C-quotes a non-ASCII name, so the quoted
+    # name never ends in ".md" and the doc was silently skipped. A non-zero git
+    # status stays None (the caller exits 2), never an empty set.
+    diff = _git_z(["diff", "-z", "--no-renames", "--ignore-submodules=none", "--name-only", base_ref, "--"])
+    if diff is None:
         return None
-    names: set[str] = {n for n in diff.stdout.splitlines() if n}
+    names: set[str] = {n for n in diff if n}
     # Untracked new docs (not yet in any commit) still count as "changed".
-    others = _git(["ls-files", "--others", "--exclude-standard"])
-    if others.returncode != 0:
+    others = _git_z(["ls-files", "-z", "--others", "--exclude-standard"])
+    if others is None:
         return None
-    names.update(n for n in others.stdout.splitlines() if n)
+    names.update(n for n in others if n)
 
     prefixes = tuple(d + "/" for d in SCAN_DIRS)
     picked: list[Path] = []

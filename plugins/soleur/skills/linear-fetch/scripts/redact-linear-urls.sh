@@ -43,7 +43,7 @@ input=$(cat -)
 count=0
 output="$input"
 for pattern in "${LINEAR_CDN_PATTERNS[@]}"; do
-  matches=$(printf '%s' "$output" | grep -oE "$pattern" | wc -l | tr -d '[:space:]')
+  matches=$(printf '%s' "$output" | grep -oE "$pattern" | wc -l | tr -d '[:space:]') || true
   count=$((count + matches))
   output=$(printf '%s' "$output" | sed -E "s#$pattern#[linear-image: REDACTED]#g")
 done

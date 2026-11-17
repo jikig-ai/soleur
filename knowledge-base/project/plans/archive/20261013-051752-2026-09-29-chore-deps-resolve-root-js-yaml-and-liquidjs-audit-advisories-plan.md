@@ -25,7 +25,7 @@ in array filters; `strip_html` infinite loop).
 **Half the issue is already resolved on `main`.** Dependabot PR #7970 (merged
 2026-09-24) bumped `js-yaml` to `4.3.2` (top-level) and `3.15.2` (nested under
 `gray-matter`) — exactly the `first_patched_version`s of
-`GHSA-2883-xcg3-v3hh` (`>=4.0.0 <4.3.2` and `>=3.0.0 <3.15.2`). A live
+the js-yaml advisory (`>=4.0.0 <4.3.2` and `>=3.0.0 <3.15.2`). A live
 `npm audit --json` run today flags **only `liquidjs`**; `js-yaml` no longer
 appears. The residual js-yaml work is not a bump — it is the drain-guard
 ratchet #7970 skipped (`scripts/assert-dependabot-drain.py` still floors
@@ -34,9 +34,8 @@ regression to a still-vulnerable copy would pass the guard silently).
 
 **The liquidjs half is a transitive-only bump.** `node_modules/liquidjs`
 `10.27.0` is pulled solely by `@11ty/eleventy@3.1.5` (`"liquidjs":
-"^10.25.0"`). Three open HIGH advisories
-(`GHSA-g357-x5c3-c72p`, `GHSA-m7fp-h3p4-hr49`, `GHSA-4r6h-5v86-94p3`) are all
-cleared by `first_patched_version` **10.27.2** (the strictest of the three);
+"^10.25.0"`). Three open HIGH advisories are all
+addressed by `first_patched_version` **10.27.2** (the strictest of the three);
 `npm@11 update liquidjs` resolves to **10.29.0**, inside the declared range —
 no `package.json` or `overrides` change is needed on the primary path.
 
@@ -55,13 +54,13 @@ no `package.json` or `overrides` change is needed on the primary path.
   PR's job (see the 2026-09-29 ratchet learning).
 - **Advisory records re-derived live** via `gh api
   "/advisories?ecosystem=npm&affects=<pkg>"` (2026-09-29):
-  - `js-yaml` `GHSA-2883-xcg3-v3hh` (HIGH): two vulnerable ranges,
+  - `js-yaml`, one HIGH advisory: two vulnerable ranges,
     `>=4.0.0 <4.3.2` **and** `>=3.0.0 <3.15.2` — installed `4.3.2` + `3.15.2`
     are exactly patched on both lines.
-  - `liquidjs`: `GHSA-g357-x5c3-c72p` (`pop` filter `memoryLimit` bypass,
-    `<=10.27.0`, patched 10.27.1), `GHSA-m7fp-h3p4-hr49` (`strip_html`
+  - `liquidjs`: one advisory (`pop` filter `memoryLimit` bypass,
+    `<=10.27.0`, patched 10.27.1), a second (`strip_html`
     infinite loop, `>=10.26.0 <10.27.1`, patched 10.27.1),
-    `GHSA-4r6h-5v86-94p3` (`join` filter resource exhaustion, `<=10.27.1`,
+    a third (`join` filter resource exhaustion, `<=10.27.1`,
     patched 10.27.2). No published advisory covers `>=10.27.2`; latest stable
     is `10.29.0` (`11.0.0-alpha.1` is a prerelease — not a target).
   - `liquidjs` exists in **only** the root lockfile — absent from
@@ -106,7 +105,7 @@ no `package.json` or `overrides` change is needed on the primary path.
 | Bump js-yaml in root lockfile | Property 1 (js-yaml arm) | **Cut — already done by #7970.** Installed copies are exactly the patched versions; re-bumping is a no-op. The audit-confirm step replaces it. |
 | `npx --yes npm@11 update liquidjs` | Property 1 (liquidjs arm) | **Adopted** — the documented npm@11 transitive-bump path (`work-lockfile-bumps.md` header). |
 | `overrides.liquidjs` pin in root `package.json` | Same | **Fallback only** — single deduped node at a resolvable-in-range version; an override buys nothing `npm update` doesn't and persists as cleanup debt. Used only if `npm update` no-ops (2026-04-07 silent-no-op class). Adding it fires `cq-before-pushing-package-json-changes`. |
-| Ratchet drain-guard `REQUIRED`/`FLOOR_ANCHORS` for js-yaml (3.x→3.15.2, 4.x→4.3.2, all manifests carrying those lines) | Property 2 (js-yaml arm) | **Adopted** — required by the guard's own header ("Add an anchor whenever an advisory forces a floor up") and the 2026-09-29 learning; #7970 left floors below GHSA-2883's patched versions. |
+| Ratchet drain-guard `REQUIRED`/`FLOOR_ANCHORS` for js-yaml (3.x→3.15.2, 4.x→4.3.2, all manifests carrying those lines) | Property 2 (js-yaml arm) | **Adopted** — required by the guard's own header ("Add an anchor whenever an advisory forces a floor up") and the 2026-09-29 learning; #7970 left floors below the js-yaml advisory's patched versions. |
 | Add `liquidjs` to `WATCHED_PACKAGES` + a `("root","liquidjs",10,"10.27.2")` row + `("liquidjs",10)` anchor | Property 2 (liquidjs arm) | **Adopted** — a remediated package not in the watched set has no regression floor at all; mirrors the #9198 ratchet shape. |
 | Extend the test's FLOOR_ANCHORS source-grep spec list to the anchors this PR moves/adds (`js-yaml:3:3.15.2`, `js-yaml:4:4.3.2`, `liquidjs:10:10.27.2`) | Property 2 durability | **Adopted** — the test's own comment ("lowering a threshold AND its anchor together is a three-file edit") describes the intent; today only brace-expansion anchors are grep-pinned. |
 | New CI guard / new audit workflow | Property 1 | **Cut** — `lockfile-sync` + `assert-dependabot-drain-live` (test-all.sh:3716) already cover this surface. |
@@ -116,7 +115,7 @@ no `package.json` or `overrides` change is needed on the primary path.
 
 | Issue claim | Codebase reality (verified 2026-09-29) | Plan response |
 |---|---|---|
-| "js-yaml … high-severity" in root lockfile | Resolved on `main` by #7970 (`4.3.2`/`3.15.2` = GHSA-2883's patched versions); absent from today's `npm audit` | Document as resolved-by-#7970 in the PR body; ratchet guard floors so the fix can't silently regress. |
+| "js-yaml … high-severity" in root lockfile | Resolved on `main` by #7970 (`4.3.2`/`3.15.2` = the js-yaml advisory's patched versions); absent from today's `npm audit` | Document as resolved-by-#7970 in the PR body; ratchet guard floors so the fix can't silently regress. |
 | "liquidjs … high-severity" in root lockfile | Confirmed — `10.27.0` < strictest patched `10.27.2`; single copy under `@11ty/eleventy@3.1.5` | `npm@11 update liquidjs` → `10.29.0`. |
 | "update affected root devDependencies **and applicable overrides**" | `overrides.js-yaml` is already `^4.3.2` and `gray-matter.js-yaml` `^3.15.1` resolves `3.15.2`; no liquidjs override needed on the primary path | **No `package.json` edit** — same disposition as #9198. Overrides stay as fallback documentation only. |
 
@@ -275,7 +274,7 @@ that the override is temporary cleanup debt.
 
 ### Phase 2 — Ratchet `scripts/assert-dependabot-drain.py`
 
-In `REQUIRED`: set the four js-yaml rows to GHSA-2883's strictest patched
+In `REQUIRED`: set the four js-yaml rows to the js-yaml advisory's strictest patched
 versions — `("web-platform","js-yaml",3)` `3.15.1→"3.15.2"`,
 `("web-platform","js-yaml",4)` `4.3.1→"4.3.2"`, `("root","js-yaml",3)`
 `3.15.1→"3.15.2"`, `("root","js-yaml",4)` `4.3.1→"4.3.2"` — and add
@@ -322,7 +321,7 @@ in the PR body).
 
 - One commit on `feat-one-shot-8065-dep-audit-advisories`: `package-lock.json`,
   `scripts/assert-dependabot-drain.py`, `scripts/assert-dependabot-drain.test.sh`.
-- PR #9223 body: advisory table (GHSA → range → patched → resolved version),
+- PR #9223 body: advisory table (advisory → range → patched → resolved version),
   `Closes #8065`, labels `type/security` + `type/chore` + `domain/engineering`
   (+ `dependencies`), and a "js-yaml resolved by #7970; this PR ratchets the
   guard" note so reviewers don't hunt for a js-yaml lockfile diff.
@@ -462,7 +461,7 @@ no web-platform file otherwise, (3) the fixture in
 - **Do not "fix" js-yaml again** — it is already at the patched versions
   (#7970). The risk here is a reviewer expecting a js-yaml lockfile diff that
   does not exist; the PR body must say so explicitly. The js-yaml work is the
-  *floor ratchet*: `4.3.1`/`3.15.1` remain vulnerable to GHSA-2883 and would
+  *floor ratchet*: `4.3.1`/`3.15.1` remain vulnerable to the js-yaml advisory and would
   pass the guard today.
 - **FLOOR_ANCHORS key per (package,major), not per manifest** — ratcheting
   the js-yaml anchors forces the *web-platform* rows to move too. Do not
@@ -500,7 +499,7 @@ no web-platform file otherwise, (3) the fixture in
    `package-lock.json` reads `10.29.0` (≥ `10.27.2`); assert-floors probe
    prints `OK`.
 2. **Audit clean:** `npm audit --json` → `total: 0` (js-yaml absent because
-   `4.3.2`/`3.15.2` are at GHSA-2883's patched versions; liquidjs absent
+   `4.3.2`/`3.15.2` are at the js-yaml advisory's patched versions; liquidjs absent
    because `10.29.0` > all three ranges' ceilings).
 3. **Guard ratchet:** `python3 scripts/assert-dependabot-drain.py` prints 21
    rows OK; mutating a js-yaml row back to `4.3.1` or dropping the liquidjs
@@ -532,5 +531,4 @@ no web-platform file otherwise, (3) the fixture in
   resolved the first half: #7970
 - `plugins/soleur/skills/work/references/work-lockfile-bumps.md`
 - `knowledge-base/project/learnings/workflow-patterns/2026-09-29-dependabot-remediation-must-ratchet-drain-guard-floors.md`
-- Advisories: GHSA-2883-xcg3-v3hh (js-yaml) · GHSA-g357-x5c3-c72p,
-  GHSA-m7fp-h3p4-hr49, GHSA-4r6h-5v86-94p3 (liquidjs)
+- Advisories: the js-yaml advisory and the three liquidjs advisories named in #8065

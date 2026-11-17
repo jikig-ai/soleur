@@ -1929,8 +1929,8 @@ resource "sentry_alert" "stale_bot_pr" {
 # stage, so all boot events land in a single perpetually-active issue group. Emitting into a
 # bucket nobody reads is not observability — it is the silence the gate was built to end.
 #
-# Fires rarely by construction: runcmd is once-per-instance, so a fresh host boot emits at most
-# one event per emitter (a fresh web boot has three, below). Any occurrence means either the NIC never converged within that host's bound
+# Fires rarely by construction: runcmd runs once per pass (a web birth has two since ADR-326), so a fresh host boot emits at most
+# one event per emitter per pass (a fresh web boot has three, below). Any occurrence means either the NIC never converged within that host's bound
 # (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault).
 #
 # HOST-GENERIC since #8539 — DO NOT re-scope this to web-1. This rule filters on `stage` and
@@ -1989,8 +1989,8 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 # on host, so it was never web-2-specific; the original comment here said it was "the SOLE PAGE for
 # a dead web-2 WARM STANDBY", which was already the wrong framing and became a live falsehood when
 # web-2 was retired 2026-07-17 (#6538/#6463). Post-retire this is **web-1's sole no-SSH boot page**:
-# a web-1 that aborts its cloud-init runcmd at stage=verify never binds :80/:3000, and `runcmd` is
-# once-per-instance so no reboot repairs it. The #5933 per-host origin uptime probe was RETIRED
+# a web-1 that aborts its cloud-init runcmd at stage=verify never binds :80/:3000, and `runcmd` does
+# not re-run on a later reboot (only the earlier ADR-326 kernel-settle reboot re-runs it), so no reboot repairs it. The #5933 per-host origin uptime probe was RETIRED
 # (dns.tf), and `betteruptime_monitor.app` probes the app.soleur.ai A-record — which is web-1
 # itself, so on a dead web-1 it goes red only after the host is already dark.
 #
@@ -2031,7 +2031,7 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
 # Distinct `frequency_minutes = 24` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-23,30,60-62).
 # Events carry stage/host_id/region tags. FROM THE FIRST HOST BORN on an image containing #6969
 # (ADR-147) they additionally carry `host_name` and `detail`; hosts running today keep emitting
-# the three-tag payload, because runcmd is once-per-instance and hcloud_server.web pins user_data
+# the three-tag payload, because runcmd does not re-run on a running host and hcloud_server.web pins user_data
 # under lifecycle.ignore_changes — the new tags reach a host only at a fresh create.
 # `detail` is the failing boot stage's own stderr — machine output from a first-booting host,
 # never user or tenant content. It is redacted for credential shapes (Doppler/GitHub tokens, URI
@@ -2099,7 +2099,7 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
 # THROTTLE WINDOW (#9377 review; real, fleet-wide, spans boots). frequency_minutes = 35 is a per-rule, per-issue-group
 # throttle, and every boot event shares ONE perpetually-active issue group (the web_terminal_boot_fatal and
 # web_private_nic_boot_gate comments above: one shared message, no fingerprint). So the window is NOT per boot and NOT per
-# host: at most one email per 35 minutes across ALL fourteen paging stages and ALL web-class hosts. A retry within 35 minutes
+# host: at most one email per 35 minutes across ALL fifteen paging stages and ALL web-class hosts. A retry within 35 minutes
 # of any earlier page from this rule (another stage, another host, or an earlier failed attempt of the same host) can fold an
 # escrow page into silence, and the escrow page (emitted first in a boot) can equally fold a fatal stage that follows it.
 # Read from those group comments, not measured against live Sentry. The reads that do not depend on the throttle are the
@@ -2129,7 +2129,7 @@ resource "sentry_alert" "web_luks_boot_fatal" {
     {
       logic_type = "any-short"
       conditions = [
-        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,workspaces_luks_provision_escrow" } },
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,fresh_boot_not_ready_kernel,workspaces_luks_provision_escrow" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
@@ -3282,6 +3282,58 @@ resource "sentry_alert" "git_data_erasure_redrive_no_progress" {
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "cron-git-data-erasure-redrive" } },
         { tagged_event = { key = "reason", match = "eq", value = "no_erasure_progress" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#10479, ADR-321 items 11 and 12) origin-tls-event: ANY Sentry event tagged feature=origin_tls pages. server/origin-tls.ts is the
+# only emitter: op=listen (phase=runtime, reason=unexpected-close, which is FATAL under ORIGIN_TLS_REQUIRED=1 and restarts the
+# container; and the rate-limited post-bind server-error report), op=load / op=create (rejected, absent or unbuildable certificate
+# material at start), and op=cert_expiry (a warning once per start while under 90 days remain; silent until about 90 days before the 2041 expiry).
+# Before this rule nothing paged on any of them: a Sentry event was a pull-based check (ADR-321 R-B).
+#
+# Filter = the feature tag ALONE, on purpose. An `op`, `phase` or `reason` filter would make a future op (or a renamed tag) silently
+# un-paged, which is the class this rule exists to close; the interesting tuples (phase=runtime, reason=unexpected-close) are
+# covered by default. The op-contract test derives the feature literal from the emitter and asserts there is no second filter.
+#
+# Triggers copy legal_acceptance_row_without_event: the events are message events with static messages (few issue groups), so the
+# three transition triggers alone would email once and stay silent while the issue is open; `event_frequency_count {1h, 0}` fires on
+# every event. `frequency_minutes = 47` (unused elsewhere in the root) is the per-issue throttle, so a deploy that keeps restarting
+# under REQUIRED with bad material re-pages at most once every 47 minutes per issue group until it is resolved. Resolve the Sentry
+# issue after the cause is fixed, never archive it (an archived issue fires no trigger).
+#
+# DECLARED in this change; live only after apply-sentry-infra.yml has applied it on merge. A dead :443 that raises NO event
+# (docker-proxy or iptables failure) is not covered here: the Better Stack app/app_health monitors and the https LB monitor remain
+# the detectors for that (ADR-321 R-B). The REQUIRED fatal paths flush Sentry for up to 2 s before exiting (createExitAfterFlush), so
+# the events above are sent before the container restarts; if the 2.25 s hard timer wins, only the pino line in Better Stack remains.
+# Pinned against the emitter by apps/web-platform/test/sentry-origin-tls-alert-op-contract.test.ts.
+resource "sentry_alert" "origin_tls_event" {
+  organization      = var.sentry_org
+  name              = "origin-tls-event"
+  enabled           = true
+  frequency_minutes = 47
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "origin_tls" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

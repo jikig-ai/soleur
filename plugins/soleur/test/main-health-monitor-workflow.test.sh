@@ -112,8 +112,9 @@ FILER   = "Create issue on failure"
 CLOSER  = "Close issue on success"
 BEAT    = "Sentry check-in (final)"
 
-# The five leg jobs. Order is display order; the report job `needs` all five.
-LEG_JOBS = ("test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "test-infra")
+# The six leg jobs (#12626 added test-webplat-mutations). Order is display
+# order; the report job `needs` all six.
+LEG_JOBS = ("test-webplat", "test-webplat-mutations", "test-bun", "test-scripts", "test-scripts-heavy", "test-infra")
 import os
 manifest_dir = os.path.dirname(runner_path)
 
@@ -129,19 +130,19 @@ elif "!cancelled()" not in f_if:
 else:
     ok("(1) filer if: carries !cancelled() (defeats the implicit success())")
 
-# ---- (2) filer fires on NOT-success, disjunctively over the five leg jobs ---
+# ---- (2) filer fires on NOT-success, disjunctively over the six leg jobs ----
 if f_if:
     has_or = "||" in f_if
     _needs_ne = [j for j in LEG_JOBS
                  if re.search(r"needs\." + j + r"\.result\s*!=\s*'success'", f_if)]
-    if has_or and len(_needs_ne) == 5:
+    if has_or and len(_needs_ne) == 6:
         ok("(2) filer fires on any leg result != success")
     else:
         bad("(2) filer fires on any leg result != success",
             f"matched={_needs_ne} -- a job/leg timeout is `cancelled` and a skipped leg is `skipped`; "
             "`== 'failure'` misses both, and && would need ALL to fail. if=" + f_if)
 
-# ---- (3) closer is strict AND on success, over the five leg jobs -----------
+# ---- (3) closer is strict AND on success, over the six leg jobs ------------
 c_if = step_if(CLOSER)
 if c_if is None:
     bad("(3) closer step and its if: exist", "step or if: not found")
@@ -149,10 +150,10 @@ else:
     has_and = "&&" in c_if
     _needs_eq = [j for j in LEG_JOBS
                  if re.search(r"needs\." + j + r"\.result\s*==\s*'success'", c_if)]
-    if has_and and len(_needs_eq) == 5:
-        ok("(3) closer requires all five leg results == success")
+    if has_and and len(_needs_eq) == 6:
+        ok("(3) closer requires all six leg results == success")
     else:
-        bad("(3) closer requires all five leg results == success",
+        bad("(3) closer requires all six leg results == success",
             f"matched={_needs_eq} -- a loosened closer auto-closes the tracker while main is red -- "
             "defect B's consequence. if=" + c_if)
     if "always()" in c_if:
@@ -180,7 +181,7 @@ if "github.event.inputs.dry_run" in stripped:
 else:
     ok("(4b) dry_run read via the typed `inputs` context, not github.event.inputs")
 
-# ---- (5) the five leg jobs are the report's needs, referenced in lockstep --
+# ---- (5) the six leg jobs are the report's needs, referenced in lockstep ---
 # A partial reference set means one leg's verdict is silently dropped from the
 # filer, closer or heartbeat. The report job's needs: list is also asserted:
 # a leg missing from it makes the report run BEFORE the leg finishes.
@@ -191,9 +192,9 @@ _needs_decl = re.search(r'^    needs:\s*\[(?P<l>[^\]]*)\]', _rep_body, re.M)
 _declared = [x.strip() for x in (_needs_decl.group("l").split(",") if _needs_decl else [])]
 _missing_decl = [j for j in LEG_JOBS if j not in _declared]
 if _rep and not _missing_decl:
-    ok("(5) report needs: lists all five leg jobs")
+    ok("(5) report needs: lists all six leg jobs")
 else:
-    bad("(5) report needs: lists all five leg jobs",
+    bad("(5) report needs: lists all six leg jobs",
         f"declared={_declared} missing={_missing_decl} -- a leg outside needs: "
         "lets the report run before the leg finishes and drops its result")
 if re.search(r'^    if:\s*always\(\)\s*$', _rep_body, re.M):
@@ -207,9 +208,9 @@ for _j in LEG_JOBS:
     _lockstep.append((tok, stripped.count(tok)))
 _counts = {c for _, c in _lockstep}
 if _counts and len(_counts) == 1 and _counts != {0}:
-    ok(f"(5c) the five needs.*.result tokens are referenced in lockstep ({_lockstep[0][1]} each)")
+    ok(f"(5c) the six needs.*.result tokens are referenced in lockstep ({_lockstep[0][1]} each)")
 else:
-    bad("(5c) the five needs.*.result tokens are referenced in lockstep",
+    bad("(5c) the six needs.*.result tokens are referenced in lockstep",
         repr(_lockstep) + " -- a partial reference set drops a leg's verdict")
 
 # ---- (6) ceiling arithmetic -------------------------------------------------
@@ -260,10 +261,12 @@ else:
 # Anything between the pipeline and the read makes rc always 0 -- a silent false
 # pass, strictly worse than the original bug.
 run_lines = [l.rstrip() for l in stripped.splitlines()]
+# Both invocation shapes: the test-all.sh legs and the test-webplat-mutations
+# leg's direct `bash apps/web-platform/test/<battery>.test.sh` pipeline (#12626).
 pipe_idx = [i for i, l in enumerate(run_lines)
-            if re.search(r'bash scripts/test-all\.sh .*\|\s*tee', l)]
+            if re.search(r'bash (scripts/test-all\.sh|"apps/web-platform/test/)[^\n]*\|\s*tee', l)]
 if not pipe_idx:
-    bad("(7) suite invocations pipe into tee", "no `test-all.sh ... | tee` found")
+    bad("(7) suite invocations pipe into tee", "no `... | tee` pipeline found")
 else:
     bad_sites = []
     for i in pipe_idx:
@@ -580,7 +583,7 @@ def _step_block(name):
     return m.group("b") if m else ""
 
 _kproblems = []
-for _sname in ("Run test suite", "Run infra suites"):
+for _sname in ("Run test suite", "Run infra suites", "Run mutation battery"):
     for _m in re.finditer(r'^      - name: ' + re.escape(_sname) + r'\s*$', stripped, re.M):
         _rest = stripped[_m.end():]
         _nxt = re.search(r'^      - (?:name|uses):', _rest, re.M)
@@ -594,15 +597,15 @@ for _sname in ("Run test suite", "Run infra suites"):
         if "t0=$SECONDS" not in _sb:
             _kproblems.append(f"a {_sname!r} step never starts its timer")
 _n_suite = len(re.findall(r'^        id: suite\s*$', stripped, re.M))
-if _n_suite != 5:
-    _kproblems.append(f"expected 5 `id: suite` leg suite steps, found {_n_suite}")
+if _n_suite != 6:
+    _kproblems.append(f"expected 6 `id: suite` leg suite steps, found {_n_suite}")
 _n_status = stripped.count("printf 'elapsed_s=%s\\n'")
-if _n_status != 5:
-    _kproblems.append(f"expected 5 status.env elapsed_s writes, found {_n_status}")
-if stripped.count("${LEG_ID}_elapsed_s") < 5:
-    _kproblems.append("fewer than 5 ${LEG_ID}_elapsed_s notice tokens")
-if stripped.count("^[0-9]+$") < 10:
-    _kproblems.append(f"numeric guards (^[[0-9]+$) found {stripped.count('^[0-9]+$')}, expected >= 10 (stage step x2 per leg)")
+if _n_status != 6:
+    _kproblems.append(f"expected 6 status.env elapsed_s writes, found {_n_status}")
+if stripped.count("${LEG_ID}_elapsed_s") < 6:
+    _kproblems.append("fewer than 6 ${LEG_ID}_elapsed_s notice tokens")
+if stripped.count("^[0-9]+$") < 12:
+    _kproblems.append(f"numeric guards (^[[0-9]+$) found {stripped.count('^[0-9]+$')}, expected >= 12 (stage step x2 per leg)")
 _rbb = _step_block("Record step outcomes")
 if 'mint=${{ steps.mintwatch.outputs.verdict }}' not in _rbb and "mint=" not in _rbb:
     _kproblems.append("the aggregate notice lacks mint=")
@@ -737,10 +740,10 @@ _iv_m = re.search(r'^  deploy-script-tests:\s*\n((?:.*\n)*?)(?=^  [A-Za-z0-9_-]+
 _iv_ro = re.search(r'^    runs-on:\s*(\S+)\s*$', _iv_m.group(1), re.M).group(1) if _iv_m else None
 _ro_map = {k: v for k, v in _job_runs_on_all(stripped).items() if k in LEG_JOBS + ("report",)}
 _bad_ro = {k: v for k, v in _ro_map.items() if v != _iv_ro or (v and "latest" in v)}
-if _iv_ro and not _bad_ro and len(_ro_map) == 6:
-    ok(f"(12c) all six jobs run on {_iv_ro}, the same pinned label as deploy-script-tests")
+if _iv_ro and not _bad_ro and len(_ro_map) == 7:
+    ok(f"(12c) all seven jobs run on {_iv_ro}, the same pinned label as deploy-script-tests")
 else:
-    bad("(12c) all six jobs run on the same pinned label as deploy-script-tests",
+    bad("(12c) all seven jobs run on the same pinned label as deploy-script-tests",
         f"iv={_iv_ro} monitor={_ro_map} bad={_bad_ro}")
 
 # ---- (S1) the matrices match the ADR-240 manifests' declared n --------------
@@ -807,27 +810,73 @@ if "pattern: monitor-leg-*" not in stripped:
 if "path: /tmp/leg-reports" not in stripped:
     _s3p.append("leg reports are not downloaded to /tmp/leg-reports")
 _up = re.findall(r'name:\s*monitor-leg-([A-Za-z0-9_${{}}.\-]+)', stripped)
-if len(_up) != 5:
-    _s3p.append(f"expected 5 monitor-leg-* upload steps, found {len(_up)}: {_up}")
+if len(_up) != 6:
+    _s3p.append(f"expected 6 monitor-leg-* upload steps, found {len(_up)}: {_up}")
 if _s3p:
     bad("(S3) one monitor-leg-* artifact per leg job and a patterned download", "; ".join(_s3p))
 else:
     ok("(S3) one monitor-leg-* artifact per leg job and a patterned download")
 
-# EXPECTED_LEGS must equal the derived set: webplat x2 + bun + scripts x8 +
-# heavy x3 + infra = 15.
+# EXPECTED_LEGS must equal the derived set: webplat x2 + mut x3 + bun +
+# scripts x8 + heavy x3 + infra = 18 (#12626). The mut-* leg ids are derived
+# from the job's own matrix.battery literals and its LEG_ID prefix, so a stem
+# dropped from the matrix OR a LEG_ID rename reds here.
+_mut_b = _jobs_blocks.get("test-webplat-mutations", "")
+_mut_list = re.search(r'^        battery:\s*\[(?P<l>[^\]]*)\]', _mut_b, re.M)
+_mut_bats = [x.strip().strip('"\'') for x in (_mut_list.group("l").split(",") if _mut_list else [])]
+_mut_pref = re.search(r'LEG_ID:\s*(?P<p>[A-Za-z0-9_-]+)\$\{\{\s*matrix\.battery\s*\}\}', _mut_b)
+_mut_pref = _mut_pref.group("p") if _mut_pref else ""
 _exp = re.search(r'^      EXPECTED_LEGS:\s*"([^"]+)"', stripped, re.M)
 _exp_legs = _exp.group(1).split() if _exp else []
 _derived = (["webplat-0", "webplat-1", "bun"] +
+            [f"{_mut_pref}{b}" for b in _mut_bats] +
             [f"scripts-{i}" for i in range(8)] +
             [f"heavy-{i}" for i in range(3)] +
             ["infra"])
-if sorted(_exp_legs) == sorted(_derived):
-    ok("(S4) EXPECTED_LEGS enumerates all 15 legs")
+if sorted(_exp_legs) == sorted(_derived) and _mut_bats and _mut_pref:
+    ok(f"(S4) EXPECTED_LEGS enumerates all {len(_derived)} legs")
 else:
-    bad("(S4) EXPECTED_LEGS enumerates all 15 legs",
+    bad(f"(S4) EXPECTED_LEGS enumerates all {len(_derived)} legs",
         f"expected={_derived} got={_exp_legs} -- a leg outside the list is invisible "
         "to the report's missing-leg accounting")
+
+# ---- (S7) the mutation legs carry the batteries the webplat leg declines (#12626) ----
+# The three web-platform mutation batteries are the coverage this job exists
+# for: scripts/test-all.sh skip_suite-declines their webplat registrations
+# under VITEST_SHARD, so a monitor that never runs them again is a silent
+# coverage hole no leg's verdict reports. Asserted here: a 3-stem
+# matrix.battery, a DIRECT battery invocation (never test-all.sh — its shard
+# gate would decline the registrations and a group run would re-run the whole
+# webplat suite set), and no VITEST_SHARD or TEST_GROUP env sneaking back in.
+_mut_p = []
+if _mut_bats != ["approval-guard1-mutation", "destroy-ask-mutation", "home-census-mutations"]:
+    _mut_p.append(f"matrix.battery={_mut_bats} != the three webplat battery stems")
+if "apps/web-platform/test/${{ matrix.battery }}.test.sh" not in _mut_b:
+    _mut_p.append("the leg does not invoke the battery script directly")
+if re.search(r'bash scripts/test-all\.sh', _mut_b):
+    _mut_p.append("the leg invokes test-all.sh — its VITEST_SHARD gate declines every battery registration")
+if "VITEST_SHARD" in _mut_b or "TEST_GROUP" in _mut_b:
+    _mut_p.append("VITEST_SHARD/TEST_GROUP set on the mutation leg — the batteries must run whole")
+if _mut_p:
+    bad("(S7) test-webplat-mutations carries the three battery stems via direct invocation", "; ".join(_mut_p))
+else:
+    ok("(S7) test-webplat-mutations carries the three battery stems via direct invocation")
+
+# ---- (S8) a completed-but-failing mut leg emits a `RED ` verdict (#12626 review) ----
+# The filer's cap_fail gate recognizes only the runner's own verdict tokens
+# (`^RED `, `^UNACCOUNTED `, a `=== N suites:` failed breakdown, or the
+# [FAIL]+short-terminal pairing). The batteries emit NONE of those, so a leg
+# that runs to completion and legitimately fails would title "did not
+# complete" — censored-leg semantics applied to a verdict-bearing capture.
+# The leg must emit `RED <path>` into the teed capture on non-zero exit; a
+# censored leg never reaches the emit, which preserves the complete-vs-timeout
+# split the filer relies on.
+if re.search(r'RED apps/web-platform/test/\$\{\{ matrix\.battery \}\}\.test\.sh', _mut_b):
+    ok("(S8) mut leg emits a `RED ` verdict into the capture on non-zero exit")
+else:
+    bad("(S8) mut leg emits a `RED ` verdict into the capture on non-zero exit",
+        "no `RED ` emit found — a completed-but-failing battery leg files as "
+        "'did not complete' instead of 'tests failing'")
 
 # ---- (S5) exactly one Sentry check-in owner -----------------------------------
 _n_beat = len(re.findall(r'uses:\s*\./\.github/actions/sentry-heartbeat', stripped))
@@ -840,7 +889,7 @@ else:
 
 # ---- (S6) every leg emits its own SOLEUR_MAIN_HEALTH notice -------------------
 _n_notice = len(re.findall(r'::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH \$\{LEG_ID\}=\$\{SUITE_OUTCOME\}', stripped))
-if _n_notice == 5:
+if _n_notice == 6:
     ok("(S6) every leg job emits its SOLEUR_MAIN_HEALTH per-leg notice")
 else:
     bad("(S6) every leg job emits its SOLEUR_MAIN_HEALTH per-leg notice",
@@ -1353,7 +1402,7 @@ B_RC=0
 # B16/B23/B24 rows need is still exercised. `outcome=` empty in status.env is
 # the harness's "the step never ran" marker; an absent status.env would mean
 # "no leg report" instead (see the B26a row).
-EXPECTED_LEGS_FULL="webplat-0 webplat-1 bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+EXPECTED_LEGS_FULL="webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
 _leg_dir() { # $1 leg id, $2 outcome, $3 elapsed-or-empty, $4 fixture-or-empty
   local d="$BEHAVE_DIR/run/leg-reports/monitor-leg-$1"
   mkdir -p "$d"
@@ -1372,7 +1421,7 @@ run_filer() {
   [[ "$_io" == "-" ]] && _io=""
   _leg_dir scripts-0 "$_to" "${B_TESTS_ELAPSED_S:-}" "$1"
   _leg_dir infra "$_io" "${B_INFRA_ELAPSED_S:-}" "${4:-}"
-  for _l in webplat-0 webplat-1 bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2; do
+  for _l in webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2; do
     _leg_dir "$_l" success "" ""
   done
   # shellcheck disable=SC2086
@@ -1383,7 +1432,7 @@ run_filer() {
       RUN_URL="https://example.invalid/actions/runs/1" \
       COMMIT_SHA=deadbeefdeadbeef \
       EXPECTED_LEGS="$EXPECTED_LEGS_FULL" \
-      R_WEBPLAT=success R_BUN=success R_SCRIPTS="$_to" R_HEAVY=success R_INFRA="$_io" \
+      R_WEBPLAT=success R_MUT=success R_BUN=success R_SCRIPTS="$_to" R_HEAVY=success R_INFRA="$_io" \
       MINT_VERDICT="${B_MINT_VERDICT:-green}" MINT_RUN_ID= MINT_CONCLUSION= \
       bash --noprofile --norc $3 "$BEHAVE_DIR/filer.sh" \
       > "$BEHAVE_DIR/run/stdout.txt" 2>&1 || B_RC=$?
@@ -1799,20 +1848,20 @@ rec() { # $1 number of status.env legs to stage -> the ::notice line
     i=$((i + 1))
   done
   env EXPECTED_LEGS="$EXPECTED_LEGS_FULL" \
-      R_WEBPLAT=success R_BUN=success R_SCRIPTS=failure R_HEAVY=success R_INFRA=success \
+      R_WEBPLAT=success R_MUT=success R_BUN=success R_SCRIPTS=failure R_HEAVY=success R_INFRA=success \
       GITHUB_STEP_SUMMARY="$BEHAVE_DIR/summary.txt" \
       bash --noprofile --norc -e "$BEHAVE_DIR/record.sh" 2>&1 | grep -a '^::notice' | head -1
 }
-_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=success bun=success scripts=failure heavy=success infra=success mint=green'
+_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=success mut=success bun=success scripts=failure heavy=success infra=success mint=green'
 CASES=$((CASES + 1))
-row "(R1) a full 15-leg report reaches the ::notice annotation" "got: $(rec 15)" \
-  "$([[ "$(rec 15)" == "$_N legs=15/15" ]]; echo $?)"
+row "(R1) a full 18-leg report reaches the ::notice annotation" "got: $(rec 18)" \
+  "$([[ "$(rec 18)" == "$_N legs=18/18" ]]; echo $?)"
 CASES=$((CASES + 1))
 row "(R2) a partial report counts only staged legs" "got: $(rec 3)" \
-  "$([[ "$(rec 3)" == "$_N legs=3/15" ]]; echo $?)"
+  "$([[ "$(rec 3)" == "$_N legs=3/18" ]]; echo $?)"
 CASES=$((CASES + 1))
-row "(R3) no leg reports still emits the annotation with legs=0/15" "got: $(rec 0)" \
-  "$([[ "$(rec 0)" == "$_N legs=0/15" ]]; echo $?)"
+row "(R3) no leg reports still emits the annotation with legs=0/18" "got: $(rec 0)" \
+  "$([[ "$(rec 0)" == "$_N legs=0/18" ]]; echo $?)"
 
 # ── (MWd) the mintwatch step body, EXECUTED (#9082) ────────────────────────────
 #
@@ -1970,9 +2019,10 @@ fi
 # from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
 # Recalibrated to 155 for #9410 (the sharded-leg rewrite): the JOBS-pin mutation matrix and the
 # tests/infra two-step rows retired with the single-job shape; new shard guards (S1-S6, needs-lockstep,
-# per-leg elapsed) landed in their place. Set to the MEASURED count (the `anti-vacuity: N assertions ran`
+# per-leg elapsed) landed in their place. Recalibrated to 156 for #12626 (the test-webplat-mutations
+# leg: S7 plus the 18-leg census rows). Set to the MEASURED count (the `anti-vacuity: N assertions ran`
 # line), not below it: slack here is budget for deleted rows to hide in.
-MIN_ASSERTIONS=155
+MIN_ASSERTIONS=156
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

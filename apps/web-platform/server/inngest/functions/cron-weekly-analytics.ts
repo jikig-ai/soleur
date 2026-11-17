@@ -31,6 +31,7 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import { CRON_GIT_CONFIG_PIN, withCronGitConfigPin } from "@/server/host-git";
 
 const FUNCTION_NAME = "cron-weekly-analytics";
 const SENTRY_MONITOR_SLUG = "scheduled-weekly-analytics";
@@ -39,10 +40,11 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 function spawnGit(
   args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts?: { cwd?: string },
 ): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { stdio: "ignore", ...opts });
+    // #12757 — env after ...opts, built at call time (never a module-load snapshot).
+    const child = spawn("git", args, { stdio: "ignore", ...opts, env: { ...process.env, ...CRON_GIT_CONFIG_PIN } });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
   });
@@ -56,7 +58,7 @@ function spawnScriptCapture(
   return new Promise((resolve) => {
     const child = spawn("bash", [script, ...args], {
       cwd: opts.cwd,
-      env: opts.env,
+      env: withCronGitConfigPin(opts.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -138,6 +140,7 @@ export async function cronWeeklyAnalyticsHandler({
             PLAUSIBLE_API_KEY: plausibleApiKey,
             PLAUSIBLE_SITE_ID: plausibleSiteId,
             GITHUB_OUTPUT: "/dev/stdout",
+            ...CRON_GIT_CONFIG_PIN,
           },
         },
       );

@@ -18,6 +18,7 @@
  * full), the non-interactive fast deny, and the pending-card cap.
  */
 import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
+import { ExecutionGrants } from "@/server/approval/grants";
 
 const { log, mockWarn, mockLogDecision } = vi.hoisted(() => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -61,6 +62,9 @@ function makeCtx(
     sendToClient: vi.fn().mockReturnValue(true),
     notifyOfflineUser: vi.fn().mockResolvedValue(true),
     updateConversationStatus,
+    // The legacy no-verdict card of every approval-required tool needs the workspace Owner (#12597): by default the user
+    // is an Owner whose flag is off, so the call reaches the in-memory card. Overridable through `opts.extra`.
+    approval: { isEnabled: vi.fn(async () => false), viewerRole: vi.fn(async () => "owner" as const), grants: new ExecutionGrants() },
     ...opts.extra,
   };
   const ctx = {
@@ -291,6 +295,7 @@ describe("gated platform tool: verdicts", () => {
   test.each(["crm_note_append", "workstream_issue_close", "github_push_branch"])(
     "a gated tool outside the probed eight (%s) takes the identical expiry path",
     async (tool) => {
+      // makeCtx's default Owner (flag off) takes the push to the same in-memory card as the other two (#12597).
       const { ctx, deps } = makeCtx(() => Promise.reject(new Error("timeout")));
       const res = await callTool(ctx, tool, {}, { contactId: "c1", number: 1, branch: "b" });
       expect(res.behavior).toBe("deny");

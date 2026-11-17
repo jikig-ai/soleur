@@ -249,6 +249,19 @@ run_fixture "doppler-personal-token-bare-in-a-line" \
 run_fixture "dp-prefix-ordinary-text-passes-through-intact" \
   '{"message":"build output dp.dev.local started"}' \
   '(.message == "build output dp.dev.local started")'
+# --- #12007: the periodic SOLEUR_HOST_KERNEL marker line passes the scrub UNCHANGED ---
+# The line is non-JSON, so it meets only the string backstop. It carries a kernel string, an uptime, a role and (registry only)
+# a host token: none is a user-content key, a userId/credential key=value, an email, a DSN or a Doppler token, so every rule
+# must leave it byte-identical (the cve-exposure helper and the dead-man feeder pin the exact tokens downstream). The kernel is
+# SYNTHESIZED; the tag itself is derived by the AC3 census below from host-kernel-marker.service.
+run_fixture "host-kernel-marker-web-line-passes-through-unchanged (#12007)" \
+  '{"message":"SOLEUR_HOST_KERNEL v=1 role=web kernel=9.9.9-1-generic uptime_s=12345 reboot_required=0 sec_updates=2"}' \
+  '(.pii_scrub_applied | contains("string"))' \
+  '(.message == "SOLEUR_HOST_KERNEL v=1 role=web kernel=9.9.9-1-generic uptime_s=12345 reboot_required=0 sec_updates=2")'
+run_fixture "host-kernel-marker-registry-line-with-host-passes-through-unchanged (#12007)" \
+  '{"message":"SOLEUR_HOST_KERNEL v=1 role=registry kernel=9.9.9-1-generic uptime_s=12345 reboot_required=unknown sec_updates=unknown host=fixture-host-1"}' \
+  '(.pii_scrub_applied | contains("string"))' \
+  '(.message == "SOLEUR_HOST_KERNEL v=1 role=registry kernel=9.9.9-1-generic uptime_s=12345 reboot_required=unknown sec_updates=unknown host=fixture-host-1")'
 # Boundaries of the rule, each a case the token body length, the anchor or the stage order decides.
 DP_BODY20="$(printf 'k%.0s' $(seq 1 20))"
 DP_BODY19="$(printf 'k%.0s' $(seq 1 19))"
@@ -614,7 +627,7 @@ EXPECTED_TAGS=$(
 # vice versa — fails AC3; they are a lockstep pair.
 SYSTEMD_UNIT_IDENTIFIERS="webhook
 sshd"
-EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u)
+EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u) || true
 # AC3 PRIORITY-arm exemption registry (#9963) — tags the census above derives from a real
 # `logger -t` call site that must NOT join the Source 4 include_matches.SYSLOG_IDENTIFIER
 # allowlist, because their rows already ship through Source 1's include_matches.PRIORITY
@@ -666,7 +679,7 @@ fi
 # the `logger -t` gate), removing the dark arm silently drops this tag from EXPECTED and
 # AC3 starts demanding its deletion from vector.toml. Assert the channel yields the tag
 # on its own, with no reference to any logger call.
-SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
+SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u) || true
 CASES=$((CASES + 1))
 if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -cx >/dev/null 'inngest-heartbeat'; then
   pass "inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
@@ -728,7 +741,7 @@ for svc in "$INFRA_DIR"/*.service; do
   grep -qE '^[[:space:]]*SyslogIdentifier=' "$svc" && continue
   # Effective identifier = basename of the ExecStart binary (first non-space token). `^ExecStart=`
   # does NOT match ExecStartPre= (needs '=' right after ExecStart).
-  binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//')
+  binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//') || true
   [[ -z "$binpath" ]] && continue
   tag="$(basename "$binpath")"
   SERVICE_BASENAMES+="$tag"$'\n'
@@ -905,7 +918,8 @@ fi
 # boundary pair, underscore anchor, strip order both ways, six-letter kind, the documented DNS-label
 # over-redaction, a late split and a separator-plus-early-split, and the three non-string-message cases): the
 # full current count of 55.
-PII_SCRUB_MIN_CASES=55
+# Ratcheted 55 -> 57 by #12007 (the SOLEUR_HOST_KERNEL web and registry lines pass through unchanged).
+PII_SCRUB_MIN_CASES=57
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

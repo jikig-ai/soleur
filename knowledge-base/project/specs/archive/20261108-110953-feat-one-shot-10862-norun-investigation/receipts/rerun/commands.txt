@@ -1,0 +1,5 @@
+# 2026-11-08 rerun window: origin/main @ f0c3bb86566231a41015e26ea91616b60356335c (fresh last-300 first-parent)
+python3 -I scripts/ci-pr-affected-replay.py collect --out /var/tmp/s4-rerun-10862 --commits 300 --chunk I/4 --base origin/main  (I=1..4, rc=0 each)
+python3 -I scripts/ci-pr-affected-replay.py ejections --out /var/tmp/s4-rerun-10862 --commits 300 --base origin/main  (rc=0)
+python3 -I scripts/ci-pr-affected-replay.py aggregate /var/tmp/s4-rerun-10862 --expect-commits 300 --out /var/tmp/s4-rerun-10862/replay-summary.txt  (rc=0)
+python3 -I scripts/ci-pr-affected-replay.py verdict --a fail --b unmeasured --c unmeasured --d unmeasured  (rc=0; computed=NO-GO reason=criterion-failed)

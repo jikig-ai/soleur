@@ -58,7 +58,7 @@ Check the latest CI run on main triggered by the merge:
 gh run list --branch main --limit 3 --json databaseId,status,conclusion,headSha
 ```
 
-Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background`:
+Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background` (Monitor rules: [monitor-hygiene.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/monitor-hygiene.md)):
 
 ```bash
 for i in $(seq 1 20); do
@@ -69,7 +69,7 @@ for i in $(seq 1 20); do
 done
 ```
 
-React to the final status from the Monitor output.
+React to the final status.
 
 **If CI passes:** Proceed to Phase 3.
 
@@ -92,7 +92,7 @@ Conclusion: <conclusion>
 Failed log tail:
 <last 50 lines>
 
-Investigate before proceeding. The merge is complete but production may not deploy.
+Before fixing, run [ci-fix-probe.md](./references/ci-fix-probe.md). Merged; production may not deploy.
 ```
 
 ## Phase 3: Verify Production Deployment
@@ -113,10 +113,10 @@ curl -sf --max-time 10 "<production-url>/health" | jq .
 
 Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. For this repo, `build_sha` is judged by `deploy-arm.sh` below.
 
-**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` — it polls about once a minute for up to 120 polls and prints one line; watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`; **Grok:** AwaitShell), never Bash `run_in_background`. Only once that line has arrived with rc ≠ 4, run `served`:
+**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` (one line); watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`, bounded and re-armed per Phase 2's Monitor rules; **Grok:** AwaitShell), never Bash `run_in_background` or a foreground call. Only once a final line has arrived, run `served`:
 
 ```bash
-bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-merge-sha>
+bash plugins/soleur/scripts/deploy-arm.sh find --wait 25 <full-merge-sha>
 bash plugins/soleur/scripts/deploy-arm.sh served <full-merge-sha>
 ```
 
@@ -159,7 +159,7 @@ Query cron monitors:
 ```bash
 SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>/dev/null || \
   doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
+SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai-eu")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
 # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
@@ -247,7 +247,7 @@ selector that returned another merge's arm, or none, while the real arm had depl
 - `exact` + `success` → `GATE-VALIDATED`. `descendant` + `success` → `GATE-VALIDATED (via <DEPLOYED_SHA>, run <ARM>)`.
 - `DEPLOY=skipped` → `GATE-NOT-EXERCISED`: the arm clean-skipped (docs-only; `CI=failure` → `ci_not_green`) — the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Neither a failure nor a validation; the watch stays open until a merge that deploys.
 - `DEPLOY=superseded|blocked` → `GATE-INDETERMINATE — <DEPLOY>` (lock-queue cancellation; a resolve/migrate/verify job failed).
-- `DEPLOY=blocked` from `resolve-target`: read its reason, which the annotation carries (job outputs are not readable through the API): `gh run view <ARM> --json jobs --jq '.jobs[] | select(.name=="resolve-target") | .databaseId'`, then `gh api repos/jikig-ai/soleur/check-runs/<id>/annotations --jq '.[].message'` and match `[skip_reason=<reason>]`. For `release_run_missing` or `github_api_unavailable` (a lookup failure, not a broken release) recover yourself: `gh run rerun <ARM> --failed` once, then re-arm `deploy-arm.sh find --wait`; if it fails the same way, wait ~15 minutes and retry once more. Never re-run the push-arm run. Any other reason (`release_failed`, `identity_mismatch`, `schema_mismatch`, …) is not a re-run case — report it.
+- `DEPLOY=blocked` from `resolve-target`: read its reason, which the annotation carries (job outputs are not readable through the API): `gh run view <ARM> --json jobs --jq '.jobs[] | select(.name=="resolve-target") | .databaseId'`, then `gh api repos/jikig-ai/soleur/check-runs/<id>/annotations --jq '.[].message'` and match `[skip_reason=<reason>]`. For `release_run_missing` or `github_api_unavailable` (a lookup failure, not a broken release) recover yourself: `gh run rerun <ARM> --failed` once, then re-arm `find --wait 25`; if it fails the same way, wait ~15 minutes and retry once more. Never re-run the push-arm run. Any other reason (`release_failed`, `identity_mismatch`, `schema_mismatch`, …) is not a re-run case — report it.
 - rc 2/3 `ARM=none` (incl. `timeout`, `error`) → `GATE-INDETERMINATE — <REASON> <CAUSE>`: absence of evidence, never a pass. rc 4 → still pending; poll.
 - `descendant` + `failure` → `GATE-SUSPECT`: list `git log --oneline <merge>..<DEPLOYED_SHA>` beside this PR's gate diff — the failure may be the later merge's, so do not recommend an immediate revert.
 - `exact` + `failure` with a canary/sandbox rollback reason AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
@@ -357,7 +357,7 @@ complete before any had started.
 
 `git rev-parse --short main` next to `git rev-parse --short origin/main` is the cheap tell when a result looks wrong. Prefer the merge SHA unconditionally: it is immutable, it is the exact tree that merged, and it cannot drift while the phase runs. `origin/main` is an acceptable second choice only immediately after a fetch, and even then a sibling merge can move it mid-phase.
 
-Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes. **Why:** PR #7240 — Phase 4 read `git show main:` while local `main` sat 2 commits behind, reported the PR's own new learning file as MISSING, and the same stale ref undercounted `blkid` occurrences 2-vs-8 in a file the PR had rewritten. **And PR #7770** — Phase 4 addressed the merge SHA correctly, as the paragraphs above instruct, and still reported all 5 spot-checked files MISSING: the worktree had not fetched the merge commit, and git's `exists on disk, but not in <sha>` wording was read as a verdict about the tree. One `git fetch` made all 5 read correctly. Both failures are the same shape — Phase 4 manufacturing a false alarm about the merge it exists to confirm — reached by two different routes, which is why the fetch and the message table above are both load-bearing.
+Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes. **Why:** PRs #7240 and #7770 — a stale local `main` and an unfetched merge commit each made Phase 4 report the PR's own files MISSING, so the fetch and the message table above are both load-bearing ([history](./references/phase4-false-alarm-history.md)).
 
 ## Phase 5: Browser Verification (Conditional)
 
@@ -503,14 +503,17 @@ merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (n
    (read-only, token on stdin, one word). Run exactly:
 
 ```bash
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
-   a mismatch is a red status. `volume-gone` (HTTP 404) is not a read problem: report it and route to the runbook's "After
-   a total loss". `read-failed` (an HTTP error such as a 401, a network error, a non-JSON body or a missing field) and a
-   **missing word** (nothing printed: `doppler` absent or unauthenticated, an error before the command ran) mean the read
-   did not happen: report them, never dispatch on their account. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
+   a mismatch is red. `volume-gone` (HTTP 404) is not a read problem, nor proof of a loss: a token from
+   another Hetzner project also gets 404. Report it, then run the read-only server-name listing under
+   `orphan_sweep_project_identity_unproven` in the 8209 runbook named below: unknown names mean a wrong-project token
+   (re-mint it, step O5); only matching names route to the runbook's "After a total loss". `read-failed` (a 401 or other HTTP error, network error, non-JSON or missing field) and a
+   **missing word** (nothing printed: `doppler` absent or unauthenticated, an early error) mean the read
+   did not happen: report them, never dispatch on them. Proxy-only egress also reads `read-failed` (it bypasses
+   proxies): report no direct egress; never retry, drop `--noproxy`/`--disable` or add a proxy. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
    `prd_terraform`; minting it is operator step O5 in `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`.
    Report `missing-token` and file an issue (the idiom of Phase 5.5, with the same label and the repo milestone):
 
@@ -641,6 +644,6 @@ per-prerequisite behaviour (skip / warn / poll).
 ## Production Debugging
 
 - **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
-- For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
+- For production debugging use Sentry API (`SENTRY_ISSUE_RO_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
 - For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

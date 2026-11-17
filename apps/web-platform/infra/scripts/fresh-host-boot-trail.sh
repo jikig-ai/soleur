@@ -204,27 +204,28 @@ fi
 # content, not by line number, because THIS change shifts it. The previous `:825 of
 # 835` coordinate was CORRECT on main; a content anchor is used so the next edit does
 # not silently rot it) and the host's own declared budget is
-# SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 (soleur-host-bootstrap.sh). So on a HEALTHY
+# SOLEUR_FRESH_BOOT_WINDOW_SECONDS (900 then; soleur-host-bootstrap.sh). So on a HEALTHY
 # birth the single read landed in the no-match branch and printed "the host
 # genuinely emitted nothing" — which is byte-identical to what a genuinely dark
 # host produces. The step satisfied ADR-128 R2's letter while inverting its purpose:
 # it could not discriminate the two states it exists to tell apart.
 #
 # COST OF THIS POLL, stated on its own terms — a shared script must not name one caller's
-# timeout-minutes. The loop checks the deadline BEFORE sleeping, so the worst case is 960s plus
-# one more iteration (~30s sleep + <=20s curl) ~= 17m. Every caller's timeout-minutes must cover
-# its own pre-poll work plus that; measured pre-poll cost on the birth path is ~2.6m, so both
-# the 30m (create) and 40m (replace) budgets have ample margin. Terminal states end the poll early, so a
-# healthy boot usually returns in well under the budget.
+# timeout-minutes. BOOT_TRAIL_DEADLINE_S is the host's SOLEUR_FRESH_BOOT_WINDOW_SECONDS plus 60 s
+# (both grew 240 s for the one kernel-settle reboot, #12008); kernel-currency.test.sh pins the two
+# together and computes every caller's worst case from these literals: the deadline, then CC_GRACE
+# once cloud_init_complete is seen, then one more iteration (30 s sleep + the 20 s curl bound).
+# Terminal states end the poll early, so a healthy boot usually returns well under the budget.
+BOOT_TRAIL_DEADLINE_S=1200
 # The step is `if: always()`, so it also runs when the APPLY failed — and then
-# there may be no host at all. Polling 16 minutes for a host that was never
-# created would turn every failed apply into a 16-minute red run for no signal.
+# there may be no host at all. Polling the full deadline for a host that was never
+# created would turn every failed apply into a 20-minute red run for no signal.
 # On a failed job: read ONCE, report whatever partial boot trail exists, and never
 # fail the step (the job is already failing, and a second ::error:: would obscure
 # the real cause). Only a job that got as far as a successful apply is entitled to
 # a dark-boot verdict.
 if [[ "${JOB_STATUS}" == "success" ]]; then
-  DEADLINE=$(( SECONDS + 960 ))
+  DEADLINE=$(( SECONDS + BOOT_TRAIL_DEADLINE_S ))
 else
   DEADLINE=$SECONDS
 fi
@@ -432,10 +433,10 @@ case "$TERMINAL" in
     # to be interpolated HERE. `detail` carries the failing command's own stderr plus
     # its exit code and attempt count (rc=124 = the call timed out).
     echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) booted DARK at stage ${FATAL_STAGE:-${LAST_STAGE:-unknown}}: ${FATAL_DETAIL:-<no detail — the failing stage has no producer wired yet; see #6969 follow-up>}"
-    echo "::error::runcmd is once-per-instance, so this host CANNOT be repaired by a reboot — it must be replaced. Do NOT put it into service."
+    echo "::error::runcmd re-runs only on the one deliberate kernel-settle reboot (ADR-326), so this host CANNOT be repaired by a reboot — it must be replaced. Do NOT put it into service."
     echo "_**The host booted dark.** Host \`${LAST_HOST:-unknown}\`, stage \`${FATAL_STAGE:-${LAST_STAGE:-unknown}}\`._" | tee -a "$GITHUB_STEP_SUMMARY"
     echo "_Cause: \`${FATAL_DETAIL:-<no detail captured>}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
-    echo "_runcmd is once-per-instance — replace the host, do not reboot it._" | tee -a "$GITHUB_STEP_SUMMARY"
+    echo "_A reboot cannot repair it (runcmd re-runs only on the one kernel-settle reboot) — replace the host._" | tee -a "$GITHUB_STEP_SUMMARY"
     exit 1
     ;;
   timeout)
@@ -443,12 +444,20 @@ case "$TERMINAL" in
       echo "_No terminal boot event; this job did not complete its apply, so no dark-boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
       exit 0
     fi
-    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
+    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within ${BOOT_TRAIL_DEADLINE_S}s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 1140). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
     echo "_**No terminal boot event inside the host's own boot window.** Host \`${LAST_HOST:-unknown}\`, last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
     # (#8651) A slow seed pull can fail AFTER this poll ends; the fatal still reaches Sentry.
     # Read it once more (server-side, 14 d) so the cause is not lost, and name the re-read.
     if SFL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") && [[ "$SFL" != stage=none* ]]; then
       echo "::error::${WEB_HOST_KEY} late seed fatal (after the poll): ${SFL}"
+    fi
+    # (#12008) The unfiltered poll page can lose an early `kernel_reboot` on a busy hour (#12621), and
+    # it is the one event that tells "rebooted and never returned" from "never booted". Re-read the
+    # host's newest boot stage server-side; a failed read is named, never read as "none".
+    if BSL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-cloud-init boot stage\"" "${BOOT_TRAIL_SINCE:-0}"); then
+      echo "::error::${WEB_HOST_KEY} newest boot stage (server-side re-read): ${BSL}"
+    else
+      echo "::warning::${WEB_HOST_KEY} server-side boot-stage re-read failed: ${BSL}"
     fi
     echo "_Re-read later without SSH: \`bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh --image-origin ${EXPECT_HOST}\` (SENTRY_ACTIONS_RO_TOKEN)._" | tee -a "$GITHUB_STEP_SUMMARY"
     if [[ -n "$LAST_DETAIL" ]]; then

@@ -1,9 +1,10 @@
 // origin-tls.ts — the Cloudflare-to-origin TLS listener (#10479, epic #10205).
 //
-// WHY. Cloudflare reaches the web hosts over plain HTTP because the zone carries an enabled
-// `flexible` rule for app.soleur.ai (apps/web-platform/infra/seo-config-rules.tf). The Cloudflare
-// `strict` mode needs the origin to answer TLS on :443 with a certificate Cloudflare verifies
-// (a Cloudflare Origin CA certificate). This module is that listener: a SECOND server inside the
+// WHY. Cloudflare reached the web hosts over plain HTTP while the zone carried an enabled
+// `flexible` rule for app.soleur.ai (apps/web-platform/infra/seo-config-rules.tf); since the ADR-321
+// item 13 cleanup (#10479) that adopted rule is `strict`. The Cloudflare `strict` mode needs the
+// origin to answer TLS on :443 with a certificate Cloudflare verifies (a Cloudflare Origin CA
+// certificate). This module is that listener: a SECOND server inside the
 // same Node process, on container port 3443 (published as host :443 by ci-deploy.sh /
 // cloud-init.yml), that hands every request and every WebSocket upgrade to the SAME handlers as
 // the plain-HTTP server. It is a transport, not a second app: no route, auth or session logic
@@ -12,13 +13,22 @@
 // INERT BY DEFAULT. With no ORIGIN_TLS_* material in the environment nothing starts (dev, CI, e2e
 // and every host before the certificate is minted). With material that does not validate, nothing
 // starts either, the reason is mirrored to Sentry, and the plain-HTTP listener keeps serving: a
-// bad certificate must never take the :80 path down while the zone is still `flexible`.
+// bad certificate must never take the :80 path down (it served every edge request while the app host
+// was `flexible`; with the host `strict`, REQUIRED MODE below is what keeps bad material from shipping).
 //
-// REQUIRED MODE. With ORIGIN_TLS_REQUIRED=1 (set in Doppler `prd` by the strict-flip PR, never
-// before) "inert" is no longer allowed: absent or invalid material, a TLS context that cannot be
-// built, or a listener error is reported and then FATAL, so the canary container (same env-file)
-// exits, its health gate fails and the old container keeps serving. Without it a deploy with bad
-// material would pass the canary and Cloudflare, in `strict`, would answer 525/526 to every user.
+// REQUIRED MODE. With ORIGIN_TLS_REQUIRED=1 (an owner write to Doppler `prd`, act 1 of the ADR-321 item 10
+// flip order; read at container start, so it applies from the next restart) "inert" is no longer
+// allowed: absent or invalid material, a TLS context that cannot be built, or a listener error BEFORE
+// the bind completes is reported and then FATAL, so the canary container (same env-file) exits, its
+// health gate fails and the old container keeps serving. Without it a deploy with bad material would
+// pass the canary and Cloudflare, in `strict`, would answer 525/526 to every user.
+// AFTER the bind (ADR-321 decision 6, ruling of 2026-11-08): an unexpected 'close' of the https server
+// is also fatal under REQUIRED (the one in-process signal of a dead listener; the container's
+// `--restart unless-stopped` then brings it back), while a server 'error' is reported to Sentry at
+// most once a minute and the process keeps serving, because Node leaves the listener open after it.
+// What this does NOT detect: a dead :443 that raises neither event (docker-proxy or iptables
+// failure, a rejected certificate). The Better Stack monitors and the https LB monitor are the
+// detectors for those, and recovery is a redeploy.
 //
 // MATERIAL. ORIGIN_TLS_KEY_B64 and ORIGIN_TLS_CERT_B64 are base64 of the PEM files, delivered
 // through Doppler `prd` into the container's env-file. Base64 because the docker env-file format
@@ -30,18 +40,24 @@
 // PROOF OF TRANSPORT. Every /health response served through this listener carries
 // `x-origin-transport: <negotiated TLS version>`. The plain-HTTP listener never sets it, so a
 // probe through Cloudflare that sees the header has proven the Cloudflare-to-origin hop used TLS.
-// It proves that Cloudflare ACCEPTED the certificate only when the zone (or the canary rule) is in
-// `strict` for that request: under `full`, Cloudflare dials TLS without validating the certificate,
-// so the header appears with any certificate. The probe's pass/fail text says which it measured.
+// It proves that Cloudflare ACCEPTED the certificate only when the app host is in `strict` for that
+// request (the adopted rule in seo-config-rules.tf, since the ADR-321 item 13 cleanup): under `full`,
+// Cloudflare dials TLS without validating the certificate, so the header appears with any certificate.
+// The probe's pass/fail text says which it measured.
 //
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
 // change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
 
+// Every Sentry report in this file tags `feature: "origin_tls"` as an INLINE literal on purpose: the alert rule
+// `sentry_alert.origin_tls_event` (apps/web-platform/infra/sentry/issue-alerts.tf) filters on that tag alone, and
+// test/sentry-origin-tls-alert-op-contract.test.ts derives the literal from these call sites. Hoisting it into a constant or
+// reporting through another helper hides it from that contract and silently un-pages the events.
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { TLSSocket } from "node:tls";
 import { performance } from "node:perf_hooks";
+import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -63,7 +79,10 @@ export const ORIGIN_TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
  * same constant.
  */
 export const ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS = 905_000;
-/** `1` makes absent/invalid material or a listener failure fatal at startup (the strict flip sets it). */
+/**
+ * `1` makes absent/invalid material or a startup listener failure fatal, and an unexpected close of the
+ * listener fatal afterwards (an owner Doppler write; see REQUIRED MODE above).
+ */
 export const ORIGIN_TLS_REQUIRED_ENV = "ORIGIN_TLS_REQUIRED";
 /** Below this many days to notAfter the startup line is also a Sentry warning. */
 export const ORIGIN_TLS_EXPIRY_WARN_DAYS = 90;
@@ -192,6 +211,50 @@ const isHealthPath = (url: string | undefined): boolean =>
 
 /** One line per minute at most: a scanner hitting :443 must not become a log flood. */
 const TLS_CLIENT_ERROR_LOG_INTERVAL_MS = 60_000;
+/** Post-bind server 'error' reports: one a minute, with a suppressed count (same pattern as the client-error log). */
+const RUNTIME_ERROR_REPORT_INTERVAL_MS = 60_000;
+
+/** Bound on the Sentry flush before a REQUIRED-mode exit (the same 2 s as crash-handlers FATAL_FLUSH_MS). */
+export const EXIT_FLUSH_MS = 2_000;
+/** Hard stop: exit even if the flush neither resolves nor rejects, so a wedged transport cannot keep a dead listener alive. */
+const EXIT_HARD_TIMER_MS = EXIT_FLUSH_MS + 250;
+
+/**
+ * Builds an exit that first gives the Sentry SDK up to EXIT_FLUSH_MS to send what the report just queued (the SDK sends
+ * asynchronously, so a bare process.exit can drop the very event the origin_tls alert rule exists for). It always exits:
+ * on resolve, on reject, on a synchronous throw, on a non-promise return, or when the hard timer fires first. Idempotent per
+ * returned function, so a second fatal during the flush window neither re-flushes nor exits twice. The pino error line
+ * (shipped to Better Stack) is the second sink if the hard timer wins.
+ */
+export function createExitAfterFlush(
+  deps: { flush?: (timeoutMs: number) => unknown; exit?: (code: number) => void } = {},
+): (code: number) => void {
+  const flush = deps.flush ?? ((ms: number) => Sentry.flush(ms));
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  let exiting = false;
+  return (code: number): void => {
+    if (exiting) return;
+    exiting = true;
+    let done = false;
+    // `finish` is declared right after `timer` and before the try block, so every path that can call it (timer, flush callbacks, the sync-throw catch) sees both.
+    const timer = setTimeout(() => finish(), EXIT_HARD_TIMER_MS);
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        exit(code);
+      } catch {
+        // process.exit does not return; an injected exit that throws must not become an unhandled rejection or a crash loop
+      }
+    };
+    try {
+      Promise.resolve(flush(EXIT_FLUSH_MS)).then(finish, finish);
+    } catch {
+      finish();
+    }
+  };
+}
 
 /**
  * Start the origin TLS listener next to `httpServer`, or return null when it must not run (no
@@ -204,12 +267,26 @@ export function startOriginTlsListener(params: {
   /** 0 asks the OS for a free port (tests). */
   port?: number;
   onListening?: (port: number) => void;
-  /** Injected in tests; defaults to process.exit. Only called in REQUIRED mode. */
+  /** Injected in tests; defaults to a Sentry flush (bounded) then process.exit. Only called in REQUIRED mode. */
   exit?: (code: number) => void;
 }): OriginTlsListener | null {
   const env = params.env ?? process.env;
   const required = env[ORIGIN_TLS_REQUIRED_ENV] === "1";
-  const exit = params.exit ?? ((code: number) => process.exit(code));
+  // The default exit first stops the plain :80 server accepting (the flush below can take up to 2.25 s, and a dying REQUIRED
+  // start must not look healthy to the deploy canary in that window), then flushes Sentry, then exits.
+  const flushThenExit = createExitAfterFlush();
+  const exit =
+    params.exit ??
+    ((code: number): void => {
+      try {
+        params.httpServer.close();
+        params.httpServer.closeIdleConnections?.();
+      } catch (err) {
+        // a server that cannot close must not stop the exit
+        log.warn({ err }, "origin-tls: could not close the plain HTTP server before the REQUIRED-mode exit");
+      }
+      flushThenExit(code);
+    });
   const failClosed = (): null => {
     if (required) exit(1);
     return null;
@@ -276,9 +353,12 @@ export function startOriginTlsListener(params: {
   // The same handlers as the plain-HTTP server, by re-emitting its events: the request handler and
   // the WebSocket upgrade listener (ws-handler.ts) are registered on `httpServer`, and ws accepts
   // any duplex socket, so a TLS socket upgrades like a plain one. Server-level options (timeouts,
-  // maxHeaderSize) are per server instance and are NOT shared: keepAliveTimeout/headersTimeout are
-  // mirrored from index.ts through one shared constant; any OTHER option later set on the plain
-  // server in index.ts must be applied here too.
+  // maxHeaderSize) are per server instance and are NOT shared. This listener sets keepAliveTimeout and
+  // leaves headersTimeout and requestTimeout at Node's defaults (60 s / 300 s) on purpose. The plain :80
+  // server in index.ts states the same two numbers explicitly through ./http-timeouts (ADR-321 item 12),
+  // so both listeners cut a stalled client at the same bound; assigning either property here would risk
+  // LOOSENING it for no demonstrated need (an idle keep-alive socket was measured open at 75 s with the
+  // default). Any OTHER option later set on the plain server in index.ts must be applied here too, deliberately.
   httpsServer.on("request", (req, res) => {
     if (isHealthPath(req.url)) {
       res.setHeader(ORIGIN_TRANSPORT_HEADER, negotiatedProtocol(req));
@@ -307,25 +387,73 @@ export function startOriginTlsListener(params: {
     );
   });
 
+  // Phases (ADR-321 decision 6, ruling of 2026-11-08). `listening` is set when the bind completes.
+  // BEFORE it, a server 'error' is a startup failure (EADDRINUSE, EACCES): under REQUIRED it is fatal so
+  // the candidate container fails its health gate and the old one keeps serving.
+  // AFTER it, a server 'error' (an accept failure; Node's net layer emits it from its connection handler
+  // and leaves the listener open, and whether libuv surfaces EMFILE there is unverified) is a runtime
+  // event: exit(1) would drop every WebSocket on the plain listener for a transient condition, so it is
+  // reported (`tags.phase = runtime`) at most once a minute with a suppressed count, and the process
+  // continues. The signal that :443 is actually DEAD is the server 'close' event below.
+  let listening = false;
+  let closing = false; // set by our own close(): an intentional close must not look like a dead listener
+  let lastRuntimeErrorReport = -Infinity;
+  let suppressedRuntimeErrors = 0;
   httpsServer.on("error", (err) => {
+    const reason = (err as NodeJS.ErrnoException).code ?? "unknown";
+    if (listening) {
+      const t = performance.now();
+      if (t - lastRuntimeErrorReport < RUNTIME_ERROR_REPORT_INTERVAL_MS) {
+        suppressedRuntimeErrors++;
+        return;
+      }
+      lastRuntimeErrorReport = t;
+      const suppressed = suppressedRuntimeErrors;
+      suppressedRuntimeErrors = 0;
+      reportSilentFallback(null, {
+        feature: "origin_tls",
+        op: "listen",
+        tags: { reason, phase: "runtime" },
+        message: "origin-tls: listener error after bind (process continues)",
+        extra: { errName: err.name, suppressed },
+      });
+      return;
+    }
     reportSilentFallback(null, {
       feature: "origin_tls",
       op: "listen",
-      tags: { reason: (err as NodeJS.ErrnoException).code ?? "unknown" },
+      tags: { reason, phase: "startup" },
       message: "origin-tls: listener error",
       extra: { errName: err.name },
     });
     if (required) exit(1);
   });
+  // The https server closing when nobody asked it to is the one in-process sign of a dead :443 listener.
+  // Under REQUIRED it is fatal, so `--restart unless-stopped` restarts the container; otherwise it is reported.
+  httpsServer.on("close", () => {
+    if (closing || !listening) return;
+    reportSilentFallback(null, {
+      feature: "origin_tls",
+      op: "listen",
+      tags: { reason: "unexpected-close", phase: "runtime" },
+      message: "origin-tls: listener closed unexpectedly",
+      extra: { required },
+    });
+    if (required) exit(1);
+  });
 
   httpsServer.listen(port, () => {
+    listening = true;
     const address = httpsServer.address();
     const boundPort = typeof address === "object" && address ? address.port : port;
     // warn, not info: Vector's app_container_warn_filter drops INFO before Better Stack, and this
     // once-per-start line is the positive evidence (per host, by host_name) that the listener bound
     // with this certificate. Precedent: logGitDataHostKeyPinAtStartup.
+    // `required` is a boolean (the mode this process started in), never a value from the key or certificate. It is
+    // written AFTER the certificate facts because the later key wins in an object spread, so nothing in them can
+    // override it. It makes "ORIGIN_TLS_REQUIRED is live on this host" a direct per-host read (PR #12388).
     log.warn(
-      { port: boundPort, ...loaded.info },
+      { port: boundPort, ...loaded.info, required },
       "origin-tls: listening (Cloudflare strict-mode origin), certificate loaded",
     );
     if (loaded.info.daysLeft < ORIGIN_TLS_EXPIRY_WARN_DAYS) {
@@ -341,6 +469,7 @@ export function startOriginTlsListener(params: {
   return {
     server: httpsServer,
     close() {
+      closing = true;
       httpsServer.close();
       httpsServer.closeIdleConnections();
     },

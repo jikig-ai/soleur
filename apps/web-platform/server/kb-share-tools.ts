@@ -37,6 +37,12 @@ interface BuildKbShareToolsOpts {
    * workspace the Owner approved it for.
    */
   grants: ExecutionGrants;
+  /**
+   * #12597 — the workspace the legacy card's Owner check read the role in (the session's `activeWorkspaceId`). With no
+   * grant (the legacy in-memory card path), a call refuses as `workspace_changed` when the current workspace is another
+   * one, so an Owner-approved call never lands in a workspace the role was not read in.
+   */
+  sessionWorkspaceId?: string;
 }
 
 type ToolTextResponse = {
@@ -114,7 +120,7 @@ function wrapPreview(result: PreviewShareResult): ToolTextResponse {
 }
 
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
-  const { serviceClient, userId, kbRoot, baseUrl, grants } = opts;
+  const { serviceClient, userId, kbRoot, baseUrl, grants, sessionWorkspaceId } = opts;
   return [
     tool(
       "kb_share_create",
@@ -123,7 +129,8 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
         "Returns { token, url, documentPath, size }. Links are revocable. " +
         "Use kb_share_list first to check whether an active link already exists — " +
         "the tool is idempotent on unchanged content, but listing surfaces stale or " +
-        "revoked links the user may want to know about.",
+        "revoked links the user may want to know about. " +
+        "Requires the workspace Owner's approval.",
       { documentPath: z.string() },
       async (args) => {
         const toolName = "mcp__soleur_platform__kb_share_create";
@@ -134,6 +141,10 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
         const workspaceId = await resolveCurrentWorkspaceId(userId, serviceClient);
         // The approval binds the workspace it was granted in: approved-on-W1 must not create the link on W2.
         if (grant.kind === "granted" && grant.binding.workspaceId !== workspaceId) {
+          reportGrantRefused(toolName, "workspace_changed");
+          return grantRefusalResponse("workspace_changed");
+        }
+        if (grant.kind !== "granted" && sessionWorkspaceId !== undefined && workspaceId !== sessionWorkspaceId) {
           reportGrantRefused(toolName, "workspace_changed");
           return grantRefusalResponse("workspace_changed");
         }

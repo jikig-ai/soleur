@@ -120,6 +120,16 @@ describe("request validation", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects a legal row (400): the founder's legal text is never archivable, nothing is read or dispatched", async () => {
+    const res = await inboxBulkArchiveHandler(
+      req({ items: [{ kind: "legal", id: "founder-acceptance-record" }] }),
+      USER,
+    );
+    expect(res.status).toBe(400);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
+
   it("dedupes repeated ids into a single result", async () => {
     seedInboxRow(U1);
     rpc.mockResolvedValue({ error: null });

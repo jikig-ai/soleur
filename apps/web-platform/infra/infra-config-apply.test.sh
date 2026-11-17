@@ -10,7 +10,7 @@ HANDLER="${SCRIPT_DIR}/infra-config-apply.sh"
 # as a literal. The previous hardcoded 15 had to be edited in lockstep with every FILE_MAP
 # addition, which is the drift these counts exist to detect; a stale literal turns a real
 # regression and a routine addition into the same red. MANAGED_N ratchets automatically.
-MANAGED_N=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -cE '^[[:space:]]*"[A-Z0-9_]+\|')
+MANAGED_N=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -cE '^[[:space:]]*"[A-Z0-9_]+\|') || true
 if [[ "${MANAGED_N:-0}" -lt 15 ]]; then
   echo "FATAL: derived MANAGED_N=$MANAGED_N from $HANDLER FILE_MAP — parse is broken; every count assertion below would be vacuous" >&2
   exit 2
@@ -194,8 +194,8 @@ test_happy_path() {
 
   export_valid_env_vars
 
-  bash "$HANDLER"
-  local rc=$?
+  local rc
+  if bash "$HANDLER"; then rc=0; else rc=$?; fi
   assert_eq "handler exits 0" "0" "$rc"
 
   assert_file_exists "ci-deploy.sh written" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh"
@@ -632,9 +632,9 @@ test_b64_delivery_parity() {
   local push="${SCRIPT_DIR}/push-infra-config.sh"
   local hooks="${SCRIPT_DIR}/hooks.json.tmpl"
   local push_keys map_vars pass_vars
-  push_keys=$(grep -oE '"[a-z0-9_]+_b64":' "$push" | sed -E 's/"([a-z0-9_]+)":/\1/' | tr '[:lower:]' '[:upper:]' | sort -u)
-  map_vars=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -oE '"[A-Z0-9_]+_B64\|' | tr -d '"|' | sort -u)
-  pass_vars=$(grep -oE '"envname": "[A-Z0-9_]+_B64"' "$hooks" | sed -E 's/.*"([A-Z0-9_]+)".*/\1/' | sort -u)
+  push_keys=$(grep -oE '"[a-z0-9_]+_b64":' "$push" | sed -E 's/"([a-z0-9_]+)":/\1/' | tr '[:lower:]' '[:upper:]' | sort -u) || true
+  map_vars=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -oE '"[A-Z0-9_]+_B64\|' | tr -d '"|' | sort -u) || true
+  pass_vars=$(grep -oE '"envname": "[A-Z0-9_]+_B64"' "$hooks" | sed -E 's/.*"([A-Z0-9_]+)".*/\1/' | sort -u) || true
   if [[ "$push_keys" == "$map_vars" && "$map_vars" == "$pass_vars" ]]; then
     echo "  PASS: push payload ↔ FILE_MAP ↔ pass-environment b64 key sets are identical ($(echo "$push_keys" | wc -l | tr -d ' ') keys)"; CASES=$((CASES + 1)); pass;
   else
@@ -755,7 +755,7 @@ test_dropin_restart_grant() {
   granted_units=$(grep -E '^Cmnd_Alias DROPIN_TRY_RESTART = ' "$sudoers" \
     | sed 's/^Cmnd_Alias DROPIN_TRY_RESTART = //' \
     | tr ',' '\n' \
-    | sed -n 's#.*try-restart[[:space:]]\{1,\}\([^[:space:],]\{1,\}\).*#\1#p')
+    | sed -n 's#.*try-restart[[:space:]]\{1,\}\([^[:space:],]\{1,\}\).*#\1#p') || true
   while IFS= read -r unit; do
     [[ -n "$unit" ]] || continue
     n_units=$((n_units + 1))
@@ -1079,7 +1079,7 @@ test_reconcile_vector_ordered_last() {
   assert_eq "vector.service is the final restart" "try-restart vector.service" "$last_call"
   # And the marker order matches, since that is what an operator reads.
   local last_marker
-  last_marker=$(grep 'SOLEUR_INFRA_CONFIG_RESTART' "$LOGGER_LOG" | tail -1)
+  last_marker=$(grep 'SOLEUR_INFRA_CONFIG_RESTART' "$LOGGER_LOG" | tail -1) || true
   if [[ "$last_marker" == *"unit=vector.service"* ]]; then
     echo "  PASS: vector is also last in the emitted markers"; CASES=$((CASES + 1)); pass
   else
@@ -1434,7 +1434,7 @@ test_handler_to_grant_lint() {
   # regressed to emitting nothing, every membership test inside the lint would pass by
   # vacuity and the arm above would report a clean handler forever.
   local n_granted
-  n_granted=$(_granted_argv "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" | grep -c .)
+  n_granted=$(_granted_argv "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" | grep -c .) || true
   if [[ "$n_granted" -ge 10 ]]; then
     echo "  PASS: the User_Spec-gated granted set resolved $n_granted argv"; CASES=$((CASES + 1)); pass
   else
@@ -2404,8 +2404,8 @@ test_fatal_channel_handoff_requires_ownership() {
   # STRUCTURAL: anchored on the shell test construct, which a comment cannot produce (verified
   # unique in-file). Also pins ORDER — a trust gate below the read is not a trust gate.
   local guard_line read_line
-  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
-  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
+  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1) || true
+  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1) || true
   if [[ -n "$guard_line" ]]; then
     echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; CASES=$((CASES + 1)); pass
   else

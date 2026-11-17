@@ -1,0 +1,11 @@
+.github/workflows/ci.yml
+plugins/soleur/scripts/lint-ratchet.py
+scripts/lib/test-affected-paths.sh
+scripts/test-all.sh
+scripts/ci-oracle-lane.sh
+scripts/ci-oracle-lane.test.sh
+scripts/ci-oracle-lane-suites.txt
+scripts/ci-oracle-lane-legs.tsv
+scripts/ci-oracle-review.sh
+scripts/ci-oracle-review.test.sh
+scripts/ci-oracle-surface.txt

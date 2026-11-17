@@ -167,3 +167,22 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
     expect(res.headers.get("cache-control") ?? "").not.toMatch(/no-store/);
   });
 });
+
+// #9601: the away-user approval landing page now carries the requester's email for an Owner. It must never be restorable
+// from a browser cache: the middleware's document no-store (path-independent) plus the page's `force-dynamic`.
+describe("approval landing page carries the requester label (#9601)", () => {
+  test("a document navigation to /dashboard/approvals/<uuid> → Cache-Control: no-store", async () => {
+    const res = await middleware(
+      makeRequest("/dashboard/approvals/00000000-0000-4000-8000-000000000006", { "sec-fetch-dest": "document" }),
+    );
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  test("the page exports dynamic = force-dynamic (a whitespace-tolerant source match, without importing the page)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "..", "app/(dashboard)/dashboard/approvals/[id]/page.tsx"), "utf8");
+    expect(src).toMatch(/export\s+const\s+dynamic\s*=\s*["']force-dynamic["']\s*;/);
+  });
+});

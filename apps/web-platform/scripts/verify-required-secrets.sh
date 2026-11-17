@@ -32,6 +32,15 @@ REQUIRED=(
   # job from the GH secret and flips this entry to FORBIDDEN_IN_PRD (the token
   # has no app-code reader and should not ride in the container env).
   SUPABASE_ACCESS_TOKEN
+  # Relay hello-signing key (#12289, PR A of #8211 / #12167): minted by Terraform
+  # (random_bytes.proxy_hello_hmac -> doppler_secret.proxy_hello_hmac_key) and read by the
+  # session proxy to sign and verify every relayed hello. PRESENCE ONLY, as ruled in F2 (refuses an
+  # absent or empty key): the 64-hex shape is checked by the app's startup guard (createProxyServer.no-hello-key), and the
+  # Terraform-minted value cannot be malformed without an owner write. A missing key blocks every
+  # deploy (hotfixes included) until it exists. REMOVE THIS ENTRY IN THE SAME CHANGE that turns
+  # host_proxy_tls_enabled off (the pair is then destroyed); terraform-target-parity.test.ts pins
+  # the coupling to that variable's default.
+  PROXY_HELLO_HMAC_KEY
 )
 
 missing=0

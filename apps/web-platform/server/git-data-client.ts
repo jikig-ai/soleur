@@ -34,6 +34,7 @@ import {
 } from "@/server/observability";
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
 import { gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { assertNoUrlRewrite } from "@/server/git-data-url-guard";
 import { readGitDataKeyEnv } from "@/server/git-data-key";
 // Pure transport helpers (call-time only) from the WRITE-side module. The two
 // modules reference each other exclusively inside async function bodies (this
@@ -269,6 +270,9 @@ export async function fetchFromGitData(params: {
   // `--force`. Cross-user visibility is a separate explicit fetch of the peer namespace
   // (ADR-068 D0-ref), not this call.
   const fetchRefspecs = gitDataFetchRefspecs(worktreeId);
+  // A `url.<base>.insteadOf` in the workspace config could rewrite the explicit URL to another tenant's repository on the
+  // same host and pull its objects here: refuse before the transport (preflight, not a structural control).
+  assertNoUrlRewrite(workspacePath);
   await gitWithPrivateKeyAuth(
     [
       "fetch",

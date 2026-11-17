@@ -62,7 +62,7 @@ export const SAFE_TOOLS = ["Skill", "TodoRead", "TodoWrite"] as const;
 export const UNVERIFIED_PARAM_TOOLS = ["LS", "NotebookRead", "NotebookEdit"] as const;
 
 /** Every input field a file tool reads a location from. Single source for `extractToolPath` and `pathFieldsEscape`. */
-const PATH_FIELDS = ["file_path", "path", "notebook_path"] as const;
+export const PATH_FIELDS = ["file_path", "path", "notebook_path"] as const;
 
 /**
  * Extracts the filesystem path from a tool's input parameters.

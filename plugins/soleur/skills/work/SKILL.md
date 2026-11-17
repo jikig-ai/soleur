@@ -384,9 +384,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    concurrent full-gate runs inflate each other's timings and corrupt the measurement. Measured
    2026-08-11 — three agents running lints and suites at once turned an 860 s battery into 1675 s,
    and that 1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate
-   ONCE, after collecting fan-out work — the bounded default `bash scripts/test-all.sh` (bare
-   resolves `--affected`), previewed by `bash scripts/test-all.sh --print-selection` and
-   reported with the `selected N of M`. Two mechanical backstops exist, and neither depends on an
+   ONCE, after collecting fan-out work — step 9's `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"`
+   (the same `--affected` run; rc table: [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+   previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M` (an `AFFECTED_GATE_SKIPPED` line is not a pass). Two mechanical backstops exist, and neither depends on an
    agent volunteering anything: a `--full` or degraded-full [scripts/test-all.sh](../../../../scripts/test-all.sh)
    exits 4 when it MEASURES a sibling full-gate run already in flight (#7553), and `tc_acquire`'s
    advisory lock (ADR-133) serialises whatever gets past that. **`SOLEUR_SUBAGENT=1` is a convention
@@ -487,8 +487,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      [`sql-security-definer-rpc-scaffold.sql`](./references/sql-security-definer-rpc-scaffold.sql)
      — it encodes the `search_path` pin + 4-role REVOKE + `auth.uid()`
      authorization pin that `test/migration-rpc-grants.test.ts` enforces.
-   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
-     → Bash via `gh` CLI
+   - `gh pr ready` / `gh issue close` → Bash via `gh` CLI
+   - Merge → `soleur:ship` (review-evidence arm check)
    - End-to-end UI flow → Playwright MCP (`mcp__plugin_soleur_playwright__*` — dedicated persistent profile; a flow needing stored auth that lives in a different registration's profile uses that registration)
    - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
    - Live Stripe state → `mcp__plugin_soleur_stripe__*`
@@ -1037,12 +1037,13 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    Before entering Phase 3, run the affected gate — **once, and not the whole battery**:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"
+   # wraps affected-tests.sh; skips only on a brief's ci-is-the-gate token
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"
    ```
 
-   The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
+   An `AFFECTED_GATE_SKIPPED` line means the gate was NOT run: report it so, never as a pass.
 
-   A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected bash scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
+   The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md#token-aware-front-door-gate-or-skipsh-12247). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
 
    **`TEST_GROUP=<g>` remains as an explicit cross-cut, not the default.** `TEST_GROUP=bun|scripts|scripts-heavy|webplat|infra bash scripts/test-all.sh` restricts the run to that group's registrations under the same affected-selection rules — a non-`all` ask force-selects its group. Use it to re-run one shard in isolation; it is no longer how the Phase 2 exit picks coverage — the affected index derives a finer set.
 
@@ -1180,7 +1181,7 @@ every RED reporting `rc=?`, because the log dir had been removed mid-run; the 12
 like a flake reproduction and were entirely self-inflicted. **If an edit cannot wait, kill the
 run** — a discarded run costs minutes, a misattributed one costs the whole investigation. Same
 rule for measurement loops and agent panels: they contend for one machine, so sequence them.
-**Test-harness sharp edges** — mid-run commits trip the write boundary; new policy hooks touch ~15 ratchet surfaces; nested `test-all.sh` sandboxes need `env -u` scrubs → [work-test-harness-sharp-edges.md](./references/work-test-harness-sharp-edges.md) (#10161).
+**Test-harness sharp edges** — mid-run commits trip the write boundary; new policy hooks touch ~15 ratchet surfaces; nested `test-all.sh` sandboxes need `env -u` scrubs; markdownlint `0 files` = skipped → [work-test-harness-sharp-edges.md](./references/work-test-harness-sharp-edges.md) (#10161).
 
 **Sibling-worktree contention produces a FALSE RED — the runner now self-identifies it.** Parallel worktrees are this repo's documented workflow, so two sessions can run `test-all.sh` simultaneously. The contended resource is NOT a colliding path — it is CAPACITY: every suite's `mktemp` lands in the same machine-global, RAM-backed 4 GiB `/tmp` tmpfs, so a second run competes for the memory the first is holding, and the failure both implicated suites document in-repo is a TIMEOUT (`skill-security-scan.test.ts` #4096; `vitest.config.ts` #3817/#4128), never a path collision. **The previously-recorded cause — `skill-security-scan`'s `.scan-meta.json` plus the semgrep bootstrap as "the known pair" — was refuted by measurement (#6789):** `run-scan.sh` PID-scopes `.scan-meta.json` since its original commit (cannot collide across worktrees; its real defect was an *unbounded meta_dir* leak, age-reaped), and the semgrep bootstrap is unreachable from any suite `test-all.sh` runs. You no longer run `ps` by hand: `test-all.sh` prints a contention preamble (`/tmp` headroom, sibling runs resolved to their worktrees via `/proc/<pid>/cwd`, machine load) and fires a named `SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM` banner when one of those conditions holds (`SIBLING_SUITE_DETECTED`: one level down — a sibling running a single suite directly), and an advisory git-common-dir lock serializes concurrent runs (`LOCK_CONTENDED_PROCEEDING` banner on timeout; never aborts). When a banner fires, confirm three ways (isolated re-run, the matching CI gate's status, a clean full re-run once the sibling exits) rather than accepting "flake"; never delete another session's `/tmp` artifacts — `/tmp` is shared tmpfs; write large logs to `/var/tmp` (`tmpfs-guard.sh`'s cron reaper bounds abandoned-scratch growth only for entries above its size floor; the **count-shaped** class — tens of thousands of few-hundred-byte artifacts, which filled `/tmp` on 2026-07-27 — is **not reclaimed by anything today**; the reclaim tier was measured against the real `/tmp` and **removed before merge** (12,240 entries, ~1,500 authored), so the guard *detects and reports* the count shape, deleting nothing. #7004 rebaselined that report onto growth above a downward-ratcheting watermark, so it alarms on NEW leaks, not the standing backlog. Do not treat the reaper as a general backstop). **Why:** #6726 — 4 `skill-security-scan` failures were pure contention (isolated re-run 22/0, CI green throughout); #6789 re-derived the actual cause and shipped the self-identification above.
 

@@ -745,7 +745,7 @@ describe("note rules", () => {
 });
 
 describe("Sentry feature tag (the alert rules match feature=legal-acceptance plus the op)", () => {
-  it("the five legal ops are reported under feature legal-acceptance with their op literals and unique messages; the gate's ops keep approval-queue", async () => {
+  it("the legal ops (the five paged ones plus the unpaged kind_undeclared) are reported under feature legal-acceptance with their op literals and unique messages; the gate's ops keep approval-queue", async () => {
     const real = await vi.importActual<typeof import("@/server/approval/ops")>("@/server/approval/ops");
     for (const [key, op, sink] of [
       ["accepted", "accepted", h.warnSink],
@@ -753,6 +753,7 @@ describe("Sentry feature tag (the alert rules match feature=legal-acceptance plu
       ["reauthFailed", "reauth_failed", h.errSink],
       ["rowWithoutEvent", "row_without_event", h.errSink],
       ["pageReadFailed", "page_read_failed", h.errSink],
+      ["kindUndeclared", "kind_undeclared", h.warnSink],
     ] as const) {
       sink.mockReset();
       real.reportLegalOp(key, null, { userId: USER, tags: { reason: "x" } });

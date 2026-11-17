@@ -160,6 +160,11 @@ async function bootLegacySession(): Promise<Booted> {
     apiKeyRows: [DEFAULT_API_KEY_ROW, plausibleRow],
     mockRpc,
   });
+  // The legacy no-verdict card is Owner-only (#12597); the shared rpc mock answers null for this RPC.
+  const base = mockRpc.getMockImplementation()!;
+  mockRpc.mockImplementation((fnName: string, ...rest: unknown[]) =>
+    fnName === "is_workspace_owner" ? Promise.resolve({ data: true, error: null }) : base(fnName, ...rest),
+  );
   createQueryMock(mockQuery);
   await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
   const options = mockQuery.mock.calls[0][0].options;
@@ -229,7 +234,7 @@ describe("buildAllowedTools: unit census", () => {
   });
 
   test("the booted legacy session registers every hand-listed tool except the cc-only ones (a deleted or renamed tool shows here)", () => {
-    const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status"].map(fqn));
+    const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status", "github_list_pull_requests"].map(fqn));
     const expectedRegistered = [...EXPECTED_GATED_FQNS, ...EXPECTED_AUTO_FQNS].filter((n) => !ccOnly.has(n));
     for (const n of expectedRegistered) expect(booted.platformToolNames, `expected registered: ${n}`).toContain(n);
   });

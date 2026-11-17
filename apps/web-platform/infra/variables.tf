@@ -93,10 +93,22 @@ variable "web_hosts" {
   description = "Web-host cluster (multi-host /workspaces, ADR-068 Phase 3). web-1 = pre-existing host; keys immutable post-migration; EU-location-pinned (CLO T-1)."
   # (The former `monitored` per-host flag was removed with the #5933 per-host uptime
   # probe/monitor — uptime is now monitored at app.soleur.ai, see uptime-alerts.tf.)
+  # Keyed role fields (#9421 Part 2a, ADR-327): every role a host holds is a field here, never a
+  # `key == "web-N"` predicate, so a new host is one map entry. lb_weight is the host's declared GA
+  # pool weight (a gated drain can only lower it, cloudflare-lb.tf); exactly one host carries each of
+  # luks_monitor_profile = "primary", jump (the ssh. ingress target) and tunnel_connector (ADR-114 I1).
+  # luks_monitor_profile is not yet wired into a host: cloud-init.yml writes LUKS_MONITOR_PROFILE=standby
+  # for every birth, and web-1, the primary, is never re-born. The PR that first births a primary wires it
+  # into the render. Today one thing reads it: the GA pool's ungated-host precondition (cloudflare-lb.tf),
+  # which lets only the primary serve outside the drain gate.
   type = map(object({
-    location    = string
-    private_ip  = string
-    server_type = optional(string, "cx33")
+    location             = string
+    private_ip           = string
+    server_type          = optional(string, "cx33")
+    lb_weight            = optional(number, 0)
+    luks_monitor_profile = optional(string, "standby")
+    jump                 = optional(bool, false)
+    tunnel_connector     = optional(bool, false)
   }))
   # web-2 RE-ADDED 2026-07-24 as a FRESH cattle out-of-band standby (ADR-143, #6459) — a
   # different host from the fsn1/10.0.1.11 warm standby RETIRED 2026-07-17 (#6538, which cost
@@ -178,15 +190,15 @@ variable "web_hosts" {
   #
   # Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
   # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
-  # the freed 10.0.1.11 address. web-2 is OUT-OF-BAND (serving-weight 0, ADR-143 D2): NOT in the
-  # ingress rotation (dns.tf app record stays web-1-only; the single tunnel connector stays
-  # web-1-gated) until the ADR-068 Phase-3 GA flip — the rebuilt #6575 anti-pooling gate
-  # (lb-weight-gate.sh) fail-closes any attempt to pool it before then. A request to web-2
-  # pre-flip hits the empty /workspaces (the sole copy is web-1's volume) = workspace-gone.
+  # the freed 10.0.1.11 address. web-2 was OUT-OF-BAND (serving-weight 0, ADR-143 D2) until the
+  # 2026-11-08 serve flip (#12167): it now serves from the GA LB pool at weight 1 (web2_lb_weight
+  # below, default 1 = live). The dns.tf app record stays web-1-only and the single tunnel connector
+  # stays web-1-gated (the flip changed the pool weight, nothing else). A request to web-2
+  # pre-flip hit the empty /workspaces (the sole copy is web-1's volume) = workspace-gone.
   # Keys are IMMUTABLE (moved-block for_each; never rename web-1 — 29 refs / 6 files, ADR-143 D4).
   default = {
-    "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }
+    "web-1" = { location = "hel1", private_ip = "10.0.1.10", lb_weight = 1, luks_monitor_profile = "primary", jump = true }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22", lb_weight = 1, tunnel_connector = true }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
@@ -195,6 +207,32 @@ variable "web_hosts" {
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))])
     error_message = "web_hosts private_ip must be a host address in the 10.0.1.0/24 private subnet (network.tf)."
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : tonumber(split(".", h.private_ip)[3]) >= 2 && tonumber(split(".", h.private_ip)[3]) <= 254])
+    error_message = "web_hosts private_ip last octet must be 2-254 (.0 is the network, .1 the Hetzner gateway, .255 broadcast)."
+  }
+  validation {
+    condition     = length(distinct([for h in values(var.web_hosts) : h.private_ip])) == length(var.web_hosts)
+    error_message = "web_hosts private_ip values must be unique."
+  }
+  # The next two use == rather than contains(): test-eu-location-allowset-parity.sh reads every
+  # contains() allow-set in this file as an EU location set.
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : h.lb_weight == 0 || h.lb_weight == 1])
+    error_message = "web_hosts lb_weight must be 0 (drained member) or 1 (serving)."
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : h.luks_monitor_profile == "primary" || h.luks_monitor_profile == "standby"]) && length([for h in values(var.web_hosts) : h if h.luks_monitor_profile == "primary"]) == 1
+    error_message = "web_hosts luks_monitor_profile must be primary or standby, with exactly one primary host."
+  }
+  validation {
+    condition     = length([for h in values(var.web_hosts) : h if h.jump]) == 1
+    error_message = "web_hosts must mark exactly one host jump = true (the ssh. ingress target)."
+  }
+  validation {
+    condition     = length([for h in values(var.web_hosts) : h if h.tunnel_connector]) == 1
+    error_message = "web_hosts must mark exactly one host tunnel_connector = true (ADR-114 I1: one connector)."
   }
 }
 
@@ -525,6 +563,33 @@ variable "terraform_version" {
   default     = ""
 }
 
+# web-2's serving weight in the GA LB pool (cloudflare-lb.tf, ADR-068 §(c)). DEFAULT 1 = the live
+# serving shape since the 2026-11-08 serve flip (#12167, #12363): every plan that does not name this
+# variable (routine apply, scheduled drift plan, laptop plan) plans web-2 at weight 1, which equals
+# live, so those plans are clean. A drain is an explicit act: cf-lb-overlay `ga-pool-update mode=drain`
+# passes `-var=web2_lb_weight=0`, and `ga-overlay` passes the same 0 so a FRESH GA3 create stays the
+# drained shape (its grader is create-only, so it cannot drain a live pool). The gated 0-to-1 act is
+# `ga-pool-update mode=serve` (1 solely there, after its fail-closed §(c) gate-chain step passed).
+# lb-weight-gate.test.sh C.4 pins the feeder census, the ordering and the default. The structural
+# "only the serve arm can set weight 1" guarantee that held while the default was 0 is vacuous while
+# live is 1 and is gone at the first drain: after an intentional drain, any later full-root plan or
+# apply that omits the variable restores weight 1 outside the gate chain (as does a pool re-create), so
+# a drain is not durable until this default is changed back.
+# Never set this in Doppler / tfvars: a TF_VAR_ route would bypass the gate chain. Only 0 and 1 are
+# admitted. An untargeted apply that CREATES or REPLACES hcloud_server.web["web-2"] (or the pool) MUST
+# pass `-var=web2_lb_weight=0`: at the default an empty replacement host would enter the pool at weight 1
+# before the serve gate chain runs.
+variable "web2_lb_weight" {
+  description = "web-2 origin weight in the GA LB pool (0 = drained, 1 = serving). Default 1 = the live serving shape after the #12167 serve flip; drain is explicit via cf-lb-overlay ga-pool-update mode=drain (passes 0); ga-overlay passes 0 for a fresh create only. Do not set via Doppler or tfvars."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.web2_lb_weight == 0 || var.web2_lb_weight == 1
+    error_message = "web2_lb_weight must be 0 (drained) or 1 (serving)."
+  }
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string
@@ -663,7 +728,7 @@ variable "git_data_betterstack_logs_token" {
 }
 
 variable "host_proxy_tls_enabled" {
-  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default true since the multi-host flip (#12167, ADR-118 amendment 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all four addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the four resources then plan as destroys, which needs [ack-destroy]."
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert) and the relay hello-signing key pair in proxy-hello-hmac.tf (random_bytes.proxy_hello_hmac, doppler_secret.proxy_hello_hmac_key). Default true since the multi-host flip (#12167, 31c8a232fe / #12203; the count gate itself is the ADR-118 amendment of 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all six addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the four TLS resources then plan as destroys under [ack-destroy], but the hello-key pair's destroys are refused by the non-ackable relay_hello_key_changes HALT on the per-merge path (ADR-118 amendment 2026-11-09), so retiring the relay needs a separately reviewed route (and the PROXY_HELLO_HMAC_KEY entry removed from verify-required-secrets.sh in the same change); setting it true again mints a DIFFERENT hello-signing key."
   type        = bool
   default     = true
 }

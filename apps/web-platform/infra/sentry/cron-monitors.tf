@@ -460,9 +460,10 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
 
 # #11631: GHA-fired via .github/workflows/scheduled-deadman-heartbeat-feeder.yml (on.schedule '0 * * * *' is the
 # FALLBACK; the PRIMARY trigger is the web server's watchdog dispatch clock, ADR-248, one workflow_dispatch per
-# hourly UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow is the repo-side feeder for the two archive-fed
-# dead-man heartbeats betteruptime_heartbeat.luks_monitor_host_timer and betteruptime_heartbeat.claude_cost_capture
-# that replaced two native logs alerts (the luks one waited for a once-a-day row and read `Current value: 0`
+# hourly UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow is the repo-side feeder for the archive-fed
+# dead-man heartbeats betteruptime_heartbeat.luks_monitor_host_timer, betteruptime_heartbeat.claude_cost_capture
+# and betteruptime_heartbeat.inngest_luks_key_probe_deadman (#12230 c1), the first two of which
+# replaced two native logs alerts (the luks one waited for a once-a-day row and read `Current value: 0`
 # through 33 healthy nights, #11048; the cost one fires a few times a day, n=4 in 24 h): it beats a heartbeat
 # only while a qualifying row exists in the Logs hot-plus-archive window of the retired alert. A MISSED check-in
 # here means the feeder went dark (clock + fallback both dead, workflow disabled), and the heartbeats then time
@@ -892,8 +893,10 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
 # heartbeat means the sweep_approvals() RPC failed (the next tick retries). The cron runs with the
 # `approval-queue` flag OFF as well, so the monitor is live from the first deploy. Pure database RPC plus
 # generic push, no claude-eval spawn: the 30-min margin and 10-min runtime of the Inngest small-cron
-# cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routing to cron_monitor_failure follows the
-# two-PR rule (cron_monitor_alert_unrouted in cron-monitor-alerts.tf).
+# cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routed into cron_monitor_failure
+# (cron-monitor-alerts.tf, #12293): this monitor is the only cover for a dropped or dead sweep function
+# (scheduled_inngest_cron_watchdog covers only whole-scheduler death), because the gate_unanswered alert is
+# emitted by the sweep itself.
 resource "sentry_cron_monitor" "scheduled_approval_expiry" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug

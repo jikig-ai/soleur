@@ -44,9 +44,11 @@
 #   Top-guard (ADR-143 D3): SOLEUR_WEB2_SERVING_WEIGHT (explicit integer ≥0; absent/non-int/negative
 #     → FAIL CLOSED) + SOLEUR_SERVING_ROTATION (present, comma-set; absent → FAIL CLOSED). PASS iff
 #     weight==0 AND web-2 ∉ rotation. Otherwise → Conditions A + B.
-#   Condition A (owner-side relay config-shape): SOLEUR_PROXY_BIND non-empty; SOLEUR_PROXY_PEER_
-#     ALLOWLIST parses to non-empty set; SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist
-#     ⊆ roster addrs (outbound dial), web-2 addr ∈ allowlist (inbound accept).
+#   Condition A (owner-side relay config-shape): SOLEUR_PROXY_PEER_ALLOWLIST parses to non-empty set;
+#     SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist ⊆ roster addrs (outbound dial),
+#     web-2 addr ∈ allowlist (inbound accept). The relay BIND is deliberately not checked here: it is a
+#     literal in ci-deploy.sh, not a Doppler value. Bind/reachability evidence is the serve arm's
+#     relay-evidence step (#12168), NOT this gate.
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
 #     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-143 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
 #     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a web-2 whose
@@ -75,6 +77,13 @@ WEIGHT="${WEIGHT%"${WEIGHT##*[![:space:]]}"}"   # rtrim
 [[ "$WEIGHT" =~ ^-?[0-9]+$ ]] || fail "TOP_web2_weight_not_integer"
 [[ "$WEIGHT" -ge 0 ]] || fail "TOP_web2_weight_negative"
 
+# Gated host key (#9421 Part 2a, ADR-327): the var.web_hosts key whose pooling this run gates. The gate
+# names no host itself, so any key at weight 0 gets the same standby branch and any key being pooled the
+# same Conditions A + B. Absent/blank/malformed -> FAIL CLOSED (same reasoning as the weight above).
+HOST="${SOLEUR_GATED_HOST-}"
+[[ -n "$HOST" ]] || fail "TOP_gated_host_absent"
+[[ "$HOST" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || fail "TOP_gated_host_malformed"
+
 # Rotation membership set: MUST be present (SET, even if the empty string = "no rotation"). An UNSET
 # var → FAIL CLOSED (not assume-empty→PASS; CTO ruling 2c.2). `${VAR+set}` is non-empty iff VAR is
 # set, so `-z` here is true ONLY when genuinely unset — distinct from an explicit empty "no rotation".
@@ -98,7 +107,7 @@ parse_rotation() {
 parse_rotation "$ROTATION_RAW"
 
 web2_in_rotation=0
-[[ -n "${ROTATION_SET[web-2]-}" ]] && web2_in_rotation=1
+[[ -n "${ROTATION_SET[$HOST]-}" ]] && web2_in_rotation=1
 
 # The PASS branch that fixes the #6575 flaw: web-2 weight==0 AND not in the serving rotation is the
 # correct OUT-OF-BAND STANDBY state — the state a correct pre-flip config is actually in. Short-
@@ -120,11 +129,13 @@ fi
 # Condition A — owner-side relay config-shape
 # =============================================================================
 
-# A.1 — SOLEUR_PROXY_BIND non-empty (trimmed).
-PROXY_BIND="${SOLEUR_PROXY_BIND-}"
-PROXY_BIND="${PROXY_BIND#"${PROXY_BIND%%[![:space:]]*}"}"
-PROXY_BIND="${PROXY_BIND%"${PROXY_BIND##*[![:space:]]}"}"
-[[ -n "$PROXY_BIND" ]] || fail "A_proxy_bind_empty"
+# A.1 — RETIRED (CTO ruling, #12167 / #8211): the relay bind is NOT a gate input. SOLEUR_PROXY_BIND is not a
+# Doppler value; the app container binds 0.0.0.0 via a literal in ci-deploy.sh (pinned by docker-run-tuple.py).
+# A Doppler "declared intent" proved nothing (any non-empty string passed). This gate proves ONLY the
+# weight/rotation shape and the cut-over config shape; it carries NO bind or reachability evidence. That evidence
+# is the serve arm's relay-evidence step (#12168: relay_probe proxy_state=listening and relay_peer_probe
+# result=ok from Better Stack), NOT this gate. The sub-condition ids A.2+ keep their numbers so the structured
+# gate_fail contract does not shift.
 
 # PARITY POINTER: the roster/allowlist parsing below intentionally MIRRORS (and is stricter than)
 # the two TypeScript loaders it gates for:
@@ -177,7 +188,7 @@ key_uniq=$(printf '%s\n' "$ROSTER_KEYS" | sort -u | grep -c . || true)
 [[ "$key_total" -eq "$key_uniq" ]] || fail "A_host_roster_duplicate_key"
 
 # web-2 specifically present as a roster host_id.
-jq -e 'has("web-2")' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
+jq -e --arg h "$HOST" 'has($h)' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
 
 # Allowlist peers ⊆ roster addresses (OUTBOUND-dial direction: every peer we accept must be reachable).
 declare -A ROSTER_ADDRS=()
@@ -193,7 +204,7 @@ done
 # REJECT an inbound relay from web-2 (its addr ∉ allowlist) → post-flip mis-route → empty /workspaces.
 declare -A ALLOWLIST_SET=()
 for peer in "${ALLOWLIST[@]}"; do ALLOWLIST_SET["$peer"]=1; done
-WEB2_ADDR=$(jq -r '.["web-2"]' <<<"$ROSTER_RAW")
+WEB2_ADDR=$(jq -r --arg h "$HOST" '.[$h]' <<<"$ROSTER_RAW")
 [[ -n "${ALLOWLIST_SET[$WEB2_ADDR]-}" ]] || fail "A_web2_addr_not_in_allowlist"
 
 # =============================================================================
@@ -252,6 +263,9 @@ WS_MARKER="${WORKSPACES_LUKS_CUTOVER_AT-}"
 WS_MARKER="${WS_MARKER#"${WS_MARKER%%[![:space:]]*}"}"
 WS_MARKER="${WS_MARKER%"${WS_MARKER##*[![:space:]]}"}"
 [[ -n "$WS_MARKER" ]] || fail "B_workspaces_luks_marker_absent"
+# The marker is UNKEYED: its only writer probes one host, so it attests that host and no other. The seam
+# names that host (WORKSPACES_LUKS_MARKER_HOST); pooling any OTHER key on it is refused, never inherited.
+[[ "${WORKSPACES_LUKS_MARKER_HOST-}" == "$HOST" ]] || fail "B_workspaces_luks_marker_other_host"
 [[ "$WS_MARKER" =~ $ISO_RE ]] || fail "B_workspaces_luks_marker_unparseable"
 ws_epoch=$(date -u -d "$WS_MARKER" +%s 2>/dev/null) || fail "B_workspaces_luks_marker_unparseable"
 [[ "$ws_epoch" =~ ^-?[0-9]+$ ]] || fail "B_workspaces_luks_marker_unparseable"

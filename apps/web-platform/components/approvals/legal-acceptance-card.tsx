@@ -15,6 +15,7 @@
 //     success. An answer is final: there is no undo here (task 6.10); a new version of the text is the way to change it.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
@@ -23,9 +24,12 @@ import {
   confirmedWithCodeLine,
   formatLegalDate,
   formatLegalUtc,
-  legalTextLabel,
+  legalKindCopy,
+  legalTextKind,
+  type LegalKindCopy,
 } from "@/lib/legal-acceptance-copy";
 import { interpretDecide, postLegalDecide, type LegalRowFacts } from "@/lib/legal-acceptance-client";
+import { swrKeys } from "@/lib/swr-config";
 import { REQUEST_CHANGES_MAX, codePointLength, truncateCodePoints, type LegalCardStateWire, type LegalChoiceWire } from "@/lib/legal-acceptance-wire";
 import { LegalReauthDialog } from "@/components/approvals/legal-reauth-dialog";
 
@@ -33,6 +37,8 @@ export type { LegalRowFacts };
 
 export interface LegalAcceptanceCardProps {
   keyName: string;
+  /** What the card calls the text (`legalDisplayLabel`, computed by the server page). */
+  label: string;
   version: string;
   /** The registry text exactly as the server read it. Empty for a replaced card (the older text is no longer in the registry). */
   body: string;
@@ -43,13 +49,13 @@ export interface LegalAcceptanceCardProps {
   state: LegalCardStateWire;
   /** The stored row for this card when there is one. */
   row: LegalRowFacts | null;
-  /** The `approval-queue` flag. Off: the card is read-only and says answering is not available yet. */
-  flagEnabled: boolean;
+  /** The surface is open (`isLegalSurfaceEnabled`: the configured founder id; not the `approval-queue` flag). Off: the card is read-only and says answering is not available yet. */
+  surfaceEnabled: boolean;
   /** The signed-in account's email, for the start step of the check. */
   email: string | null;
   /** The registry's current version, for the replaced card. */
   currentVersion: string;
-  /** False when the page does not render the current version's card (flag off, no answer yet): a replaced card then links nowhere. Default true. */
+  /** False when the page does not render the current version's card (surface off, no answer yet): a replaced card then links nowhere. Default true. */
   currentVisible?: boolean;
 }
 
@@ -67,8 +73,7 @@ const STATE_STYLE: Record<LegalCardStateWire, { box: string; badge: string }> = 
 };
 
 export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
-  const { keyName, version, body, textHash, validUntil, flagEnabled, email, currentVersion, currentVisible = true } = props;
-  const label = legalTextLabel(keyName);
+  const { keyName, label, version, body, textHash, validUntil, surfaceEnabled, email, currentVersion, currentVisible = true } = props;
 
   // The server's last word about this card. After a recorded answer the same pure derivation gives the new state.
   const [local, setLocal] = useState<{ row: LegalRowFacts; already: boolean } | null>(null);
@@ -83,13 +88,28 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
       })
     : props.state;
 
-  const onRecorded = useCallback((r: LegalRowFacts, already: boolean) => setLocal({ row: r, already }), []);
+  // The nav badge (mounted in the dashboard shell, so it stays mounted on this page) and the Inbox list share one SWR key:
+  // refresh it once a decision is recorded so the badge clears without a reload (Ref #12197). The Inbox list itself
+  // (InboxSurface) is mounted only on the Inbox page, so it re-reads that key when the founder opens it. Only a recorded decision calls this.
+  const { mutate } = useSWRConfig();
+  const onRecorded = useCallback(
+    (r: LegalRowFacts, already: boolean) => {
+      setLocal({ row: r, already });
+      void mutate(swrKeys.inbox("active"));
+    },
+    [mutate],
+  );
+
+  // A text with no declared kind has no wording, so no card (CTO ruling 2026-11-07, no default). Placed after the last hook.
+  const kc = legalKindCopy(keyName);
+  const kind = legalTextKind(keyName);
+  if (kc === null) return null;
   const style = STATE_STYLE[state];
 
   return (
-    <article data-testid="legal-card" data-state={state} aria-label={label} className={`${BOX} ${style.box}`}>
+    <article data-testid="legal-card" data-state={state} data-key={keyName} data-kind={kind ?? undefined} aria-label={label} className={`${BOX} ${style.box}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className={`${BADGE} ${style.badge}`}>{badgeFor(state)}</span>
+        <span className={`${BADGE} ${style.badge}`}>{badgeFor(state, kc)}</span>
         <span className="text-xs text-soleur-text-secondary">{metaFor(state, validUntil, row)}</span>
       </div>
 
@@ -100,7 +120,8 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
           body={body}
           textHash={textHash}
           label={label}
-          flagEnabled={flagEnabled}
+          kc={kc}
+          surfaceEnabled={surfaceEnabled}
           email={email}
           onRecorded={onRecorded}
         />
@@ -108,6 +129,7 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
         <ResolvedBody
           state={state}
           label={label}
+          kc={kc}
           version={version}
           body={body}
           row={row}
@@ -120,12 +142,12 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
   );
 }
 
-function badgeFor(state: LegalCardStateWire): string {
+function badgeFor(state: LegalCardStateWire, kc: LegalKindCopy): string {
   switch (state) {
     case "pending":
       return LEGAL_COPY.pending.badge;
     case "accepted":
-      return LEGAL_COPY.accepted.badge;
+      return kc.acceptedBadge;
     case "declined":
       return LEGAL_COPY.declined.badge;
     case "changes_requested":
@@ -159,6 +181,7 @@ function metaFor(state: LegalCardStateWire, validUntil: string | null, row: Lega
 function ResolvedBody({
   state,
   label,
+  kc,
   version,
   body,
   row,
@@ -168,6 +191,7 @@ function ResolvedBody({
 }: {
   state: Exclude<LegalCardStateWire, "pending">;
   label: string;
+  kc: LegalKindCopy;
   version: string;
   body: string;
   row: LegalRowFacts | null;
@@ -180,19 +204,19 @@ function ResolvedBody({
   let closing: string | null = null;
   switch (state) {
     case "accepted":
-      title = LEGAL_COPY.accepted.title(label);
+      title = kc.acceptedTitle(label);
       howGiven = confirmedWithCodeLine(row?.reauthAt);
-      closing = LEGAL_COPY.accepted.body;
+      closing = kc.acceptedBody;
       break;
     case "declined":
-      title = LEGAL_COPY.declined.title(label);
+      title = kc.declinedTitle(label);
       howGiven = LEGAL_COPY.signedInLine;
-      closing = LEGAL_COPY.declined.body;
+      closing = kc.declinedBody;
       break;
     case "changes_requested":
       title = LEGAL_COPY.changesRequested.title;
       howGiven = LEGAL_COPY.signedInLine;
-      closing = LEGAL_COPY.changesRequested.body;
+      closing = kc.changesRequestedBody;
       break;
     case "replaced":
       title = LEGAL_COPY.replaced.title(version, currentVersion);
@@ -201,13 +225,13 @@ function ResolvedBody({
     case "expired":
       title = LEGAL_COPY.expired.title;
       howGiven = LEGAL_COPY.expired.howGiven;
-      closing = LEGAL_COPY.expired.body;
+      closing = kc.expiredBody;
       break;
   }
 
   return (
     <div className="mt-4 space-y-4">
-      <h2 className="text-xl font-medium text-soleur-text-primary">{title}</h2>
+      <h2 className="break-words text-xl font-medium text-soleur-text-primary">{title}</h2>
       <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.textMeta(label, version)}</p>
 
       {state === "changes_requested" && row?.requestedEdit && (
@@ -257,7 +281,8 @@ function PendingBody({
   body,
   textHash,
   label,
-  flagEnabled,
+  kc,
+  surfaceEnabled,
   email,
   onRecorded,
 }: {
@@ -266,7 +291,8 @@ function PendingBody({
   body: string;
   textHash: string;
   label: string;
-  flagEnabled: boolean;
+  kc: LegalKindCopy;
+  surfaceEnabled: boolean;
   email: string | null;
   onRecorded: (row: LegalRowFacts, already: boolean) => void;
 }) {
@@ -319,10 +345,10 @@ function PendingBody({
   }, [measure]);
 
   useLayoutEffect(() => {
-    if (flagEnabled) measure();
-  }, [measure, body, flagEnabled]);
+    if (surfaceEnabled) measure();
+  }, [measure, body, surfaceEnabled]);
   useEffect(() => {
-    if (!flagEnabled) return;
+    if (!surfaceEnabled) return;
     const el = regionRef.current;
     window.addEventListener("resize", measure);
     const ro = typeof ResizeObserver === "function" && el ? new ResizeObserver(measure) : null;
@@ -331,7 +357,7 @@ function PendingBody({
       window.removeEventListener("resize", measure);
       ro?.disconnect();
     };
-  }, [measure, flagEnabled]);
+  }, [measure, surfaceEnabled]);
 
   const confirmed = fits || (atEnd && ticked);
   const lockText = confirmed ? LEGAL_COPY.lock.open : atEnd ? LEGAL_COPY.lock.needsTick : LEGAL_COPY.lock.atEnd;
@@ -341,16 +367,20 @@ function PendingBody({
   return (
     <div className="mt-4 space-y-5">
       <div>
-        <h2 className="text-xl font-medium text-soleur-text-primary">{LEGAL_COPY.pending.title(label)}</h2>
+        <h2 className="break-words text-xl font-medium text-soleur-text-primary">{kc.pendingTitle(label)}</h2>
         <p className="mt-1 text-sm text-soleur-text-secondary">{LEGAL_COPY.versionMeta(version)}</p>
       </div>
 
-      {flagEnabled ? (
+      {surfaceEnabled ? (
         <>
           <div>
             <h3 className={KICKER}>{LEGAL_COPY.whatYourAnswerDoes}</h3>
             <dl className="mt-2 space-y-2 text-sm">
-              {[LEGAL_COPY.yesRow, LEGAL_COPY.noRow, LEGAL_COPY.changesRow].map((r, i) => (
+              {[
+                { label: LEGAL_COPY.yesRow.label, body: kc.yesBody },
+                { label: LEGAL_COPY.noRow.label, body: kc.noBody },
+                { label: LEGAL_COPY.changesRow.label, body: kc.changesBody },
+              ].map((r, i) => (
                 <div key={r.label} className={`rounded-lg border p-3 md:grid md:grid-cols-[10rem_1fr] md:gap-3 ${i === 0 ? "border-soleur-accent-gold-fg" : "border-soleur-border-default"}`}>
                   <dt className="font-semibold text-soleur-text-primary">{r.label}</dt>
                   <dd className="mt-1 text-soleur-text-secondary md:mt-0">{r.body}</dd>
@@ -361,7 +391,7 @@ function PendingBody({
           <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.pending.howGiven}</p>
         </>
       ) : (
-        <p className="text-sm text-soleur-text-primary">{LEGAL_COPY.pending.notAvailable}</p>
+        <p className="text-sm text-soleur-text-primary">{kc.pendingNotAvailable}</p>
       )}
 
       <div>
@@ -376,12 +406,12 @@ function PendingBody({
           role="region"
           aria-labelledby={`${uid}-text`}
           tabIndex={0}
-          onScroll={flagEnabled ? onScroll : undefined}
+          onScroll={surfaceEnabled ? onScroll : undefined}
           className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-soleur-border-default bg-soleur-bg-base p-4 text-sm text-soleur-text-primary"
         >
           {body}
         </div>
-        {flagEnabled && (
+        {surfaceEnabled && (
           <div className="mt-2 space-y-2">
             <p className="text-xs text-soleur-text-secondary">{fits ? LEGAL_COPY.scroll.fits : atEnd ? LEGAL_COPY.scroll.reached : LEGAL_COPY.scroll.keep}</p>
             {!fits && (
@@ -405,7 +435,7 @@ function PendingBody({
         )}
       </div>
 
-      {flagEnabled && (
+      {surfaceEnabled && (
         <div className="space-y-3">
           <p className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-3 text-xs text-soleur-text-secondary">{LEGAL_COPY.cardNotice}</p>
 
@@ -495,7 +525,7 @@ function PendingBody({
                   {LEGAL_COPY.changes.cancel}
                 </Button>
               </div>
-              <p className="text-xs text-soleur-text-secondary">{LEGAL_COPY.changes.footer}</p>
+              <p className="text-xs text-soleur-text-secondary">{kc.changesFooter}</p>
             </div>
           )}
 
@@ -514,14 +544,14 @@ function PendingBody({
         </div>
       )}
 
-      {flagEnabled && <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.pending.nothingAccepted}</p>}
+      {surfaceEnabled && <p className="text-sm text-soleur-text-secondary">{kc.pendingNothing}</p>}
 
       {dialogOpen && (
         <LegalReauthDialog
           keyName={keyName}
           textHash={textHash}
-          label={label}
           version={version}
+          answerDetail={kc.answerDetail(label, version)}
           email={email}
           onClose={() => setDialogOpen(false)}
           onRecorded={(r, already) => {

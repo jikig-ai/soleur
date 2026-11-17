@@ -7,13 +7,17 @@
 # `x-origin-transport: <TLS version>` on /health, and the plain-HTTP listener never does.
 #
 # WHAT A PASS PROVES. A 200 carrying `x-origin-transport: TLSv1.2|TLSv1.3` proves the request
-# reached the origin OVER TLS. It proves Cloudflare ACCEPTED THE CERTIFICATE only when the zone (or
-# the canary rule) is in `strict` for that request: under `full`, Cloudflare dials TLS without
-# validating the certificate, so the header appears with any certificate. Say which mode you
-# measured. A 200 WITHOUT the header is the pre-flip truth (Flexible: plain HTTP to the origin).
+# reached the origin OVER TLS. Since the ADR-321 item 13 cleanup (#10479) both the zone and the
+# adopted Configuration Rule for app.soleur.ai (seo-config-rules.tf) are `strict`, so a pass now
+# also proves Cloudflare ACCEPTED THE CERTIFICATE (issuer, expiry and hostname) for that request:
+# a refused certificate is a 525/526, which is NOT-200 (exit 1). Under `full` Cloudflare dials
+# TLS without validating the certificate, so if the adopted rule is ever rolled back off `strict`,
+# say which mode you measured. A 200 WITHOUT the header means the hop was plain HTTP (`flexible`).
 #
 # Usage: origin-tls-probe.sh [--require-tls]
 #   --require-tls  exit 3 unless the response is a 200 that carries a TLSv1.2/TLSv1.3 header.
+# The `--canary` flag is RETIRED with the ORIGIN-TLS canary rule (ADR-321 item 13): it is now an unknown
+# argument, a usage error (exit 64) that sends no request.
 #
 # Output contract (one line, no ANSI, always starting `origin-tls-probe:`):
 #   origin-tls-probe: http=<code|none> transport=<token|none> cf_cache=<token|none> result=<R>
@@ -28,9 +32,6 @@
 #   3  --require-tls and the 200 does not prove TLS (no header, or a value that is not TLSv1.2/1.3)
 #  64  usage error (stderr, not the line above)
 # The unreachable arm is its own exit code on purpose: it must never collapse into a verdict.
-#
-# The canary mode (a request header a Cloudflare configuration rule matches to run ONLY this
-# request in `strict`) is added by the PR that adds that rule, so the header cannot drift from it.
 #
 # Env: ORIGIN_TLS_PROBE_URL overrides the target; it must be https unless
 # ORIGIN_TLS_PROBE_ALLOW_HTTP=1 (the test points it at a local plain server).

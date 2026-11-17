@@ -100,7 +100,7 @@ if [[ -n "$PR_HEAD" ]] && git rev-parse --verify --quiet "origin/${PR_HEAD}" >/d
   TIP="origin/${PR_HEAD}"
 elif git rev-parse --verify --quiet "refs/pull/${PR_NUM}/head" >/dev/null 2>&1; then
   TIP="refs/pull/${PR_NUM}/head"
-elif git fetch --quiet origin "pull/${PR_NUM}/head" 2>/dev/null; then
+elif git fetch --quiet --no-tags origin "pull/${PR_NUM}/head" 2>/dev/null; then
   TIP="FETCH_HEAD"  # fetched just above; covers pruned/deleted head branches
 else
   TIP="HEAD"
@@ -113,7 +113,13 @@ if [[ -n "$TRAILER_CMO" ]]; then
 fi
 
 # Check if diff touches marketing, content strategy, or blog
-CHANGED_MARKETING=$(git diff --name-only "${BASE_REF}...${TIP}" 2>/dev/null | grep -E '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' || true)
+# NUL-delimited and rename-free (#12332): plain `--name-only` C-quotes a non-ASCII, tab, `"` or `\` name (the
+# `^`-anchored regex then misses it) and lists only a rename's NEW path (a rename away from the surface is
+# invisible). A git failure leaves the list empty, which denies (fail-closed, as before). The filter reads the
+# NUL stream (`grep -z`, byte locale): here a match ALLOWS, so a name holding a newline must not split into a
+# second "line" that satisfies the prefix (`zz<LF>knowledge-base/marketing/x`), and a name with an invalid UTF-8
+# byte must not be reported as a binary-file match.
+CHANGED_MARKETING=$(git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...${TIP}" 2>/dev/null | LC_ALL=C grep -zE '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' | tr '\0' '\n' || true)
 if [[ -n "$CHANGED_MARKETING" ]]; then
   exit 0
 fi

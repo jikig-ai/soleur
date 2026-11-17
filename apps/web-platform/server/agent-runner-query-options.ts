@@ -32,6 +32,7 @@ import path from "node:path";
 
 import * as Sentry from "@sentry/nextjs";
 
+import { AGENT_DEFAULT_MODEL } from "./agent-model-defaults";
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
@@ -52,7 +53,7 @@ import {
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
-import { createUntrustedContentHook } from "./untrusted-content";
+import { createGhBashFramingHook, createUntrustedContentHook } from "./untrusted-content";
 import { createGitLockMarkerHook } from "./git-lock-marker-telemetry";
 import { createChildLogger } from "./logger";
 
@@ -149,7 +150,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-5-5" (matches both legacy + cc paths today). */
+  /** Defaults to `AGENT_DEFAULT_MODEL` (server/agent-model-defaults.ts; matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -227,7 +228,8 @@ export interface AgentQueryOptionsArgs {
    * classifies fetched content with the heuristic scorer and ANNOTATES flagged results
    * (`additionalContext`). Resolved per session from the `untrusted-content-classify`
    * Flagsmith flag by the cc dispatcher; crons never pass `webEgress`, so they are
-   * untouched. Annotate-only: never blocks.
+   * untouched. Annotate-only: never blocks. The same flag (with web egress) also gates the
+   * static `gh` Bash framing note (#11076).
    */
   enableUntrustedContentClassify?: boolean;
   /**
@@ -235,10 +237,10 @@ export interface AgentQueryOptionsArgs {
    * it). When true the same hook also rewrites a FLAGGED WebFetch result into the
    * data-only envelope via `updatedToolOutput`. Resolved from the `untrusted-content-wrap`
    * flag. The single PostToolUse output rewriter (a second one would compete
-   * last-write-wins, ADR-287).
+   * last-write-wins, ADR-287); the Bash framing note is additive and never rewrites.
    */
   enableUntrustedContentWrap?: boolean;
-  /** Metadata-only telemetry context for the WebFetch hook (never content). */
+  /** Metadata-only telemetry context for the WebFetch and Bash framing hooks (never content). */
   untrustedContentTelemetry?: { workspaceId?: string; sessionId?: string };
   /**
    * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
@@ -394,7 +396,7 @@ export function buildAgentQueryOptions(
 
   const opts: any = {
     cwd: resolvedCwd,
-    model: args.model ?? "claude-sonnet-5-5",
+    model: args.model ?? AGENT_DEFAULT_MODEL,
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose
@@ -521,6 +523,9 @@ export function buildAgentQueryOptions(
       //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's
       //     "blind sandbox stdout, not mirrored to any queryable sink" gap. Path-agnostic
       //     (a wedge can happen on any dispatch), so it is unconditional, not opt-in.
+      //   - Flag-gated (web egress AND the classify flag): a second matcher "Bash" entry that adds
+      //     the static github data-only note after read-style `gh` commands (#11076). Additive
+      //     `additionalContext` only; it never rewrites, so the single-rewriter rule below holds.
       //   - Per-caller opt-ins (matcher "Skill"), each additive `additionalContext`:
       //     the L3 phase-surface hint (#5772 lever 1, ADR-070) and the declarative
       //     context_queries injection (#6046, ADR-086). Both use matcher "Skill"; the SDK
@@ -528,6 +533,12 @@ export function buildAgentQueryOptions(
       //     Concierge router opts in.
       PostToolUse: [
         { matcher: "Bash", hooks: [createGitLockMarkerHook(args.workspacePath)] },
+        // #11076 / ADR-287 addendum — static data-only framing note after read-style `gh` commands
+        // run through Bash. A SEPARATE entry (the git-lock entry above is untouched), under the same
+        // predicate as the WebFetch hook below. Annotate-only: it never rewrites output.
+        ...(args.webEgress && args.enableUntrustedContentClassify
+          ? [{ matcher: "Bash", hooks: [createGhBashFramingHook({ ...args.untrustedContentTelemetry })] }]
+          : []),
         ...(args.enablePhaseSurfaceHint
           ? [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]
           : []),

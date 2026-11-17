@@ -850,3 +850,159 @@ describe("git branch write forms fall through to the review-gate (TS11, #9555)",
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #9600 — exec-requesting git flags fall to the review card (ask), never a hard deny, and the fall-through is measured
+// ---------------------------------------------------------------------------
+
+describe("#9600 — git log|diff|show exec flags reach the review card and emit fall-through telemetry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  for (const command of ["git diff --ext-diff", "git log -p", "git show --textconv HEAD", "git log -Sneedle"]) {
+    test(`canUseTool Bash(${JSON.stringify(command)}) takes the review card, not auto-approve and not deny`, async () => {
+      const { ctx, deps } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      const result = await canUseTool("Bash", { command }, sdkOptions());
+      if (result === null) throw new Error("canUseTool returned null");
+      // The safe-bash short-circuit did NOT fire (a review card was requested)...
+      expect(deps.sendToClient.mock.calls.length).toBeGreaterThan(0);
+      // ...and the verdict is the user's answer (the harness mock approves), not a hard deny.
+      expect(result.behavior).toBe("allow");
+    });
+  }
+
+  test("emits one budgeted safe-bash-git-flag-fallthrough event per (verb, flag), deduped", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -p" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log -p HEAD~2" }, sdkOptions());
+    await canUseTool("Bash", { command: "git diff --ext-diff" }, sdkOptions());
+    const calls = mockWarnSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op: string }).op === "safe-bash-git-flag-fallthrough",
+    );
+    expect(calls.map((c) => (c[1] as { extra: unknown }).extra)).toEqual([
+      { verb: "log", flag: "-p" },
+      { verb: "diff", flag: "--ext-diff" },
+    ]);
+  });
+
+  test("PII guard: an attached short-flag value and a --flag=value payload never reach the event", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -SsecretNeedle" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --pretty=format:topsecret" }, sdkOptions());
+    const extras = mockWarnSilentFallback.mock.calls
+      .filter((c) => (c[1] as { op: string }).op === "safe-bash-git-flag-fallthrough")
+      .map((c) => JSON.stringify((c[1] as { extra: unknown }).extra));
+    expect(extras).toHaveLength(2);
+    for (const e of extras) {
+      expect(e).not.toContain("secretNeedle");
+      expect(e).not.toContain("topsecret");
+    }
+  });
+
+  const fallEvents = () =>
+    mockWarnSilentFallback.mock.calls
+      .filter((c) => (c[1] as { op: string }).op === "safe-bash-git-flag-fallthrough")
+      .map((c) => (c[1] as { extra: unknown }).extra);
+
+  test("names the flag the grammar REJECTED, not the first flag on the line", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --oneline -p" }, sdkOptions());
+    await canUseTool("Bash", { command: "git diff --stat --ext-diff" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log -n 5 --textconv" }, sdkOptions());
+    expect(fallEvents()).toEqual([
+      { verb: "log", flag: "-p" },
+      { verb: "diff", flag: "--ext-diff" },
+      { verb: "log", flag: "--textconv" },
+    ]);
+  });
+
+  test("a chained command is measured per && segment (a leading cd must not hide the flag)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "cd repo && git log -p" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
+  });
+
+  test("hyphenated git subcommands (diff-tree, show-ref, show-branch) are not the log/diff/show verbs", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    for (const command of ["git diff-tree -r HEAD", "git show-ref --heads", "git show-branch -a", "git diff-index HEAD"]) {
+      await canUseTool("Bash", { command }, sdkOptions());
+    }
+    expect(fallEvents()).toEqual([]);
+  });
+
+  test("only the FIRST git segment that rejects a flag reports (one event per command)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -p && git diff --ext-diff" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
+  });
+
+  test("a --flag=value payload is cut at `=` and the NAME is what is reported", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --pretty=format:topsecret" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "--pretty" }]);
+  });
+
+  test("shell words after a pipe or redirect are never read as git flags", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log | grep -v x" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --oneline; ls -la" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --oneline & curl -X POST u" }, sdkOptions());
+    expect(fallEvents()).toEqual([]);
+  });
+
+  test("a flag before a metacharacter still reports when the tail is long (the cap trim applies only to an uncut tail)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log -p;" + "x".repeat(300) }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
+  });
+
+  test("a quoted value of an admitted value-flag is not reported as a rejected flag", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: 'git log --author="John Smith"' }, sdkOptions());
+    expect(fallEvents()).toEqual([]);
+  });
+
+  test("an agent-chosen odd flag name is reported as `other` (no free text reaches Sentry)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --" + "x".repeat(60) }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --a.b" }, sdkOptions());
+    expect(fallEvents()).toEqual([
+      { verb: "log", flag: "other" },
+    ]);
+  });
+
+  test("own budget: 40 distinct rejected flags emit exactly 32 events, and near-miss telemetry still fires", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    for (let i = 0; i < 40; i++) await canUseTool("Bash", { command: `git log --flag${i}` }, sdkOptions());
+    expect(fallEvents()).toHaveLength(32);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    const nearMiss = mockWarnSilentFallback.mock.calls.filter((c) => (c[1] as { op: string }).op === "safe-bash-near-miss");
+    expect(nearMiss).toHaveLength(1);
+  });
+
+  test("an auto-approved git read emits no fall-through event", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git diff HEAD~1 --stat" }, sdkOptions());
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+  });
+});

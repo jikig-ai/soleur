@@ -4270,6 +4270,15 @@
   rerun failed before setup because the local PostgreSQL image was missing;
   restoring the image allowed the rerun. No live collection or Firestore
   write was performed.
+- Main reconciliation on 2026-11-17 targets
+  `881485bb543189d53c0217f3c8663ce449ee7fce`. The disclosure conflicts retain
+  the proposed attempt disclosure and main's newer approval-queue wording in
+  both mirrors; SHA pins were recomputed from the merged canonical files. The
+  legal SHA check passed and the mirror ratchet passed with an explicit warning:
+  80 existing drift lines remain beyond the target date, tracked by open issue
+  #7465. The ratchet is not a legal review or an equivalence proof. The merged
+  shell-test floor retains main's 656 pending the complete measured run.
+  Merged-head qualification, CLO review and final reconciliation remain open.
 
 ### Earlier local experiments — 2026-11-06
 

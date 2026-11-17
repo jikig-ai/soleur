@@ -3,14 +3,16 @@
 # next open owner-human act of the Inngest TLS arc (#10136): A5 (the scheduler signing-key rotation) and then
 # A6 (the "no known access" record). The A5 ask names the exact dispatch lines of the rotation route
 # (.github/workflows/inngest-key-rotate.yml, ADR-307, #10540): the read-only plan rehearsal, the rotate line, and the converge line
-# that finishes a failed run. Only the owner dispatches rotate and converge, each under a fresh in-session go naming the exact line;
-# the route prints the S5-A5-DONE line and never posts it. The owner has two ways to record A5 and A6, and the ask offers the easy
+# that finishes a failed run. Rotate and converge run under a fresh, per-command, in-session owner go naming the exact
+# line; under the 2026-11-08 ruling an agent may run that dispatch under the go - the key-rotate-approval reviewer click is
+# never delegated. The route prints the S5-A5-DONE line and never posts it. The owner has two ways to record A5 and A6, and the ask offers the easy
 # one first: ONE reply in their own session ("continue A5" / "continue A6", with their own sentence), after which the agent
 # measures, drafts and posts the evidence and a RELAYED line quoting that reply (technical-ruling-delegation.md, section 9). Or the
 # owner posts the DONE line themselves. A DONE line posted by an agent, or one posted by the workflow, does not satisfy the record.
 #
 # EXIT CONTRACT. 0 and 1 are NEVER taken: this probe never closes its tracker and never performs an act (A5 and A6
-# are owner-human: no agent runs rotate or converge, and no delegation covers the owner's own words, runbook
+# are owner-human: the go and the key-rotate-approval click are never delegated (an agent may run the dispatch under the go),
+# and no delegation covers the owner's own words, runbook
 # inngest-server.md, "Production Envelope for the post-merge acts"). It speaks the notify-only vocabulary of followthrough-convention.md:
 #   2 NOT YET            nothing for the owner to do yet
 #   3 CANNOT ESTABLISH   a read failed or returned something unparseable; never turned into an ask
@@ -307,7 +309,7 @@ main() {
     say "The legal bridge date is $BRIDGE (it can be extended once, to $LAPSE), so this is time-sensitive."
   fi
   [ -z "$bad_note" ] || say "$bad_note"
-  say "The rotation is one dispatch of the rotation workflow, and only you dispatch it. It needs your go in a session that names the exact line. A go on another issue does not count, and no agent runs it."
+  say "The rotation is one dispatch of the rotation workflow, run under your fresh, per-command go in this session naming the exact line - your agent may run the dispatch itself under that go; the approval click on key-rotate-approval is yours. A go on another issue does not count."
   say "Rehearsal (read-only, any session may run it; its verdict is plan_ok only when every check the rotation needs, except your confirm and attestation, passes, otherwise plan_blocked naming the first failing check): $PLAN_LINE"
   say "Rotation (your go must name this line; the date is the UTC date of the dispatch; keys=signing is the A5 set, keys=both is a superset that also rotates the event key in the same window): $ROTATE_LINE"
   say "If a job after the first apply fails, do not retry the rotation. Finish it with this line, which needs its own go from you (the confirm date is the UTC date of that dispatch): $CONVERGE_LINE"

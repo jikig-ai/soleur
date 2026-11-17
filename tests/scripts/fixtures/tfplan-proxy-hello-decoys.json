@@ -1,0 +1,113 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "tls_private_key.proxy_server[0]",
+      "mode": "managed",
+      "type": "tls_private_key",
+      "name": "proxy_server[0]",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "id": "x"
+        },
+        "after": {
+          "id": "x"
+        }
+      }
+    },
+    {
+      "address": "doppler_secret.proxy_tls_key[0]",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "proxy_tls_key[0]",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "x"
+        },
+        "after": {
+          "id": "x"
+        }
+      }
+    },
+    {
+      "address": "doppler_secret.proxy_tls_cert[0]",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "proxy_tls_cert[0]",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "id": "x"
+        },
+        "after": {
+          "id": "x"
+        }
+      }
+    },
+    {
+      "address": "random_bytes.other",
+      "mode": "managed",
+      "type": "random_bytes",
+      "name": "other",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "id": "x"
+        },
+        "after": {
+          "id": "x"
+        }
+      }
+    },
+    {
+      "address": "random_bytes.proxy_hello_hmac[0]",
+      "mode": "managed",
+      "type": "random_bytes",
+      "name": "proxy_hello_hmac",
+      "index": 0,
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "byte_length": 32
+        },
+        "after": {
+          "byte_length": 32
+        }
+      }
+    },
+    {
+      "address": "doppler_secret.proxy_hello_hmac_key[0]",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "proxy_hello_hmac_key",
+      "index": 0,
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "PROXY_HELLO_HMAC_KEY"
+        },
+        "after": {
+          "name": "PROXY_HELLO_HMAC_KEY"
+        }
+      }
+    }
+  ]
+}

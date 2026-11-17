@@ -1,0 +1,9 @@
+rep=r5 tree=b21d8dd5130d878a32acdf8d05879641b302a4b0
+loadavg_start=1.98 2.86 5.36 load1_used=1.98 max_load1=9.0
+2026-11-07T16:16:50Z
+foreign_runs_start: none
+loadavg_end=3.39 5.79 5.51
+max_load1_during=15.14
+2026-11-07T16:38:56Z
+foreign_runs_end: none
+CLEAN

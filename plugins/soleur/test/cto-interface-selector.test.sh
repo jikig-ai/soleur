@@ -278,6 +278,9 @@ evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor i
     [[ "$nd" == *"$kw"* ]] || { emit epic-nondelegable-list; break; }
   done
   [[ "$nd" == *'Undeferred Operator-Step'* && "$esec" == *'Operator-reserved:'* ]] || emit epic-reserved-routing
+  [[ "$esec" == *'full remaining grammar-compatible act chain'* && "$esec" == *'scope-mismatch'* ]] || emit epic-scope-full-chain
+  [[ "$esec" == *'Operator-authorizes:'* ]] || emit epic-authorizes-token
+  [[ "$esec" == *'Operator-authorizes:'* && "$esec" == *'does not go to the Undeferred Operator-Step Gate'* ]] || emit epic-authorizes-routing
   link="$(link_in "$esec" standing-delegation)"
   if [[ -z "$link" ]]; then emit epic-link-missing
   else target="$(resolve_link "$link")"; [[ -f "$target" ]] || emit epic-link-unresolved; fi
@@ -312,7 +315,7 @@ CTO_PROP_LIST=(base-unresolvable base-degenerate frontmatter-differs preserved-l
   epic-section-missing epic-verifier epic-hold-eval epic-gate-predicates epic-envelope epic-close-on-last
   epic-stall-issue epic-discovery epic-discovery-pick epic-verify-synopsis epic-section-title epic-hold-eval-exit0
   epic-epic-line epic-allowlist epic-no-render epic-receipt-format epic-receipt-wiring epic-stop-sequence
-  epic-ran-row epic-receipt-rules epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
+  epic-ran-row epic-receipt-rules epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing epic-scope-full-chain epic-authorizes-token epic-authorizes-routing
   epic-link-missing epic-link-unresolved epic-holds-link-missing epic-holds-link-unresolved
   repo-relative-path plugin-root-paths plugin-root-unset-undeclared format-duplicated)
 nprops=0
@@ -582,6 +585,12 @@ printf 'not the agent file\n' > "$M/degenerate-base.txt"
 row "V22 a degenerate base (not the real file)" "$CTO" "file:$M/degenerate-base.txt" base-degenerate; nrows=$((nrows + 1))
 sub_in v18b.md "$HDR_EPIC" 'Operator-reserved:' 'Reserved:'
 row "V18b the Operator-reserved marker dropped" "$M/v18b.md" "$BASE_REF" epic-reserved-routing; nrows=$((nrows + 1))
+sub_in v18c.md "$HDR_EPIC" 'Operator-authorizes:' 'Operator-reserved:'
+row "V18c the Operator-authorizes class collapsed into reserved" "$M/v18c.md" "$BASE_REF" epic-authorizes-token; nrows=$((nrows + 1))
+sub_in v18d.md "$HDR_EPIC" 'full remaining grammar-compatible act chain' 'next few acts'
+row "V18d the Scope drafting shrinks to the next few acts" "$M/v18d.md" "$BASE_REF" epic-scope-full-chain; nrows=$((nrows + 1))
+sub_in v18e.md "$HDR_EPIC" 'does not go to the Undeferred Operator-Step Gate' 'goes to the Undeferred Operator-Step Gate'
+row "V18e the authorizes item enters the Undeferred gate" "$M/v18e.md" "$BASE_REF" epic-authorizes-routing; nrows=$((nrows + 1))
 sub_in v26.md "$HDR_EPIC" 'one receipt per act' 'receipts as needed'
 row "V26 the receipt rules lose 'one receipt per act'" "$M/v26.md" "$BASE_REF" epic-receipt-rules; nrows=$((nrows + 1))
 sub_in v27.md "$HDR_EPIC" 'replace the plan-time row' 'keep both rows'

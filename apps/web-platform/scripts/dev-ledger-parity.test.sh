@@ -2913,7 +2913,7 @@ first_line() { grep -n -m1 -- "$1" "$CALLLOG" | cut -d: -f1 || true; }
 last_line() { grep -n -- "$1" "$CALLLOG" | tail -n 1 | cut -d: -f1 || true; }
 units() { grep -c '^psql -f' "$CALLLOG" || true; }
 zero_writes() { [[ "$(units)" == "0" && ! -s "$PAYLOAD" && ! -s "$BREACH" ]]; }
-one_unit() { [[ "$(units)" == "1" && ! -s "$BREACH" ]] && [[ "$(grep -c '^=== unit argv:' "$PAYLOAD" || true)" == "1" ]]; }
+one_unit() { [[ "$(units)" == "1" && ! -s "$BREACH" && "$(grep -c '^=== unit argv:' "$PAYLOAD" || true)" == "1" ]]; }
 cas_of() { printf "DELETE FROM public._schema_migrations WHERE filename = '%s' AND content_sha = '%s';" "$1" "$2"; }
 payload_line() { grep -nF -m1 -- "$1" "$PAYLOAD" | cut -d: -f1 || true; }
 

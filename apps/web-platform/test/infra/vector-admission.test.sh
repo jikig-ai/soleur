@@ -242,6 +242,15 @@ run_case "tagged sshd PRIORITY 4 (Failed publickey — was S1+S4 before)" \
 run_case "tagged webhook PRIORITY 6" \
   '{"_SYSTEMD_UNIT":"webhook.service","SYSLOG_IDENTIFIER":"webhook","PRIORITY":"6"}' \
   "host_scripts_journald"
+# #12007: the periodic SOLEUR_HOST_KERNEL marker (a plain 6-hourly oneshot's stdout, PRIORITY 6) ships through
+# Source 4 and nowhere else; both exclude mirrors keep Source 1's {3,4} arm and Source 2's {0,1,2} arm from also
+# admitting it, at any priority.
+run_case "tagged host-kernel-marker PRIORITY 6 (the periodic marker line)" \
+  '{"_SYSTEMD_UNIT":"host-kernel-marker.service","SYSLOG_IDENTIFIER":"host-kernel-marker","PRIORITY":"6"}' \
+  "host_scripts_journald"
+run_case "tagged host-kernel-marker PRIORITY 3 (a stderr fault line single-ships via Source 4, not the {3,4} arm)" \
+  '{"_SYSTEMD_UNIT":"host-kernel-marker.service","SYSLOG_IDENTIFIER":"host-kernel-marker","PRIORITY":"3"}' \
+  "host_scripts_journald"
 
 # Container rows: Docker's journald driver maps fd1 -> PRIORITY 6, fd2 -> 3.
 # Stderr used to double-ship via Source 1's {0..4} arm AND its container source.
@@ -404,6 +413,15 @@ for s in JOURNALD.values():
 emit("'systemd' is a member of NO SYSLOG_IDENTIFIER match array, include or exclude",
      "systemd" not in sysid, "members: %s" % sorted(sysid))
 
+HKM_TAG = "host-kernel-marker"
+emit("host-kernel-marker (#12007) is in Source 4's include AND in both exclude mirrors (the marker ships once; set-equality above covers the rest)",
+     HKM_TAG in (s4.get("include", {}).get("SYSLOG_IDENTIFIER") or [])
+     and HKM_TAG in (s1.get("exclude", {}).get("SYSLOG_IDENTIFIER") or [])
+     and HKM_TAG in (s2.get("exclude", {}).get("SYSLOG_IDENTIFIER") or []),
+     "S4-incl: %s S1-excl: %s S2-excl: %s" % (HKM_TAG in (s4.get("include", {}).get("SYSLOG_IDENTIFIER") or []),
+                                              HKM_TAG in (s1.get("exclude", {}).get("SYSLOG_IDENTIFIER") or []),
+                                              HKM_TAG in (s2.get("exclude", {}).get("SYSLOG_IDENTIFIER") or [])))
+
 emit("host_metrics is a non-journald source (metrics records never enter this evaluator)",
      S.get("host_metrics", {}).get("type") == "host_metrics",
      "type: %s" % S.get("host_metrics", {}).get("type"))
@@ -562,12 +580,12 @@ fi
 # its own if, exiting inside the block — a stranded run must never report clean.
 # Ratchet this number in the same commit that adds a case; it is the measured
 # green count, zero headroom (the convention the sibling suites use). ---
-if [[ "$cases" -lt 58 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %d verdicts recorded, floor is 58 — fixtures or pins were deleted\n' "$cases" >&2
+if [[ "$cases" -lt 61 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d verdicts recorded, floor is 61 — fixtures or pins were deleted\n' "$cases" >&2
   exit 1
 fi
 
-printf '\n=== %d ok, %d no (%d cases, floor 58) ===\n' "$ok_count" "$no_count" "$cases"
+printf '\n=== %d ok, %d no (%d cases, floor 61) ===\n' "$ok_count" "$no_count" "$cases"
 if (( no_count == 0 && ${#LEDGER[@]} == 0 )); then
   echo "PASSED"
   exit 0

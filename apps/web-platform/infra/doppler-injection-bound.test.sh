@@ -40,7 +40,8 @@
 #
 #   3. `runcmd` INVOCATIONS ARE EXCLUDED — structurally, not by predicate. Only `.service` files,
 #      `cat > … <<EOF` heredocs and cloud-init `content: |` blocks are enumerated, and a runcmd
-#      entry is none of those. The boot isolation self-check at cloud-init-inngest.yml:604-611
+#      entry is none of those. The boot isolation self-check (the `doppler secrets --only-names`
+#      pipeline in cloud-init-inngest.yml's provision script)
 #      must see ALL names to do its job; demanding a bound there would self-defeat the
 #      provision-time control this guard is the runtime half of. Pinned by a must-PASS row.
 #

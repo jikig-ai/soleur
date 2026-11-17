@@ -3,9 +3,17 @@
  *
  * Handles the minimum set of Supabase API endpoints needed by the web platform:
  * - Auth: getUser, token refresh
- * - REST: users table (T&C check, workspace lookup, onboarding state), conversations
+ * - REST: users table (T&C check, workspace lookup, onboarding state), conversations,
+ *   and empty `[]` defaults for inbox_item, email_triage_items and legal_acceptance
+ *   (an inbox visit renders an empty inbox instead of a 500)
  *
- * All responses use a single test user ("test-user-id") with matching auth tokens.
+ * Two synthesized users, each with its own session:
+ * - MOCK_USER ("test-user-id"): the default for every spec (`e2e/.auth/user.json`).
+ * - MOCK_FOUNDER (a fixed UUID): the founder legal-acceptance surface's configured
+ *   founder (`LEGAL_ACCEPTANCE_FOUNDER_ID` in playwright.config.ts mirrors its id;
+ *   `e2e/.auth/founder.json`). `/auth/v1/user` picks the user by the bearer JWT's
+ *   `sub` claim; `/auth/v1/token` refresh picks the session by `refresh_token`
+ *   and answers 400 for an unknown one, so a silent identity swap fails loudly.
  */
 import http from "node:http";
 import { TC_VERSION } from "../lib/legal/tc-version";
@@ -25,6 +33,20 @@ export const MOCK_USER = {
   updated_at: "2024-01-01T00:00:00Z",
 };
 
+type MockUser = typeof MOCK_USER;
+
+/**
+ * The legal-acceptance founder (#12197). Synthesized fixture
+ * (cq-test-fixtures-synthesized-only): a fixed example UUID on the reserved
+ * example.com domain. Keep the id in lockstep with LEGAL_ACCEPTANCE_FOUNDER_ID
+ * in the `e2e-auth` webServer env (playwright.config.ts).
+ */
+export const MOCK_FOUNDER: MockUser = {
+  ...MOCK_USER,
+  id: "00000000-0000-4000-8000-0000000000f0",
+  email: "founder@example.com",
+};
+
 /**
  * Mint a synthetic JWT-shaped string with a real `iat` claim. The
  * middleware's revocation gate (#4307) decodes the JWT payload to extract
@@ -34,7 +56,7 @@ export const MOCK_USER = {
  * the edge decoder is `Unsafe` (no signature check); the test mock
  * trusts itself.
  */
-function mintMockJwt(nowSeconds: number): string {
+function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER): string {
   const b64url = (obj: object) =>
     Buffer.from(JSON.stringify(obj))
       .toString("base64")
@@ -43,7 +65,7 @@ function mintMockJwt(nowSeconds: number): string {
       .replace(/\//g, "_");
   const header = b64url({ alg: "none", typ: "JWT" });
   const payload = b64url({
-    sub: MOCK_USER.id,
+    sub: user.id,
     aud: "authenticated",
     role: "authenticated",
     iat: nowSeconds,
@@ -62,6 +84,41 @@ export const MOCK_SESSION = {
   refresh_token: "test-refresh-token",
   user: MOCK_USER,
 };
+
+export const MOCK_FOUNDER_SESSION = {
+  access_token: mintMockJwt(MOCK_NOW_SECONDS, MOCK_FOUNDER),
+  token_type: "bearer",
+  expires_in: 86400,
+  expires_at: MOCK_NOW_SECONDS + 86400,
+  refresh_token: "test-founder-refresh-token",
+  user: MOCK_FOUNDER,
+};
+
+/**
+ * The `sub` claim of an unsigned bearer JWT, or null. Keyed on `sub`, never on
+ * token-string equality: tokens embed Date.now() at module load, so a second
+ * instance of this module (the config's import, a worker) mints other strings.
+ */
+function bearerSub(authorization: string): string | null {
+  const payload = authorization.replace(/^Bearer\s+/, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: unknown };
+    return typeof json.sub === "string" ? json.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Buffer a request body as text (the refresh grant carries its token in the JSON body). */
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
 
 /** Cookie name the Supabase SSR client uses for localhost URLs. */
 export const AUTH_COOKIE_NAME = "sb-localhost-auth-token";
@@ -105,7 +162,7 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           return;
         }
         res.writeHead(200);
-        res.end(JSON.stringify(MOCK_USER));
+        res.end(JSON.stringify(bearerSub(auth) === MOCK_FOUNDER.id ? MOCK_FOUNDER : MOCK_USER));
         return;
       }
 
@@ -118,8 +175,36 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           res.end(JSON.stringify({ error: "invalid_grant", error_description: "Invalid code" }));
           return;
         }
-        res.writeHead(200);
-        res.end(JSON.stringify(MOCK_SESSION));
+        // Any grant other than a refresh is not modelled: a 400, never a session.
+        if (grantType !== "refresh_token") {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "unsupported_grant_type", error_description: "Not modelled" }));
+          return;
+        }
+        // Session refresh: the session follows the refresh token in the body.
+        // An unknown token is a 400, so a silent identity swap fails loudly.
+        void readBody(req).then(
+          (raw) => {
+            let refreshToken: unknown;
+            try {
+              refreshToken = (JSON.parse(raw || "{}") as { refresh_token?: unknown }).refresh_token;
+            } catch {
+              refreshToken = undefined;
+            }
+            const session = [MOCK_FOUNDER_SESSION, MOCK_SESSION].find((x) => x.refresh_token === refreshToken);
+            if (session === undefined) {
+              res.writeHead(400);
+              res.end(JSON.stringify({ error: "invalid_grant", error_description: "Invalid Refresh Token" }));
+              return;
+            }
+            res.writeHead(200);
+            res.end(JSON.stringify(session));
+          },
+          () => {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: "invalid_request", error_description: "Unreadable body" }));
+          },
+        );
         return;
       }
 
@@ -178,6 +263,18 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       if (url.pathname === "/rest/v1/messages") {
         res.writeHead(200);
         res.end(JSON.stringify([]));
+        return;
+      }
+
+      // Empty defaults for the Inbox sources (GET /api/inbox) and the founder's
+      // legal_acceptance rows (#12197): an inbox visit renders an empty inbox,
+      // and a founder with no recorded decision sees every declared text pending.
+      if (
+        url.pathname === "/rest/v1/inbox_item" ||
+        url.pathname === "/rest/v1/email_triage_items" ||
+        url.pathname === "/rest/v1/legal_acceptance"
+      ) {
+        sendRows([]);
         return;
       }
 

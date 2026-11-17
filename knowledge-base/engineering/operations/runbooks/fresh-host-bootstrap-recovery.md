@@ -53,6 +53,10 @@ There is **no SSH remediation**. The fresh-host path runs only cloud-init.
 3. **`terraform apply` to RECREATE the fresh host** (re-runs cloud-init from scratch).
    For a `verify` (hash-mismatch) failure specifically: ensure the applied Terraform
    commit == the image build commit, else the boot aborts again **by design**.
+   When the recreated host is `hcloud_server.web["web-2"]` (or the apply also replaces the GA pool),
+   pass `-var=web2_lb_weight=0`: the variable defaults to 1 (live), so an empty replacement host
+   would otherwise enter the LB pool at weight 1 before the serve gate chain has proven it. Re-serve
+   afterwards with `cf-lb-overlay` `arm=ga-pool-update mode=serve`.
 4. Confirm recovery: `app.soleur.ai/health` reports the expected `build_sha` (and, once #5933
    lands, the per-host uptime monitor clears).
 

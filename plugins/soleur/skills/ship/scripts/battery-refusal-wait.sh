@@ -59,7 +59,11 @@
 # gate and a deferral there would delete the only blocking one. The predicate follows
 # scripts/test-all.sh (the `_diff_names` assembly and `_infra_in_diff`): the same two triggers,
 # rename SOURCES included (`--name-status -M`), untracked files included, unanchored substring
-# match. It is STRICTER on failure: any git read that fails, a grep that errors, or an empty
+# match. Each `git diff` read ends in --ignore-submodules=none (a gitlink hidden by config or a
+# committed ignore=all is still listed; #12332). The NUL-delimited form (-z --no-renames) is
+# deliberately NOT used here: the unanchored substring match is blind to C-quoting and
+# `--name-status -M` already lists rename sources, so the predicate keeps following test-all.sh.
+# It is STRICTER on failure: any git read that fails, a grep that errors, or an empty
 # change set is "unresolved". Git runs from the repo root with the same GIT_* variables cleared
 # as the runner. The suite pins both trigger literals against the live runner.
 #
@@ -270,16 +274,16 @@ done
 infra_state() { # echoes clean | infra | unresolved
   local top names="" out lit rc hit=0
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo unresolved; return 0; }
-  out="$(git -C "$top" -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)" || { echo unresolved; return 0; }
+  out="$(git -C "$top" -c core.quotePath=false diff --name-only origin/main...HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }
   names="${names}
 ${out}"
-  out="$(git -C "$top" -c core.quotePath=false diff --name-only HEAD 2>/dev/null)" || { echo unresolved; return 0; }
+  out="$(git -C "$top" -c core.quotePath=false diff --name-only HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }
   names="${names}
 ${out}"
-  out="$(git -C "$top" -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null)" || { echo unresolved; return 0; }
+  out="$(git -C "$top" -c core.quotePath=false diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }
   names="${names}
 ${out}"
-  out="$(git -C "$top" -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null)" || { echo unresolved; return 0; }
+  out="$(git -C "$top" -c core.quotePath=false diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null)" || { echo unresolved; return 0; }
   names="${names}
 ${out}"
   out="$(git -C "$top" ls-files --others --exclude-standard 2>/dev/null)" || { echo unresolved; return 0; }

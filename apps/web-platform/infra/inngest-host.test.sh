@@ -421,13 +421,15 @@ grep -qF 'ip saddr { ${web_host_private_ips} } accept' "$CLOUD_INIT" \
 #     renamed/absent live local (a vacuous PASS). The CANON derivation assumes the only quoted
 #     `private_ip = "10.0.1.X"` assignments in variables.tf are var.web_hosts entries (true today;
 #     mirrors cutover-inngest-workflow.test.sh).
+# #9421 Part 2a: the local is no longer a literal; it is DERIVED from var.web_hosts, so it equals the
+# roster by construction. Pin the derivation itself (web-hosts-generic.test.sh evaluates it under
+# terraform console and pins every workflow copy to the value).
 ALLOWLIST_SET=$(sed 's/#.*//' "$HOST_TF" \
-  | grep -oE 'web_host_private_ips[[:space:]]*=[[:space:]]*"[0-9.,]+"' \
-  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
+  | grep -cE '^[[:space:]]*web_host_private_ips[[:space:]]*=[[:space:]]*join\(",", \[for k in sort\(keys\(var\.web_hosts\)\) : var\.web_hosts\[k\]\.private_ip\]\)[[:space:]]*$' || true)
 CANON_WEB_HOSTS=$(sed 's/#.*//' "$VARIABLES_TF" \
   | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' \
   | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
-if [[ -n "$ALLOWLIST_SET" && -n "$CANON_WEB_HOSTS" && "$ALLOWLIST_SET" == "$CANON_WEB_HOSTS" ]]; then
+if [[ "$ALLOWLIST_SET" == "1" && -n "$CANON_WEB_HOSTS" ]]; then
   pass
 else
   fail "web_host_private_ips ('$ALLOWLIST_SET') must equal var.web_hosts private_ip set ('$CANON_WEB_HOSTS') — roster drift (#6608)"
@@ -435,8 +437,8 @@ fi
 
 # 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
 #     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
-HOST_TF_NOCOMMENT=$(sed 's/#.*//' "$HOST_TF")
-if printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -cE 'web_host_private_ips[[:space:]]*=' >/dev/null && printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -E 'web_host_private_ips[[:space:]]*=' | grep -cE '10\.0\.1\.(20|30)' >/dev/null; then
+# Since #9421 the local is derived from var.web_hosts, so the roster it derives from is what must exclude them.
+if [[ -z "$CANON_WEB_HOSTS" ]] || grep -qE '10\.0\.1\.(20|30)(,|$)' <<<"$CANON_WEB_HOSTS"; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"
 else
   pass
@@ -505,11 +507,11 @@ fi
 ISO_SRC="${_G1_TMP}/provision-script.sh"
 awk '/^  - path: \/usr\/local\/bin\/soleur-inngest-provision$/{f=1;next} f&&/^  - path: /{f=0} f&&/^[^[:space:]]/{f=0} f' "$CLOUD_INIT" > "$ISO_SRC"
 grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$ISO_SRC" \
-  && grep -qF '"$n_inngest" -lt 6' "$ISO_SRC" \
-  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 6"
+  && grep -qF 'i<6' "$ISO_SRC" \
+  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is i<6"
 # The old floor must be gone.
-if grep -qF '"$n_inngest" -lt 5' "$ISO_SRC"; then
-  fail "isolation floor must be -lt 6, not the old -lt 5"
+if grep -qF 'i<5' "$ISO_SRC"; then
+  fail "isolation floor must be i<6, not the old i<5"
 else
   pass
 fi
@@ -523,12 +525,20 @@ fi
 #     Instead, extract the guard's OWN bytes and replay its predicate over synthesized name
 #     sets, so the assertions are about the decision the host actually makes.
 #     Mirrors registry-boot-guard.test.sh's extract-and-replay idiom (the sibling host).
-GUARD_RE="$(grep -E "n_inngest=.*grep -Ec" "$ISO_SRC" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
-FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$ISO_SRC" | grep -oE '[0-9]+' | sed -n '1p')"
+# The admit-regex lives in ONE inline literal, `awk -v re='...'`, feeding the single awk pass
+# that counts admissions AND extracts the foreign names (#12707). A second literal copy would
+# be a drift pair: the foreign filter could quietly admit a different set than the counter.
+# Extract it from the -v argument, then pin that it occurs exactly once.
+GUARD_RE="$(grep -oE "awk -v re='[^']*'" "$ISO_SRC" | head -1 | sed "s/^awk -v re='//; s/'\$//")"
+FLOOR="$(grep -oE 'i<[0-9]+' "$ISO_SRC" | grep -oE '[0-9]+' | sed -n '1p')"
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
 [[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from the provision script in $CLOUD_INIT (the replay below would be vacuous)"
 [[ "$FLOOR" == "6" ]] && pass || fail "could not extract the cardinality floor, or it is not 6 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
+# SINGLE-SOURCE consumption: exactly one `awk -v re='...'` literal — a second copy is exactly
+# the drift surface this shape removes.
+[ "$(grep -cF "awk -v re='" "$ISO_SRC")" = 1 ] \
+  && pass || fail "the isolation check must hold the admit-regex in exactly one awk -v re literal (#12707)"
 
 # Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
 # non-DOPPLER set is a SUBSET of the allowlist (n_total == n_inngest) AND meets the floor.
@@ -593,13 +603,29 @@ DARK6=("${DARK5[@]}" INNGEST_CONFIG_DIGEST)
 [[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI INNGEST_BETTERSTACK_LOGS_TOKEN)" == FATAL ]] && pass || fail "INNGEST_BETTERSTACK_LOGS_TOKEN must FATAL — BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL member, not nested (#6197)"
 # DOPPLER_* builtins are stripped before counting.
 [[ "$(isolation_decision "${DARK6[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
+# (#12695 / #12707) the SIXTH instance of this class — the first measured with per-attempt
+# counted telemetry, admitted: the trace-retention
+# unit's ExecStart is `doppler run --config prd -- inngest-trace-retention.sh`, so the four
+# env_int tuning knobs ARE names this host's runtime consumes. MAX_BATCHES written into
+# soleur-inngest/prd FATAL'd every provision attempt of the Nov-11 host for ~17h — each of the
+# four must pass alone (no riding on a sibling's admission), including on the minimal dark set.
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_DAYS)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_DAYS must PASS — env-injected into inngest-trace-retention.service"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_BATCH)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_BATCH must PASS — env-injected into inngest-trace-retention.service"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_MAX_BATCHES)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_MAX_BATCHES must PASS — the #12695 offender (inferred from add/remove timing; .foreign= names the next one)"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_SIZE_BUDGET_BYTES)" == PASS ]] && pass || fail "INNGEST_TRACE_RETENTION_SIZE_BUDGET_BYTES must PASS — env-injected into inngest-trace-retention.service"
+# Nesting and anchoring hold for the new member: a bare TRACE_RETENTION_* name (no INNGEST_
+# prefix) is foreign, a suffix lookalike is foreign, and the override seams the script reads
+# via os.environ.get stay UNADMITTED — a debug override in prd trips the check on purpose.
+[[ "$(isolation_decision "${DARK5[@]}" TRACE_RETENTION_MAX_BATCHES)" == FATAL ]] && pass || fail "a BARE TRACE_RETENTION_MAX_BATCHES (no INNGEST_ prefix) must FATAL — nested inside the group"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_MAX_BATCHES_EXTRA)" == FATAL ]] && pass || fail "INNGEST_TRACE_RETENTION_MAX_BATCHES_EXTRA must FATAL — the alternation is anchored"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_MARKER)" == FATAL ]] && pass || fail "INNGEST_TRACE_RETENTION_MARKER must FATAL — an os.environ.get override seam, not a tuning knob"
+[[ "$(isolation_decision "${DARK6[@]}" INNGEST_TRACE_RETENTION_PSQL)" == FATAL ]] && pass || fail "INNGEST_TRACE_RETENTION_PSQL must FATAL — an os.environ.get override seam, not a tuning knob"
 
 # 9c. Pin the COMPARISON OPERATOR. The replay above re-derives the predicate, so it cannot see
-#     an inversion in the file itself: flipping -ne to -eq makes an isolated host FATAL and a
-#     LEAKY one boot clean, with every behavioral case above still green.
-# shellcheck disable=SC2016  # literal $n_total/$n_inngest is intentional — matching the file's text
-grep -qF '[ "$n_total" -ne "$n_inngest" ]' "$ISO_SRC" \
-  && pass || fail "the isolation self-check must compare with -ne (an -eq inversion admits an over-scoped credential and rejects an isolated one)"
+#     an inversion in the file itself: flipping NR!=i to NR==i makes an isolated host FATAL and
+#     a LEAKY one boot clean, with every behavioral case above still green.
+grep -qF 'exit(NR!=i||i<6)' "$ISO_SRC" \
+  && pass || fail "the isolation self-check must exit on NR!=i||i<6 — a ||->&& mutation admits an all-admitted under-floor set (and an EMPTY read) while every member-level pin stays green"
 
 # 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
 #     claim. `curl -fsS --max-time 10 ""` exits 2 ("blank argument where content is

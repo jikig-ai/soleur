@@ -173,7 +173,7 @@ test_throwaway_posts_no_comment() {
   setup
   make_enum_stub '[]'
   run_verify >/dev/null 2>&1 || true
-  local body; body=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1)
+  local body; body=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1) || true
   assert_contains "throwaway armed at all" "$body" "named-check"
   assert_not_contains "throwaway is NOT an issue-comment (no real-issue post)" "$body" '"type":"issue-comment"'
   assert_contains "throwaway uses the sentinel unregistered check" "$body" "cutover-verify-noop"
@@ -228,8 +228,8 @@ test_happy_wipe_order() {
   assert_contains "starts inngest-server" "$sclog" "start inngest-server.service"
   # stop must come before start
   local stop_ln start_ln
-  stop_ln=$(grep -n 'stop inngest-server' "${MOCKBIN}/systemctl.log" | head -1 | cut -d: -f1)
-  start_ln=$(grep -n 'start inngest-server' "${MOCKBIN}/systemctl.log" | head -1 | cut -d: -f1)
+  stop_ln=$(grep -n 'stop inngest-server' "${MOCKBIN}/systemctl.log" | head -1 | cut -d: -f1) || true
+  start_ln=$(grep -n 'start inngest-server' "${MOCKBIN}/systemctl.log" | head -1 | cut -d: -f1) || true
   assert_eq "stop precedes start" "1" "$([[ "$stop_ln" -lt "$start_ln" ]] && echo 1 || echo 0)"
   assert_eq "data dir wiped (main.db gone)" "0" "$([[ -e "${MOCKBIN}/inngest-data/main.db" ]] && echo 1 || echo 0)"
   # terminal state file written with exit_code 0
@@ -240,10 +240,10 @@ test_happy_wipe_order() {
 # --- Test 5: marker id is unique across runs (no fixed id) ---
 test_marker_unique() {
   setup; make_enum_stub '[]'; run_verify >/dev/null 2>&1 || true
-  local id1; id1=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1 | sed 's/^ARM_BODY: //' | jq -r .reminder_id)
+  local id1; id1=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1 | sed 's/^ARM_BODY: //' | jq -r .reminder_id) || true
   teardown
   setup; make_enum_stub '[]'; sleep 1; run_verify >/dev/null 2>&1 || true
-  local id2; id2=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1 | sed 's/^ARM_BODY: //' | jq -r .reminder_id)
+  local id2; id2=$(grep '^ARM_BODY:' "$ARM_LOG" | head -1 | sed 's/^ARM_BODY: //' | jq -r .reminder_id) || true
   teardown
   assert_eq "two runs produce distinct marker ids" "1" "$([[ "$id1" != "$id2" ]] && echo 1 || echo 0)"
   assert_contains "marker id is a recognizable sentinel" "$id1" "wiped-volume-verify"

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   archiveEligibility,
+  isArchiveCandidate,
   keyOf,
   type BulkItemRef,
 } from "@/lib/inbox-archive-eligibility";
@@ -25,7 +26,10 @@ export function useRowSelection(items: MergedInboxItem[] | undefined) {
   useEffect(() => {
     if (!items) return;
     const archivable = new Set(
-      items.filter((i) => archiveEligibility(i) === "ok").map(keyOf),
+      items
+        .filter(isArchiveCandidate)
+        .filter((i) => archiveEligibility(i) === "ok")
+        .map(keyOf),
     );
     setSelected((prev) => {
       if ([...prev].every((k) => archivable.has(k))) return prev;
@@ -46,7 +50,9 @@ export function useRowSelection(items: MergedInboxItem[] | undefined) {
   /** Toggle-all over a section's archivable rendered rows: if every archivable
    * row is selected, deselect them; otherwise select them all. */
   const toggleSection = useCallback((section: MergedInboxItem[]) => {
-    const archivable = section.filter((i) => archiveEligibility(i) === "ok");
+    const archivable = section
+      .filter(isArchiveCandidate)
+      .filter((i) => archiveEligibility(i) === "ok");
     setSelected((prev) => {
       const next = new Set(prev);
       const allSelected =

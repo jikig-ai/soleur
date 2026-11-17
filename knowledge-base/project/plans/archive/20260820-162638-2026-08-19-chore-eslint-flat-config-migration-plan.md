@@ -448,7 +448,7 @@ and a review panel should be run before merge if agent spawning is authorised.
 
    > **Corrected 2026-08-19 at implementation exit.** This criterion originally named the floors
    > `1.1.12 / 2.0.2 / 3.0.1 / 4.0.1`. Those are the patched set for ONE advisory
-   > (GHSA-v6h2-p8h4-qcjw, LOW). The npm advisory API returns **six** advisories for this package,
+   > (LOW). The npm advisory API returns **six** advisories for this package,
    > three of them HIGH; the union of their vulnerable ranges puts the real floors at
    > **1.1.18 / 2.1.4 / (no patched 3.x) / (no patched 4.x) / 5.0.9**. A guard encoding the
    > original numbers would have passed a `1.1.12` that is vulnerable to two HIGH advisories, so

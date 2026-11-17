@@ -118,6 +118,7 @@ a Blocked heading|owner-list-blocked.md|1|owner-list-untagged|1|-
 a Waiting on operator heading|owner-list-waiting.md|1|owner-list-untagged|1|-
 an Action required heading|owner-list-action-required.md|1|owner-list-untagged|1|-
 a heading that only starts like an owner heading|owner-list-boundary.md|0|-|0|-
+the authorizes Needs-you line form is a tagged ACTION item|owner-list-authorizes.md|0|-|0|-
 EOF
 while IFS='|' read -r name fixture want_rc reason want_n absent; do
   [[ -n "$name" ]] || continue
@@ -203,6 +204,12 @@ assert_eq "1" "$(last_rc)" "a 1) numbered item is a list item"
 printf '## Needs you\n\n- Sign off needed (operator: brand)\n- Awaiting sign-off from the CTO (operator: scope)\n- cmo-review pending (operator: brand)\n' > "$TMP/agents.md"
 run "$GATE" --report "$TMP/agents.md"
 assert_eq "2" "$(count_reason agent-owned-step)" "sign-off from the CTO and a CMO review are agent steps; a bare sign-off is not"
+
+echo "=== Arm 2b: the Operator-authorizes Needs-you line form is pinned in section 8.1c ==="
+TRD="$REPO_ROOT/plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md"
+assert_eq "1" "$(grep -cF 'Say go and I run it: <the act> - only you can say go' "$TRD" || true)" "8.1c names the authorizes Needs-you line form"
+assert_eq "1" "$([ "$(grep -cF '`Operator-authorizes:`' "$TRD" || true)" -ge 1 ] && echo 1 || echo 0)" "the reference names `Operator-authorizes:` somewhere"
+assert_eq "1" "$([ "$(grep -c 'hr-menu-option-ack-not-prod-write-auth' "$TRD" || true)" -ge 1 ] && echo 1 || echo 0)" "the authorizes form cites the per-command go rule"
 
 echo "=== Arm 3: usage and unmeasurable input ==="
 run "$GATE" --report
@@ -327,6 +334,7 @@ cat > "$NEG" <<'EOF'
 ## Open questions
 ## Needs review
 ## Blockers
+## Say go and I run it
 ## Owner
 ## Waiting
 ## Directors
@@ -508,8 +516,8 @@ echo "=== Arm 5: assertion-count floor ==="
 # The floor reports by printf + exit 1, never through assert_eq/print_results it backstops. The threshold and the count
 # are literal bindings on the lines IMMEDIATELY above the `if` (scripts/guard-vacuity-floor.test.sh slices backward over
 # contiguous assignments), so a neutered helper leaves PASS+FAIL at 0 and this fires.
-printf 'owner-list suite: %d assertions ran (floor 511)\n' "$((PASS + FAIL))"
-FLOOR=511
+printf 'owner-list suite: %d assertions ran (floor 519)\n' "$((PASS + FAIL))"
+FLOOR=519
 ran=$((PASS + FAIL))
 if (( ran < FLOOR )); then
   printf '[FATAL] assertion floor: only %d assertions ran, the floor is %d -- the dispatch was neutered or arms were skipped (anti-vacuity)\n' "$ran" "$FLOOR" >&2

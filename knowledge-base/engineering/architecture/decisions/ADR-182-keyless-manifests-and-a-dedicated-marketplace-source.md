@@ -372,3 +372,12 @@ CLI 2.1.228; they were not repeated. What was re-run is the delivery canary itse
 `CLI_VERSION` moved: `compared=2084 expected=2084`, completeness, integrity and freshness all green, no
 `installpath_unresolved`. That shows the canary still parses this CLI's output and still compares the delivered plugin; it
 does not show the destruction half or the `autoUpdate` behaviour above still hold on 2.1.311.
+
+## Addendum — 2026-11-10 (#12514)
+
+The canary now installs CLI 2.1.321 (`CLI_VERSION` in `scheduled-marketplace-drift.yml`, in lockstep with the
+web-platform pins). Nothing above was re-measured on 2.1.321, and unlike the 2026-11-05 bump the delivery canary was
+not run against a scratch install before `CLI_VERSION` moved. The first scheduled run on `main` after the merge is
+the first exercise of the canary on this CLI; the follow-through probe
+`scripts/followthroughs/claude-cli-fable-bump-12514.sh` reads it. Until it is read green, whether the canary still
+parses this CLI's output is unverified.

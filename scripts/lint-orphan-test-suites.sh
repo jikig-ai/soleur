@@ -266,7 +266,7 @@ LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
 
 # Glob members the loop special-cases AND diverts to literal `run_suite … bash <file>` argv
 # land in BOTH surfaces — subtract only those, or the double-coverage check reds on a
-# legitimate diversion (#11562's ci-pr-affected-replay split). A special case that emits
+# legitimate diversion (#11562's retired replay-split shape). A special case that emits
 # skip_suite only (c4-from-components) stays glob-covered; surface 1 never saw it anyway.
 grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | LC_ALL=C sort -u > "$WORK/glob_special"
 comm -12 "$WORK/glob_special" "$WORK/raw1" > "$WORK/glob_diverted"
@@ -339,7 +339,7 @@ fi
 # workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
-# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds seven as of #9927 (the count had already drifted to six) -- registered both
+# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds eight as of #12396 (seven as of #9927, six before that) -- registered both
 # locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
 # listed in DOUBLE_COVERED_ACK below and the check fails on any suite not in that array.
 #
@@ -350,7 +350,10 @@ fi
 # real and now visible: the covered set is a UNION, so two surfaces matching one suite
 # make a single-surface de-registration a silent no-op, and any mutation row aimed at it
 # passes green while the suite stops running.
-grep -hEo 'run:[[:space:]]+(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+# An optional `exec` prefix is the same registration: `exec bash <suite>` replaces the step shell with the
+# suite so the runner's TERM reaches the suite's own trap (egress-injector-spike.yml, #12517). Both workflow
+# surfaces accept it; the sed below strips everything up to `bash`, so the derived path is unchanged.
+grep -hEo 'run:[[:space:]]+(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw5all" || true
 LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
@@ -367,9 +370,102 @@ LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
 # have been to excuse it with an exclusion (a false statement about a suite that runs) or to
 # stop believing the report. Disjoint from 3 and 5 by construction: both of those require
 # `run:` on the same line.
-grep -hEo '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+grep -hEo '^[[:space:]]*(exec[[:space:]]+)?(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
   "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
   | LC_ALL=C sort -u > "$WORK/raw6" || true
+
+# --- Consumed-workflows enumeration completeness (#9340, ADR-262 addendum) ---------------------
+# LINT_ORPHAN_BATTERY_PATHS narrowed its .github/workflows edge from the whole directory to the
+# committed enumeration in scripts/lint-orphan-consumed-workflows.txt: only a workflow whose text
+# can feed surfaces 5/6 — one that names `.test.sh` — can change the covered set, so only those
+# workflows arm the battery. That is sound ONLY while the enumeration stays COMPLETE in the one
+# direction that matters: every workflow matching `grep -lE '\.test\.sh'` must be listed, else a
+# new workflow carrying suite registrations changes surfaces 5/6 while the battery stays declined
+# on its own diff. (The reverse — a listed workflow that stops consuming — over-arms, never
+# under-arms, so it is allowed rather than flagged. The enumeration file is itself an element of
+# LINT_ORPHAN_BATTERY_PATHS, which is what re-arms the battery on the same diff that updates it.)
+#
+# This arm lives in the UNGATED leg on purpose: it runs on every diff, so it cannot be declined
+# out of existence by the gate it protects.
+ENUM_FILE="$REPO_ROOT/scripts/lint-orphan-consumed-workflows.txt"
+# *.yml AND *.yaml — Actions accepts both spellings, so globbing only one would silently stop
+# seeing a consumed workflow the day somebody commits the other form. nullglob keeps an absent
+# *.yaml glob from reaching grep as a literal pattern (today the directory carries zero).
+shopt -s nullglob
+_consumed_workflows=( "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml )
+shopt -u nullglob
+_consumed_rc=0
+if (( ${#_consumed_workflows[@]} > 0 )); then
+  grep -lE '\.test\.sh' "${_consumed_workflows[@]}" 2>/dev/null \
+    | sed "s|^${REPO_ROOT}/||" | LC_ALL=C sort -u > "$WORK/consumed_live" || _consumed_rc=$?
+else
+  : > "$WORK/consumed_live"
+  _consumed_rc=1
+fi
+# AN EMPTY OR BROKEN DERIVATION IS A NAMED ERROR, never a bare `set -e` abort: under pipefail a
+# grep exit 1 ("no matches") or >= 2 (unreadable operand) would kill the script mid-pipeline
+# with nothing attributable, and an empty live set makes `live ⊆ enumeration` below pass
+# VACUOUSLY — the worst shape, the guard certifying a subset while reporting completeness.
+if (( _consumed_rc >= 2 )); then
+  echo "ERROR: the consumed-workflow derivation FAILED — grep exited ${_consumed_rc} over the .github/workflows glob (an unreadable operand), so the comparisons below measured an unreadable input rather than the consumed set." >&2
+  fails=$((fails + 1))
+fi
+_consumed_n=$(wc -l < "$WORK/consumed_live" | tr -d ' ')
+# VACUITY FLOOR. The floor is a tripwire for a NARROWING derivation, not a target — live is
+# ~60 members today; a glob or pattern that stops seeing workflows leaves a shorter set that
+# the comm arms compare "successfully" against the enumeration.
+if (( _consumed_n < 20 )); then
+  echo "ERROR: the consumed-workflow derivation enumerated ${_consumed_n} workflow(s) naming .test.sh, below the tripwire of 20 (live is ~60) -- the glob or pattern narrowed, so the completeness comparison below would pass vacuously while a consumed workflow arms nothing." >&2
+  fails=$((fails + 1))
+fi
+if [[ ! -s "$ENUM_FILE" ]]; then
+  echo "ERROR: scripts/lint-orphan-consumed-workflows.txt is missing or empty -- LINT_ORPHAN_BATTERY_PATHS gates on it, so its absence would let a consumed-workflow addition arm nothing. Every workflow matching 'grep -lE \"\\\\.test\\\\.sh\" .github/workflows/*.yml' must be listed." >&2
+  fails=$((fails + 1))
+else
+  _enum_sorted=1
+  if ! LC_ALL=C sort -c "$ENUM_FILE" 2>/dev/null; then
+    _enum_sorted=0
+    echo "ERROR: scripts/lint-orphan-consumed-workflows.txt is not sorted -- it is a committed sorted enumeration; unsorted members churn diffs and desynchronise it from the live computation. Run 'LC_ALL=C sort -o scripts/lint-orphan-consumed-workflows.txt scripts/lint-orphan-consumed-workflows.txt' on it." >&2
+    fails=$((fails + 1))
+  fi
+  # comm READS AN UNSORTED INPUT AS A DIFF IT INVENTED: running it on a file sort -c just
+  # rejected emits spurious "missing member" errors beneath the real one, so every comparison
+  # below is gated on the sort check.
+  if (( _enum_sorted )); then
+    while IFS= read -r _missing_wf; do
+      [[ -n "$_missing_wf" ]] || continue
+      echo "ERROR: ${_missing_wf} names .test.sh (it can feed surfaces 5/6) but is missing from scripts/lint-orphan-consumed-workflows.txt -- the lint-orphan battery would stay declined on the diff that adds it. Add the member (sorted) to BOTH the .txt and the LINT_ORPHAN_BATTERY_PATHS enumeration block in scripts/lib/test-relevance-paths.sh, or stop it referencing .test.sh." >&2
+      fails=$((fails + 1))
+    done < <(LC_ALL=C comm -23 "$WORK/consumed_live" "$ENUM_FILE")
+
+    # STRICT EQUALITY with the array-side copy. The .txt and the .github/workflows/* block of
+    # LINT_ORPHAN_BATTERY_PATHS are TWO COPIES of one set, bound until now only by a prose
+    # "byte-identical" comment — nothing enforced it. The lib is DECLARATIONS-ONLY (inert) and
+    # is sourced again below for the relevance arrays; if it is absent the REL_LIB arm below
+    # names that, so this arm just has nothing to compare against.
+    if [[ -f "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" ]]; then
+      # shellcheck source=scripts/lib/test-relevance-paths.sh
+      source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
+      printf '%s\n' ${LINT_ORPHAN_BATTERY_PATHS[@]+"${LINT_ORPHAN_BATTERY_PATHS[@]}"} \
+        | grep '^\.github/workflows/' | LC_ALL=C sort -u > "$WORK/consumed_declared"
+      if [[ ! -s "$WORK/consumed_declared" ]]; then
+        echo "ERROR: LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh yielded ZERO .github/workflows/* elements -- the array-side copy of the consumed enumeration is gone, so the strict-equality comparison cannot run and the .txt is again the only copy." >&2
+        fails=$((fails + 1))
+      else
+        while IFS= read -r _txt_only; do
+          [[ -n "$_txt_only" ]] || continue
+          echo "ERROR: ${_txt_only} is listed in scripts/lint-orphan-consumed-workflows.txt but is NOT an element of LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh -- the two copies of the consumed enumeration drifted. Update BOTH (the .txt and the array's enumeration block) so the committed enumeration and the gated edge set agree." >&2
+          fails=$((fails + 1))
+        done < <(LC_ALL=C comm -23 "$ENUM_FILE" "$WORK/consumed_declared")
+        while IFS= read -r _arr_only; do
+          [[ -n "$_arr_only" ]] || continue
+          echo "ERROR: ${_arr_only} is an element of LINT_ORPHAN_BATTERY_PATHS in scripts/lib/test-relevance-paths.sh but is missing from scripts/lint-orphan-consumed-workflows.txt -- the two copies of the consumed enumeration drifted. Update BOTH (the .txt and the array's enumeration block) so the committed enumeration and the gated edge set agree." >&2
+          fails=$((fails + 1))
+        done < <(LC_ALL=C comm -13 "$ENUM_FILE" "$WORK/consumed_declared")
+      fi
+    fi
+  fi
+fi
 
 # --- Assembly ------------------------------------------------------------------------------
 # Each surface is intersected with the producer before it counts. A surface entry that matches
@@ -440,6 +536,7 @@ DOUBLE_COVERED_ACK=(
   "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh|test-all glob AND its own gdpr-gate-self-test.yml job -- the two surfaces do DIFFERENT things and both are load-bearing: under the glob lefthook is absent so the suite loud-skips, while the workflow installs lefthook and sets SOLEUR_REQUIRE_LEFTHOOK=1 so the skip becomes a hard failure. De-registering either is NOT a no-op. #7710"
   "apps/web-platform/infra/inngest-luks-sole-copy.test.sh|infra runner glob (deploy-script-tests) AND an explicit test-all.sh run_suite in the required test-scripts leg; the second is what makes a red Guard 1 block merge and the G2f pin in terraform-target-parity.test.ts guards it, #9927"
+  "scripts/ci-parked-hold.test.sh|explicit test-all.sh run_suite AND the parked-hold-selftest member step of the secret-guards umbrella in secret-scan.yml -- the workflow step is what puts the guard's own selftest into the REQUIRED check set (a red selftest blocks merge) while the run_suite keeps it in the local gate; de-registering either is not a no-op, #12396"
 )
 : > "$WORK/dupes"
 cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \
@@ -643,12 +740,23 @@ else
   RELEVANCE_ARRAYS=(
     "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|15"
     "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|17"
-    "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
+    # #9340: the .github/workflows member narrowed from one directory element to the
+    # committed consumed-workflows enumeration, so the floor carries the enumeration.
+    "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|74"
     "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"
     "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts/test-all-affected.test.sh|9"
-    "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
-    "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
-    "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|3"
+    "AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS|scripts/orphan-process-reaper-mutation.test.sh|12"
+    # #9340 next-tier admits (ADR-262 2026-11-12 addendum). The first three gained
+    # PR_GATE_MACHINERY_PATHS when they were admitted, so their floors moved.
+    "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|12"
+    "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|15"
+    "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|9"
+    "MONITOR_PR_CHECKS_PATHS|plugins/soleur/test/monitor-pr-checks.test.sh|9"
+    "PLAYWRIGHT_MCP_REDACT_PROXY_PATHS|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh|14"
+    "BETTERSTACK_ROUNDTRIP_LATENCY_PATHS|tests/scripts/test-betterstack-roundtrip-latency.sh|12"
+    "GIT_DATA_BIRTH_READINESS_GATE_PATHS|tests/scripts/test-git-data-birth-readiness-gate.sh|15"
+    "TEST_CONTENTION_PATHS|scripts/test-contention.test.sh|10"
+    "SENTRY_ALERT_LIVE_FIDELITY_PATHS|tests/scripts/test-sentry-alert-live-fidelity.sh|12"
   )
 
   # TEST_RELEVANCE_PREFIXES VACUITY. It is the one array with no fail-closed guard of its own,
@@ -690,6 +798,22 @@ else
     "CF_TUNNEL_BATTERY_PATHS|.github|cp -a of the whole .github tree into the sandbox; its dependencies are the W7 workflows and the bridge action, declared individually"
     "CF_TUNNEL_BATTERY_PATHS|scripts|cp -a of the whole scripts/ tree into the sandbox; its dependencies are the oracle and its SUT, declared individually"
     "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts|cp -al hardlinks all of scripts/ into the census sandbox; declared by dependency (runner, libs, linter, itself)"
+    "AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS|scripts/lib|walks $REPO_ROOT/scripts/lib as a tree; the operand names the traversal root and the 'scripts/lib/' edge already arms the battery on every diff beneath it"
+    # #9340 entries — the operand names a directory the battery sweeps as a corpus; the
+    # members that can change the verdict are what the array declares.
+    "LINT_ORPHAN_BATTERY_PATHS|.github/workflows|the battery copies every workflow into its pristine sandbox (surfaces 5/6 read them all); only consumed members can change the verdict, so the consumed subset is enumerated individually in scripts/lint-orphan-consumed-workflows.txt and the directory itself is the allowlisted corpus read"
+    "GIT_DATA_BIRTH_READINESS_GATE_PATHS|.github/workflows|W1 sweeps the workflow dir as a corpus for the SOLEUR_TEST_MODE/SOLEUR_RUNG2_ seam — a whole-tree operand by design (a workflow introducing the seam must be seen), declared by dependency like cf-tunnel's .github entry; ADR-262 residual R3, caught on the push run"
+    "PLAYWRIGHT_MCP_REDACT_PROXY_PATHS|.github/workflows|the operand is an interpolated for-loop over .github/workflows/{\$wf}.yml; the two members it reads are declared individually (ci.yml rides PR_GATE_MACHINERY_PATHS, reusable-release.yml is an element) — the directory is the operand's surface, not the dependency"
+  )
+  # GATED ARRAYS WHOSE BATTERY NAMES ZERO $REPO_ROOT/${ROOT} OPERANDS. The closure check below
+  # extracts operands by that literal token shape; these batteries anchor on a different root
+  # variable or language, so extraction legitimately finds nothing — but only because the
+  # reasoning is RECORDED here. Each entry: <ARRAY>|<reason the extraction cannot see the
+  # operands>. An entry on an array whose battery starts naming operands goes stale and reds.
+  PR_GATE_NO_OPERAND_ALLOWLIST=(
+    "MONITOR_PR_CHECKS_PATHS|the battery roots at \$DIR (=plugins/) — its SUT operand is \$DIR/soleur/scripts/monitor-pr-checks.sh, a plugins-relative anchor the \$REPO_ROOT/\${ROOT} extraction cannot see; the plugins/soleur/scripts element covers the SUT and its probe siblings"
+    "GITHUB_SCRIPTS_SUITE_PATHS|a nested runner: the subject set is the \$DIR/test-*.sh glob over .github/scripts/test/ plus its suites' corpus reads — a glob operand carries no literal anchored path for the extraction to see; the .github element covers the tree"
+    "WEBPLAT_APP_PATHS|a TypeScript battery (repo-wide-containment.test.ts): its operands are join(APP_ROOT, rel) reads the bash-shaped \$REPO_ROOT/ extraction cannot see; the apps/web-platform/ element covers the tree"
   )
   # An allowlist entry is a CLAIM that an operand is uncovered on purpose. It must carry a reason, and
   # it must still be needed: an entry no operand uses any more silently licenses the next edit.
@@ -782,6 +906,16 @@ else
       echo "ERROR: relevance predicate array ${arr_name} is not declared in ${REL_LIB} -- test-all.sh references it by name, so the gated suite would abort or decline." >&2
       fails=$((fails + 1))
       continue
+    fi
+
+    # CROSS-FILE SHADOW GUARD (#9340 review): the same array name defined in
+    # scripts/lib/test-affected-paths.sh would silently SHADOW this edge set — both consumers
+    # source REL_LIB first and AFF_LIB second, so the later definition wins for --pr-gated and
+    # --affected alike. A merge or revert that revives the pre-#9340 definition must red, not
+    # quietly restore the narrower edge set.
+    if grep -qE "^${arr_name}=\(" "$REPO_ROOT/scripts/lib/test-affected-paths.sh" 2>/dev/null; then
+      echo "ERROR: ${arr_name} is defined in scripts/lib/test-affected-paths.sh AND ${REL_LIB} -- the affected-lib definition shadows the gated edge set for both consumers. Keep exactly one definition (in ${REL_LIB})." >&2
+      fails=$((fails + 1))
     fi
 
     # `${a[@]+"${a[@]}"}` so an EMPTY array does not trip `set -u` on bash < 4.4.
@@ -888,9 +1022,19 @@ else
                | sed -E 's/^\$\{?(REPO_ROOT|ROOT)\}?"?\///' | LC_ALL=C sort -u) || g2_ops=""
       # A battery that yields ZERO operands is not "closed", it is UNREAD: the registry battery names
       # its inputs through `${ROOT}`-rooted loop variables, which this extraction could not see until
-      # `ROOT` was added above. Counting such a battery toward the floor would certify nothing.
-      if [[ -z "$g2_ops" ]]; then
-        echo "ERROR: ${battery} names no \$REPO_ROOT/ or \${ROOT}/ operand, so the ADR-262 closure check examined nothing for ${arr_name}. Extend the operand extraction to this battery's root variable." >&2
+      # `ROOT` was added above. Counting such a battery toward the floor would certify nothing —
+      # UNLESS the reason the extraction cannot see them is recorded in
+      # PR_GATE_NO_OPERAND_ALLOWLIST (#9340: three batteries root at \$DIR or are not bash at all).
+      g2_noop_ok=""
+      for g2_a in ${PR_GATE_NO_OPERAND_ALLOWLIST[@]+"${PR_GATE_NO_OPERAND_ALLOWLIST[@]}"}; do
+        if [[ "$g2_a" == "${arr_name}|"?* ]]; then g2_noop_ok=1; fi
+      done
+      if [[ -z "$g2_ops" && -z "$g2_noop_ok" ]]; then
+        echo "ERROR: ${battery} names no \$REPO_ROOT/ or \${ROOT}/ operand, so the ADR-262 closure check examined nothing for ${arr_name}. Extend the operand extraction to this battery's root variable, or record a PR_GATE_NO_OPERAND_ALLOWLIST entry with a written reason." >&2
+        fails=$((fails + 1))
+      fi
+      if [[ -n "$g2_ops" && -n "$g2_noop_ok" ]]; then
+        echo "ERROR: ${arr_name} carries a PR_GATE_NO_OPERAND_ALLOWLIST entry but ${battery} DOES name operands now -- the exemption licenses nothing and would silently absorb the next real gap. Delete the entry." >&2
         fails=$((fails + 1))
       fi
       while IFS= read -r g2_op; do
@@ -917,14 +1061,15 @@ else
 
   # FLOOR ON THE CLOSURE CHECK. A derivation that finds no --pr-gated arrays would make Guard 2
   # iterate nothing while this script still printed `orphan test suites: none` — the vacuity the
-  # dispatch floor above exists to catch, one layer up. Five batteries are gated today; the floor is
-  # the count, not a margin below it, and rises in the edit that gates a sixth.
+  # dispatch floor above exists to catch, one layer up. Fifteen arrays are gated today (six
+  # machinery batteries plus the nine #9340 admits); the floor is the count, not a margin below
+  # it, and rises in the edit that gates a sixteenth.
   # Two floors on purpose: the LITERAL catches an emptied derivation (a call site lost its flag, or the
   # sed/grep that derives the set went blind); the DERIVED equality catches a gated array nothing
-  # examined. Raise the literal in the same edit that gates a sixth battery.
+  # examined. Raise the literal in the same edit that gates the next array.
   pr_gated_n=$(printf '%s\n' "$pr_gated_set" | tr -s ' ' '\n' | grep -c . || true)
-  if (( g2_checked < 5 || g2_checked != pr_gated_n )); then
-    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 5, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 5 when a sixth battery is gated." >&2
+  if (( g2_checked < 15 || g2_checked != pr_gated_n )); then
+    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 15, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 15 when another array is gated." >&2
     fails=$((fails + 1))
   fi
   for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
@@ -1066,6 +1211,26 @@ else
   source "$AFF_LIB"
   # shellcheck source=scripts/lib/affected-glob.sh
   source "$GLOB_LIB"
+
+  # WEBPLAT BUNDLE PREFIX (#12514). AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS opens with
+  # WEBPLAT_APP_PATHS copied by hand, so the [repo-wide+component] bundle is selected by every diff
+  # that makes [unit] relevant. A WEBPLAT_APP_PATHS entry added without the copy would leave the
+  # bundle blind to it, so the relevance array must be an element-wise prefix of the bundle array.
+  if ! declare -p WEBPLAT_APP_PATHS >/dev/null 2>&1 || ! declare -p AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS >/dev/null 2>&1; then
+    echo "ERROR: WEBPLAT_APP_PATHS or AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS is not declared -- the bundle-prefix check cannot run." >&2
+    fails=$((fails + 1))
+  elif (( ${#WEBPLAT_APP_PATHS[@]} == 0 || ${#WEBPLAT_APP_PATHS[@]} > ${#AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[@]} )); then
+    echo "ERROR: WEBPLAT_APP_PATHS (${#WEBPLAT_APP_PATHS[@]} entries) cannot be a prefix of AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS (${#AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[@]} entries) -- copy every WEBPLAT_APP_PATHS entry, in order, to the head of the bundle array." >&2
+    fails=$((fails + 1))
+  else
+    for ((wb_i = 0; wb_i < ${#WEBPLAT_APP_PATHS[@]}; wb_i++)); do
+      if [[ "${WEBPLAT_APP_PATHS[wb_i]}" != "${AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[wb_i]}" ]]; then
+        echo "ERROR: AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[${wb_i}] is '${AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS[wb_i]}' but WEBPLAT_APP_PATHS[${wb_i}] is '${WEBPLAT_APP_PATHS[wb_i]}' -- the bundle array must open with WEBPLAT_APP_PATHS verbatim, so a diff that makes [unit] relevant also selects [repo-wide+component]." >&2
+        fails=$((fails + 1))
+        break
+      fi
+    done
+  fi
 
   # The live registration stream. Same env-scrubbing as the --print-suite-globs
   # call above and for the same reasons: this runs INSIDE test-all.sh as a

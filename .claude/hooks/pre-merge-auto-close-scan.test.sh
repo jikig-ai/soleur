@@ -595,7 +595,7 @@ run_case "T16 no PR for branch → allow, no notice" allow \
 # documentation. Anchor on code, never on prose (`cq-assert-anchor-not-bare-token`).
 # ---------------------------------------------------------------------------
 
-HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
+HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")" || true
 
 # Keyword-set parity. The hook DELEGATES matching to the canonical scanner
 # (RAW = scanner output), but its DIRECTIVE filter and its label-arm extraction

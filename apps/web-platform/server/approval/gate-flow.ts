@@ -15,12 +15,14 @@
  *   approved: consume(id, hash, conversation) -> execution grant -> allow(snapshot).
  *
  * Returns `null` ONLY when the flag is off (or unreadable): the caller then runs the in-memory review gate exactly as
- * it did before this module existed.
+ * it did before this module existed, except that for every approval-required tool only the workspace Owner may answer that
+ * card (#12597, extends #12197 D1).
  */
 
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { WSMessage } from "@/lib/types";
 import type { ApprovalWireStatus } from "@/lib/approval-wire";
+import { REQUESTER_SELF } from "@/lib/approval-copy";
 import {
   ApprovalCanonicalError,
   canonicalizeAction,
@@ -28,6 +30,7 @@ import {
   type CanonicalAction,
   type CanonicalValue,
 } from "./canonical";
+import { isVerifiedRequester } from "./card-visibility";
 import type { ApprovalGateDeps } from "./gate-types";
 import { putGrant } from "./grants";
 import { logApprovalMarker, reportApprovalOp, type ApprovalOpContext } from "./ops";
@@ -185,7 +188,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
     enabled = false;
   }
   if (!enabled) {
-    // A session that already ran the approval flow never falls back to the legacy requester-answerable card for the other
+    // A session that already ran the approval flow never falls back to the legacy (Owner-only, #12597) card for the other
     // tools after a mid-session flag-off or flag read error: only the grant-checked tools are protected by the sticky
     // `enforcing`, so every approval-required tool denies for the rest of the session (ADR-309 rollback).
     if (a.approval.grants.enforcing) {
@@ -391,6 +394,10 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         reportApprovalOp("viewerRoleFailed", err, ctx);
         viewerRole = "member"; // read-only card is the safe default
       }
+      // The requester line (#9601): ONLY the literal "you", and only for the verified requester. This first send goes to the
+      // proposing session user (their own agent's freshly canonicalised action) and never reads another member's identity:
+      // a label for someone else is the reattach and landing surfaces' job, behind their Owner proof.
+      const isSelf = isVerifiedRequester(a.userId, submitted.approval.requested_by_user_id);
       try {
         a.sendToClient(a.userId, {
           type: "approval_request",
@@ -403,6 +410,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           requestCount: submitted.requestCount,
           viewerRole,
           agentWaiting: true,
+          ...(isSelf ? { requester: REQUESTER_SELF } : {}),
         });
       } catch (err) {
         reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-card" } });

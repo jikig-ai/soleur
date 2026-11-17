@@ -1,0 +1,12 @@
+# Decision Challenges - feat-one-shot-12362-stall-triage-headsha
+
+The technical forks in this work were ruled by the CTO agent (one before planning started, one at
+review); no operator question is open. `soleur:ship` renders this table into the PR body.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Lift the E2 hold (issue-body template kept byte-identical in the previous stall-check PR, merged as 10e66d9ab8) so the headSha field can be added in a separate PR for #12362 | technical | Ruled by CTO agent, 2026-11-08: E2 lifted, add the test assertion, delete the follow-through probe, remove the follow-through label post-merge - the hold applied only to the earlier PR, and a membership assertion plus probe retirement closes the gap with no template change beyond one field |
+| Review found three sibling files that print the same `gh run list --event merge_group --json databaseId,headBranch,conclusion,url` command next to prose saying to correlate by headSha/createdAt (`plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/scripts/sync-pr-behind.sh`, `plugins/soleur/skills/drain-prs/SKILL.md`); widen this PR to them or file a follow-up | technical | Ruled by CTO agent, 2026-11-08: widen this PR - three one-token edits (`headSha` right after `headBranch`), no wording or `--jq` change, no edit to `merge-queue-dequeue.md` (it makes no headSha claim); run the sibling suites on the unedited tree first, then after, and fall back to one `deferred-scope-out` issue only for a script whose suite cannot be fixed inline in the same edit |
+| Fix-round review found that the premise behind the "no edit to `merge-queue-dequeue.md`" condition above was wrong: its line 28 (the authoritative recovery recipe the other three defer to) prints the same `--json databaseId,headBranch,conclusion,url` list and ends "correlate the recent `merge_group` runs by `headSha`/`createdAt`" (supersedes that one condition; the lead had told the CTO it made no headSha claim, a claim not run before it was passed on) | technical | Ruled by CTO agent, 2026-11-08: condition lifted - add `headSha,` right after `headBranch,` on line 28, no wording change; run the ratchet with `--base origin/main` plus the suites that name the path (pre-merge-rebase, monitor-pr-checks, sync-pr-behind, ship-phase-7 fixtures, drain-prs) and markdownlint; add no new content pin in this PR; if the ratchet demands an accept-row change, stop and rule again |

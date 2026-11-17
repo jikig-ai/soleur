@@ -196,7 +196,7 @@ test_all_managed_dests_accepted() {
   # Cardinality cross-check: every FILE_MAP row must have parsed. A row the sed cannot match
   # (4-digit mode, malformed quoting) would otherwise vanish from the work-list while `total`
   # still cleared the floor — a member the extraction cannot see is silently exempt.
-  filemap_rows=$(grep -cE '^[[:space:]]*"[A-Z0-9_]+\|' "$HANDLER")
+  filemap_rows=$(grep -cE '^[[:space:]]*"[A-Z0-9_]+\|' "$HANDLER") || true
   if [[ "$total" -ne "$filemap_rows" ]]; then
     echo "  FAIL: parsed $total of $filemap_rows FILE_MAP rows — an unparsed row would be silently exempt from this test"
     FAIL=$((FAIL + 1))
@@ -538,7 +538,7 @@ test_dest_spec_filemap_lockstep() {
   echo "TEST: DEST_SPEC count == FILE_MAP count (cross-file lockstep)"
   local filemap_count dest_spec_count
   # FILE_MAP entries look like: "ENV_VAR|/dest/path|mode|owner"
-  filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
+  filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER") || true
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
   #
   # REGION-SCOPED, not a whole-file grep. The bare `grep -cE '^\s*\["/'` this replaces counted

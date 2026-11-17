@@ -605,7 +605,7 @@ if [ -n "$_pt_id" ]; then
     exit 1
   fi
   _pt_dm="$(dmsetup info -c --noheadings -o blkdevname "$_pt_snap" 2>/dev/null || true)"
-  _pt_errs() { local _v; _v="$(cat "/sys/fs/ext4/$_pt_dm/errors_count" 2>/dev/null || true)"; [[ "$_v" =~ ^[0-9]+$ ]] && printf '%s' "$_v"; }
+  _pt_errs() { local _v; _v="$(cat "/sys/fs/ext4/$_pt_dm/errors_count" 2>/dev/null || true)"; [[ "$_v" =~ ^[0-9]+$ ]] && printf '%s' "$_v" || true; }
   _pt_e0="$(_pt_errs || true)"
   [ "$_pt_e0" = "$_pt_eh" ] || { log "FATAL: plaintext_unverified reason=journal — ext4 errors_count reads '${_pt_e0:-unreadable}' after replay, $_pt_eh before ($(_pt_diag))"; exit 1; }
   _pt_rc=0

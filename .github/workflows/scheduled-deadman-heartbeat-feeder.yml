@@ -11,12 +11,15 @@
 # (measured: one run every 2-7 h, which cannot hold the heartbeats' 10800 s page budget on its own); keep
 # workflow_dispatch and the concurrency group (cancel-in-progress: false) and no other trigger
 # (sentry-monitor-iac-parity.test.ts).
-# UNARMED: both heartbeats are born paused. While one is paused its target reports
+# UNARMED: each heartbeat is born paused. While one is paused its target reports
 # `qualifying_row_heartbeat_paused`; this run then emits an UNARMED ::warning:: annotation and a line in the step
 # summary every hour. That is the whole surface: an unarmed state is visible only on the run page, and NOTHING PAGES
 # for it until the owner unpauses the heartbeat. Arming is the owner's (runbook:
 # knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md, "Arming the dead-man heartbeats
 # (#11631)").
+# EXPECTED INTERIM STATE: until the #11266 bundle promotion lands, the probe is inert and every
+# inngest-luks-key-probe run exits no_qualifying_row / SOURCE DARK — expected, not a feeder fault
+# (seat finding, PR #12331).
 # RUN CONCLUSION. The step succeeds by design whatever the feeder decided: the feeder's exit status is data, read
 # into the annotations, the marker lines and all_decided. The signals are the Sentry check-in (`ok` only when every
 # target beat or is unarmed; `error` when a target was withheld or failed; `missed` when the feeder went dark, clock
@@ -69,8 +72,20 @@ jobs:
           # `shell:` key, so Actions runs it under `bash -e {0}`, and `set -uo pipefail` above does NOT clear -e;
           # a bare `out="$(...)"; rc=$?` would abort the step at the assignment. The loop never stops on a failing
           # target: one dark check must not hide the other.
+          # (#12007) The four host-kernel targets (host-kernel-web-1, -web-2, -inngest, -registry) are deliberately NOT in the
+          # list below: their heartbeats are born paused and the emitter reaches running hosts only through held steps, so
+          # an hourly run would report a dark host as a feeder fault and train the operator to ignore this monitor. The
+          # arming change adds the four names here in the same change that stages their unpause (tracked in #12386); the
+          # harness pins this list to the script's target table minus the harness's DEFERRED_TARGETS set (that set lives
+          # only in the test, not in the script). TIMEOUT CHECKLIST (revisit the job timeout of 6 minutes at arming, #12386). The
+          # per-target worst case is the 60 s query plus the 20 s API read and the 15 s beat (95 s), except the luks no-row
+          # path, which adds two 60 s counts-only diagnostic queries to its 60 s query (180 s). CURRENT worst case with the
+          # 3 armed targets: 180 + 95 + 95 = about 370 s, ALREADY over the 360 s timeout (a run that hits every worst case
+          # at once is cancelled before the last target). With the four host-kernel names added, 7 sequential targets have
+          # a worst case of about 665 s, which does not fit in 6 minutes either. The harness does not assert this
+          # arithmetic (it would be red today); the arming change must raise the timeout or split the loop.
           all_decided=true
-          for t in luks-monitor-host-timer claude-cost-capture; do
+          for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0
             out="$(bash scripts/deadman-heartbeat-feeder.sh "$t" 2>&1)" || rc=$?
 
@@ -85,7 +100,7 @@ jobs:
               safe="$(strip_log_injection "$line")"
               case "$safe" in
                 "deadman-feeder: "*)
-                  if [[ "$safe" =~ ^deadman-feeder:\ target=([a-z-]+)\ verdict=([a-z_]+)(\ [a-z_]+=[A-Za-z0-9:._-]{0,40})*$ ]]; then
+                  if [[ "$safe" =~ ^deadman-feeder:\ target=([a-z0-9-]+)\ verdict=([a-z_]+)(\ [a-z_]+=[A-Za-z0-9:._-]{0,40})*$ ]]; then
                     printf '%s\n' "$safe"
                     if [[ "${BASH_REMATCH[1]}" == "$t" || "${BASH_REMATCH[1]}" == "none" ]]; then
                       verdict="${BASH_REMATCH[2]}"

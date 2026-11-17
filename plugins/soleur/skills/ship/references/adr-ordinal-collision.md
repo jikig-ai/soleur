@@ -2,6 +2,8 @@
 
 Moved verbatim out of `ship/SKILL.md` Phase 5.5 to stay under the SKILL.md body ceiling (ADR-229); SKILL.md keeps the trigger and a load directive.
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. The ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. A collision cannot reach `main` through the queued auto-merge (the `--admin` hatch in Phase 7 bypasses the whole `required_status_checks` rule, which is why its step 2 exists): `guards-ruleset` is the required status check (its `adr-ordinals` member step runs the gate — renamed #12089) and `main` is strict-up-to-date, so a sibling's ADR arriving through a Phase 7 sync reds the PR's `adr-ordinals` member and the poll loop's required-check-failure exit stops there (Phase 7, "ADR-ordinal collision after a sync", cites the SSOT). This gate is defense-in-depth: catching the collision at PR-ready costs one commit, while catching it in Phase 7 costs a sync plus a full CI cycle (the ~35-minute figure the settle paragraph measures), and a renumber done inside the poll loop is the one most likely to leave the plan/tasks sweep undone.
 
 **Detection.** Run the canonical sentinel named on the Trigger line in `ship/SKILL.md` (fetch `origin/main` first, run from the branch root).
@@ -30,7 +32,12 @@ Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is
 
    **That `knowledge-base/`-scoped sweep is necessary but NOT sufficient — an ADR ordinal
    can be cited from CODE.** Sweep the branch's whole diff, then classify each hit:
-   `for f in $(git diff --name-only origin/main...HEAD); do [[ -f $f ]] && grep -Hn 'ADR-<old>' "$f"; done`.
+
+   ```bash
+   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown (exit 2/127): sweep every tracked file, never an empty list
+   while IFS= read -r f; do [[ -f $f ]] && grep -Hn -- 'ADR-<old>' "$f"; done <<< "$files"
+   ```
+
    Hits in a hook, a script or a test are the dangerous ones — an ADR reference inside a
    runtime **deny reason string** ships to the agent (or the operator) pointing at whatever
    unrelated ADR now holds that ordinal. Check the CLAUSE LABEL too: a provisional ADR
@@ -45,3 +52,9 @@ Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
 
 **Why:** PR #5945 (#5933) chose ADR-081 at plan time (080 was the highest then); sibling PR #5934's ADR-081 landed during the ~90-min pipeline and auto-synced into the branch during Phase 7. The ruleset did not yet carry the `adr-ordinals` gate, so the auto-merge fired on the green required set and the collision surfaced as RED CI on `main`, fixed by a follow-up renumber (#5952 → ADR-082). That gap closed two days later (see Phase 7, "ADR-ordinal collision after a sync", for the SSOT and the current failure model) — this gate is the cheaper, earlier catch.
+
+## Phase 7 half: after a BEHIND sync
+
+Moved out of `ship/SKILL.md` Phase 7 to stay under the SKILL.md body ceiling (ADR-229): the text is unchanged except for links rewritten as paths, the positional words ("above", "below") replaced by the sections they named, and the sentinel named by file instead of by its repo-relative command (the anchoring ratchet refuses a new cwd-relative anchor).
+
+A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` runs inside the required `guards-ruleset` context — `scripts/required-checks.txt` is the SSOT row, applied via `infra/github/ruleset-ci-required.tf` (#6049/#6050, 2026-07-05); read the current set via `gh api repos/{owner}/{repo}/rules/branches/main` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the member step re-runs red inside `guards-ruleset`, and the required-check-failure exit in `ship/SKILL.md` Phase 7 names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, before the next merge attempt re-run `check-adr-ordinals.sh`, exactly as the Trigger line of Phase 5.5 "ADR-Ordinal Collision Gate" in `ship/SKILL.md` runs it; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.

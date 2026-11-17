@@ -622,8 +622,10 @@ Phase 4b (continuous checkpoint).
 > claim — verify against CF docs + a staging convert before the GA window. The LB is a
 > paid add-on (~$5/mo) — record the recurring expense. web-2 sits in the pool at
 > **weight 0** (drained) until GA. **(c) Hard invariant.** NO live LB weight to web-2
-> before BOTH the owner-side relay is active (`SOLEUR_PROXY_BIND`/`PEER_ALLOWLIST`/
-> `HOST_ROSTER` set → `session-proxy.ts createProxyServer` binds) AND the git-data store
+> before BOTH the owner-side relay is active (`PEER_ALLOWLIST`/`HOST_ROSTER` set AND
+> `session-proxy.ts createProxyServer` binds; the bind address is the literal
+> `-e SOLEUR_PROXY_BIND=0.0.0.0` in `ci-deploy.sh`, NOT a Doppler value, and
+> `createProxyServer` refuses to bind without it) AND the git-data store
 > is cut over (`isGitDataStoreEnabled()` true, 3.C write-boundary sentinel merged, 3.D
 > LUKS cutover soak-verified). Rationale: with the router gated off (default) each host
 > serves purely locally on its own `/workspaces` volume, so any live request round-robined
@@ -780,8 +782,12 @@ Phase 4b (continuous checkpoint).
 > paragraph below describes what it DID, retained because the contract it encoded (especially the
 > `GIT_DATA_LUKS_CUTOVER_AT` soak-marker semantics) still binds any future implementation.
 >
+> *Amendment 2026-11-07 (#12167):* the rebuilt gate no longer shape-checks `SOLEUR_PROXY_BIND` (the
+> bind is a literal in `ci-deploy.sh`, not a Doppler value). Bind/reachability evidence is the serve
+> arm's relay-evidence step (#12168), not the gate.
+>
 > As deleted, it verified the config-shape of BOTH §(c) conditions
-> over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
+> over injected env (owner-side relay: `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
 >
@@ -1525,7 +1531,7 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
    zero traffic — until the #6027 window flips 0→1 behind the §(c) gate chain
    (`lb-weight-gate-with-marker.sh`, run fail-closed by the new `ga-pool-update` arm in
    `mode=serve` BEFORE plan). Live gate state 2026-11-01: `GIT_DATA_STORE_ENABLED=false`,
-   `GIT_DATA_LUKS_CUTOVER_AT` and `SOLEUR_PROXY_BIND` absent — the flip is not authorized
+   `GIT_DATA_LUKS_CUTOVER_AT` absent (a `SOLEUR_PROXY_BIND` absence was also read as unmet until 2026-11-07, when that gate input was retired: #12167 — the bind is a literal in `ci-deploy.sh`, not a Doppler value) — the flip is not authorized
    today. LB `steering_policy` stays `"off"` (it selects between POOLS — one default
    pool); origin selection is pinned as `origin_steering { policy = "random" }` on the
    pool (CTO ruling: `hash` is de facto session affinity contradicting
@@ -1540,3 +1546,22 @@ Apply path unchanged in kind, widened in set: `ga-monitor-fix` and `ga-pool-upda
 two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` (per-arm confirm literals,
 `environment: web-platform-infra-apply`, saved-plan graders `cf_lb_gate_ga_monitor_update` +
 `cf_lb_gate_ga_pool_update`) — the `ga-overlay` gate keeps create-only semantics.
+
+## Addendum — 2026-11-08 (#12363): web-2 serves at weight 1 and `web2_lb_weight` defaults to 1
+
+The 2026-11-01 addendum above records web-2 as a pool member at weight 0 "until the #6027 window flips 0→1". That is now history: the serve flip applied on 2026-11-08 (`cf-lb-overlay.yml` `arm=ga-pool-update mode=serve`, run 42488889045), so web-2 serves at pool weight 1 and live is `{web-1:1, web-2:1}`. This addendum is the dated record of what changes in the tree because of it.
+
+- **The Terraform default follows live.** `variable "web2_lb_weight"` defaults to `1`. Before this change the tree said 0 while live said 1, so the scheduled full-root drift plan reported web-2 `1 -> 0` on every run and any full-root plan or `ga-overlay` run would have proposed a silent drain.
+- **Drain is an explicit act.** `ga-pool-update mode=drain` already passed `-var=web2_lb_weight=0`; `ga-overlay` now passes the same explicit `0`, so a fresh GA3 create stays the drained two-member shape its grader (`cf_lb_gate_ga`) pins (it is create-only: it cannot drain a live pool). The gated 0-to-1 act is `ga_pool_update` `mode=serve` after the §(c) gate chain.
+- **The structural guarantee ends at the first drain.** While the default was 0, weight 1 could be reached only through the serve arm and its gate chain. At default 1 that holds only until web-2 is first drained: afterwards, a full-root plan or apply that omits the variable (a local full-root run, a pool re-create after an out-of-band delete; CI cannot, its per-merge `-target` lists name no load-balancer address) restores weight 1 outside the gate chain. The runbook therefore carries a pre-step for full-root runs: the plan must show no `cloudflare_load_balancer_pool` change, or it is a re-serve outside the gate chain.
+- **Serve accepts a no-op plan.** Against live `{1,1}` the pool plans as a no-op. `cf_lb_gate_ga_pool_update` is now a thin wrapper around the unchanged grader: serve requires exactly one pool entry, grades an update as before, and normalises a provably plain no-op pool entry into an update in a private copy beside the plan file so every origins and weight pin grades it on the same terms; an absent, duplicated or oddly-shaped pool entry refuses. Drain is untouched.
+- **Operational rules that follow from the new default.** (1) An untargeted apply that creates or replaces `hcloud_server.web["web-2"]` (or the pool) MUST pass `-var=web2_lb_weight=0`, because at the default an empty replacement host would enter the pool at weight 1 before the serve gate chain runs; the same rule is in the runbooks. (2) A drain is not durable until the default is changed back: the next unrelated full-root apply restores weight 1, and a full-root plan after an intentional drain proposes `0 -> 1`.
+- **Rejected option: keep the default at 0 and pass `-var=web2_lb_weight=1` in every non-serve plan.** Rejected because the drift workflow, the PR plan and every ad-hoc plan would each need the variable, and a forgotten variable drains web-2; it also makes the committed tree disagree with the live pool permanently.
+
+The one-way language and the "only feeder is the serve arm" invariant lived in the `cf-lb-a-record-gaplessness-verify.md` runbook, the `variables.tf` comment and `lb-weight-gate.test.sh` C.4, not in this ADR (which did not name the variable before this addendum); they were rewritten with this change.
+
+## Addendum — 2026-11-09 (#12288, #12289, #12290; ADR-323): the allowlist now really runs before the handshake, and the hello is signed
+
+The 2026-07-02 amendment (a) says the peer allowlist is checked "BEFORE the handshake". Until this change it was not: `session-proxy.ts` checked `req.socket.remoteAddress` inside `wss.on("connection")`, i.e. after TLS and after the WebSocket upgrade, so any private-net host could force a handshake and one Sentry report per connection. The check now runs on the raw TCP `connection` event through a prepended listener (`admitProxyPeer`) and destroys a non-allowlisted source before Node's TLS wrapper reads a byte; the in-`wss` check remains as defence in depth. Denies are reported through a bounded reporter (5 events per reason per 60 s window plus an exact counter).
+
+The proxy hello is no longer `{type, userId, workspaceId}`: it is `{type, userId, workspaceId, ts, nonce, mac}` with an HMAC-SHA256 under a dedicated key (`PROXY_HELLO_HMAC_KEY`), verified fail-closed before the AP-2 membership lookup, ±30 s skew and a replay window of about 61 s. A malformed `SOLEUR_PROXY_PORT` or an absent hello key stops only the relay (`proxy_state=error`). The mTLS option stays rejected as dominated, as in the original amendment. Decision, check order, residuals and the rolling-deploy behaviour are in ADR-323; this addendum does not restate them.

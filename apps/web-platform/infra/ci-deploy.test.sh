@@ -1757,8 +1757,8 @@ read_state_reason_and_exit() {
     _reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
     _exit=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
   else
-    _reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
-    _exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+    _reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/') || true
+    _exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://') || true
   fi
   printf -v "$reason_var" '%s' "$_reason"
   printf -v "$exit_var" '%s' "$_exit"
@@ -2139,7 +2139,7 @@ assert_canary_trace_order() {
 
   # Extract ordered DOCKER_TRACE lines
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   if [[ "$traces" == "$expected_order" ]]; then
     PASS=$((PASS + 1))
@@ -2182,7 +2182,7 @@ assert_canary_rollback() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Expected: system|pull|stop|rm|run|run|stop|rm
   # (prune, pull, stale canary cleanup [stop, rm], #8743 seed run, canary run, canary stop, canary rm)
@@ -2220,7 +2220,7 @@ assert_canary_layered_rollback() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Expected on rollback (CANARY_HEALTHY=false): no swap to prod.
   # image|pull|stop|rm|run|run|stop|rm — same shape as the existing rollback
@@ -2291,7 +2291,7 @@ assert_pull_failure() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # Should only have prune and pull (which fails), then script exits
   local expected="image|pull"
@@ -2344,7 +2344,7 @@ assert_canary_crash() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (fails)
   # → script exits via set -e
@@ -2374,7 +2374,7 @@ assert_prod_start_failure() {
   ) && actual_exit=0 || actual_exit=$?
 
   local traces
-  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//') || true
 
   # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (ok),
   # canary health ok,
@@ -2951,8 +2951,8 @@ assert_bprime_cosign_invocation() {
   local argsfile args sentry ok=1
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
-  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1) || true
+  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1) || true
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
   printf '%s' "$args" | grep -cF -- >/dev/null '--network host' || ok=0
@@ -2992,7 +2992,7 @@ assert_cosign_reads_mounted_config() {
   local argsfile args dc n_user n_dc ok=1 why=""
   argsfile=$(mktemp)
   ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
-  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1) || true
   rm -f "$argsfile"
   [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
   n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
@@ -6400,10 +6400,10 @@ MOCK
     snap_tag=$(jq -r '.tag // ""' "$snapshot" 2>/dev/null)
     snap_component=$(jq -r '.component // ""' "$snapshot" 2>/dev/null)
   else
-    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
-    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://')
-    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
-    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
+    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://') || true
+    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
+    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/') || true
   fi
 
   if [[ "$snap_reason" == "running" ]] && [[ "$snap_exit" == "-1" ]] && \
@@ -13129,17 +13129,20 @@ pe_row() { # <id> <ok 0|1> <pass text> <fail detail>
 }
 
 # PE-1: a private IP resolves from `ip` (a 210.0.1.5 interface listed BEFORE it must not win) and is the PUBLISH address; the container
-# binds 0.0.0.0; the canary publishes no 8443 and carries a literal empty bind.
+# binds 0.0.0.0; the canary publishes no 8443 and carries a literal empty bind. #9137 (CTO T2): the same resolved address is also the
+# exec-forward publish address (:8445) and the prod container's SOLEUR_HOST_PRIVATE_IP; the canary carries it EMPTY.
 pe_deploy pe1 MOCK_SYSCTL_OUT=1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL"
 PE_PROD="$(pe_line pe1 soleur-web-platform)"; PE_CAN="$(pe_line pe1 soleur-web-platform-canary)"
 PE_OK=1
 [[ "$PE_RC" -eq 0 ]] || PE_OK=0
 [[ "$PE_PROD" == *" -p 10.0.1.20:8443:8443 "* ]] || PE_OK=0
+[[ "$PE_PROD" == *" -p 10.0.1.20:8445:8445 "* ]] || PE_OK=0
 [[ "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* ]] || PE_OK=0
 [[ "$PE_PROD" == *" -e SOLEUR_PROXY_PORT=8443 "* ]] || PE_OK=0
-[[ "$PE_PROD" != *"10.0.1.5"* && "$PE_PROD" != *"-e SOLEUR_PROXY_BIND=10."* ]] || PE_OK=0
-[[ -n "$PE_CAN" && "$PE_CAN" != *8443* && "$PE_CAN" == *" -e SOLEUR_PROXY_BIND= -e "* && "$PE_CAN" != *"SOLEUR_PROXY_PORT"* ]] || PE_OK=0
-pe_row "PE-1" "$PE_OK" "prod publishes 10.0.1.20:8443:8443 (the real address, not the 210.0.1.5 decoy listed first), binds 0.0.0.0, SOLEUR_PROXY_PORT=8443; canary: no 8443, literal empty SOLEUR_PROXY_BIND" \
+[[ "$PE_PROD" == *" -e SOLEUR_HOST_PRIVATE_IP=10.0.1.20 "* ]] || PE_OK=0
+[[ "$PE_PROD" != *"10.0.1.5"* && "$PE_PROD" != *"-e SOLEUR_PROXY_BIND=10."* && "$PE_PROD" != *"-e SOLEUR_HOST_PRIVATE_IP=10.0.1.5"* ]] || PE_OK=0
+[[ -n "$PE_CAN" && "$PE_CAN" != *8443* && "$PE_CAN" != *8445* && "$PE_CAN" == *" -e SOLEUR_PROXY_BIND= -e "* && "$PE_CAN" == *" -e SOLEUR_HOST_PRIVATE_IP= -e "* && "$PE_CAN" != *"SOLEUR_PROXY_PORT"* ]] || PE_OK=0
+pe_row "PE-1" "$PE_OK" "prod publishes 10.0.1.20:8443:8443 and :8445:8445 (the real address, not the 210.0.1.5 decoy listed first), binds 0.0.0.0, SOLEUR_PROXY_PORT=8443, SOLEUR_HOST_PRIVATE_IP=10.0.1.20; canary: no 8443/8445, literal empty SOLEUR_PROXY_BIND and SOLEUR_HOST_PRIVATE_IP" \
   "rc=$PE_RC prod=[$(printf '%s' "$PE_PROD" | cut -c1-600)] canary=[$(printf '%s' "$PE_CAN" | cut -c1-300)]"
 
 # PE-2: no 10.0.1.x on the host (or an empty PROXY_BIND) -> a LOOPBACK publish (unreachable by peers, fail-closed), same argv shape.
@@ -13149,7 +13152,11 @@ PE_OK=1
 [[ "$PE_RC" -eq 0 ]] || PE_OK=0
 [[ "$PE_PROD" == *" -p 127.0.0.1:8443:8443 "* && "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* ]] || PE_OK=0
 [[ "$PE_PROD" != *"-p 0.0.0.0:8443"* && "$PE_PROD" != *"-p :8443"* && "$PE_PROD" != *"-p 8443"* ]] || PE_OK=0
-pe_row "PE-2" "$PE_OK" "no private address (only a 210.0.1.5 decoy) -> prod publishes 127.0.0.1:8443:8443, never 0.0.0.0 or an unqualified 8443" \
+# #9137: the 8445 publish degrades identically, and an unresolved PROXY_BIND leaves SOLEUR_HOST_PRIVATE_IP empty —
+# a pinned call on that host refuses (forwarding fails closed), the T3-accepted shape.
+[[ "$PE_PROD" == *" -p 127.0.0.1:8445:8445 "* && "$PE_PROD" == *" -e SOLEUR_HOST_PRIVATE_IP= -e "* ]] || PE_OK=0
+[[ "$PE_PROD" != *"-p 0.0.0.0:8445"* && "$PE_PROD" != *"-p :8445"* && "$PE_PROD" != *"-p 8445"* ]] || PE_OK=0
+pe_row "PE-2" "$PE_OK" "no private address (only a 210.0.1.5 decoy) -> prod publishes 127.0.0.1:8443:8443 and :8445:8445, never 0.0.0.0 or an unqualified port, and SOLEUR_HOST_PRIVATE_IP stays empty" \
   "rc=$PE_RC prod=[$(printf '%s' "$PE_PROD" | cut -c1-600)]"
 
 # PE-3: resolve_proxy_bind itself, executed from the real script text against a stubbed `ip`. The anchored `inet 10.0.1.x/` match is
@@ -13329,10 +13336,19 @@ PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
 PE_OK=1; PE_MSG=""
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod publish line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-p [^ ]*8443')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [an other 8443 publish exists]"; }
+# #9137: the exec-forward publish mirrors the relay publish exactly (one line, the same RELAY_PUBLISH_BIND fallback).
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod 8445 publish line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-p [^ ]*8445')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [an other 8445 publish exists]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-e SOLEUR_PROXY_BIND=0.0.0.0 \')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod bind line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_PROXY_BIND= \\$')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [canary empty-bind line count != 1]"; }
 ! /usr/bin/grep -qF -- '-e SOLEUR_PROXY_BIND="$PROXY_BIND"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the host IP still reaches the container as the bind]"; }
-pe_row "PE-11" "$PE_OK" "comment-stripped script: one loopback-fallback publish, one literal 0.0.0.0 bind (prod), one literal empty bind (canary), the host IP never handed to the container as its bind" "$PE_MSG"
+# #9137 (CTO T2): the resolved host address DOES reach the container — as the exec-identity env, never the bind:
+# exactly two SOLEUR_HOST_PRIVATE_IP lines (prod "$PROXY_BIND", canary literal empty), never a literal IP.
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND" \')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod identity-env line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_HOST_PRIVATE_IP= \\$')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [canary empty identity-env line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_HOST_PRIVATE_IP')" -eq 2 ]] || { PE_OK=0; PE_MSG+=" [SOLEUR_HOST_PRIVATE_IP named more than twice]"; }
+! /usr/bin/grep -qE -- '-e SOLEUR_HOST_PRIVATE_IP=[0-9]' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [a literal IP reaches the container as the exec identity]"; }
+pe_row "PE-11" "$PE_OK" "comment-stripped script: one loopback-fallback publish each for :8443 and :8445, one literal 0.0.0.0 bind (prod), one literal empty bind (canary), the host IP never handed to the container as its bind; SOLEUR_HOST_PRIVATE_IP is \"\$PROXY_BIND\" on prod, literal empty on canary, never a literal IP" "$PE_MSG"
 
 # PE-12: the reboot-race gate. A publish on an IP that is not configured yet fails the whole container start, and docker-proxy can bind a
 # not-yet-configured address only with net.ipv4.ip_nonlocal_bind=1 (shipped by a separate PR). Until it is exactly 1 the prod publish
@@ -13347,10 +13363,11 @@ for PE_X in "1|10.0.1.20|0|0" "0|127.0.0.1|0|1" "|127.0.0.1|0|1" "2|127.0.0.1|0|
   PE_S="$(/usr/bin/grep -n '^sysctl$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
   PE_R="$(/usr/bin/grep -n '^run soleur-web-platform$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
   [[ "$PE_RC" -eq 0 && "$(jq -r '.reason' "$PE_DIR/pe12.state" 2>/dev/null)" == "ok" \
-     && "$PE_PROD" == *" -p $PE_WANT:8443:8443 "* && "$PE_W" == "$PE_WARN" \
+     && "$PE_PROD" == *" -p $PE_WANT:8443:8443 "* && "$PE_PROD" == *" -p $PE_WANT:8445:8445 "* && "$PE_W" == "$PE_WARN" \
      && "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* && "$PE_PROD" == *" -e SOLEUR_PROXY_PORT=8443 "* \
+     && "$PE_PROD" == *" -e SOLEUR_HOST_PRIVATE_IP=10.0.1.20 "* \
      && -n "$PE_S" && -n "$PE_R" && "$PE_S" -lt "$PE_R" ]] \
-    || { PE_OK=0; PE_MSG+=" [sysctl='$PE_V' rc=$PE_RCV want -p $PE_WANT warn=$PE_WARN got warn=$PE_W rc=$PE_RC sysctl@${PE_S:-none} run@${PE_R:-none}: $(printf '%s' "$PE_PROD" | /usr/bin/grep -oE -- '-p [^ ]*8443:8443' || true)]"; }
+    || { PE_OK=0; PE_MSG+=" [sysctl='$PE_V' rc=$PE_RCV want -p $PE_WANT warn=$PE_WARN got warn=$PE_W rc=$PE_RC sysctl@${PE_S:-none} run@${PE_R:-none}: $(printf '%s' "$PE_PROD" | /usr/bin/grep -oE -- '-p [^ ]*8443:8443|-p [^ ]*8445:8445|-e SOLEUR_HOST_PRIVATE_IP=[^ ]*' || true)]"; }
 done
 # no private address at all: already loopback, so the degrade warning (about a private IP we could not publish on) is NOT logged
 pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO" MOCK_SYSCTL_OUT=0

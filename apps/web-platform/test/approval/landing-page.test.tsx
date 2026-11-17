@@ -9,15 +9,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { canonicalizeAction, computeActionHash } from "@/server/approval/canonical";
-import { APPROVAL_ID, CONVERSATION_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
+import {
+  APPROVAL_ID,
+  CONVERSATION_ID,
+  OTHER_WORKSPACE_ID,
+  REQUESTER_EMAIL,
+  REQUESTER_ID,
+  SAMPLES,
+  TOOLS,
+  USER_ID,
+  WORKSPACE_ID,
+  makeLabelerClient,
+  type FakeLabelerWorld,
+} from "./fixtures";
 
 const h = vi.hoisted(() => ({
   user: { value: { id: "00000000-0000-4000-8000-000000000007" } as { id: string } | null },
   row: { value: null as Record<string, unknown> | null },
   rowError: { value: null as unknown },
   count: { value: 1 },
+  /** When set, the count read awaits this instead of answering at once (proves the label read does not wait for it). */
+  countOverride: { value: null as null | (() => Promise<{ count: number; error: null }>) },
   countError: { value: null as unknown },
   fromCalls: [] as string[],
+  /** Columns of every select on approval_request (#9601: the row read must include requested_by_user_id). */
+  selectCols: [] as string[],
+  /** The service-role client the requester labeler reads through (#9601). */
+  serviceClient: { value: null as unknown },
+  serviceCalls: { value: 0 },
   flag: vi.fn(),
   report: vi.fn(),
 }));
@@ -44,7 +63,8 @@ vi.mock("@/lib/supabase/server", () => ({
       h.fromCalls.push(table);
       const chain = {
         select: (_c: string, opts?: { head?: boolean }) => {
-          if (opts?.head) return { eq: () => ({ eq: async () => ({ count: h.count.value, error: h.countError.value }) }) };
+          if (table === "approval_request" && !opts?.head) h.selectCols.push(_c);
+          if (opts?.head) return { eq: () => ({ eq: async () => (h.countOverride.value ? h.countOverride.value() : { count: h.count.value, error: h.countError.value }) }) };
           return {
             eq: () => ({
               maybeSingle: async () =>
@@ -58,6 +78,13 @@ vi.mock("@/lib/supabase/server", () => ({
       return chain;
     },
   }),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => {
+    h.serviceCalls.value++;
+    return h.serviceClient.value;
+  },
 }));
 
 vi.mock("@/server/approval/flag", () => ({
@@ -102,7 +129,11 @@ beforeEach(() => {
   h.rowError.value = null;
   h.count.value = 1;
   h.countError.value = null;
+  h.countOverride.value = null;
   h.fromCalls.length = 0;
+  h.selectCols.length = 0;
+  h.serviceClient.value = null;
+  h.serviceCalls.value = 0;
   h.flag.mockReset();
   h.report.mockReset();
 });
@@ -224,5 +255,242 @@ describe("rendering", () => {
       expect.anything(),
       expect.objectContaining({ approvalId: APPROVAL_ID, extra: { read: "row" } }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601: the requester line. The REAL labeler runs against the strict PostgREST fake at the service-client seam (never a
+// mocked labeler), and only after the Owner-RLS read succeeded.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("the requester line (#9601)", () => {
+  const world = (over: Partial<FakeLabelerWorld> = {}): FakeLabelerWorld => ({
+    members: [
+      { workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner" },
+      { workspace_id: WORKSPACE_ID, user_id: REQUESTER_ID, role: "member" },
+    ],
+    authEmails: { [REQUESTER_ID]: REQUESTER_EMAIL },
+    publicEmails: { [REQUESTER_ID]: "attacker-controlled@example.com" },
+    ...over,
+  });
+  const useWorld = (w: FakeLabelerWorld) => {
+    const fake = makeLabelerClient(w);
+    h.serviceClient.value = fake.client;
+    return fake;
+  };
+  const line = () => screen.queryByTestId("approval-requester");
+  const labelReports = () => h.report.mock.calls.filter((c) => c[0] === "requesterLabelFailed");
+
+  it("the row read selects requested_by_user_id", async () => {
+    useWorld(world());
+    await run();
+    expect(h.selectCols.some((c) => c.includes("requested_by_user_id"))).toBe(true);
+  });
+
+  it("a current member who requested: the Owner sees their auth email (never the public users address)", async () => {
+    const fake = useWorld(world());
+    h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+    render(await run());
+    expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+    expect(document.body.textContent).not.toContain("attacker-controlled");
+    // Scoped to the ROW's workspace.
+    expect(fake.queries[0].filters).toContainEqual({ op: "eq", col: "workspace_id", val: WORKSPACE_ID });
+    // The Approve/Deny controls are unaffected.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  it("the Owner is the requester: 'you', and no service-role read at all", async () => {
+    useWorld(world());
+    h.row.value = stored({ requested_by_user_id: USER_ID });
+    render(await run());
+    expect(line()?.textContent).toBe("Requested by you");
+    expect(h.serviceCalls.value).toBe(0);
+  });
+
+  it("a requester who left the workspace: the fixed fallback", async () => {
+    useWorld(world({ members: [{ workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner" }] }));
+    h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+    render(await run());
+    expect(line()?.textContent).toBe("Requested by a workspace member");
+  });
+
+  it("an erased requester (NULL): the fixed fallback, with no query", async () => {
+    const fake = useWorld(world());
+    h.row.value = stored({ requested_by_user_id: null });
+    render(await run());
+    expect(line()?.textContent).toBe("Requested by a workspace member");
+    expect(fake.queries).toHaveLength(0);
+  });
+
+  it("a requester who is a member of ANOTHER workspace only: the fallback, not their address", async () => {
+    useWorld(world({ members: [{ workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner" }, { workspace_id: OTHER_WORKSPACE_ID, user_id: REQUESTER_ID, role: "member" }] }));
+    h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+    render(await run());
+    expect(line()?.textContent).toBe("Requested by a workspace member");
+  });
+
+  it("a lookup failure: no line, no 500, the card still decides, and the failure is reported without the address", async () => {
+    const fake = useWorld(world({ membershipError: { code: "57014", message: `timeout ${REQUESTER_EMAIL}` } }));
+    h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+    render(await run());
+    expect(line()).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    expect(fake.queries[0].terminal).toBe("await");
+    expect(labelReports()).toHaveLength(1);
+    // The thrown value is handed to the (mocked) ops helper raw; the real helper keeps only {code, fn, errName}. What the
+    // landing page itself puts in the context must carry no address.
+    expect(JSON.stringify(h.report.mock.calls.map((c) => c[2]))).not.toContain(REQUESTER_EMAIL);
+    expect((labelReports()[0][1] as { code?: string }).code).toBe("57014");
+  });
+
+  it("a lookup that times out still renders Approve and Deny, with no line", async () => {
+    const ctl = new AbortController();
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => ctl.signal);
+    try {
+      let hungReads = 0;
+      h.serviceClient.value = {
+        from: () => {
+          hungReads += 1;
+          return { select: () => ({ eq: () => ({ in: () => ({ abortSignal: () => new Promise(() => {}) }) }) }) };
+        },
+        auth: { admin: { getUserById: () => new Promise(() => {}) } },
+      };
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      const pending = run();
+      await vi.waitFor(() => expect(hungReads).toBe(1));
+      ctl.abort();
+      render(await pending);
+      expect(line()).toBeNull();
+      expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+      expect(labelReports()).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a scrubbed row (details removed) shows no line and makes no lookup", async () => {
+    const fake = useWorld(world());
+    h.row.value = stored({ canonical_action: null, status: "consumed", requested_by_user_id: REQUESTER_ID });
+    render(await run());
+    expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("details_removed");
+    expect(line()).toBeNull();
+    expect(fake.queries).toHaveLength(0);
+  });
+
+  it("a row read that carries no requested_by_user_id key at all (undefined, not null) renders NO line and never calls the labeler", async () => {
+    const fake = useWorld(world());
+    const row = stored();
+    expect("requested_by_user_id" in row).toBe(false);
+    h.row.value = row;
+    render(await run());
+    expect(line()).toBeNull();
+    expect(fake.queries).toHaveLength(0);
+    expect(h.serviceCalls.value).toBe(0);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  describe("two or more requests for the conversation and action: the label never depends on the count", () => {
+    it("another member's request with count 2: the Owner still gets the requester's auth email", async () => {
+      h.count.value = 2;
+      const fake = useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+      expect(fake.queries).toHaveLength(1);
+      expect(screen.getByTestId("approval-request-count").textContent).toContain("request 2");
+    });
+
+    it("count 2 because of a prior DENIED row (the count is any status): the Owner still gets the label", async () => {
+      // The head count read covers every status; a denied earlier row is one of the 2. The label names THIS row's requester.
+      h.count.value = 2;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID, status: "pending" });
+      render(await run());
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+    });
+
+    it("an erased requester with count 3: the fixed fallback", async () => {
+      h.count.value = 3;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: null });
+      render(await run());
+      expect(line()?.textContent).toBe("Requested by a workspace member");
+    });
+
+    it("the Owner is the requester with count 2: the literal you stays, with no lookup", async () => {
+      h.count.value = 2;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: USER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe("Requested by you");
+      expect(h.serviceCalls.value).toBe(0);
+    });
+
+    it("an unavailable count (read error): the label is unaffected and the error is reported", async () => {
+      h.countError.value = { code: "57014" };
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+      expect(h.report.mock.calls.some((c) => c[0] === "landingReadFailed")).toBe(true);
+      expect(screen.queryByTestId("approval-request-count")).toBeNull();
+    });
+
+    it("an unavailable count still shows 'you' for the requester", async () => {
+      h.countError.value = { code: "57014" };
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: USER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe("Requested by you");
+    });
+
+    it("the label read starts without waiting for the count read (both are in flight together)", async () => {
+      let releaseCount: (v: { count: number; error: null }) => void = () => {};
+      const countGate = new Promise<{ count: number; error: null }>((r) => (releaseCount = r));
+      h.countOverride.value = () => countGate;
+      const fake = useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      const pending = run();
+      await vi.waitFor(() => expect(fake.queries).toHaveLength(1));
+      releaseCount({ count: 2, error: null });
+      render(await pending);
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+    });
+  });
+
+  it("an invisible row (not found for a non-Owner) makes no service-role read", async () => {
+    useWorld(world());
+    h.row.value = null;
+    await expect(run()).rejects.toBeInstanceOf(NotFound);
+    expect(h.serviceCalls.value).toBe(0);
+  });
+
+  it("the Owner-only RLS read gates the label: migration 180's select policy is is_workspace_owner(workspace_id, auth.uid())", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const sql = readFileSync(join(__dirname, "../../supabase/migrations/180_approval_request.sql"), "utf8");
+    const at = sql.indexOf("CREATE POLICY approval_request_owner_select");
+    expect(at).toBeGreaterThan(-1);
+    expect(sql.slice(at, at + 400)).toContain("is_workspace_owner(workspace_id, auth.uid())");
+  });
+
+  it("is_workspace_owner (what the Owner policy calls) is defined only in 098_workspace_logos.sql", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(__dirname, "../../supabase/migrations");
+    const defining = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(public\.)?"?is_workspace_owner\b/i.test(readFileSync(join(dir, f), "utf8")));
+    expect(defining).toEqual(["098_workspace_logos.sql"]);
+  });
+
+  it("migration 180 is the ONLY migration that defines approval_request_owner_select (a later redefinition would silently move the Owner gate)", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(__dirname, "../../supabase/migrations");
+    const defining = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /\b(CREATE|ALTER)\s+POLICY\s+"?approval_request_owner_select\b/i.test(readFileSync(join(dir, f), "utf8")));
+    expect(defining).toEqual(["180_approval_request.sql"]);
   });
 });

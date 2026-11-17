@@ -243,7 +243,7 @@ inngest_quiesce_state() {
 }
 
 # epoch seconds -> ISO-8601 UTC; prints nothing (rc 1) on a non-integer.
-iso_of() { [[ "${1-}" =~ ^[0-9]+$ ]] && date -u -d "@$1" +%FT%TZ; }
+iso_of() { [[ "${1-}" =~ ^[0-9]+$ ]] || return 1; date -u -d "@$1" +%FT%TZ; }
 
 # capture_mismatch_reason: empty when the persisted capture is a JSON array whose sha256 equals the
 # marker's capture_sha256; otherwise one short reason for the stale_capture refusal.

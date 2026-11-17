@@ -5,7 +5,8 @@
 # htpasswd-stdin, cloud-init-inngest-provision-unit and sandbox-masked-proc-docker), with expiry routed to the declared
 # environment decline (FIXTURE_APT_FAILED + exit 100) and every non-timeout failure keeping its own rc.
 #
-# Host-only: a stub `apt-get` on PATH and the real coreutils `timeout`; no docker, no network.
+# Host-only: a stub `apt-get` (and a stub `dpkg` for the retry-time repair) on PATH and the real
+# coreutils `timeout`; no docker, no network.
 # Behaviour rows drive the helper in a fresh `bash` (set -u, the shell the container drivers give it).
 # The assembly row is DERIVED from the six consumer suites and binds each docker site to its arm, its mount,
 # its source line and its rc handling; it reads the suites' text, so it pins what the text says, and the
@@ -116,17 +117,31 @@ case "${GD_STUB_MODE:?}" in
   hang-once) if [ "$n" -eq 1 ]; then sleep 300 & echo "$!" > "${GD_STUB_CHILD:?}"; wait; fi; exit 0 ;;
   slow) sleep "${GD_STUB_SLEEP:-1}"; exit 0 ;;
   fail-then-ok) [ "$n" -eq 1 ] && { echo "E: transient" >&2; exit 100; }; exit 0 ;;
+  # a mid-configure cap-kill leaves dpkg poisoned: every apt-get exits 100 on "dpkg was interrupted"
+  # until a repair runs. The poison arm fires on the FIRST call only (a real kill lands mid-attempt),
+  # so a fix that repairs before retrying must recover inside the same attempt count.
+  dpkg-poisoned) [ "$n" -eq 1 ] && { echo "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem." >&2; exit 100; }; exit 0 ;;
   oom)  exit 137 ;;
 esac
 exit 99
 STUBEOF
 chmod +x "$STUB/apt-get"
 
+# Stub dpkg for the retry-time `dpkg --configure -a` repair: the suite executes on the host, so an
+# unstubbed repair would run the REAL host dpkg on every retrying row. It logs to its OWN calls file —
+# never GD_STUB_CALLS, whose line count pins the apt-call assertions.
+cat > "$STUB/dpkg" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "$*" >> "${GD_STUB_DPKG_CALLS:?}"
+exit "${GD_STUB_DPKG_RC:-0}"
+STUBEOF
+chmod +x "$STUB/dpkg"
+
 # run_helper <mode> <budget|unset> [pkg...] — sets RC OUT ERR CALLS ELAPSED. The state dir is rebuilt
 # per call unless KEEP_STATE=1 (rows that chain calls to prove the budget is SHARED); PRE_SPENT seeds it.
 run_helper() {
   local mode="$1" budget="$2"; shift 2
-  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; NET="$W/net"; : > "$CALLS"; : > "$NET"; : > "$OUT"; : > "$ERR"
+  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; NET="$W/net"; : > "$CALLS"; : > "$NET"; : > "$OUT"; : > "$ERR"; : > "$W/dpkg-calls"
   rm -f "$W/child"
   if [ "${KEEP_STATE:-0}" != 1 ]; then
     chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"; rm -f "$W/stalled"
@@ -135,13 +150,14 @@ run_helper() {
   local t0; t0=$(date +%s)
   RC=0
   # shellcheck disable=SC2016  # single-quoted on purpose: expands inside the fresh bash
-  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_NET="$NET" GD_STUB_STALLED="$W/stalled" GD_STUB_CHILD="$W/child" \
+  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_NET="$NET" GD_STUB_STALLED="$W/stalled" GD_STUB_CHILD="$W/child" GD_STUB_DPKG_CALLS="$W/dpkg-calls" \
     GD_APT_LOG="$W/apt.log" GD_APT_BACKOFFS="${GD_APT_BACKOFFS:-0 0}" GD_APT_STATE_DIR="${GD_APT_STATE_DIR:-$W/state}" \
     bash --noprofile --norc -c 'set -u; . "$1" || exit 97; shift; gd_apt_install_bounded "$@"' _ "$LIB" "${@:-curl}" \
     >"$OUT" 2>"$ERR" || RC=$?
   ELAPSED=$(( $(date +%s) - t0 ))
 }
 calls() { wc -l < "$CALLS" | tr -d ' '; }
+dpkg_calls() { wc -l < "$W/dpkg-calls" | tr -d ' '; }
 last_err_line() { tail -n 1 "$ERR"; }
 spent_total() { awk '{s += $1} END {print s + 0}' "$W/state/spent"; }
 reap_child() { local c; c="$(cat "$W/child" 2>/dev/null || true)"; [ -n "$c" ] && kill "$c" 2>/dev/null || true; }
@@ -294,6 +310,16 @@ if printf '%s\n' "$_ao" | grep -cx >/dev/null 'rc2=0 budget=7 spent=3' && printf
    && cmp -s "$LIB" "$_ad/apt-bounded.sh" && [ "$_oct" = 8 ] && [ "$_badrc" -eq 2 ] && [ "$_ia" -eq 0 ]; then
   pass "A19: arm is idempotent on disk and keeps spent, copies the lib, normalises 08, rejects abc; the summary reports; the armed dir drives the helper"
 else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')] oct=[$_oct] bad-rc=$_badrc helper-rc=$_ia"; fi
+
+# A20 — a mid-configure cap-kill poisons dpkg: apt exits 100 on "dpkg was interrupted" and EVERY retry
+# re-pays the poison. The cycle must run a `dpkg --configure -a` repair before each retry, inside the
+# same attempt timeout (proved by GD_APT_STAGE=repair in the attempt log), and then recover. Without
+# the repair this row ends rc 100 with 3 poisoned attempts and zero dpkg calls.
+row; run_helper dpkg-poisoned 60 curl
+if [ "$RC" -eq 0 ] && [ "$(calls)" -eq 3 ] && [ "$(dpkg_calls)" -eq 1 ] && grep -qx 'GD_APT_STAGE=repair' "$W/apt.log" \
+   && grep -q '^--configure -a$' "$W/dpkg-calls" && [ "$(last_err_line)" != "FIXTURE_APT_FAILED" ]; then
+  pass "A20: poisoned dpkg — the retry repairs first (stage=repair, dpkg --configure -a once, inside the attempt), apt then succeeds (rc 0, 3 apt calls)"
+else fail "A20: dpkg repair before retry" "rc=$RC calls=$(calls) dpkg_calls=$(dpkg_calls) dpkg-log=[$(tr '\n' '|' < "$W/dpkg-calls")] apt-log=[$(grep -a 'GD_APT_STAGE' "$W/apt.log" | tr '\n' '|')] last=[$(last_err_line)]"; fi
 
 # ── Guard 4: the shared apt cache (#10781) ───────────────────────────────────────────────
 # A cache-simulating stub (modes cache*, above) records a network cost only when the lists are empty or the package is
@@ -485,15 +511,17 @@ if [ "$_h1_rc" -eq 100 ] && [ "$_h1_want" -eq 21 ] && grep -qE '^FIXTURE_APT_CAU
   pass "gd_apt_out_tail H1: cause line first, then exactly the last $(( _h1_want - 1 )) scrubbed lines, bounded at ${_h1_want} lines in all, none of the unscrubbed lines around them"
 else fail "gd_apt_out_tail H1: full block" "apt rc=$_h1_rc lines=$_h1_n want=$_h1_want head=[$(printf '%s\n' "$_h1" | head -n 2 | cut -c1-120 | tr '\n' '|')] tail=[$(printf '%s\n' "$_h1" | tail -n 2 | cut -c1-100 | tr '\n' '|')]"; fi
 
-# H2 — a SHORT scrubbed block (fewer lines than the cap, here the 5-line `fail` stub accumulated over 3 attempts): the
-# helper takes the exact count the cause line carries, so it never reaches back into the unscrubbed lines above the block.
+# H2 — a bounded scrubbed block (the 5-line `fail` stub accumulated over 3 attempts; the two retry-time
+# GD_APT_STAGE=repair lines bring it to exactly the 20-line cap boundary): the helper takes the exact
+# count the cause line carries, so it never reaches back into the unscrubbed lines above the block.
+# The NOISE assertions are what prove no-reach-back; the size predicate is only the fixture shape.
 row
 run_helper fail 60 curl; _h2_rc=$RC
 _h2_blk=$(( $(wc -l < "$ERR") - 2 ))   # stderr = scrubbed block + cause + marker
 _mkcap "$ERR" 30
 _h2="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
 _h2_n=$(printf '%s\n' "$_h2" | wc -l | tr -d ' ')
-if [ "$_h2_rc" -eq 100 ] && [ "$_h2_blk" -ge 3 ] && [ "$_h2_blk" -lt 20 ] && [ "$_h2_n" -eq $(( _h2_blk + 1 )) ] \
+if [ "$_h2_rc" -eq 100 ] && [ "$_h2_blk" -ge 3 ] && [ "$_h2_blk" -le 20 ] && [ "$_h2_n" -eq $(( _h2_blk + 1 )) ] \
    && grep -qE '^FIXTURE_APT_CAUSE: apt-error ' < <(head -n 1 <<<"$_h2") && ! grep -qE 'NOISE' <<<"$_h2" \
    && grep -qF 'archive.ubuntu.com/ubuntu noble InRelease' <<<"$_h2" && ! grep -qF 's3cr3t' <<<"$_h2"; then
   pass "gd_apt_out_tail H2: a ${_h2_blk}-line scrubbed block yields the cause plus exactly those ${_h2_blk} lines (no reach into the 30 unscrubbed lines above), credentials still scrubbed"
@@ -808,12 +836,12 @@ else fail "A10b: raw tail of an apt capture, or no gd_apt_out_tail call" "${_a10
 # Two statements, both loud: the first is the floor shape scripts/guard-vacuity-floor.test.sh mutation-tests (a literal threshold
 # adjacent to the `if`, `-lt`, reported by printf + exit 1); the second makes the count EXACT, so an added-but-unregistered row is a
 # finding as well as a deleted one. Move BOTH numbers together with the row count.
-if [ "$checked" -lt 36 ]; then
-  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 36 — rows were deleted or the suite exited early.\n' "$checked" >&2
+if [ "$checked" -lt 37 ]; then
+  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 37 — rows were deleted or the suite exited early.\n' "$checked" >&2
   exit 1
 fi
-if [ "$checked" -gt 36 ]; then
-  printf 'FAIL ANTI-VACUITY: %s rows ran, expected exactly 36 — rows were added without moving this count.\n' "$checked" >&2
+if [ "$checked" -gt 37 ]; then
+  printf 'FAIL ANTI-VACUITY: %s rows ran, expected exactly 37 — rows were added without moving this count.\n' "$checked" >&2
   exit 1
 fi
 if [ "$((passes + fails))" -ne "$checked" ]; then

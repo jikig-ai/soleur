@@ -142,7 +142,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 2 0 "null" 2 3
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (loop continues)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset to 0"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -163,7 +163,7 @@ create_state_file "$TEST_DIR" 1 0 "null" 2 3
 # Exactly 150 alphanumeric chars (no spaces to strip)
 run_hook "$TEST_DIR" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset (150 chars = substantive)"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -175,7 +175,7 @@ create_state_file "$TEST_DIR" 1 0 "null" 0 3
 # Exactly 149 alphanumeric chars
 run_hook "$TEST_DIR" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented to 1"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -206,7 +206,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" ""
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (only 1 empty, threshold is 3)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for empty message"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -260,7 +260,7 @@ Test prompt
 EOF
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (no crash on corrupted field)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "corrupted stuck_count reset to 0"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -285,7 +285,7 @@ Use standard HTTP status codes.
 EOF
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//') || true
 assert_eq "2" "$ITERATION" "iteration updated to 2"
 # Verify the raw state file preserves --- and text after it in the prompt body
 # (The awk prompt extractor on line 133 consumes bare --- lines -- that's pre-existing behavior.)
@@ -317,7 +317,7 @@ Check iteration: current status of deployment.
 EOF
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//') || true
 assert_eq "2" "$ITERATION" "frontmatter iteration updated to 2"
 PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md")
 assert_contains "$PROMPT_BODY" "iteration: current status of deployment" "prompt iteration: text preserved"
@@ -342,7 +342,7 @@ Monitor stuck_count: should be zero.
 EOF
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/stuck_count: *//')
+STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT_FM" "frontmatter stuck_count reset to 0"
 PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md")
 assert_contains "$PROMPT_BODY" "stuck_count: should be zero" "prompt stuck_count: text preserved"
@@ -354,8 +354,7 @@ echo "Test 16: Hook exits 0 from subdirectory when no state file"
 TEST_DIR=$(setup_test)
 mkdir -p "$TEST_DIR/sub/deep"
 # No state file created -- hook should exit 0 cleanly
-HOOK_OUTPUT=$(cd "$TEST_DIR/sub/deep" && echo '{}' | bash "$HOOK" 2>&1) || true
-EXIT_CODE=$?
+if HOOK_OUTPUT=$(cd "$TEST_DIR/sub/deep" && echo '{}' | bash "$HOOK" 2>&1); then EXIT_CODE=0; else EXIT_CODE=$?; fi
 assert_eq "0" "$EXIT_CODE" "hook exits 0 when no state file from subdirectory"
 assert_eq "" "$HOOK_OUTPUT" "no output when no state file"
 cleanup_test "$TEST_DIR"
@@ -369,7 +368,7 @@ mkdir -p "$TEST_DIR/sub/deep"
 # run_hook uses a subshell, so CWD isolation is automatic
 run_hook "$TEST_DIR/sub/deep" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file found and updated from subdirectory"
-ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//')
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | head -1 | sed 's/iteration: *//') || true
 assert_eq "2" "$ITERATION" "iteration updated from subdirectory"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -435,7 +434,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "All slash commands are finished"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (only 1 idle, threshold 3)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -446,7 +445,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "Nothing left to do"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -457,7 +456,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "Session already complete"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -477,7 +476,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 2 0 "null" 2 3
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset to 0 for substantive response"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -490,7 +489,7 @@ create_state_file "$TEST_DIR" 1 0 "null" 2 3
 LONG_RESPONSE="I've updated all 5 files. The module is all done and tested. Here is a detailed summary of the changes: refactored the authentication layer, added rate limiting, improved error handling, updated the documentation, and added comprehensive integration tests."
 run_hook "$TEST_DIR" "$LONG_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (long response = substantive)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset (length gate prevents idle detection)"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -501,7 +500,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "All done. No active commands to run."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (only 1 idle)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for short idle response"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -533,7 +532,7 @@ REPEATED_HASH=$(echo "$REPEATED_STRIPPED" | tr '[:upper:]' '[:lower:]' | md5sum 
 create_state_file "$TEST_DIR" 5 0 "null" 0 3 "$REPEATED_HASH" 1
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists"
-REPEAT_COUNT=$(grep '^repeat_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/repeat_count: *//')
+REPEAT_COUNT=$(grep '^repeat_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/repeat_count: *//') || true
 assert_eq "0" "$REPEAT_COUNT" "repeat_count reset to 0 after different response"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -569,7 +568,7 @@ create_state_file "$TEST_DIR" 1 0 "null" 2 3
 BOUNDARY_RESPONSE="All done with the feature implementation. Here are the changes I made to the authentication system, the rate limiter, the error handlers, the logging framework, and the monitoring dashboards updated successfully with the new metrics.."
 run_hook "$TEST_DIR" "$BOUNDARY_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (200 chars = substantive)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset (200 chars hits length gate)"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -645,8 +644,7 @@ started_at: "$NOW_TS"
 
 Foreign session prompt
 EOF
-HOOK_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1) || true
-EXIT_CODE=$?
+if HOOK_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1); then EXIT_CODE=0; else EXIT_CODE=$?; fi
 assert_eq "0" "$EXIT_CODE" "hook exits 0 when only foreign PID state file exists"
 assert_eq "" "$HOOK_OUTPUT" "no output for live foreign PID"
 # Foreign file still exists (live process, fresh timestamp)
@@ -759,7 +757,7 @@ create_state_file "$TEST_DIR" 3 0 "null" 0 3 "" 0 2 "$PREV_WORDS"
 # Completely different response (< 80% overlap with NATO alphabet)
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (dissimilar response)"
-SIMILARITY_COUNT=$(grep '^similarity_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/similarity_count: *//')
+SIMILARITY_COUNT=$(grep '^similarity_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/similarity_count: *//') || true
 assert_eq "0" "$SIMILARITY_COUNT" "similarity_count reset to 0 after dissimilar response"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -808,7 +806,7 @@ create_state_file "$TEST_DIR" 1 0 "null" 0 3
 IDLE_LONG="All the slash commands are already done and complete. I have verified every single one of them and confirmed that nothing is pending or remaining to be executed in this entire session right now today."
 run_hook "$TEST_DIR" "$IDLE_LONG"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (only 1 idle)"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//') || true
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern in 150-199 char range"
 cleanup_test "$TEST_DIR"
 echo ""

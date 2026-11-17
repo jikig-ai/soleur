@@ -65,6 +65,17 @@
 # apps/*/infra/, and the docs/legal/ disclosed_as anchors). Re-derive that
 # intersection before widening ALLOWED_PATHS; see the ADR-140 addendum of
 # 2026-09-23.
+# That disjointness is the encryption-posture sweep's alone. The `test` sweep
+# also reaches the digest through always-on suites that read knowledge-base/
+# wholesale: scripts/generate-kb-index-live (predates #12348; the bot action
+# does not reproduce it) and, since #12348, scripts/lint-cve-safe-status-live
+# (the no-argument lint run), which scans knowledge-base/ wholesale — but only on diffs the oracle lane
+# (scripts/ci-oracle-lane.sh) does not skip. The always-running full scan is
+# the `guards-ruleset` member `cve-safe-status` (below). The credential-path
+# overlap reaches the digest via `guards-ruleset` (credential-path-guard), not
+# `test`. The bot action earns the lint-cve-safe-status part of BOTH greens by
+# running `lint-cve-safe-status.py --paths` over its staged paths before the
+# push (parity Test 11; the ci.yml step itself is pinned by Test 12).
 test
 dependency-review
 e2e
@@ -84,26 +95,49 @@ skill-security-scan PR gate
 #     (`lint fixture content`), waiver-discipline (`waiver discipline
 #     (issue:#NNN trailer)`), rename-guard (`rename-guard (allowlist
 #     destinations)`), allowlist-diff (`allowlist-diff (.gitleaks.toml paths
-#     surface)`).
+#     surface)`), parked-hold and parked-hold-selftest (added 2026-11-08,
+#     #12396).
 #       - scan + lint-fixture-content: EARNED — the composite action reproduces
 #         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
 #         posting any synthetic (action.yml); the greens are earned, not
 #         fabricated. (#6049)
-#       - waiver-discipline: reachable only if a bot diff adds a `gitleaks:allow`
-#         waiver line. The one file a bot PR may write is
-#         knowledge-base/project/weakness-digest.md, emitted verbatim by
-#         weakness-miner.sh — a digest listing that contains no `gitleaks:allow`
-#         token, so the member is vacuously clean over every bot diff
-#         (unreachability-by-construction, re-derived here).
+#       - waiver-discipline: EARNED — the composite action reproduces the
+#         member's own predicate over the staged diff (added `gitleaks:allow`
+#         lines must carry an `issue:#NNN <reason>` trailer) in the same
+#         Phase-4 ceiling as the gitleaks / lint-fixture-content arms
+#         (action.yml). Replaces the earlier unreachability note, which
+#         leaned on weakness-digest.md's current output format — a
+#         generator-emitted file is not a bound on the format. (#12276)
 #       - rename-guard / allowlist-diff: CONTENT-SCOPED, sound by
 #         UNREACHABILITY — their guarded surfaces (renames into allowlist
 #         destinations under apps/web-platform/**, and the .gitleaks.toml paths
 #         surface) are disjoint from ALLOWED_PATHS = {weakness-digest.md} ->
 #         intersection EMPTY.
+#       - parked-hold / parked-hold-selftest: NOT content-scoped — they read
+#         the PR's LIVE label list (scripts/ci-parked-hold.sh), not the diff,
+#         so the content-scoped reachability argument does not apply and none
+#         is made. Hosted in this umbrella because secret-scan.yml already
+#         triggers on labeled/unlabeled (ci.yml does not); a semantic misfit
+#         for a secret scanner, accepted over a new top-level required context
+#         (which would need a ruleset apply). The bot synthetic for
+#         `secret-guards` is UNCHANGED. The member is unreachable at synthesis
+#         for the current bot producers because the composite action's
+#         `labels` input is caller-fixed (swept: `grep -rn
+#         "bot-pr-with-synthetic-checks" .github` -> weakness-miner.yml is the
+#         only live caller and it never passes `parked`). A later HUMAN label
+#         fires a real `labeled` run that supersedes the synthetic (latest
+#         check-run per name wins); for a PR created with GITHUB_TOKEN that is
+#         UNVERIFIED. Flip evidence: a human-labeled bot PR that shows NO new
+#         `secret-guards` run means the member must be reproduced in the
+#         action's Phase-4 ceiling (live label read before posting any
+#         synthetic). A `parked` label applied by an Actions actor with
+#         GITHUB_TOKEN fires no `labeled` run either (a GitHub rule), so such
+#         a PR keeps its synthetic green until its merge_group run.
 #   quality-guards (.github/workflows/pr-quality-guards.yml job
 #     `quality-guards`)
 #     members: enforce, markdown-lint, guard-script-fixture-tests (context was
-#     `Bash fixture tests for guard scripts`).
+#     `Bash fixture tests for guard scripts`), workflow-yaml-strict (step
+#     `workflow-duplicate-keys`, added 2026-11-07, #12283).
 #       - enforce: CONTENT-SCOPED, UNREACHABLE — its DSAR surface patterns +
 #         the four required legal docs are all outside ALLOWED_PATHS (∅).
 #       - markdown-lint: CONTENT-SCOPED, UNREACHABLE — the whole-corpus sweep
@@ -125,10 +159,23 @@ skill-security-scan PR gate
 #       - guard-script-fixture-tests: CONTENT-SCOPED, UNREACHABLE — it executes
 #         the fixture battery under .github/scripts/**; ALLOWED_PATHS ∩ that
 #         tree = ∅.
+#       - workflow-yaml-strict (step `workflow-duplicate-keys`): CONTENT-SCOPED,
+#         UNREACHABLE — it strict-parses (duplicate-key aware, keys compared
+#         case-insensitively as GitHub does) only .github/workflows/*.{yml,yaml}
+#         (suffix any case) and .github/actions/**/action.{yml,yaml};
+#         ALLOWED_PATHS = {weakness-digest.md} ∩ that scan surface = ∅. Re-derive
+#         on ANY change to the guard's file set
+#         (.github/scripts/check-workflow-duplicate-keys.py). Comment-only
+#         disposition: no ruleset, .tf or canonical-JSON change (the umbrella
+#         context `quality-guards` is unchanged).
 #   guards-ruleset (.github/workflows/ci.yml job `guards-ruleset`)
 #     members: adr-ordinals, rule-body-lint, tc-document-sha-guard,
 #     marketplace-manifest-guard, service-role-allowlist-gate,
-#     credential-path-guard, lockfile-sync, grok-fidelity.
+#     credential-path-guard, cve-safe-status, lockfile-sync, grok-fidelity.
+#       - cve-safe-status (#12348, ADR-322): REACHABLE — full scan of every
+#         tracked knowledge-base/ file, which includes weakness-digest.md. The
+#         action earns this green by running `lint-cve-safe-status.py --paths`
+#         over its staged paths before opening the PR (parity Test 11).
 #       - credential-path-guard: REACHABLE — and this is the member that breaks
 #         the unreachability pattern. Its SCAN_DIRS = (plugins, knowledge-base)
 #         over tracked *.md INCLUDES knowledge-base/project/weakness-digest.md,
@@ -225,6 +272,26 @@ sentry-destroy-required
 #      binding result on exactly the re-vendor PRs the gate exists to
 #      protect. Do not add it.
 vendor-pin-required
+
+# #10859 — ci.yml `oracle-review-required` (PR3b, ADR-276 ruling (a) of
+# 2026-11-06): the bound owner-review sentinel for the oracle surface
+# (scripts/ci-oracle-surface.txt — re-scoped off the retired replay.py
+# RATCHET_ORACLE by the S4 retirement of 2026-11-09). pull_request: the
+# BASE commit's resolved oracle list ∩ diff must be empty, the author deruelle, or a
+# deruelle APPROVED review bound to the head SHA must exist; merge_group: every
+# member's queued head must show its LATEST oracle-review-required check-run
+# completed/success (the self-loop is closed by member enumeration, never
+# self-report). Fail-closed on every unknown.
+#
+# ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: the pull_request arm
+# classifies on the BASE commit's resolved oracle list, and ALLOWED_PATHS ∩
+# oracle surface = ∅ (pinned by
+# plugins/soleur/test/bot-synthetic-unreachability.test.sh), so every bot PR is
+# verdict `not-oracle` and the synthetic green asserts exactly that — never a
+# fabricated review act. The residual goes LIVE the instant an oracle path is
+# added to ALLOWED_PATHS: a bot PR could then reach the surface this sentinel
+# gates, and the synthetic green would fabricate the review act (#6049 ceiling).
+oracle-review-required
 
 # CLA Required ruleset
 cla-check

@@ -193,7 +193,7 @@ jobs:
           # Pinned, never `latest`: an unpinned CLI makes every canary verdict a
           # function of whatever shipped that morning, so a red run could not be
           # attributed to this repo's delivery path.
-          CLI_VERSION: "2.1.311"
+          CLI_VERSION: "2.1.321"
         run: |
           set -uo pipefail
           # Inherited errexit is ON in a `run:` block with no `shell:` key. A failed

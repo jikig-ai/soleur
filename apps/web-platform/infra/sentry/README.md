@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **56 `sentry_alert` rules** (56 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672, #10914, #12011. 54 are
-  fully Terraform-owned (53 of the 55 `sentry_alert` blocks in `issue-alerts.tf`, the other two being the frozen pair below, plus `cron-monitor-failure` in
+- **57 `sentry_alert` rules** (57 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672, #10914, #12011, #10479. 55 are
+  fully Terraform-owned (54 of the 56 `sentry_alert` blocks in `issue-alerts.tf`, the other two being the frozen pair below, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -141,6 +141,16 @@ the rule, its `alert-reference.json` entry, these README lines, both guard tests
 and the other items of the removal checklist in the header of `server/agent-auth-mode.ts`, when the root-cause fix merges or on
 2026-11-26 (30 days after the first event), whichever comes first. #11085 is reviewed on 2026-11-30 at the latest, whether or
 not step 2 has happened.
+
+## Origin TLS paging: `origin-tls-event` (#10479, ADR-321)
+
+`sentry_alert.origin_tls_event` (`issue-alerts.tf`, `frequency_minutes = 47`) emails the issue owners (`ActiveMembers` fallthrough) on
+ANY event tagged `feature=origin_tls`, which `server/origin-tls.ts` is the only emitter of (`op=listen` incl. `phase=runtime` /
+`reason=unexpected-close`, `op=load`, `op=create`, `op=cert_expiry`, which fires only at a container start within 90 days of expiry). Its only filter is the feature tag, so a future op is paged by
+default; `test/sentry-origin-tls-alert-op-contract.test.ts` derives the literal from the emitter. The rule is DECLARED in the change
+that added it and takes effect only once `apply-sentry-infra.yml` has applied it on merge. A dead `:443` that raises no event (docker-proxy
+or iptables failure) is not covered: the Better Stack monitors remain the detectors for that. Resolve the Sentry issue after the cause is fixed,
+never archive it (an archived issue fires no trigger).
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

@@ -113,3 +113,5 @@ Always cite your sources and indicate the authority level:
 If you encounter conflicting advice, present the different viewpoints and explain the trade-offs.
 
 Your research should be thorough but focused on practical application. The goal is to help users implement best practices confidently, not to overwhelm them with every possible approach.
+
+When you download a source file to read it (curl, wget, a raw GitHub URL), save it under the session scratchpad or a fresh temporary directory, never the current working directory: the working directory is usually a feature worktree, and a stray download there gets swept into the next commit.

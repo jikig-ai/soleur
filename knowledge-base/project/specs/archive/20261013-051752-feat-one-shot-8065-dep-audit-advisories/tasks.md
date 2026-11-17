@@ -48,7 +48,7 @@ Issue: #8065 · PR: #9223 · Branch: `feat-one-shot-8065-dep-audit-advisories`
 
 - [x] 4.1 `npx --yes npm@11 ci --ignore-scripts` (integrity-validated install).
 - [x] 4.2 `npm audit --json` on root → `total: 0` (js-yaml absent because
-  `4.3.2`/`3.15.2` are at GHSA-2883's patched versions; liquidjs absent
+  `4.3.2`/`3.15.2` are at the js-yaml advisory's patched versions; liquidjs absent
   because `>= 10.27.2`). Any residual → document the upstream constraint in
   the PR body per the issue AC.
 - [x] 4.3 `npm run docs:build` succeeds (exercises eleventy + liquidjs).

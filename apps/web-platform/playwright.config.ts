@@ -109,6 +109,15 @@ export default defineConfig({
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
         SUPABASE_URL: MOCK_SUPABASE_URL,
         SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+        // Founder legal-acceptance surface (#12197): the id of MOCK_FOUNDER in
+        // e2e/mock-supabase.ts, written as a literal (importing the mock here
+        // would load a second instance of it in every worker). The approval-queue
+        // flag is pinned OFF and Flagsmith unconfigured so
+        // e2e/nav-states-inbox-legal.e2e.ts proves "flag off, founder configured:
+        // the row is visible" instead of inheriting the developer's shell.
+        LEGAL_ACCEPTANCE_FOUNDER_ID: "00000000-0000-4000-8000-0000000000f0",
+        FLAG_APPROVAL_QUEUE: "0",
+        FLAGSMITH_ENVIRONMENT_KEY: "",
       },
     },
   ],

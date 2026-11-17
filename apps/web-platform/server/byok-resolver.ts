@@ -34,7 +34,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { isByokDelegationsEnabled, ANON_IDENTITY, type Identity } from "@/lib/feature-flags/server";
-import { resolveCurrentWorkspaceId } from "./workspace-resolver";
+import { resolveCurrentWorkspaceId } from "./current-workspace-id";
 import { resolveGranteeAcceptanceStatus } from "./byok-delegation-ui-resolver";
 
 const log = createChildLogger("byok-resolver");

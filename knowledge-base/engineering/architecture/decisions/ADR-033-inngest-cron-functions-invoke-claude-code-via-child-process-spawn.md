@@ -46,7 +46,7 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
 - **I4.** `claude` binary (npm package `@anthropic-ai/claude-code`) is **pinned via `apps/web-platform/package.json` dependency**. The existing deploy pipeline runs `npm install` on the Hetzner worker; the npm package's `postinstall` downloads the platform-native binary and exposes it at `node_modules/.bin/claude`. Inngest functions resolve the absolute path at module load via `createRequire(import.meta.url).resolve("@anthropic-ai/claude-code/package.json")`. The npm package installs the binary under the name `claude` (NOT `claude-code` — that is only the npm-registry package name). `[Refined 2026-05-18 post PR-1 plan review — original cloud-init pin was an extra IaC dance for no upside; the dep already ships via the same release artifact as the application code.]` `[Refined 2026-05-26 post TR9 PR-11 — I4 binary pin surface now includes Chromium, pinned transitively via @playwright/test devDep at docker build time (npx playwright@1.58.2 install --with-deps chromium). The @playwright/test package itself is a devDep omitted from the runner's npm ci --omit=dev; only the browser binary + system libs persist in the image. The Chromium revision is frozen in the image; drift between image-baked Chromium and any future @playwright/test bump is caught by the existing lockfile-sync CI gate.]`
 - **I5.** Stdout/exit-code captured **deterministically** so `step.run` memoization fires reliably. Inngest's memoization is keyed on the serialized step result; if claude-code's stdout includes nondeterministic timestamps or progress chatter, memoization breaks and replays re-spawn the agent. PR-1 must verify deterministic capture via the FR10 integration test (second invocation in succession MUST NOT re-spawn).
 - **I6.** Event payloads emitted by `cron-*` functions carry `actor: "platform"` tag. This is the boundary marker that lets platform-loop crons + per-founder runtime share one Inngest server; without it, `hr-gdpr-gate-on-regulated-data-surfaces` fires the moment PR-G (#3947) ships founder cohort exposure.
-- **I7.** Cron containment is a **deny-by-default `PreToolUse` hook**, NOT the OS bash sandbox and NOT `--allowedTools`/`permissions.defaultMode`. `[Added 2026-06-08 — #5018/#5000/#5004.]` The substrate's `DEFAULT_CLAUDE_SETTINGS` sets `sandbox.enabled:false` (host-independence — immune to the recurring bwrap-userns drift #4928/#4932 that broke #5000/#5004) and registers `cron-bash-allowlist-hook.mjs` under a `*` catch-all matcher via `buildCronEvalSettings`. Phase-0 probes (committed AC0 evidence; re-verified on the prod-pinned CLI 2.1.79) proved that with the sandbox off, headless `claude --print` does **NOT** fail-close non-allowlisted commands via `--allowedTools` or any `defaultMode` (dontAsk/default/auto all fail-OPEN), and an unhooked tool class / a crashed hook **fails OPEN** — so the hook is the only fail-closed boundary. Load-bearing sub-invariants: (a) deny-by-default at the **tool-class** level (catch-all + explicit Read/Grep/Glob secret-path deny + Bash allowlist + Write/Edit self-protection) — `bypassPermissions` (the v1 P1-blocked exfil primitive) MUST NOT reappear; (b) **secret-out-of-context** is the real safety property — every env/secret-read path (env dump, `/proc`, `.git/config` where the clone URL embeds the token) is denied across Bash AND Read/Grep, so the allowed egress verbs (`gh issue create`, `git push`) can't leak a secret never read; (c) a **spawn-time self-test** (`runHookSelfTest`) asserts the hook denies a canonical exfil payload before any agent spawns — a failure aborts the cron (→ FAILED self-report) rather than running unprotected; (d) per-cron `--allowedTools` and `permissions.deny` are documented defense-in-depth, NOT relied upon. **Negative guarantee:** this containment governs the claude-code tool layer ONLY — it does NOT extend to Node-level `child_process.spawn("bash", …)` (cron-content-publisher / content-vendor-drift / rule-prune / weekly-analytics bypass it entirely). Those + the broad-bash crons (`TIER2_DEFERRED_CRONS`) are paused (D6) until restored under finite allowlists. `[Refined 2026-06-10 — #5046 PR-2/ADR-052.]` The Tier-2 boundary LANDED: the 4 spawn-bash crons are now contained by the DOCKER-USER container egress allowlist (ADR-052 — content-blind, off-allowlist-severing), and the hook's catch-all was relax-minimally opened to `Task`/`Agent`/`Skill` ONLY (every Bash/secret-read layer intact; gated by extended `runHookSelfTest` probes incl. a `*`-matcher registration check). That restored exactly the two crons whose sole denied construct was `Task` (cron-agent-native-audit, cron-legal-audit — issue-creator allowlists + a `contents:read`+`issues:write` token); the remaining nine stay deferred pending per-construct allowlist refinement (six PR-flow crons) or non-GitHub-egress coverage (bug-fixer, community-monitor, ux-audit). Only crons whose entire command surface is a finite allowlist (`CRON_BASH_ALLOWLISTS`) are restorable.
+- **I7.** Cron containment is a **deny-by-default `PreToolUse` hook**, NOT the OS bash sandbox and NOT `--allowedTools`/`permissions.defaultMode`. `[Added 2026-06-08 — #5018/#5000/#5004.]` The substrate's `DEFAULT_CLAUDE_SETTINGS` sets `sandbox.enabled:false` (host-independence — immune to the recurring bwrap-userns drift #4928/#4932 that broke #5000/#5004) and registers `cron-bash-allowlist-hook.mjs` under a `*` catch-all matcher via `buildCronEvalSettings`. Phase-0 probes (committed AC0 evidence; re-verified on the prod-pinned CLI 2.1.79) proved that with the sandbox off, headless `claude --print` does **NOT** fail-close non-allowlisted commands via `--allowedTools` or any `defaultMode` (dontAsk/default/auto all fail-OPEN), and an unhooked tool class / a crashed hook **fails OPEN** — so the hook is the only fail-closed boundary. Load-bearing sub-invariants: (a) deny-by-default at the **tool-class** level (catch-all + explicit Read/Grep/Glob secret-path deny + Bash allowlist + Write/Edit self-protection) — `bypassPermissions` (the v1 P1-blocked exfil primitive) MUST NOT reappear; (b) **secret-out-of-context** is the real safety property — every env/secret-read path (env dump, `/proc`, `.git/config` where the clone URL embeds the token) is denied across Bash AND Read/Grep, so the allowed egress verbs (`gh issue create`, `git push`) can't leak a secret never read; (c) a **spawn-time self-test** (`runHookSelfTest`) asserts the hook denies a canonical exfil payload before any agent spawns — a failure aborts the cron (→ FAILED self-report) rather than running unprotected; (d) per-cron `--allowedTools` and `permissions.deny` are documented defense-in-depth, NOT relied upon. **Negative guarantee:** this containment governs the claude-code tool layer ONLY — it does NOT extend to Node-level `child_process.spawn("bash", …)` (cron-content-publisher / content-vendor-drift / rule-prune / weekly-analytics bypass it entirely). Those + the broad-bash crons (`TIER2_DEFERRED_CRONS`) are paused (D6) until restored under finite allowlists. `[Refined 2026-06-10 — #5046 PR-2/ADR-052.]` The Tier-2 boundary LANDED: the 4 spawn-bash crons are now contained by the DOCKER-USER container egress allowlist (ADR-052 — content-blind, off-allowlist-severing), and the hook's catch-all was relax-minimally opened to `Task`/`Agent`/`Skill` ONLY (every Bash/secret-read layer intact; gated by extended `runHookSelfTest` probes incl. a `*`-matcher registration check). That restored exactly the two crons whose sole denied construct was `Task` (cron-agent-native-audit, cron-legal-audit — issue-creator allowlists + a `contents:read`+`issues:write` token); the remaining nine stay deferred pending per-construct allowlist refinement (six PR-flow crons) or non-GitHub-egress coverage (bug-fixer, community-monitor, ux-audit). Only crons whose entire command surface is a finite allowlist (`CRON_BASH_ALLOWLISTS`) are restorable. `[Amended 2026-11-16 — #12757]` Sub-invariant (a)'s Write/Edit self-protection also covers git's global config (`.gitconfig`, `.config/git`) and the identity-file trust root `/usr/local/share/soleur`, matched on the raw and the `posix.normalize`d path; see the 2026-11-16 amendment below for the git-config pin and the command-word shape rule.
 
 - **I8.** **Classify-fatal heartbeat + widened `routine_runs` failure contract.** `[Added 2026-06-29 — #5674.]` A claude-eval non-zero exit is NOT uniformly green and NOT uniformly red — it is **classified** from the captured stdout/stderr tail (`resolveBestEffortEvalOk` / `classifyEvalFatal` in `_cron-shared.ts`, single source of the fatal markers, shared with the credit-probe canary):
   - a **FATAL class** — credit exhausted (`/credit balance is too low/i`), auth/401 revoked (`invalid x-api-key` / `authentication_error`), spawn fault (`exitCode === -1` / `ENOENT`/`EACCES`), OR `abortedByTimeout` — MUST flip the Sentry monitor RED (`postSentryHeartbeat({ ok:false })`) and write a `routine_runs.failed` row carrying the redaction-scrubbed reason;
@@ -178,6 +178,8 @@ Rows 2, 6 and 8 apply to EVERY new served Inngest function (event, oneshot and a
 
 Plus the `cron-tier2-parity` sibling-set sweep (`.github/enforcement-contracts.json`) forces `cron-safe-commit-parity.test.ts` (add to `MIGRATED_PROMPT` for safe-commit crons) and `cron-shared.test.ts` into the same diff whenever `cron-manifest.ts` changes. Validate locally before push: `bunx vitest run test/server/inngest/{function-registry-count,sentry-monitor-iac-parity,cron-containment-classify,cron-safe-commit-parity,cron-shared,execution-placement}.test.ts`.
 
+`[Added 2026-11-16 — #12757]` Row 1's spawn env: copy an existing cron's env literal, which ends with `...CRON_GIT_CONFIG_PIN`. `test/server/inngest/cron-spawn-git-config-pin.test.ts` fails a cron env literal or git spawn without it.
+
 ## Cost Impacts
 
 **None.** Inngest substrate is already in `knowledge-base/operations/expenses.md` (PR-F shipped self-hosted on existing Hetzner node; no new vendor, no billing-tier change). `claude-code` CLI install on Hetzner is free; binary pin is a config change, not a paid resource. Operator `ANTHROPIC_API_KEY` consumption stays in the same operator-Anthropic billing surface — the migration is a substrate swap (GitHub Actions runner → Hetzner node), not a budget increase.
@@ -253,6 +255,13 @@ dedicated host's `--sdk-url` (`http://10.0.1.10:3000/api/inngest`) is only the r
 (#8611). Steps go to the serve URL the app registers, `serveHost` = `https://app.soleur.ai` in
 `app/api/inngest/route.ts`, and `cloudflare_record.app` resolves that name to web-1 only. The hand
 count is replaced by a per-function manifest.
+
+> **Superseded 2026-11-13 (#10479/#10538, PR #12737):** the declared `--sdk-url` in `inngest-host.tf` is now the public
+> serve URL `https://app.soleur.ai/api/inngest` (ADR-100 Decision 1 as amended, #10538 remedy (c)), not
+> `http://10.0.1.10:3000/api/inngest`; it is live only after the owner's `inngest-host-replace` (#12742). The `10.0.1.10`
+> pin no longer shares a source with `sdk_url`: it binds to the ADR-119 workspaces-LUKS volume holder (web-1) only. Steps
+> still go to the registered serve URL, which the Cloudflare LB steers to either serving web host (web-2 at LB weight 1
+> since 2026-11-08, #12414); the placement forwarder routes pinned work to web-1.
 
 ### Decision
 
@@ -362,3 +371,167 @@ per 2–7 h for a `*/15` schedule. Where it is the only trigger, its dropped run
 That is legitimate, because their run is not the only signal of the substrate's total loss:
 `scheduled-inngest-health` covers that from outside it. They watch partial failures (config drift,
 de-planned crons) that leave the substrate able to run them.
+
+## Amendment — 2026-11-10 (#9137): placement-aware execution via the fnId-keyed forwarder
+
+The 2026-09-28 amendment designated "placement-aware execution at the ADR-143 Phase-3 flip" as the
+target and left it to this issue to pick one of the two sanctioned shapes. This amendment records
+the mechanism as merged (CTO rulings T1–T4, 2026-11-10,
+`knowledge-base/project/specs/archive/20261110-134652-feat-one-shot-9137-placement-aware-execution/decision-challenges.md`).
+
+**Exposure that forced it.** web-2 has served LB weight 1 since the 2026-11-08 serve flip (#12167):
+`cloudflare_load_balancer.app` steers `app.soleur.ai` randomly between web-1 and web-2, so step calls
+at `https://app.soleur.ai/api/inngest` already fan out — the exposure the 2026-09-28 amendment
+scheduled for a future flip is live. Roughly half of `host-affine` and `volume-bound` calls were
+executing on web-2, where the sole-copy LUKS volume is absent and `spawnClaudeEval`'s process-local
+single-flight (ADR-243 §2) cannot join.
+
+### Mechanism (Option C, CTO T1)
+
+An app-layer fnId-aware forwarder in front of `serve()` in `app/api/inngest/route.ts` reads the step
+call's `?fnId` query key — the routing key the SDK itself requires — looks it up in
+`EXECUTION_PLACEMENT` (`server/inngest/execution-placement.ts`, the single classification
+authority), and decides per class:
+
+- `portable` executes wherever the call lands — losing web-1 no longer drops portable work.
+- `host-affine`, `volume-bound`, unknown and unclassifiable calls are forwarded **verbatim** — raw
+  body, all signature headers, full query — to the exec host's dedicated private listener
+  (`https://10.0.1.10:8445/api/inngest`) with the `x-soleur-exec-forward` marker set, and the
+  response is streamed back unbuffered.
+
+One app id (`soleur-runtime`), one registered serve URL, zero function-id migration, zero
+Terraform/DNS/LB changes. `EXPECTED_CRON_FUNCTIONS`, Sentry monitor slugs, the watchdog and
+deploy-verify are untouched because no function identity moves.
+
+**Rejected (CTO T1):** (A) per-class app ids — ~33-37 function-id migrations, a second registration
+path and consumer prefix churn, and it still needs a host-pinned serve URL; (B) edge fnId steering
+(Cloudflare LB rules / Worker) — a generated second copy of the pinned set that drifts against the
+manifest, so a new unlisted function silently misplaces.
+
+### Decision table (evaluated per request; GET, PUT and `?probe=` bypass the forwarder)
+
+| Condition | Decision |
+|---|---|
+| Not a step call (GET/PUT/`?probe=`) | `execute` locally — unchanged semantics on any host |
+| Class `portable` | `execute` locally |
+| Pinned class (`host-affine`/`volume-bound`), host IS exec | `execute` locally |
+| Pinned class, host NOT exec | `forward` verbatim to `https://10.0.1.10:8445/api/inngest`, marker set, streamed response |
+| Pinned class, marked `x-soleur-exec-forward`, host NOT exec | `refuse` — loop-guard, never re-forward |
+| `SOLEUR_HOST_PRIVATE_IP` unset/empty | `refuse` — HTTP 503 (retriable, never a `NonRetriable` shape) with the distinct `placement.exec_identity_missing` error |
+| POST with no `fnId` and no `probe`, or fnId unknown after prefix/suffix strip | treated as pinned (fail-closed direction: `forward`/`refuse`, never `execute` on a non-exec host) |
+
+### Exec-host identification (CTO T2, re-ruled)
+
+`ci-deploy.sh` injects `-e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND"` into the prod container (the
+canary gets it empty — it serves no step traffic). `PROXY_BIND` is already resolved per host from
+the `10.0.1.x` NIC, so the value and the hardcoded `10.0.1.10` pin constant share one Terraform
+source (`variables.tf` / `network.tf` web-1 `private_ip`, `inngest-host.tf` `sdk_url`) and both
+survive a `web-host-replace`. The pin is a hardcoded constant, drift-guarded — never an env value
+(#5182 forbids env-derived pins) and never `SOLEUR_HOST_ID` (instance id changes on every replace).
+A host that cannot establish exec identity (unset/empty) **refuses** every pinned call; a marked
+call arriving on a non-exec host is **refused**, never re-forwarded — the loop-guard.
+
+### Transport and receiver (CTO T3 + plan review)
+
+The web-host-to-web-host hop runs over **pinned TLS** reusing the session-proxy material:
+`loadProxyTlsClientCa()` (the `PROXY_TLS_CERT` env, minted in `infra/proxy-tls.tf` with SANs over
+every web host's private IP, so the default IP hostname check passes) with
+`rejectUnauthorized: true` — never `false`, never a new verification scheme. Plaintext was rejected:
+forwarded calls carry user payloads (BYOK agent-on-spawn event data), and ADR-294's direction for
+private Inngest links is already TLS. The receiver is a **sibling listener on a dedicated port
+(8445)** using `loadProxyTlsServerOptions()` material bound to the private IP, which invokes the
+app's own `/api/inngest` handler in-process; the :8443 wss server is NOT the receiver — its 10 s
+hello deadline would kill a streamed HTTP step mid-run. A non-exec host forwards only calls that
+carry an `x-inngest-signature` header (missing → refuse as `placement.missing_signature`, 401);
+the HMAC check itself runs only on the exec host's `serve()`.
+
+### Fail-closed semantics
+
+No code path executes a pinned-class, unknown-class or unclassifiable step call on a non-exec host:
+the refusal is an HTTP 503 (retriable — a late-NIC deploy stalls ticks visibly rather than killing
+runs), a marked call on a non-exec host is refused rather than re-forwarded, and a forward failure
+emits `placement.forward_failed` and never falls back to local execution.
+
+### Enforcement — now at request time
+
+The 2026-09-28 Enforcement section declared the `host-affine`/`volume-bound` split "DECLARED and
+reviewed, not guarded, until the placement-aware registry of #9137 consumes it". This amendment is
+that consumer: the split is now **enforced at request time** — `decidePlacement` reads
+`EXECUTION_PLACEMENT` on every step call, and `test/server/inngest/exec-placement-forward.test.ts`
+pins the whole decision table (Guard 1 served-set/classifier parity, Guard 2 fail-closed direction,
+Guard 3 forward fidelity, Guard 4 the `10.0.1.10` pin against `inngest-host.tf` `sdk_url` and the
+web-1 private-IP source). The manifest remains the single classification authority — the forwarder
+imports it, no second class table exists.
+
+### Residuals (CTO dissents, accepted)
+
+- **web-1 remains a SPOF for pinned classes** — already true today via the ADR-119 sole-copy LUKS
+  volume; this amendment makes the coupling visible and guarded (Guard 4), it does not create it.
+- **A NIC-late deploy on web-1 can ship an empty `SOLEUR_HOST_PRIVATE_IP`** → pinned fns refuse
+  (503, retriable) until the next deploy — surfaced as `placement.exec_identity_missing` plus the
+  no-SSH recovery step in `knowledge-base/engineering/operations/runbooks/inngest-server.md`.
+- **An 8445 publish degraded to loopback** (`net.ipv4.ip_nonlocal_bind` ≠ 1, the
+  `RELAY_PUBLISH_BIND` fallback) makes the exec listener unreachable by peers → forwards fail
+  closed (`placement.forward_failed`), a visible pinned-fn stall — accepted; the alternative
+  (exec-side blind spot) is worse.
+
+### Fallback (a) — still deferred; re-evaluation triggers carried verbatim (CTO T4)
+
+From #9137's own re-evaluation criteria, restated so they are not silently dropped: a second SDK
+worker on the Inngest host is deferred unless **a host-state verifier appears that neither GHA
+`schedule:` nor the ADR-248 clock can serve; or a measured incident of web-host loss dropping
+portable work**. Neither is true today: the ADR-248 clock runs on both web hosts and GHA-native
+`schedule:` covers the rest, and this amendment's forwarder is what closes the live fan-out
+exposure.
+
+## Amendment — 2026-11-16 (#12757): git config is part of the containment boundary
+
+The containment hook protected itself, its allowlist and its settings, but not git's global config. Git runs a command
+named there on every `status` (`core.fsmonitor`), runs an alias script on a mistyped command when `help.autocorrect` is
+set, and applies URL rewrites on every fetch. Cron `HOME` persists across runs, so one poisoned run reached every later
+run's token-bearing clone. Three changes close it.
+
+1. **Write-protection (I7(a)).** `WRITE_PROTECTED_PATTERNS` in `cron-bash-allowlist-hook.mjs` gains `.gitconfig`,
+   `.config/git` and `/usr/local/share/soleur`, checked on the raw path and on `posix.normalize(path)`. The `.config/git`
+   entry assumes `XDG_CONFIG_HOME` is unset; nothing under `server/` sets it.
+2. **The git-config pin (new sub-invariant).** Every cron child process that can run git (`git`, `gh`, `bash`,
+   `claude`) carries `CRON_GIT_CONFIG_PIN` from `server/host-git.ts` (`GIT_CONFIG_GLOBAL` = the identity-only
+   `AGENT_GIT_GLOBAL_CONFIG`, `GIT_CONFIG_NOSYSTEM=1`), spread last, or a stricter `/dev/null` global. It is applied at the
+   `spawnClaudeEval` and `spawnSimple` chokepoints and in every cron env literal and git helper. `spawnSimple` and the
+   script helpers keep a caller's `/dev/null` (`withCronGitConfigPin`); the claude spawn always forces the identity file,
+   because the agent commits. `test/server/inngest/cron-spawn-git-config-pin.test.ts` enforces it for what its AST walk
+   can see: every `HOME`-keyed literal, every call whose command is a git/gh/bash/sh/env literal, and every
+   named-import `child_process` call, in non-test `*.ts` under `server/inngest`; a namespace, default or whole-module
+   handle on `child_process` there (an import, or any `require`/`import()` of it other than the destructured named form) fails the census (row 4e) instead of passing unseen. Any unquoted `{`, glob character (`*`, `?`, `[`, extglob) or word-start `~`, any backslash outside single quotes, `$'…'`/`$"…"` quoting, and any `$` not followed by whitespace (outside single quotes) are refused as metachars, so the hook's quote tracking matches bash's and no raw-token rule can be re-spelled past (an escaped quote or brace was read as a boundary bash does not see). A missing or unreadable identity
+   file is reported once per transition per process (`cron-git-config-pin`), because git treats it as an empty global
+   and commits then fail with "Author identity unknown".
+3. **Command-word shape rule.** For a `git` or `gh` segment, the raw command words at the allowlist's fixed positions
+   (`git <sub>`, `gh <group> <verb>`, `gh api <path>`) must be plain (`^[A-Za-z0-9-]+$`, no leading flag), and the
+   `gh api` path word must hold no whitespace. A git global option before the sub-command is refused with "drop it",
+   never "move it" (`git log -C` and `git commit -c` mean something else after the verb). `git worktree add|move` is
+   refused for an absolute, `~`, `$`, `..` or write-protected path, since it writes a whole tree there. The allowlist
+   matches the whitespace-normalised join of the tokens while the verb rules read raw token positions, so an empty,
+   padded or no-break-space token made the two views disagree. Requiring plain command words makes them agree. Arguments
+   after the command words are not shape-checked.
+
+Residuals, stated plainly:
+
+- A flag-led git or gh allowlist line (`git -c …`, `gh -R …`) cannot be expressed under the shape rule; adding one means
+  extending `commandWordShapeReason` and this amendment, not loosening the regex.
+- The pin does not cover `$HOME/.config/git/ignore` or `attributes`, whose defaults git reads from XDG whatever
+  `GIT_CONFIG_GLOBAL` says. Write-protection (item 1, with the agent-editable-code residual below) is the only barrier for them, and an `XDG_CONFIG_HOME` pin waits
+  until the Dockerfile is in scope. Their presence is reported (`cron-git-xdg-config-present`).
+- The node self-test probes in the substrate (`execFileSync(nodeBin, …)`) run node, not git, and are excluded.
+- Founder-workspace git spawns outside `server/inngest/` (`git-config-atomic.ts`, `push-branch.ts`) inherit the
+  container `HOME` and are not covered; tracked under #9601.
+- Write-protection covers the Write/Edit/MultiEdit tools and `git worktree add|move` only. A cron that keeps file
+  tools (bug-fixer) can edit a script or test it is allowed to run (`bash …/worktree-manager.sh`, `vitest run`), a
+  plugin hook loaded via `--plugin-dir`, or `~/.bashrc`, and that code runs with the spawn's secrets and can write any
+  path. Under the pin a `~/.gitconfig` written that way is no longer read by cron git; the remaining reader is
+  founder-workspace git (above). The agent-editable-code class is tracked in #12824 (CTO F1).
+- `safe.bareRepository` and `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` pins are out of scope for crons (CTO ruling);
+  a config carried by a committed bare repo, or by `GIT_CONFIG_PARAMETERS` in a host env, is not closed here. No cron
+  env or Dockerfile line sets either variable today.
+- `server/compound-promote-create-gates.ts` `spawnRepoScript` (outside `server/inngest`, `HOME=/tmp`) carries no pin;
+  its scripts run no git today.
+- Prod `HOME` is assumed writable per the Dockerfile and deploy flags; not checked live.

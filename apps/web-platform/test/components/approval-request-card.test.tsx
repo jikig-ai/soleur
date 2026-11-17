@@ -422,3 +422,167 @@ describe("accessibility", () => {
     expect(g.getAttribute("aria-busy")).toBe("false");
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601: the requester line on the Owner card, and the withheld (redacted) member card.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("requester line on the Owner card (#9601)", () => {
+  const line = () => screen.getByTestId("approval-requester");
+
+  it.each([
+    ["jane@example.com", "Requested by jane@example.com"],
+    ["you", "Requested by you"],
+    ["a workspace member", "Requested by a workspace member"],
+  ])("renders the label %s as '%s'", (requester, text) => {
+    render(<ApprovalRequestCard {...props({ requester })} />);
+    expect(state()).toBe("pending_owner");
+    expect(line().textContent).toBe(text);
+  });
+
+  it("no requester prop: no requester line at all (a failed lookup omits the key, it never invents one)", () => {
+    render(<ApprovalRequestCard {...props()} />);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+  });
+
+  it("the label is a plain text node: no link, no mailto, no markup", () => {
+    render(<ApprovalRequestCard {...props({ requester: "jane@example.com" })} />);
+    expect(card().querySelector('a[href^="mailto:"]')).toBeNull();
+    expect(line().querySelector("a")).toBeNull();
+    const { unmount } = render(<ApprovalRequestCard {...props({ requester: "<b>x</b>@example.com" })} />);
+    expect(screen.getAllByTestId("approval-requester").some((el) => el.textContent === "Requested by <b>x</b>@example.com")).toBe(true);
+    expect(document.querySelector("b")).toBeNull();
+    unmount();
+  });
+
+  it("a right-to-left override in the label is made visible, not obeyed", () => {
+    render(<ApprovalRequestCard {...props({ requester: "jane‮evil@example.com" })} />);
+    expect(line().textContent).toContain("<U+202E>");
+    expect(line().textContent).not.toContain("‮");
+  });
+
+  it("a 254-character address wraps (the wrap classes are on the label) and is never truncated", () => {
+    const long = `${"a".repeat(254 - "@example.com".length)}@example.com`;
+    render(<ApprovalRequestCard {...props({ requester: long })} />);
+    expect(line().textContent).toContain(long);
+    const wrapEl = line().querySelector("span") ?? line();
+    expect(`${line().className} ${wrapEl.className}`).toContain("[overflow-wrap:anywhere]");
+    expect(`${line().className} ${wrapEl.className}`).toContain("min-w-0");
+    expect(`${line().className} ${wrapEl.className}`).not.toMatch(/truncate|text-ellipsis|line-clamp/);
+  });
+
+  it("the line sits outside the aria-live region and above the title", () => {
+    render(<ApprovalRequestCard {...props({ requester: "jane@example.com" })} />);
+    expect(line().closest("[aria-live]")).toBeNull();
+    const heading = screen.getByRole("heading");
+    expect(line().compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the landing layout shows the same line", () => {
+    render(<ApprovalRequestCard {...props({ layout: "landing", requester: "jane@example.com", agentWaiting: false })} />);
+    expect(line().textContent).toBe("Requested by jane@example.com");
+  });
+
+  it("a scrubbed Owner card (details removed) hides the requester line", () => {
+    render(<ApprovalRequestCard {...props({ view: null, requester: "jane@example.com" })} />);
+    expect(state()).toBe("details_removed");
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+  });
+
+  it("an Owner card with a label keeps Approve and Deny", () => {
+    render(<ApprovalRequestCard {...props({ requester: "jane@example.com" })} />);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+  });
+});
+
+describe("withheld member card (#9601)", () => {
+  const WAITING = "An action in this conversation is waiting for an Owner's approval.";
+  const withheld = (over: Partial<ApprovalRequestCardProps> = {}) => props({ view: null, viewerRole: "member", ...over });
+
+  it("pending: the waiting copy, no bound block, no buttons, never 'Details removed'", () => {
+    render(<ApprovalRequestCard {...withheld()} />);
+    expect(state()).toBe("pending_member");
+    expect(screen.getByRole("heading").textContent).toBe(WAITING);
+    expect(screen.queryByTestId("approval-bound-block")).toBeNull();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(card().textContent).not.toMatch(/Details removed/i);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+  });
+
+  it("pending: keeps the countdown and the member role line (time, not action text)", () => {
+    render(<ApprovalRequestCard {...withheld()} />);
+    expect(screen.getByTestId("approval-expiry").textContent).toContain("Expires in 23h 41m");
+    expect(screen.getByTestId("approval-member-role").textContent).toContain("only they can decide");
+  });
+
+  it("the newer-request banner never renders on a withheld card (two redacted cards share a tool name)", () => {
+    render(<ApprovalRequestCard {...withheld({ newerRequestExists: true })} />);
+    expect(screen.queryByTestId("approval-newer-banner")).toBeNull();
+  });
+
+  it("the requester member keeps the full bound block and reads 'You requested this. Waiting for an Owner's approval.'", () => {
+    const v = view();
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: v, requester: "you" })} />);
+    expect(state()).toBe("pending_member");
+    expect(screen.getByRole("heading").textContent).toBe("You requested this. Waiting for an Owner's approval.");
+    for (const f of v.fields) expect(screen.getByTestId("approval-bound-block").textContent).toContain(f.value);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("a member with a full view and no label keeps the existing wording", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view() })} />);
+    expect(screen.getByRole("heading").textContent).toBe("Waiting for the workspace Owner");
+  });
+
+  // Defensive: the server never sends a non-pending status to a withheld card, but if one arrives the card must not
+  // state anything the viewer cannot see (no bound block) and must not speak of "your agent" or "continuing".
+  it.each([
+    ["consumed", { status: "consumed" as const, agentWaiting: false }],
+    ["approved, agent waiting", { status: "approved" as const, agentWaiting: true }],
+    ["approved, agent gone", { status: "approved" as const, agentWaiting: false }],
+    ["rejected", { status: "rejected" as const }],
+    ["expired", { status: "expired" as const }],
+    ["expired after approval", { status: "expired" as const, expiredAfterApproval: true }],
+    ["revoked", { status: "rejected" as const, revoked: true }],
+  ])("a withheld card handed a non-pending status (%s) shows no bound block and no agent claims", (_n, over) => {
+    render(<ApprovalRequestCard {...withheld(over)} />);
+    expect(screen.queryByTestId("approval-bound-block")).toBeNull();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    const text = card().textContent ?? "";
+    expect(text).not.toMatch(/your agent/i);
+    expect(text).not.toMatch(/continuing/i);
+    expect(text).not.toMatch(/Details removed/i);
+    expect(text).not.toMatch(/\b(sent|executed|delivered)\b|\bran\b/i);
+    expect(text).not.toContain("email"); // the generic noun is 'request'
+  });
+});
+
+describe("a member card never shows the requester line and only the literal you reads as 'You requested this' (#9601)", () => {
+  const OWN = "You requested this. Waiting for an Owner's approval.";
+
+  it("member + full view + requester 'you': the existing member title with the own-request wording, and NO approval-requester line", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "you" })} />);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(screen.getByRole("heading").textContent).toBe(OWN);
+  });
+
+  it("member + full view + requester 'jane@example.com': no line, and the card does not claim 'You requested this'", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "jane@example.com" })} />);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(card().textContent).not.toContain("You requested this");
+    expect(card().textContent).not.toContain("jane@example.com");
+    expect(screen.getByRole("heading").textContent).toBe("Waiting for the workspace Owner");
+  });
+
+  it("a withheld member card with a non-'you' requester reads as withheld, never as 'You requested this'", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: null, requester: "a workspace member" })} />);
+    expect(card().textContent).not.toContain("You requested this");
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(screen.getByRole("heading").textContent).toBe("An action in this conversation is waiting for an Owner's approval.");
+  });
+
+  it("a requester string that merely contains 'you' is not the literal (strict equality)", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "you@example.com" })} />);
+    expect(card().textContent).not.toContain("You requested this");
+  });
+});

@@ -26,6 +26,7 @@ import { usePendingRouter } from "@/hooks/use-pending-router";
 import useSWR, { useSWRConfig } from "swr";
 import { EmailTriageRow } from "@/components/inbox/email-triage-row";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
+import { LegalInboxRow } from "@/components/inbox/legal-inbox-row";
 import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -36,10 +37,12 @@ import { useRowSelection } from "@/hooks/use-row-selection";
 import { swrKeys } from "@/lib/swr-config";
 import {
   archiveEligibility,
+  isArchiveCandidate,
   keyOf,
   unkey,
   REASON_COPY,
   type BulkItemRef,
+  type ArchivableInboxItem,
   type BulkItemResult,
 } from "@/lib/inbox-archive-eligibility";
 import {
@@ -69,11 +72,18 @@ function Row({
   item: MergedInboxItem;
   onChanged: () => void;
 }) {
-  return item.kind === "email" ? (
-    <EmailTriageRow item={item.email} onChanged={onChanged} />
-  ) : (
-    <InboxItemRow item={item.inbox} onChanged={onChanged} />
-  );
+  switch (item.kind) {
+    case "email":
+      return <EmailTriageRow item={item.email} onChanged={onChanged} />;
+    case "inbox":
+      return <InboxItemRow item={item.inbox} onChanged={onChanged} />;
+    case "legal":
+      return <LegalInboxRow item={item} />;
+    default: {
+      const _exhaustive: never = item;
+      return _exhaustive;
+    }
+  }
 }
 
 /** Row + sibling selection checkbox. The checkbox is NOT inside the row:
@@ -86,6 +96,34 @@ function SelectableRow({
   onChanged,
 }: {
   item: MergedInboxItem;
+  checked: boolean;
+  onToggle: (ref: BulkItemRef) => void;
+  onChanged: () => void;
+}) {
+  // The founder's legal text is never selectable or archivable: a width spacer keeps its left edge aligned with the
+  // checkbox rows around it (wireframe frame 23). It has no checkbox, no reason line and no bulk-archive path.
+  if (!isArchiveCandidate(item)) {
+    return (
+      <div className="flex items-start gap-2">
+        <span aria-hidden="true" className="-ml-3 -mr-2 h-11 w-11 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <Row item={item} onChanged={onChanged} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <SelectableArchivableRow item={item} checked={checked} onToggle={onToggle} onChanged={onChanged} />
+  );
+}
+
+function SelectableArchivableRow({
+  item,
+  checked,
+  onToggle,
+  onChanged,
+}: {
+  item: ArchivableInboxItem;
   checked: boolean;
   onToggle: (ref: BulkItemRef) => void;
   onChanged: () => void;
@@ -135,7 +173,9 @@ function SelectAllStrip({
   selected: ReadonlySet<string>;
   onToggleSection: (items: MergedInboxItem[]) => void;
 }) {
-  const archivable = items.filter((i) => archiveEligibility(i) === "ok");
+  const archivable = items
+    .filter(isArchiveCandidate)
+    .filter((i) => archiveEligibility(i) === "ok");
   const count = archivable.filter((i) => selected.has(keyOf(i))).length;
   const indeterminate = count > 0 && count < archivable.length;
   return (
@@ -499,7 +539,7 @@ function renderActive(
             <SelectableRow
               key={m.id}
               item={m}
-              checked={selection.selected.has(keyOf(m))}
+              checked={isArchiveCandidate(m) && selection.selected.has(keyOf(m))}
               onToggle={selection.toggle}
               onChanged={refetch}
             />
@@ -533,7 +573,7 @@ function renderActive(
               <SelectableRow
                 key={m.id}
                 item={m}
-                checked={selection.selected.has(keyOf(m))}
+                checked={isArchiveCandidate(m) && selection.selected.has(keyOf(m))}
                 onToggle={selection.toggle}
                 onChanged={refetch}
               />

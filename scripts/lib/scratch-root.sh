@@ -30,6 +30,12 @@
 # a test harness and wrong for a script that shells out to tools with their own
 # expectations. Ownership stays where it can be reasoned about.
 #
+# The documented harness exception is plugins/soleur/test/test-helpers.sh (#11764):
+# in its no-outer-root arm it exports TMPDIR at the `.soleur-owned` incident sandbox
+# it mints, so every descendant `mktemp` of a directly-invoked suite lands inside the
+# dir its composed EXIT trap reaps — the direct-invocation counterpart of
+# soleur_scratch_session_begin's own `export TMPDIR` in test-all.sh.
+#
 # RELATIONSHIP TO test-contention.sh
 # ----------------------------------
 # `scripts/lib/test-contention.sh` binds TC_TMPDIR at SOURCE time and declares itself

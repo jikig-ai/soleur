@@ -2,8 +2,10 @@
 //
 // Every function app/api/inngest/route.ts serves EXECUTES on the one step-executing host (web-1):
 // the Inngest server calls steps at the registered serve URL (https://app.soleur.ai/api/inngest),
-// which Cloudflare routes to web-1 only. `--sdk-url` on the dedicated Inngest host is the
-// registration poll, not the step path. This leaf records where each function COULD run, so the
+// which the Cloudflare LB steers to either serving web host (exec-placement.ts forwards a pinned
+// call to the exec host). `--sdk-url` on the dedicated Inngest host is the registration poll, not
+// the step path; the declared value is the same public serve URL since #10538 remedy (c), live
+// after the owner's `inngest-host-replace`. This leaf records where each function COULD run, so the
 // ADR-143 Phase-3 flip (placement-aware execution, #9137) has a checked answer.
 //
 // Classify a function by the FIRST rule that matches:
@@ -42,8 +44,8 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested module",
   },
   "cfo-on-payment-failed": {
-    placement: "volume-bound",
-    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
+    placement: "portable",
+    reason: "host-free: resolveCurrentWorkspaceId moved to the filesystem-free server/current-workspace-id.ts leaf (#9137); import closure reaches no host-local dependency (needs prd secrets only)",
   },
   "cron-action-required-sla": {
     placement: "portable",
@@ -306,8 +308,8 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     reason: "spawnClaudeEval in an ephemeral clone (process-local single-flight, ADR-243 §2)",
   },
   "github-on-event": {
-    placement: "volume-bound",
-    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
+    placement: "portable",
+    reason: "host-free: resolveCurrentWorkspaceId moved to the filesystem-free server/current-workspace-id.ts leaf (#9137); import closure reaches no host-local dependency (needs prd secrets only)",
   },
   "oneshot-4650-monitor-close": {
     placement: "portable",

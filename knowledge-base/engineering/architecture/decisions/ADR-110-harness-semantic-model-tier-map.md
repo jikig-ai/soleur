@@ -134,3 +134,30 @@ Build)" scope predates the opencode TIER_MAPS row (#10571) and this Devin addend
 | Concrete model IDs in workflow pins | ADR-053 rejected this for Claude (hard-fail vs silent retargeting); doubles maintenance across harnesses. |
 | Per-harness workflow copies | 12× duplication; drift guaranteed (opposite of ADR-089 substrate pattern). |
 | Session-relative tiers | ADR-053 rejected — non-deterministic cost contract; runtime lacks relative tier API. |
+
+## Addendum — 2026-11-10 (Per-phase saturation fallback & never-downgrade invariant, Issue #12529)
+
+Autonomous workflow pipelines (`soleur:review`, `soleur:plan-review`, `soleur:deepen-plan`, `soleur:resolve-parallel`, `soleur:resolve-todo-parallel`, `soleur:resolve-pr-parallel`, `soleur:drain-labeled-backlog`) execute multi-phase tasks that pin mechanical steps to `'standard'` or `'cheap'`. When AI providers encounter temporary rate limits (HTTP 429), capacity saturation (HTTP 529/503), or token overloads, unhandled failures abort overnight autonomous runs.
+
+**Decision: Intra-harness saturation fallback with strict judgment tier boundaries.**
+
+1. **`FALLBACK_TIER_GRAPH` (`lib/harness-model-map.ts`):**
+   - `standard` -> `cheap` (mechanical classification, issue formatting, cluster steps fall back to lower-cost/higher-throughput mechanical tiers).
+   - `cheap` -> `null` (already at floor; fails loudly rather than thrashing).
+   - `advisor` -> `strong` (retains ADR-083 Fable -> Opus consult fallback path).
+   - `strong` -> `null` (**Strict never-downgrade invariant:** security, architecture, legal, C-suite, and review verification steps strictly refuse downgrade, failing loudly with context rather than silently degrading audit rigor).
+   - `inherit` -> `null` (session judgment steps refuse downgrade).
+
+2. **Deterministic Error Detection (`isSaturationError` / `isWorkflowSaturationError`):**
+   - Detects HTTP status codes `429`, `529`, `503`.
+   - Matches regex `/rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests/i` against error messages.
+
+3. **Workflow Resilience Wrapper:**
+   - The inlined fence wraps `hostAgent` in an error interception loop.
+   - On saturation, if `resolveWorkflowFallbackTier(currentTier)` yields a valid fallback tier, it logs a visible structured sentinel:
+     `SOLEUR_SATURATION_FALLBACK phase=<phase> label=<label> from=<from_tier> to=<to_tier> model=<model>`
+     and immediately retries using the fallback model.
+   - Non-saturation errors or non-downgradable tiers (`strong`, `cheap`, `inherit`) re-throw immediately.
+
+4. **Clean-room Attestation:**
+   - Derived 100% independently from ADR-110 and `lib/harness.ts`; zero source code or schema referenced from AGPL-3.0 peer frameworks (`HephaestusNG`).

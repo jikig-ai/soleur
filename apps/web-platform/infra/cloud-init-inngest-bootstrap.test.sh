@@ -151,8 +151,8 @@ assert "drift comment clarifies pin is bootstrap-image version, not inngest-cli 
 # --- AC4: positional ordering ---
 echo ""
 echo "--- AC4: positioned BEFORE soleur-web-platform docker run ---"
-BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
+WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
 assert "bootstrap line found in cloud-init.yml"      "[[ -n '$BOOTSTRAP_LINE' ]]"
 assert "soleur-web-platform run line found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
 assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLATFORM_LINE ))"
@@ -239,7 +239,7 @@ assert "cloud-init.yml (templatefile directives stripped) parses as valid YAML" 
 echo ""
 echo "--- AC5: sudoers parity (deploy-inngest-bootstrap) ---"
 SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
-SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
+SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC") || true
 # Extract the inline sudoers body (#4665 fix). The prior version's two real
 # defects: (1) it compared the raw inline block (WITH comments + blanks) against
 # the source's content-only form (`grep -vE '^\s*#|^\s*$'` above) → never matched
@@ -467,7 +467,7 @@ fi
 echo ""
 echo "--- AC6b: pin-consistency (all soleur-inngest-bootstrap refs present + agree) ---"
 PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" || true)
-DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
+DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l) || true
 assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
   "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
 
@@ -568,12 +568,12 @@ assert "col-0 '%{ if ~}' / '%{ endif ~}' directives balance" \
 # spaces behind after the `~` trim and corrupts the runcmd: list.
 assert "exactly one col-0 '%{ if web_tunnel_connector ~}' directive (#6425)" \
   "(( \$(grep -cE '^%\{ if web_tunnel_connector ~\}$' '$CLOUD_INIT') == 1 ))"
-IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
+COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
 # The first endif AT OR AFTER this block's if — `head -1` of the file would since #6425 return
 # the web_tunnel_connector pair's endif (which sits earlier) and false-FAIL the ordering assert.
 ENDIF_LINE=$(awk -v s="$IF_LINE" 'NR > s && /^%\{ endif ~\}$/ { print NR; exit }' "$CLOUD_INIT")
-TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
 assert "if-directive precedes the bootstrap comment"        "(( IF_LINE < COMMENT_LINE ))"
 assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRAP_DISARM_LINE ))"
 # `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its
@@ -826,9 +826,12 @@ PY
   # The render cannot see WHICH host maps to which toggle value — and that mapping is the
   # risk that darkens the connector host (AC5's inverted-predicate catastrophe). Pin it at
   # the source: the connector lives on web-2, the replaceable cattle standby — web-1 is
-  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix.
-  assert "server.tf pins the connector predicate to web-2 (each.key == \"web-2\")" \
-    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-2\"' '$SCRIPT_DIR/server.tf'"
+  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix. Since
+  # #9421 Part 2a the predicate is the keyed tunnel_connector field (exactly one, validated).
+  assert "server.tf reads the connector predicate from the keyed tunnel_connector field" \
+    "grep -qE '^[[:space:]]*web_tunnel_connector[[:space:]]*=[[:space:]]*each\.value\.tunnel_connector[[:space:]]*\$' '$SCRIPT_DIR/server.tf'"
+  assert "var.web_hosts gives the connector to web-2" \
+    "grep -qE '^[[:space:]]*\"web-2\"[[:space:]]*=[[:space:]]*\{.*tunnel_connector[[:space:]]*=[[:space:]]*true' '$SCRIPT_DIR/variables.tf'"
 
   rm -rf "$RENDER_SCRATCH"
 else
@@ -1794,8 +1797,9 @@ assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_
 assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
   "(( GD_ALL == GD_ALL_PERMISSIVE ))"
 # #5150: two quoted heredocs (RETENTIONUNITEOF, RETENTIONTIMEREOF) raised the inventory 11 -> 13.
+# #12007: three quoted heredocs (HKMSCRIPTEOF, HKMUNITEOF, HKMTIMEREOF: the byte-copied SOLEUR_HOST_KERNEL collector and its inngest unit pair) raised it 13 -> 16.
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
-  "(( GD_ALL == 13 ))"
+  "(( GD_ALL == 16 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the

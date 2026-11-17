@@ -42,13 +42,14 @@ interface InboxItemRowProps {
   onChanged?: () => void;
 }
 
-const DOT_CLASS: Record<InboxItemSeverity, string> = {
+/** Severity styling, shared with the founder legal-text row (`legal-inbox-row.tsx`): one palette for every inbox row. */
+export const DOT_CLASS: Record<InboxItemSeverity, string> = {
   action_required: "bg-red-500",
   attention: "bg-amber-500",
   info: "bg-soleur-text-muted",
 };
 
-const CONTAINER_CLASS: Record<InboxItemSeverity, string> = {
+export const CONTAINER_CLASS: Record<InboxItemSeverity, string> = {
   action_required: "border-red-500/30 bg-red-500/[0.06] hover:bg-red-500/[0.1]",
   attention: "border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]",
   info: "border-soleur-border-default bg-soleur-bg-surface-1/50 hover:bg-soleur-bg-surface-2/50",

@@ -9,6 +9,7 @@ import {
   NEEDS_YOU_CAP,
   type InboxItemRowData,
   type InboxItemSeverity,
+  type LegalInboxRowData,
 } from "@/lib/inbox-severity";
 
 function email(overrides: Partial<EmailTriageItem>): EmailTriageItem {
@@ -178,5 +179,127 @@ describe("buildInboxDeepLink — from source_ref ids, null when target absent", 
   });
   it("not-yet-shipped autopilot_run is non-navigating", () => {
     expect(buildInboxDeepLink("autopilot_run", { any: "x" })).toBeNull();
+  });
+});
+
+// ---- legal rows (CTO ruling T7, Ref #12197): a third merged variant. The sort-time ternary, the badge count and the
+// partition must all treat it as a first-class item, never as an `inbox` row (m.inbox is undefined on it).
+function legalRow(overrides: Partial<LegalInboxRowData> = {}): LegalInboxRowData {
+  return {
+    key: "founder-acceptance-record",
+    label: "How your decisions are recorded and kept",
+    version: "2026-11-07",
+    validUntil: null,
+    state: "pending",
+    severity: "action_required",
+    outstanding: true,
+    ...overrides,
+  };
+}
+
+describe("mergeAndRank - legal rows", () => {
+  it("wraps a legal row as kind:legal, unpinned, with the row facts under `legal` only", () => {
+    const [m] = mergeAndRank([], [], [legalRow()]);
+    expect(m).toEqual({
+      kind: "legal",
+      id: "founder-acceptance-record",
+      severity: "action_required",
+      pinned: false,
+      outstanding: true,
+      legal: {
+        key: "founder-acceptance-record",
+        label: "How your decisions are recorded and kept",
+        version: "2026-11-07",
+        validUntil: null,
+        state: "pending",
+      },
+    });
+  });
+
+  it("does not crash sorting a legal row beside inbox rows (sort time is the version date)", () => {
+    const older = inbox({ id: "i-old", severity: "action_required", created_at: "2026-06-01T00:00:00.000Z" });
+    const newer = inbox({ id: "i-new", severity: "action_required", created_at: "2026-12-01T00:00:00.000Z" });
+    const merged = mergeAndRank([older, newer], [], [legalRow()]);
+    // recency DESC inside NEEDS YOU: newer inbox (Dec) > legal (2026-11-07) > older inbox (Jun)
+    expect(merged.map((m) => m.id)).toEqual(["i-new", "founder-acceptance-record", "i-old"]);
+  });
+
+  it("a statutory email stays pinned above a pending legal row", () => {
+    const merged = mergeAndRank([], [email({ id: "e1", statutory_class: "breach" })], [legalRow()]);
+    expect(merged.map((m) => m.kind)).toEqual(["email", "legal"]);
+  });
+
+  it("an unparseable version sorts as time 0 instead of throwing", () => {
+    const merged = mergeAndRank([inbox({ id: "i", severity: "action_required" })], [], [legalRow({ version: "not-a-date" })]);
+    expect(merged.map((m) => m.id)).toEqual(["i", "founder-acceptance-record"]);
+  });
+
+  it("a pending legal row counts toward the badge; an answered one does not", () => {
+    const pending = mergeAndRank([], [], [legalRow()]);
+    expect(countOutstandingActionRequired(pending)).toBe(1);
+    const answered = mergeAndRank([], [], [legalRow({ state: "accepted", severity: "info", outstanding: false })]);
+    expect(countOutstandingActionRequired(answered)).toBe(0);
+  });
+
+  it("partitions a pending legal row under NEEDS YOU and an answered one under GOOD TO KNOW", () => {
+    const merged = mergeAndRank(
+      [],
+      [],
+      [legalRow(), legalRow({ key: "other-text", state: "declined", severity: "info", outstanding: false })],
+    );
+    const part = partitionForDisplay(merged);
+    expect(part.needsYouVisible.map((m) => m.id)).toEqual(["founder-acceptance-record"]);
+    expect(part.goodToKnow.map((m) => m.id)).toEqual(["other-text"]);
+  });
+
+  it("a pending legal row is ALWAYS visible: 25 newer action_required items cannot push it into 'N more' (the cap exemption)", () => {
+    // The legal row sorts by the registry version (2026-11-07); every inbox row below is newer, so it ranks LAST in NEEDS YOU.
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 5 }, (_, i) =>
+      inbox({ id: `n${i}`, severity: "action_required", created_at: `2026-12-${String((i % 28) + 1).padStart(2, "0")}T10:00:00.000Z` }),
+    );
+    const merged = mergeAndRank(newer, [], [legalRow()]);
+    expect(merged[merged.length - 1].kind).toBe("legal");
+
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    expect(needsYouVisible.some((m) => m.kind === "legal" && m.id === "founder-acceptance-record")).toBe(true);
+    // The legal row takes its share of the cap: 19 others + 1 legal = 20 visible; 6 overflow.
+    expect(needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(needsYouOverflow).toBe(newer.length - (NEEDS_YOU_CAP - 1));
+  });
+
+  it("an outstanding legal row keeps its merged position: it is not appended after the other visible rows", () => {
+    // 4 newer inbox rows, then the legal row (2026-11-07), then 22 older ones: the legal row ranks 5th (index 4) and the cap cuts the tail.
+    const day = (m: string, d: number) => `2026-${m}-${String(d).padStart(2, "0")}T10:00:00.000Z`;
+    const newer = Array.from({ length: 4 }, (_, i) => inbox({ id: `new${i}`, severity: "action_required", created_at: day("12", 30 - i) }));
+    const older = Array.from({ length: 22 }, (_, i) => inbox({ id: `old${i}`, severity: "action_required", created_at: day("06", 28 - i) }));
+    const merged = mergeAndRank([...older, ...newer], [], [legalRow()]);
+    expect(merged.findIndex((m) => m.kind === "legal")).toBe(4);
+
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    // The visible rows are exactly the first CAP of the merged order (4 newer, the legal row, then 15 older): same ids, same sequence.
+    expect(needsYouVisible.map((m) => m.id)).toEqual(merged.slice(0, NEEDS_YOU_CAP).map((m) => m.id));
+    expect(needsYouVisible[4].id).toBe("founder-acceptance-record");
+    expect(needsYouOverflow).toBe(merged.length - NEEDS_YOU_CAP);
+  });
+
+  it("every outstanding legal row is visible and takes its own slot of the cap, not one slot for all", () => {
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 5 }, (_, i) =>
+      inbox({ id: `n${i}`, severity: "action_required", created_at: `2026-12-${String((i % 28) + 1).padStart(2, "0")}T10:00:00.000Z` }),
+    );
+    const merged = mergeAndRank(newer, [], [legalRow(), legalRow({ key: "second-text", version: "2026-11-01" })]);
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    expect(needsYouVisible.filter((m) => m.kind === "legal").map((m) => m.id)).toEqual(["founder-acceptance-record", "second-text"]);
+    // Two legal rows plus CAP - 2 others fill the cap exactly; everything else overflows.
+    expect(needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(needsYouOverflow).toBe(newer.length - (NEEDS_YOU_CAP - 2));
+  });
+
+  it("an answered legal row (FYI) is not affected: it is GOOD TO KNOW and never in the NEEDS YOU cap", () => {
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 1 }, (_, i) => inbox({ id: `n${i}`, severity: "action_required" }));
+    const merged = mergeAndRank(newer, [], [legalRow({ state: "accepted", severity: "info", outstanding: false })]);
+    const part = partitionForDisplay(merged);
+    expect(part.needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(part.needsYouOverflow).toBe(1);
+    expect(part.goodToKnow.map((m) => m.kind)).toEqual(["legal"]);
   });
 });

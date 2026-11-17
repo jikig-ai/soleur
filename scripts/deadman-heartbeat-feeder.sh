@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# (#11631) Feeder for the two archive-fed dead-man heartbeats that replaced the native logs alerts
+# (#11631) Feeder for the archive-fed dead-man heartbeats that replaced the native logs alerts
 # `luks_monitor_host_timer_dark` (window 97200 s, once-a-day row) and `claude_cost_capture_dark` (window 86400 s):
 #
 #   luks-monitor-host-timer -> betteruptime_heartbeat.luks_monitor_host_timer  (soleur-luks-monitor-host-timer-prd)
 #   claude-cost-capture     -> betteruptime_heartbeat.claude_cost_capture      (soleur-claude-cost-capture-prd)
+#   host-kernel-<role>      -> betteruptime_heartbeat.host_kernel_<role>       (soleur-host-kernel-<role>-prd), role in web-1,
+#                              web-2, inngest, registry (#12007): a host's own valid SOLEUR_HOST_KERNEL row inside a literal
+#                              36 h window (129600 s). The window is deliberately NOT an environment knob; the "lowered
+#                              threshold" rehearsal is the offline fixture suite. Born paused; their names are not yet in the
+#                              workflow loop (the arming change adds them, #12386).
 #
-# A heartbeat is beaten ONLY while the target's own predicate (moved verbatim from the retired alert, minus its
-# window conjunct) finds a qualifying row inside the old window in the Better Stack Logs HOT arm (remote()) UNION
-# the ARCHIVE arm (s3Cluster). The native luks alert could not see its once-a-day row (incident 1023423999, #11048,
+# A heartbeat is beaten ONLY while the target's own predicate (for the luks and cost targets, the retired alert's WHERE
+# conjuncts minus the window conjunct; for the host-kernel targets, a new predicate with no retired alert) finds a
+# qualifying row inside the target's window in the Better Stack Logs HOT arm (remote()) UNION the ARCHIVE arm (s3Cluster).
+# The native luks alert could not see its once-a-day row (incident 1023423999, #11048,
 # read `Current value: 0` through 33 healthy nights; the cost marker is NOT once-a-day: it fires a few times a day,
 # n=4 in 24 h), so this reads the archive itself. A spurious beat hides exactly
 # what the control exists to find, so a withheld beat is the signal: the heartbeat times out and pages.
@@ -34,7 +40,7 @@
 # narrow what counts (tag, unit, host, message; marker key, component, source) but cannot tell a forged row from a
 # real one. This control detects a dark emitter or shipper, not a hostile writer.
 #
-# BEAT BUDGET. Both heartbeats use period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
+# BEAT BUDGET. Each heartbeat uses period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
 # hourly WHEN the web watchdog clock delivers it (WATCHDOG_DISPATCH_TABLE); the `schedule:` fallback alone
 # (one run every 2-7 h, measured) cannot hold the budget, and a dark clock shows as a missed Sentry check-in.
 #
@@ -115,9 +121,10 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIA
 export LC_ALL=C
 
 # ── THE TARGET TABLE ─────────────────────────────────────────────────────────────────────────────
-# Predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window conjunct (the window is
-# the SQL's own, below). Each is ONE physical line. They are read by name by the harness.
-TARGETS="luks-monitor-host-timer claude-cost-capture"
+# The luks, cost and key-probe predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window
+# conjunct (the window is the SQL's own, below); the four host-kernel predicates (#12007) are new and have no retired
+# alert. Each is ONE physical line. They are read by name by the harness.
+TARGETS="luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe host-kernel-web-1 host-kernel-web-2 host-kernel-inngest host-kernel-registry"
 
 # luks-monitor.service's own passing row: tag (luks-monitor.sh LOG_TAG / the unit's SyslogIdentifier), the unit
 # journald stamps (the verify job's rows carry session-N.scope or no unit, so they can never keep this fed), the
@@ -140,6 +147,45 @@ EOF
 def_pred LUKS_FAIL_PRED <<'EOF'
 JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND JSONExtractString(raw, 'message') LIKE 'FAIL (%'
 EOF
+# The LUKS key-continuity probe's MEASURED rows on either channel (#12230 / ADR-282 D12 dead-man): the
+# journald channel anchors the marker at message position 1 like the paging SQL, and the phone-home
+# channel carries it in .detail under shipper=cloud-init-phone-home stage=luks-key-probe. Only verdict=ok
+# and verdict=fail_* count as health — an indeterminate-only stream is NOT health (ADR-282 ruling D12).
+def_pred KEYPROBE_PRED <<'EOF'
+(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip' AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1 AND (position(JSONExtractString(raw, 'message'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0)) OR (JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home' AND JSONExtractString(raw, 'stage') = 'luks-key-probe' AND (position(JSONExtractString(raw, 'detail'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0))
+EOF
+
+# (#12007) The host-kernel marker rows. The collector prints ONE line:
+#   SOLEUR_HOST_KERNEL v=1 role=<web|inngest|registry> kernel=<uname -r|unreadable> uptime_s=... reboot_required=... sec_updates=...[ host=<id>]
+# Identity is transport-stamped, never self-declared. The journald hosts (web-1, web-2, inngest) ship through Vector,
+# which stamps host_name; the exact SYSLOG_IDENTIFIER AND the exact _SYSTEMD_UNIT (host-kernel-marker.service, the luks
+# precedent) keep every other unit's rows out, role= is only a cross-check (web-1 and web-2 are both role=web) and a
+# journald row carrying ANY `host=` substring (leading space, newline, tab or end of message) is refused. Each predicate
+# leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0, intended to prune the scan; ClickHouse does not guarantee AND
+# evaluation order, so it is a cost hint and never a correctness guard. The registry posts directly, so its
+# rows carry NO SYSLOG_IDENTIFIER or host_name key; there the identity is in the message: role=registry plus host=<the
+# registry id the SOLEUR_ZOT_DISK path uses>, and the message must carry EXACTLY ONE `host=` (a registry message with
+# more than one `host=` is refused, so `host=evil host=soleur-registry` never feeds). The host_name and registry-id literals are cross-pinned by the harness to
+# ROLE_TABLE / REGISTRY_HOST_ID in plugins/soleur/skills/cve-exposure/scripts/host-state.sh (the feeder runs in CI, the
+# helper from an operator checkout, so neither can source the other). The kernel shape is START-anchored
+# (`^SOLEUR_HOST_KERNEL v=1 role=<r> kernel=<shape> `) because the helper reads the FIRST kernel= token (host-state.sh
+# kv): an unanchored search let a later `role=<r> kernel=<valid> ` occurrence feed the dead-man while the helper reported
+# `unreadable`. It is delimited by its trailing space: build_sql refuses every dollar sign but its two table tokens, so
+# there is no end anchor; an `unreadable` or malformed kernel therefore never qualifies. Bracket classes stand in for
+# backslash escapes so the text needs none. The registry's transport fields must be ABSENT (JSONHas = 0), not merely
+# empty: JSONExtractString returns '' for a numeric or null value too, so an `= ''` test would pass a non-string field.
+def_pred HK_WEB1_PRED <<'EOF'
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+EOF
+def_pred HK_WEB2_PRED <<'EOF'
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+EOF
+def_pred HK_INNGEST_PRED <<'EOF'
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+EOF
+def_pred HK_REGISTRY_PRED <<'EOF'
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=registry kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND (endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1
+EOF
 
 # The target is matched by LITERAL EQUALITY against the table and never interpolated: the matched arm assigns
 # constants (T, W, NAME, PRED), and nothing else of $1 reaches SQL, a marker, a path or a curl config.
@@ -150,6 +196,16 @@ select_target() {
       T="luks-monitor-host-timer"; W=97200; NAME="soleur-luks-monitor-host-timer-prd"; PRED="$LUKS_PRED" ;;
     claude-cost-capture)
       T="claude-cost-capture"; W=86400; NAME="soleur-claude-cost-capture-prd"; PRED="$COST_PRED" ;;
+    inngest-luks-key-probe)
+      T="inngest-luks-key-probe"; W=93600; NAME="soleur-inngest-luks-key-probe-deadman-prd"; PRED="$KEYPROBE_PRED" ;;
+    host-kernel-web-1)
+      T="host-kernel-web-1"; W=129600; NAME="soleur-host-kernel-web-1-prd"; PRED="$HK_WEB1_PRED" ;;
+    host-kernel-web-2)
+      T="host-kernel-web-2"; W=129600; NAME="soleur-host-kernel-web-2-prd"; PRED="$HK_WEB2_PRED" ;;
+    host-kernel-inngest)
+      T="host-kernel-inngest"; W=129600; NAME="soleur-host-kernel-inngest-prd"; PRED="$HK_INNGEST_PRED" ;;
+    host-kernel-registry)
+      T="host-kernel-registry"; W=129600; NAME="soleur-host-kernel-registry-prd"; PRED="$HK_REGISTRY_PRED" ;;
     *) return 1 ;;
   esac
   return 0
@@ -184,6 +240,13 @@ if [[ "$1" == "--selftest" ]]; then
   st_ok=1
   for st_t in $TARGETS; do
     if ! select_target "$st_t" || [[ ! "$W" =~ ^[0-9]{1,6}$ ]] || [[ -z "$NAME" || -z "$PRED" || "$T" != "$st_t" ]] || ! build_sql "$W" "$PRED"; then
+      st_ok=0
+    fi
+  done
+  # (#12007) The four host-kernel targets must ALL be present in the table (removing one fails the selftest), carry the
+  # literal 36 h window and the exact heartbeat name, and name the marker in their predicate.
+  for st_t in host-kernel-web-1 host-kernel-web-2 host-kernel-inngest host-kernel-registry; do
+    if [[ " $TARGETS " != *" $st_t "* ]] || ! select_target "$st_t" || [[ "$W" != 129600 || "$NAME" != "soleur-$st_t-prd" || "$PRED" != *"SOLEUR_HOST_KERNEL v=1 role="* ]]; then
       st_ok=0
     fi
   done
@@ -313,6 +376,12 @@ withhold_no_row() {
   fmarker "no_qualifying_row"
   if [[ "$T" == "luks-monitor-host-timer" ]]; then
     echo "CANNOT BEAT: no qualifying row for $T in the last ${W}s (hot plus archive). The checked host, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+  elif [[ "$T" == host-kernel-* ]]; then
+    echo "CANNOT BEAT: no valid SOLEUR_HOST_KERNEL row for $T in the last ${W}s (hot plus archive). The host is dark or silent, or its marker timer, the log shipper or the Logs source is; that is what this heartbeat exists to report."
+    echo "CANNOT BEAT: next action for $T: see the Querying SOLEUR_HOST_KERNEL section of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md."
+  elif [[ "$T" == "inngest-luks-key-probe" ]]; then
+    echo "CANNOT BEAT: no SOLEUR_INNGEST_LUKS_KEY_PROBE verdict row for $T in the last ${W}s (hot plus archive, either channel). The key-continuity probe, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+    echo "CANNOT BEAT: next action for $T: see knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md."
   else
     echo "CANNOT BEAT: no cost marker or credit-probe RED row for $T in the last ${W}s (hot plus archive). The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which."
     echo "CANNOT BEAT: next action for $T: see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md."

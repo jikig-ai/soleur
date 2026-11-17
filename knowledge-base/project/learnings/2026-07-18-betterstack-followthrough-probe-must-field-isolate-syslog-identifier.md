@@ -101,3 +101,16 @@ marker. Run the live discoverability query (AC9-class) **at /work, not post-merg
 - **AC3 grep matched my own `${VAR:?}` anti-pattern comment** (one-off, documented
   class `cq-assert-anchor-not-bare-token`) — Recovery: reworded the comment to drop
   the literal.
+
+## Addendum 2026-11-12 (#12587): scope the field by emitter type
+
+The blanket "isolate on SYSLOG_IDENTIFIER" prescription is correct only for
+**host-journald emitters** (`logger -t`, stable tag). For **docker
+`--log-driver journald` containers with no `--log-opt tag`**, SYSLOG_IDENTIFIER
+is the rotating container short ID — isolating on it matched zero rows forever
+(the placement_decision soak probe was dead at birth, PR #12554). The container
+axis is `CONTAINER_NAME == <docker --name>`; the structured pino payload is
+`.message_json`, not `.message`. Decode totally (`fromjson?`/`objects`) so one
+malformed row cannot abort the stream mid-window. 4th recurrence of this class
+(#6475, inngest-host-state.sh, #8846, #12587); the emitter-read census now
+allowlists the container-axis form.

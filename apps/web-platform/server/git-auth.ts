@@ -28,6 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
+import { assertWorkspaceGitShape, hostGitInvocation } from "./host-git";
 import { HARDENED_GIT_ARGS, assertIsolatedPushDir, buildIsolatedGitEnv, type IsolatedPushDir } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +64,13 @@ const TOKEN_FORMAT_RE = /^ghs_[A-Za-z0-9._~+/=-]{36,}$/;
 // authoritative. Git ≥ 2.9 treats `credential.helper=` (empty) as the
 // clear sentinel; the node:22-slim runtime ships git ≥ 2.39.
 const HELPER_RESET: readonly string[] = ["-c", "credential.helper="];
+
+// `GIT_ALLOW_PROTOCOL` for the two network arms of the shared host-git invocation (server/host-git.ts): the installation
+// arm only ever talks https to GitHub, the key-auth arm only ssh to the git-data host. A repo-config-switched local-exec
+// transport (`uploadpack` on a local-path remote, `ext::`) is refused. This does NOT stop an https rewrite toward an
+// attacker host (a measured RESIDUAL pinned in test/host-git-consumers-real-git.test.ts).
+export const LEGACY_ALLOW_PROTOCOL = "https";
+export const KEY_AUTH_ALLOW_PROTOCOL = "ssh";
 
 function isWriteable(dir: string): boolean {
   try {
@@ -138,7 +146,8 @@ export interface GitExecOptions {
    * (never `process.env`), `GIT_DIR` = the isolated directory, the workspace object store as the only alternate, and
    * `HOME` = the isolated directory (the askpass script is written inside it). The value is validated at runtime BEFORE any
    * token is minted (a stray `true`, an unbranded object or an unsafe path refuses), and a caller-supplied `cwd` is refused:
-   * the child's cwd is the isolated directory. Unset keeps the exact legacy argv and environment.
+   * the child's cwd is the isolated directory. Unset uses the shared host-git invocation (hardening arguments, a
+   * scrubbed environment, https-only transport); it still reads the workspace `.git` (ADR-050 2026-11-09 addendum).
    */
   hardened?: IsolatedPushDir;
 }
@@ -292,6 +301,9 @@ export async function gitWithInstallationAuth(
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const { hardened, ...execOpts } = opts;
+  // The legacy arm refuses a redirecting `.git` shape BEFORE the mint, so a refused workspace costs no GitHub App token
+  // on every pull, push and fallback call (the shared host-git invocation below repeats the same check).
+  if (hardened === undefined && execOpts.cwd !== undefined) assertWorkspaceGitShape(execOpts.cwd);
   // Checked BEFORE the mint: a malformed isolated directory (a stray `true`, an unbranded object, an unsafe path) or a caller
   // cwd refuses without minting a token or running git. `undefined` is the only legacy value.
   if (hardened !== undefined) {
@@ -312,7 +324,6 @@ export async function gitWithInstallationAuth(
   const scriptPath = hardened ? writeAskpassScriptTo(hardened.gitDir) : writeAskpassScript();
 
   try {
-    const fullArgs = [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
     const authEnv = {
       GIT_ASKPASS: scriptPath,
       GIT_INSTALLATION_TOKEN: token,
@@ -320,15 +331,28 @@ export async function gitWithInstallationAuth(
       GIT_TERMINAL_PROMPT: "0",
       GIT_TERMINAL_PROGRESS: "0",
       GIT_CONFIG_NOSYSTEM: "1",
-      // Defense-in-depth: ignore any attacker-controlled user gitconfig
-      // that could slip a `credential.helper` past HELPER_RESET if an
-      // unexpected `$HOME` sibling ever becomes writeable.
+      // Hardened (isolated) arm only: ignore any attacker-controlled user gitconfig that could slip a
+      // `credential.helper` past HELPER_RESET if an unexpected `$HOME` sibling ever becomes writeable. The legacy arm
+      // does not forward this (see below): the shared host-git invocation pins the image identity file instead.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
-    // Hardened: an allowlisted environment, never the server's. Legacy: unchanged.
+    // Legacy: the shared host-git invocation (hardening arguments before the credential-helper reset, a scrubbed
+    // environment plus this arm's own auth variables). `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` are NOT forwarded from
+    // `authEnv` on this arm: the helper owns them (the image identity file), and `/dev/null` there would drop the fallback
+    // identity. The hardened arm below keeps its own argv and env exactly as before.
+    const { GIT_CONFIG_GLOBAL: _global, GIT_CONFIG_NOSYSTEM: _nosystem, ...legacyAuthEnv } = authEnv;
+    const legacy = hardened
+      ? undefined
+      : hostGitInvocation([...HELPER_RESET, ...args], {
+          cwd: execOpts.cwd,
+          extraEnv: legacyAuthEnv,
+          allowProtocol: LEGACY_ALLOW_PROTOCOL,
+        });
+    const fullArgs = legacy ? legacy.args : [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
+    // Hardened: an allowlisted environment, never the server's.
     const env: NodeJS.ProcessEnv = hardened
       ? buildIsolatedGitEnv(hardened, authEnv)
-      : { ...process.env, ...authEnv };
+      : (legacy as { env: NodeJS.ProcessEnv }).env;
 
     // Async exec (non-blocking) — critical for Next.js route handlers
     // that invoke this helper on the request path (kb/upload pull,
@@ -498,19 +522,23 @@ export async function gitWithPrivateKeyAuth(
       "BatchMode=yes",
     ].join(" ");
 
-    const fullArgs = [...HELPER_RESET, ...args];
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_SSH_COMMAND: sshCommand,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_TERMINAL_PROGRESS: "0",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: "/dev/null",
-    };
+    // The shared host-git invocation: hardening arguments, a scrubbed environment (a helper that reads only its own
+    // environment sees none of the server's variables; a same-uid helper can still read the server's /proc environ), the
+    // image identity file as the global config, and ssh as the only transport.
+    // Only this arm's own variables ride `extraEnv`; it sets no `GIT_CONFIG_*` of its own.
+    const h = hostGitInvocation([...HELPER_RESET, ...args], {
+      cwd: opts.cwd,
+      extraEnv: {
+        GIT_SSH_COMMAND: sshCommand,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_TERMINAL_PROGRESS: "0",
+      },
+      allowProtocol: KEY_AUTH_ALLOW_PROTOCOL,
+    });
 
-    const { stdout } = await execFileAsync("git", fullArgs, {
+    const { stdout } = await execFileAsync("git", h.args, {
       ...opts,
-      env,
+      env: h.env,
       maxBuffer: 10 * 1024 * 1024,
     });
     return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);

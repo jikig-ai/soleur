@@ -178,3 +178,165 @@ export function mutateField(tool: string, field: string): Sample {
 // The approval action hash is an HMAC keyed from SENTRY_USERID_PEPPER (canonical.ts; an unset pepper fails closed).
 // Suites that hash fill a fixed, non-secret test pepper here; a suite that needs it unset deletes it itself.
 process.env.SENTRY_USERID_PEPPER ||= "vitest-approval-pepper-not-a-secret";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601: requester label and reattach redaction. Distinct, recognisable principals (synthesized; example.com only).
+// ---------------------------------------------------------------------------------------------------------------------
+export const OWNER_ID = "00000000-0000-4000-8000-0000000000a1";
+export const MEMBER_ID = "00000000-0000-4000-8000-0000000000a2";
+export const REQUESTER_ID = "00000000-0000-4000-8000-0000000000a3";
+export const OTHER_MEMBER_ID = "00000000-0000-4000-8000-0000000000a4";
+export const REQUESTER_EMAIL = "jane.requester@example.com";
+
+/** A distinct, loud value per card field. Each is >= 12 ASCII-alphanumeric characters and appears in no key name. */
+export const CANARIES = {
+  to: "RcptCanary91x2",
+  subject: "SubjCanary47b8",
+  body: "BodyCanary63k5",
+  replyTo: "ReplyCanary28d7",
+  postalAddress: "PostalCanary35m1",
+  branch: "BranchCanary55q9",
+  repo: "RepoCanary18m4",
+} as const;
+
+/** The real tool name behind an email send; the redacted frame must not carry it. */
+export const EMAIL_TOOL = TOOLS.emailSend;
+
+/** Throws when the fake client is driven outside its contract (an unknown or out-of-order method). Distinct from TypeError. */
+export class FakeContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FakeContractError";
+  }
+}
+
+export interface FakeQueryRecord {
+  table: string;
+  columns: string;
+  filters: Array<{ op: "eq" | "in"; col: string; val: unknown }>;
+  signalPresent: boolean;
+  signalAborted: boolean;
+  /** How the chain ended: awaited directly (array rows) or through maybeSingle (one row). */
+  terminal: "await" | "maybeSingle" | null;
+}
+
+export interface FakeResult {
+  data: unknown;
+  error: unknown;
+}
+
+const strictPhase = <T extends object>(phase: string, allowed: string[], impl: T): T =>
+  new Proxy(impl, {
+    get(target, prop, receiver) {
+      if (typeof prop === "symbol") return Reflect.get(target, prop, receiver);
+      if (!allowed.includes(prop)) throw new FakeContractError(`unknown or out-of-order method "${prop}" in phase ${phase}`);
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+/**
+ * One strict PostgREST fake: a phase-typed builder `from(table).select(cols).eq()|in()...abortSignal(sig)` that ends by being
+ * awaited (rows) or by `.maybeSingle()` (one row). An unknown or out-of-order method, or ending the chain before
+ * `.abortSignal(...)`, throws a `FakeContractError`. Every query is recorded. `respond` produces the result and may return a
+ * promise that never settles (a hung read) or settles late.
+ */
+export function createStrictPostgrest(respond: (q: FakeQueryRecord) => FakeResult | Promise<FakeResult>) {
+  const queries: FakeQueryRecord[] = [];
+  const run = (rec: FakeQueryRecord, terminal: "await" | "maybeSingle"): Promise<FakeResult> => {
+    rec.terminal = terminal;
+    return Promise.resolve(respond(rec));
+  };
+  const from = (table: string) => {
+    const rec: FakeQueryRecord = { table, columns: "", filters: [], signalPresent: false, signalAborted: false, terminal: null };
+    queries.push(rec);
+    return strictPhase("from", ["select"], {
+      select: (columns: string) => {
+        rec.columns = columns;
+        const filterPhase = strictPhase("filter", ["eq", "in", "abortSignal"], {
+          eq: (col: string, val: unknown) => {
+            rec.filters.push({ op: "eq", col, val });
+            return filterPhase;
+          },
+          in: (col: string, val: unknown) => {
+            rec.filters.push({ op: "in", col, val });
+            return filterPhase;
+          },
+          abortSignal: (signal: AbortSignal) => {
+            rec.signalPresent = true;
+            rec.signalAborted = signal.aborted;
+            return strictPhase("terminal", ["then", "maybeSingle"], {
+              then: (ok: (v: FakeResult) => unknown, bad?: (e: unknown) => unknown) => run(rec, "await").then(ok, bad),
+              maybeSingle: () => run(rec, "maybeSingle"),
+            });
+          },
+        });
+        return filterPhase;
+      },
+    });
+  };
+  return { client: { from }, queries };
+}
+
+export interface FakeLabelerWorld {
+  /** workspace_members rows of the fake database. */
+  members: Array<{ workspace_id: string; user_id: string; role: string }>;
+  /** The authoritative auth email by user id (auth.admin.getUserById). */
+  authEmails: Record<string, string | null | undefined>;
+  /** public.users.email by id: member-writable, so the labeler must never read it. */
+  publicEmails?: Record<string, string>;
+  /** Make the membership read return this error. */
+  membershipError?: unknown;
+  /** Make the auth read return this error. */
+  authError?: unknown;
+}
+
+/**
+ * A labeler client over {@link createStrictPostgrest}: `workspace_members` is served from `members` (filters applied), `users`
+ * from `publicEmails`, and `auth.admin.getUserById` from `authEmails`. `getUserById` calls are recorded in `authCalls`.
+ */
+export function makeLabelerClient(world: FakeLabelerWorld) {
+  const authCalls: string[] = [];
+  const pg = createStrictPostgrest((q) => {
+    if (q.table === "workspace_members") {
+      if (world.membershipError) return { data: null, error: world.membershipError };
+      let rows = world.members;
+      for (const f of q.filters) {
+        rows = rows.filter((r) => {
+          const v = (r as Record<string, unknown>)[f.col];
+          return f.op === "eq" ? v === f.val : (f.val as unknown[]).includes(v);
+        });
+      }
+      // Project exactly the columns the query asked for (a select that omits `role` gets rows with no role, as PostgREST would).
+      const wanted = q.columns.split(",").map((c) => c.trim());
+      return { data: rows.map((r) => Object.fromEntries(wanted.map((c) => [c, (r as Record<string, unknown>)[c]]))), error: null };
+    }
+    if (q.table === "users") {
+      const id = q.filters.find((f) => f.col === "id")?.val as string | undefined;
+      return { data: id && world.publicEmails?.[id] ? [{ id, email: world.publicEmails[id] }] : [], error: null };
+    }
+    throw new FakeContractError(`unexpected table ${q.table}`);
+  });
+  const client = {
+    from: pg.client.from,
+    auth: {
+      admin: {
+        getUserById: async (id: string) => {
+          authCalls.push(id);
+          if (world.authError) return { data: null, error: world.authError };
+          return { data: { user: { id, email: world.authEmails[id] } }, error: null };
+        },
+      },
+    },
+  };
+  return { client, queries: pg.queries, authCalls };
+}
+
+/** Throws unless every canary is absent from the serialized frame (and the serialized frame is non-trivial). Used as a detector. */
+export function expectNoLeak(frame: unknown, canaries: readonly string[]): void {
+  if (canaries.length === 0) throw new Error("expectNoLeak: no canaries given (a vacuous check)");
+  const text = JSON.stringify(frame);
+  if (!text || text.length < 20) throw new Error("expectNoLeak: the frame is empty or trivial (a vacuous check)");
+  for (const c of canaries) {
+    if (text.includes(c)) throw new Error(`leak: canary ${c} present in the serialized frame`);
+  }
+}

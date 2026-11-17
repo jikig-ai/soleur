@@ -240,17 +240,20 @@ describe("approvalFailClosed set, approval wired, the flow gives no verdict", ()
   });
 });
 
-describe("approvalFailClosed UNSET: the branch is byte-identical to before", () => {
-  test("approval absent: a required tool still reaches the in-memory review card", async () => {
+// The legacy runner is NOT byte-identical to before any more (#12597): with no verdict, its in-memory card for every
+// approval-required tool needs the workspace Owner, so a missing dependency (no role to read) is the unavailable deny.
+describe("approvalFailClosed UNSET (the legacy runner): the in-memory card needs the workspace Owner", () => {
+  test("approval absent: a required tool gets the unavailable deny, no card, and one wiring-absent event", async () => {
     const h = setup({ approval: "absent" });
     const res = await h.call(TOOLS.emailSend, inputFor(TOOLS.emailSend));
-    expect(h.abortableReviewGate).toHaveBeenCalledTimes(1);
-    expect(reviewCards(h)).toHaveLength(1);
-    expect(res.behavior).toBe("allow");
-    expect(wiringAbsentEvents()).toHaveLength(0);
+    expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
+    expect(h.abortableReviewGate).not.toHaveBeenCalled();
+    expect(reviewCards(h)).toHaveLength(0);
+    expect(wiringAbsentEvents()).toHaveLength(1);
   });
 
-  test("flag off: a required tool still reaches the in-memory review card", async () => {
+  test("flag off, the user is the Owner: a required tool still reaches the in-memory review card", async () => {
+    // setup's viewer role is the Owner.
     const h = setup({ approval: "off" });
     const res = await h.call(TOOLS.emailSend, inputFor(TOOLS.emailSend));
     expect(h.abortableReviewGate).toHaveBeenCalledTimes(1);

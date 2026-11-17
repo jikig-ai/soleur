@@ -187,3 +187,189 @@ exist (#10195).
 One place to change the framing text; a measured, reversible, observe-first control on the one surface with web egress today (the scorer; the 2026-10-25 amendment adds unmeasured, unconditional static framing for GitHub text); and a
 documented, partial coverage boundary. Cost: a second PostToolUse hook on the WebFetch path, a corpus to maintain, and one extra
 tenant read per cold web-egress conversation.
+
+## Addendum 2026-11-08 (Ref #9601 slice 2): `untrusted-classify` logs `sessionIdHash`, not `sessionId`
+
+The `untrusted-classify` line carried the raw conversation id next to the hashed workspace id. It now carries `sessionIdHash`, the same
+pepper-keyed HMAC as `workspaceIdHash` (`hashUserId`); with the pepper unset the value is the literal `pepper_unset` and the raw id is never a
+fallback. The hook option and the dispatcher call site still pass the raw id; the hash is applied only inside `emit()`. No flag, scorer
+behaviour or other field changes, and the decision above is unchanged. The hash is applied locally in `emit()` rather than by extending the
+ADR-029 key-rename boundary, because that boundary (`formatters.log` and the Vector scrub) is keyed on `userId` and would not catch a
+`sessionId` key. This pulls the hashing ahead of the prd-enablement gate where an earlier spec had deferred it; the PA-8(c) half of that
+gate stays open. Lines emitted before this change keep the raw id until log retention expires; no backfill scrub is part of this change.
+The Article 30 register amendment (PA-8(c)) is still owed and is operator and CLO work, tracked with #10195.
+
+## Addendum 2026-11-08 (Ref #9601, #11076): gh output framing through Bash
+
+This addendum extends the 2026-10-25 static-framing amendment to `gh` output that reaches the model through the Bash tool. The decisions above
+are unchanged, with one departure stated plainly: the 2026-10-25 amendment says the classify and wrap flags are "not involved" in static framing
+and that it has no runtime kill switch. This hook IS gated by the classify flag, so it has one, and the kill switch is shared: turning the
+WebFetch scorer off also removes this note.
+
+1. **What the hook does.** One `PostToolUse(Bash)` hook adds the static `github` preamble from `UNTRUSTED_PREAMBLES` as `additionalContext`
+   after a read-style `gh` command (closed verb table: `issue`, `pr`, `run`, `api`, `repo view`, `release`, `search`; `ls` is read as `list`;
+   `-R <repo>` and `--repo` are skipped between the noun and the verb). It is registered under the same predicate as the WebFetch hook (web
+   egress and the classify flag), as a separate Bash entry beside the git-lock hook. It does no scoring and never rewrites output; the
+   single-rewriter rule (decision 7) holds, and only the WebFetch hook may emit `updatedToolOutput`. The Bash `tool_response` is measured in
+   the shapes the git-lock hook's coercer also accepts (an object with `stdout` and/or `stderr` strings, as in the SDK typings; a bare string; an
+   array of text blocks; an object whose `content` is one of those). Any other shape returns `{}`, logs a `shape` outcome and raises one
+   debounced Sentry event: an unknown response shape fails toward silence (the operator's acceptance wording), unlike an undecidable command,
+   which fails toward annotating.
+2. **The framing is unmeasured and delivery is unverified.** No experiment shows that the note changes model behavior, and it could make a
+   legitimate "work this issue" request under-act, including on a founder's own issues; the note repeats after every matching call. An
+   `annotated` log line proves the hook returned a note, not that the model received it, and the `tool_response` shape rests on the SDK typings
+   with no live capture. The control is inactive in prd until the flag is enabled. This is an annotation, not a claim of protection, and no
+   public claim follows from it.
+3. **Reach (read this before the coverage list).** In a session with web egress the sandbox is denied its gh credentials (`GH_TOKEN` and the git auth set are in the
+   web-egress env deny census, and the session prompt tells the model that in-sandbox `gh` fails at auth). The sessions that satisfy the
+   registration predicate are therefore the sessions where an in-sandbox `gh` read cannot normally authenticate, and the sessions where `gh`
+   does authenticate (a minted installation token, no web-egress grant) get no hook, because the classify flag is resolved only when egress
+   exists. As specified, the practical reach of this control today is narrow: in the registered population a `gh` call normally fails at auth and exits
+   non-zero, which the SDK delivers through `PostToolUseFailure` (item 4), so the expected `annotated` volume is near zero. A near-zero count
+   therefore cannot tell "working" from "inert". Widening registration to sessions that hold a minted gh token needs
+   a flag-resolution change in the dispatcher and is a scope decision for the operator, not made here. A flag-on capture of one real annotated
+   `gh` read is a precondition for enablement, and in the registered population it has no organic source, so that precondition is tied to the
+   widening decision.
+4. **Coverage is limited and stated by name.** The hook annotates only `gh` read commands invoked through Bash and recognised by the closed verb
+   table, with the classify flag on. Several bypasses are reachable by an injected model, not incidental: `bash -c`, a wrapper, redirect-then-
+   `cat`, output padding that lands in the persisted file, or a forced non-zero exit. Not covered:
+   - cron Bash output; Read of attachments and KB files (including the file the SDK writes for oversized output: the oversized output itself is
+     annotated, the later Read is not); leader PDF text; Playwright;
+   - `bash -c "gh ..."`, `eval`, `xargs gh` and `gh` inside a double-quoted command substitution; capture-then-echo (`body="$(gh ...)"; echo "$body"`);
+     backgrounded commands whose output is read later through another tool; output redirected to a file and read later; the Task result a
+     subagent hands back to its parent;
+   - wrappers the tokenizer does not unwrap: `timeout`, `sudo`, `nohup`, `exec`, `nice`, `watch`, `command -p`, `time -p`, `env -u`, `env -C`;
+     a redirection or a variable in the command-word position; `curl` or `wget` to the GitHub API; `gh alias`; ANSI-C quoted strings;
+   - read commands outside the verb table: `gist`, `workflow`, `gh status`, `repo list`, `label list`, `project item-list`, `discussion view`,
+     `run watch`, `run download`; and other GitHub text reachable through safe-admitted commands such as `git log` and `git show`;
+   - commands that exit non-zero: the SDK delivers those through `PostToolUseFailure`, whose payload is `error` text rather than `stdout` and
+     `stderr`. That includes ROUTINE cases, for example `gh pr checks` while checks fail or are pending, not only a forced non-zero exit;
+   - whether the hook fires inside Task subagents (unverified, as for WebFetch) and the SDK's own merge of two Bash hooks' `additionalContext`
+     (not independently measured). The log line carries no `subagent` field, so subagent coverage cannot be observed for `gh`.
+
+   The tokenizer reads quotes by parity and does not understand comments or heredoc bodies. A command it cannot decide (an unterminated quote, a
+   command over 8192 characters, or a multi-line script containing a quote character or a backslash-newline, whether or not an earlier `gh` command appears in it) goes
+   to a bounded 64 KiB fallback scan that frames it when a
+   `gh` token (separators split tokens) is followed by a read noun within three tokens. That scan is a heuristic (its handling of backslash-newline pairs is approximate): it can miss a `gh` hidden by
+   the shapes above, and it frames any command longer than 64 KiB, `gh` or not, logged as `annotated` with `fallback: true`.
+5. **"Oversized" is read as "bound the work".** Acceptance criterion (d) is met by not tokenizing a command over 8192 characters and by bounding
+   the fallback scan at 64 KiB. Output size never suppresses the note.
+6. **Rollback latency.** A flag flip reaches the next cold conversation start. An idle conversation is reaped between 10 and 15 minutes after its
+   last activity (a 10-minute idle limit checked on a 5-minute tick), and a conversation in continuous use keeps its hooks until it goes idle or the
+   process restarts, so the rollback bound for an active conversation is the conversation itself. A conversation waiting on the user is skipped by
+   the reaper, and a flag snapshot is cached for about 30 seconds, so both add to the delay. The "about 10 minutes" in decision 6 above is
+   imprecise; this item supersedes it.
+7. **Telemetry volume.** Every `gh` command that matches no read verb logs one WARN `skipped` line, which the default logger also mirrors as a
+   breadcrumb. The volume is bounded by the number of Bash calls and carries hashed ids, a verb enum and lengths only. For a bare-string or text-block
+   response `stdoutLength` is the combined output and `stderrLength` is null. The fallback also frames a multi-line command that merely mentions
+   `gh` and a read noun in prose (a commit message, for example) and a multi-line gh WRITE such as `gh pr create --body "..."` or
+   `gh issue comment`; rates should exclude `fallback: true` lines from the `annotated` denominator.
+8. **Prd enablement stays an operator action** gated on written, checkable preconditions: the liveness alerts (#10195), a PA-8(c) Article 30
+   amendment that covers the new `untrusted-gh-frame` op including the `skipped` volume (the register already records the Better Stack retention
+   period), a measured under-action comparison that includes founder-authored issues, and one flag-on capture proving delivery. None of that is in
+   this change. Follow-ups are recorded, not done here and not yet filed as issues: a `PostToolUseFailure` registration; a preamble
+   counter-framing clause (output text that retracts the note); consolidating the tokenizer with the shell lexer in the destroy-ask classifier
+   (the purpose-built tokenizer was kept to avoid coupling an annotate-only hook to that classifier); an optional `subagent` boolean on the log
+   line; and widening registration per item 3.
+
+## Addendum 2026-11-12 (Ref #9601, #11076): cron gh output framing, dark
+
+1. **What.** A standalone `PostToolUse(Bash)` command hook for cron `claude --print` spawns,
+   `apps/web-platform/server/inngest/cron-gh-output-framing-hook.mjs`. It is registered only by
+   `buildCronEvalSettings(spawnCwd, { frameGhOutput: true })`, and no caller passes that, so it is dark: inactive in every
+   cron. It adds an annotation only and never emits `updatedToolOutput` (decision 7 holds). It sits beside the 2026-10-25
+   system-prompt append and does not replace it.
+2. **How it differs from the hosted twin, and why.** The verb table and preamble are copies of the hosted ones held equal by
+   a parity test (the duplicate-plus-parity-guard pattern in
+   `knowledge-base/project/learnings/best-practices/2026-07-04-testable-workflow-internal-logic-lib-plus-duplicate-plus-parity-guard.md`).
+   That is in tension with ADR-058, which rejects "a second source of truth in another module"; a copy is used because the
+   hook is plain dependency-free ESM run by node from the clone, which cannot import the TypeScript module. Detection reuses the containment hook's `splitSegments`, `tokenize` and
+   `normalizeSegmentWhitespace`, the parse that admitted the command. Containment matches the whitespace-normalised join of
+   the tokens, so this hook matches `gh <noun> <verb>` on the first three words of that same normalised text, not on raw token
+   positions (review K2: `gh "" pr view`, `gh issue "view 1"` and a no-break space inside a token are admitted and framed).
+   That holds for prefix-allowlist crons. A no-file-tools cron matches its literal lines on raw tokens
+   (`tokensMatchLiteral`), so there the hook can annotate a little more than containment admits, which over-annotates. It
+   has no fallback scan, because containment denies the shapes that scan exists for. It has no `-R`/`--repo` skip, no `ls`
+   alias and no path-qualified `gh`, because those fail containment's normalised prefix match against literal
+   `gh <noun> <verb>` lines; a test fails if a cron allowlist gains a gh line outside that shape, outside a closed canonical
+   verb set, or on a noun outside the table that is not named in item 4. Unlike the hosted hook, it does not skip leading
+   words such as env assignments or wrappers; containment denies those shapes. A command over containment's
+   `MAX_BASH_COMMAND_CHARS` emits nothing, since containment denied it. It has no shape gate and emits no telemetry. On the differential test corpus, the cron hook
+   annotates a superset of what the hosted hook annotates. The known extra cases (a `#`-commented tail, and a command over the
+   hosted 8192-character cap) over-annotate. That is accepted, with the same under-action residual as item 5. The failure
+   posture is inverted relative to containment: a null token list or a throw from the shared parser means "no annotation".
+   `[Cross-reference 2026-11-16 — #12757]` `gh "" pr view`, `gh issue "view 1"` and NBSP-in-token shapes are now denied by containment's command-word shape rule (ADR-033, 2026-11-16 amendment); framing them is redundant but harmless. The decisions in this item are unchanged.
+3. **Self-test.** When `settings.json` registers a `PostToolUse` key, the spawn-time self-test deep-equals it against the one
+   expected entry. It then runs a gh-read probe, which must print exactly the annotation object, and an `ls` probe, which must
+   print nothing. Any failure throws and aborts the cron. When the key is absent, nothing new runs. The self-test catches a
+   broken or mis-registered hook at spawn time only; it cannot see the file change during the run. Containment denies Write,
+   Edit and MultiEdit to the framing hook file (`WRITE_PROTECTED_PATTERNS`), and, from this change, admits `git checkout`
+   and `git switch` only in three forms (`git checkout [-q] -b <branch>`, `git switch [-q] -c <branch>`,
+   `git switch [-q] <branch>`, with one branch-name-shaped token and no start point) and denies `git restore` outright;
+   for a canonical `git <sub>` token, every other flag, abbreviated or not, `--`, pathspec and extra positional is denied.
+   An empty, padded or no-break-space-led subcommand token skips these rules today; that needs a writable global git
+   config to matter and is tracked with it in #12757. That is an allow-list narrowing of
+   a live control (CTO K1, re-ruled as K1'); it is not a claim that no Bash route can rewrite the file. It governs the
+   model's Bash calls only; git run by the server itself is not routed through containment, and neither is git run inside
+   the allowlisted `worktree-manager.sh` (`reset --hard HEAD`, `checkout main`, `checkout "$branch"`), which restores
+   tracked content and was not shown to delete a hook. The structural fix, running the hooks from a copy outside the clone,
+   is #12753. The self-test reads only `.claude/settings.json` on the
+   `setupEphemeralWorkspace` path. A CI test fails if `plugins/soleur/hooks/hooks.json`, which `--plugin-dir` loads into every
+   cron, gains a `PostToolUse` key. The self-test runs the hook with `execFileSync`, not through the shell the CLI uses for
+   the registered command string; the containment entry has the same shape, and the spawn paths are generated. It also
+   cannot see a CLI-side change in how `PostToolUse` output is delivered, which is why enablement step 5 re-runs the
+   delivery probe. A second `PostToolUse` entry would need the self-test widened first, since it deep-equals one entry.
+   Recorded dissent: if environmental
+   probe failures (node resolution, timeouts) occur after enablement, they may be downgraded to `reportSilentFallback`.
+4. **Gaps** (listed so no coverage is implied):
+   - Failed commands. It is not documented or probed whether a Bash command with a non-zero exit fires `PostToolUse` or
+     `PostToolUseFailure`, and `PostToolUseFailure` is not registered. The 2026-11-08 addendum's statement that the SDK
+     delivers non-zero exits through `PostToolUseFailure` is, for this CLI surface, unverified; it is left as written there
+     and qualified here. Examples are `gh pr checks` while checks fail, and a
+     compound command whose last segment fails (`gh issue view 1; false`). Their gh output may arrive with no annotation.
+   - Oversized output. If the pinned CLI saves a large Bash result to a file and the agent reads it back with Read, that text
+     arrives with no annotation; the annotation sits only next to the pointer. Separately, a very large `tool_response` on
+     stdin (`gh run view --log`, `--paginate`) could make the hook fail to parse and emit nothing, so annotation can drop out
+     exactly where output is largest. That failure is silent and harmless to containment.
+   - GitHub text read through `bash plugins/soleur/skills/community/scripts/community-router.sh github …`, which is not a `gh`
+     command at the Bash layer.
+   - Nouns outside the table (`label list`, `gist`, `workflow`).
+   - Admitted write verbs on table nouns that echo third-party text: `gh issue close N` prints the issue title, and
+     `comment`, `edit` and `create` print a URL.
+   - A Task result a subagent hands back to its parent, since the matcher is `Bash`.
+   - A gh read run with `run_in_background`, whose output is later read back with Read from the task output file: the
+     launch is annotated, the read-back is not.
+   - Host `~/.claude/settings.json` and managed settings, which production does not exclude with `--setting-sources`. They
+     can register hooks the self-test never reads (CTO K4, #12754).
+   - `-R`/`--repo` between noun and verb, the `ls` alias and path-qualified `gh` (unreachable today).
+   - `git log` and `git show` text.
+   - Subagents. Settings hooks are documented to fire for subagent tool calls, but that was not probed under `--print`.
+   - KB and attachment reads, leader PDF text, and the plugin-side CLI.
+   - `api: []` annotates every allowlisted `gh api` call, write-method calls included. That over-annotates and is accepted as
+     in item 2.
+5. **Residuals.** The effect on model behaviour in headless `--print` is unmeasured. The added value over the 2026-10-25
+   system-prompt append is positional only: the same text, placed next to each result. Delivery was verified at CLI 2.1.321 on
+   2026-11-13: a stub hook's nonce came back in the `result`, and a control without the hook returned `NONE`
+   (`knowledge-base/project/specs/archive/20261115-120458-feat-one-shot-11076-cron-gh-output-framing/probe-delivery.md`). That probe ran with
+   `--setting-sources project` to keep the developer's own hooks out, which production does not pass. The annotation could
+   make a legitimate task under-act, and it repeats after every matching call. No public claim follows.
+6. **Enablement steps.** None are in this change. They run in this order, each authorized by the operator:
+   1. Add a per-cron list `CRON_FRAME_GH_OUTPUT`, shaped like `CRON_NO_FILE_TOOLS`, and pass it through the same directives
+      return to the builder call. Decide again whether to also pass it explicitly to the self-test (CTO C1 dissent).
+   2. Replace the dark pins (the AC4 token scan, and the "no PostToolUse key in the written settings.json" row) with a
+      behavioural test: the listed crons get the entry and the others do not. These pins are meant to go RED on the first
+      enablement edit.
+   3. Re-rule the brand-survival threshold (the F8 flip condition).
+   4. Choose the telemetry signal from two candidates: parse the `--include-hook-events` stream inside the substrate, or rely on
+      the self-test alone. The signal must be a closed field set with no paths, filenames or matched text (CLO).
+   5. Re-run the delivery probe at the CLI version pinned then. Run an under-action comparison for the first cron enabled, and
+      state its owner and pass bar before the run.
+   6. Deploy before registering, and keep deploys green. The hook runs from the clone of `main`, while registration and the
+      self-test's expected preamble come from the deployed image. A preamble edit must therefore ship through a deploy before, or
+      together with, the hook edit. Otherwise every registered cron throws on the mismatch, which is the intended fail-safe
+      signal (CTO D3). A failing web-platform deploy blocks enablement.
+   7. Confirm the framing hook file is still in `WRITE_PROTECTED_PATTERNS`, along with any new file it imports (CTO D1).
+   8. Close #12754: host and managed settings as `PostToolUse` sources (CTO K4), and stage-tagged
+      `setup-ephemeral-workspace` failures in the cron setup catch blocks (CTO K3; today a framing self-test throw is told
+      apart only by its message prefix).
+7. **Status.** This ADR stays `adopting`. Decision 6 ("Crons never opt in") still concerns the WebFetch scorer only.

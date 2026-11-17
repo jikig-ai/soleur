@@ -43,7 +43,7 @@ if [[ ${#IMPORTERS[@]} -eq 0 ]]; then
 fi
 
 # Strip comments + blank lines from the allowlist for `grep -vFf`.
-ALLOWED_PATHS="$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST")"
+ALLOWED_PATHS="$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST")" || true
 
 VIOLATORS=()
 for f in "${IMPORTERS[@]}"; do

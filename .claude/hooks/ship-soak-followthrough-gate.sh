@@ -104,7 +104,10 @@ fi
 # Build the scan corpus: PR body (fenced code stripped, fail-closed on unbalanced
 # fence) + any linked plan/spec read from disk.
 CORPUS=$(mktemp)
-trap 'rm -f "$CORPUS"' EXIT INT TERM
+# `${_plan_stripped:-}` is bound before its allocation site (below, inside the
+# PLAN branch): unset expands to nothing, and a signal between allocation and
+# the re-registration at DROPPED_CORPUS is the exact window that stranded it.
+trap 'rm -f "$CORPUS" "${_plan_stripped:-}"' EXIT INT TERM
 printf '%s' "$PR_BODY" | awk '
   /^```/ { in_fence = !in_fence; next }
   !in_fence { print }
@@ -158,6 +161,9 @@ if [[ -n "$PLAN" && -f "$PLAN" ]]; then
   # The fallback writes to a TEMP file, not straight onto $CORPUS: the awk above
   # has already appended its partial output, so `|| cat "$PLAN" >> "$CORPUS"`
   # appended the plan a SECOND time on failure, duplicating every ref.
+  # Allocated between the two trap registrations below: the EXIT trap at the
+  # DROPPED_CORPUS site re-registers including this name, so a signal or an
+  # early exit between here and the adjacent `rm -f` cannot strand it (#11764).
   _plan_stripped=$(mktemp)
   if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' \
        "$PLAN" > "$_plan_stripped" 2>/dev/null; then
@@ -214,7 +220,7 @@ fi
 # 36/42 over the plans carrying a real `soleur:followthrough script=` enrollment
 # directive — zero recall regression. Re-derive rather than trust those figures.
 DROPPED_CORPUS=$(mktemp)
-trap 'rm -f "$CORPUS" "$DROPPED_CORPUS"' EXIT INT TERM
+trap 'rm -f "$CORPUS" "$DROPPED_CORPUS" "${_plan_stripped:-}"' EXIT INT TERM
 if awk '
       { u = tolower($0) }
       # DROP a negated-soak line ONLY when it carries no tracker reference.

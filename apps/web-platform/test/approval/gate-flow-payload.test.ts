@@ -27,7 +27,7 @@ import { APPROVAL_ID, CONVERSATION_ID, OTHER_WORKSPACE_ID, SAMPLES, TOOLS, USER_
 const CARD_EXPIRES = "2031-01-02T03:04:05.000Z";
 const DISPATCH_EXPIRES = "2032-06-07T08:09:10.000Z";
 
-async function run() {
+async function run(requestedBy: string | null = USER_ID) {
   process.env.SENTRY_USERID_PEPPER = "gate-payload-test-pepper";
   clearAllWaiters();
   const tool = TOOLS.emailSend;
@@ -48,7 +48,7 @@ async function run() {
           id: APPROVAL_ID,
           workspace_id: WORKSPACE_ID,
           conversation_id: CONVERSATION_ID,
-          requested_by_user_id: USER_ID,
+          requested_by_user_id: requestedBy,
           tool_name: tool,
           action_sha256: p.actionSha256,
           status: "pending",
@@ -123,6 +123,19 @@ describe("gate-flow payload wiring", () => {
   test("the onRequested dispatch gets the approval id, the created and notify verdicts and the DATABASE's expiresAt (not the card's)", async () => {
     const { dispatched } = await run();
     expect(dispatched).toEqual([{ approvalId: APPROVAL_ID, created: true, notify: true, expiresAt: DISPATCH_EXPIRES }]);
+  });
+
+  test("the first-send frame carries no requester key when no label applies (a member viewer, a row with no stored requester)", async () => {
+    const { frames } = await run(null);
+    const card = frames.find((f) => f.type === "approval_request")!;
+    expect(Object.hasOwn(card, "requester")).toBe(false);
+    expect(Object.keys(card).at(-1)).toBe("agentWaiting");
+  });
+
+  test("the first-send frame carries the literal you when the viewer is the stored requester (no lookup needed)", async () => {
+    const { frames } = await run(USER_ID);
+    const card = frames.find((f): f is Extract<WSMessage, { type: "approval_request" }> => f.type === "approval_request")!;
+    expect(card.requester).toBe("you");
   });
 
   test("the flow ends as designed for this fixture (Owner rejection -> deny), so the payload assertions above ran on the real path", async () => {

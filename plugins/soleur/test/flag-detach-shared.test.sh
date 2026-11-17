@@ -147,8 +147,8 @@ if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
   grep -q 'POST .*/environments/90721/features/.*/versions/' "$CURL_LOG" \
     || { echo "detach: FAIL — no detach version POST against prd env 90721" >&2; fail=1; }
   # 2c. append-before-flip: audit RPC POSTed BEFORE the first version POST.
-  audit_line=$(grep -n '/rpc/audit_flag_flip' "$CURL_LOG" | head -1 | cut -d: -f1)
-  ver_line=$(grep -nE 'POST .*/versions/' "$CURL_LOG" | head -1 | cut -d: -f1)
+  audit_line=$(grep -n '/rpc/audit_flag_flip' "$CURL_LOG" | head -1 | cut -d: -f1) || true
+  ver_line=$(grep -nE 'POST .*/versions/' "$CURL_LOG" | head -1 | cut -d: -f1) || true
   if [[ -z "$audit_line" ]]; then
     echo "detach: FAIL — no WORM audit RPC call recorded" >&2; fail=1
   elif [[ -n "$ver_line" && "$audit_line" -ge "$ver_line" ]]; then

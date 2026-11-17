@@ -1,0 +1,9 @@
+$ gh api repos/jikig-ai/soleur/actions/workflows/ci.yml/runs?head_sha=a04d06d40d122d94ee31946eac01310b01c8af08&per_page=100 --jq .total_count
+2
+{"conclusion":"success","event":"push","head_sha":"a04d06d40d122d94ee31946eac01310b01c8af08","id":39805374830}
+{"conclusion":"success","event":"merge_group","head_sha":"a04d06d40d122d94ee31946eac01310b01c8af08","id":39796039611}
+$ gh api repos/jikig-ai/soleur/commits/a04d06d40d122d94ee31946eac01310b01c8af08/check-runs?per_page=5 --jq .total_count
+223
+{"details_url":"https://github.com/jikig-ai/soleur/actions/runs/39811359843/job/119938163882","name":"cla-evidence"}
+$ gh api repos/jikig-ai/soleur/actions/workflows/ci.yml/runs?head_sha=5c533f38f866c347fcab04cc9578edcca44620e2&per_page=100 --jq .total_count
+2

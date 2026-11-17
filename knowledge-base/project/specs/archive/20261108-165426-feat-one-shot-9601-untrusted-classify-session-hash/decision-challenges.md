@@ -1,0 +1,16 @@
+# Decision challenges: feat-one-shot-9601-untrusted-classify-session-hash
+
+Technical forks met while planning the sessionIdHash change. None is an operator question; each was ruled by the CTO agent and the operator's stated direction was kept as the default.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| F1 test mechanism for the pepper-set and pepper-unset states | technical | Ruled by CTO agent, 2026-11-08: a new dedicated test file `apps/web-platform/test/untrusted-content-session-hash.test.ts` (pepper deleted in `vi.hoisted` for the unset pin; `vi.resetModules` + `vi.stubEnv` + dynamic import for the pepper-set equality case); the two existing tests only drop the raw pin and add `not.toHaveProperty("sessionId")` - the pepper is read once at module load, so adding cases to the existing file would depend on the CI environment's pepper and be non-deterministic |
+| F2 absent session id handling and runtime key stripping | technical | Ruled by CTO agent, 2026-11-08: mirror `workspaceIdHash` with `ctx.sessionId ? hashUserId(ctx.sessionId) : undefined`, and add no runtime strip of a caller-supplied `sessionId` key - hashing the empty string would give one constant value that correlates unrelated lines, and silently dropping caller keys hides mistakes; every `emit()` caller is in-file, so the four-path negative assertion is the guard |
+| F3 brand-survival threshold | technical | Ruled by CTO agent, 2026-11-08: `aggregate pattern`, no CPO sign-off gate - the change removes an identifier from a telemetry line, `emit()` is already fail-open, and the worst failure is lost per-session correlation; flips to `single-user incident` only if the hash is shown not to be pseudonymous (for example a public pepper) |
+| F4 lines already shipped and ADR addendum placement | technical | Ruled by CTO agent, 2026-11-08: no backfill scrub (it would be an operator-held production write); state once in the ADR-287 addendum and the PR body that lines already shipped keep the raw id until log retention expires; append the addendum at the end of the ADR file (append-only, and inserting would break the trailing Alternatives/Consequences structure) |
+| Simplicity review: shrink the pepper-set describe from six paths to one or two | taste | Kept the plan default (six paths in both describes): the cost is a table row each, and a per-path regression in the hashed branch would otherwise go unseen; dissent from code-simplicity reviewer |
+| Simplicity review: drop mutation rows 3 and 7 | taste | Kept the plan default: row 3 is the second-member row and row 7 the other-sink row that plan Phase 2.12 requires of a guard contract; dissent from code-simplicity reviewer |
+| Simplicity review: trim the runbook addition to a bare clause | taste | Kept the plan default (one lookup sentence, marked inferred in the Scope Check): a hashed field is unusable for lookup without it; dissent from code-simplicity reviewer |
+| Review simplicity seat: collapse the six-path matrix, drop the real-logger case and the planned extra guards | taste | Kept the six-path matrix (the binding scope names every emit path; CTO ruling F1) and the real-logger case (plan Guard Contract), made the rows assert the path they reach; dropped the source-text sentinel and console spies as the seat advised; dissent from code-simplicity reviewer |

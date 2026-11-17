@@ -299,13 +299,13 @@ run_case 2026-10-30
 expect "row 7: the ask names the read-only plan rehearsal line" 5 "gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=signing"
 expect "row 7: the ask names the exact rotate line with its typed confirm" 5 "-f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true"
 expect "row 7: the ask names the converge line and says it needs its own go" 5 "-f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-YYYY-MM-DD" "restart-inngest-server"
-expect "row 7: the ask says only the owner dispatches and that a go on another issue does not count" 5 "only you dispatch it" "run the manual"
+expect "row 7: the ask says the dispatch runs under the owner go (the agent may run it) and that a go on another issue does not count" 5 "your agent may run the dispatch itself under that go" "run the manual"
 expect "row 7: the ask is a one-reply ask: tell your session to continue A5, and the relay line names the run and quotes the reply" 5 "tell your session to continue A5" "Post that line yourself"
 expect "row 7: the ask still offers the owner's own done line, as a comment on the epic" 5 "post the done line yourself: the green run prints S5-A5-DONE"
 cases=$((cases + 1)); grep -qF "a DONE line posted by an agent or by the workflow does not count" <<<"$OUT" && grep -qF "S5-A5-DONE: YYYY-MM-DDTHH:MM:SSZ" <<<"$OUT" \
   && pass "row 7: the ask states the agent-posted-DONE-line rule and the done-line format" \
   || fail "row 7: the ask lacks the agent-posted-DONE-line rule or the done-line format"
-expect "row 7: the ask keeps the rule that no agent dispatches the rotation" 5 "no agent runs it"
+expect "row 7: the ask keeps the rule that the approval click is never delegated" 5 "the approval click on key-rotate-approval is yours" "no agent runs it"
 cases=$((cases + 1)); grep -qF "the Inngest host is down for a few minutes" <<<"$OUT" \
   && pass "row 7: the ask tells the owner what the go must say about downtime" \
   || fail "row 7: the ask lacks the downtime sentence"

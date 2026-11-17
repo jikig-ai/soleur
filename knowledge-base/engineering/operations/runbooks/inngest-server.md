@@ -290,6 +290,16 @@ replacement exists. The single follow-up tracker is #12158: the replacement writ
 rollback/resume (the Tier-B move before the arm revoke, optionally a canary) and removal of the arm
 `-target` lines in the revoke PR.
 
+*Dated note, 2026-11-13 (#9927 step D2-2):* the replacement exists. `op=rollback` and `op=resume`
+now write with `DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE`, an `inngest-cutover` **environment** secret
+(main-only + required-reviewer) relayed from `doppler_service_token.inngest_cutover_write` by the
+staged script `knowledge-base/project/specs/feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh`.
+The first credential step of both ops refuses `verdict=write_token_stale` when the secret is unset
+or no longer authenticates — a `-replace` of the token mints a new key and strands the environment
+secret, so the recovery order is **replace, then re-run the relay script, then re-dispatch**. The
+arm token stays minted and exported until the step-4 revoke change; there is never a fallback to it
+inside the ops.
+
 **Host-side log text.** The on-host `SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED` line still says
 `op=reflush writes both`. That verb is retired. The text is part of the sha256-compared
 config-bundle content (`inngest-cutover-flip.sh`), so it is left as is and changes with the next
@@ -596,7 +606,7 @@ root config), a read-scoped token, `INNGEST_DIAGNOSTIC_BOOT=true`, loopback `sdk
 | `provision-attempt-start attempt=N` (Better Stack) | Attempt N began. N counts every attempt since the host was born (the counter is on the root disk). |
 | `provision-env-MISSING keys=…` (Better Stack) | The env file exists but lacks a required key. The attempt ends before any Doppler call. |
 | `provision-nic-ABSENT ip=…` (Better Stack) | The private NIC was still absent after the NIC wait; the attempt ended and retries. |
-| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. |
+| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. Since #12707 its detail names the offender: `attempt=N.foreign=<name>` repeated once per foreign secret, then `.n_total=<n>.n_inngest=<m>`, and `iid=<iid>` LAST — the detail must never glue to `iid=` (followthrough parsers read `iid=[A-Za-z0-9._-]+`, which would capture `<iid>.foreign`). No `.foreign=` field means an under-floor read; `.n_total=0` means the `doppler secrets` read itself returned nothing — an auth/API fault, not an empty set. The same suffix rides `provision-attempt-exit-*` and `provision_attempt_failed` via `why=isolation-check-FAILED.foreign=…`, so the Sentry page names the secret too (names only, never values). |
 | `zot-creds-EMPTY` / `zot-login-FAILED` (Better Stack) | No baked zot credential, or the zot login was refused. The pull that follows misses. |
 | `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
 | `provision-fsm-busy` (Better Stack) | A flip step was still running, or a flip was between steps, after the 300 s quiesce bound; the attempt ended and retries. (A host born before #11080 also holds here on `frozen-active` and a running LUKS cutover.) |
@@ -669,7 +679,14 @@ awk '$2 == "provision-attempt-start" {buf = ""} {buf = buf $0 "\n"} END {printf 
 ```
 
 - **"`isolation-check-FAILED` on every attempt"** reads as: its count equals the
-  `provision-attempt-start` count, over at least 3 attempts.
+  `provision-attempt-start` count, over at least 3 attempts. Since #12707 the row's detail
+  names the cause directly: each `foreign=<name>` field is one secret in `soleur-inngest/prd`
+  that the admission regex does not know (no `foreign=` field means the set matched but was
+  under the floor — a deleted admitted secret). The fix for a foreign name is either to dismiss
+  it from the isolated config or, when it is a name this host's runtime legitimately consumes
+  (a `doppler run`-injected knob — the `INNGEST_TRACE_RETENTION_*` env_int knobs are the
+  measured case, #12695), to add it to the admission alternation in `cloud-init-inngest.yml`,
+  which is a no-op until the name exists.
 - **"Repeating `provision-fsm-busy`"** reads as: it ends 3 or more consecutive attempts (the last
   lines of `life.txt` alternate `provision-attempt-start` / `provision-fsm-busy`). That is a flip
   step wedged, or a flip stuck between steps, for well over 15 minutes. Read the FSM state with the read-only
@@ -1487,7 +1504,8 @@ Read the last `OK`/`SUSPECT` line. On `SUSPECT`, treat the QUIESCED notice as un
 Status: **adopting** ([ADR-294](../architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md)). Everything below is
 **inert at merge**: the resolver's default is still `http://10.0.1.40:8288`, nothing reads the new secrets until the host is replaced,
 and the flag does not exist until the owner-gated flip. This section covers **leg 1 only** (the web app's sends and reads to the
-scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10, tracked as #10538) and the Cloudflare step-call leg (#10479) are not fixed
+scheduler on `:8288`). The `sdk_url` poll (#10538: declared as the public serve URL by remedy (c), live only after the owner's `inngest-host-replace`, see
+[Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c)) and the Cloudflare step-call leg (#10479) are not fixed
 here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run. One failure has no no-SSH remedy at all and is escalated instead of improvised: a non-empty directory or a root-owned `/mnt/data/inngest-link` (see "CA on web hosts", #10557).
 
 ### What the pieces are
@@ -1710,12 +1728,14 @@ given, it names BOTH the flip and its `action=off` revert, so a failing soak in 
 are in form (b) above).
 
 **Owner-human, no delegation covers them:** the A1b `inngest-cutover` environment approval (a GitHub required reviewer), the A5
-credential rotation (authority: a fresh in-session go naming the exact `inngest-key-rotate.yml` dispatch line, which only the owner dispatches; a go recorded on #10382 or on any other issue is not a go under form
-(b), and an agent never runs `rotate` or `converge`), the A6 and A7 records (each carries the owner's own sentence, given once in session and quoted verbatim under the provenance block below; delegation covers posting, never the owner's words; *Superseded 2026-11-02, CLO ruling:* these were "owner-signed" records, with A7 keeping the literal line "SIGNED BY OWNER (human, not an agent)", which is now a human-only marker an agent never writes and is BANNED on an agent-posted record), money, sole-copy data
+credential rotation (authority: a fresh in-session go naming the exact `inngest-key-rotate.yml` dispatch line; under the 2026-11-08 ruling an agent
+may run that dispatch under the go — what stays owner-human, never delegated, is the go itself and the `key-rotate-approval` reviewer
+click; a go recorded on #10382 or on any other issue is not a go under form (b)), the A6 and A7 records (each carries the owner's own sentence, given once in session and quoted verbatim under the provenance block below; delegation covers posting, never the owner's words; *Superseded 2026-11-02, CLO ruling:* these were "owner-signed" records, with A7 keeping the literal line "SIGNED BY OWNER (human, not an agent)", which is now a human-only marker an agent never writes and is BANNED on an agent-posted record), money, sole-copy data
 loss, force-push or ruleset bypass, and any hold the owner worded as "ask me before".
 
 For the A1b approval and the A5 dispatch the agent sends ONE plain-words ask with the direct link or the exact dispatch line, and reads back
-the result: the click and the dispatch are the owner's own and are never delegated. For the records of A5, A6 and A7 the agent does the evidence
+the result: the approval click is the owner's own and is never delegated; under the 2026-11-08 ruling the dispatch itself may be agent-run,
+but only under a fresh, per-command, in-session owner go naming the exact full command. For the records of A5, A6 and A7 the agent does the evidence
 gathering, the drafting and, with the owner's in-session delegation of the posting, the posting, and then sends ONE plain-words ask
 ([Owner-knowledge acts: relay, do not hand off](../../../../plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md), section 9). The A6 knowledge claim (what the owner
 knows) is only the owner's own words: the agent never drafts it, and the ask does not offer a draft. For A7 the agent drafts the full
@@ -1754,7 +1774,7 @@ whether a replace is half-applied is the CTO's technical call; only the producti
 | A2: handshake verification = the handshake inside A3's `flip_verify` (`scripts/inngest-link-flip.sh` runs it after the pending redeploy installs the CA, before the `1` write); a post-flip re-run of `/hooks/inngest-tls-handshake` is an optional in-session corroboration | part of the A3 authority (read-only; no separate go) | the pending redeploy of A3 has installed the CA; the optional re-run needs A3's `1` write to have landed | the `flip_verify` line in the A3 workflow run log; for the optional re-run, web-host hook `/hooks/inngest-tls-handshake` (web-1 only: the hook channel terminates there), via doppler plus curl (GET recipe below) | the `flip_verify` handshake line in the workflow run log shows `verified=200`, `unverified_rc=60` and `result=pass`: a verified request returns 200, and the same request without the CA fails with a certificate-verification error (curl exit 60). The optional re-run body is one line, `inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass`; it is never part of a delegated envelope's evidence. web-2's container path is proven by its own `ci-deploy` canary at A3 | read-only, none |
 | A3: flip through `inngest-link-flip.yml` | in-session per-command go to the displayed exact command(s): the flip, and its `action=off` revert shown in the same ask. The verifier refuses `confirm=`, so no valid recorded Standing Delegation covers the flip. `action=off` stays delegable (A4). The go is **procedural** (`infra-privileged` has no required reviewer, see "How the flag is written", so no technical control enforces it), and "procedural" means no GitHub-side reviewer, not that authority is optional; the displayed sentence says "and I switch it back if the check fails" and states the A4 rollback condition (see form (b) in the intro) | A1 green; the `apply-deploy-pipeline-fix.yml` run for the merge commit that added `inngest_link_scrub_env_file` concluded success (`gh run list --workflow apply-deploy-pipeline-fix.yml`; it delivers `ci-deploy.sh` to web-1 and web-2, and both must hold the fixed script before the flip); #10542 and #10543 fixed, or the replay check run afterwards (the same window controls as A1); no in-flight release run; a low-traffic window that is also cron-quiet (see above: the script cannot detect a cron in flight); the flip date noted on the tracker | `gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LINK` | the canary layer passes (all five checks, including the real in-container send; one fleet redeploy, i.e. one swap on each of the two hosts, and two such redeploys if the revert fires); the script's `FLIPPED` line is printed, which proves web-1's canary and swap and only that web-2 *accepted* the trigger; each host has a `class=resolved ... scheme=https` row **and a `class=canary_ok` row since the flip's T0, with no `canary_failed` or `env_scrub_failed` row** (the per-host flip read under "Resolver events"; web-2 is not verifiable from CI, so its rows are its only evidence, and the `resolved` row alone does not prove its canary or swap); **T = the later of the two hosts' `CRON_DRAIN: waited` rows of that deploy (logged just before the host's prod stop; the `resolved` row is written at deploy start, before the canary, the cron drain and the swap, so it is a lower bound, not the swap time) plus 5 minutes**, with the baseline row read as `--since T --until T+400s` (below); post the two anchor lines on #10136; the `flip_verify` handshake line in the workflow run log (`verified=200`, `unverified_rc=60`, `result=pass`) plus the script's `FLIPPED` line is the success evidence; the post-flip re-run of the A2 handshake hook (doppler plus curl, GET recipe below) is optional in-session corroboration only | `gh workflow run inngest-link-flip.yml -f action=off` (idempotent; the workflow's own failure step is best-effort and after a cancelled run, `off` must be dispatched again; the 30-minute lease only bounds new deploys) |
 | A4: 48 hour soak | envelope-delegable before A5 (authority: see intro, form (a) a valid recorded Standing Delegation whose Scope names `inngest-link-flip.yml`, with the narrowing to `action=off` carried by the byte-identical envelope line, or form (b) an in-session per-command go); the soak itself needs none and the `action=off` dispatch is the only command. After A5 the new `INNGEST_SIGNING_KEY` would travel over plaintext `:8288` if the link is turned off, so `action=off` after A5 is form (b) only (a fresh in-session go) and also needs `-f confirm_off_after_rotation=OFF-AFTER-ROTATION` (see "Rollback" step 3). The A3 go that pre-names this revert is valid only inside the session that received it | A3 timestamp T and the baseline row | the follow-through sweeper runs `inngest-tls-soak-10136.sh` | gap-free `tls-health` series since T, one `boot_id`, `legacy_8288` delta exactly 0, `tls_8443` delta at least 90% of the expected probe cadence, for 48 hours. A reboot restarts the clock: re-anchor with a new pair of comments | any non-zero legacy delta: run `action=off` and find which caller still dials `8288` |
-| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | **owner-human** (credential rotation; no delegation covers it): only the owner dispatches `rotate` and `converge`, each under a fresh in-session go naming the exact command line (mode, keys and the typed confirm); a go recorded on #10382 or on any other issue is not a go under form (b); an agent never runs either mode; the typed confirm and `quiet_window` are typo-guards and a statement of fact, not the authorization. The daily ask is the follow-through probe on tracker #11218 (it also warns from 2026-11-09 if #11215 or #10540 is not done). The route prints the `S5-A5-DONE: <UTC time ending in Z, like 2026-11-20T14:00:00Z>` line and never posts it: the owner posts it on #10136 themselves, or replies once in session and the agent posts an `S5-A5-RELAYED:` record (`relayed-by: agent`, `owner-words:`, `owner-reply-at:`, `run=<id>` of a green rotate or converge run, which the probe verifies); an agent-posted `S5-A5-DONE` line does not satisfy the record | A4 passed (the route's `guard` also checks it: tracker #11215 closed as completed and the link flag at `1`, so the new key never rides plaintext); a green read-only `mode=plan` rehearsal (`verdict=plan_ok`); the "Key rotation" section re-read; the Stripe-webhook (#10542) and dashboard-send (#10543) loss defects fixed first, or the rotation runs inside a quiesced window with the replay check; the go text names the residual that the production dedicated host has never been rebooted with its LUKS volume and live scheduler (unverified) | one dispatch of `inngest-key-rotate.yml` (`mode=rotate`, `keys=signing`, or `event` / `both` only if the owner extends the go), shown in "Key rotation": phase 1 replaces the dedicated pair, a Hetzner soft reboot restarts the scheduler on the new key, phase 2 replaces the app copy, then the canary-then-prod web redeploy runs at once. `restart-inngest-server.yml` is not used: its hook channel terminates on web-1 and cannot reach 10.0.1.40. During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` can fail with 401 | the run's value-free evidence block and Better Stack rows from the dedicated host (never `deploy-status`, which reads web-1): a `tls-health` row with a NEW `boot_id` and `listener=1`, and `scripts/inngest-host-state.sh` reading `SERVING=yes` (see "Key rotation order (A5)") | none: a rotation is forward-only (no old key exists after phase 1); a failed run is finished with `converge` under the owner's own per-command go; for the plaintext hazard of a flag-off rollback see "Rollback" step 3 |
+| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | **owner-human** for the go and the `key-rotate-approval` reviewer click (credential rotation; no delegation covers either): the dispatch of `rotate` and `converge` runs under a fresh, per-command, in-session owner go naming the exact command line (mode, keys and the typed confirm) — under the 2026-11-08 ruling that go authorizes the agent to run the dispatch; a go recorded on #10382 or on any other issue is not a go under form (b); *Superseded 2026-11-08:* "only the owner dispatches ... an agent never runs either mode"; the typed confirm and `quiet_window` are typo-guards and a statement of fact, not the authorization. The daily ask is the follow-through probe on tracker #11218 (it also warns from 2026-11-09 if #11215 or #10540 is not done). The route prints the `S5-A5-DONE: <UTC time ending in Z, like 2026-11-20T14:00:00Z>` line and never posts it: the owner posts it on #10136 themselves, or replies once in session and the agent posts an `S5-A5-RELAYED:` record (`relayed-by: agent`, `owner-words:`, `owner-reply-at:`, `run=<id>` of a green rotate or converge run, which the probe verifies); an agent-posted `S5-A5-DONE` line does not satisfy the record | A4 passed (the route's `guard` also checks it: tracker #11215 closed as completed and the link flag at `1`, so the new key never rides plaintext); a green read-only `mode=plan` rehearsal (`verdict=plan_ok`); the "Key rotation" section re-read; the Stripe-webhook (#10542) and dashboard-send (#10543) loss defects fixed first, or the rotation runs inside a quiesced window with the replay check; the go text names the residual that the production dedicated host has never been rebooted with its LUKS volume and live scheduler (unverified) | one dispatch of `inngest-key-rotate.yml` (`mode=rotate`, `keys=signing`, or `event` / `both` only if the owner extends the go), shown in "Key rotation": phase 1 replaces the dedicated pair, a Hetzner soft reboot restarts the scheduler on the new key, phase 2 replaces the app copy, then the canary-then-prod web redeploy runs at once. `restart-inngest-server.yml` is not used: its hook channel terminates on web-1 and cannot reach 10.0.1.40. During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` can fail with 401 | the run's value-free evidence block and Better Stack rows from the dedicated host (never `deploy-status`, which reads web-1): a `tls-health` row with a NEW `boot_id` and `listener=1`, and `scripts/inngest-host-state.sh` reading `SERVING=yes` (see "Key rotation order (A5)") | none: a rotation is forward-only (no old key exists after phase 1); a failed run is finished with `converge` under a fresh, per-command, in-session owner go (an agent may run it under that go); for the plaintext hazard of a flag-off rollback see "Rollback" step 3 |
 | A6: "no known access" record | **owner-human**: CLO condition; the owner's own knowledge sentence, given once in session, quoted verbatim under the provenance block; an agent measures, drafts the record (never the knowledge sentence) and files; the CLO attests separately (*Superseded 2026-11-02:* "owner-signed (no delegation covers it)"); the daily ask follows A5 on the same tracker #11218; the owner posts `S6-A6-DONE: <UTC time ending in Z>` on #10136 when the record is filed and linked, or the agent posts `S6-A6-RELAYED: <UTC time ending in Z>` with `relayed-by: agent`, `owner-words:` and `owner-reply-at:` after the owner's one reply | A5 complete; a measured re-read from the deployed #10405 emit; the Hetzner member list enumerated read-only | a record under `knowledge-base/legal/audits/`, linked from #10382 and #10136, carrying the owner's sentence (*Superseded 2026-11-02:* "written by the owner") and attested separately by the CLO agent | the record exists and is linked | n/a (this PR does not write it) |
 | A7: leg-2 accepted-risk record (the `sdk_url` poll) | **owner-human**: owner item, class `operator (legal-risk)`; delegation covers the agent posting the record, never the owner's acceptance sentence (*Superseded 2026-11-02:* "no delegation covers it") | the CLO conditions on the leg-2 row | a record on #10136 that carries the owner's acceptance sentence (referencing the exact record by comment id or digest) and the provenance block; delegation covers posting, never the owner's words (*Superseded 2026-11-02:* "an owner-typed record ... beginning "SIGNED BY OWNER (human, not an agent)"; an agent-posted record does not satisfy it"; the literal line is now banned on an agent-posted record, and a record claiming human typing is void) | the record exists before the poll row is relied on | n/a |
 
@@ -1809,7 +1829,7 @@ Built and merged but NOT delivered to any host until the owner-gated A1-class `a
 - **Until the replace, an `apply_target=inngest-host` dispatch aborts by design while the server still exists or a token is still pending replacement** (`server_touched`, `doppler_touched` and the destroy-guard see the server replace and the boot token `["delete","create"]`). Do not dispatch it against a live host. The exception is a host that is already absent: the state-to-dispatch matrix below says which absent-host states pass `inngest-host` (rows "Token(s) partly created", "Both tokens in state" and, after the owner-run token apply, "Pending replace, host lost out of band"). The scheduled drift workflow (`scheduled-terraform-drift.yml`) runs an unscoped `terraform plan -detailed-exitcode` and treats exit code 2 as drift (it opens or updates a "Drift Detected" issue carrying the plan output), so expect that issue to name the pending `hcloud_server.inngest` replace and the token changes until the replace runs. That is expected, not an incident: `user_data` has no `ignore_changes`, so any merged edit of the template does the same (read from the workflow, not from a live run).
 - **Expected replace plan shape.** `-/+ doppler_service_token.inngest` (ForceNew `access`), `+ doppler_service_token.inngest_flip`, `-/+ hcloud_server.inngest`, `-/+ hcloud_server_network.inngest`, `-/+ hcloud_volume_attachment.inngest_redis_luks`; the volume is untouched. The replace gate also judges the two token addresses by action (R10, counter `doppler_token_touched`): only `no-op`, `create`, `delete`+`create` and `create`+`delete` are admitted, so an `update`, a bare `delete` or a `forget` on either token aborts the replace before any apply. After a partial failure the plan shape differs; use the state-to-dispatch matrix below, not a blind re-dispatch.
 - **Replace-window impact.** The sole scheduler is dark from the destroy until `op=resume` completes: the replaced host inherits `INNGEST_CUTOVER_FLIP=done` and refuses to start the scheduler until then (A1b), so after a replace there is no running scheduler to keep its state. Plan for 15 to 60 minutes plus approval latency (see "Replace duration" below). Scheduled agent runs and reminders due in the window do not fire on time; choose a low-traffic window. What happens to the jobs that come due is the existing AOF-preserved behaviour recorded under "Replace duration" (each missed tick fired exactly once on resume after the 2026-09-17 gap); it is not re-measured for this change.
-- **Silence alert (#11820), PAUSED pending #11869 (false positive: the evaluator reads 0 while the rows arrive).** `logtail_exploration_alert.inngest_cutover_flip_silent` (`soleur-inngest-cutover-flip-silent-prd`) is `paused = true` until the evaluator behaviour is measured; the text below is the armed behaviour. When armed it emails when no JSON `inngest-cutover-flip` row arrives from the production Inngest host for 15 minutes. It WILL email during an owner-authorized `apply_target=inngest-host-replace`, because the host is dark from the destroy until the first `noop-*` row after the new host boots; that is expected and it clears on its own once the row arrives. Outside a replace it means the flip unit is not running to completion: read the unit's own rows for the cause (a revoked or rotated-alone flip token fails before the script starts). Replace-window suppression is not built; it stays open on #11820 (a heartbeat beaten by a scheduled workflow). The alert does not see a failure that reaches the script's `emit_state`, because those still write JSON rows.
+- **Silence alert (#11820), ARMED (re-armed 2026-11-12 under #9927 step D2-1a, on #12221 decision 2; it sat paused pending #11869 — a false positive where the evaluator read 0 while the rows arrived — and the same stuck-at-0 can recur: an open incident while rows arrive is that failure mode, not a real silence).** `logtail_exploration_alert.inngest_cutover_flip_silent` (`soleur-inngest-cutover-flip-silent-prd`) emails when no JSON `inngest-cutover-flip` row arrives from the production Inngest host for 15 minutes. It WILL email during an owner-authorized `apply_target=inngest-host-replace`, because the host is dark from the destroy until the first `noop-*` row after the new host boots; that is expected and it clears on its own once the row arrives. Outside a replace it means the flip unit is not running to completion: read the unit's own rows for the cause (a revoked or rotated-alone flip token fails before the script starts). Replace-window suppression is not built; it stays open on #11820 (a heartbeat beaten by a scheduled workflow). The alert does not see a failure that reaches the script's `emit_state`, because those still write JSON rows.
 - **Abort and rollback rule.** If the replaced host has not armed (no `provision-unit-armed` row for the new instance id) within the A1 abort thresholds above, stop and wait for a fresh owner go; then take the route the matrix names for the state you read. The old host's state (the Redis AOF volume, the `done` latch) is the thing at risk, not the tokens. No `inngest-doppler-write-REFUSED` row and no `provision-unit-armed` row for the iid is consistent with the flip-file write itself having failed (the charset guards emit the REFUSED row; the flip write emits nothing and aborts runcmd), but it is not proof: other stops precede the armed row too (`inngest-doppler-config-REFUSED`, `zot-read-write-REFUSED`, a LUKS-stage fatal exit, a runcmd that never ran, or Vector not yet shipping). Check `runcmd-entered` and the other `*-REFUSED` or `*-FAILED` stages for the iid first, because the flip-rotation route does not fix a non-flip fault and costs a second replace of the sole scheduler. The pre-resume abort (step 4 below) is the second stop.
 - **First replace, in order (the owner's steps; an agent reads, the owner decides).** The first use of the flip token is the unit's own `ExecStart=/usr/bin/doppler run ...` on every timer tick from boot, a READ of the flag with `DOPPLER_TOKEN` overridden by the drop-in; on success the script emits a JSON `noop-done` row. The first WRITE with the flip token happens only after `op=resume`: resume writes `flushed` with the CI-side token, the next tick takes the `flushed)` arm (`start_server`, `verify_or_abort`, `flag_set "done"`), and that flag write is the first one made with the flip token.
   1. Before the go, read the two `access` lines in `apps/web-platform/infra/inngest-host.tf` at the dispatch SHA: `doppler_service_token.inngest_flip` must be `read/write` and `doppler_service_token.inngest` must be `read`. If a "Drift Detected" issue is open, its plan output shows the same two token changes (`+ doppler_service_token.inngest_flip`, `-/+ doppler_service_token.inngest`). The `inngest-host-replace` dispatch plans and applies in one job with no pause between them, so there is no pre-apply plan for the owner to read. The replace gate pins `.change.after.access` on any plan entry that creates a token (`read/write` for `inngest_flip`, `read` for `inngest`; a wrong or missing value aborts with `reason=doppler_token_access` before any apply, #11831), and the destroy-guard does not read `.after` for these token addresses. The pin judges what the plan MINTS, not state: a token an earlier ungated apply already minted wrong shows as `no-op` and is outside it. Step 3 proves only a read, so it cannot tell a read-only token from a read/write one; this read of the two literals stays as a cheap cross-check of what the gate pins.
@@ -1904,6 +1924,22 @@ Measured from the repository's own records on 2026-10-18 (no estimate is used wh
   redeploy is unverified, so use the existing op and do not assume a mechanism.
 - **Not measured:** how a step HTTP call in flight when the scheduler goes away is re-driven (presumed at-least-once). Check
   non-idempotent steps before A1.
+
+**The liveness gate at the end of the apply job (#12708).** Since #12708 the `inngest_host_replace` job does not end at
+"apply succeeded": a post-apply step polls Better Stack for up to 20 minutes for the first `SOLEUR_INNGEST_SERVER_PROBE`
+row carrying the NEW server's `instance_id` (the pin exists on `scripts/inngest-host-state.sh` as `--instance-id`; the
+destroyed host's rows stay inside any lookback window and would otherwise mask the replacement's silence). A job that ends
+**red at "Post-replace liveness gate"** means: the host exists and the apply was clean, but the host is not emitting —
+the born-dark class of #12695, read at ~20 minutes instead of ~17 hours. Read the `SOLEUR_INNGEST_BOOT_STAGE` rows for
+the new `iid` for the first failing stage (`isolation-check-FAILED` names the offending secret in its `foreign=` detail,
+#12707), then follow the failure-stage guidance in [§ Stages](#stages). A last-read `rc=6` in the step output is an
+instrument fault (Better Stack/Doppler read path), not a host verdict — and if the window ends with NO verdict read at
+all (every read rc=6/124), the step summary says so explicitly rather than claiming the host dark. One strictness to
+know before reading a red gate as dead: a host whose metadata read failed emits its probe rows with
+`instance_id=unknown`, which can never satisfy the pin — the gate reports dark on what may be a live, unidentified
+host. That direction is deliberate (an unidentified row is not a per-host liveness claim), and the BOOT_STAGE rows
+still distinguish the two cases. The job timeout rose 20 → 40 minutes to hold the
+window; the gate itself is what changed, not the dispatch.
 
 ### Reading `tls-health` without SSH
 
@@ -2111,10 +2147,11 @@ window.
 
 1. Do not start until the soak (A4) has passed: the new key must never travel over `:8288` in plaintext. The route's `guard` job refuses
    `rotate` and `converge` unless the link flag reads `1` and tracker #11215 is closed as completed.
-2. Rehearse read-only first: `gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'` (it passes through the
-   `infra-privileged` environment approval, see "Who dispatches what"). It runs both plan gates, reports the guard checks as booleans, refuses
+2. Rehearse read-only first: `gh workflow run inngest-key-rotate.yml -f mode=plan -f keys=both -f reason='rehearsal'` (it binds the
+   `infra-privileged` environment for the Tier-B credentials — branch policy, no required-reviewer park, see "Who dispatches what"). It runs both plan gates, reports the guard checks as booleans, refuses
    on none of them and writes nothing; expect `verdict=plan_ok` (or `plan_blocked` naming the first admission check that `rotate` would fail).
-3. The owner dispatches `rotate` under a fresh in-session go (see "Key rotation" for the lines and what the go must say). The route
+3. `rotate` is dispatched under a fresh, per-command, in-session owner go (see "Key rotation" for the lines and what the go must say);
+   under the 2026-11-08 ruling an agent may run that dispatch — the `key-rotate-approval` reviewer click stays the owner's. The route
    rotates the dedicated copy (`soleur-inngest/prd`), soft-reboots the dedicated host through the Hetzner control plane, waits for it to
    serve on a new boot, rotates the app copy (`soleur/prd`), and redeploys the web fleet canary-then-prod at once. Both copies take the
    same value because the app copy is derived from the dedicated `random_id`; the event key rotates in the same window only if the owner's
@@ -2133,18 +2170,20 @@ window.
    *Superseded 2026-11-02:* "The owner pastes the run's evidence block and the printed `S5-A5-DONE` line on #10136 as their own comment."
 6. The legal bridge date: from 2026-11-09 the follow-through probe on #11218 also asks for A5 with the exact dispatch lines, so
    2026-11-12 is not missed. The 2026-12-10 extension is not recorded in the legal records (unverified) and is not decided here.
+   *Ruled 2026-11-13 (CLO):* the 2026-12-10 conditional extension is dead; the owner acceptance recorded by PR #12733 runs
+   to 2026-11-20 only (see [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c)).
 
 ### Tracked follow-ups (filed 2026-10-19)
 
 | Issue | What it tracks |
 |---|---|
-| #10538 | the `sdk_url` poll (leg 2): a web-side listener or poll removal, merge by 2026-11-12, accepted-risk row lapses 2026-12-10 |
+| #10538 | the `sdk_url` poll (leg 2). Ruled 2026-11-13 (CTO and CLO): remedy (c), the poll URL becomes the public serve URL `https://app.soleur.ai/api/inngest` (a web-side listener and poll removal were rejected); declared in `inngest-host.tf`, live at the owner's `inngest-host-replace`. The 2026-12-10 extension is dead (CLO): the owner acceptance runs to 2026-11-20. See [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c) |
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
-| #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 is still owner-dispatched) |
+| #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 runs under the owner's per-command go) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
-| #10544 | `inngest-host-replace` has no confirm or id-pin input |
+| #10544 | `inngest-host-replace` has no id-pin input (a typed confirm, `PUBLIC-SDK-URL`, landed with #10538 in PR #12737; it is a typo-guard, not an id-pin) |
 | #10545 | the Inngest host's nft loader is not idempotent |
 | #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
 | #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
@@ -2175,12 +2214,14 @@ The other generated secrets (the manual-trigger secret, the dev Inngest keys, th
 ### Who dispatches what
 
 - **`mode=plan`** is the read-only rehearsal (both Terraform plan gates, the guard checks reported as booleans, no write). It is not a free
-  read: its `apply1` job runs under the `infra-privileged` environment (a required-reviewer approval) and loads the Tier-B credentials to
-  plan against Terraform state. Dispatch it only when the owner asked for it or a standing delegation covers it, and approve its environment
-  gate the way any other `infra-privileged` run is approved. It may be re-run.
-- **`mode=rotate` and `mode=converge` are dispatched only by the owner.** Each needs a fresh, per-command, in-session go that names the mode, the
-  keys and the typed confirm. A go on another issue does not count (a go on #10382 is not one), no delegation covers it, and an agent never
-  runs either mode. The `confirm` string and the `quiet_window` input are typo-guards and a statement of fact, not the authorization.
+  read: its `apply1` job binds the `infra-privileged` environment (branch policy, zero required reviewers — no reviewer
+  park) and loads the Tier-B credentials to plan against Terraform state. Dispatch it only when the owner asked for it or a standing
+  delegation covers it. It may be re-run.
+- **`mode=rotate` and `mode=converge` park at `key-rotate-approval` (required reviewer `deruelle`, `main`-only branch policy).** Each
+  needs a fresh, per-command, in-session go that names the mode, the keys and the typed confirm — under the 2026-11-08 ruling that go
+  authorizes the agent to run the dispatch; the reviewer click on the environment is NEVER delegated. A go on another issue does not count
+  (a go on #10382 is not one) and no delegation covers it. The `confirm` string and the `quiet_window` input are typo-guards and a
+  statement of fact, not the authorization.
 - A GitHub "re-run" of a `rotate` or `converge` run is refused (`run_attempt` must be 1): a re-run reuses the inputs and would bypass the go.
   Only `plan` may be re-run.
 
@@ -2248,8 +2289,8 @@ recovery, and it depends on where the run stopped:
   scheduler and the app copy still hold the old key and nothing has rebooted. `converge` has no source to resume and refuses
   (`converge_source_missing`). The recovery is a **fresh `rotate`** under a fresh owner go. Until then an unrelated restart of the
   dedicated host loads whatever the dedicated copy holds now while the app holds the old key.
-- **Phase 1 landed and a later job failed** (everything else below): the recovery is `converge` under the owner's own per-command go; no
-  agent runs it. `converge` never mints a key and resumes from the observed state: copies unequal means phase 1 is done and it continues at
+- **Phase 1 landed and a later job failed** (everything else below): the recovery is `converge` under a fresh, per-command, in-session owner go — an agent
+  may run it under that go; the `key-rotate-approval` reviewer click stays owner-human. `converge` never mints a key and resumes from the observed state: copies unequal means phase 1 is done and it continues at
   `apply2`; it issues no reboot POST when the newest boot began after `rotated_at` or a Hetzner reboot action is running or finished after
   it; it refuses to redeploy while the host reads NOT SERVING. The key set and `rotated_at` are derived from the newest earlier `rotate` run, and only
   that one (it never walks back to an older rotation); that run's `apply1` must have concluded `success`. A source whose first apply
@@ -2603,6 +2644,104 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 4. Restart the web platform so it re-reads — re-run `web-platform-release.yml`. The container
    swap IS the restart; `ci-deploy.sh` deliberately rejects `restart web-platform` because a
    web-platform restart is docker-level, not systemd-level. No host login is involved.
+
+## Registry-empty alert (#10538)
+
+`logtail_exploration_alert.inngest_registry_empty` (`soleur-inngest-registry-empty-prd`, defined in
+`apps/web-platform/infra/betterstack-logs-alerts.tf`, drift guard `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`).
+Email and push; `higher_than 0` over 900 s, checked every 300 s, missing data counts as zero, recovery 7200 s.
+
+**What fires it.** One hourly `SOLEUR_INNGEST_SERVER_PROBE` row from the dedicated host (`host_role=dedicated`) that is
+serving (`server_active=active`, `http_code=200`), past the uptime floor (`uptime_s` above 900, the host's `/proc/uptime`),
+and whose `registry_fns` is NOT a positive integer: `0` (the server answers and owns nothing), `__UNREADABLE__` (the
+registry query failed), or the field missing. Leg B is the same field row on the vector-down phone-home envelope
+(`shipper='cloud-init-phone-home'`, `stage='inngest-server-probe-vector-down'`), read from `.detail`. After the owner's
+`inngest-host-replace` the most likely cause is the public `sdk_url` poll failing (see the next section).
+
+**What does not fire it, by design.** A not-serving row (`http_code` other than 200, or `server_active` other than `active`)
+belongs to the probe heartbeat `betteruptime_heartbeat.inngest_server_probe` ([Arming the probe heartbeat (#9703)](#arming-the-probe-heartbeat-9703)).
+The first probe after a replace is under the uptime floor and stays quiet. `uptime_s=unknown` reads 0 and stays quiet.
+A **stale non-zero** registry is not detected: the registry persists in Postgres across a replace, so a broken poll most
+likely still shows the old count. #12742 (the sync-evidence probe field) closes that and must merge before the replace.
+
+**Triage, read-only, no SSH.**
+
+1. Read the dedicated host's rows, newest first: `scripts/inngest-host-state.sh` (journal and unit state through the
+   journald to Vector to Better Stack channel, pinned to the dedicated host), and the probe row itself:
+   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE`,
+   decoded with the `jq` in that script's header; keep `host_role=dedicated` rows and read `registry_fns=`, `uptime_s=`,
+   `http_code=`, `boot_id=` per row. A phone-home row (`.shipper`, `.stage` as above) carries the field row in `.detail`.
+2. Count instead of reading when the window is long. Single-quote the SQL (the script substitutes `$BS_TABLE` and
+   `$BS_TABLE_S3`; double quotes expand them, empty, in your shell) and UNION the hot table with the archive, or the count
+   is short:
+   `SELECT count() FROM (SELECT raw FROM remote($BS_TABLE) WHERE dt > now() - INTERVAL 6 HOUR UNION ALL SELECT raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1 AND dt > now() - INTERVAL 6 HOUR) WHERE JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe' AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0 AND NOT match(JSONExtractString(raw, 'message'), 'registry_fns=[1-9][0-9]* ')`.
+3. Replace-window reading: a fresh `boot_id` with `registry_fns=0` in the first rows after an `inngest-host-replace`,
+   while `uptime_s` is still small, is the server waiting on its first sync; a page means the floor was passed and it
+   still owns nothing. Check the web side next: `resolve-origin` rejection rows and the app's `/api/inngest` responses in
+   Better Stack, and whether `https://app.soleur.ai/health` is green.
+4. Re-registration: `curl -fsS -X PUT https://app.soleur.ai/api/inngest` makes the app register itself with the server
+   (the same call that recovered crons on 2026-06-11, see `app/api/inngest/route.ts`). It writes the scheduler's app
+   record, so it runs under the go that covers the replace, not as a read. A `modified:true` answer followed by a
+   probe row with a positive `registry_fns` resolves the incident (recovery 7200 s, two emissions).
+
+## Public sdk_url poll (#10538 remedy (c))
+
+Ruled 2026-11-13 (CTO and CLO, `knowledge-base/project/specs/archive/20261115-230930-feat-origin-tls-inngest-poll-10479-10538/decision-challenges.md`):
+the dedicated host's `--sdk-url` becomes the public serve URL `https://app.soleur.ai/api/inngest` (ADR-100 Decision 1 as
+amended), `--poll-interval` stays 60. The poll then takes the same path as the step calls: public-CA TLS to the Cloudflare
+edge, then `strict` to the origin (ADR-321). The value is declared in `apps/web-platform/infra/inngest-host.tf` and pinned by
+Guard 4 of `exec-placement-forward.test.ts`; `hcloud_server.inngest` is not a push-apply target, so the **live host keeps
+polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-replace`**. That replace is the gate (no flag).
+
+**Preconditions, in order** (the CLO's conditions; each is a recorded measurement, not an assumption):
+
+1. The #10479 cleanup apply is measured (`strict` on the adopted rule) and #10479 is closed.
+
+   > **Superseded 2026-11-17 (#10479), as to "#10479 is closed":** this means the legal-record closure, not the GitHub issue state. The CLO ruling of 2026-11-13 ("Remedy (c) legality") defines it as "(cleanup apply measured, wording merged, row 7 converted)". Q-1 is recorded as discharged in 'Addendum — 2026-11-16 (post-merge, Q-1)' of `knowledge-base/legal/audits/2026-11-counsel-review-10479.md`, from the 2026-11-16 13:12-13:16Z read (#10479 comment 6917496007) and the CLO ruling of 2026-11-16 (#10479 comment 6946870123). Item 1 is met. Check it against that addendum, never against `gh issue view`: an OPEN issue does not block the replace, and a closed issue without that addendum does not meet item 1. On GitHub #10479 is OPEN (read 2026-11-17), and the owner closes it. Items 2 to 4 are unchanged, and so is the 2026-11-20 limit in item 4.
+
+2. #12742's sync-evidence probe field is merged (the registry-empty alert above cannot see a stale non-zero registry).
+3. Hop 1 (the Inngest server to the Cloudflare edge, certificate check) is measured against the deployed build.
+4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
+   acceptance recorded by PR #12733 runs to 2026-11-20 only).
+
+**Typed-confirm gate (CTO rulings D2, 2026-11-13, and fix-round F1, 2026-11-15).** Until #12742 item 1 merges, the step
+right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any
+credential loads) fails unless the dispatch carries `-f confirm=PUBLIC-SDK-URL`. The `inngest_host` birth job (the
+"server absent" recovery row) needs `-f confirm=PUBLIC-SDK-URL-BIRTH`, because a birth boots the same public sdk_url.
+Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. A third path has no gate: a local, untargeted
+`terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of `hcloud_server.inngest` because its
+user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. The confirm is a typo-guard, not the go; its error points
+to #12742. The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
+alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
+They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the
+first post-boot run of each cron function for a duplicate (two runs inside one schedule slot) before declaring recovery.
+The #12742 item-1 PR replaces the script with a fail-closed live-mode preflight (it is never deleted bare).
+
+**Precondition re-read at dispatch time (CTO fix-round F2).** Precondition 1 is a fresh reading, not the historical one:
+within 30 minutes before the dispatch, run `plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint` and confirm
+the last rule matching `app.soleur.ai` is the adopted rule with `ssl = strict`. A dashboard break-glass to `flexible`
+leaves the repo `strict` and every guard green, so only this read can see it.
+
+**Post-replace checks, read-only:**
+
+- `registry_fns` on the new host's probe rows is a positive integer once `uptime_s` passes 900 (the alert above pages
+  otherwise), and #12742's new field shows a recent sync.
+- If the registry is empty, re-register with the explicit `PUT https://app.soleur.ai/api/inngest` (step 4 above).
+- The stored app `url` rows: Inngest v1.45.1 `pollSDKs` pings EVERY stored `app.Url`, not only the `--sdk-url` seed, so a
+  surviving `http://10.0.1.10:3000/api/inngest` row would keep the plaintext poll alive after the replace. **There is no
+  no-SSH read path for these rows today** (the host-local GQL is reachable only on the host); #12742 must emit them as a probe
+  field. Leg 2 counts as closed only when that field is read.
+- The private-IP rejections logged by `apps/web-platform/lib/auth/resolve-origin.ts` for `10.0.1.10:3000` stop: a Better Stack
+  `SELECT count()` of those rows falls to 0 after the replace.
+- Watch the #7228 double-fire probe after the replace: the sync checksum includes the URL, so the first sync is not
+  deduplicated.
+- Mixed-build residual (ADR-100 Decision 1 amendment): web-2 serves at LB weight 1 (#12414), so each 60 s sync may land
+  on either host; during a rolling deploy with mixed builds, consecutive syncs can alternate between two function/cron sets.
+  Bounded by the deploy window (same last-writer shape as the app's boot `PUT`); read `registry_fns` again after the deploy
+  finishes, not during it.
+
+The carrier comment in `inngest-bootstrap.sh` ("polls the co-located web-platform") stays out of date until that file next
+changes for a real reason (it is an image carrier; a comment-only edit mints a no-op image release).
 
 ## Arming the probe heartbeat (#9703)
 
@@ -3997,6 +4136,114 @@ The opt-in `missed_tick_candidates=true` lines are keyed by function UUID and ar
 2(b) at most, never a list to fire. Naming them and filtering them to due ticks is the proper fix,
 tracked on #6940. Before dispatching `op=verify` against a newly cut-over dedicated host, check
 whether #6940 has landed (ADR-146 § Deferred item 5).
+
+## Exec-placement forwarder (#9137, ADR-033 amendment 2026-11-10)
+
+Step calls arrive at `https://app.soleur.ai/api/inngest` and the Cloudflare LB steers them to either
+web host. The forwarder in front of `serve()` reads the call's `?fnId` and the function's
+`EXECUTION_PLACEMENT` class: `portable` executes where it lands; `host-affine`, `volume-bound`,
+unknown and fnId-less POSTs forward verbatim (raw body, signature headers, full query) over pinned
+TLS to the exec listener on web-1 (`10.0.1.10:8445`, the ADR-119 volume holder), and the response
+streams back. These rows live on the WEB hosts' app log (pino → journald → Vector → Better Stack,
+`feature=inngest-exec-placement`), not on the dedicated Inngest host — a `placement.*` symptom is a
+web-platform signal, so do NOT reach for `inngest-host-state.sh` or `restart-inngest-server.yml`
+first. Every step call emits a `placement_decision` row (op `inngest-exec-placement`; fields `fnId`,
+`class`, `decision`, `host_ip`, plus `reason` on refuse rows) on the host that received it;
+`decision=forward` on web-2 and `decision=execute` on web-1 for a pinned fn is HEALTHY, not a fault.
+The refusal wire body is `{ error: "placement.<reason>" }` with a status per reason:
+`placement.exec_identity_missing` is **503, error-level and Sentry-mirrored** (retriable BY DESIGN —
+a refused step stalls the tick visibly, it does not kill the run, so recovery is always "fix the
+cause, let Inngest retry", never "re-fire the cron"); `placement.marked_on_nonexec` is **403,
+error-level and Sentry-mirrored** (the loop-guard — a marked call must never re-forward);
+`placement.missing_signature` is **401, a rate-limited warn only** (an unsigned public caller
+prodding the pinned surface — unsigned calls can never execute, so it is a signal, not a page).
+
+### `placement.exec_identity_missing` — recovery is a re-deploy after the NIC is up
+
+`SOLEUR_HOST_PRIVATE_IP` is injected per host by `ci-deploy.sh` from `PROXY_BIND`, which
+`resolve_proxy_bind()` reads off the host's `10.0.1.x` interface. The Hetzner private NIC is a
+post-boot hot attach: a deploy that runs before the NIC holds its address starts the container with
+an EMPTY `SOLEUR_HOST_PRIVATE_IP`, and that host then refuses every pinned step call with 503 +
+`placement.exec_identity_missing` until the next deploy — it never guesses and never executes a
+pinned fn locally. Recovery is a re-deploy AFTER the NIC is up — PRIMARY action, NO SSH
+(`hr-no-ssh-fallback-in-runbooks`):
+
+1. **Confirm the NIC is up (no SSH).** `web-private-nic-guard.timer` emits a `SOLEUR_PRIVATE_NIC`
+   line per web host to Better Stack; `nic_ok=true` is the healthy line, `nic_ok=false` carries the
+   host's actual v4 addresses in `zot_last_err`:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 6h --grep 'SOLEUR_PRIVATE_NIC' --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+   `nic_ok=false` on web-1 means the private NIC still does not hold `10.0.1.10`. The web guard is
+   detect-and-alarm (`converged_by=detect-only` — it deliberately does NOT converge the NIC), so a
+   persistent `nic_ok=false` is a host-attachment problem owned by the operator/HA path (#6459),
+   not something a re-deploy fixes: re-deploying before `nic_ok=true` only re-installs the empty
+   value.
+2. **Re-deploy the web image (no SSH).** Once the newest `SOLEUR_PRIVATE_NIC` row on the refusing
+   host reads `nic_ok=true`, dispatch `web-platform-release.yml`:
+
+   ```
+   gh workflow run web-platform-release.yml
+   ```
+
+   `resolve_proxy_bind` re-reads the now-present address and the new prod container starts with
+   `SOLEUR_HOST_PRIVATE_IP=10.0.1.10`. The refusal self-heals at the swap: the 503 is retriable, so
+   Inngest retries the refused step calls and they execute on the exec host — no missed-tick
+   re-fire, no cron drain intervention.
+3. **Verify (no SSH).** The `placement_decision` rows for pinned fns on the recovering host read
+   `decision=execute` (they read `decision=refuse` during the window), and `placement.exec_identity_missing`
+   rows stop:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 2h --grep 'placement' --limit 500 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+### `placement.forward_failed` — two named causes
+
+A `placement.forward_failed` row on a non-exec host means the pinned-TLS dial to
+`10.0.1.10:8445` failed — the FORWARD failed, not the function and not the signature (the
+`x-inngest-signature` presence gate runs before any dial; a missing header is refused, never
+forwarded). Diagnose the two named causes in order:
+
+1. **The 8445 publish state degraded to loopback.** web-1 publishes the exec listener as
+   `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8445:8445"`: `RELAY_PUBLISH_BIND` is `PROXY_BIND` only when
+   `net.ipv4.ip_nonlocal_bind` reads exactly `1`; anything else — unset, `0`, or an unreadable
+   sysctl — leaves the listener bound to `127.0.0.1`, unreachable by peers, and the deploy that set
+   it logged `relay_publish degraded=nonlocal_bind_unset` (tag `ci-deploy`, Better Stack). Read it:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 7d --grep 'relay_publish degraded' --limit 200 \
+     | jq -R -r 'fromjson? | .raw? | fromjson? | select(type=="object") | "\(.dt) \(.host) \(.message)"'
+   ```
+
+   A fresh row means the host lost the sysctl. The file is `/etc/sysctl.d/99-soleur-nonlocal-bind.conf`,
+   shipped by cloud-init and re-asserted by the `terraform_data.nonlocal_bind_sysctl*` pair in
+   `server.tf`; restore it through the infra path (`apply-web-platform-infra.yml`), then re-deploy
+   web so the publish lands on `10.0.1.10`. Until then the forwarding fails closed — pinned fns
+   stall visibly (503-retried by Inngest), which is the accepted trade: the alternative is an
+   exec-side blind spot.
+2. **The proxy cert is absent or expired on either host.** The forward dials with
+   `loadProxyTlsClientCa()` + `rejectUnauthorized: true` against `PROXY_TLS_CERT` (minted in
+   `infra/proxy-tls.tf`, SANs over every web host's private IP). An absent, unparseable or expired
+   cert fails the handshake: look for `relay_peer_probe ... result=tls` rows (tag `ci-deploy`) from
+   the last deploy, the `proxy_cert_expiry` Sentry op (`feature=control_plane_route`), and the
+   `proxy-tls: server cert loaded` startup row's `daysLeft`/`notAfter` — the Better Stack monitor
+   watches expiry. Remedy is the IaC path: rotate/replace the material through `proxy-tls.tf` and
+   re-deploy BOTH web hosts (the cert must match on dialer and listener). The forwarder NEVER dials
+   with verification disabled — do not work around an expired cert by weakening the pin.
+
+What it is NOT: a `placement.forward_failed` is not an exec-identity problem (that refuses before
+any dial as `placement.exec_identity_missing`) and not an Inngest-host outage — the dedicated
+scheduler at 10.0.1.40 is not on this path. If BOTH causes read clean, the residual is the exec
+host's listener itself (web-1 app container down) — read `.services` via
+[§ Reading host state without SSH](#reading-host-state-without-ssh) on web-1.
 
 ## Concurrency conventions
 

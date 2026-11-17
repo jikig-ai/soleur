@@ -105,8 +105,8 @@ fi
 # (2) The HALT precedes the destroy_count sum. This is what makes it ack-INDEPENDENT:
 # `[ack-destroy]` is parsed and consulted only by the destroy gate below the sum, so a HALT
 # above it cannot be typed past. Order is the guarantee — assert the order, not just presence.
-halt_line=$(grep -nF "$HALT_PATTERN" "$WF" | head -1 | cut -d: -f1)
-sum_line=$(grep -nF "$SUM_PATTERN" "$WF" | head -1 | cut -d: -f1)
+halt_line=$(grep -nF "$HALT_PATTERN" "$WF" | head -1 | cut -d: -f1) || true
+sum_line=$(grep -nF "$SUM_PATTERN" "$WF" | head -1 | cut -d: -f1) || true
 if [[ -n "$halt_line" && -n "$sum_line" && "$halt_line" -lt "$sum_line" ]]; then
   echo "[ok] host_creates HALT (line $halt_line) precedes the destroy_count sum (line $sum_line) — no [ack-destroy] bypass"
 else

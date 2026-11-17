@@ -14,22 +14,22 @@
 #     MERGE_GROUP_HEAD_SHA, MERGE_GROUP_BASE_SHA, RUN_ATTEMPT.
 #
 # THE ORACLE SURFACE (the lane's entire authority, Guard 1): a diff is oracle-only iff EVERY
-# changed path is `scripts/ci-pr-affected-audit.accept.tsv`,
+# changed path is a doc or an in-extent test-affected-paths.sh edit (the data-file member retired with S4),
 # `knowledge-base/**/*.md`, a root `*.md`, or `scripts/lib/test-affected-paths.sh` whose EVERY changed
 # line lies inside an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent computed in BOTH the base and the
 # head image (so adding or deleting a whole array block still classifies — the PR #12150 shape).
-# The load-bearing exclusion list — any one of `scripts/ci-pr-affected-replay.py`,
+# The load-bearing exclusion list — any one of `scripts/test-all.sh`,
 # `scripts/test-all.sh`, `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`,
 # `scripts/lib/**` other than the in-extent edit — is pinned by row_exclusions. The plan's sharp
 # edge is pinned by row_extent_out: a whole-file path test for test-affected-paths.sh would let a
 # LOGIC edit take the lane, so hunk extents are exercised, not just paths.
 #
-# GUARD 1 MATRIX MAPPING (plan §Guard Contract): row 1 → row_exclusions (replay.py + accept.tsv);
+# GUARD 1 MATRIX MAPPING (plan §Guard Contract): row 1 → row_exclusions (non-surface code + oracle doc);
 # row 2 → row_exclusions (one oracle path + each outside path); row 3 → row_extent_out
 # (ALWAYS_ON_SUITES, _CLOSURE_LEAF_*, AFFECTED_CONSUMED_EDGES, comments, a function, a member-looking
 # line outside the extents); row 4 → row_diff_error + row_event_out + the killed-driver row;
 # row 5 → row_empty (an EMPTY surface membership must NOT classify: the vacuity arm);
-# row 6 (must-PASS non-canonical) → fixture mustpass6: accept.tsv + a KB specs .md + a NEW
+# row 6 (must-PASS non-canonical) → fixture mustpass6: a KB .md + a KB specs .md + a NEW
 # AFFECTED_*_PATHS block, paths in non-sorted order.
 #
 # GUARD 4 MATRIX MAPPING (manifest parity): row 1 → check_manifest bogus-member copy;
@@ -37,17 +37,24 @@
 # row 4 → row_index_job (the extracted oracle-index-check step must propagate a member's non-zero
 # exit into the leg verdict); row 4b → the leg's checkout declares fetch-depth 0 and is gated on
 # oracle_only (a static pin of ci.yml); row 5 → check_manifest reordered copy (a different member
-# order is a PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
+# order is a PASS). Legs rows → check_legs mutants (unassigned, stale row, out-of-matrix, vacant leg,
+# missing legs file, duplicate, malformed value, stray third field, repacked, reordered) and the
+# sandbox arms over the extracted step body: ORACLE_LEG unset/malformed sweep, foreign leg, k==n
+# green, malformed legs value, missing legs file, unassigned member, vacuous leg — each with a
+# reason pin. The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
 # registration, and every live registration whose label matches the declared oracle-SUT name class
 # (affected|lint-orphan-test-suites|ci-pr|ci-path-gating) must be a member OR named in a commented
 # exclusion line — a NEW oracle-machinery registration cannot silently escape the leg.
 #
-# THE ACTIVATION LOCK: `readonly ORACLE_LANE_LOCKED=1` keeps active=false forever; with SWITCH=on on
-# an oracle-only diff the driver still emits the `would_skip` telemetry (the five heavy legs) while
-# skip_legs stays EMPTY — the lane is dark. The lock-neutralized copy (same edit recipe as
-# ci-pr-selection.test.sh) proves the arm fires for EXACTLY `on` and nothing else.
+# THE ACTIVATION LOCK (removed): `readonly ORACLE_LANE_LOCKED=1` used to keep active=false forever —
+# the activation PR (#12156 follow-up) deleted it, so the driver ARMS on an oracle-only diff with
+# SWITCH=on: active=true and skip_legs carries the six heavy legs. The env-read at O-LOCK-READ
+# remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks — no ci.yml env wires it
+# today, so reaching it is an excluded-path code edit; covered here because O-LOCK-READ is live machinery);
+# row_lock covers it. The lock-neutralized copy (the recipe the retired selector suite used) is now
+# identical to the pristine driver, which is itself the pinned absence check.
 #
-# GUARD ANCHORS (contract with the driver, same convention as scripts/ci-pr-selection.sh): the
+# GUARD ANCHORS (contract with the driver, the convention the retired selector driver used): the
 # mutation battery below deletes or weakens lines tagged `# GUARD:<id>`; a driver line that carries
 # no anchor cannot be proven killed. Required ids:
 #   O-DEFAULTS        the defaults-first output block (crash-safe first write)
@@ -62,7 +69,7 @@
 #   O1-MG-SHA         the merge_group sha pair is 40-hex (was listed as "O-MG-SHAPE")
 #   O1-MG-RESOLVE     the merge_group shas resolve to commits (the other half of "O-MG-SHAPE")
 #   O-ATTEMPT         run attempt 1 only
-#   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops test-webplat from the skip list
+#   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops the web-platform legs from the skip list
 #   O-MAX-FILES       the ≤500 changed-file cap
 #   O-STATUS          M/A/D status letters only
 #   O-MODES           modes ⊆ {000000,100644,100755} on both sides
@@ -75,14 +82,17 @@
 #   O-BINARY-INDEX    a `Binary files` verdict on the index diff returns 1 (zero hunks must not pass vacuously)
 #   O-ELEM-GRAMMAR    every +/- line inside an index hunk must match the element grammar
 #   O-EMPTY-DIFF      a zero-path diff is NOT oracle-only (the vacuity arm)
+#   O-BASE-REF        PR_BASE_REF is branch-name grammar before any fetch (pull_request, #12418)
+#   O-BASE-FETCH      the live-base fetch must succeed (refs/heads/ pinned)
+#   O-NO-MERGE-BASE   the fetched base must share an ancestor with HEAD^2
 #   O-LOCK-READ       the driver reads ORACLE_LANE_LOCKED
 #   O-ARM             active=true only when unlocked AND switch `on` AND oracle_only
 #   O-GRAMMAR         the output-grammar revalidation at the final printf
 #
 # NOTICE CONTRACT (observability): every pull_request/merge_group classification emits exactly one
 # `::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE ` line carrying at least `oracle_only=`,
-# `active=`, `locked=` and `would_skip=` fields; would_skip names the five heavy legs
-# (test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build) on an oracle-only
+# `active=`, `locked=` and `would_skip=` fields; would_skip names the six heavy legs
+# (test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build) on an oracle-only
 # diff and `none` otherwise. No fixture path token, repo name, raw switch value or sha ever reaches
 # stdout, stderr, the summary or the output file (the two audit shas are the gh.out exception).
 #
@@ -230,26 +240,29 @@ git_fixture_env "$FX/_anchor" || { printf 'FAIL: git_fixture_env refused\n' >&2;
 # ── The pristine driver, and the lock-neutralized COPY ───────────────────────
 PRISTINE="$SANDBOX/drv.pristine.sh"
 cp "$DRIVER" "$PRISTINE"
-# The lock line is ONE literal line, byte-exact (the PR_AFFECTED_LOCKED analogue). The anchor is
-# `readonly ORACLE_LANE_LOCKED=1`, carried on its own line — the activation PR deletes it.
+# The lock line WAS ONE literal line, byte-exact (the retired lock-literal analogue), carried on its own
+# line — the activation PR deleted it. LOCK_RE is kept as the absence pin: a re-lock must never sneak
+# back in through an unrelated diff.
 LOCK_RE='^readonly ORACLE_LANE_LOCKED=1([[:space:]]+#.*)?$'
 UNLOCKED="$SANDBOX/drv.unlocked.sh"
 sed -E "/$LOCK_RE/d" "$PRISTINE" > "$UNLOCKED"
 
 # ── Fixture builders ─────────────────────────────────────────────────────────
-ACCEPT="scripts/ci-pr-affected-audit.accept.tsv"
-BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
+# The accept table and the strict-zero baseline retired with S4 (2026-11-09): the lane surface is now
+# extent-edits in test-affected-paths.sh plus doc paths, so a KB .md is the in-surface "oracle path" the rows
+# below feed through fx_op.
+ACCEPT="knowledge-base/project/learnings/zzleak-accept.md"
+BASELINE="scripts/ci-pr-"'affected-audit.baseline.tsv'   # assembled, never literal: the residual census greps the retired name
 TAP="scripts/lib/test-affected-paths.sh"
 KB_A="knowledge-base/project/learnings/zzleak-a.md"
 KB_B="knowledge-base/project/specs/zzleak-pipe/zzleak-y.md"
-ORACLE_FIVE="test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
+ORACLE_SIX="test-webplat,test-webplat-mutations,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
 ORACLE_FOUR="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
-FIVE_RE='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
+SIX_RE='^(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-webplat-mutations|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
 DEFAULTS=$'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha='
 
 # The load-bearing exclusion list, one path per member (Guard 1 row 2).
 EXCLUSIONS=(
-  "scripts/ci-pr-affected-replay.py"
   "scripts/test-all.sh"
   "plugins/soleur/scripts/lint-ratchet.py"
   ".github/workflows/ci.yml"
@@ -421,11 +434,11 @@ for _t in bin_nul ins_unquoted ins_evil ins_evil_out ins_pp unclosed nested; do
   fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
 done
 unset _t
-# Guard 1 row 6 (must-PASS non-canonical): accept.tsv + a KB specs .md + a NEW array block (baseline.tsv was the
-# third member until PR5z made it a non-member — accept.tsv keeps the row a must-PASS).
+# Guard 1 row 6 (must-PASS non-canonical): a KB .md + a KB specs .md + a NEW array block (the accept/baseline
+# data files retired with S4 — the surface is extent-edits + docs only).
 fx_case mustpass6; fx_op mustpass6 M "$ACCEPT"; fx_op mustpass6 M "$KB_B"; fx_tap mustpass6 new_array; fx_done mustpass6
-# DIAGRAMS carve-out (ported from ci-pr-selection.sh): a diagrams .md inside an otherwise-oracle diff keeps
-# oracle_only=true but drops test-webplat from would_skip/skip_legs.
+# DIAGRAMS carve-out (the grammar the retired selector driver carried): a diagrams .md inside an otherwise-oracle diff keeps
+# oracle_only=true but drops the web-platform legs (test-webplat and test-webplat-mutations) from would_skip/skip_legs.
 fx_case diag; fx_op diag M "$ACCEPT"; fx_op diag A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_done diag
 fx_case diagx; fx_op diagx A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_op diagx M "apps/web-platform/zzleak-code.ts"; fx_done diagx
 # a mode flip on an oracle path stays oracle (both modes allowed)
@@ -440,7 +453,7 @@ done
 unset _t
 
 # EXCLUSIONS (Guard 1 rows 1-2): one oracle path plus each excluded/outside path must stay full.
-fx_case replay; fx_op replay M "$ACCEPT"; fx_op replay M "scripts/ci-pr-affected-replay.py"; fx_done replay
+fx_case replay; fx_op replay M "$ACCEPT"; fx_op replay M "scripts/zzleak-retired-excluded.py"; fx_done replay
 fx_case ex_testall; fx_op ex_testall M "$ACCEPT"; fx_op ex_testall M "scripts/test-all.sh"; fx_done ex_testall
 fx_case ex_ratchet; fx_op ex_ratchet M "$ACCEPT"; fx_op ex_ratchet M "plugins/soleur/scripts/lint-ratchet.py"; fx_done ex_ratchet
 fx_case ex_ciyml; fx_op ex_ciyml M "$ACCEPT"; fx_op ex_ciyml M ".github/workflows/ci.yml"; fx_done ex_ciyml
@@ -451,6 +464,7 @@ fx_case ex_lib; fx_op ex_lib M "$ACCEPT"; fx_op ex_lib M "scripts/lib/zzleak-oth
 fx_case ex_oracle_sh; fx_op ex_oracle_sh M "$ACCEPT"; fx_op ex_oracle_sh M "scripts/ci-oracle-lane.sh"; fx_done ex_oracle_sh
 fx_case ex_oracle_test; fx_op ex_oracle_test M "$ACCEPT"; fx_op ex_oracle_test M "scripts/ci-oracle-lane.test.sh"; fx_done ex_oracle_test
 fx_case ex_oracle_suites; fx_op ex_oracle_suites M "$ACCEPT"; fx_op ex_oracle_suites M "scripts/ci-oracle-lane-suites.txt"; fx_done ex_oracle_suites
+fx_case ex_oracle_legs; fx_op ex_oracle_legs M "$ACCEPT"; fx_op ex_oracle_legs M "scripts/ci-oracle-lane-legs.tsv"; fx_done ex_oracle_legs
 fx_case ex_tap; fx_op ex_tap M "$ACCEPT"; fx_tap ex_tap always_on; fx_done ex_tap
 fx_case ex_code; fx_op ex_code M "$ACCEPT"; fx_op ex_code M "apps/web-platform/zzleak-app.ts"; fx_done ex_code
 fx_case ex_mk; fx_op ex_mk M "$ACCEPT"; fx_op ex_mk M Makefile; fx_done ex_mk
@@ -515,6 +529,54 @@ unset _long _long2
 # an empty diff: a genuine merge commit whose tree equals the base tree
 fx_case empty; fx_done empty
 
+# STALE BASE (#12418): the merge ref's HEAD^1 froze at a base tip BEFORE the main-side commit the PR head
+# already merged. `diff HEAD^1..HEAD` re-counts that main-side change; merge-base(HEAD^2, live base) does not.
+# fx_stale <name> <pr-file> <pr-content>: that topology — main advanced an outside-surface file, the PR
+# merged it and made its own edit, the merge ref's first parent is the pre-advance tip, and the remote's
+# live base ref is at the newer main.
+fx_stale() {
+  local d="$FX/$1"
+  git -C "$d" checkout -q main \
+    && printf 'main-side\n' >> "$d/scripts/foo.sh" \
+    && git -C "$d" add scripts/foo.sh \
+    && git -C "$d" commit -q -m main2 \
+    && git -C "$d" update-ref refs/heads/zzleak-pr-base main \
+    && git -C "$d" checkout -q pr \
+    && git -C "$d" merge -q --no-ff -m merge-main main \
+    && printf '%s\n' "$3" >> "$d/$2" \
+    && git -C "$d" add -- "$2" \
+    && git -C "$d" commit -q -m pr \
+    && git -C "$d" checkout -q --detach 'main~1' \
+    && git -C "$d" merge -q --no-ff -m merge-ref pr
+}
+fx_case stale; fx_stale stale "$KB_A" 'doc' || { printf 'FAIL: fixture stale\n' >&2; exit 2; }
+# `stale_code`: identical topology, but the PR's own delta carries a code file — proves a PR-side code
+# path still pays the battery on a merge-carrying branch.
+fx_case stale_code; fx_stale stale_code apps/web-platform/zzleak-app.ts 'x' || { printf 'FAIL: fixture stale_code\n' >&2; exit 2; }
+# `behind`: the MIRROR direction — merge-base(HEAD^2, live) is BEHIND the merge ref's HEAD^1 (the branch
+# never synced the main-side commit the merge ref's first parent already carries). Only the true three-dot
+# pair — merge-base..HEAD^2 — classifies the PR's own delta; pairing the merge-base against the merge
+# RESULT would re-count the base-side arc the other way.
+fx_case behind
+{ git -C "$FX/behind" checkout -q main \
+  && printf 'main-side\n' >> "$FX/behind/scripts/foo.sh" \
+  && git -C "$FX/behind" add scripts/foo.sh \
+  && git -C "$FX/behind" commit -q -m main2 \
+  && git -C "$FX/behind" update-ref refs/heads/zzleak-pr-base main \
+  && git -C "$FX/behind" checkout -q pr \
+  && printf 'doc\n' >> "$FX/behind/$KB_A" \
+  && git -C "$FX/behind" add -- "$KB_A" \
+  && git -C "$FX/behind" commit -q -m pr \
+  && git -C "$FX/behind" checkout -q main \
+  && git -C "$FX/behind" merge -q --no-ff -m merge-ref pr; } \
+  || { printf 'FAIL: fixture behind\n' >&2; exit 2; }
+# `unrel`: the fetched live base shares NO ancestor with the PR head — merge-base is empty, fail closed.
+# An empty-tree root commit via commit-tree: unrelated history, no checkout churn.
+cp -a "$FX/accept" "$FX/unrel"
+{ git -C "$FX/unrel" update-ref refs/heads/zzleak-pr-base \
+    "$(git -C "$FX/unrel" commit-tree "$(git -C "$FX/unrel" mktree </dev/null)" -m unrel)"; } \
+  || { printf 'FAIL: fixture unrel\n' >&2; exit 2; }
+
 # ── drive(): run the driver once, hermetically, and assert the invariants every run must hold ──
 RUN_N=0
 EXPECT_KILLED=0
@@ -532,6 +594,13 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   head=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head="0000000000000000000000000000000000000000"
   prhead=$(git -C "$repo" rev-parse 'HEAD^2' 2>/dev/null) || prhead="$head"
   base=$(git -C "$repo" rev-parse 'HEAD^1' 2>/dev/null) || base="$head"
+  # The live base ref the pull_request arm fetches (#12418): a self `file://` origin plus a `zzleak-pr-base`
+  # branch at the merge ref's first parent keeps merge-base(HEAD^2, FETCH_HEAD) == HEAD^1 — the pre-#12418
+  # diff — for every fixture that does not pre-create the ref elsewhere (the stale-base ones do).
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 \
+    || git -C "$repo" remote add origin "file://$repo" 2>/dev/null || true
+  git -C "$repo" rev-parse --verify -q refs/heads/zzleak-pr-base >/dev/null 2>&1 \
+    || git -C "$repo" update-ref refs/heads/zzleak-pr-base "$base" 2>/dev/null || true
   local -a e=(
     "PATH=$BIN" "HOME=$SANDBOX/home" "TMPDIR=$SANDBOX/tmp" "LANG=C"
     "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" "GIT_CONFIG_NOSYSTEM=1" "GIT_CONFIG_GLOBAL=/dev/null"
@@ -539,6 +608,7 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
     "EVENT_NAME=pull_request" "SWITCH=on" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
     "HEAD_REPO=$REPO_NAME" "GH_REPO=$REPO_NAME" "RUN_ATTEMPT=1"
     "MERGE_GROUP_HEAD_SHA=$head" "MERGE_GROUP_BASE_SHA=$base"
+    "PR_BASE_REF=zzleak-pr-base"
     "GITHUB_OUTPUT=$o/gh.out" "GITHUB_STEP_SUMMARY=$o/sum.out" "RUNNER_TEMP=$SANDBOX/rt"
     "DRV=$drv"
   )
@@ -622,8 +692,8 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   check_match "run$RUN_N($name) head_sha grammar" "$O_HEAD" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) base_sha grammar" "$O_BASE" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) skip_legs grammar" "$O_SKIP" '^([a-z-]+(,[a-z-]+)*)?$'
-  check_true "run$RUN_N($name) skip_legs names only the five heavy legs" \
-    "$( [ -z "$O_SKIP" ] || [[ "$O_SKIP" =~ $FIVE_RE ]]; echo $?)"
+  check_true "run$RUN_N($name) skip_legs names only the six heavy legs" \
+    "$( [ -z "$O_SKIP" ] || [[ "$O_SKIP" =~ $SIX_RE ]]; echo $?)"
   if [ "$O_ACTIVE" = true ]; then
     check_true "run$RUN_N($name) active=true carries a non-empty skip list" "$([ -n "$O_SKIP" ]; echo $?)"
   else
@@ -648,13 +718,13 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   fi
 }
 
-expect_lane() {  # $1=label: oracle_only=true, locked dark telemetry, audit shas bound
+expect_lane() {  # $1=label: oracle_only=true, armed post-activation, audit shas bound
   local lbl="$1"
   check_eq "$lbl: oracle_only" "$O_OO" "true"
-  check_eq "$lbl: active (locked)" "$O_ACTIVE" "false"
-  check_eq "$lbl: skip_legs empty (locked)" "$O_SKIP" ""
-  check_eq "$lbl: would_skip telemetry is the five heavy legs" "$N_WOULD" "$ORACLE_FIVE"
-  check_eq "$lbl: notice locked" "$N_LOCKED" "true"
+  check_eq "$lbl: active (unlocked)" "$O_ACTIVE" "true"
+  check_eq "$lbl: skip_legs is the six heavy legs (unlocked)" "$O_SKIP" "$ORACLE_SIX"
+  check_eq "$lbl: would_skip telemetry is the six heavy legs" "$N_WOULD" "$ORACLE_SIX"
+  check_eq "$lbl: notice locked" "$N_LOCKED" "false"
   check_match "$lbl: head_sha bound" "$O_HEAD" '^[0-9a-f]{40}$'
   check_match "$lbl: base_sha bound" "$O_BASE" '^[0-9a-f]{40}$'
 }
@@ -684,7 +754,7 @@ row_oracle_surface() {  # the must-PASS set: surface members and in-extent hunks
     expect_full "O-SURFACE baseline-path fixture '$f'"
     check_eq "O-SURFACE '$f': reason" "$N_REASON" "outside_surface"
   done
-  # the diagrams carve-out: oracle_only stays true, would_skip drops test-webplat (four-name list)
+  # the diagrams carve-out: oracle_only stays true, would_skip drops the web-platform legs (four-name list)
   drive diag "$d"
   check_eq "O-DIAGRAMS accept+diagrams.md: oracle_only" "$O_OO" "true"
   check_eq "O-DIAGRAMS would_skip is the four-name subset" "$N_WOULD" "$ORACLE_FOUR"
@@ -702,7 +772,51 @@ row_shape_ok() {  # the validated pull_request shape emits the audit values
   drive accept "$d"
   p1=$(git -C "$FX/accept" rev-parse 'HEAD^1'); p2=$(git -C "$FX/accept" rev-parse 'HEAD^2')
   check_eq "O-1 valid shape: head_sha is HEAD^2" "$O_HEAD" "$p2"
-  check_eq "O-1 valid shape: base_sha is HEAD^1" "$O_BASE" "$p1"
+  check_eq "O-1 valid shape: base_sha is the resolved merge-base (== HEAD^1 in this fixture)" "$O_BASE" "$p1"
+}
+row_stale_base() {  # #12418: diff base is the merge-base against the fetched live base, never frozen HEAD^1
+  local d="$1" m2
+  # `stale`: HEAD^1 is a stale base tip and the PR head merged a newer main carrying an outside-surface edit.
+  # The frozen-parent derivation re-counts that main-side file (outside_surface); the merge-base diff is the
+  # PR's own delta only — one doc — so the lane fires and base_sha is the merge-base, not HEAD^1.
+  drive stale "$d"
+  expect_lane "O-BASE stale merge-ref: lane classifies on the PR's own delta"
+  check_eq "O-BASE stale: files counts the PR delta only" "$N_FILES" "1"
+  m2=$(git -C "$FX/stale" rev-parse refs/heads/zzleak-pr-base)
+  check_eq "O-BASE stale: base_sha is the live merge-base, not HEAD^1" "$O_BASE" "$m2"
+  # the same topology with a PR-side code file still pays the battery — the gate is not reject-everything
+  drive stale_code "$d"
+  expect_full "O-BASE stale merge-ref + PR-side code pays the battery"
+  check_eq "O-BASE stale+code: reason" "$N_REASON" "outside_surface"
+  # the mirror direction: the branch never synced the main-side commit the merge ref's first parent already
+  # carries — merge-base is BEHIND HEAD^1, and only the D..HEAD^2 pairing classifies the PR delta
+  drive behind "$d"
+  expect_lane "O-BASE behind merge-ref: lane classifies on the PR's own delta"
+  check_eq "O-BASE behind: files counts the PR delta only" "$N_FILES" "1"
+  m2=$(git -C "$FX/behind" merge-base 'HEAD^2' refs/heads/zzleak-pr-base)
+  check_eq "O-BASE behind: merge-base is behind HEAD^1 (precondition)" \
+    "$([ "$m2" != "$(git -C "$FX/behind" rev-parse 'HEAD^1')" ] && echo behind)" "behind"
+  check_eq "O-BASE behind: base_sha is the merge-base, behind HEAD^1" "$O_BASE" "$m2"
+  # every resolution failure is a named fail-closed arm, never a partial classification
+  drive accept "$d" "PR_BASE_REF=zzleak-no-such-ref"
+  expect_full "O-BASE an unresolvable live base fails closed"
+  check_eq "O-BASE missing remote ref: reason" "$N_REASON" "base_fetch"
+  drive unrel "$d"
+  expect_full "O-BASE an unrelated live base (empty merge-base) fails closed"
+  check_eq "O-BASE empty merge-base: reason" "$N_REASON" "no_merge_base"
+  drive accept "$d" "PR_BASE_REF=+refs/heads/x:refs/heads/y"
+  expect_full "O-BASE a refspec-shaped base ref is rejected before fetch"
+  check_eq "O-BASE refspec-shaped ref: reason" "$N_REASON" "bad_base_ref"
+  drive accept "$d" "PR_BASE_REF="
+  expect_full "O-BASE an empty base ref is rejected before fetch"
+  check_eq "O-BASE empty ref: reason" "$N_REASON" "bad_base_ref"
+  # the refs/heads/ pin: a hex- or tags/-shaped base.ref must never FETCH_HEAD outside the named branch
+  drive accept "$d" "PR_BASE_REF=0123456789012345678901234567890123456789"
+  expect_full "O-BASE a hex-shaped base ref cannot SHA-want outside refs/heads/"
+  check_eq "O-BASE hex ref: reason" "$N_REASON" "base_fetch"
+  drive accept "$d" "PR_BASE_REF=tags/v9"
+  expect_full "O-BASE a tags/-shaped base ref cannot dwim outside refs/heads/"
+  check_eq "O-BASE tags/ ref: reason" "$N_REASON" "base_fetch"
 }
 row_shape() {  # two-parent merge-ref only: octopus, non-merge HEAD, HEAD^2 != PR head, empty, shallow, not a repo
   local d="$1" b
@@ -735,8 +849,8 @@ row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus eve
   # members are already outside the surface), so dropping it only moves reason=excluded to reason=outside_surface.
   local d="$1"
   drive replay "$d"
-  expect_full "O-EXC row1 replay.py beside accept.tsv"
-  check_eq "O-EXC row1 replay.py: reason" "$N_REASON" "excluded"
+  expect_full "O-EXC row1 a non-surface code path beside an oracle doc"
+  check_eq "O-EXC row1 non-surface code: reason" "$N_REASON" "outside_surface"
   drive ex_testall "$d";  expect_full "O-EXC scripts/test-all.sh"
   check_eq "O-EXC test-all.sh: reason" "$N_REASON" "excluded"
   drive ex_ratchet "$d";  expect_full "O-EXC lint-ratchet.py"
@@ -753,6 +867,8 @@ row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus eve
   check_eq "O-EXC ci-oracle-lane.test.sh: reason" "$N_REASON" "excluded"
   drive ex_oracle_suites "$d"; expect_full "O-EXC the validation manifest"
   check_eq "O-EXC ci-oracle-lane-suites.txt: reason" "$N_REASON" "excluded"
+  drive ex_oracle_legs "$d";  expect_full "O-EXC the leg assignment"
+  check_eq "O-EXC ci-oracle-lane-legs.tsv: reason" "$N_REASON" "excluded"
   drive ex_tap "$d";      expect_full "O-EXC accept + out-of-extent hunk"
   check_eq "O-EXC out-of-extent hunk: reason" "$N_REASON" "extent_miss"
   drive ex_code "$d";     expect_full "O-EXC apps/web-platform ts"
@@ -841,7 +957,7 @@ row_status_modes() {  # M/A/D only, modes ⊆ {000000,100644,100755}
     check_eq "O-MODE '$f': reason" "$N_REASON" "non_oracle_mode"
   done
   drive mflip "$d"
-  expect_lane "O-MODE a 100644->100755 flip on accept.tsv stays in-surface"
+  expect_lane "O-MODE a 100644->100755 flip on an oracle doc stays in-surface"
   drive mflipdoc "$d"
   expect_lane "O-MODE a mode flip on a KB doc stays in-surface"
 }
@@ -902,11 +1018,11 @@ row_mg() {  # the merge_group arm: whole-batch diff over MERGE_GROUP_BASE_SHA..M
   drive accept "$d" "EVENT_NAME=merge_group" "MERGE_GROUP_BASE_SHA="
   expect_full "O-MG empty base sha"
 }
-row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutralized copy)
+row_switch() {  # the switch is compared EXACTLY (the lock-neutralized copy is now byte-identical to the driver — the recipe is the pinned no-op)
   local d="$1" v
   drive accept "$d" "SWITCH=on"
   check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: active" "$O_ACTIVE" "true"
-  check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+  check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: skip_legs" "$O_SKIP" "$ORACLE_SIX"
   check_eq "O-SWITCH SWITCH=on, unlocked: notice locked=false" "$N_LOCKED" "false"
   # the diagrams carve-out reaches skip_legs too (unlocked): four-name subset
   drive diag "$d" "SWITCH=on"
@@ -925,16 +1041,33 @@ row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutra
   drive ex_code "$d" "SWITCH=on"
   check_eq "O-SWITCH SWITCH=on on a code diff: oracle_only stays false" "$O_OO" "false"
 }
-row_lock() {  # the activation lock: SWITCH=on classifies and annotates but never arms
-  local d="$1"
+row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the env-read
+  # ORACLE_LANE_LOCKED remains as the dark-mode revert path (a mapped env can re-lock the lane —
+  # no step env wires it today, so wiring is itself an excluded-path edit; O-LOCK-READ is still
+  # live machinery, so it is covered here).
+  local d="$1" v
   drive accept "$d" "SWITCH=on"
-  check_eq "O-LOCK lock + SWITCH=on: active" "$O_ACTIVE" "false"
-  check_eq "O-LOCK lock + SWITCH=on: skip_legs" "$O_SKIP" ""
-  check_eq "O-LOCK lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
-  check_eq "O-LOCK the would-skip telemetry is still produced under the lock" "$N_WOULD" "$ORACLE_FIVE"
+  check_eq "O-ARM unlocked + SWITCH=on: active" "$O_ACTIVE" "true"
+  check_eq "O-ARM unlocked + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_SIX"
+  check_eq "O-ARM unlocked + SWITCH=on: notice locked" "$N_LOCKED" "false"
+  check_eq "O-ARM the would-skip telemetry still names the six legs" "$N_WOULD" "$ORACLE_SIX"
+  drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=1"
+  check_eq "O-LOCK env re-lock + SWITCH=on: active" "$O_ACTIVE" "false"
+  check_eq "O-LOCK env re-lock + SWITCH=on: skip_legs" "$O_SKIP" ""
+  check_eq "O-LOCK env re-lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
+  check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_SIX"
+  # Non-`1` values must NOT lock: the O-LOCK-READ compare is exact-`1`. `on` is the highest-value member
+  # (the plausible "same as the switch" fat-finger); `0` and `true` cover the numeric/string truthy spellings;
+  # `10` pins against a `=~ ^1`-family prefix loosening (locks on `10`, `1 `, `1x`).
+  for v in 0 true on 10; do
+    drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=$v"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: active" "$O_ACTIVE" "true"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_SIX"
+    check_eq "O-LOCK env=$v (non-1) + SWITCH=on: notice locked" "$N_LOCKED" "false"
+  done
   drive accept "$d" "UNSET:SWITCH"
-  check_eq "O-LOCK dark (switch unset): oracle_only" "$O_OO" "false"
-  check_eq "O-LOCK dark (switch unset): would_skip" "$N_WOULD" "none"
+  check_eq "O-ARM dark (switch unset): oracle_only" "$O_OO" "false"
+  check_eq "O-ARM dark (switch unset): would_skip" "$N_WOULD" "none"
 }
 row_defaults_first() {  # a step killed anywhere leaves exactly the defaults (adversarial: unlocked + on)
   local d="$1"
@@ -950,7 +1083,7 @@ row_leak() {  # the raw switch value, the repo name and the shas reach no output
 }
 row_property() {  # Guard 1 property sweep: ANY generated combination of in-surface members must
   local d="$1" i j combo cname                       # classify; ONE contaminant anywhere flips it.
-  # members: accept.tsv, baseline.tsv, an in-extent hunk, a KB doc, a root doc.
+  # members: a KB doc, an in-extent hunk, another KB doc, a root doc.
   i=0
   for a in 0 1; do for b in 0 1; do for c in 0 1; do for e in 0 1; do for g in 0 1; do
     [ "$((a + b + c + e + g))" -ge 1 ] || continue
@@ -972,9 +1105,9 @@ row_property() {  # Guard 1 property sweep: ANY generated combination of in-surf
     fi
   done; done; done; done; done
   # every in-surface member plus ONE contaminant (the second member defeats it) — Guard 1 row 2
-  # generalized: for each contaminant, a diff of [accept.tsv, in-extent hunk, KB doc] + contaminant.
+  # generalized: for each contaminant, a diff of [KB doc, in-extent hunk, KB doc] + contaminant.
   local -a CONTAM=(
-    "scripts/ci-pr-affected-replay.py"
+    "scripts/zzleak-retired-excluded.py"
     "scripts/test-all.sh"
     "plugins/soleur/scripts/lint-ratchet.py"
     ".github/workflows/ci.yml"
@@ -1007,6 +1140,7 @@ _c0=$fails
 row_oracle_surface "$PRISTINE"
 row_shape_ok "$PRISTINE"
 row_shape "$PRISTINE"
+row_stale_base "$PRISTINE"
 row_exclusions "$PRISTINE"
 row_extent_out "$PRISTINE"
 row_elem_grammar "$PRISTINE"
@@ -1037,24 +1171,35 @@ echo "  control: $((passes)) checks green against the pristine and the lock-neut
 
 # ── Static guards: the lock literal, the lock copy, and the driver's tool surface ──
 _lockn=$(grep -c -E "$LOCK_RE" "$PRISTINE")
-check_eq "O-LOCK the activation lock is ONE literal line" "$_lockn" "1"
-_lockline=$(grep -n -E "$LOCK_RE" "$PRISTINE" | cut -d: -f1)
-_armline=$(grep -n 'GUARD:O-ARM' "$PRISTINE" | head -1 | cut -d: -f1)
-check_true "O-LOCK the lock line is read BEFORE the arm that checks it ($_lockline < $_armline)" "$(rc_of test "$_lockline" -lt "$_armline")"
-check_eq "O-LOCK the neutralized copy differs from the pristine driver by exactly the lock line" \
-  "$(diff "$PRISTINE" "$UNLOCKED" | grep -c '^[<>]')" "1"
+check_eq "O-LOCK the activation lock is ABSENT (removed by the activation PR; a re-lock is a driver edit, not an accident)" "$_lockn" "0"
+# Pin intent (not redundant with _lockn): `_lockn` counts only LOCK_RE matches, so it cannot see a recipe that
+# over-deletes or drifts in operand — this whole-file compare reds that drift while `_lockn` stays green.
+# $UNLOCKED is also the row_switch control operand and the mutation base for the $UNLOCKED-targeted mutants.
+check_eq "O-LOCK the lock-neutralization recipe is now a no-op on the unlocked driver" \
+  "$(cmp -s "$PRISTINE" "$UNLOCKED"; echo $?)" "0"
 check_eq "O-LOCK the neutralized copy has no lock line" "$(grep -c -E '^readonly ORACLE_LANE_LOCKED=' "$UNLOCKED")" "0"
-check_true "O-LOCK the driver READS the lock for the arm" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
+check_true "O-LOCK the driver still READS an env lock for the arm (dark-mode revert path)" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
 check_eq "PRISTINE copy is byte-identical to the live driver" "$(cmp -s "$PRISTINE" "$DRIVER"; echo $?)" "0"
-# The driver's comment claims the doc allowlist grammar is IDENTICAL to ci-pr-selection.sh is_doc_path — enforce it
-# byte-for-byte (a divergence between the two classifiers is exactly the drift the comment warns about).
-_lp=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$REPO_ROOT/scripts/ci-pr-selection.sh")
+# O-DOCPARITY, re-pinned at the S4 retirement (2026-11-09): the parity source (the retired selector driver) removed with
+# the lever, and scripts/lib/test-affected-paths.sh carries no is_doc_path function — there is no surviving second
+# copy to compare against, so the lane's is_doc_path is now pinned LITERAL-BYTE against the grammar the retired
+# classifier carried. An edit to the body below reds this row.
 _ld=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$DRIVER")
-check_eq "O-DOCPARITY is_doc_path is byte-identical to ci-pr-selection.sh" "$_ld" "$_lp"
+read -r -d '' _lp <<'EOF' || true
+is_doc_path() {
+  case "$1" in
+    knowledge-base/?*.md) return 0 ;;
+    */*) return 1 ;;
+    ?*.md) return 0 ;;
+  esac
+  return 1
+}
+EOF
+check_eq "O-DOCPARITY is_doc_path is byte-identical to the pinned grammar" "$_ld" "$_lp"
 unset _lp _ld
 # the surface and exclusion lists are committed literals in the driver (the plan's anchor): a
 # one-commit weakening must edit the driver AND defeat this sentinel.
-for _lit in "$ACCEPT" "$TAP" "scripts/ci-pr-affected-replay.py" "scripts/test-all.sh" \
+for _lit in "$TAP" "scripts/test-all.sh" \
             "plugins/soleur/scripts/lint-ratchet.py" ".github/workflows/ci.yml"; do
   check_true "O-LITERAL the driver names '$_lit'" "$(grep -qF -- "$_lit" "$PRISTINE"; echo $?)"
 done
@@ -1093,9 +1238,7 @@ DECLARED_MEMBERS=(
   "scripts/test-all-affected-a" "scripts/test-all-affected-b" "scripts/test-all-affected-c" "scripts/test-all-affected-d"
   "scripts/test-all-group-affected"
   "scripts/test-affected-derive" "scripts/test-affected-derive-cache" "scripts/test-affected-kb-consumers"
-  "plugins/soleur/test/ci-pr-affected-replay-a" "plugins/soleur/test/ci-pr-affected-replay-b" "plugins/soleur/test/ci-pr-affected-replay-c"
-  "scripts/ci-pr-selection"
-  "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
+  "scripts/ci-oracle-review"
 )
 DECLARED_EXCLUSIONS=(
   "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b"
@@ -1149,7 +1292,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
       printf 'MEMBER-NOT-REGISTERED:%s\n' "$label"
     fi
   done < "$mf"
-  if [ "$nmembers" -lt 13 ]; then printf 'MANIFEST-TOO-SMALL:%d\n' "$nmembers"; fi
+  if [ "$nmembers" -lt 8 ]; then printf 'MANIFEST-TOO-SMALL:%d\n' "$nmembers"; fi  # 10 members post-S4-retirement (was 15; floor holds real-2)
   # bi-directional: every live registration in the oracle-SUT name class is a member or exclusion.
   local reg covered
   while IFS=$'\t' read -r _ reg; do
@@ -1176,6 +1319,76 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
   done
 }
 
+# Guard 4 legs: the manifest's members are dispatched across the oracle-index-check
+# matrix legs by scripts/ci-oracle-lane-legs.tsv (label<TAB>leg — the ADR-240 checked-in
+# assignment shape). check_legs pins the assignment bi-directionally: legs labels ≡
+# manifest members, every live matrix leg owns >=1 member, leg values ⊆ the live
+# `strategy.matrix.leg` set, and no member is assigned twice.
+LEGS_FILE="$REPO_ROOT/scripts/ci-oracle-lane-legs.tsv"
+check_legs() {  # $1=legs path $2=manifest path $3=space-separated live matrix leg set; prints tag lines (empty = clean)
+  local lf="$1" mf="$2" mset=" $3 " line label leg seen=" " k
+  if [ ! -f "$lf" ]; then printf 'LEGS-FILE-MISSING\n'; return; fi
+  if [ ! -f "$mf" ]; then printf 'LEGS-MANIFEST-MISSING:%s\n' "$mf"; return; fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    label="${line%%[[:space:]]*}"
+    leg="$(printf '%s\n' "$line" | awk -F'\t' '{print $2}')"
+    # exactly label<TAB>leg like the manifest's MEMBER-BAD-FIELDS doctrine — a stray
+    # third column is silently truncated by both this suite and the runtime awk.
+    local lnf
+    lnf="$(printf '%s\n' "$line" | awk -F'\t' '{print NF}')"
+    [ "$lnf" = "2" ] || printf 'LEG-BAD-FIELDS:%s:%s\n' "$label" "$lnf"
+    case "$seen" in *" $label "*) printf 'LEG-DUPLICATE:%s\n' "$label" ;; esac
+    seen="$seen$label "
+    case "$leg" in
+      ''|*/*/*|*[!0-9/]*) printf 'LEG-BAD-VALUE:%s:%s\n' "$label" "$leg" ;;
+      *) case "$mset" in *" $leg "*) : ;; *) printf 'LEG-OUT-OF-MATRIX:%s:%s\n' "$label" "$leg" ;; esac ;;
+    esac
+    # a legs row naming a label that is not a manifest member is a stale assignment
+    awk -v l="$label" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf" \
+      || printf 'LEG-STALE-ROW:%s\n' "$label"
+  done < "$lf"
+  # reverse direction: every manifest member is assigned to exactly one leg (the
+  # run-block's fail-closed unassigned-member arm is the runtime backstop for this)
+  while IFS=$'\t' read -r label _argv || [ -n "$label" ]; do
+    case "$label" in ''|'#'*) continue ;; esac
+    awk -v l="$label" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$lf" \
+      || printf 'LEG-UNASSIGNED:%s\n' "$label"
+  done < "$mf"
+  # every matrix leg owns at least one member — a vacant leg would be a vacuous gate
+  for k in $3; do
+    awk -F'\t' -v leg="$k" '!/^[[:space:]]*#/ && NF && $2==leg{f=1} END{exit !f}' "$lf" \
+      || printf 'LEG-VACANT:%s\n' "$k"
+  done
+  # the rebalance trigger, mechanised (arch P3-3): join each row to committed
+  # scripts/suite-durations.tsv and red when a leg's projected serial total comes within
+  # ~5 min of the 30-min bound (1500000 ms) — a duration drift otherwise surfaces only as
+  # a timeout kill. A member with no measured row is LEG-UNMEASURED (never 0-min).
+  local durs="$REPO_ROOT/scripts/suite-durations.tsv"
+  if [ -f "$durs" ]; then
+    awk -F'\t' -v durfile="$durs" '
+      NR==FNR { if ($1 !~ /^[[:space:]]*#/ && NF >= 2) dur[$1]=$2; next }
+      /^[[:space:]]*#/ || !NF { next }
+      {
+        if (!($1 in dur)) { printf "LEG-UNMEASURED:%s\n", $1; next }
+        sum[$2] += dur[$1]
+      }
+      END { for (l in sum) if (sum[l] > 1500000) printf "LEG-OVER-BUDGET:%s:%d\n", l, sum[l] }
+    ' "$durs" "$lf"
+  else
+    printf 'LEG-DURATIONS-MISSING\n'
+  fi
+}
+
+OIC_LEGS="$(python3 - "$CI_YML" <<'PYX' || true
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+job = (doc.get("jobs") or {}).get("oracle-index-check") or {}
+legs = (((job.get("strategy") or {}).get("matrix") or {}).get("leg")) or []
+print(" ".join(str(x) for x in legs))
+PYX
+)"
+
 if [ -f "$MANIFEST" ]; then
   _mtags=$(check_manifest "$MANIFEST")
   check_eq "G4 the live manifest is clean (members registered, parity, exclusions commented)" "$_mtags" ""
@@ -1197,34 +1410,76 @@ if [ -f "$MANIFEST" ]; then
   _mt=$(check_manifest "$_mm/reordered.txt")
   check_eq "G4 row5 a reordered member list stays clean" "$_mt" ""
   # a member line whose argv is absent must be caught (label + argv shape)
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\n'; } > "$_mm/noargv.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\n'; } > "$_mm/noargv.txt"
   _mt=$(check_manifest "$_mm/noargv.txt")
-  check_contains "G4 a member without argv is caught" "$_mt" "MEMBER-NO-ARGV:scripts/ci-pr-selection"
+  check_contains "G4 a member without argv is caught" "$_mt" "MEMBER-NO-ARGV:scripts/ci-oracle-review"
   # dropping a declared exclusion comment is caught
   grep -vF 'lint-orphan-test-suites-mutations-a' "$MANIFEST" > "$_mm/no-excl.txt"
   _mt=$(check_manifest "$_mm/no-excl.txt")
   check_contains "G4 dropping a committed exclusion is caught" "$_mt" "EXCLUSION-NOT-COMMENTED:scripts/lint-orphan-test-suites-mutations-a"
   # a member label listed twice would silently run the same suite twice in the leg
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash scripts/ci-pr-selection.test.sh\n'; } > "$_mm/dup.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\tbash scripts/ci-oracle-review.test.sh\n'; } > "$_mm/dup.txt"
   _mt=$(check_manifest "$_mm/dup.txt")
-  check_contains "G4 a duplicate member label is caught" "$_mt" "MEMBER-DUPLICATE:scripts/ci-pr-selection"
+  check_contains "G4 a duplicate member label is caught" "$_mt" "MEMBER-DUPLICATE:scripts/ci-oracle-review"
   # a stray third TSV column is silently truncated by the leg's `IFS=$'\t' read -r label argv`
   awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF==2 && !d {print $0"\tzz-extra"; d=1; next} {print}' "$MANIFEST" > "$_mm/threecol.txt"
   _mt=$(check_manifest "$_mm/threecol.txt")
   check_contains "G4 a stray third field is caught" "$_mt" "MEMBER-BAD-FIELDS"
   # an argv whose first non-shell token names a nonexistent file would fail only at leg runtime
-  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash zz/no-such-file.test.sh\n'; } > "$_mm/badargv.txt"
+  { cat "$MANIFEST"; printf 'scripts/ci-oracle-review\tbash zz/no-such-file.test.sh\n'; } > "$_mm/badargv.txt"
   _mt=$(check_manifest "$_mm/badargv.txt")
-  check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-pr-selection:zz/no-such-file.test.sh"
-  # an argv that names a real file but drifts from the registration's argv (a different row window)
-  sed 's|--rows 1-193|--rows 1-195|' "$MANIFEST" > "$_mm/argvdrift.txt"
+  check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-oracle-review:zz/no-such-file.test.sh"
+  # an argv that names a real file but drifts from the registration's argv (a stray extra flag)
+  sed 's|scripts/ci-oracle-review.test.sh|scripts/ci-oracle-review.test.sh --zz|' "$MANIFEST" > "$_mm/argvdrift.txt"
   _mt=$(check_manifest "$_mm/argvdrift.txt")
-  check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:plugins/soleur/test/ci-pr-affected-replay-a"
+  check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:scripts/ci-oracle-review"
 else
   fail "G4 $MANIFEST does not exist (the oracle-validation manifest is an implementation deliverable)"
 fi
 
-# Guard 4 row 4: the oracle-index-check leg runs the manifest SERIALLY and a member's non-zero exit
+if [ -f "$LEGS_FILE" ]; then
+  check_true "G4 legs ci.yml names a matrix leg set" "$(rc_of test -n "$OIC_LEGS")"
+  _ltags=$(check_legs "$LEGS_FILE" "$MANIFEST" "$OIC_LEGS")
+  check_eq "G4 legs the live assignment is clean (parity, matrix coverage)" "$_ltags" ""
+  _lm="$SANDBOX/legs-mut"
+  mkdir -p "$_lm"
+  grep -vF 'scripts/lint-orphan-test-suites' "$LEGS_FILE" > "$_lm/unassigned.tsv"
+  _mt=$(check_legs "$_lm/unassigned.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row1 an unassigned member is caught" "$_mt" "LEG-UNASSIGNED:scripts/lint-orphan-test-suites"
+  { cat "$LEGS_FILE"; printf 'zz/not-a-member\t1/5\n'; } > "$_lm/stale.tsv"
+  _mt=$(check_legs "$_lm/stale.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row2 a stale row naming a non-member is caught" "$_mt" "LEG-STALE-ROW:zz/not-a-member"
+  awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF && !d {print $1,"9/5"; d=1; next} {print}' "$LEGS_FILE" > "$_lm/oom.tsv"
+  _mt=$(check_legs "$_lm/oom.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row3 a leg value outside the matrix set is caught" "$_mt" "LEG-OUT-OF-MATRIX"
+  awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF && $2=="5/5" {print $1,"1/5"; next} {print}' "$LEGS_FILE" > "$_lm/vacant.tsv"
+  _mt=$(check_legs "$_lm/vacant.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row4 a vacant matrix leg is caught" "$_mt" "LEG-VACANT:5/5"
+  _mt=$(check_legs "$_lm/does-not-exist.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row5 a missing legs file is caught" "$_mt" "LEGS-FILE-MISSING"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\t2/5\n'; } > "$_lm/dup.tsv"
+  _mt=$(check_legs "$_lm/dup.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row6 a double-assigned member is caught" "$_mt" "LEG-DUPLICATE:scripts/ci-oracle-review"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\tbogus\n'; } > "$_lm/badval.tsv"
+  _mt=$(check_legs "$_lm/badval.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row6b a malformed leg value is caught" "$_mt" "LEG-BAD-VALUE:scripts/ci-oracle-review:bogus"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-oracle-review\t5/5\tjunk\n'; } > "$_lm/threecol.tsv"
+  _mt=$(check_legs "$_lm/threecol.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row6c a stray third field is caught" "$_mt" "LEG-BAD-FIELDS:scripts/ci-oracle-review:3"
+  awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF && $1=="scripts/lint-orphan-test-suites" {print $1,"5/5"; next} {print}' "$LEGS_FILE" > "$_lm/permuted.tsv"
+  grep -qF $'scripts/lint-orphan-test-suites\t5/5' "$_lm/permuted.tsv" \
+    || fail "G4 legs row7 mutant did not land (label match produced a pristine copy)"
+  _mt=$(check_legs "$_lm/permuted.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_eq "G4 legs row7 a repacked-but-complete assignment stays clean" "$_mt" ""
+  { grep -E '^[[:space:]]*#' "$LEGS_FILE"; grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$LEGS_FILE" | tac; } > "$_lm/reordered.tsv"
+  _mt=$(check_legs "$_lm/reordered.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_eq "G4 legs row8 reordered assignment rows stay clean" "$_mt" ""
+else
+  fail "G4 legs $LEGS_FILE does not exist (the leg assignment is an implementation deliverable)"
+fi
+
+# Guard 4 row 4: the oracle-index-check leg runs the manifest members its legs-file row
+# assigns to ORACLE_LEG, and a member's non-zero exit
 # propagates into the leg verdict. The step body is extracted from ci.yml by manifest-name mention
 # and executed over a stub manifest in a sandbox repo (never the real suites — the stub argv is
 # `true`/`false`, so the row is milliseconds, not the 10–20-minute leg itself).
@@ -1254,18 +1509,77 @@ PYX
     mkdir -p "$_oic/scripts"
     # the manifest grammar is label<TAB>argv — the step body reads IFS=$'\t', so a space-separated stub reads as a
     # member with no argv and exits 1 by design (the no-argv fail-closed arm).
-    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-also-pass\ttrue\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
-    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/pass.out" 2>&1
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-also-pass\ttrue\n'; printf 'scripts/fake-fail\tfalse\n'; printf 'scripts/fake-after\ttrue\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
+    { printf 'scripts/fake-pass\t1/2\n'; printf 'scripts/fake-also-pass\t1/2\n'; printf 'scripts/fake-fail\t2/2\n'; printf 'scripts/fake-after\t2/2\n'; } > "$_oic/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/pass.out" 2>&1
     _rc_pass=$?
     check_eq "G4 row4 an all-pass stub manifest leaves the leg green" "$_rc_pass" "0"
-    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-fail\tfalse\n'; printf 'scripts/fake-after\ttrue\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
-    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/fail.out" 2>&1
+    check_eq "G4 legs only the leg-1 members ran on leg 1/2" "$(grep -c '── oracle-index-check:' "$_oic/pass.out")" "2"
+    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=2/2 GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/fail.out" 2>&1
     _rc_fail=$?
     check_true "G4 row4 a member's non-zero exit propagates into the leg verdict" "$(rc_of test "$_rc_fail" -ne 0)"
     ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=false GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/off.out" 2>&1
     _rc_off=$?
-    check_eq "G4 an off-lane run is a sub-minute no-op (exit 0)" "$_rc_off" "0"
+    check_eq "G4 an off-lane run is a sub-minute no-op (exit 0) — the not-oracle-only exit precedes every leg check" "$_rc_off" "0"
     check_contains "G4 an off-lane run says not-oracle-only" "$(cat "$_oic/off.out")" "not-oracle-only"
+    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/noleg.out" 2>&1
+    _rc_noleg=$?
+    check_true "G4 legs unset ORACLE_LEG fails closed" "$(rc_of test "$_rc_noleg" -ne 0)"
+    check_contains "G4 legs unset ORACLE_LEG names the malformed-ORACLE_LEG arm" "$(cat "$_oic/noleg.out")" "unset or malformed"
+    for _badleg in "" "15" "1/5/2" "0/5" "5/0" "/5" "5/" "1/5 " "x/y"; do
+      ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG="$_badleg" GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/badleg.out" 2>&1
+      _rc_badleg=$?
+      check_true "G4 legs malformed ORACLE_LEG='${_badleg}' fails closed" "$(rc_of test "$_rc_badleg" -ne 0)"
+      check_contains "G4 legs malformed ORACLE_LEG='${_badleg}' names the arm" "$(cat "$_oic/badleg.out")" "unset or malformed"
+    done
+    # a well-formed leg outside the live matrix set needs no dedicated arm — every member's
+    # assignment fails the n==K check (or matches nothing), so the vacuous-leg arm reds it.
+    for _forleg in 9/9 5/9; do
+      ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG="$_forleg" GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/forleg.out" 2>&1
+      _rc_forleg=$?
+      check_true "G4 legs a well-formed foreign leg ($_forleg) fails closed" "$(rc_of test "$_rc_forleg" -ne 0)"
+      check_contains "G4 legs foreign leg $_forleg names the n==K arm" "$(cat "$_oic/forleg.out")" "malformed leg value"
+    done
+    # k==n green arm: a leg equal to K still runs its own members to green.
+    _oic3="$_oic-kn"
+    assert_fixture_dir "$_oic3"
+    mkdir -p "$_oic3/scripts"
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-also-pass\ttrue\n'; } > "$_oic3/scripts/ci-oracle-lane-suites.txt"
+    { printf 'scripts/fake-pass\t2/2\n'; printf 'scripts/fake-also-pass\t2/2\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=2/2 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/kn.out" 2>&1
+    _rc_kn=$?
+    check_eq "G4 legs a k==n leg runs its members to green" "$_rc_kn" "0"
+    check_eq "G4 legs the k==n leg ran both members" "$(grep -c '── oracle-index-check:' "$_oic3/kn.out")" "2"
+    # a malformed legs-file row value is not a silent skip: it reds naming the row
+    { printf 'scripts/fake-pass\t1/5 \n'; printf 'scripts/fake-also-pass\t1/2\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/mallegs.out" 2>&1
+    _rc_mallegs=$?
+    check_true "G4 legs a malformed legs-file value fails closed" "$(rc_of test "$_rc_mallegs" -ne 0)"
+    check_contains "G4 legs a malformed legs-file value names the row" "$(cat "$_oic3/mallegs.out")" "malformed leg value"
+    # the vacuous arm needs a leg that is VALID for its K but owns zero members — assign
+    # the stub members to 1/3 and 2/3, then ask for 3/3.
+    { printf 'scripts/fake-pass\t1/3\n'; printf 'scripts/fake-also-pass\t2/3\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=3/3 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/vacleg.out" 2>&1
+    _rc_vacleg=$?
+    check_true "G4 legs a leg owning zero members fails closed" "$(rc_of test "$_rc_vacleg" -ne 0)"
+    check_contains "G4 legs the vacuous leg names the zero-member arm" "$(cat "$_oic3/vacleg.out")" "zero manifest members"
+    _oic2="$_oic-nofile"
+    assert_fixture_dir "$_oic2"
+    mkdir -p "$_oic2/scripts"
+    cp "$_oic/scripts/ci-oracle-lane-suites.txt" "$_oic2/scripts/"
+    ( cd "$_oic2" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic2/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic2/nofile.out" 2>&1
+    _rc_nofile=$?
+    check_true "G4 legs a missing legs file fails closed" "$(rc_of test "$_rc_nofile" -ne 0)"
+    check_contains "G4 legs the missing file names the legs-file arm" "$(cat "$_oic2/nofile.out")" "legs file"
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-stray\ttrue\n'; } > "$_oic2/scripts/ci-oracle-lane-suites.txt"
+    cp "$_oic/scripts/ci-oracle-lane-legs.tsv" "$_oic2/scripts/"
+    ( cd "$_oic2" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic2/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic2/stray.out" 2>&1
+    _rc_stray=$?
+    check_true "G4 legs an unassigned manifest member fails closed" "$(rc_of test "$_rc_stray" -ne 0)"
+    check_contains "G4 legs the unassigned member names its arm" "$(cat "$_oic2/stray.out")" "no legs-file row"
+    check_eq "G4 legs the failing-member leg ran only up to the failure" "$(grep -c '── oracle-index-check:' "$_oic/fail.out")" "1"
+    check_contains "G4 legs leg 1/2 names the member it ran" "$(cat "$_oic/pass.out")" "scripts/fake-also-pass"
+    check_eq "G4 legs leg 1/2 never saw the leg-2 failing member" "$(grep -c 'fake-fail' "$_oic/pass.out")" "0"
   else
     fail "G4 row4 the oracle-index-check manifest step could not be extracted from ci.yml ($(head -c 120 "$SANDBOX/oic.err"))"
   fi
@@ -1330,7 +1644,6 @@ kill_guard() { printf 's|^.*# GUARD:%s$|  : # MUTATED|' "$1"; }
 # `then`; delete the whole block so every path falls through to outside_surface instead of classifying in-surface.
 mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" '/if is_oracle_data_path "\$p" || is_doc_path "\$p"; then/,/fi  # GUARD:O-SURFACE/d'  row_oracle_surface row_allowlist
 mutate "O-EXCLUSION the exclusion list is removed"              "$PRISTINE" "$(kill_guard O-EXCLUSION)"      row_exclusions
-mutate "O-EXCLUSION replay.py dropped from the exclusion list"  "$PRISTINE" '/ci-pr-affected-replay\.py/d'     row_exclusions
 mutate "O-EXCLUSION ci.yml dropped from the exclusion list"     "$PRISTINE" '/workflows\/ci\.yml/d'            row_exclusions
 mutate "O-EXTENT the in-extent hunk check is removed (whole-file path test — the plan's named sharp edge)" "$PRISTINE" "$(kill_guard O-EXTENT)" row_extent_out
 mutate "O-BINARY a binary index diff passes vacuously"              "$PRISTINE" "$(kill_guard O-BINARY-INDEX)" row_elem_grammar
@@ -1342,7 +1655,7 @@ mutate "O-EXTENT-HEAD the head-image half is dropped (a new array is not checked
 mutate "O-SURFACE the doc allowlist widened to any .md"         "$PRISTINE" 's|knowledge-base/?\*\.md|*.md|' row_allowlist
 # a REAL wholesale admission, well-formed: (a) the exclusion entry stops matching lib paths, (b) is_oracle_data_path
 # gains scripts/lib/* — a one-arm no-op sed would leave the exclusion first in line and change nothing.
-mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|    scripts/lib/\*) return 0 ;;|    scripts/lib/ZZ-NOMATCH-XX) return 0 ;;|; s|    scripts/ci-pr-affected-audit.baseline.tsv) return 0 ;;|&\n    scripts/lib/*) return 0 ;;|' row_exclusions row_extent_out
+mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|    scripts/lib/\*) return 0 ;;|    scripts/lib/ZZ-NOMATCH-XX) return 0 ;;|; s|    _never_a_member_) return 0 ;;|    scripts/lib/*) return 0 ;;|' row_exclusions row_extent_out
 # the preconditions
 mutate "O-EVENT any event classifies"                           "$PRISTINE" "$(kill_guard O-EVENT)"          row_event_out
 mutate "O-TWO-PARENTS the two-parent check is removed"          "$PRISTINE" "$(kill_guard O-TWO-PARENTS)"    row_shape
@@ -1356,13 +1669,22 @@ mutate "O-MODES any mode is accepted"                           "$PRISTINE" "$(k
 mutate "O-PATH-CHARS control/odd characters accepted in a path" "$PRISTINE" "$(kill_guard O-PATH-CHARS)"     row_odd
 mutate "O-EMPTY-DIFF a zero-path diff classifies (the vacuous arm)" "$PRISTINE" "$(kill_guard O-EMPTY-DIFF)" row_empty
 mutate "O-DIFF a failed git diff is trusted anyway"             "$PRISTINE" 's/ || return 0/ # MUTATED/'    row_diff_error
+# #12418: the discriminating mutations — reverting either endpoint of the three-dot pair re-opens a
+# stale-base miscount the fix exists to close, and the stale/behind fixtures must see it.
+mutate "O-BASE the diff base reverts to the frozen HEAD^1"      "$PRISTINE" 's|\$(git merge-base HEAD\^2 FETCH_HEAD 2>/dev/null)|HEAD^1|' row_stale_base
+mutate "O-BASE the diff head reverts to the merge result"       "$PRISTINE" 's|diff_head="\$p2"|diff_head="HEAD"|' row_stale_base
+mutate "O-BASE the audit base_sha reverts to HEAD^1"            "$PRISTINE" 's|base_sha="\$diff_base"|base_sha="$p1"|' row_stale_base
+mutate "O-BASE-REF the base-ref grammar admits a refspec"       "$PRISTINE" 's|\^\[A-Za-z0-9\]\[A-Za-z0-9._/-\]\*\$|.*|' row_stale_base
 # the arm, the lock, the defaults
 mutate "O-SWITCH the exact-on compare becomes non-empty"        "$UNLOCKED"  's|= on \]|=~ ^on]|'            row_switch
 mutate "O-SWITCH any non-empty switch arms"                     "$UNLOCKED"  's|\[ "\${SWITCH:-}" = on \]|[ -n "${SWITCH:-}" ]|' row_switch
-# a dead arm is verdict-identical on the LOCKED copy (active stays false by construction), so this one mutates the
-# lock-neutralized driver and is read by the unlocked rows that expect active=true.
-mutate "O-LOCK the arm ignores the lock"                        "$UNLOCKED"  "$(kill_guard O-ARM)"           row_switch
+# this one mutates the lock-neutralized driver and is read by the unlocked rows that expect active=true
+# ($UNLOCKED is byte-identical to $PRISTINE today — the cmp pin above proves it; it stays the base for
+# symmetry with the O-SWITCH mutants).
+mutate "O-ARM the whole arm line is deleted (arm-presence, not lock-conjunct)" "$UNLOCKED" "$(kill_guard O-ARM)" row_switch
+mutate "O-LOCK the arm's lock conjunct is dropped"              "$PRISTINE"  's| && \[ "\$locked" = false \]||' row_lock
 mutate "O-LOCK the lock is not read"                            "$PRISTINE"  "$(kill_guard O-LOCK-READ)"     row_lock
+mutate "O-LOCK the lock-read is loosened to non-empty"          "$PRISTINE"  's|\[ "\${ORACLE_LANE_LOCKED:-}" = 1 \]|[ -n "${ORACLE_LANE_LOCKED:-}" ]|' row_lock
 mutate "O-DEFAULTS the defaults are not written first"          "$PRISTINE"  "$(kill_guard O-DEFAULTS)"      row_defaults_first
 mutate "O-EXIT the always-exit-0 trap is removed"               "$PRISTINE"  "$(kill_guard ALWAYS-EXIT-0)"   row_diff_error
 mutate "O-DIAGRAMS the diagrams carve-out flag is removed"      "$PRISTINE"  "$(kill_guard O-DIAGRAMS-FLAG)" row_oracle_surface
@@ -1385,7 +1707,7 @@ fi
 # ASSERTION FLOOR, reported with printf + exit rather than through the helpers it backstops
 # (ADR-193). DERIVED FROM A MEASURED GREEN RUN, not guessed: re-derive after adding a row —
 #   bash scripts/ci-oracle-lane.test.sh | tail -1
-MIN_ROWS=400
+MIN_ROWS=5043
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2

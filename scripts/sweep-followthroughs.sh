@@ -58,7 +58,7 @@ if ! [[ "$CLOSED_LOOKBACK_DAYS" =~ ^[0-9]+$ ]] || (( CLOSED_LOOKBACK_DAYS < 1 ))
 fi
 # Per-probe wall-clock cap, in seconds (CTO ruling 2026-10-29, Ref #11215). One slow probe used to be
 # able to eat the whole job: runs 40776246270, 40702857885 and 40587723911 were cancelled at the
-# 15-minute job ceiling with four probes (ci-draft-light-soak-9728, pr-battery-gate-saving-9323,
+# 15-minute job ceiling with four probes (the #9728 draft-light soak, pr-battery-gate-saving-9323,
 # ci-push-dedupe-soak-9512, bearer-curl-s4-first-runs-9905) taking 1.5-5 minutes EACH. A probe that
 # outlives this cap is killed and reported as CANNOT ESTABLISH (exit 3) with its script name logged,
 # so the sweep reaches the trackers behind it. Validated before use: `timeout 0` DISABLES the cap and

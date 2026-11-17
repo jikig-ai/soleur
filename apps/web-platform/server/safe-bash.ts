@@ -107,6 +107,54 @@ const GH_ARG = String.raw`[\w./~+:=@,-]+`;
 const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-(?=[arv]*[ar])[arv]+)`;
 const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verbose|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
 
+// git log|diff|show — the CLOSED flag grammar (#9600). ADMISSION RULE: a flag is added here only
+// with a row in test/safe-bash-git-config-exec.test.ts showing real git never runs a repo-config
+// helper, writes a file or reads an arbitrary file because of it, and never adds an exec channel the bare
+// verb does not already have (so --no-ext-diff / --no-textconv are OUT: they swap one config-driven
+// channel for another), plus a safe-bash test. A flag is NEVER admitted by prefix or by a generic
+// `--[\w-]+=value` shape: only exact spellings count. A flag that is ABSENT is "not yet measured", not
+// "known dangerous": most of what falls to the review card (-w, --follow, --date=, --color, -M,
+// --check, --exit-code, --quiet ...) is inert, and the fall-through telemetry in permission-callback.ts
+// is how the list is widened by evidence. Flags that DO ask git to execute a helper or read a file:
+// --ext-diff, --textconv, -p/--patch/-u and -U<n> (patch output), -S, -G, -c/--cc (imply -p),
+// -O<orderfile> (reads a file), --show-signature (gpg.program), --no-index (reads arbitrary paths),
+// --output (writes; also in FILE_WRITE_FLAG_DENYLIST).
+/** Every admitted LITERAL flag spelling. Exported so the real-git admission test iterates the SHIPPED list:
+ *  a spelling added here without a measured row in test/safe-bash-git-config-exec.test.ts fails that test. */
+export const GIT_READ_FLAG_LITERALS: readonly string[] = [
+  "--oneline", "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw",
+  "--graph", "--no-patch", "-s", "--cached", "--staged", "--no-color", "--abbrev-commit", "--decorate",
+  "--all", "--first-parent", "--no-merges", "--merges", "--reverse", "--",
+];
+const GIT_READ_FLAG_TOKEN = String.raw`(?:${GIT_READ_FLAG_LITERALS.join("|")}|-\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+)`;
+const GIT_READ_FLAG = String.raw`(?:${GIT_READ_FLAG_TOKEN}|-n\s+\d+)`;
+const GIT_READ_FLAG_TOKEN_RE = new RegExp(`^${GIT_READ_FLAG_TOKEN}$`);
+
+/**
+ * The first dash-token of a `git log|diff|show` tail that the closed grammar does NOT admit, or `null`
+ * when every flag is admitted (the command then missed the allowlist for another reason). Walks the
+ * SAME flag source as the allowlist pattern so the telemetry names the flag that actually fell
+ * through, not merely the first flag on the line. `-n` is the one two-token flag (`-n 5`). A
+ * `--stem=value` whose stem is an admitted value-flag is not a rejected FLAG (the value, e.g. a quoted
+ * string, is what missed the allowlist), so it is skipped.
+ */
+export function firstRejectedGitFlag(tail: string): string | null {
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (!t.startsWith("-")) continue;
+    if (t === "-n" && /^\d+$/.test(tokens[i + 1] ?? "")) {
+      i += 1;
+      continue;
+    }
+    if (GIT_READ_FLAG_TOKEN_RE.test(t)) continue;
+    const eq = t.indexOf("=");
+    if (eq > 0 && GIT_READ_FLAG_TOKEN_RE.test(`${t.slice(0, eq + 1)}x`)) continue;
+    return t;
+  }
+  return null;
+}
+
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands
   /^pwd\s*$/,
@@ -132,20 +180,18 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^which\s+${PATH_TOKEN}\s*$`),
   // uname with optional flags
   /^uname(?:\s+-[a-zA-Z]+)*\s*$/,
-  // git read-only verbs. Arg shape is a SINGLE non-overlapping token branch
-  // (`${PATH_TOKEN}` already covers `-flag`, `--flag`, `--flag=value`, paths,
-  // and bare numbers — all within the metachar-free PATH_TOKEN charset). The
-  // prior multi-branch form (`-[a-zA-Z]+ | --[a-zA-Z][\w-]* | PATH_TOKEN`) was
-  // exponentially ambiguous: a `--foo` token matched BOTH the `--flag` branch
-  // and the PATH_TOKEN branch, so a failing tail (e.g. a char outside the
-  // charset) forced ~2^n backtracking — a per-Bash-call ReDoS reachable under
-  // prompt injection (review PR #4868). One branch = linear. The
-  // GIT_OUTPUT_REDIRECT_DENYLIST below rejects `--output=<file>` so this
-  // read-allowlist cannot be turned into an arbitrary-file-write primitive.
+  // git read-only verbs. `git status` is bare-only. `git log|diff|show` take a CLOSED flag
+  // grammar (#9600): every flag must be in GIT_READ_FLAG, a positional must not start with `-`,
+  // and anything else — including every unknown flag, every unique-prefix abbreviation and every
+  // `--flag=value` outside the list — misses this pattern and falls to the review card (never a
+  // hard deny). The prior free tail (`${PATH_TOKEN}` for every token) auto-approved
+  // `--ext-diff`, `--textconv`, `-p`, `-S`, `-G`, `-O<file>` and `--show-signature`, each of which
+  // asks git to run a repo-config helper (diff.external, textconv, gpg.program) or read a file.
+  // A token is EITHER a listed flag OR a non-dash positional, so no token matches both branches
+  // and a failing tail cannot backtrack exponentially (the #4868 ReDoS lesson). The
+  // FILE_WRITE_FLAG_DENYLIST below still rejects `--output` as a second layer.
   /^git\s+status\s*$/,
-  new RegExp(String.raw`^git\s+log(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+diff(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+show(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+(?:log|diff|show)(?:\s+(?:${GIT_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
   // Arm 1: bare `git branch` or flag-only forms (incl. --show-current, -v).
   new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
   // Arm 2: the leading flag run must contain ≥1 list-FORCING flag before any

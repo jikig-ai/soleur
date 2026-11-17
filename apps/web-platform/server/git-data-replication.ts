@@ -23,6 +23,8 @@ import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
+import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
+import { assertNoUrlRewrite, GitDataUrlRewriteError } from "./git-data-url-guard";
 import { readGitDataKeyEnv, type GitDataKeyEnvName } from "./git-data-key";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
@@ -629,14 +631,19 @@ export function ensureGitDataRemote(
   try {
     // Idempotent: add if absent, else re-point (host address may change during
     // Phase-2 fence iteration).
-    const existing = execFileSync("git", ["-C", workspacePath, "remote"], opts)
+    // Host-side git in a workspace an agent session may have authored: shared hardening + scrubbed env (host-git.ts).
+    const run = (args: string[]): Buffer => {
+      const h = hostGitInvocation(args, { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE });
+      return execFileSync("git", h.args, { ...opts, env: h.env });
+    };
+    const existing = run(["-C", workspacePath, "remote"])
       .toString()
       .split("\n")
       .map((s) => s.trim());
     if (existing.includes("git-data")) {
-      execFileSync("git", ["-C", workspacePath, "remote", "set-url", "git-data", url], opts);
+      run(["-C", workspacePath, "remote", "set-url", "git-data", url]);
     } else {
-      execFileSync("git", ["-C", workspacePath, "remote", "add", "git-data", url], opts);
+      run(["-C", workspacePath, "remote", "add", "git-data", url]);
     }
   } catch (err) {
     // Surface (fail-loud) — an unconfigurable remote means the push below cannot
@@ -849,8 +856,14 @@ export async function replicateToGitData(params: {
       `--push-option=lease-gen=${leaseGeneration}`,
       `--push-option=worktree-id=${worktreeId}`,
     ];
-    const pushArgs = ["push", "--force", "git-data", refspecs.heads, refspecs.tags, ...pushOptions];
-    const rescuePushArgs = ["push", "--force", "--atomic", "git-data", refspecs.rescue, ...pushOptions];
+    // Push to the EXPLICIT server-derived URL, never the remote NAME `git-data`: the name resolves through the agent-writable
+    // `.git/config` (`remote.git-data.pushurl`, `url.<base>.insteadOf`), which could aim the key-auth push at another tenant's
+    // repository on the same host (the host-key pin does not bind the repository path). `assertNoUrlRewrite` is a
+    // preflight for the `url.*` keys (git-data-url-guard.ts); it is not a structural control.
+    assertNoUrlRewrite(workspacePath);
+    const pushTarget = gitDataRemoteUrl(workspaceId);
+    const pushArgs = ["push", "--force", pushTarget, refspecs.heads, refspecs.tags, ...pushOptions];
+    const rescuePushArgs = ["push", "--force", "--atomic", pushTarget, refspecs.rescue, ...pushOptions];
     // True if EITHER step took its single transient retry; reported as a bit on the success marker.
     let retried = false;
     const pushWithRetry = async (args: string[]): Promise<void> => {
@@ -900,12 +913,12 @@ export async function replicateToGitData(params: {
     // Step 1 (only if a local rescue branch exists): the rescue refs alone, BEFORE `main` is touched.
     // A listing failure is not swallowed: it lands in the catch below like any other local-git fault.
     // The listing is local and bounded (5 s). Its lines are `<full sha> <refname>`.
+    const listing = hostGitInvocation(
+      ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
+      { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE },
+    );
     const rescueListing = String(
-      execFileSync(
-        "git",
-        ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
-        { cwd: workspacePath, stdio: "pipe", timeout: 5000 },
-      ) ?? "",
+      execFileSync("git", listing.args, { cwd: workspacePath, stdio: "pipe", timeout: 5000, env: listing.env }) ?? "",
     );
     if (rescueListing.trim() !== "") {
       await pushWithRetry(rescuePushArgs);
@@ -917,10 +930,12 @@ export async function replicateToGitData(params: {
         const m = /^([0-9a-f]{40,64}) (refs\/heads\/soleur-store-tip-\S+)$/.exec(line.trim());
         if (!m) continue;
         try {
-          execFileSync("git", ["-C", workspacePath, "update-ref", "-d", m[2], m[1]], {
+          const del = hostGitInvocation(["-C", workspacePath, "update-ref", "-d", m[2], m[1]], { cwd: workspacePath, allowProtocol: ALLOW_PROTOCOL_NONE });
+          execFileSync("git", del.args, {
             cwd: workspacePath,
             stdio: "pipe",
             timeout: 5000,
+            env: del.env,
           });
         } catch {
           log.warn(
@@ -992,6 +1007,19 @@ export async function replicateToGitData(params: {
         },
       });
       throw err instanceof Error ? err : new Error(String(err));
+    }
+    // A refused workspace (`.git` shape, or a `url.*` / unexpected `remote.*` rewrite) is not a fence reject or a transport
+    // error: label it so triage does not chase the store. The message carries a count or a reason, never a key or a path.
+    if (err instanceof GitDataUrlRewriteError || err instanceof HostGitRefusedError) {
+      reportSilentFallback(err, {
+        feature: "worktree_lease",
+        op: "git_data_replication_refused",
+        extra: { workspaceIdHash: hashUserId(workspaceId), worktreeIdHash: hashUserId(worktreeId), leaseGeneration },
+        message:
+          "git-data replication refused: the workspace config redirects git (a url/remote rewrite or a redirecting .git); " +
+          "the workspace's objects were NOT replicated to the shared store",
+      });
+      throw err;
     }
     reportSilentFallback(err, {
       feature: "worktree_lease",

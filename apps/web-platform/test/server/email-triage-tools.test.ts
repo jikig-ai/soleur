@@ -311,6 +311,15 @@ describe("buildEmailTriageTools", () => {
     }
   });
 
+  test("email_send / email_reply descriptions name the workspace Owner as the approver (#12597, CTO F11)", async () => {
+    // Each description is one joined string (email_send's text spans two literals in the source).
+    const send = (await getTool("email_send")).description;
+    const reply = (await getTool("email_reply")).description;
+    expect(send).toContain("the workspace Owner approves the exact recipient + body before it sends");
+    expect(reply).toContain("the workspace Owner approves before it sends");
+    for (const d of [send, reply]) expect(d).not.toContain("operator approves");
+  });
+
   test("email_send / email_reply cap the body at 4000 and the subject at 200 (the review card shows the whole send)", async () => {
     const tools = (await buildTools()) as unknown as Array<{ name: string; schema: Record<string, { safeParse: (v: unknown) => { success: boolean } }> }>;
     for (const name of ["email_send", "email_reply"]) {

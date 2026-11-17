@@ -487,3 +487,15 @@ that emits into a production sink and records no operator authorisation or accep
 ## Addendum 2026-11-04 (#12026): SDK / bundled-CLI bump to 0.3.311 / 2.1.311
 
 Re-eval criterion 1 ("any SDK, bundled-CLI or sandbox-option bump lands") **fires again** for this bump. What was and was not measured: the real-SDK sandbox suites (credential-deny, wrapped-command, masked-`/proc`) pass at 0.3.311 under `C4_BWRAP_REQUIRED=1`, but they do not exercise the must-ask lane's hook ordering, and the ordering measurement cited in `server/sandbox-hook.ts` (#10054) was taken on SDK 0.3.284. No pre-merge probe of the lane was run at 0.3.311. The evidence is the paid `scheduled-real-sdk-ask-probe` run on the merge, which by this ADR's own rule cannot discharge a Flip criterion without a `build_sha` match against the deployed build. Until that run is read green, the lane is unverified at the new pin; a red or absent run keeps #12026 open per its Phase 4.3 step. No other part of this ADR changes.
+
+## Addendum 2026-11-10 (#12514): SDK / bundled-CLI bump to 0.3.321 / 2.1.321
+
+Re-eval criterion 1 ("any SDK, bundled-CLI or sandbox-option bump lands") **fires again**. The same shape as the
+2026-11-04 addendum holds: the real-SDK sandbox suites passed at 0.3.321 under `C4_BWRAP_REQUIRED=1` in a throwaway
+container, and a Write-then-Edit `canUseTool` allow-path smoke through the real SDK `query()` passed against a stub
+API, but neither exercises the must-ask lane's hook-then-`canUseTool` ordering for a destroy family. No pre-merge
+`apps/web-platform/scripts/dev-probe-destroy-ask.ts` run was made at 0.3.321. The lane is measured after the merge by
+`scheduled-real-sdk-ask-probe`; the follow-through probe `scripts/followthroughs/claude-cli-fable-bump-12514.sh`
+reads its first run. By this ADR's rule that run cannot discharge a Flip criterion without a `build_sha` match
+against the deployed build. Until it is read green, the lane is unverified at the new pin. No other part of this
+ADR changes.

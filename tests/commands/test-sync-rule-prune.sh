@@ -282,7 +282,7 @@ tp2_one_non_hr() {
   }' > "$root/knowledge-base/project/rule-metrics.json"
   : > "$root/scripts/retired-rule-ids.txt"
   local rc; rc=$(_run_pr "$root")
-  local appends; appends=$(grep -cE '^wg-stale-only \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  local appends; appends=$(grep -cE '^wg-stale-only \|' "$root/scripts/retired-rule-ids.txt" || true)
   if [[ "$rc" == "0" ]] \
      && [[ "$appends" == "1" ]] \
      && grep -qE '^::rule-prune-pr-title::' "$root/out.txt" \
@@ -312,7 +312,7 @@ tp3_hr_skipped() {
 tp4_already_retired() {
   local root; root=$(_setup_pr)
   local rc; rc=$(_run_pr "$root")
-  local n; n=$(grep -cE '^wg-pr-already-ret \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  local n; n=$(grep -cE '^wg-pr-already-ret \|' "$root/scripts/retired-rule-ids.txt" || true)
   if [[ "$rc" == "0" ]] \
      && [[ "$n" == "1" ]] \
      && grep -qE '\[skip\] already retired' "$root/out.txt"; then
@@ -328,8 +328,8 @@ tp5a_mixed_counts() {
   local root; root=$(_setup_pr)
   local rc; rc=$(_run_pr "$root")
   local foo bar
-  foo=$(grep -cE '^wg-pr-stale-foo \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
-  bar=$(grep -cE '^cq-pr-stale-bar \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  foo=$(grep -cE '^wg-pr-stale-foo \|' "$root/scripts/retired-rule-ids.txt" || true)
+  bar=$(grep -cE '^cq-pr-stale-bar \|' "$root/scripts/retired-rule-ids.txt" || true)
   if [[ "$rc" == "0" ]] && [[ "$foo" == "1" ]] && [[ "$bar" == "1" ]]; then
     _report "tp5a: mixed → both non-hr ids appended exactly once" ok
   else
@@ -343,7 +343,7 @@ tp5b_title_format() {
   local root; root=$(_setup_pr)
   _run_pr "$root" >/dev/null
   local title
-  title=$(grep -E '^::rule-prune-pr-title::' "$root/out.txt" | head -n 1 | sed 's/^::rule-prune-pr-title:://')
+  title=$(grep -E '^::rule-prune-pr-title::' "$root/out.txt" | head -n 1 | sed 's/^::rule-prune-pr-title:://') || true
   # Expected: "feat(rule-prune): propose retirement of 2 rules (1 hook/skill-enforced)"
   if echo "$title" | grep -cE >/dev/null 'propose retirement of 2 rules' \
      && echo "$title" | grep -cE >/dev/null '\(1 hook/skill-enforced\)'; then
@@ -423,7 +423,7 @@ tp10_duplicate_candidate() {
   }' > "$root/knowledge-base/project/rule-metrics.json"
   : > "$root/scripts/retired-rule-ids.txt"
   _run_pr "$root" >/dev/null
-  local n; n=$(grep -cE '^wg-dup \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  local n; n=$(grep -cE '^wg-dup \|' "$root/scripts/retired-rule-ids.txt" || true)
   if [[ "$n" == "1" ]] && grep -qE '\[skip\] duplicate candidate id' "$root/out.txt"; then
     _report "tp10: duplicate candidate id → single append" ok
   else

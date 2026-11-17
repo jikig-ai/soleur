@@ -119,6 +119,32 @@ const atLeast = (have: number[], floor: readonly number[]): boolean => {
   return true;
 };
 
+// CLI <-> SDK pairing (#12514, ruling F2): the two pins move together because
+// @anthropic-ai/claude-agent-sdk 0.3.N ships the 2.1.N CLI as its own binary
+// (its package.json `claudeCodeVersion`; measured 0.3.321 -> 2.1.321, and the
+// two linux-x64 binaries are byte-identical), and hosted consults run that
+// bundled binary. The patch numbers have NOT always matched in this
+// package.json's history (2.1.219 and 2.1.280 sat on SDK 0.3.197, 2.1.293 on
+// 0.3.284), but every such state was a CLI-only bump, which F2 forbids. So the
+// rule is patch equality on the declared release lines; a new major/minor line
+// on either side is a deliberate edit to these two constants after re-measuring
+// the SDK's claudeCodeVersion.
+const CLI_LINE = "2.1";
+const SDK_LINE = "0.3";
+
+function pairViolation(cli: string, sdk: string): string | null {
+  const c = /^(\d+\.\d+)\.(\d+)$/.exec(cli);
+  const s = /^(\d+\.\d+)\.(\d+)$/.exec(sdk);
+  if (!c || !s) return `not exact semver pins: claude-code ${cli}, claude-agent-sdk ${sdk}`;
+  if (c[1] !== CLI_LINE || s[1] !== SDK_LINE) {
+    return `release line moved (claude-code ${c[1]}.x, claude-agent-sdk ${s[1]}.x; declared ${CLI_LINE}.x <-> ${SDK_LINE}.x): re-measure the SDK's claudeCodeVersion, then update CLI_LINE/SDK_LINE`;
+  }
+  if (c[2] !== s[2]) {
+    return `claude-code ${cli} is not paired with claude-agent-sdk ${sdk} (expected ${SDK_LINE}.${c[2]}): bump both together (ruling F2)`;
+  }
+  return null;
+}
+
 describe("claude pin lockstep (#12102)", () => {
   it("positive control: the pin regex matches full pins in any case or subpath and refuses tag-only and short-SHA forms", () => {
     const sha = "3b7e1a45ca6f231c62605aabcf79e6a41b08c7da";
@@ -200,6 +226,28 @@ describe("claude pin lockstep (#12102)", () => {
       "Dockerfile claude-code install",
     );
     expect({ CLI_VERSION: cli, Dockerfile: docker }).toEqual({ CLI_VERSION: pinned, Dockerfile: pinned });
+  });
+
+  it("positive control: the CLI/SDK pairing rule refuses an unpaired, re-lined or ranged pin", () => {
+    expect(pairViolation("2.1.321", "0.3.321")).toBeNull();
+    // a CLI-only bump (the state F2 forbids)
+    expect(pairViolation("2.1.321", "0.3.311")).toMatch(/not paired/);
+    // the real pre-F2 drift in this package.json's history
+    expect(pairViolation("2.1.293", "0.3.284")).toMatch(/not paired/);
+    // an SDK-only bump
+    expect(pairViolation("2.1.311", "0.3.321")).toMatch(/not paired/);
+    // a new release line on either side needs a deliberate re-declaration
+    expect(pairViolation("2.2.321", "0.3.321")).toMatch(/release line moved/);
+    expect(pairViolation("2.1.321", "0.4.321")).toMatch(/release line moved/);
+    // a range is not a pin
+    expect(pairViolation("2.1.321", "^0.3.321")).toMatch(/not exact semver/);
+  });
+
+  it("the claude-code pin and the claude-agent-sdk pin are one paired release (2.1.N <-> 0.3.N)", () => {
+    const pkg = JSON.parse(read("apps/web-platform/package.json"));
+    const cli: string = pkg.dependencies["@anthropic-ai/claude-code"];
+    const sdk: string = pkg.dependencies["@anthropic-ai/claude-agent-sdk"];
+    expect(pairViolation(cli, sdk), "apps/web-platform/package.json CLI/SDK pins").toBeNull();
   });
 
   it("the pen-cli SDK override names this app's SDK pin", () => {

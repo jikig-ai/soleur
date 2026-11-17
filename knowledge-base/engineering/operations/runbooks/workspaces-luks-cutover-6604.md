@@ -70,6 +70,11 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    of state), just re-dispatch with the same inputs — the gate's recovery arm accepts the bare create
    that a re-dispatch then plans, completing the raw-volume create.
 
+   > **Note (2026-11-10, #10432).** The example id `106406962` above is the 2026-07 orphaned volume and stays as the
+   > record. The live `hcloud_volume.workspaces_luks` is the id ADR-119's addendum of 2026-11-10 states (the read-back at
+   > the end of this runbook names it). It holds the only copy of every workspace and is never the `<ID>` this retired step
+   > names.
+
 1. **Provision the encrypted volume (additive, zero downtime).** *(FIRST cutover only — skip if you
    ran Step 0, which already leaves the five resources in state.)*
    `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-cutover -f reason='#6604 cutover volume'`
@@ -354,14 +359,22 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    - **Verify the retired end state (read-only, any time after D; no SSH, GETs only):**
 
      ```bash
-     doppler run -p soleur -c prd_terraform -- sh -c 'curl -sS -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
-     doppler run -p soleur -c prd_terraform -- sh -c 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/servers/123931471' | jq -c '.server.volumes'   # expect [106443278]
-     doppler run -p soleur -c prd_terraform -- sh -c 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data"' | jq -c '[.volumes[].id]'   # expect []
-     doppler run -p soleur -c prd_terraform -- sh -c 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/volumes/106443278' | jq '.volume.protection.delete'   # expect true after the SSH-stage apply
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/105149570'   # expect 404
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/servers/123931471 | jq -c ".server.volumes"'   # expect [106443278]
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 "https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data" | jq -c "[.volumes[].id]"'   # expect []
+     doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 https://api.hetzner.cloud/v1/volumes/106443278 | jq ".volume.protection.delete"'   # expect true after the SSH-stage apply
      ```
 
-     (`sh -c` so the token expands inside Doppler's environment. Use `HCLOUD_TOKEN_READONLY` once it
-     is provisioned, #9371.)
+     (`sh -c` so the token expands inside Doppler's environment. The block reads the Read-permission token
+     `HCLOUD_TOKEN_READONLY` only: `--only-secrets` keeps the read/write token out of the process, an absent token prints
+     `missing-token` (exit 3) instead of sending an empty bearer header, and the header reaches curl on stdin, never on its
+     argument list. `--disable --noproxy "*"` come first, as in `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and
+     honours no proxy variable from the operator's environment. `jq` runs inside the wrapper, after the token check, so the
+     `missing-token` word is printed as is rather than fed to `jq`. Each request is bounded by `--max-time 30`. Copy the
+     lines exactly: `plugins/soleur/test/sole-copy-drift-check.test.sh` (row N3) pins this block byte for byte. #9371 stays open for the cutover job. For the flag alone, the one-word read-back is "Read back the
+     delete-protection flag (read-only token)" at the end of this runbook. Lines 1 and 3 also pass on a token minted in
+     another Hetzner project (a 404 and an empty list are what any project answers); only lines 2 and 4 tell the two apart,
+     because on another project's token they print `null` instead of the volume list and the flag.)
 
    > **web-1 lost (note, 2026-10-01, #6604 PR B).** web-1 is not replaceable by automation (ADR-148;
    > the replace path refuses it by name), and after step 7 there is no plaintext copy to fall back on.
@@ -953,10 +966,12 @@ match; the listing's `url` attribute is deliberately not selected):
 
 ```bash
 set -uo pipefail
-: "${TARGET:?set TARGET=luks-monitor-host-timer or claude-cost-capture}"
+: "${TARGET:?set TARGET=luks-monitor-host-timer, claude-cost-capture or host-kernel-<web-1|web-2|inngest|registry>}"
 case "$TARGET" in
   luks-monitor-host-timer) HB_NAME=soleur-luks-monitor-host-timer-prd; INCIDENT=1023423999; ISSUE=11048 ;;
   claude-cost-capture)     HB_NAME=soleur-claude-cost-capture-prd;     INCIDENT=1020832712; ISSUE=11049 ;;
+  host-kernel-web-1|host-kernel-web-2|host-kernel-inngest|host-kernel-registry)
+                           HB_NAME="soleur-${TARGET}-prd";             INCIDENT=none;       ISSUE=12386 ;;
   *) echo "unknown target" >&2; exit 64 ;;
 esac
 WORKFLOW=scheduled-deadman-heartbeat-feeder.yml
@@ -1141,3 +1156,91 @@ incident mirror (`scheduled-betterstack-incident-mirror.yml`, ADR-298) comments 
 (`gh issue view <ISSUE> --json state`, with `<ISSUE>` 11048 for luks or 11049 for cost).
 
 <!-- lint-infra-ignore end -->
+
+### Host-kernel heartbeats (#12007, tracked in #12386)
+
+Four more dead-man heartbeats ship born paused, one per host that reports the periodic kernel marker
+`SOLEUR_HOST_KERNEL v=1` (how the marker is read: the "Querying `SOLEUR_HOST_KERNEL`" section of
+`betterstack-log-query.md`):
+
+| Feeder target | Heartbeat |
+|---|---|
+| `host-kernel-web-1` | `soleur-host-kernel-web-1-prd` |
+| `host-kernel-web-2` | `soleur-host-kernel-web-2-prd` |
+| `host-kernel-inngest` | `soleur-host-kernel-inngest-prd` |
+| `host-kernel-registry` | `soleur-host-kernel-registry-prd` |
+
+Each is period 3600, grace 7200, fed only while that host's own valid row exists inside a literal 36 hour window, so a dark host
+pages after about 40 hours at worst. The helpers block above accepts these four targets (`INCIDENT=none`: there is no retired
+logs alert behind them, so the incident GET in step 2 and the whole of step 5 do not apply to them). Everything in this section is
+an operator-reserved hold tracked in #12386: nothing here is run by an agent, and each production write needs the owner to
+authorize that exact command, as above.
+
+**Two-stage arming order.** Arming is staged so no step waits on itself, and each stage is ONE batched change, not one per host.
+
+1. **Stage 1 (loop membership while still paused).** After the owner's rollout shows a first qualifying row for a host, a small
+   change adds that host's target name to the loop in `scheduled-deadman-heartbeat-feeder.yml` while its heartbeat is still
+   paused. The feeder then reports `verdict=qualifying_row_heartbeat_paused` for it (healthy, no paging surface), and nothing goes
+   red. Until this stage the four names stay out of the loop on purpose, so the feeder does not file an hourly error check-in for a
+   deliberate interim.
+2. **Stage 2 (arm).** After TWO consecutive `qualifying_row_heartbeat_paused` runs for a target (step 1 above, per target), the
+   owner arms each heartbeat with steps 2 to 4 above (`TARGET=host-kernel-<role>`), and the `feeder` rows for the four targets in
+   `plugins/soleur/lib/heartbeat-manifest.ts` flip from `kind: "none"` to the cron form in one batched change.
+
+**Delivery matrix (the single source for how the marker reaches each host class).** The ADR-322 addendum, the C4 prose and
+the query runbook refer to this table and do not restate it. Every row is held (#12386); the nearest thing to a delivery event
+is named in the Precondition column.
+
+| Host class | Carrier | Precondition | Expected drift until delivered |
+|---|---|---|---|
+| web-1 (running) | `terraform_data.host_kernel_marker_install` (SSH provisioner over the tunnel) | the owner releases the hold by editing the SSH-stage `-target` list and both exclusion sets (`EXCLUSION_ALLOWLIST`, `OPERATOR_APPLIED_EXCLUSIONS`), then applying; no dispatch mode targets the installers (`server.tf` and `terraform-target-parity.test.ts` say so) | a standing create on the twice-daily plan |
+| web-2 (running) | `terraform_data.host_kernel_marker_install_web2` (same forward through the web-1 bastion as the other web-2 twins) | the same release as web-1 | a standing create on the twice-daily plan |
+| a freshly born web host | cloud-init bake of the collector and the timer | none: it ships with the image the host is born from | none |
+| inngest host | the emitter embedded in `inngest-bootstrap.sh`, delivered ONLY through the digest-pinned bootstrap OCI image | a new bootstrap tag is minted and the pin is bumped. A replaced host boots with whatever the pin names, and a routine bootstrap-version bump re-runs the bootstrap on the RUNNING host and installs the emitter too, so the pin bump itself is the delivery event | none until the pin moves; the pin bump then shows as its own change |
+| registry host | the registry emitter is not in the change that introduces the marker: it is a separate follow-up PR (6-hourly stamp-gated block in `zot-disk-heartbeat.sh`, baked through `cloud-init-registry.yml`) | its merge auto-fires `registry-host-replace-dispatch.yml` (ADR-190) and replaces the production registry host (the sole pull path, no rollback if the create fails): merge only with the owner's explicit go-ahead; do not merge ahead of the owner (verify target-type stock first) | none from the marker change (the registry user_data is unchanged, so the dispatcher emits deliver=false); the follow-up PR's merge IS the delivery event |
+| git-data host, grok-dogfood host | none | git-data is tracked in #12385; grok-dogfood is a census exemption (default off, no shipper) | none; both read `unknown` by design |
+
+Until a host class above is delivered, the marker for it does not exist and the host reads `unknown`; that is the honest
+state and not a fault. For the inngest host, #12386 must say that the pin bump is the delivery event, so nobody bumps the pin
+for another reason and installs the emitter by accident.
+
+**Replacing the inngest or registry host.** A planned replace of either host takes its emitter dark for up to the 36 hour window
+(the collector only runs again after the replacement boots and its first timer or post fires). Pause that host's heartbeat BEFORE
+the window opens and arm it again after the first row from the new host is visible, so the replace does not page. Web hosts need no
+replace for the marker, so this does not apply to them. Scheduling a replace is the owner's call, tracked in #12386.
+
+**`unknown` in the skill output is the expected rollout state.** Until a host has been delivered and has produced its first valid
+row, the `soleur:cve-exposure` host-state output prints `unknown` for it. For the registry and the inngest host that is the
+long-lived state, because each is delivered by the carrier in the delivery matrix above (the separate registry-emitter PR, or a bootstrap pin
+bump for the inngest host), not by being replaced for an unrelated reason. It is the honest answer and
+not a bug; a host that reads `unknown` is never read as clean. The git-data host (#12385) and the default-off grok-dogfood host
+have no heartbeat here and read `unknown` by design.
+
+## Read back the delete-protection flag (read-only token)
+
+The read-back the web-1 workspaces volume issues of the `sole-copy-protection-check` job point at (ADR-119, addendum of
+2026-11-10). It is read-only: one GET of the volume the command names (`hcloud_volume.workspaces_luks`) with the Hetzner
+Read-permission token, the token passed to curl as a config on stdin, and one word of output. It is the same shape as the
+section 5c step 3 read-back in `inngest-luks-cutover-6894.md`, with curl confined by `--disable --noproxy "*"` as its first
+arguments.
+
+```
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106443278) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+```
+
+| Word (exit) | Meaning | Action |
+| --- | --- | --- |
+| `protected` (0) | delete protection is on | The pass. |
+| `not-protected` (1) | delete protection is off | Outside a reviewed lift, a red status: recommend the owner-approved `manual-rerun` dispatch of the per-merge apply, whose SSH stage re-applies the flag (ADR-119 D1, addendum of 2026-10-08); never run it unprompted. |
+| `volume-gone` (4) | HTTP 404 on the volume | Either the volume no longer exists or `HCLOUD_TOKEN_READONLY` was minted in another Hetzner project: a 404 does not separate the two. First run the read-only server-name listing under `orphan_sweep_project_identity_unproven` ("Triage — the orphan sweeps") in `infra-credential-tiers-8209.md` and compare it with the production server names. Names that do not match mean a wrong-project token (re-mint it, step **O5**), not a loss. Names that match mean the volume is gone: incident (`soleur:incident`); ADR-119 (addendum of 2026-10-08) names the loss modes. |
+| `read-failed` (2) | an HTTP error other than 404 (a 401, say), a network error or no answer within 30 seconds, a non-JSON body, or a body without the field | The read did not happen; it is not a lifted protection. Fix the read; never dispatch on its account. |
+| `missing-token` (3) | `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform` | Minting it is operator step **O5** in `infra-credential-tiers-8209.md`. The agent reports `missing-token`; it does not fall back to `HCLOUD_TOKEN`. |
+| no word printed | the read did not happen (`doppler` missing or unauthenticated, an error before the command ran) | Report it; never dispatch on its account. |
+
+The wrapper is single-quoted so the variable expands after Doppler sets it, not in the caller's shell. `--only-secrets`
+injects only the read-only token, so the read/write token in the same config never enters the process, and the bearer
+header reaches curl on stdin, never on its argument list. `--disable --noproxy "*"` keep curl from reading a `.curlrc` or
+a proxy variable from the operator's environment, which could otherwise send the request, header included, elsewhere.
+The suite's row N3 pins this line, and the four of "Verify the retired end state", byte for byte. If the volume is ever
+recreated, the id here moves with the `web1` row of the job and the ADR-119 addendum of 2026-11-10 (the suite's row N1c
+pins them equal).

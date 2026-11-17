@@ -248,13 +248,15 @@ jobs:
       - id: kill_switch
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
-        # Anchor `[skip-web-platform-apply]` to its own line so it cannot
-        # fire from a quoted block, code fence, or trailer that happens
-        # to carry the literal substring. Symmetric posture with the
-        # `[ack-destroy]` gate in the apply job.
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
+        # Anchor `[skip-web-platform-apply]` to its own line: a mid-line or
+        # `>`-quoted token does not fire; a bare fenced line DOES. Symmetric with `[ack-destroy]`.
         run: |
           set -euo pipefail
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; then
+          ALL_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
+          if [[ "$ALL_MSGS" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Kill switch detected in commit message — skipping apply."
           else
@@ -408,6 +410,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         # ALLOW-LIST MAINTENANCE: if a future PR adds a new `.tf` resource at
         # `apps/web-platform/infra/*.tf`, append a matching `-target=<addr>`
         # line below.
@@ -459,6 +462,10 @@ jobs:
               -target=random_id.egress_audit_ingest_token \
               -target=doppler_secret.egress_audit_ingest_token \
               -target=doppler_secret.egress_audit_ingest_token_previous \
+              -target=random_password.legal_acceptance_verify_token_prd \
+              -target=random_password.legal_acceptance_verify_token_dev \
+              -target=doppler_secret.legal_acceptance_verify_token_prd \
+              -target=doppler_secret.legal_acceptance_verify_token_dev \
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
@@ -526,6 +533,7 @@ jobs:
               -target=doppler_service_account_token.token_drift \
               -target=github_actions_secret.doppler_token_drift \
               -target=doppler_service_token.inngest_arm_write \
+              -target=doppler_service_token.inngest_cutover_write \
               -target=doppler_service_token.inngest_flip_read \
               -target=github_repository_environment.inngest_cutover \
               -target=github_repository_environment.inngest_config_signing \
@@ -600,7 +608,12 @@ jobs:
               -target=betteruptime_heartbeat.inngest_server_probe \
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
               -target=betteruptime_heartbeat.luks_monitor_host_timer \
+              -target=betteruptime_heartbeat.host_kernel_web_1 \
+              -target=betteruptime_heartbeat.host_kernel_web_2 \
+              -target=betteruptime_heartbeat.host_kernel_inngest \
+              -target=betteruptime_heartbeat.host_kernel_registry \
               -target=betteruptime_heartbeat.claude_cost_capture \
+              -target=betteruptime_heartbeat.inngest_luks_key_probe_deadman \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
               -target=betteruptime_heartbeat.git_data_host_prd \
@@ -640,6 +653,8 @@ jobs:
               -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
+              -target=logtail_exploration.inngest_registry_empty \
+              -target=logtail_exploration_alert.inngest_registry_empty \
               -target=logtail_exploration.claude_cost_daily_burn \
               -target=logtail_exploration_alert.claude_cost_daily_burn \
               -target=logtail_exploration.workspaces_luks_deadman_fired \
@@ -656,8 +671,6 @@ jobs:
               -target=logtail_exploration_alert.egress_gw_deny_spike \
               -target=logtail_exploration.egress_gw_probe_silent \
               -target=logtail_exploration_alert.egress_gw_probe_silent \
-              -target=logtail_exploration.egress_gw_probe_silent_canary \
-              -target=logtail_exploration_alert.egress_gw_probe_silent_canary \
               -target=logtail_exploration.egress_gw_probe_fail \
               -target=logtail_exploration_alert.egress_gw_probe_fail \
               -target=logtail_exploration.registry_zot_log_credential_shape \
@@ -666,10 +679,18 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=logtail_exploration.relay_listener_down \
+              -target=logtail_exploration_alert.relay_listener_down \
+              -target=logtail_exploration.relay_probe_silent \
+              -target=logtail_exploration_alert.relay_probe_silent \
+              -target=logtail_exploration.relay_peer_probe_failed \
+              -target=logtail_exploration_alert.relay_peer_probe_failed \
               -target=tls_private_key.proxy_server \
               -target=tls_self_signed_cert.proxy_server \
               -target=doppler_secret.proxy_tls_key \
               -target=doppler_secret.proxy_tls_cert \
+              -target=random_bytes.proxy_hello_hmac \
+              -target=doppler_secret.proxy_hello_hmac_key \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=tls_private_key.inngest_link \
@@ -704,60 +725,30 @@ jobs:
           counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)
           resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
           nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
-          # reboot_updates (#5911): reboot-forcing in-place update on
-          # hcloud_server.* (placement_group_id / server_type change →
-          # power-off reboot of the running host, 0 destroys — invisible to
-          # the two counters above). Source of truth:
-          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          # reboot_updates (#5911): reboot-forcing in-place update on hcloud_server.* (rationale: runbook).
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
-          # host_creates (#6416): a pure `+ create` of an hcloud_server
-          # (hcloud_volume dropped #6919/T55 — a for_each volume fan-out for a
-          # legitimate new web host is not a host birth). INVISIBLE to all three
-          # counters above (no delete, no
-          # nested-block shrinkage, not an ["update"]). This apply path must
-          # NEVER birth a host: `-target` is transitive at the RESOURCE level, so
-          # cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
-          # (firewall.tf) each pull the whole hcloud_server.web for_each map —
-          # but the map's hcloud_server_network attachments are NOT
-          # target-reachable. That asymmetry is exactly how soleur-web-2 came up
-          # with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
-          # still serving as a CF tunnel connector replica (ADR-114 I1). Such a host
-          # also boots with NO firewall (hcloud provider 1.63.0:
-          # hcloud_firewall_attachment does not attach before first boot, unlike
-          # hcloud_server.firewall_ids). Source of truth:
-          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          # host_creates (#6416): a pure `+ create` of an hcloud_server, invisible to the counters above. This path must
+          # NEVER birth a host (the server is -target-reachable, its hcloud_server_network attachment is not).
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §Comment prose relocated from the apply step
           host_creates=$(echo "$counts" | jq -r '.host_creates')
           luks_rotations=$(echo "$counts" | jq -r '.luks_passphrase_rotations')
-          # undecidable_entries (#7695 review F1): any entry, at ANY address, whose actions array is
-          # empty or not an array. `[] | any(...)` is false and `[] | index("delete")` is null, so
-          # such an entry is invisible to every other counter in the filter — a destroy of the
-          # inngest AOF volume or of hcloud_volume.workspaces (every user's repo tree) reads as a
-          # clean plan with destroy_count 0, which never even demands [ack-destroy].
+          # relay_hello_key_changes (F1, PR A of #8211): the relay hello-key pair; rationale in the job-rationale runbook.
+          relay_hello_key_changes=$(echo "$counts" | jq -r '.relay_hello_key_changes')
+          # undecidable_entries (#7695 review F1): any entry, at ANY address, whose actions array is empty or not an array.
+          # Rationale: job-rationale runbook, 'Comment prose relocated'.
           undecidable_entries=$(echo "$counts" | jq -r '.undecidable_entries')
-          # apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
-          # against absent state. The ONLY counter here that is about STATE rather
-          # than about the text of dns.tf. Source of truth:
-          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          # apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped against absent state (rationale: runbook).
           apex_move_orphans=$(echo "$counts" | jq -r '.apex_move_orphans')
-          # plan_ok: false means the plan JSON carried no resource_changes ARRAY,
-          # so every counter above is 0 because nothing was read — not because
-          # there is nothing to do. Without this, an empty or error plan document
-          # passes every gate in this step.
+          # plan_ok false = no resource_changes array was read (every counter 0 because nothing was parsed); see the runbook.
           plan_ok=$(echo "$counts" | jq -r '.plan_ok')
           if [[ "$plan_ok" != "true" ]]; then
             echo "::error::the terraform plan JSON has no resource_changes array (plan_ok=${plan_ok}) — every destroy-guard counter would read 0 because nothing was parsed, not because the plan is empty. Refusing to grade it."
             exit 1
           fi
-          # Validate counters parsed correctly — empty values from a jq
-          # failure would silently evaluate false in the `-gt 0` test and
-          # let destructive plans slip past the guard.
-          #
-          # BOTH new counters are listed. This `if` is the one place two concurrent branches each
-          # added a counter, and a merge that keeps only one side's list leaves the other counter
-          # unvalidated — it would then read empty on a jq failure and evaluate false in its own
-          # `-gt 0` HALT, which is precisely the fail-open this validation exists to prevent.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]] || [[ ! "$undecidable_entries" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}', luks_passphrase_rotations='${luks_rotations}', undecidable_entries='${undecidable_entries}')."
+          # Validate every counter: an empty value from a jq failure would evaluate false in its `-gt 0` HALT (fail-open).
+          # Every counter MUST be listed on the next line; rationale: job-rationale runbook, 'Comment prose relocated'.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]] || [[ ! "$undecidable_entries" =~ ^[0-9]+$ ]] || [[ ! "$relay_hello_key_changes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}', luks_passphrase_rotations='${luks_rotations}', undecidable_entries='${undecidable_entries}', relay_hello_key_changes='${relay_hello_key_changes}')."
             exit 1
           fi
           # HALT on an entry this filter cannot classify (#7695 review F1). Evaluated OUTSIDE and
@@ -768,6 +759,21 @@ jobs:
             echo "::error::This is refused rather than counted because the guard cannot tell what the entry does. It is the same fail-closed posture plan-gate-preamble.sh takes for the dispatch gates (plan_gate_assert_classifiable); that preamble does not run on this path, which is why the check exists here."
             echo "::error::Remediation: re-run \`terraform plan\` and inspect the offending entries with: jq '.resource_changes[] | select((.change.actions | type) != \"array\" or (.change.actions | length) == 0)' <plan.json>. A well-formed plan from a current terraform never emits this shape; if it appeared, the plan document is truncated, hand-edited, or produced by a provider/terraform version this guard has not been taught to read."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
+            exit 1
+          fi
+          # Relay hello-key HALT (F1): OUTSIDE and BEFORE the destroy_count sum.
+          if [[ "$relay_hello_key_changes" -gt 0 ]]; then
+            echo "::error::terraform plan would CREATE (random_bytes only), UPDATE, DELETE, FORGET or MOVE ${relay_hello_key_changes} relay hello key resource(s) (random_bytes.proxy_hello_hmac, doppler_secret.proxy_hello_hmac_key), or emitted one whose action list could not be read."
+            echo "::error::This pair mints PROXY_HELLO_HMAC_KEY, which signs relayed hellos; both hosts read it from Doppler. Any change splits the hosts: a relay outage, not data loss."
+            echo "::error::[ack-destroy] does NOT reach this HALT (acking an unrelated delete would ack this one too)."
+            echo "::error::Remediation depends on what you intended:"
+            echo "::error::  • Not intended → an upstream change forced a replace (length, keepers, count gate, a reference). Revert it."
+            echo "::error::  • Intended rotation → escalate, not here: accept-only slot (ADR-323 Decision 9), #12538. Never a -replace (it writes the new key into Tier-A-readable state)."
+            echo "::error::  • CREATE of random_bytes.proxy_hello_hmac → most likely lost state; on a FIRST birth Doppler prd also lacks the key and the release gate refuses until an owner-run full apply mints it. Do NOT apply from here: a new value splits the hosts. A lone create of the Doppler copy is not refused."
+            echo "::error::  • Bare update of doppler_secret.proxy_hello_hmac_key → most likely an out-of-band edit. Restore the previous value unless the key LEAKED (ADR-323 Decision 9); never apply over it."
+            echo "::error::  • Retiring the relay (proxy-TLS gate variable off) destroys this pair and is closed here: it needs a separately reviewed route that also drops PROXY_HELLO_HMAC_KEY from verify-required-secrets.sh."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
+            grep -F -e random_bytes.proxy_hello_hmac -e doppler_secret.proxy_hello_hmac_key -e 'Plan:' tfplan.txt >&2 || true
             exit 1
           fi
           # HALT on a LUKS passphrase rotation (#7695). Evaluated OUTSIDE the destroy_count sum
@@ -802,7 +808,7 @@ jobs:
             echo "::error::terraform plan would CREATE ${host_creates} hcloud_server resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode. (hcloud_volume creates are NOT counted since #6919/T55 — a for_each volume fan-out for a legitimate web host is routine, not a host birth.)"
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
             echo "::error::  • ANY hcloud_server.web[*] → dispatch '-f apply_target=web-host-create -f web_host_key=<key> -f confirm=BIRTH-<key>' (#6730, ADR-145). That job is the ONE route granted this capability: it resolves a digest pin, runs the coherence preflight, asserts SENTRY_DSN is non-empty, and grades the plan with an INVERTED guard (exactly one create, OF THE REQUESTED HOST, zero destroys/reboots/out-of-scope changes). It is environment-gated on web-platform-infra-apply, so it waits for a reviewer before any step runs. This HALT stays because it is correct for THIS path — the per-PR apply reaches the server but not its hcloud_server_network attachment, so a birth here yields a host with no private IP and, transiently, no firewall (#6416)."
-            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
+            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host -f confirm=PUBLIC-SDK-URL-BIRTH'."
             echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
             echo "::error::  • a legitimate new WEB host (e.g. web-3 added to var.web_hosts) → dispatch web-host-create for that key, as above. Order matters: adding a key to var.web_hosts makes EVERY subsequent merge HALT here until the host is actually born, so dispatch promptly after the merge that introduces the key. For a NON-web new host, no dispatch creates it; note also that the HALT is NOT inherited — it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), living in the apply job whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard."
             echo "::error::PINNED-IMAGE CHAIN — the BREAK-GLASS fallback only, for when the web-host-create dispatch is itself unavailable (the job automates every step below). A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
@@ -810,7 +816,7 @@ jobs:
             echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
             echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/host-image-coherence-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply."
             echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
-            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
+            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096); abort if it replaces hcloud_server.inngest (#12742)"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
@@ -845,13 +851,19 @@ jobs:
             grep -E 'will be created|must be replaced|moved from|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
+          # Deploy-webhook Access policy gate (#9294 PR-2): outside the destroy_count sum, no [ack-destroy] path.
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/deploy-policy-gate.sh"
+          # The ack can sit below the tip when the merge queue coalesces: the
+          # squash that changed the policy is in event.commits, not head_commit.
+          ALL_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
+          deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
-          # Anchor `[ack-destroy]` to its own line (start-of-string OR
-          # preceded by newline; followed by newline OR end-of-string) so
-          # the token cannot fire from a quoted block, code fence, or
-          # `Co-Authored-By:` trailer carrying that literal substring.
+          # Anchor `[ack-destroy]` to its own line: a mid-line or `>`-quoted
+          # token does not fire; a bare fenced line DOES.
           ack_destroy=false
-          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+          if [[ "$ALL_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
@@ -949,6 +961,18 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
+
+      # #9294 PR-2 (Ruled by CTO agent, 2026-10-23): the apply is `-target`ed, and a targeted plan does not prune the
+      # two deleted deploy-token root outputs, so their stored values may stay in state. Observe only (boolean, no
+      # values, never fails the job): if they persist, the old Access token is treated as exposed and rotated first.
+      - name: Report deploy-token outputs left in state
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -uo pipefail
+          if terraform state pull 2>/dev/null | jq -e '.outputs | keys | any(test("^access_service_token_client_(id|secret)$"))' >/dev/null 2>&1; then
+            echo "::warning::the deleted deploy-token outputs are STILL in state after this targeted apply; treat the old deploy Access token as exposed and rotate it first (ADR-241 G1 rotation)."
+          fi
 
       # Tunnel ingress origin verification (#6594 / ADR-114 I2).
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply/Measure the apex origin (ADR-194 Hypothesis Z) (test-anchored lines kept below)
@@ -1691,6 +1715,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # (#10538, CTO D2/F1) unconditional, before credentials. Why: §inngest_host_replace rationale.
+      - name: Validate dispatch inputs (PUBLIC-SDK-URL-BIRTH confirm token, #12742)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: bash tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL-BIRTH
+
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -1856,25 +1886,24 @@ jobs:
 
   # ─── inngest-host scoped -replace (dispatch-only; re-run cloud-init; #6197) ────
   # Selected by `-f apply_target=inngest-host-replace`. The additive-only `inngest_host`
-  # job above CANNOT force-replace the host (its destroy-guard aborts on any delete), so a
-  # cloud-init/bootstrap change (e.g. the arm64 Vector wiring, #6197) that force-replaces
-  # hcloud_server.inngest needs THIS scoped -replace path — the same gated, scoped -replace
-  # shape the registry-host-replace and git-data-host-replace jobs use. The
-  # sourced inngest_host_replace_gate permits EXACTLY the server + its 2 id-referencing
-  # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis_luks).
-  # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
+  # job above CANNOT force-replace the host (its destroy-guard aborts on any delete).
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §inngest_host_replace
   inngest_host_replace:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
-    # restart-inngest-server.yml serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
+    timeout-minutes: 40
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # (#10538, CTO D2/F1) unconditional, before credentials. Why: §inngest_host_replace rationale.
+      - name: Validate dispatch inputs (PUBLIC-SDK-URL confirm token, #12742)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: bash tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -1888,8 +1917,6 @@ jobs:
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
-        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
-        # satisfies var.ssh_key_path (never consumed by the scoped inngest replace).
         run: |
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
@@ -1904,12 +1931,6 @@ jobs:
             exit 1
           fi
 
-      # INHERITED-`done` PREFLIGHT (#8252, 2026-09-17). A replace of this host strands the scheduler when
-      # INNGEST_CUTOVER_FLIP is `done` (the root-disk marker is destroyed, the Doppler flag is not). This step
-      # does not block that; it makes the recovery known BEFORE the outage. It does FAIL CLOSED when it cannot
-      # measure (empty token, blind instrument, failed read of a present key): a skipped guard is not a cleared
-      # one (#9927). Rationale, the rc-capture reasoning and the non-`done` stranding values live in the runbook
-      # inngest-server.md, inherited-done section; the token is inngest-flip-read-token.tf.
       - name: 'Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)'
         env:
           DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}
@@ -2012,25 +2033,14 @@ jobs:
         run: terraform init -input=false -lockfile=readonly
 
       - name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)
-        # CTO N9: on the first replace after the flip-token split both token keys are unknown at plan
-        # time, so the user_data length precondition is deferred to APPLY (after the destroy). This
-        # offline step is the only pre-destroy size gate; see runbooks/inngest-server.md.
         run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only
 
       - name: Warn if SENTRY_DSN is absent (#6500)
-        # Advisory, and it degrades open, like the #7228 strand warning above. This job is also
-        # a RECOVERY route for the sole scheduler, and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
-        # a hard fail here would block restoring the sole scheduler over a missing observability
-        # value, or over a transient Doppler read. Decision T2 in #6500's decision-challenges.md.
         continue-on-error: true
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
-          # #6500: this host now bakes SENTRY_DSN, and its Sentry event is what zot-soak-6122.sh
-          # counts. An empty or unreadable value means the replacement reports nothing to the
-          # soak. Say so BEFORE the plan, and proceed; the shape is the precondition's job
-          # (inngest-host.tf). The value is never printed.
           dsn_rc=0
           DSN=$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
           if [[ "$dsn_rc" -ne 0 ]]; then
@@ -2048,17 +2058,6 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the inngest server + its 3 id-referencing dependents
-        # (hcloud_server_network.inngest and hcloud_volume_attachment.inngest_redis_luks; both
-        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis_luks is
-        # NOT -targeted, so the durable volume is preserved by OMISSION (the retired plaintext pair
-        # is no longer declared or targeted here, #8285). The additive VOLUME joins `inngest-host`
-        # (it must be creatable) and never this one. Its ATTACHMENT must be here, though,
-        # because inngest_host_replace_gate interpolates the server id and a replace therefore
-        # forces the attachment into the plan; without admitting it the gate aborts
-        # `out_of_scope` and a routine dispatch becomes a dead end. The sourced
-        # inngest_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
-        # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
@@ -2088,20 +2087,7 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
-          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
-          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
-          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
-          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
-          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
-          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
-          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
-          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
-          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
-          # cutover-inngest.yml:359.
           HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
-          # before any later step can echo it. This token carries destroy authority over the
-          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
@@ -2121,15 +2107,10 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Apply the saved, guarded plan. Post-apply: prove from the SAVED plan (the exact plan
-        # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
         run: |
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
-          # Mid-replace failure: the destroy ran first, so name the fresh stock class before the
-          # operator acts — stock-caused vs config/contract/apply failures take different arms.
-          # stock_recovery_report is a diagnostic annotation only; it always returns 0 (#9510).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
@@ -2146,6 +2127,81 @@ jobs:
             exit 1
           fi
           echo "Redis AOF volume preserved (0 delete actions in the applied plan)."
+
+      - name: Resolve the new host's server id
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          IID="$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform show -json \
+            | jq -r '[.values.root_module.resources[]? | select(.address == "hcloud_server.inngest")] | .[0].values.id // empty')" || IID=""
+          case "$IID" in
+            ''|*[!0-9]*)
+              IID_SAN="$(printf '%s' "$IID" | tr -cd '0-9a-zA-Z._-' | cut -c1-40)"
+              echo "::error::could not resolve the new inngest server id from terraform state (got '${IID_SAN}'). The apply reported success but the state read did not — treat the host as UNVERIFIED and read the BOOT_STAGE channel before anything else."
+              exit 1 ;;
+          esac
+          printf 'INNGEST_NEW_IID=%s\n' "$IID" >> "$GITHUB_ENV"
+          echo "new host iid=$IID"
+
+      - name: Post-replace liveness gate — first probe row on the new iid (#12708)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          deadline=$(( SECONDS + 1200 ))
+          last_rc=9
+          verdict_reads=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            timeout 90 doppler run -p soleur -c prd_terraform -- \
+              env -u INNGEST_STATE_QUERY -u INNGEST_STATE_SINCE -u INNGEST_PROBE_ROW_LIB -u INNGEST_PROBE_EMITTER -u INNGEST_PROBE_MARKER \
+              scripts/inngest-host-state.sh --since 30m --instance-id "$INNGEST_NEW_IID" --no-errors
+            last_rc=$?
+            if [ "$last_rc" -eq 0 ]; then
+              echo "liveness gate PASSED: a SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID has landed — the new host is emitting."
+              exit 0
+            fi
+            case "$last_rc" in
+              4)
+                verdict_reads=$(( verdict_reads + 1 ))
+                echo "liveness gate: no probe row for iid=$INNGEST_NEW_IID yet (rc=4, host not shipping) — retrying in 60s." ;;
+              6)
+                echo "liveness gate: the read path failed (rc=6, instrument fault, not a host verdict) — retrying in 60s." ;;
+              *)
+                echo "liveness gate: unexpected read rc=$last_rc (not a host verdict) — retrying in 60s." ;;
+            esac
+            sleep 60
+          done
+          {
+            echo "## inngest-host-replace liveness gate FAILED (#12708)"
+            echo ""
+            if [ "$verdict_reads" -eq 0 ]; then
+              echo "No read completed a verdict in 20min (last rc=\`$last_rc\`) — the host's emission"
+              echo "state is UNMEASURED (instrument fault), not confirmed dark."
+            else
+              echo "No \`SOLEUR_INNGEST_SERVER_PROBE\` row for iid=\`$INNGEST_NEW_IID\` within 20min of apply"
+              echo "(last read rc=\`$last_rc\`; 4 = host not shipping, 6 = the read path itself failed)."
+            fi
+            echo ""
+            echo "The apply succeeded. Read the BOOT_STAGE channel for the"
+            echo "first failing stage — \`isolation-check-FAILED\` now names the offending secret in its"
+            echo "detail (#12707). NOTE: a host whose metadata read failed emits probe rows with"
+            echo "\`instance_id=unknown\`, which cannot satisfy the pin — check unfiltered"
+            echo "\`inngest-host-state.sh\` output before re-dispatching:"
+            echo ""
+            echo '```'
+            echo "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_INNGEST_BOOT_STAGE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$verdict_reads" -eq 0 ]; then
+            echo "::error::liveness gate: no verdict read completed within 20min of apply (last rc=$last_rc, instrument fault — the host's emission state is UNMEASURED, not confirmed dark). Run the betterstack-query above directly before re-dispatching."
+          else
+            echo "::error::liveness gate: no SOLEUR_INNGEST_SERVER_PROBE row for iid=$INNGEST_NEW_IID within 20min of apply (last rc=$last_rc). The host is provisioned but not emitting — read SOLEUR_INNGEST_BOOT_STAGE rows for the failing stage before re-dispatching."
+          fi
+          exit 1
 
       - name: Dispatch summary
         if: always()
@@ -4140,7 +4196,6 @@ jobs:
         id: pin_load
         if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
           # The webhook swap is minutes; 1200 s bounds the poll well inside the
           # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
@@ -4149,12 +4204,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Post-replace readiness note (non-SSH)
@@ -4636,9 +4687,9 @@ jobs:
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
     # Budget: digest resolve (~1m) + preflight docker pull/extract (~3m) + plan (~2m) +
-    # apply, whose dominant term is Hetzner provisioning the server + volume (~5m). 30m
-    # leaves room for a slow GHCR pull without letting a wedged apply run unbounded.
-    timeout-minutes: 30
+    # apply (Hetzner server + volume, ~5m), then the boot-trail poll (~26m worst, #12008);
+    # kernel-currency.test.sh checks that sum against this value.
+    timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
     steps:
@@ -5082,7 +5133,7 @@ jobs:
       # GHCR is a PRIVATE package; the digest resolve below authenticates with
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
-    # Budget = web_host_create's + the ~16m boot-trail poll ceiling; host is new either way.
+    # Budget = web_host_create's + one destroy minute (kernel-currency.test.sh checks it).
     timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
@@ -6006,7 +6057,6 @@ jobs:
         id: pin_load
         if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
           # The webhook swap is minutes; 1200 s bounds the poll well inside the
           # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
@@ -6015,12 +6065,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Dispatch summary

@@ -126,6 +126,97 @@ res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
 assert_eq "main-checkout session sees trailer via pull/N/head fetch" "" "$res"
 git -C "$WORKDIR" checkout -q feat-branch
 
+# --- 11-14. Changed-path reader (#12332): the marketing-surface diff is read NUL-delimited and rename-free.
+#    Fixtures carry NO Reviewed-By-CMO trailer, so only the diff arm can let a PR through.
+# make_gate_repo <dir> <mutating-shell-snippet>: main with a marketing file + an unrelated file, then a feat
+# branch with the snippet applied and committed. No `origin` remote, so BASE_REF=main and TIP=HEAD.
+# Canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh); the relative-path
+# ratchet recognises only this executed statement before a write into a fixture root.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+make_gate_repo() {
+  local dir="$1" snippet="$2"
+  assert_fixture_dir "$dir"
+  mkdir -p "$dir"
+  git -C "$dir" init -q -b main
+  git -C "$dir" config user.email "test@example.com"
+  git -C "$dir" config user.name "Test User"
+  mkdir -p "$dir/knowledge-base/marketing" "$dir/docs"
+  printf 'old\n' > "$dir/knowledge-base/marketing/old-plan.md"
+  printf 'x\n' > "$dir/docs/keep.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "initial commit"
+  git -C "$dir" checkout -q -b feat-branch
+  ( cd "$dir" && bash -c "$snippet" )
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "branch change"
+}
+run_hook_in() { # <dir> <pr-title>
+  local dir="$1" pr_title="$2"
+  PATH="$BINDIR:$PATH" MOCK_PR_TITLE="$pr_title" SOLEUR_SKIP_CMO_CONTENT_GATE=0 \
+    bash "$HOOK" <<EOF
+{"tool_name": "Bash", "tool_input": {"command": "gh pr merge 123 --squash --auto"}, "cwd": "$dir"}
+EOF
+}
+decision_of() { echo "$1" | jq -r '.decision // empty' 2>/dev/null || echo ""; }
+
+# 11. Control OUTSIDE the surface: a branch that only touches docs/ is denied.
+make_gate_repo "$TMPDIR/g-ctl" "printf 'y\\n' >> docs/keep.md"
+res=$(run_hook_in "$TMPDIR/g-ctl" "feat: new capability")
+assert_eq "control: a diff outside the marketing surface is denied" "deny" "$(decision_of "$res")"
+
+# 12. A non-ASCII marketing path (git C-quotes it, so a ^-anchored regex over the plain list misses it).
+make_gate_repo "$TMPDIR/g-utf8" "printf 'n\\n' > \$'knowledge-base/marketing/caf\\xc3\\xa9-plan.md'"
+precond=$(git -C "$TMPDIR/g-utf8" diff --name-only main...HEAD) || { echo "FATAL: the g-utf8 fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: the plain name-only list C-quotes the non-ASCII marketing path" "1" "$([[ "$precond" == '"'* ]] && echo 1 || echo 0)"
+res=$(run_hook_in "$TMPDIR/g-utf8" "feat: new capability")
+assert_eq "a non-ASCII marketing path counts as a marketing change (passes)" "" "$res"
+
+# 13. A quote-and-backslash marketing path (core.quotePath=false would not unquote these).
+make_gate_repo "$TMPDIR/g-quote" "printf 'n\\n' > \$'knowledge-base/marketing/q\"uote\\\\slash.md'"
+precond=$(git -C "$TMPDIR/g-quote" diff --name-only main...HEAD) || { echo "FATAL: the g-quote fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: the plain list C-quotes a quote-and-backslash marketing path" "1" "$([[ "$precond" == '"'* ]] && echo 1 || echo 0)"
+res=$(run_hook_in "$TMPDIR/g-quote" "feat: new capability")
+assert_eq "a quote-and-backslash marketing path counts as a marketing change (passes)" "" "$res"
+
+# 14. Rename AWAY from the marketing surface: the OLD path is the marketing path (default rename detection lists only the new one).
+make_gate_repo "$TMPDIR/g-rename" "git mv knowledge-base/marketing/old-plan.md docs/old-plan.md"
+res=$(run_hook_in "$TMPDIR/g-rename" "feat: new capability")
+assert_eq "a rename away from knowledge-base/marketing/ counts as a marketing change (passes)" "" "$res"
+
+# 15. A gitlink (submodule pointer) under the marketing surface that configuration hides: a committed `ignore = all`
+#    in .gitmodules plus a local diff.ignoreSubmodules=all. Without --ignore-submodules=none the diff omits the
+#    gitlink, the marketing list is empty and the gate wrongly denies.
+make_gate_repo "$TMPDIR/g-gitlink" "printf '[submodule \"sm\"]\\n\\tpath = knowledge-base/marketing/sm\\n\\turl = https://example.invalid/sm.git\\n\\tignore = all\\n' > .gitmodules; mkdir -p knowledge-base/marketing/sm; git update-index --add --cacheinfo 160000,\$(git rev-parse HEAD),knowledge-base/marketing/sm; git config diff.ignoreSubmodules all"
+# Capture FIRST and refuse to continue on a failed or EMPTY fixture diff: a `grep -c ... || true` over an empty capture is "0"
+# and would make the omission precondition pass vacuously. `.gitmodules` is in the same commit, so a working fixture lists it.
+precond=$(git -C "$TMPDIR/g-gitlink" diff --name-only main...HEAD) || { echo "FATAL: the g-gitlink fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: the fixture diff is non-empty (it lists .gitmodules)" "1" "$(printf '%s\n' "$precond" | grep -Fxc '.gitmodules' || true)"
+assert_eq "precondition: the config-hidden plain diff omits the marketing gitlink" "0" "$(printf '%s\n' "$precond" | grep -Fxc 'knowledge-base/marketing/sm' || true)"
+res=$(run_hook_in "$TMPDIR/g-gitlink" "feat: new capability")
+assert_eq "a config-hidden gitlink under knowledge-base/marketing/ counts as a marketing change (passes)" "" "$res"
+
+# 16. A DIRECTORY name holding a newline: `zz<LF>knowledge-base/marketing/x` is NOT a marketing path. The hook filters the NUL stream
+#    (`grep -z`); an LF-split would turn the tail into a line that satisfies the prefix, and here a match ALLOWS. The only changed
+#    file is that one, so the gate must still deny.
+make_gate_repo "$TMPDIR/g-lf" "mkdir -p \$'zz\\nknowledge-base/marketing' && printf 'n\\n' > \$'zz\\nknowledge-base/marketing/x'"
+lf_split=$(git -C "$TMPDIR/g-lf" diff -z --name-only main...HEAD | tr '\0' '\n') || { echo "FATAL: the g-lf fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: an LF-split of the changed list WOULD yield the line knowledge-base/marketing/x" "1" "$(printf '%s\n' "$lf_split" | grep -Fxc 'knowledge-base/marketing/x' || true)"
+res=$(run_hook_in "$TMPDIR/g-lf" "feat: new capability")
+assert_eq "a newline-named directory fragment is not a marketing change (denied)" "deny" "$(decision_of "$res")"
+# Control for the same fixture shape: the same file WITHOUT the newline prefix passes.
+make_gate_repo "$TMPDIR/g-lf-ctl" "mkdir -p knowledge-base/marketing && printf 'n\\n' > knowledge-base/marketing/x"
+res=$(run_hook_in "$TMPDIR/g-lf-ctl" "feat: new capability")
+assert_eq "control: knowledge-base/marketing/x without the newline prefix is a marketing change (passes)" "" "$res"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

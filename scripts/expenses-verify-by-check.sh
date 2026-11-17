@@ -134,7 +134,7 @@ main() {
     # marker (violating "fail loud, never a silent skip"). A human pasting two
     # estimates into one Notes cell is exactly the edit this gate must catch.
     local marker_hits
-    marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]')
+    marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]') || true
     if (( marker_hits > 1 )); then
       anomalies=$((anomalies + 1))
       anomaly_rows+=("$(row_service "$line") — $marker_hits estimate markers on one row (one-marker-per-row invariant violated)")

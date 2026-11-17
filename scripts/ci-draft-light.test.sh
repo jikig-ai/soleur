@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Guard 1 for #9728 (ADR-276 S3): the `draft-light` gate and the red draft aggregator in .github/workflows/ci.yml.
 #
-# WHAT THE GATE IS. On a `pull_request` run, job `draft-light` decides whether the four measured heavy jobs
-# (test-webplat, test-scripts, test-scripts-heavy, shard-totality-mutations) may be skipped because the PR is a
+# WHAT THE GATE IS. On a `pull_request` run, job `draft-light` decides whether the five measured heavy jobs
+# (test-webplat, test-webplat-mutations, test-scripts, test-scripts-heavy, shard-totality-mutations) may be skipped because the PR is a
 # DRAFT. It is a COST lever allowed to fail in one direction only: every unknown runs the full battery. When it
 # does skip them the `test` aggregator concludes RED by design (Option R, ADR-276 Decision 4), so a light draft can
 # never be merged on the strength of a light run; the `ready_for_review` run is never light, and runs the full set.
@@ -15,7 +15,7 @@
 #     LIVE read of the pull request returns the JSON boolean draft == true (the event payload's draft flag is not an
 #     input);
 #   * the wrapper (job `if`, permissions, outputs, flags, env, timeouts, no `uses`/secrets/checkout), the trigger
-#     `types:`, the four gated conditions (EVALUATED over an event x output x need-result truth table), the gated-set
+#     `types:`, the five gated conditions (EVALUATED over an event x output x need-result truth table), the gated-set
 #     parity in BOTH directions (derived from the parsed YAML) and the untouched light set are what the design says;
 #   * the `test` aggregator body, EXECUTED over result triples, exits 1 with `draft: full battery owed at ready` for a
 #     light draft EVEN IF the loop is made to tolerate skipped legs, and is unaffected on merge_group, push and
@@ -73,31 +73,28 @@ fi
 passes=$_p0; fails=$_f0; FAILURES=()
 
 # ── Pinned expectations (the design's reading of the wrapper) ────────────────
-# The S2 condition every gated job already carries, and the S3 clause appended to the four heavy ones.
+# The S2 condition every gated job already carries, and the S3 clause appended to the five heavy ones.
 ELIDE_TAIL="(github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
 LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
-# The four heavy families S3 gates. A NEW HEAVY JOB MUST JOIN THIS SET (needs [push-dedupe, draft-light] plus the clause).
-HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
+# The five heavy families S3 gates. A NEW HEAVY JOB MUST JOIN THIS SET (needs [push-dedupe, draft-light] plus the clause).
+HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat test-webplat-mutations"
 # Jobs that carry S2's push-dedupe pair but deliberately NO draft-light term: they run on drafts (the light set).
 # e2e is a required context and must keep reporting on drafts (#8450); test-bun is 1.81 min/run (below the 3 min bar);
 # web-platform-build and the aggregator `test` are checked on their own below.
 S2_ONLY_PINNED="e2e test-bun web-platform-build"
-# ADR-276 S4 (#9729, PR B): three jobs (two heavy ones and the S2-only test-bun) additionally carry `pr-selection` in `needs:` and a PR-skip
-# term appended AFTER every earlier term, so the S2 and S3 terms stay verbatim. scripts/ci-push-dedupe.test.sh pins the term's grammar and
-# executes its truth table; this suite only has to keep seeing the S3 terms intact, so it derives the term from the same prefix.
-PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
-PR_T_EV="github.event_name == 'pull_request' && "
-PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
-PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
-PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
-PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
+# ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling): the pr-selection lever, its needs edges and
+# its PR-skip term are gone. PR_GATED_PINNED is the EMPTY set on purpose: this suite re-asserts the post-removal
+# needs grammar (no job may edge to the retired job), and scripts/ci-push-dedupe.test.sh pins the zero-reference
+# census in both directions.
+PR_GATED_PINNED=""
+PR_TERM_PRE=""   # dead prefix kept exported so chk.py's environment read stays uniform
 pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
-# oracle-only lane (#12156): five legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
+# oracle-only lane (#12156): six legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
 # `needs:` and the skip conjunct appended AFTER every earlier term — the same four-term shape as the S4 PR term
 # (event disjunct, active, head_sha nonempty, head bound to either event's sha); `shard-totality-mutations` carries
 # the same four-term conjunct MINUS the skip_legs membership — it skips on event+active+bound-head alone
-# (active, not oracle_only: oracle_only is true during the locked dark phase while active stays false).
-OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
+# (active, not oracle_only: an `ORACLE_LANE_LOCKED=1` env re-lock leaves `oracle_only` true while `active` stays false).
+OR_GATED_PINNED="test-webplat test-webplat-mutations test-bun test-scripts test-scripts-heavy web-platform-build"
 SHARD_GATED="shard-totality-mutations"
 OR_T_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
 OR_T_AC="needs.oracle-selection.outputs.active == 'true' && "
@@ -107,7 +104,7 @@ OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection push-dedupe"
+LIGHT_PINNED="critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection push-dedupe"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"
@@ -156,12 +153,12 @@ def gate(n):
 def canon_heavy(n): return "${{ !cancelled() && " + TAIL + " && " + CLAUSE + gate(n) + " }}"
 def canon_s2(n): return "${{ !cancelled() && " + TAIL + gate(n) + " }}"
 def want_needs(n, dl):
-    out = ["push-dedupe"] + (["draft-light"] if dl else []) + (["pr-selection"] if n in PRGATED else [])
+    out = ["push-dedupe"] + (["draft-light"] if dl else [])
     if n in ORGATED or n in SHARDG: out += ["oracle-selection"]
     return sorted(out)
 CANON_TEST = "${{ always() && " + TAIL + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "PR_NUMBER", "ACTION", "HEAD_REPO", "SWITCH"}
-LEGS = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
+LEGS = {"test-webplat", "test-webplat-mutations", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture", "oracle-index-check"}
 
 def load():
     try:
@@ -181,8 +178,9 @@ def ev(expr, event, elide, light, need_results, cancelled=False):
     e = e[3:-2].strip()
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
-    # the PR-skip term (ADR-276 S4): this suite grades the S3 terms, so the S4 inputs are held at their INERT point (no activation, no
-    # listed leg); scripts/ci-push-dedupe.test.sh executes that term's own truth table over every input combination.
+    # the retired S4 term's translation stays so a re-introduced `needs.pr-selection` term still parses to its
+    # inert point rather than crashing the eval (the zero-reference census in ci-push-dedupe.test.sh is the
+    # load-bearing pin that it can never reappear).
     e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in ",,")' % m.group(1), e)
     # the oracle-lane terms are likewise held at their INERT point (active='', so both `!(active == 'true' && ...)`
     # and `active != 'true'` evaluate true); scripts/ci-push-dedupe.test.sh executes the oracle truth table.
@@ -190,6 +188,11 @@ def ev(expr, event, elide, light, need_results, cancelled=False):
     e = e.replace("needs.oracle-selection.outputs.active", "''").replace("needs.oracle-selection.outputs.head_sha", "''").replace("needs.oracle-selection.outputs.oracle_only", "''")
     e = e.replace("github.event.pull_request.head.sha || github.event.merge_group.head_sha", "''")
     e = e.replace("needs.pr-selection.outputs.active", "''").replace("needs.pr-selection.outputs.head_sha", "''").replace("github.event.pull_request.head.sha", "''")
+    # the retired term's dead tail: with the S4 prefix gone, a leftover `$(pr_term leg)` emits `<leg>,'))` —
+    # the orphaned tail of the old contains() call (the well-formed heads are consumed by the subs above, so a
+    # surviving tail is by definition the residue). Read it as that same membership test — False at the inert
+    # point — so a re-introduction reaches a verdict mismatch (TT:) instead of crashing eval to TT-ERR.
+    e = re.sub(r"([a-z-]+),'\)\)", lambda m: '(",%s," in ",,")' % m.group(1), e)
     e = re.sub(r"!(?=\()", " not ", e)
     e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
@@ -350,7 +353,7 @@ if mode == "agg":
     tags = []
     n = needs(t)
     if "draft-light" not in n: tags.append("A-NEEDS")
-    if sorted(x for x in n if x not in LEGS) != ["draft-light", "oracle-selection", "pr-selection", "push-dedupe"]: tags.append("A-NEEDS-SET")
+    if sorted(x for x in n if x not in LEGS) != ["draft-light", "oracle-selection", "push-dedupe"]: tags.append("A-NEEDS-SET")
     st = (t.get("steps") or [{}])[0]
     env = st.get("env") or {}
     if "".join(str(env.get("DRAFT_LIGHT", "")).split()) != "${{needs.draft-light.outputs.light}}": tags.append("A-ENV")
@@ -649,7 +652,7 @@ chk aggbody "$WF" "$SANDBOX/live" 2>/dev/null
 cp "$SANDBOX/live/agg.sh" "$SANDBOX/pristine-agg.sh" 2>/dev/null
 declare -A A
 set_agg_defaults() {
-  A=([WEBPLAT_RESULT]=success [BUN_RESULT]=success [SCRIPTS_RESULT]=success [SCRIPTS_HEAVY_RESULT]=success [BUILD_RESULT]=success
+  A=([WEBPLAT_RESULT]=success [MUTATIONS_RESULT]=success [BUN_RESULT]=success [SCRIPTS_RESULT]=success [SCRIPTS_HEAVY_RESULT]=success [BUILD_RESULT]=success
      [POSTURE_RESULT]=success [EVENT_NAME]=pull_request [DRAFT_LIGHT]="")
 }
 AGG_N=0; AGG_LINES=""
@@ -658,7 +661,7 @@ arow() {
   local id="${1//[^[:alnum:]_.-]/_}" wrc="$2" wmsg="$3" wok="$4" rc why="" k so se envs=()
   AGG_N=$((AGG_N + 1))
   so="$SANDBOX/agg.out"; se="$SANDBOX/agg.err"
-  # oracle-index-check is entries[7] of the live aggregator: its `if:` gates it to pull_request/merge_group, so the
+  # oracle-index-check is entries[8] of the live aggregator: its `if:` gates it to pull_request/merge_group, so the
   # realistic result is `success` on those events and `skipped` (the OFF-EVENT arm, not a failure) everywhere else.
   # Rows may pin A[ORACLE_INDEX_RESULT] to exercise the leg itself; the default models the wiring.
   if [ -z "${A[ORACLE_INDEX_RESULT]+x}" ]; then
@@ -671,17 +674,17 @@ arow() {
   [ "$rc" -eq "$wrc" ] || why="$why rc=$rc(want $wrc)"
   if grep -qF -- "$DRAFT_MSG" "$se"; then [ "$wmsg" = 1 ] || why="$why msg-printed"; else [ "$wmsg" = 0 ] || why="$why msg-missing"; fi
   grep -qF -- "$DRAFT_MSG" "$so" && why="$why msg-on-stdout"
-  if [ "$wok" = 1 ]; then grep -qF -- "All legs green (six battery" "$so" || why="$why no-success-line"; else
+  if [ "$wok" = 1 ]; then grep -qF -- "All legs green (seven battery" "$so" || why="$why no-success-line"; else
     [ -s "$so" ] && why="$why stdout-not-empty"; fi
   if [ -z "$why" ]; then AGG_LINES="$AGG_LINES"$'\n'"AROW $id ok"; else AGG_LINES="$AGG_LINES"$'\n'"AROW $id bad:$why"; fi
 }
 agg_battery() { # <body>
   ABODY="$1"; AGG_N=0; AGG_LINES=""; BAT_CRASH=0
-  # a light draft: the four heavy legs skipped (the shard-totality leg is not an aggregator leg), the light legs green
-  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
+  # a light draft: the five heavy legs skipped (the shard-totality leg is not an aggregator leg), the light legs green
+  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
   arow D1-light-draft-skipped-legs 1 1 0
   # same, with the env order and an extra unrelated leg name (a non-canonical input that must reach the same verdict)
-  set_agg_defaults; A[UNRELATED_RESULT]=success; A[DRAFT_LIGHT]=true; A[SCRIPTS_HEAVY_RESULT]=skipped; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped
+  set_agg_defaults; A[UNRELATED_RESULT]=success; A[DRAFT_LIGHT]=true; A[SCRIPTS_HEAVY_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped
   arow D2-light-draft-reordered-extra-leg 1 1 0
   # the arm is unconditional on the legs: a light draft is red even if every leg reads success
   set_agg_defaults; A[DRAFT_LIGHT]=true
@@ -727,11 +730,11 @@ else fail "AGGREGATOR COUNT: arow() ran $AGG_CTRL_N rows but $((_aok + _abad)) v
 sed 's/^\([[:space:]]*\)fail=1/\1: fail=1/' "$SANDBOX/pristine-agg.sh" > "$SANDBOX/mut/agg-tolerant.sh"
 if cmp -s "$SANDBOX/mut/agg-tolerant.sh" "$SANDBOX/pristine-agg.sh"; then fail "TOLERANT: the loop-tolerating mutation did not land"; else
   ABODY="$SANDBOX/mut/agg-tolerant.sh"
-  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
+  set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[MUTATIONS_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
   AGG_LINES=""; arow T1-tolerant-loop-light-draft 1 1 0
   case "$AGG_LINES" in *" ok") pass ;; *) fail "TOLERANT: a light draft must exit 1 even when the loop tolerates skipped legs:$AGG_LINES" ;; esac
   # sanity: the tolerant loop really tolerates (off pull_request it exits 0 on a skipped leg), so the row above is not vacuous
-  ( env -i PATH=/usr/bin:/bin WEBPLAT_RESULT=success BUN_RESULT=success SCRIPTS_RESULT=skipped SCRIPTS_HEAVY_RESULT=success BUILD_RESULT=success POSTURE_RESULT=success EVENT_NAME=merge_group DRAFT_LIGHT=true ORACLE_INDEX_RESULT=success bash --noprofile --norc -eo pipefail "$SANDBOX/mut/agg-tolerant.sh" >/dev/null 2>&1 ); _trc=$?
+  ( env -i PATH=/usr/bin:/bin WEBPLAT_RESULT=success MUTATIONS_RESULT=success BUN_RESULT=success SCRIPTS_RESULT=skipped SCRIPTS_HEAVY_RESULT=success BUILD_RESULT=success POSTURE_RESULT=success EVENT_NAME=merge_group DRAFT_LIGHT=true ORACLE_INDEX_RESULT=success bash --noprofile --norc -eo pipefail "$SANDBOX/mut/agg-tolerant.sh" >/dev/null 2>&1 ); _trc=$?
   if [ "$_trc" -eq 0 ]; then pass; else fail "TOLERANT: the tolerant-loop control did not exit 0 off pull_request (rc=$_trc), so the row above proves nothing"; fi
 fi
 
@@ -917,11 +920,11 @@ mutate_yml() {
 HEAVY_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE }}"
 S2_IF="if: \${{ !cancelled() && $ELIDE_TAIL }}"
 # the jobs that carry the S4 PR-skip term and/or the oracle-lane conjunct (appended last): their live conditions and needs lines
-WEBPLAT_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) && $(or_term test-webplat) }}"
-HEAVYSC_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) && $(or_term test-scripts-heavy) }}"
+WEBPLAT_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-webplat) }}"
+HEAVYSC_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-scripts-heavy) }}"
 SCRIPTS_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-scripts) }}"
 SHARD_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $SHARD_TERM }}"
-BUN_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-bun) && $(or_term test-bun) }}"
+BUN_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(or_term test-bun) }}"
 BUILD_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(or_term web-platform-build) }}"
 # trigger
 mutate_yml y-types-no-ready "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" trigger T-TYPES
@@ -946,7 +949,9 @@ mutate_yml y-dl-needs-heavy "    timeout-minutes: 3
     timeout-minutes: 3
     permissions:
       pull-requests: read" wrapper W-JOBNEEDS
-mutate_yml y-dl-perm "      pull-requests: read" "      pull-requests: write" wrapper W-PERM
+mutate_yml y-dl-perm "    permissions:
+      pull-requests: read" "    permissions:
+      pull-requests: write" wrapper W-PERM
 mutate_yml y-dl-timeout "    timeout-minutes: 3
     permissions:
       pull-requests: read" "    timeout-minutes: 5
@@ -973,9 +978,9 @@ mutate_yml y-dl-no-step-coe "        continue-on-error: true
           PR_NUMBER" wrapper W-COE
 # the gated set
 mutate_yml y-gate-no-clause "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) && $(or_term test-webplat) }}" gated G-COND:test-webplat
 mutate_yml y-gate-no-need "  test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]" "  test-scripts:
@@ -986,14 +991,14 @@ mutate_yml y-gate-heavy-missing-clause "  shard-totality-mutations:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $SHARD_TERM }}" gated G-SET-IF
 mutate_yml y-gate-success-fn "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $HEAVYSC_IF" "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ success() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) && $(or_term test-scripts-heavy) }}" truth TT:test-scripts-heavy
 mutate_yml y-gate-lost-cancelled "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) && $(or_term test-webplat) }}" truth TT:test-webplat
 mutate_yml y-gate-light-eq-false "  test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]
@@ -1048,9 +1053,9 @@ mutate_yml y-e2e-if "  e2e:
     needs: [push-dedupe]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:e2e
 mutate_yml y-test-bun-gated "  test-bun:
-    needs: [push-dedupe, pr-selection, oracle-selection]
+    needs: [push-dedupe, oracle-selection]
     $BUN_IF" "  test-bun:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-bun) && $(or_term test-bun) }}" gated G-S2ONLY-TOUCHED:test-bun
 mutate_yml y-build-gated "  web-platform-build:
     needs: [push-dedupe, oracle-selection]
@@ -1058,7 +1063,7 @@ mutate_yml y-build-gated "  web-platform-build:
     needs: [push-dedupe, draft-light, oracle-selection]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:web-platform-build
 # the aggregator: draft-light in needs and env; its own `if:` must not gain the term (it would skip a required context)
-mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" agg A-NEEDS
+mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe]" agg A-NEEDS
 mutate_yml y-agg-no-env "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
 " "" agg A-ENV
 mutate_yml y-agg-env-literal "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}" "          DRAFT_LIGHT: \${{ needs.draft-light.result }}" agg A-ENV
@@ -1085,17 +1090,19 @@ live_control() { # <label> <mode> <old> <new> <want-prefix: TAGS:… | CRASH>
   v=$(live_verdict "$mode" "$f")
   case "$v" in "$want"*) pass ;; *) fail "LIVE CONTROL $label: live_verdict said '${v:0:120}', wanted $want" ;; esac
 }
-live_control wrapper wrapper "      pull-requests: read" "      pull-requests: write" "TAGS:"
+live_control wrapper wrapper "    permissions:
+      pull-requests: read" "    permissions:
+      pull-requests: write" "TAGS:"
 live_control trigger trigger "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" "TAGS:T-TYPES"
 live_control gated gated "  e2e:
     needs: [push-dedupe]" "  e2e:
     needs: [push-dedupe, draft-light]" "TAGS:G-"
 live_control truth truth "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) && $(or_term test-webplat) }}" "TAGS:TT:"
-live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" "TAGS:A-"
+live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe]" "TAGS:A-"
 case "$(live_verdict wrapper "$SANDBOX/does-not-exist.yml")" in CRASH:*) pass ;; *) fail "LIVE CONTROL: a missing workflow file did not read as a checker crash" ;; esac
 # names_clean: a doctored required-set file must be reported, a missing one must be reported as MISSING
 _nr="$SANDBOX/mut/nc-root"; rm -rf "$_nr"; mkdir -p "$_nr"

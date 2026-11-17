@@ -22,6 +22,7 @@ import {
   APPROVAL_COPY,
   APPROVAL_RETENTION_DAYS,
   APPROVAL_STATE_COPY,
+  REQUESTER_SELF,
   formatExpiry,
 } from "@/lib/approval-copy";
 import {
@@ -45,12 +46,21 @@ export const APPROVAL_DECIDE_REPLY_TIMEOUT_MS = 20_000;
 
 export interface ApprovalRequestCardProps {
   approvalId: string;
-  /** Null when the stored text was removed by the retention scrub: the card then shows the details-removed state. */
+  /**
+   * Null means one of two different things, told apart by the viewer's role (the wire has no third flag): for an Owner the
+   * stored text was removed by the retention scrub (the details-removed state); for a member the action text is WITHHELD
+   * from this viewer (#9601) and the card shows the waiting copy with no bound block.
+   */
   view: ApprovalCardView | null;
   status: ApprovalWireStatus;
   expiresAt: string;
   requestCount: number;
   viewerRole: "owner" | "member";
+  /**
+   * Who raised the request (#9601): "you" for the verified requester, an email or "a workspace member" for an Owner. Shown as
+   * a plain-text line for an Owner only; absent when the server sent none (a failed lookup omits it).
+   */
+  requester?: string;
   /** True while the agent is still inside its in-session wait (server truth, never guessed client-side). */
   agentWaiting: boolean;
   /** The server's reply to THIS viewer's own decide, when there was one (conflict, already_decided, revoked, expired and closed). */
@@ -274,6 +284,7 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
     expiresAt,
     requestCount,
     viewerRole,
+    requester,
     agentWaiting,
     decideOutcome,
     approvalUnusable,
@@ -289,12 +300,14 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
   } = props;
 
   const titleId = useId();
+  // A null view is "withheld" for a member and "scrubbed" otherwise (see the prop). A withheld card never claims the scrub.
+  const withheld = view === null && viewerRole === "member";
   const state = deriveApprovalCardState({
     status,
     viewerRole,
     agentWaiting,
     decideOutcome,
-    detailsRemoved: view === null,
+    detailsRemoved: view === null && viewerRole !== "member",
     expiredAfterApproval,
     revoked,
   });
@@ -358,7 +371,13 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       infoLine = view?.consequence ?? null;
       break;
     case "pending_member":
-      title = APPROVAL_COPY.nonOwnerWaiting;
+      // Chosen independently of `view`: the requester keeps their full card, a withheld card says only that it is waiting.
+      title =
+        requester === REQUESTER_SELF
+          ? APPROVAL_COPY.memberWaitingOwn
+          : withheld
+            ? APPROVAL_COPY.memberWaitingRedacted
+            : APPROVAL_COPY.nonOwnerWaiting;
       infoLine = APPROVAL_STATE_COPY.memberLine;
       break;
     case "released":
@@ -427,6 +446,16 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
   }
 
+  // A withheld card can still be handed a non-pending status: reattach skips approved rows for such a viewer, but the gate
+  // also emits `approval_status` to the proposing user (gate-flow `emitStatus`) after a reattach redacted that user's card. Say nothing about the agent,
+  // the action or an outcome.
+  const withheldSettled = withheld && state !== "pending_member";
+  if (withheldSettled) {
+    title = APPROVAL_COPY.withheldSettledTitle;
+    infoLine = null;
+    infoIcon = "info";
+  }
+
   const danger = view?.danger === true && state === "pending_owner";
   const boxClass = danger ? `${BOX_BASE} border-red-500/70 bg-red-950/20` : style.box;
   const badgeClass = danger ? "bg-red-500 text-soleur-text-on-accent" : style.badge;
@@ -456,7 +485,11 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
           className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${badgeClass}`}
         >
           {style.icon !== "none" && <Icon name={style.icon} className="h-3.5 w-3.5" />}
-          {state === "approved_late" && approvalUnusable ? APPROVAL_STATE_COPY.badge.approvedUnusable : BADGE_TEXT[state]}
+          {withheldSettled
+            ? APPROVAL_STATE_COPY.badge.withheldSettled
+            : state === "approved_late" && approvalUnusable
+              ? APPROVAL_STATE_COPY.badge.approvedUnusable
+              : BADGE_TEXT[state]}
         </span>
         {pendingState && expiry.text ? (
           <span
@@ -484,6 +517,17 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
           <span>
             {APPROVAL_COPY.newerRequestBanner}. {APPROVAL_COPY.newerRequestBannerDetail}
           </span>
+        </p>
+      )}
+
+      {/* The requester line: plain text (never a link or markdown), invisible controls made visible, wrapped and never truncated,
+          outside the live region, above the title. An Owner only; hidden when the details were removed. */}
+      {viewerRole === "owner" && requester && state !== "details_removed" && (
+        <p
+          data-testid="approval-requester"
+          className="mt-3 min-w-0 text-sm text-soleur-text-secondary [overflow-wrap:anywhere]"
+        >
+          {APPROVAL_COPY.requestedBy(revealInvisible(requester))}
         </p>
       )}
 

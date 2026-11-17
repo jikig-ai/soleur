@@ -128,6 +128,15 @@ DRIFT_ABS_MS = 10000
 DRIFT_TOTAL_PCT = 0.10
 GROWTH_ACK_PREFIX = "# growth-acked="
 
+# PRICE_DRIFT_ROW bound (#12016): a committed src=measured price flags when its
+# fresh cross-run median diverges >= 4x in either direction AND by >= 120 s,
+# timed in >= 3 sampled runs. Sized so the two known-stale rows (43x/109x)
+# flag while the audit's ordinary drift band (+12%..+190%, max 2.9x) stays
+# silent; the sample floor suppresses one-run contention spikes.
+PRICE_DRIFT_RATIO = 4.0
+PRICE_DRIFT_ABS_MS = 120000
+PRICE_DRIFT_MIN_TIMED = 3
+
 # Artifact name patterns, one per group and mutually exclusive: the heavy job's
 # artifacts carry a `-heavy-` infix the light pattern cannot match, and vice versa.
 LIGHT_ARTIFACT = re.compile(r"^suite-timings-scripts-\d+$")
@@ -630,6 +639,12 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
         — one per src=floor or src=estimate row that measured in >= 1 sampled
         run (an estimate that finally measures IS the drift event this probe
         exists to name).
+      PRICE_DRIFT_ROW <group> <label> <committed_ms> <fresh_median_ms> <timed>/<sampled>
+        — one per src=measured row whose fresh median diverges past the flag
+        bound: ratio >= PRICE_DRIFT_RATIO in EITHER direction AND |delta| >=
+        PRICE_DRIFT_ABS_MS, timed in >= PRICE_DRIFT_MIN_TIMED sampled runs
+        (#12016 — a wrong-but-present measured price looks authoritative where
+        a floor row is honest about being an estimate).
       LEG_PREDICTED <group> <leg> <sum_ms>
         — committed durations summed through the incumbent manifest.
       LEG_OBSERVED light <leg> <sum_ms>
@@ -662,6 +677,21 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
         print(f"DRIFT_ROW {group} {label} {rows[label][0]} "
               f"{fresh[label]} {timed_n[label]}/{sampled}")
     print(f"FLOOR_UNMEASURED {group} {len(floor_labels - set(fresh))}")
+
+    measured_labels = {l for l, (_ms, src) in rows.items()
+                       if src == "measured"}
+    for label in sorted(measured_labels & set(fresh)):
+        committed, f = rows[label][0], fresh[label]
+        # Delta first: it is the cheap conjunct and a base-0 row is only
+        # ever an under/overflow when the delta alone already exceeds the
+        # bound (committed=0→big or big→0 is an unbounded ratio — emit it,
+        # never divide by it).
+        if (timed_n[label] >= PRICE_DRIFT_MIN_TIMED
+                and abs(f - committed) >= PRICE_DRIFT_ABS_MS):
+            base = min(committed, f)
+            if base == 0 or max(committed, f) / base >= PRICE_DRIFT_RATIO:
+                print(f"PRICE_DRIFT_ROW {group} {label} {committed} "
+                      f"{f} {timed_n[label]}/{sampled}")
 
     # Predicted: every committed row prices its incumbent leg (floor rows
     # included — the manifest's own accounting).

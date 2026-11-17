@@ -119,7 +119,7 @@ TOTAL=$((TOTAL+1))
 T7=$(mktemp -d); setup_repo "$T7" docs
 declare -a ids
 for i in 1 2 3; do
-  m=$(invoke_hook "$T7" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+  m=$(invoke_hook "$T7" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
   if [[ -z "$m" || ! -f "$m" ]]; then
     echo "FAIL: idempotency (manifest not written on run $i)"
     FAIL=$((FAIL+1)); break
@@ -166,7 +166,7 @@ fi
 TOTAL=$((TOTAL+1))
 T9=$(mktemp -d); setup_repo "$T9" docs
 out9=$(invoke_hook "$T9")
-manifest9=$(printf '%s' "$out9" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+manifest9=$(printf '%s' "$out9" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
 if [[ -f "$manifest9" ]]; then
   fields=$(jq -r 'keys | sort | @csv' "$manifest9")
   expected='"change_class","rule_ids_loaded","timestamp"'
@@ -224,7 +224,7 @@ T12=$(mktemp -d); setup_repo "$T12" docs
 # Crafted session_id attempting `../../tmp/PWNED.json` escape.
 payload12=$(jq -nc --arg cwd "$T12" --arg sid "../../../tmp/PWNED_RULES_LOADER" '{cwd: $cwd, session_id: $sid}')
 out12=$(printf '%s' "$payload12" | "$HOOK" 2>/dev/null)
-manifest12=$(printf '%s' "$out12" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+manifest12=$(printf '%s' "$out12" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
 if [[ -f "/tmp/PWNED_RULES_LOADER.json" ]]; then
   echo "FAIL: session_id path traversal — /tmp/PWNED_RULES_LOADER.json was created"
   rm -f /tmp/PWNED_RULES_LOADER.json
@@ -585,7 +585,7 @@ TOTAL=$((TOTAL+1))
 { printf '2026-07-27T10:00:00Z NASTY\001\002CTRL '; head -c 3000 /dev/zero | tr '\0' 'Z'; printf '\n'; } > "$ALARM_FIX"
 ctx_nasty=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
   | jq -r '.hookSpecificOutput.additionalContext')
-nasty_line=$(printf '%s' "$ctx_nasty" | grep -F '[tmpfs-guard]' | head -1)
+nasty_line=$(printf '%s' "$ctx_nasty" | grep -F '[tmpfs-guard]' | head -1) || true
 nasty_ctrl=$(printf '%s' "$nasty_line" | tr -cd '\001-\010\013\014\016-\037' | wc -c)
 if [[ "$nasty_ctrl" -eq 0 ]] && [[ "${#nasty_line}" -le 512 ]]; then
   echo "PASS: AC-T3 alarm content is control-char stripped and length-capped"
@@ -642,7 +642,7 @@ stamp25=$(printf '%s' "$ctx25" | head -1)
 # non-match reports a clear FAIL instead of aborting the suite under `set -e`.
 den25=$(printf '%s' "$stamp25" | sed -nE 's/.*loaded: [0-9]+ of ([0-9]+) rules.*/\1/p' || true)
 # Independently re-derive the body count from the corpus only.
-bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.rules.md | wc -l | tr -d ' ')
+bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.rules.md | wc -l | tr -d ' ') || true
 if [[ "$den25" == "$bodies25" ]]; then
   echo "PASS: stamp denominator == corpus body count ($den25)"
   PASS=$((PASS+1))
@@ -660,7 +660,7 @@ fi
 # the loader may still NAME the retired forms when explaining them.
 
 TOTAL=$((TOTAL+1))
-code26=$(grep -vE '^[[:space:]]*#' "$HOOK")
+code26=$(grep -vE '^[[:space:]]*#' "$HOOK") || true
 bad26=""
 printf '%s' "$code26" | grep -cE >/dev/null 'AGENTS[^"[:space:]]*\*' && bad26="glob spanning the index"
 printf '%s' "$code26" | grep -cE >/dev/null 'TOTAL_RULES=.*\$(CONTEXT|CORPUS)' && bad26="denominator derived from loaded sidecars"
@@ -682,7 +682,7 @@ fi
 
 TOTAL=$((TOTAL+1))
 T27=$(mktemp -d); LATE_TMPDIRS+=("$T27"); setup_repo "$T27" docs
-idx27=$(grep -c '^- \[id: ' "$T27/AGENTS.md")
+idx27=$(grep -c '^- \[id: ' "$T27/AGENTS.md") || true
 grep -v 'cq-test-rest' "$T27/AGENTS.rules.md" > "$T27/AGENTS.rules.md.tmp"
 mv "$T27/AGENTS.rules.md.tmp" "$T27/AGENTS.rules.md"
 stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
@@ -703,7 +703,7 @@ fi
 
 TOTAL=$((TOTAL+1))
 T27B=$(mktemp -d); LATE_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
-idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md")
+idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md") || true
 rm -f "$T27B/AGENTS.rules.md"
 stamp27b=$(invoke_hook "$T27B" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
 den27b=$(printf '%s' "$stamp27b" | sed -nE 's/.*loaded: [0-9]+ of ([0-9]+) rules.*/\1/p' || true)
@@ -802,12 +802,12 @@ fi
 TOTAL=$((TOTAL+1))
 T32=$(mktemp -d); LATE_TMPDIRS+=("$T32"); setup_repo "$T32" mixed
 m32=$(invoke_hook "$T32" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null \
-        | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+        | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
 if [[ -z "$m32" || ! -f "$m32" ]]; then
   echo "FAIL: full-injection check could not locate the manifest"
   FAIL=$((FAIL+1))
 else
-  want32=$(grep -oE '^- \[id: [a-z0-9-]+\]' "$T32/AGENTS.md" | sed -E 's/^- \[id: (.*)\]$/\1/' | sort | tr '\n' ' ')
+  want32=$(grep -oE '^- \[id: [a-z0-9-]+\]' "$T32/AGENTS.md" | sed -E 's/^- \[id: (.*)\]$/\1/' | sort | tr '\n' ' ') || true
   got32=$(jq -r '.rule_ids_loaded[]' "$m32" | sort | tr '\n' ' ')
   if [[ "$want32" == "$got32" && -n "$want32" ]]; then
     echo "PASS: every indexed rule id actually reached context ($(printf '%s' "$want32" | wc -w) ids)"

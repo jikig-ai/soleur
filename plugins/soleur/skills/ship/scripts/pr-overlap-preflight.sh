@@ -9,8 +9,8 @@
 #   --mode      start (default; no change needs to exist yet) or merge (a change must exist and the
 #               starting point must be readable, otherwise exit 2)
 #   --pr        this change's number (default: read from `gh pr view`)
-#   --files     the files this change touches, space-separated (default: git diff --no-renames
-#               --name-only origin/main...HEAD)
+#   --files     the files this change touches, space-separated (default: git diff -z --no-renames
+#               --ignore-submodules=none --name-only origin/main...HEAD, so odd names read exactly)
 #   --vehicle   the change a CTO ruling designated to carry the work. Taken from this flag ONLY, never
 #               parsed out of prose. `this` means THIS change is the vehicle (usable before a change
 #               exists).
@@ -220,11 +220,11 @@ if [ "$FILES_SET" -eq 1 ]; then
   set +f
 else
   [ "$BASE_OK" -eq 1 ] || cannot_check "I could not read which files this change touches"
-  OWN_FILES="$(git diff --no-renames --name-only origin/main...HEAD 2>/dev/null)" # mut:norenames
+  OWN_FILES="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only origin/main...HEAD 2>/dev/null | tr '\0' '\n')" # mut:norenames
   rc=$?
   [ "$rc" -eq 0 ] || cannot_check "I could not read which files this change touches"
 fi
-OURS_JSON="$(printf '%s\n' "$OWN_FILES" | jq -R -s -c "$JQ_DEFS"' split("\n") | map(select(length > 0 and (noise | not))) | unique')" \
+OURS_JSON="$(printf '%s\n' "$OWN_FILES" | jq -R -s -c "$JQ_DEFS"' split("\n") | map(clean | select(length > 0 and (noise | not))) | unique')" \
   || cannot_check "I could not read which files this change touches"
 NOURS="$(printf '%s' "$OURS_JSON" | jq 'length')"
 NEED=2

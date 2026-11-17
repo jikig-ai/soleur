@@ -290,7 +290,7 @@ production write and needs the operator's per-command go-ahead:
 
 | Signal | What it means now | Route |
 | --- | --- | --- |
-| Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
+| Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=PUBLIC-SDK-URL -f reason="<why>"` (typed-confirm gate, #12742) (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
 | `op=luks-cutover` dispatched again | The verb no longer exists (deleted 2026-11-05, §5a-2): GitHub rejects the dispatch as an invalid `op` input. Before that it was refused on this host (durable pointer set, flag `done`, G1/G2) | Nothing to do |
 
@@ -354,11 +354,18 @@ happened, and no claim of physical or secure erasure is made.
 ### Read-backs after `destroy` (read-only; re-runnable)
 
 ```
-doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN_READONLY:?absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN}"; curl -sS -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes/106261946'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/106261946'   # expect 404
 ```
 
-Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.volumes` is `[106903269]`). The next
-`host_role=dedicated` probe row still reports `scsi-0HC_Volume_106903269` with `redis_active=active`.
+Expect `404`. `missing-token` (exit 3) means `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform`: minting it is step
+**O5** in `infra-credential-tiers-8209.md`, and the command never falls back to the read/write token. The token goes to
+curl as a config on stdin, never on argv. The line is the runbook-6604 retired-volume GET with only the id changed, and
+the drift suite pins it (row N3b of `plugins/soleur/test/sole-copy-drift-check.test.sh`). At retirement the host's
+attached volumes read `[106903269]` (the `destroy` row above), and the next `host_role=dedicated` probe row still reported
+`scsi-0HC_Volume_106903269` with `redis_active=active`. Any output other than `404` is a failure. A `404` alone cannot tell
+a deleted volume from a token minted in another Hetzner project (as with `volume-gone` in section 5c), so it counts only
+beside the section 5c read-back of 106903269 (step 3 of "Read-back") printing `protected` or `not-protected`: that read
+answers 200 only to a token that reads this project. If it prints `volume-gone`, route on the section 5c table instead.
 
 ### Rules that stay in force
 
@@ -405,7 +412,7 @@ Order matters. The merge's own apply delivers the protection, so the read-back i
 3. **Run the read-back** (read-only; the token goes to curl as a config on stdin; the output is one word):
 
 ```
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
 ```
 
 4. **Route on the word** (compare with the expected word from step 1):
@@ -414,7 +421,7 @@ doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no
 | --- | --- | --- |
 | `protected` (0) | delete protection is on | The pass when `protected` was expected; a mismatch when `not-protected` was expected (the lift did not land): report it. |
 | `not-protected` (1) | delete protection is off | The pass for a sanctioned lift. Otherwise a red status: recommend the `manual-rerun` dispatch in "Delivery route" (owner go-ahead), never run it unprompted. |
-| `volume-gone` (4) | HTTP 404 on the volume | NOT a read problem: the volume no longer exists. Incident (`soleur:incident`); follow "After a total loss". |
+| `volume-gone` (4) | HTTP 404 on the volume | Either the volume no longer exists or `HCLOUD_TOKEN_READONLY` was minted in another Hetzner project: a 404 does not separate the two. First run the read-only server-name listing under `orphan_sweep_project_identity_unproven` ("Triage — the orphan sweeps") in `infra-credential-tiers-8209.md` and compare it with the production server names. Names that do not match mean a wrong-project token (re-mint it, step **O5**), not a loss. Names that match mean the volume is gone: incident (`soleur:incident`); follow "After a total loss". |
 | `read-failed` (2) | an HTTP error other than 404 (a 401, say), a network error, a non-JSON body, or a body without the field | The read did not happen; it is not a lifted protection. Fix the read; never dispatch on its account. |
 | `missing-token` (3) | `HCLOUD_TOKEN_READONLY` is absent from `prd_terraform` | Minting it is operator step **O5** in `infra-credential-tiers-8209.md` (console-minted, no API). The agent reports `missing-token` and files an issue; it does not fall back to `HCLOUD_TOKEN`. |
 | no word printed | the read did not happen (`doppler` missing or unauthenticated, an error before the command ran) | Report it; never dispatch on its account. |
@@ -425,12 +432,15 @@ The wrapper is single-quoted so the variable expands after Doppler sets it, not 
 injects only the read-only token, so the read/write `HCLOUD_TOKEN` in the same config never enters the process, and the
 command stops rather than falling back to it. `--no-exit-on-missing-only-secrets` makes Doppler run the command when the
 token is absent, so `missing-token` is reachable; without it Doppler exits before the command and no word is printed. This
-asserts presence of the read-only token; its scope is not verified here. The token never reaches argv (a stdin curl config);
-there is no `-v` and no `set -x`. A JSON string `"true"` reads as `read-failed`, not as `protected`. This read is a proxy
-for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was exercised against a stubbed `doppler`
-and `curl` (fake token, no network) for protected, not-protected, HTTP 401, HTTP 404, network failure, non-JSON, a missing
-field, a missing token, an empty token and a failing `doppler` (no word). It was then run once against the real API, on
-2026-10-15, and printed `protected` (exit 0; ADR-282, Addendum 2026-10-15).
+asserts presence of the read-only token; its scope is not verified here. The token never reaches argv (a stdin curl config).
+`--disable --noproxy "*"` come first, the same two flags as `scripts/lib/bearer-curl.sh`, so curl reads no `.curlrc` and honours no proxy
+variable; `--max-time 30` bounds the request. There is no `-v` and no `set -x`. A JSON string `"true"` reads as
+`read-failed`, not as `protected`. This read is a proxy for "Hetzner refuses a delete"; the refusal itself is not
+exercised. The current form (`--disable --noproxy "*"` first and `--max-time 30`, #12616) was exercised on 2026-11-11
+against a stubbed `doppler` and `curl`, with a fake token and no network. It covered protected, not-protected, HTTP 401,
+HTTP 404, network failure, non-JSON, a missing field, a missing token, an empty token and a failing `doppler` (no word).
+The one run against the real API, on 2026-10-15 (`protected`, exit 0; ADR-282, Addendum 2026-10-15), was of the earlier
+form without those three flags. The current form has not been run against the real API.
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in
@@ -765,6 +775,18 @@ below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10
   `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, and the dated audit records under
   `knowledge-base/legal/audits/` (historical records keep the id they were written with; add a dated line, do not rewrite them).
 
+**Regenerated 2026-11-10 (#10432).** The list above stays as the 2026-10-24 record. `git grep -n 106903269` on 2026-11-10
+changes it in three ways; the `git grep` output stays the source of truth:
+
+- In `.github/workflows/scheduled-terraform-drift.yml` there are now exactly two `readonly VOLUME_ID_PIN=` lines (the two orphan
+  sweeps). The sole-copy probe's pin moved to the `volume_id:` of the `inngest` include row of the `sole-copy-protection-check`
+  matrix (ADR-282, addendum of 2026-11-10). Row N1 pins that row to ADR-282, and row N1b pins the two sweep copies equal to that row.
+- `plugins/soleur/test/sole-copy-drift-check.test.sh` carries the id in more places than one: the `inngest` pair of
+  `_ids_of` (which `use_entry inngest` reads into `VOL_ID`), the Python harness's `INNGEST_ID` constant, and test-data
+  literals. Change every occurrence in that file in the same edit.
+- One more record-only place: a dated live-probe comment in `apps/web-platform/infra/betterstack-logs-alerts.tf` (the
+  wrong-volume alert's quiet control, 2026-10-29).
+
 ### Revert recipe
 
 Two recipes. The full revert was executed once in a scratch detached worktree (the record is below); the partial recipe is a
@@ -889,7 +911,7 @@ sequence end to end.
    The PR opens a dated revert follow-through before it merges: once `prd` satisfies the glob,
    nothing alerts if it stays — the follow-through script should assert the literal on main is back
    to `rehearsal_*)`, not only remind.
-3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`. The host is
+3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`, with `-f confirm=PUBLIC-SDK-URL` (the typed-confirm gate in inngest-server.md; read #12742 first). The host is
    born with the new blank volume attached; `STAGE=resolve` takes `mode=unpointed`, the widened
    allowlist admits `prd`, and the unpointed arm runs its format path.
 4. **Verify the stage rows** (Better Stack, `inngest-luks-stage` source): `luks_format` →

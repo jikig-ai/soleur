@@ -408,7 +408,7 @@ test_dual_alert_no_cooldown() {
   ) && actual_exit=0 || actual_exit=$?
 
   local alert_count=0
-  [[ -f "$mock_dir/curl_args" ]] && alert_count=$(grep -c 'api.resend.com' "$mock_dir/curl_args")
+  [[ -f "$mock_dir/curl_args" ]] && alert_count=$(grep -c 'api.resend.com' "$mock_dir/curl_args") || true
 
   if [[ "$actual_exit" -eq 0 ]] && [[ "$alert_count" -eq 2 ]] \
      && grep -qF "CRIT" "$mock_dir/curl_args" \

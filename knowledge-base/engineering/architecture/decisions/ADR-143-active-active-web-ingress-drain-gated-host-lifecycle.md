@@ -317,6 +317,12 @@ coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrato
 > **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
 > addendum 2026-10-12); the anti-pooling fence is unchanged.
 
+**Addendum — 2026-11-10 (#9137):** the placement mechanism the 2026-09-28 addendum required has landed — the
+`?fnId`-keyed exec-placement forwarder (ADR-033 amendment 2026-11-10) routes `portable` step calls to whichever web host
+the LB selects and forwards `host-affine`/`volume-bound` calls verbatim over pinned TLS to the exec host (web-1, the
+ADR-119 volume holder). web-2 has served LB weight 1 since the 2026-11-08 serve flip (#12167), so the flip this
+amendment gated on is live and the "must honour the placement classes" requirement is now satisfied at request time.
+
 ## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
 
 Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy
@@ -347,3 +353,13 @@ The "residual exposure" clause (a targeted `destroy`/`-replace` of `workspaces_l
 window) is closed by `prevent_destroy` for every plan that keeps the resource in config. It is not
 closed for a state-only removal (`terraform state rm`, a `removed {}` block), which `prevent_destroy`
 does not see.
+
+## Addendum — 2026-11-10 (#9421) — D2's gated member is a keyed weight
+
+[ADR-327](ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md): the GA pool's origins are one dynamic block
+over `var.web_hosts`, at each host's declared `lb_weight`. A gate can only lower that weight. D2's drain and serve
+acts still land on web-2 through `var.web2_lb_weight`, and `lb-weight-gate.sh` takes the gated key as an input
+(`SOLEUR_GATED_HOST`). A new key enters the pool drained (its declared weight defaults to 0). It is not yet
+gated: the plan refuses a second host serving outside `local.web_lb_gate`, and the gate refuses web-2's unkeyed
+LUKS marker for any other key, so pooling a new key waits for a later PR to give it a gate input and a marker. The plan output for today's
+two hosts is unchanged.

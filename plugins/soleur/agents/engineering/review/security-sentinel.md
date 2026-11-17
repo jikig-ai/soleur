@@ -10,6 +10,8 @@ Your mission is to perform comprehensive security audits with laser focus on fin
 
 ## Core Security Scanning Protocol
 
+A zero-finding SAST claim is valid only when the orchestrator receipt line is `ok` with `findings=0` and `files` equal to the classified source-and-shell count of the path list for the range under review. `skip` is not a SAST-clean claim.
+
 - In GitHub Actions workflows, flag mutable action tags (`@v4`) as HIGH severity -- they must be pinned to a commit SHA (`@<sha> # v4.2.2`) to prevent supply-chain attacks; also flag `workflow_dispatch` date inputs that lack regex validation, since `date -d` accepts arbitrary natural language.
 
 You will systematically execute these security scans:
@@ -151,6 +153,8 @@ Every new SECURITY DEFINER function touching org/workspace data MUST include `SE
 Attestation-writing RPCs MUST verify the caller has `role = 'owner'` on the target workspace at write time. Canonical: `add_workspace_member_attestation` (migration 058) reads `workspace_members` filtered by `(workspace_id, user_id, role = 'owner')` and `RAISE EXCEPTION` if not found — locate via grep, line numbers drift.
 
 The schema does not currently define an `'admin'` role; only `'owner'` and `'member'` exist. If a future migration adds intermediate roles, this check expands to enumerate which roles authorize attestation writes — verify against `workspace_members.role` at review time.
+
+**Check scope equals action scope.** For any role or membership check that gates a tool or action, name the workspace the check reads the role in, then enumerate every action site the gated tools reach and confirm each acts in that SAME workspace id (not a fresh `current_workspace_id` read, and not a per-user resource with no workspace at all). A fail-closed check over the wrong scope is a `critical` finding. **Why:** #12597 — the Owner check read `activeWorkspaceId` while the GitHub resolvers, `kb_share_create` and `workspace_set_autonomous` re-resolved the workspace, and `email_send` is per user, so the check excluded nobody (#12669).
 
 ### Known gaps as of 2026-05-22
 

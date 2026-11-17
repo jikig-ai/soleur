@@ -1091,7 +1091,7 @@ t32_rule_id_shape_gate() {
 {"schema":1,"rule_id":"cost-of-filing-flip-inline","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
 {"schema":1,"rule_id":"hr-rule-a-synthetic-test","event_type":"applied","timestamp":"zzz /home/user/secret gh pr merge --body user@example.com"}
 EOF
-  out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); rc=$?
+  if out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); then rc=0; else rc=$?; fi
   assert_eq "T32 a numeric rule_id no longer aborts the aggregation" "0" "$rc"
   keys=$(printf '%s' "$out" | jq -r '[.summary.non_corpus_counts, .summary.hook_input_fault_reasons] | map(keys[]?) | .[]' 2>/dev/null | tr '\n' '|' || true)
   case "$keys" in

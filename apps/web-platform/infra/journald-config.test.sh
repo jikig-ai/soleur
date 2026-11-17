@@ -200,8 +200,8 @@ echo "--- AC5: journald-persistence runs (in the bootstrap) before the container
 # carries the persistence steps AND that the extraction launcher precedes the container start.
 assert "bootstrap sets up journald persistence (mkdir + tmpfiles + restart + flush)" \
   "grep -q 'mkdir -p /var/log/journal' '$BOOTSTRAP' && grep -q 'systemd-tmpfiles --create --prefix /var/log/journal' '$BOOTSTRAP' && grep -q 'systemctl restart systemd-journald' '$BOOTSTRAP' && grep -q 'journalctl --flush' '$BOOTSTRAP'"
-EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
+WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1) || true
 assert "host-script extraction (runs the bootstrap) found" "[[ -n '$EXTRACT_LINE' ]]"
 assert "soleur-web-platform container-start found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
 assert "the bootstrap runs BEFORE the container starts" \
@@ -293,6 +293,20 @@ assert "WBS-2: the unit sets SyslogIdentifier=web-bash-synthetic (the join's oth
   "grep -qE '^SyslogIdentifier=web-bash-synthetic\$' \"\$WBS_UNIT\""
 assert "WBS-3: vector.toml carries the identifier in exactly three arrays (one include, two excludes)" \
   "[[ \"\$(grep -cE '^[[:space:]]*\"web-bash-synthetic\",?\$' '$SCRIPT_DIR/vector.toml')\" -eq 3 ]]"
+
+# --- #12007: the periodic SOLEUR_HOST_KERNEL marker's tag, on BOTH sides of the join and in all three arrays ---
+# Same exact-value reasoning as WBS above: an allowlist entry whose unit does not set the literal tag is a silent no-op,
+# and a unit tag with no entry is a silent drop. INCLUDED by Source 4, EXCLUDED by the two other journald sources so the
+# marker line ships once. The unit file is a PLAIN service (no systemd template), so the tag is a fixed literal.
+HKM_UNIT="$SCRIPT_DIR/host-kernel-marker.service"
+assert "HKM-1: host-kernel-marker is in the Source 4 (host_scripts_journald) allowlist" \
+  "grep -qE '^[[:space:]]*\"host-kernel-marker\",?\$' <<<\"\$HSJ\""
+assert "HKM-2: the unit sets SyslogIdentifier=host-kernel-marker (anchored; the join's other half)" \
+  "grep -qE '^SyslogIdentifier=host-kernel-marker\$' \"\$HKM_UNIT\""
+assert "HKM-3: vector.toml carries the identifier in exactly three arrays (one include, two excludes)" \
+  "[[ \"\$(grep -cE '^[[:space:]]*\"host-kernel-marker\",?\$' '$SCRIPT_DIR/vector.toml')\" -eq 3 ]]"
+assert "HKM-4: 'systemd' is still absent from every SYSLOG_IDENTIFIER array (the marker joined Source 4 by its own tag, never via the PID-1 identifier)" \
+  "! grep -qE '^[[:space:]]*\"systemd\",?\$' < <(sed 's/#.*\$//' \"$SCRIPT_DIR/vector.toml\")"
 
 # --- #6617c (A5): the dedicated-host tag trio, asserted on BOTH sides of the join ---
 # Source 4's include_matches.SYSLOG_IDENTIFIER is sd_journal_add_match EXACT-VALUE equality,
@@ -461,7 +475,7 @@ assert "every pii_scrub_string capture ref is templatefile-escaped (\$\${N}, nev
 # rule). `$${N}` is unescaped to the `${N}` Vector itself sees before perl runs it.
 vrl_rule_apply() {
   local marker="$1" input="$2" line re rep
-  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | head -1)"
+  line="$(grep -F 'replace(msg,' <<<"$PSS" | grep -F "$marker" | head -1)" || true
   # Missing rule -> return the input UNCHANGED, so the redaction assertions below go red.
   # Erroring here instead would make a deleted rule look like a harness fault.
   if [[ -z "$line" ]]; then printf '%s\n' "$input"; return 0; fi
@@ -807,7 +821,8 @@ echo ""
 # -> 113 here (the #7596 CF-4e..g restage lockstep adds 3 rows over 110).
 # -> 116 (#10455 b: WBS-1..3, the runtime Bash synthetic's identifier on both sides of the join and in all three arrays).
 # -> 113 (#10112: the three LUKS cutover unit-tag rows went with the retired trio; measured 113/113).
-MIN_TOTAL=113
+# -> 117 (#12007: HKM-1..4, the SOLEUR_HOST_KERNEL marker's identifier on both sides of the join and in all three arrays).
+MIN_TOTAL=117
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1

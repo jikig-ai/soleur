@@ -137,7 +137,7 @@ t_a2_not_ack_reachable() {
   # operator not to try, not a commit-message read, and a bare-token grep flags it.
   # Comments are stripped first for the same reason.
   reads_msg=$(grep -vE '^[[:space:]]*#' "$TRIPWIRE" \
-    | grep -cE 'HEAD_MSG|ack_destroy|head_commit|git[[:space:]]+log' || true)
+    | grep -cE 'HEAD_MSG|POLICY_MSGS|EVENT_MSGS_JSON|ack_destroy|head_commit|git[[:space:]]+log' || true)
   # In both jobs the tripwire call must precede the first `ack_destroy=` line —
   # everything after that point is inside the ack's blast radius.
   local job

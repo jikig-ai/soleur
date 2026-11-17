@@ -38,11 +38,12 @@
 # destroy = false } }` blocks) will trip nested_deletes against this filter
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
-# is null → positive count. The `removed` blocks in apps/web-platform/infra/
-# today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
-# forget, web-host-birth-environment.tf's #8754 phantom deployment-policy forget) are
-# non-Cloudflare types, which the nested_deletes clauses do not match.
-# A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
+# is null → positive count. Do not keep a hand-written inventory of the root's
+# `removed` blocks here: list them with
+#   grep -n '^removed' apps/web-platform/infra/*.tf
+# and check each "from" type against the six types the nested_deletes clauses
+# below select on. Only a forget of one of THOSE types trips it; the remedy
+# DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
 #     path with no ack token to type past), so the
@@ -71,7 +72,9 @@
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
 #          host_creates: int, non_terraform_data_deletes: int,
-#          luks_passphrase_rotations: int, …}.
+#          luks_passphrase_rotations: int, relay_hello_key_changes: int,
+#          deploy_policy_changes: int, deploy_policy_unsafe: int,
+#          access_token_stray_forgets: int, …}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -189,9 +192,33 @@ def luks_passphrase_create_halt_addrs: [
   "random_password.inngest_redis_luks"
 ];
 
+# The relay hello-key pair (PR A of #8211 / #12167): random_bytes.proxy_hello_hmac mints PROXY_HELLO_HMAC_KEY and
+# doppler_secret.proxy_hello_hmac_key delivers it to Doppler prd (apps/web-platform/infra/proxy-hello-hmac.tf, both
+# count-gated on host_proxy_tls_enabled, so a real plan addresses them with `[0]`). Both are in the per-merge `-target=`
+# list. Since the signed-hello change every relayed session hello is signed under this key and both web hosts read it
+# from Doppler at container start, so a replace, update, delete or forget of either member leaves the hosts disagreeing
+# on the key (or one without it): a relay outage for every user whose lease sits on the other host. It is NOT data loss,
+# which is why this is a DEDICATED counter (relay_hello_key_changes) with its own HALT text rather than two more rows in
+# luks_passphrase_addrs: the LUKS set protects data already encrypted under the old value and its HALT wording, parity
+# test and exact floor are LUKS-worded (CTO ruling F1, 2026-11-09). Exact-equality membership after luks_passphrase_base,
+# like the LUKS lists. One address per line; the set may only GROW.
+def relay_hello_key_addrs: [
+  "random_bytes.proxy_hello_hmac",
+  "doppler_secret.proxy_hello_hmac_key"
+];
+
+# The one address where a CREATE also halts: only a create of the random_bytes can mint a new key. State losing the
+# entry plans create+create, and applying it would write a different value over the live Doppler copy that the running
+# hosts hold. A create of the Doppler copy ALONE re-derives the state-held value (the random_bytes is untouched) and stays
+# legal, so a lost Doppler copy remains repairable. Deliberately NARROWER than relay_hello_key_addrs.
+def relay_hello_key_create_halt_addrs: [
+  "random_bytes.proxy_hello_hmac"
+];
+
 # The resource address with a leading module path and a trailing instance index removed, so
 # `random_password.workspaces_luks_web["web-2"]`, `...[0]` and `module.x.random_password.workspaces_luks_web`
-# all read as `random_password.workspaces_luks_web`. Used ONLY by luks_passphrase_rotations: every other counter
+# all read as `random_password.workspaces_luks_web`. Used by luks_passphrase_rotations and relay_hello_key_changes
+# (both address lists carry `[0]`/`["k"]`-indexed spellings in a real plan): every other counter
 # keeps its exact-address semantics. The module arm eats `module.<name>` plus an optional `["k"]`/`[0]` per level (a
 # quoted key may hold escaped characters such as `\"`);
 # after it the first `[` is the resource's own index.
@@ -543,6 +570,40 @@ def destroyed_at($addr):
     | length
   ),
 
+  # 12th surface (PR A of #8211 / #12167, CTO ruling F1): a CHANGE TO THE RELAY HELLO-KEY PAIR on the per-merge apply path.
+  # Same verb semantics as luks_passphrase_rotations just above, over relay_hello_key_addrs: `update` OR `delete` OR
+  # `forget` counts, and so does ANY entry whose `previous_address` is a key address, whatever its verb (a `moved{}` plans
+  # as `no-op` at the new address and takes the live entry off the address the HALT watches), an entry whose verb set cannot be read counts (decidability first: `any(...)` over `[]` is false),
+  # a CREATE counts at relay_hello_key_create_halt_addrs only (the random_bytes; a lone create of the Doppler copy reads 0),
+  # and `["no-op"]` reads 0, the routine merge shape once the key exists. Matched through luks_passphrase_base because the
+  # real addresses are `[0]`-indexed. Read OUTSIDE the destroy_count sum by the apply job, so `[ack-destroy]` cannot
+  # reach its HALT: a replace also trips resource_deletes, and acking an unrelated delete in the same merge would ack the
+  # key replace through with it. A replace is a relay outage (the hosts disagree on the signing key), recoverable only by
+  # restoring the previous value, which Terraform state no longer holds once overwritten.
+  relay_hello_key_changes: (
+    [ .resource_changes[]?
+      # A state MOVE (`moved{}`) off a key address plans as `["no-op"]` at the NEW address with the key address in
+      # previous_address: the live entry leaves the address the HALT watches. Counted whatever the verb. Built as a
+      # boolean array so an absent previous_address yields `false`, never `empty` (which would drop the entry).
+      | select(
+          IN(.address | strings | luks_passphrase_base; relay_hello_key_addrs[])
+          or ([ (.previous_address? // empty) | strings | luks_passphrase_base
+                | IN(.; relay_hello_key_addrs[]) ] | any)
+        )
+      | select(
+          ([ (.previous_address? // empty) | strings | luks_passphrase_base
+             | IN(.; relay_hello_key_addrs[]) ] | any)
+          or ((.change.actions | type) != "array")
+          or ((.change.actions | length) == 0)
+          or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
+          or (
+            (.change.actions | any(. == "create"))
+            and IN(.address | strings | luks_passphrase_base; relay_hello_key_create_halt_addrs[])
+          )
+        ) ]
+    | length
+  ),
+
   # --- web-2 RETIRE counters (#6538) -------------------------------------
   # Read ONLY by web2_retire_gate (tests/scripts/lib/web2-retire-gate.sh) against
   # the B6.2 operator-local 5-target plan. BACKWARD-COMPAT: additive keys; the
@@ -579,6 +640,44 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.address == "hcloud_firewall_attachment.web")
       | select(.change.actions? | index("delete")) ]
+    | length
+  )  ,
+  # G1 PR-2 (#9294, ADR-241 D10; Ruled by CTO agent, 2026-10-23). The deploy webhook's Access policy admits
+  # the ids in local.deploy_service_token_ids; a wrong id in the single `include` block locks the deploy
+  # channel out at Access, and nothing above can see it: cf_access_policy_include_count counts BLOCKS (an
+  # id swap inside the one block counts 0) and an in-place update is not a delete. These three counters are
+  # evaluated by the workflow OUTSIDE the destroy_count sum, so `[ack-destroy]` cannot reach them.
+  #
+  # deploy_policy_changes: the policy's plan entry is anything but exactly ["no-op"]. An ABSENT entry counts
+  # as 1 (the policy is always in the -target list, so an absent entry is a changed plan shape). The only
+  # acknowledgeable one: a rotation PR changes the include on purpose and carries [ack-deploy-policy].
+  deploy_policy_changes: (
+    [ .resource_changes[]? | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token") ] as $p
+    | if ($p | length) == 0 then 1
+      else ($p | map(select(.change.actions != ["no-op"])) | length) end
+  ),
+  # deploy_policy_unsafe: the policy would be created or deleted, or its planned include is not exactly ONE
+  # block holding a non-empty service_token list, or any part of the include is unknown at plan time. Never
+  # acknowledgeable: this is the lockout shape.
+  deploy_policy_unsafe: (
+    [ .resource_changes[]?
+      | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token")
+      | select(
+          ((.change.actions? // []) | any(. == "create" or . == "delete"))
+          or ((.change.after_unknown.include? // false) != false)
+          or (((.change.after // {}) | .include? // []) | length) != 1
+          or ((((.change.after // {}) | .include? // [])[0].service_token? // []) | length) == 0
+        ) ]
+    | length
+  ),
+  # access_token_stray_forgets: a forget of an Access service token other than the deploy token this PR
+  # forgets on purpose (the ci_ssh and registry_push tokens are other credentials). Once the forget has
+  # applied, the `removed` tombstone yields no plan entry, so the permanent rule needs no maintenance.
+  access_token_stray_forgets: (
+    [ .resource_changes[]?
+      | select(.type == "cloudflare_zero_trust_access_service_token")
+      | select((.change.actions? // []) | any(. == "forget"))
+      | select(.address != "cloudflare_zero_trust_access_service_token.deploy") ]
     | length
   )
 }

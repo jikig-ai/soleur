@@ -24,11 +24,11 @@
 # also PRIORITY 2) is deliberately outside the operator's stated scope — decision-challenges
 # UC-1 and ADR-218 record the exclusion; opting in is one more needle.
 #
-# ROUTING. The free tier has no escalation policy (every `betteruptime_policy` is
+# ROUTING. Escalation policies are gated off (every `betteruptime_policy` is
 # `count = var.betterstack_paid_tier ? 1 : 0`), so this alert emails the same team surface every
-# sibling monitor and heartbeat uses (account owner + betteruptime_team_member.ops) and escalates
-# to betteruptime_policy.uptime when the paid tier is enabled — the same ternary as
-# uptime-alerts.tf, in the alert's escalation_target shape.
+# sibling monitor and heartbeat uses (ops@jikigai.com, the vendor-managed org Admin; see the
+# removed block in uptime-alerts.tf) and escalates to betteruptime_policy.uptime when the paid
+# tier is enabled — the same ternary as uptime-alerts.tf, in the alert's escalation_target shape.
 #
 # CHANGED THE SQL? BUMP THE REV. `monitor_send_failed_probe_rev` is the ONLY trigger of
 # terraform_data.send_failed_alert_probe (server.tf): the SSH apply runs on every push to main
@@ -1413,8 +1413,8 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
 # roster hosts that did NOT emit (length(var.web_hosts) minus the distinct
 # emitting hosts, floored at 0) and pages on higher_than 0, so an evaluator
 # step that reads 0 reads healthy instead of paging (INFERRED mechanism, see
-# the alert block); a throwaway canary alert runs the same query against an
-# identifier no host emits and must fire.
+# the alert block). A throwaway canary alert (#12180) ran the same query against
+# an identifier no host emits, fired, and was retired by #12189.
 #
 # egress_gw_probe_fail is the verdict detector: result=fail rows (allow leg
 # refused, deny leg bypassed) are security-relevant on first sight, and
@@ -1474,11 +1474,6 @@ locals {
       AND (position(JSONExtractString(raw, 'message'), 'result=fail') > 0
         OR position(JSONExtractString(raw, 'message'), 'reason=gw_absent') > 0)
   SQL
-
-  # THROWAWAY positive control (#12180): the production query against an identifier no
-  # host emits, so it reads length(var.web_hosts) and must fire. Derived, never copied:
-  # the guard pins this line whole and the replace() target occurring once in the source.
-  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, "'egress-gw-probe'", "'egress-gw-probe-canary-absent'")
 
   egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
 }
@@ -1577,8 +1572,9 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   # measured at about 66 minutes) reads 1 under either operator,
   # and a vendor that never auto-resolves incidents cannot be fixed by inverting
   # the metric. The query is proven (healthy 0, one host 1, unknown identifier 2);
-  # the evaluator is not, which is what the canary below is for. A green alert is
-  # not evidence of health until the canary has fired.
+  # the evaluator was not, which is what the throwaway canary (#12180) was for: it
+  # fired on 2026-11-06, so the evaluator delivers a non-zero value for this query
+  # shape on an empty count, and #12189 retired it.
   # Residual: an evaluator error or timeout also reads 0 under treat_as_zero, so
   # that failure is quiet here. The sibling detectors cover only a fleet-wide dead
   # resolver timer (the Sentry cron check-in has no host dimension) and a probe
@@ -1608,68 +1604,6 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   critical_alert = false
 
   incident_cause = "Value = roster hosts NOT emitting an egress_gw_probe row in 15+ min (1 = one dark, ${length(var.web_hosts)} = all dark). Rows on both hosts in the window => suspect the evaluator, not the fleet. Cause: resolver timer, Vector (stale Source-4 allowlist is a measured failure mode) or host journal; allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
-  metadata = {
-    runbook = local.egress_gw_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-# THROWAWAY CANARY (#12180). Same shape and windows as egress_gw_probe_silent, run
-# against an identifier no host emits, so it reads length(var.web_hosts) and must
-# fire. Its incident never recovers (the query is constant): that, its mirrored P1
-# issue and the email are expected and last until the follow-up PR deletes the two
-# resources (RETIREMENT line in scripts/followthroughs/egress-gw-probe-silent-12180.sh).
-# If it NEVER fires, the evaluator is blind for this query shape and the production
-# alert cannot be trusted; leave it armed and build the heartbeat poller (#12190).
-# The canary shares the production query shape, so it proves non-zero delivery on an
-# empty count, not general evaluator health.
-resource "logtail_exploration" "egress_gw_probe_silent_canary" {
-  name      = "soleur-egress-gw-probe-silent-canary-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    sql_query       = replace(trimspace(local.egress_gw_probe_silent_canary_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
-  exploration_id = logtail_exploration.egress_gw_probe_silent_canary.id
-  name           = "soleur-egress-gw-probe-silent-canary-prd"
-
-  alert_type          = "threshold"
-  operator            = "higher_than"
-  value               = 0
-  check_period        = 300
-  query_period        = 900
-  confirmation_period = 0
-  recovery_period     = 900
-  on_missing_data     = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "THROWAWAY CANARY (#12180), NOT an outage. Do NOT close its mirror issue: closing it files a fresh P1 at the next 15-minute run. Expected to fire; it proves the evaluator delivers a non-zero value for this query shape. Never firing = the evaluator is blind for this shape: keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }
@@ -2177,7 +2111,8 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
 # Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file.
 #
-# PAUSED PENDING #11869 (false positive, measured 2026-11-02). The alert opened an incident at its
+# WAS PAUSED PENDING #11869 (false positive, measured 2026-11-02); RE-ARMED 2026-11-12 under #9927
+# step D2-1a on #12221 decision 2. The alert opened an incident at its
 # first evaluation (started 14:00:00Z, alert created 14:05:54Z) and has read `Current value: 0` ever
 # since, while the query API returns 3 rows for a 900 s window (269 object rows in 24 h;
 # `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
@@ -2187,9 +2122,13 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
 # returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
 # (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
-# cycle plus another false page. The resource is kept, predicate unchanged, and paused; re-arming is
-# one line (`paused = false`) once an evaluator-side fix is MEASURED on a live alert, and the guard
-# pins `paused = true` with this issue number so the pause cannot be lost silently.
+# cycle plus another false page. The resource is kept and the predicate is UNCHANGED: #12221
+# decision 2 made the re-arm conditional on the first post-replace `noop-*` row arriving from the
+# new host, and that precondition is met (13 `noop-done` rows on new host 175859399 as of
+# 2026-11-12), so the alert was re-armed as it stood. The guard now pins `paused = false` so the
+# armed state cannot be lost silently. The stuck-at-0 failure mode is not excluded: if the
+# evaluator reads 0 while rows arrive again, the response is the #12180-class measured predicate
+# change, not another silent pause.
 #
 # THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
 # `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
@@ -2264,10 +2203,10 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   recovery_period     = 900
   on_missing_data     = "treat_as_zero"
 
-  # Paused pending #11869 (see "PAUSED PENDING #11869" above). A literal true keeps the
-  # reconciler's `logs-alert-paused` arm quiet: it reports only a live pause under a declaration
-  # that resolves to `paused = false`.
-  paused = true
+  # Armed: re-armed under #9927 step D2-1a (was paused under #11869 — see "WAS PAUSED PENDING
+  # #11869" above). The reconciler's `logs-alert-paused` arm reports exactly this shape: a live
+  # pause under a declaration that resolves to `paused = false`.
+  paused = false
 
   email          = true
   push           = false
@@ -2278,6 +2217,349 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   incident_cause = "No JSON inngest-cutover-flip row arrived from the production Inngest host in 15+ min. The flip unit is not running to completion: a revoked, rotated-alone or invalid flip Doppler token fails it before the script starts, the boot-time flip-file write may have aborted, or Vector stopped shipping the tag. The LUKS key-continuity probe is silent with it. EXPECTED during an owner-authorized inngest-host-replace (the host is dark until the first noop row after boot), and then it clears on its own. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
   metadata = {
     runbook = local.inngest_cutover_flip_silent_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #12167 / epic #8211: the session relay's own bind, its silence, and the deploy-time peer dial ──
+#
+# WHAT THEY DETECT. The relay (server/proxy-listener-status.ts) reports its OWN bind from inside the app container: ONE
+# warn-level pino line per minute per web host,
+#   relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>
+# (`addr=0.0.0.0` is the expected bound value now). warn is the level that ships (the app-container Vector filter keeps pino
+# level >= 40; info lines never reach this source). ci-deploy.sh `relay_peer_probe` dials every OTHER roster peer's relay port
+# from inside the app container after this host's prod swap and journals, under `logger -t ci-deploy`,
+#   relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>      (or `skipped=<reason>`, never an alert)
+# Three alerts, one per question:
+#   (1) relay_listener_down      - a relay NOT bound for about 5 minutes: any proxy_state other than `listening`, on either host.
+#   (2) relay_probe_silent       - a roster host stopped reporting relay_probe for 10 minutes (the relay line is the only
+#                                  off-host bind evidence, web-2 has no SSH ingress).
+#   (3) relay_peer_probe_failed  - a deploy-time peer dial came back refused|timeout|tls|denied. It fires at deploy time only,
+#                                  so the FIRST row pages (no sustained window).
+#
+# ROW SHAPE (app-container pino rows, runbook "App container pino lines" + the sandbox alert above): `raw.CONTAINER_NAME` is
+# `soleur-web-platform` on web-1 and web-2 alike and the pino fields nest under `raw.message`, so the sentence is
+# `JSONExtractString(raw, 'message', 'msg')`. LIVE-PROBED 2026-11-07 (read-only Better Stack query, after release run
+# 42357001048): both hosts' relay_probe rows carry `raw.CONTAINER_NAME` = `soleur-web-platform` and `raw.message.msg` =
+# `relay_probe proxy_state=listening addr=0.0.0.0 port=8443 workspaces_populated=<0|1>`; the ci-deploy peer rows carry
+# `raw.message` as the plain string `relay_peer_probe peer=<ip> result=<r>`.
+#
+# (1) WINDOW. The line is per minute, so a 300 s bucket holds about five rows per host. `higher_than 3` pages at four or more
+# non-listening rows in the bucket: a restart blip or one transient row never pages, a relay that stays down for about four
+# minutes does. The count is a SUM across both hosts (no GROUP BY host), so two hosts with two transient rows each also reach it;
+# accepted, because both relays not listening at once is itself page-worthy. The incident's host is read from the row's host_name
+# (soleur-web-platform = web-1, soleur-web-2 = web-2). NO host_name conjunct on purpose: the signal belongs to every web host.
+# (2) SHAPE. The host-distinct missing-host scalar of egress_gw_probe_silent (ADR-218's 2026-10-12 host-mask amendment, inverted in
+# #12180): the value is `length(var.web_hosts)` minus the DISTINCT emitting hosts (uniqExact, ClickHouse's count(DISTINCT); `least`
+# caps the subtrahend at the roster size so a surplus emitter floors the value at 0 without a signed wrap), so a fully dark window
+# reads the roster size, not "no data", and the page is `higher_than 0` (a `lower_than` incident was observed to stay open after the data
+# returned). The same open question rides with it (#12190): the evaluator is proven for the query, not for this shape, and there is
+# no canary pair here. A relay that is DISABLED still emits (proxy_state=disabled), so a host with no relay counts as alive.
+# (3) By construction `result=ok` and the whole `skipped=` class never match: literal needles with a leading space, no LIKE.
+# `skipped=exec_failed` is the probe failing to run, not a failed dial, and is deliberately not paged here.
+#
+# ALL THREE PAGE BY EMAIL ONLY (the free tier has no escalation policy; paid tier: betteruptime_policy.uptime). The deploy-time
+# alert can fire on a rolling deploy when the peer's container is mid-swap (refused) - the runbook says to re-read the row after the
+# peer's own deploy before treating it as a defect. The drift guard (test/infra/relay-probe-alerts.test.sh) reads the needles FROM
+# the emitters and pins every -target= line; terraform-target-parity.test.ts checks terraform_data only.
+locals {
+  relay_listener_down_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=')
+      AND NOT startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=listening ')
+    GROUP BY time
+  SQL
+
+  relay_probe_silent_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, toInt64(${length(var.web_hosts)}) - least(toInt64(${length(var.web_hosts)}), toInt64(uniqExact(JSONExtractString(raw, 'host_name')))) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=')
+  SQL
+
+  relay_peer_probe_failed_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'relay_peer_probe peer=')
+      AND multiSearchAny(JSONExtractString(raw, 'message'), [' result=refused', ' result=timeout', ' result=tls', ' result=denied'])
+    GROUP BY time
+  SQL
+
+  relay_probe_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#session-relay-probe-alerts-12167"
+}
+
+resource "logtail_exploration" "relay_listener_down" {
+  name      = "soleur-relay-listener-down-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_listener_down_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_listener_down" {
+  exploration_id = logtail_exploration.relay_listener_down.id
+  name           = "soleur-relay-listener-down-prd"
+
+  # About five per-minute rows per host fit one 300 s bucket; `higher_than 3` is four or more non-listening rows (sustained,
+  # see "(1) WINDOW" above). treat_as_zero: no non-listening row returns NO bucket, which must read as healthy so an open
+  # incident can observe recovery (silence is relay_probe_silent's job, not this alert's).
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 3
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A session relay reports it is NOT bound: relay_probe proxy_state is disabled, no_bind, no_allowlist or error (not listening) on at least four of the last five minutes. Peer hosts cannot proxy sessions to it. The email has no row body: read host_name (soleur-web-platform = web-1, soleur-web-2 = web-2) and the state from the runbook query. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the relay was fixed. Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "relay_probe_silent" {
+  name      = "soleur-relay-probe-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_probe_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_probe_silent" {
+  exploration_id = logtail_exploration.relay_probe_silent.id
+  name           = "soleur-relay-probe-silent-prd"
+
+  # Value = roster hosts NOT emitting a relay_probe row in 10+ min (one row per minute per host; 1 = one dark, all dark = the
+  # roster size). 600 s is within the 900 s ceiling every alert created since 2026-10-01 stays under.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 600
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "Value = roster hosts NOT emitting a relay_probe row in 10+ min (1 = one dark, ${length(var.web_hosts)} = all dark). The relay's bind is unprovable off-host while a host is silent: the app container is down or not yet running the reporter, the app-container log path (Vector, journald) is broken on that host, or the reporter stopped. Rows on every host in the window => suspect the evaluator, not the fleet (the egress_gw_probe_silent open question, #12190). Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "relay_peer_probe_failed" {
+  name      = "soleur-relay-peer-probe-failed-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_peer_probe_failed_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_peer_probe_failed" {
+  exploration_id = logtail_exploration.relay_peer_probe_failed.id
+  name           = "soleur-relay-peer-probe-failed-prd"
+
+  # The row exists only at deploy time, one per peer per deploy, so the FIRST row pages (value 0) and there is no sustained window.
+  # bwrap_probe_rollback's windows: the 5-min bucket holds ONE incident across a CI retry's repeated rows, 10 quiet minutes
+  # auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A deploy-time session-relay peer dial failed: relay_peer_probe result is refused (nothing listening or unreachable), timeout, tls (handshake or certificate pin failed, OR the peer's source-address allowlist does not carry this host: since #12288 the peer resets a non-allowlisted source before the handshake, so read the peer's createProxyServer.peer-deny events to tell the two apart) or denied (the peer closed right after the upgrade). Sessions proxied between these hosts would fail the same way. A refused/timeout right after the peer's own deploy can be the peer container mid-swap: re-read the row after that deploy before treating it as a defect. The email has no row body: read the peer and result from the runbook query. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the dial was fixed. Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #10538: a serving dedicated Inngest host that owns no functions (registry-empty alert) ───────
+# Pages when an hourly SOLEUR_INNGEST_SERVER_PROBE row from a SERVING dedicated host (server_active=active,
+# http_code=200) past the uptime floor (uptime_s > 900: the first probe after a replace is still syncing)
+# reports a registry_fns that is not a positive integer: the public sdk_url poll (#10538) may be failing.
+# Shape from inngest_luks_wrong_volume_sql (emitter anchor, marker at position 1, phone-home leg B on
+# `detail`); every needle is space-delimited on BOTH sides (`detail` starts with a field, hence `(?:^| )`),
+# and the registry test is NEGATED so a missing/renamed/0/__UNREADABLE__ field fires. No volume reference
+# (ADR-282) and no `detail = ''` disjunct (ruling F1: not-serving rows are the probe heartbeat's).
+# LIVE 2026-11-13 17:30 UTC, SELECT count() only, 24 h hot remote() UNION s3Cluster archive: (a) predicate
+# 0; (b) negation dropped 24 (registry_fns=77); (c) emitter+marker+' host_role=dedicated ' 24. Leg B, 7 d:
+# 1 row (not serving), 0 un-negated matches; the `(?:^| )` extract/match forms were checked on constants.
+# Residual: a STALE non-zero registry is invisible (#12742). Runbook: inngest-server.md#registry-empty-alert-10538.
+# Pinned by apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh.
+locals {
+  inngest_registry_empty_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
+        AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+        AND position(JSONExtractString(raw, 'message'), ' host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' server_active=active ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' http_code=200 ') > 0
+        AND toUInt64OrZero(extract(JSONExtractString(raw, 'message'), ' uptime_s=([0-9]+) ')) > 900
+        AND NOT match(JSONExtractString(raw, 'message'), ' registry_fns=[1-9][0-9]* ')
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )host_role=dedicated ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )server_active=active ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )http_code=200 ')
+          AND toUInt64OrZero(extract(JSONExtractString(raw, 'detail'), '(?:^| )uptime_s=([0-9]+) ')) > 900
+          AND NOT match(JSONExtractString(raw, 'detail'), '(?:^| )registry_fns=[1-9][0-9]* ')
+        )
+      )
+    GROUP BY time
+  SQL
+
+  inngest_registry_empty_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#registry-empty-alert-10538"
+}
+
+resource "logtail_exploration" "inngest_registry_empty" {
+  name      = "soleur-inngest-registry-empty-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_registry_empty_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_registry_empty" {
+  exploration_id = logtail_exploration.inngest_registry_empty.id
+  name           = "soleur-inngest-registry-empty-prd"
+
+  # The probe emits hourly; one serving row past the uptime floor with no positive registry pages
+  # within ~5 min. 900 s is the ceiling for an alert created since 2026-10-01; the row stays in the
+  # window for three checks. recovery_period 7200 covers two emissions, so one good row does not
+  # close an incident the next row would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 7200
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A serving dedicated Inngest host (server_active=active, http_code=200, uptime above 900 s) reports registry_fns that is not a positive integer: it owns no functions or cannot read its registry, so no step and no cron is planned. After an inngest-host-replace the public sdk_url poll (https://app.soleur.ai/api/inngest, #10538) may be failing. If Vector was down, the row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down): decode its .detail. This alert does NOT detect a stale non-zero registry (#12742 adds that field). Runbook: ${local.inngest_registry_empty_runbook_url}"
+  metadata = {
+    runbook = local.inngest_registry_empty_runbook_url
   }
 
   escalation_target {

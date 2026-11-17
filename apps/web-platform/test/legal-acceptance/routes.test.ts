@@ -1,6 +1,7 @@
 /**
  * #12011 PR-C workstream A: POST /api/legal-acceptance/[key]/{reauth,decide}.
- * Cookie-session routes: CSRF fails closed on an absent Origin, JSON required, flag-gated, unknown key 404, identity from
+ * Cookie-session routes: CSRF fails closed on an absent Origin, JSON required, founder-gated (LEGAL_ACCEPTANCE_FOUNDER_ID only; the
+ * approval-queue flag is not read, CTO ruling 2026-11-10), unknown key 404, identity from
  * getUser() only, a runtime-audience token never opens an intent, the decision is recorded on the USER client only, and
  * the unknown-address 422 looks exactly like a send.
  */
@@ -27,8 +28,26 @@ const h = vi.hoisted(() => ({
   ceiling: { value: null as unknown },
   failures: { value: null as unknown },
   clientFails: { value: false },
+  flush: vi.fn(),
+  after: vi.fn(),
+  // The card kinds declared for the fixture keys (the real map declares only the committed text).
+  declared: { value: { "fixture-terms": "terms", "fixture-other": "terms" } as Record<string, "terms" | "acknowledgement"> },
 }));
 
+// `after` is spied and then delegated to the real one (which throws outside a request scope, so the helper's fallback runs the task).
+vi.mock("next/server", async (orig) => {
+  const real = await orig<typeof import("next/server")>();
+  return {
+    ...real,
+    after: (...a: Parameters<typeof real.after>) => {
+      h.after(...a);
+      return real.after(...a);
+    },
+  };
+});
+
+// Only `flush` is replaced: the decide route flushes the accepted event before it acknowledges the row (#12011 PR-D).
+vi.mock("@sentry/nextjs", async (orig) => ({ ...(await orig<typeof import("@sentry/nextjs")>()), flush: (...a: unknown[]) => h.flush(...a) }));
 vi.mock("@/server/request-auth", () => ({
   verifiedUserId: async () => h.verified.value,
   // The bounded helpers return the `data` of the underlying call (or null on a stall or a throw), like the real ones.
@@ -71,6 +90,11 @@ vi.mock("@supabase/supabase-js", () => ({
   }),
 }));
 vi.mock("@/server/approval/flag", () => ({ isApprovalQueueEnabled: async () => h.flag.value }));
+// The fixture keys are not in the real LEGAL_TEXT_KIND, so the kind lookup the guard uses reads the per-test map instead.
+vi.mock("@/lib/legal-acceptance-copy", async (orig) => {
+  const real = await orig<typeof import("@/lib/legal-acceptance-copy")>();
+  return { ...real, legalKindCopy: (key: string) => real.legalKindCopy(key, h.declared.value) };
+});
 vi.mock("@/server/approval/ops", async (orig) => ({
   ...(await orig<typeof import("@/server/approval/ops")>()),
   reportLegalOp: (...a: unknown[]) => h.report(...a),
@@ -86,7 +110,7 @@ vi.mock("@/server/legal-acceptance/reauth", async (orig) => {
       real.sendReauthCode({ ...deps, sendFailures: h.failures.value as InstanceType<typeof real.SendFailureMemory> }, a),
   };
 });
-// The registry directory is a fixture dir (the real one holds no legal text yet).
+// The registry directory is a fixture dir, so these route tests do not depend on whatever the real texts directory holds.
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
   return { ...real, getLegalText: (key: string) => real.getLegalText(key, h.texts.dir) };
@@ -96,6 +120,7 @@ import { POST as reauth } from "@/app/api/legal-acceptance/[key]/reauth/route";
 import { POST as decide } from "@/app/api/legal-acceptance/[key]/decide/route";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
 import { AttemptCeiling, SendFailureMemory } from "@/server/legal-acceptance/reauth";
+import { resetSurfaceConfigReport } from "@/server/legal-acceptance/surface";
 
 const jwt = (payload: Record<string, unknown>) =>
   `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
@@ -104,9 +129,11 @@ const webToken = () => jwt({ sub: USER, aud: "authenticated", session_id: SESSIO
 const dir = mkdtempSync(path.join(tmpdir(), "legal-routes-"));
 mkdirSync(dir, { recursive: true });
 writeFileSync(path.join(dir, "fixture-terms.md"), "---\nversion: fx-1\n---\nSynthesized fixture text.\n");
+writeFileSync(path.join(dir, "fixture-other.md"), "---\nversion: fx-2\n---\nA different synthesized fixture text.\n");
 h.texts.dir = dir;
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const HASH = getLegalText("fixture-terms").textHash;
+const HASH_OTHER = getLegalText("fixture-other").textHash;
 
 function req(action: "reauth" | "decide", body: unknown, o: { key?: string; origin?: string | null; ct?: string | null; raw?: string } = {}) {
   const headers: Record<string, string> = {};
@@ -123,9 +150,12 @@ const issued = { data: { outcome: "issued", reused: false, event_id: EVENT, expi
 
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+  h.declared.value = { "fixture-terms": "terms", "fixture-other": "terms" };
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key-fixture");
   h.verified.value = USER;
   h.flag.value = true;
+  resetSurfaceConfigReport(); // the once-per-process config report must not leak between tests
   h.token.value = webToken();
   h.getUserUser.value = { id: USER, email: EMAIL };
   for (const f of [h.userRpc, h.serviceRpc, h.throwaway.send, h.throwaway.verify, h.throwaway.signOut, h.report]) f.mockReset();
@@ -136,6 +166,8 @@ beforeEach(() => {
   h.ceiling.value = new AttemptCeiling();
   h.failures.value = new SendFailureMemory();
   h.clientFails.value = false;
+  h.flush.mockReset();
+  h.flush.mockResolvedValue(false);
 });
 
 describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
@@ -154,14 +186,52 @@ describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
     expect((await json(await post(req(action, { ...ok, userId: "attacker", email: "x@y.z" })))).status).toBe(401);
   });
 
-  it("flag off and unknown or malformed key are 404 with an error body; nothing is called", async () => {
+  it("founder id unset and unknown or malformed key are 404 with an error body; nothing is called", async () => {
     const post = action === "reauth" ? reauth : decide;
-    h.flag.value = false;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
     expect(await json(await post(req(action, ok)))).toEqual({ status: 404, body: { error: "Not found" } });
-    h.flag.value = true;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
     expect((await json(await post(req(action, ok, { key: "no-such-key" })))).status).toBe(404);
     expect((await json(await post(req(action, ok, { key: "Bad_Key" })))).status).toBe(404);
     expect(h.serviceRpc).not.toHaveBeenCalled();
+  });
+
+  it("founder gate: only the configured founder gets through; another user, an unset variable and a malformed variable are the same 404 and nothing is called (AC13)", async () => {
+    const post = action === "reauth" ? reauth : decide;
+    const notFound = { status: 404, body: { error: "Not found" } };
+    const OTHER = "00000000-0000-4000-8000-0000000000bb";
+    // control: a non-founder is refused with the flag on and the founder configured
+    h.verified.value = OTHER;
+    h.getUserUser.value = { id: OTHER, email: EMAIL };
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    h.verified.value = USER;
+    h.getUserUser.value = { id: USER, email: EMAIL };
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(h.userRpc).not.toHaveBeenCalled();
+    // the founder, variable equal: enabled (the request proceeds past the guard)
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
+    // flag off with the variable equal: STILL enabled (the surface does not read the flag, CTO ruling 2026-11-10)
+    h.flag.value = false;
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
+    // and a non-founder is still refused with the flag off
+    h.verified.value = OTHER;
+    h.getUserUser.value = { id: OTHER, email: EMAIL };
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+  });
+
+  it("a registered text with no declared card kind is the same 404 (no default kind), and nothing is called", async () => {
+    const post = action === "reauth" ? reauth : decide;
+    h.declared.value = {};
+    expect(await json(await post(req(action, ok)))).toEqual({ status: 404, body: { error: "Not found" } });
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(h.userRpc).not.toHaveBeenCalled();
+    h.declared.value = { "fixture-terms": "acknowledgement" };
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
   });
 
   it("requires application/json and a JSON object body", async () => {
@@ -308,12 +378,111 @@ describe("decide", () => {
     error: null,
   });
 
+  it("a founder who already holds a live intent cannot record once the founder id is unset: 404, and neither client is called (CTO ruling T4)", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    const notFound = { status: 404, body: { error: "Not found" } };
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", ""); // the founder variable went away after the intent was issued
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
+    expect(h.userRpc).not.toHaveBeenCalled();
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    // control: with the gate open the same request does record (so the 404 above was the gate, not a broken fixture)
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.userRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("a founder who holds a live intent STILL records after the flag is turned off (CTO ruling 2026-11-10: the flag is not read)", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    h.flag.value = false; // the operator turned the flag off after the intent was issued
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200);
+    expect(out.body.outcome).toBe("recorded");
+    expect(h.userRpc).toHaveBeenCalledTimes(1);
+  });
+
   it("accept records on the USER client only and returns the typed result; the service client is not used", async () => {
     h.userRpc.mockResolvedValue(recorded("accept"));
     const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
     expect(out).toEqual({ status: 200, body: { outcome: "recorded", choice: "accept", decidedAt: "2026-11-05T10:00:00Z", reauthAt: "2026-11-05T09:58:00Z" } });
     expect(h.userRpc).toHaveBeenCalledWith("record_legal_acceptance", { p_key: "fixture-terms", p_text_hash: HASH, p_choice: "accept", p_requested_edit: null });
     expect(h.serviceRpc).not.toHaveBeenCalled();
+  });
+
+  it("PR-D ack: a recorded decision is acknowledged AFTER the response, only once the flush returned true, with the user's id", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.body.outcome).toBe("recorded");
+    await vi.waitFor(() =>
+      expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: HASH }),
+    );
+    expect(h.flush).toHaveBeenCalledWith(2000);
+  });
+
+  it("PR-D ack: the decide route hands the flush-then-ack task to next/server after() (not run inline, not dropped)", async () => {
+    h.after.mockReset();
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.after).toHaveBeenCalledTimes(1);
+    expect(typeof h.after.mock.calls[0][0]).toBe("function");
+    await vi.waitFor(() =>
+      expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: HASH }),
+    );
+    // already_recorded schedules nothing
+    h.after.mockReset();
+    h.userRpc.mockResolvedValue({ data: { outcome: "already_recorded", choice: "accept" }, error: null });
+    await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(h.after).not.toHaveBeenCalled();
+  });
+
+  it("PR-D ack: the ack carries the key and hash of the decision it follows (two keys: a hard-coded key or hash fails)", async () => {
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    for (const [key, hash] of [["fixture-terms", HASH], ["fixture-other", HASH_OTHER]] as const) {
+      h.serviceRpc.mockClear();
+      h.userRpc.mockResolvedValue({
+        data: { outcome: "recorded", choice: "accept", text_hash: hash, decided_at: "2026-11-05T10:00:00Z", reauth_at: "2026-11-05T09:58:00Z" },
+        error: null,
+      });
+      expect((await json(await decide(req("decide", { choice: "accept", textHash: hash }, { key })))).body.outcome).toBe("recorded");
+      expect(h.userRpc).toHaveBeenLastCalledWith("record_legal_acceptance", { p_key: key, p_text_hash: hash, p_choice: "accept", p_requested_edit: null });
+      await vi.waitFor(() => expect(h.serviceRpc).toHaveBeenCalledTimes(1));
+      expect(h.serviceRpc.mock.calls).toEqual([["ack_legal_acceptance", { p_founder_id: USER, p_key: key, p_text_hash: hash }]]);
+    }
+  });
+
+  it("PR-D ack: a flush that returns false writes no ack; a flush that never resolves does not delay the response", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(false);
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    await vi.waitFor(() => expect(h.flush).toHaveBeenCalledTimes(1));
+    h.flush.mockImplementation(() => new Promise<boolean>(() => {}));
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200); // returned although the flush is still pending
+    expect(h.serviceRpc).not.toHaveBeenCalledWith("ack_legal_acceptance", expect.anything());
+  });
+
+  it("PR-D ack: a flush that throws and an ack that errors leave the response unchanged and are reported as store_failed", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockRejectedValue(new Error("transport"));
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200);
+    await vi.waitFor(() => expect(h.report.mock.calls.some((c) => c[0] === "storeFailed")).toBe(true));
+    expect(h.report.mock.calls.some((c) => c[0] === "decideRejected")).toBe(false);
+  });
+
+  it("PR-D ack: already_recorded never flushes or acks", async () => {
+    h.userRpc.mockResolvedValue({ data: { outcome: "already_recorded", choice: "accept" }, error: null });
+    h.flush.mockResolvedValue(true);
+    await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.flush).not.toHaveBeenCalled();
+    expect(h.serviceRpc).not.toHaveBeenCalledWith("ack_legal_acceptance", expect.anything());
   });
 
   it("request_changes opens the intent (service) then records the trimmed note (user)", async () => {

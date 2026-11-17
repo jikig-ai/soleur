@@ -277,8 +277,8 @@ read -p "App installed? Type 'yes': " ACK
 # --- Verify App install ---
 
 INSTALL_JSON=$(gh api "/repos/${TENANT_ORG}/${SLUG}/installation" 2>/dev/null) || true
-INSTALL_CHECK=$(echo "$INSTALL_JSON" | grep -o '"actions":"[^"]*"' | head -1 | cut -d'"' -f4)
-REPO_SELECTION=$(echo "$INSTALL_JSON" | grep -o '"repository_selection":"[^"]*"' | head -1 | cut -d'"' -f4)
+INSTALL_CHECK=$(echo "$INSTALL_JSON" | grep -o '"actions":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+REPO_SELECTION=$(echo "$INSTALL_JSON" | grep -o '"repository_selection":"[^"]*"' | head -1 | cut -d'"' -f4) || true
 
 if [[ "$REPO_SELECTION" == "all" ]]; then
   echo "ERROR: App installed org-wide (repository_selection=all). Must be 'selected' (single repo)." >&2
@@ -287,7 +287,7 @@ if [[ "$REPO_SELECTION" == "all" ]]; then
 fi
 
 if [[ "$INSTALL_CHECK" == "write" ]]; then
-  INSTALL_ID=$(echo "$INSTALL_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  INSTALL_ID=$(echo "$INSTALL_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2) || true
   CREATED_RESOURCES+=("gh api -X DELETE /app/installations/${INSTALL_ID}")
   echo "Verified: Soleur App installed with actions:write permission (repository_selection=${REPO_SELECTION:-selected})."
 else

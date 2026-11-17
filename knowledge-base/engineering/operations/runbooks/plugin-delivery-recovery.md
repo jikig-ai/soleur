@@ -303,3 +303,10 @@ cached answer.
 The scheduled canary installs CLI 2.1.311 from this date (it was 2.1.228). Every statement above that cites 2.1.228 is a dated
 measurement and was not re-measured; only the delivery canary was re-run on 2.1.311 (`compared=2084 expected=2084`, all
 conjuncts green). Treat the destruction-half and `autoUpdate` observations as unverified on 2.1.311 until someone repeats them.
+
+## Addendum 2026-11-10 (#12514)
+
+The scheduled canary installs CLI 2.1.321 from this date (it was 2.1.311). The delivery canary was not re-run on 2.1.321
+before merge (running the new CLI on a credentialed host was ruled out until it was contained); the first scheduled
+`scheduled-marketplace-drift.yml` run after merge is the first measurement. Until it is green, treat every statement above
+as measured on 2.1.311 or earlier.

@@ -99,3 +99,53 @@ export function resolveAdvisorTier(harness: Harness): string {
 export function resolveAdvisorFallback(harness: Harness): string {
   return resolveModelTier("strong", harness);
 }
+
+/**
+ * Fallback tier resolution graph (Issue #12529).
+ *
+ * Mechanical steps (`standard`) fall back to `cheap`.
+ * `cheap`, `strong`, and `inherit` have no lower fallback (`null`).
+ * `advisor` falls back to `strong` (ADR-083 Fable -> Opus path).
+ *
+ * Strict never-downgrade invariant: `strong` and `inherit` tiers NEVER downgrade
+ * to a weaker model tier, failing loudly rather than degrading review or security quality.
+ */
+export const FALLBACK_TIER_GRAPH: Record<SemanticTier, SemanticTier | null> = {
+  cheap: null,
+  standard: "cheap",
+  strong: null,
+  advisor: "strong",
+  inherit: null,
+} as const;
+
+export function resolveFallbackTier(tier: SemanticTier): SemanticTier | null {
+  if (!SEMANTIC_TIER_SET.has(tier)) {
+    throw new Error(`unknown semantic tier: ${String(tier)}`);
+  }
+  return FALLBACK_TIER_GRAPH[tier];
+}
+
+/**
+ * Deterministic saturation and rate-limit error detector.
+ * Matches HTTP 429, 529, 503, and standard rate-limit / quota error messages.
+ */
+export function isSaturationError(err: unknown): boolean {
+  if (!err) return false;
+  const status =
+    typeof err === "object" && err !== null && ("status" in err || "statusCode" in err)
+      ? Number((err as { status?: unknown; statusCode?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode)
+      : undefined;
+  if (status === 429 || status === 529 || status === 503) {
+    return true;
+  }
+  const msg =
+    typeof err === "string"
+      ? err
+      : (err as { message?: unknown })?.message
+        ? String((err as { message?: unknown }).message)
+        : String(err);
+  return /rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests/i.test(
+    msg,
+  );
+}
+

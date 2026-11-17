@@ -928,7 +928,7 @@ rulesets is 25 → 12):
 | Umbrella context | Producer job | Folded members (former contexts / job names) |
 | --- | --- | --- |
 | `guards-ruleset` | `.github/workflows/ci.yml` job `guards-ruleset` (`name: guards-ruleset`) | `adr-ordinals`, `rule-body-lint`, `tc-document-sha-guard`, `marketplace-manifest-guard`, `service-role-allowlist-gate`, `credential-path-guard`, `lockfile-sync`, `grok-fidelity` |
-| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`) |
+| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`), `workflow-yaml-strict` (step `workflow-duplicate-keys`, added 2026-11-07, #12283) |
 | `secret-guards` | `.github/workflows/secret-scan.yml` job `secret-guards` (`name: secret-guards`) | `scan` (`gitleaks scan`), `lint-fixture-content` (`lint fixture content`), `waiver-discipline` (`waiver discipline (issue:#NNN trailer)`), `rename-guard` (`rename-guard (allowlist destinations)`), `allowlist-diff` (`allowlist-diff (.gitleaks.toml paths surface)`) |
 
 Each folded guard is a **member step** of its umbrella: it keeps its step
@@ -1013,3 +1013,181 @@ candidates are evaluated against the restored 16-name set.
 `sentry-destroy-required` (apply-sentry-infra.yml);
 `vendor-pin-required` (vendor-pin-verify.yml). The CLA Required ruleset
 (`cla-check`, `cla-evidence`) is unchanged.
+
+## Addendum 2026-11-07 (#12283, Ref #9927): `quality-guards` gains a fourth member, `workflow-yaml-strict`
+
+The `quality-guards` umbrella (2026-11-06 amendment above) now has four member
+guards: `enforce`, `markdown-lint`, `guard-script-fixture-tests` and
+**`workflow-yaml-strict`** (step id `workflow-duplicate-keys`, run by
+`.github/scripts/check-workflow-duplicate-keys.py`). The member is a strict
+duplicate-key parse of every `.github/workflows/*.{yml,yaml}` and
+`.github/actions/**/action.{yml,yaml}`. It exists because a merge candidate
+whose `ci.yml` carried two `fetch-depth` keys in one `with:` mapping merged
+cleanly in git, could not be loaded by GitHub Actions (a failed `push` run on
+the queue temp ref, no `merge_group` run, the required `test` context never
+reported) and stalled the queue for 175 minutes (#12283). `quality-guards`
+already reports on `merge_group` and does not depend on `ci.yml` loading, so a
+red member there ejects the candidate in minutes (except for a duplicate in the
+host file itself, which takes tens of minutes; see the host-file residual below).
+
+No required context is added or renamed and no ruleset, Terraform or canonical
+JSON changes, so the Sharp Edge 1 paired-edit contract is not triggered; the
+three-umbrella inventory table above changes only by its `quality-guards`
+member list. The #6049 per-member disposition for the new member (CONTENT-SCOPED,
+UNREACHABLE from the bot `ALLOWED_PATHS = {weakness-digest.md}`: the scan
+surface is `.github/workflows` and `.github/actions`, intersection empty) is
+recorded in `scripts/required-checks.txt`. The member's verdict reaches the
+required context only through the `member workflow-yaml-strict` row of the
+`aggregate` step, which `scripts/lint-umbrella-aggregate.sh` enforces.
+
+### Review rulings on the guard (PR #12295, 2026-11-07)
+
+- **Key identity.** GitHub compares mapping keys as case-insensitive strings on every mapping
+  (actions/runner `TemplateReader.cs` builds an `OrdinalIgnoreCase` key set per mapping; verified
+  2026-11-07 against lines 180 and 307 of that file), so the
+  guard's identity for a scalar key is its text with ASCII letters folded to upper case: `Fetch-Depth`
+  and `fetch-depth` collide, `on` and `"true"` do not, and the merge key `<<` is an ordinary key. The
+  earlier residual limited to `with:` and `env:` input names was wrong and is withdrawn. The fold is
+  ASCII-only (Python `upper()` would equate sharp-s with `SS`, which `OrdinalIgnoreCase` does not), so
+  non-ASCII case variants and non-scalar keys remain a stated false-GREEN residual. Plain scalar keys
+  that read as a YAML 1.2 core null, bool, int or float (`1`, `1.0`, `0xA`, `~`, `null`, `true`, an
+  empty key) are converted to strings by GitHub before its duplicate check, so the guard does not
+  compare them: each is itself a finding (quote it or rename it), no canonicalization is emulated, and
+  `on`, `off`, `yes`, `no` (plain strings in YAML 1.2) are untouched. A lone numeric key is flagged
+  although GitHub would accept it (deliberate over-strictness; the real tree has none).
+- **File set.** The `yml` and `yaml` suffixes are matched case-insensitively; a dangling or unreadable
+  entry named like a workflow is an unparseable finding (only directories are skipped). Composite
+  actions outside `.github/actions` stay unscanned, with a suite tripwire row asserting none is tracked.
+- **Host-file residual.** The guard cannot protect its own host file: a duplicate key in
+  `pr-quality-guards.yml` stops `quality-guards` from reporting at all. The host file's own duplicate
+  is caught by this script's real-tree row in `ci.yml` `test`, not by `quality-guards`; that residual
+  reopens if `ci.yml`'s gate is narrowed. The latency differs from the other members: the red reaches
+  `test` through the heavy leg (`timeout-minutes: 60`), so it arrives in tens of minutes, not minutes
+  (still well under the 175-minute incident). No ruleset change and no new required workflow. A PR that
+  edits the script, the step or the aggregate row is caught by review, not by the guard (the same trust
+  model as the other three members); the CODEOWNERS rows added for the script and its suite are routing
+  text only (the ruleset has no `require_code_owner_review`), not a second reviewer.
+- **PyYAML.** PyYAML is assumed preinstalled on `ubuntu-latest`, not verified. The guard prints
+  `pyyaml=<version>` on every summary line (that run output is the evidence), exits 2 if it is missing,
+  and has no pip fallback.
+
+## Amendment — 2026-11-08 (#12396): `parked-hold`, a server-side member step for the `parked` label
+
+Status: the `parked` merge hold (the label, the `.claude/hooks/ship-operator-step-gate.sh` text matcher and the
+drain-prs triage tier from #12197/#12342) was a best-effort local guardrail. This amendment adds the server-side
+check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision record). Append-only.
+
+- **Decision.** Two member steps join the `secret-guards` umbrella in `.github/workflows/secret-scan.yml`:
+  `parked-hold` (runs `scripts/ci-parked-hold.sh`) and `parked-hold-selftest` (runs
+  `scripts/ci-parked-hold.test.sh` against a stubbed `gh`, no `GH_TOKEN`, no network). Each carries the
+  step-level condition `!cancelled() && (pull_request || merge_group)` exactly as `waiver-discipline` does,
+  and each has its own `member ... 'pull_request,merge_group'` line in the `aggregate` step
+  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint gained the parsed key allow-list and the aggregate-shape rules, see the structural invariant below). No job-level
+  `if:`. No Terraform, ruleset, canonical-JSON or `required-checks.txt` list change: the required context is
+  still the umbrella `secret-guards`, so this PR applies nothing to production.
+- **Why hosted in `secret-guards`.** `secret-scan.yml` already triggers on `labeled`/`unlabeled`; `ci.yml` does
+  not, and adding the types there would re-run the whole suite on every label event under
+  `cancel-in-progress`. A new top-level required context would need a ruleset apply, a canonical-JSON edit and a
+  bot synthetic for no gain over a member of an existing umbrella. The semantic misfit (a label hold inside a
+  secret scanner) is accepted and recorded in `scripts/required-checks.txt`.
+- **Evaluation.** The labels are read LIVE (`gh api repos/<repo>/pulls/<n>`), never from the event payload
+  (a re-run reuses a stale payload). Label names compare case-insensitively. The response body must name the
+  expected PR number and carry a label array, or the check fails closed. One bounded retry (two attempts) so a
+  single transient API 5xx does not stall the queue; a persistent failure, an unparseable body, a missing PR or a
+  non-matching queue ref fails closed with a fixed annotation (never label text or a body). On `merge_group` the
+  PR number comes from `github.event.merge_group.head_ref` with the `mg_arm` regex of
+  `scripts/ci-oracle-review.sh`. Unlike `mg_arm`, the check does not enumerate queue entries: with SQUASH each
+  position runs its own `merge_group` build, and each build judges the PR named by its own ref.
+  The failure annotation is fixed text that tells a reader not to lift the hold (`PR #N is held for the operator
+  (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held
+  anyway.`); the three "label state unreadable" annotations end `re-run the check (this is not a parked hold)`.
+  Neither carries label text or a response body.
+- **Structural invariant (member step keys and the aggregate).** `scripts/lib/umbrella-member.sh` `member()` reads
+  each step's `conclusion`, and `continue-on-error: true` makes a failed step's conclusion `success` (the failure
+  survives only in `outcome`, which `member()` prints but does not judge); a `shell:` template that never runs the
+  command is a second one-key neutraliser. On either parked-hold step either would disarm the hold with the
+  umbrella still green. It is pinned twice, from the PARSED workflow (PyYAML), not from a text match, so no YAML
+  spelling of a key (bare, double-quoted, single-quoted, first key of a list item, flow mapping, job level) gets past
+  it. `scripts/lint-umbrella-aggregate.sh` allow-lists the job keys and step keys of every umbrella (a required
+  umbrella may carry no `continue-on-error`, `shell`, `defaults` or job-level `if`; a `uses:` must be an
+  `owner/repo@<40-hex>` action, so a local composite action cannot hide a step); restricts each member step's
+  `if:` to `!cancelled()` plus an allow-listed set of comparison atoms (a `&& false`, a trailing comment naming
+  `!cancelled()` and a top-level `||` are rejected); requires every `member` call to match one strict shape whose
+  4th and 5th arguments are exactly the `conclusion` and `outcome` expressions of the ids in the 3rd (a constant
+  or another step's verdict is rejected); and requires the aggregate to be a fixed statement sequence ending in
+  the `if [ "$failed" -ne 0 ]` tail (an early `exit`, a statement after the tail, `|| true` between the `||` links
+  are rejected). `scripts/ci-parked-hold.test.sh` re-pins the two parked-hold steps and the job by the same
+  parsed allow-list and feeds the lint one mutated copy of the workflows per rule (sections D and G, each
+  mutation-proven in a sandbox copy). The lint also allow-lists the TOP-LEVEL keys of the three umbrella workflows
+  (`name`, `on`, `permissions`, `concurrency`, `env`, `jobs`), so a workflow-level `defaults.run.shell` is rejected
+  like the job-level one (measured: none of the three files carries a top-level `defaults:`); it rejects `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `BASH_FUNC_*` and `GITHUB_*` names in any `env` mapping (workflow, job or
+  step) of an umbrella, except the two `GITHUB_*` names the tree measured in use (`GITHUB_BASE_REF`,
+  `GITHUB_REPOSITORY`) (a `BASH_ENV` file holding an EXIT trap turns the aggregate's `exit 1` into success);
+  pins the aggregate step's `env` to exactly `EVENT_NAME: ${{ github.event_name }}`; rejects a step with both `uses`
+  and `run`, and an empty `jobs:` (a clean annotated failure, not a traceback); and its census reads `*.yml` and
+  `*.yaml`. The tree was swept: the only umbrella that uses `continue-on-error` is the advisory `guards-advisory`
+  (several of its steps, the harness-discovery ones; the number is deliberately not written here, re-measure with
+  the one-liner in the lint header; not a required context), which the lint exempts by name from that one key.
+  `quality-advisory` is NOT exempt from it (it has none); it is allowed only its job-level `if`/`needs`.
+  PyYAML is a dependency of the lint and of the suite that runs it in the `secret-guards` job: its presence on the
+  runner (`ubuntu-24.04` for `secret-guards`, `ubuntu-latest` for `test-scripts`) is assumed, not installed or
+  verified here, exactly as the required `workflow-duplicate-keys` member already assumes it. The assumption has
+  precedent in the same `test-scripts` job: `git grep -n 'import yaml' scripts` finds
+  `scripts/digest-oracle-guard.test.sh:55`, `scripts/ci-draft-light.test.sh:60` and
+  `scripts/ci-push-dedupe.test.sh:67`, each of which hard-fails (exit 2) when `import yaml` fails. The lint prints
+  `pyyaml=<version>` on success (that run output is the evidence), and a missing PyYAML fails the lint (exit 2)
+  rather than skipping it; a missing PyYAML would also turn the required `parked-hold-selftest` member red, because
+  section G of the suite runs the lint.
+  Residuals this does NOT close: (i) a member group is an OR over its arms, so a dead arm next to a live sibling of
+  the same member (for example `scan-install`, which runs on every event) stays green; (ii) the `run:` bodies of
+  member steps are not inspected by the lint (the parked-hold steps' bodies are executed by section E of the
+  suite, the others are not); (iii) a never-true event comparison inside an allow-listed `if:` atom cannot be
+  detected; (iv) there is no check that `secret-guards` has a single producer.
+- **What "server-side enforced" means.** The check binds auto-merge, the merge queue and every identity subject
+  to the required checks, including Actions tokens and the `schedule` skill's `gh pr merge --squash --auto`.
+  Draft status stays the first hold (`gh pr ready` flips it with no check; this check covers parked-and-ready).
+  `admin-merge-ready.sh` grades every required context, so a parked PR is red there with no edit.
+- **Stated residuals (not hidden).**
+  1. Any identity with triage access can run `gh pr edit --remove-label parked`; that fires `unlabeled`, and the
+     re-run is green. An allowlist of the last unlabeling actor (`issues/N/events`) was considered and left out
+     as scope.
+  2. The ruleset's bypass actors (OrganizationAdmin and Admin role, `pull_request` mode) are not bound: an
+     admin-credentialed `gh pr merge --admin` passes. `admin-merge-ready.sh` is the shipped gate for that path.
+  3. A `parked` label applied by an Actions actor with `GITHUB_TOKEN` fires no `labeled` run (a GitHub rule), so
+     a parked bot PR keeps its fabricated-green `secret-guards` synthetic until its `merge_group` run. The only
+     live bot-PR producer today (`weakness-miner.yml` through `bot-pr-with-synthetic-checks`) passes no labels.
+     A later HUMAN label fires a real `labeled` run that supersedes the synthetic; for a `GITHUB_TOKEN`-created PR
+     that is unverified, and the flip evidence is defined in `scripts/required-checks.txt`.
+  4. Each queue entry is judged by its own `merge_group` build (queue grouping `ALLGREEN`,
+     `max_entries_to_merge = 3`): a label added to an entry AFTER its build ran is not seen. Mitigation is dequeue
+     per `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`.
+  5. CODEOWNERS rows for `scripts/ci-parked-hold.sh`, `scripts/ci-parked-hold.test.sh` and
+     `scripts/lib/umbrella-member.sh` route review but are advisory until branch protection enforces code-owner
+     review (the ruleset has no `require_code_owner_review`). A PR that removes the member is judged by its own
+     weakened workflow file; that is the limit of any in-repo check, and review is the control.
+  6. An unreadable GitHub API fails closed: a transient outage is cleared by a re-run, a prolonged one by an
+     admin bypass.
+  7. A seconds-wide window between the label write and the new check-run: until the `labeled` run reports, the
+     previous green `secret-guards` run is still the latest, so an auto-merge that fires inside that window is
+     not held.
+  8. Renaming or deleting the `parked` label disarms the check: it matches the literal name, so a renamed label
+     is no longer seen and a deleted one is gone. (The local hook also blocks `gh label delete|edit` on a
+     checkout that carries it, which is defence in depth only.)
+  9. A stacked PR whose base is not `main` is outside the ruleset (it targets `main` only), so neither the
+     required context nor this check binds it.
+- **ASSUMPTION to re-check (ADR-270 per-position build).** The decision not to enumerate queue entries rests on
+  this premise: each `merge_group` entry pays its own cumulative build under `ALLGREEN`, and a grouped `head_ref`
+  names only the deepest member. If `grouping_strategy` (or `max_entries_to_merge`) changes so that one build
+  covers several entries, a lower entry's label is no longer judged by its own build and this check must
+  enumerate the entries as `mg_arm` does. The queue-ref regex is parity-pinned to the one in
+  `scripts/ci-oracle-review.sh` and `scripts/merge-queue-cla-verify.sh` by `scripts/ci-parked-hold.test.sh`.
+- **Local hook.** `.claude/hooks/ship-operator-step-gate.sh` stays as defence in depth; its header and the
+  drain-prs skill no longer call the hold best-effort-only but point at this check. The follow-through probe
+  `scripts/followthroughs/parked-merge-hold-enforcement-12342.sh` (it re-evaluated this very route) is deleted.
+- **Hook cost measured (item 5, 2026-11-08).** The hook with a PATH-stubbed `gh`, `gh pr merge <n> --squash`
+  statements chained with `;`, median of five runs on a host at load average about 41 (so absolute numbers are
+  inflated): 1 statement 218 ms, 10 statements 577 ms, 100 statements 4954 ms (about 47 ms per statement, one
+  stubbed `gh pr view` per statement). The 100-statement run exceeds the 200 ms threshold ruled in T3, so the
+  per-statement cost is tracked in #12449 rather than fixed here.
+- **Accepted residual, 2026-11-10 (#12449).** Ruled by CTO agent, 2026-11-10: stated residual 2 (the ruleset's admin bypass lets an admin-credentialed `gh pr merge --admin` pass a parked PR) is accepted with no ruleset change, because every CODEOWNERS entry names one code owner, so a code-owner review rule would block every PR that identity authors (GitHub does not let an author approve their own PR) while the bypass stayed, and both agent merge paths are already gated by `admin-merge-ready.sh` and the local hook.

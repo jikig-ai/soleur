@@ -155,7 +155,7 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
           "`title` is required; `body` optional; `status` optionally seeds the " +
           "column (defaults Backlog). owner/repo + the creator attribution are " +
           "resolved server-side (never accepted as input). Returns { issue } — " +
-          "the created issue with its real number. Gated (founder approval).",
+          "the created issue with its real number. Gated (the session user approves).",
         {
           title: z.string().describe("Issue title (required, non-empty)."),
           body: z.string().optional().describe("Optional issue body/description."),

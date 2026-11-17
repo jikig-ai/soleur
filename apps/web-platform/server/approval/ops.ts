@@ -131,10 +131,23 @@ export const APPROVAL_OPS = {
     message: "Approval gate: status reads failed while waiting for the Owner",
     level: "warn",
   },
-  /** The requester's role could not be read; the card falls back to the read-only member view. */
+  /**
+   * The requester's role could not be read; the card falls back to the read-only member view. Also reported, with tag
+   * `stage = legacy-push-owner-check` and `extra.outcome = denied-no-card` (or `denied-on-answer` for the read made after an
+   * Approve), when the legacy card's Owner check fails: the action is refused, before any card for `denied-no-card` and after
+   * the card was answered for `denied-on-answer` (#12197 D1). Since #12597
+   * that check covers every approval-required tool; the tag and the pino decision key keep their push-era names (production
+   * query handles) and the report's `toolName` tells the tools apart.
+   */
   viewerRoleFailed: {
     op: "approval-viewer-role-failed",
     message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
+    level: "warn",
+  },
+  /** The requester label (who raised the request) could not be read; the card shows no requester line. Ids only, never the address. */
+  requesterLabelFailed: {
+    op: "approval-requester-label-failed",
+    message: "Approval card: the requester label could not be read; the card shows no requester line",
     level: "warn",
   },
   /** The `approval-queue` flag read threw; the flag is treated as OFF. Debounced to one report per 10 minutes per process (flag.ts). */
@@ -251,7 +264,7 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
  * the thrown value contributes only `{code, fn, errName}`, and never the note, the code, the address or the text.
  */
 export const LEGAL_OPS = {
-  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row with no matching event is `row_without_event`. */
+  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row the decide route did not acknowledge after flushing this event is `row_without_event`. */
   accepted: {
     op: "accepted",
     message: "Legal acceptance: a founder decision was recorded",
@@ -269,21 +282,60 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: the email code step failed at the auth service; nothing was recorded",
     level: "error",
   },
-  /** Reconciliation found a legal_acceptance row with no matching `accepted` event (reported by the verify endpoint, PR-D). */
+  /**
+   * Reconciliation found a legal_acceptance row with no acknowledgement (reported by the verify endpoint, PR-D): the decide
+   * route writes the ack only after the `accepted` event was flushed, so this proves the route did not acknowledge, not that
+   * Sentry received or missed the event. Alert-only. `extra` carries `key`, the public `textHash`, `ageSeconds` and `status`.
+   */
   rowWithoutEvent: {
     op: "row_without_event",
-    message: "Legal acceptance: a recorded decision has no matching accepted event",
+    message: "Legal acceptance: a legal acceptance row has no recorded acknowledgement",
     level: "error",
   },
-  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  /**
+   * A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged.
+   * `extra.read` names the read. The Inbox legal row (`read: legal_acceptance_inbox`, server/legal-acceptance/inbox-rows.ts) adds a static
+   * `extra.step` saying where it stopped: gate | registry | read | shape | state. The registry step also carries `extra.key`.
+   */
   pageReadFailed: {
     op: "page_read_failed",
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
     level: "error",
   },
+  /** A registered text has no declared card kind (LEGAL_TEXT_KIND), so the page renders nothing for it. Reported on every render, once the founder surface gate has passed; `tags.key` names the text. */
+  kindUndeclared: {
+    op: "kind_undeclared",
+    message: "Legal acceptance: a registry text has no declared card kind",
+    level: "warn",
+  },
+  /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). `extra` carries `key` and the public `textHash`. */
+  recordInvalid: {
+    op: "record_invalid",
+    message: "Legal acceptance: a stored decision failed its integrity check",
+    level: "error",
+  },
+  /**
+   * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
+   * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
+   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; the verify route's step 4 and the counts route's step 4, so both
+   * routes emit it) or `config` (a token or founder id that is SET but malformed; once per route module, so a malformed
+   * token yields one event from each of the verify and counts routes; names only the variable) or `counts` (the aggregate
+   * read behind GET /api/internal/legal-acceptance/[key]/counts failed, threw, or answered an undocumented shape, including
+   * migration 186 not applied; extra.code is the SQLSTATE and extra.reason is "too_many_hashes" when the RPC refused with
+   * 54000; #12429). No paging rule yet (#12195).
+   */
+  storeFailed: {
+    op: "store_failed",
+    message: "Legal acceptance: a store call on the verify or acknowledge path failed",
+    level: "error",
+  },
 } as const satisfies Record<string, ApprovalOp>;
 
 export type LegalOpKey = keyof typeof LEGAL_OPS;
+
+/** The closed set of `store_failed` `tags.stage` values; every storeFailed report carries exactly one (the contract test pins it). */
+export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config", "counts"] as const;
+export type StoreFailedStage = (typeof STORE_FAILED_STAGES)[number];
 
 export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
   const def: ApprovalOp = LEGAL_OPS[key];

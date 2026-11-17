@@ -641,7 +641,7 @@ describe("transcripts placeholder (#10445)", () => {
   });
 });
 
-// #12026 — claude-code 2.1.311 / SDK 0.3.311 covers the config-dir `seed-admin` (default `$HOME/.claude/seed-admin`) with a --tmpfs in every per-command argv.
+// #12026 — claude-code 2.1.311 / SDK 0.3.311 (still 2.1.321 / 0.3.321, 2026-11-10 capture) covers the config-dir `seed-admin` (default `$HOME/.claude/seed-admin`) with a --tmpfs in every per-command argv.
 describe("seed-admin placeholder (#12026)", () => {
   const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
   const SA = "/root/.claude/seed-admin";
@@ -1506,5 +1506,47 @@ describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
     expect(
       classifyOuterWrapReplayVerdict({ bwrapExitCode: 2, bwrapStderr: "something odd" }),
     ).toEqual({ verdict: "canary_infra_error", reason: "bwrap_exit_2" });
+  });
+});
+
+// The committed fixture's sdkVersion is what `--replay` emits into the deploy
+// logs (runReplay's verdict) and what the soak surface reports, but `--verify`
+// compares only the argv — so a fixture left at an old SDK version after a pin
+// bump would keep reporting the old version as the one the canary proved
+// (#12514 review). Tie it to the app's SDK pin. A range pin (`^0.3.321`) can
+// never equal a captured exact version, so it reds through the sdkVersion check.
+const SDK = "@anthropic-ai/claude-agent-sdk";
+
+function fixtureSdkPinViolation(
+  fixture: Record<string, unknown>,
+  pkg: { dependencies?: Record<string, string> },
+): string | null {
+  const pin = pkg.dependencies?.[SDK];
+  if (fixture.sdkPackage !== SDK) return `fixture sdkPackage is ${String(fixture.sdkPackage)}, not ${SDK}`;
+  if (typeof fixture.sdkVersion !== "string" || fixture.sdkVersion !== pin) {
+    return `fixture sdkVersion is ${String(fixture.sdkVersion)} but package.json pins ${SDK}@${pin}: re-capture the fixture (--capture), never hand-edit it`;
+  }
+  return null;
+}
+
+describe("committed fixture sdkVersion equals the claude-agent-sdk pin (#12514)", () => {
+  const pkgOf = (v: string) => ({ dependencies: { [SDK]: v } });
+
+  it("positive control: a stale, missing or foreign-package fixture is refused", () => {
+    expect(fixtureSdkPinViolation({ sdkPackage: SDK, sdkVersion: "0.3.321" }, pkgOf("0.3.321"))).toBeNull();
+    expect(fixtureSdkPinViolation({ sdkPackage: SDK, sdkVersion: "0.3.311" }, pkgOf("0.3.321"))).toMatch(/0\.3\.311/);
+    expect(fixtureSdkPinViolation({ sdkPackage: SDK }, pkgOf("0.3.321"))).toMatch(/sdkVersion/);
+    expect(
+      fixtureSdkPinViolation({ sdkPackage: "@anthropic-ai/claude-code", sdkVersion: "0.3.321" }, pkgOf("0.3.321")),
+    ).toMatch(/sdkPackage/);
+  });
+
+  it("infra/sandbox-canary-argv.json sdkVersion == package.json's claude-agent-sdk pin", () => {
+    const fixture = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    );
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+    expect(fixture.status, "the committed fixture is a real capture").toBe("captured");
+    expect(fixtureSdkPinViolation(fixture, pkg)).toBeNull();
   });
 });

@@ -29,8 +29,7 @@ assert_file_exists "$SCRIPT" "T0: script file exists"
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- T10: --help ---"
-out=$(python3 "$SCRIPT" --help 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --help 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T10: --help exits 0"
 assert_contains "$out" "--list" "T10: usage mentions --list"
 assert_contains "$out" "--no-verify" "T10: usage mentions --no-verify"
@@ -41,8 +40,7 @@ assert_contains "$out" "--no-verify" "T10: usage mentions --no-verify"
 echo ""
 echo "--- T3: --list empty-ledger ---"
 set +e
-out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/empty-ledger" 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/empty-ledger" 2>&1); then rc=0; else rc=$?; fi
 set -e
 assert_eq "0" "$rc" "T3: --list empty exits 0"
 assert_contains "$out" "No open debt entries" "T3: empty-state message"
@@ -52,8 +50,7 @@ assert_contains "$out" "No open debt entries" "T3: empty-state message"
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- T2: --list typical fixture ---"
-out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/typical" 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/typical" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T2: --list typical exits 0"
 # 3 open + 1 resolved → 3 rows
 assert_contains "$out" "legacy-schema-fixture" "T2: lists legacy-schema entry"
@@ -69,9 +66,9 @@ else
 fi
 
 # Severity sort order: high (legacy) before medium (current) before low
-high_line=$(echo "$out" | grep -n "legacy-schema-fixture" | head -1 | cut -d: -f1)
-med_line=$(echo "$out" | grep -n "current-schema-fixture" | head -1 | cut -d: -f1)
-low_line=$(echo "$out" | grep -n "low-severity-fixture" | head -1 | cut -d: -f1)
+high_line=$(echo "$out" | grep -n "legacy-schema-fixture" | head -1 | cut -d: -f1) || true
+med_line=$(echo "$out" | grep -n "current-schema-fixture" | head -1 | cut -d: -f1) || true
+low_line=$(echo "$out" | grep -n "low-severity-fixture" | head -1 | cut -d: -f1) || true
 if [[ -n "$high_line" && -n "$med_line" && -n "$low_line" \
       && "$high_line" -lt "$med_line" && "$med_line" -lt "$low_line" ]]; then
   echo "  PASS: T2: severity sort order high > medium > low"
@@ -87,8 +84,7 @@ fi
 echo ""
 echo "--- T7: malformed frontmatter sibling ---"
 set +e
-out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/with-malformed" 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --list --ledger "$FIXTURE_DIR/with-malformed" 2>&1); then rc=0; else rc=$?; fi
 set -e
 assert_eq "0" "$rc" "T7: --list with malformed sibling exits 0 (no crash)"
 assert_contains "$out" "good-entry" "T7: still lists the good entry"
@@ -102,8 +98,7 @@ echo "--- T4: interactive happy path (resolved + linked_issue) ---"
 WORK_DIR="$TMP_ROOT/t4"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 # Pick the legacy-schema entry (idx 1 after severity sort: high first)
-out=$(printf "1\nresolved\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "1\nresolved\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T4: interactive happy path exits 0"
 # Verify the file was mutated
 mutated_file="$WORK_DIR/2026-02-12-legacy-schema-fixture.md"
@@ -148,8 +143,7 @@ WORK_DIR="$TMP_ROOT/t5"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 # 3 bad attempts → exit 2; no file mutation
 set +e
-out=$(printf "1\nresolved\nnot-a-number\n12.5\n\$(rm -rf /)\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "1\nresolved\nnot-a-number\n12.5\n\$(rm -rf /)\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 set -e
 assert_eq "2" "$rc" "T5: 3 bad linked_issue attempts → exit 2"
 # File must NOT have been mutated
@@ -179,8 +173,7 @@ exit 1
 STUB
 chmod +x "$STUB_DIR/gh"
 set +e
-out=$(PATH="$STUB_DIR:$PATH" printf "1\nresolved\n9999999\n" | PATH="$STUB_DIR:$PATH" python3 "$SCRIPT" --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(PATH="$STUB_DIR:$PATH" printf "1\nresolved\n9999999\n" | PATH="$STUB_DIR:$PATH" python3 "$SCRIPT" --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 set -e
 assert_eq "1" "$rc" "T6: gh failure → exit 1"
 assert_contains "$out" "gh issue view failed" "T6: stderr names the failure"
@@ -202,8 +195,7 @@ echo "--- T8: current-schema close round-trip ---"
 WORK_DIR="$TMP_ROOT/t8"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 # After severity sort: high=legacy(1), medium=current(2), low=low(3). Pick idx 2.
-out=$(printf "2\nwont-fix\n\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "2\nwont-fix\n\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T8: wont-fix close exits 0"
 mutated_file="$WORK_DIR/2026-03-03-current-schema-fixture.md"
 if grep -q "^status: wont-fix$" "$mutated_file"; then
@@ -239,8 +231,7 @@ echo "--- T-quit: q quits cleanly ---"
 WORK_DIR="$TMP_ROOT/tq"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 set +e
-out=$(printf "q\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "q\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 set -e
 assert_eq "0" "$rc" "T-quit: q exits 0"
 if grep -q "^status: resolved$" "$WORK_DIR/2026-02-12-legacy-schema-fixture.md"; then
@@ -261,8 +252,7 @@ echo "--- T-fixture-refusal: refuse fixture mutation without --allow-fixture ---
 # resolved-path check should refuse mutation without --allow-fixture even
 # though the test passes valid stdin.
 set +e
-out=$(printf "1\nresolved\n2723\n" | python3 "$SCRIPT" --no-verify --ledger "$FIXTURE_DIR/typical" 2>&1)
-rc=$?
+if out=$(printf "1\nresolved\n2723\n" | python3 "$SCRIPT" --no-verify --ledger "$FIXTURE_DIR/typical" 2>&1); then rc=0; else rc=$?; fi
 set -e
 if [[ "$rc" -ne 0 ]]; then
   echo "  PASS: T-fixture-refusal: non-zero exit on fixture path without --allow-fixture (rc=$rc)"
@@ -287,8 +277,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- T-json: --list --json output ---"
-out=$(python3 "$SCRIPT" --list --json --ledger "$FIXTURE_DIR/typical" 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --list --json --ledger "$FIXTURE_DIR/typical" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T-json: --list --json exits 0"
 # Validate JSON parses and has 3 open entries.
 parsed=$(echo "$out" | python3 -c "import sys, json; data = json.load(sys.stdin); print(len(data))" 2>&1)
@@ -305,8 +294,7 @@ echo ""
 echo "--- T-wontfix-with-linked-issue: wont-fix + linked_issue persistence ---"
 WORK_DIR="$TMP_ROOT/twfl"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
-out=$(printf "1\nwont-fix\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "1\nwont-fix\n2723\n" | python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T-wontfix-with-linked-issue: exits 0"
 mutated_file="$WORK_DIR/2026-02-12-legacy-schema-fixture.md"
 if grep -q "^status: wont-fix$" "$mutated_file" && grep -q "^linked_issue: 2723$" "$mutated_file"; then
@@ -334,8 +322,7 @@ echo "FAIL: --no-verify did not skip gh (stub was called: $*)" >&2
 exit 77
 STUB
 chmod +x "$STUB_DIR_NV/gh"
-out=$(printf "1\nresolved\n2723\n" | PATH="$STUB_DIR_NV:$PATH" python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
-rc=$?
+if out=$(printf "1\nresolved\n2723\n" | PATH="$STUB_DIR_NV:$PATH" python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T-noverify-positive: exits 0 (gh stub not invoked)"
 if echo "$out" | grep -c >/dev/null "FAIL: --no-verify did not skip gh"; then
   echo "  FAIL: T-noverify-positive: gh stub WAS invoked despite --no-verify"
@@ -366,9 +353,8 @@ echo ""
 echo "--- T-noninteractive: --close non-interactive close ---"
 WORK_DIR="$TMP_ROOT/tni"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
-out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
-        --close 1 --status resolved --linked-issue 2723 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
+        --close 1 --status resolved --linked-issue 2723 2>&1); then rc=0; else rc=$?; fi
 assert_eq "0" "$rc" "T-noninteractive: --close happy path exits 0"
 mutated_file="$WORK_DIR/2026-02-12-legacy-schema-fixture.md"
 if grep -q "^status: resolved$" "$mutated_file" && grep -q "^linked_issue: 2723$" "$mutated_file"; then
@@ -382,9 +368,8 @@ fi
 WORK_DIR="$TMP_ROOT/tni2"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 set +e
-out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
-        --close 1 --status resolved 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
+        --close 1 --status resolved 2>&1); then rc=0; else rc=$?; fi
 set -e
 if [[ "$rc" -ne 0 ]]; then
   echo "  PASS: T-noninteractive: --status resolved without --linked-issue is rejected"
@@ -397,9 +382,8 @@ fi
 WORK_DIR="$TMP_ROOT/tni3"
 cp -r "$FIXTURE_DIR/typical" "$WORK_DIR"
 set +e
-out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
-        --close 99 --status wont-fix 2>&1)
-rc=$?
+if out=$(python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" \
+        --close 99 --status wont-fix 2>&1); then rc=0; else rc=$?; fi
 set -e
 if [[ "$rc" -ne 0 ]]; then
   echo "  PASS: T-noninteractive: out-of-range --close rejected"

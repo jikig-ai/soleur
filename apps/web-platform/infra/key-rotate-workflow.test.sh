@@ -570,6 +570,13 @@ refuse() { echo "doppler REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 if [[ "$1" == run ]]; then
   [[ "$*" == "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- "* ]] || refuse "$@"
   shift; while [[ $# -gt 0 && "$1" != -- ]]; do shift; done; shift
+  # the tf-var transformer exposes EVERY name of soleur/prd_terraform as TF_VAR_*; the config carries a STALE
+  # EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS copy (#12299). --preserve-env: an exported name wins even when empty, so the
+  # injection fills only a slot the caller left unset (apply-A's previous feed and the clear's shadow export close it).
+  if [[ -z "${TF_VAR_egress_audit_ingest_token_previous+x}" ]]; then
+    echo "doppler-run injected stale TF_VAR_egress_audit_ingest_token_previous" >> "$STUB/injected.log"
+    export TF_VAR_egress_audit_ingest_token_previous="stale-prd_terraform-copy"
+  fi
   exec "$@"
 fi
 [[ "${DOPPLER_TOKEN:-}" == dp.tffixture ]] || refuse "copy call with token class '${DOPPLER_TOKEN:-}': $*"
@@ -802,12 +809,14 @@ case "$1 $2" in
     t="$(arg_after --title "$@")"; bf="$(arg_after --body-file "$@")"
     labs=""; prev=""; for a in "$@"; do [[ "$prev" == --label ]] && labs="$labs $a"; prev="$a"; done
     for l in $labs; do grep -q "\"$l\"" "$S/labels.json" || { echo "could not add label: '$l' not found" >&2; exit 1; }; done
+    # state/create_vanishes: the create never lands — it exits 1, prints no URL, and nothing ever lists
+    [[ -f "$S/create_vanishes" ]] && exit 1
     n=$(( $(cat "$S/issuen" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$S/issuen"
     echo "$t | labels:$labs" >> "$STUB/issues_created.log"; cp "$bf" "$STUB/issue_body_$n.md"
-    if [[ ! -f "$S/create_vanishes" ]]; then
-      jq -c --arg t "$t" --argjson n "$((100 + n))" '. + [{number:$n,title:$t}]' "$S/issues.json" 2>/dev/null > "$S/issues.tmp" || jq -cn --arg t "$t" --argjson n "$((100 + n))" '[{number:$n,title:$t}]' > "$S/issues.tmp"
-      mv "$S/issues.tmp" "$S/issues.json"
-    fi
+    jq -c --arg t "$t" --argjson n "$((100 + n))" '. + [{number:$n,title:$t}]' "$S/issues.json" 2>/dev/null > "$S/issues.tmp" || jq -cn --arg t "$t" --argjson n "$((100 + n))" '[{number:$n,title:$t}]' > "$S/issues.tmp"
+    mv "$S/issues.tmp" "$S/issues.json"
+    # state/create_rc: the response was lost AFTER the issue landed — the client sees this exit code, the issue exists
+    [[ -f "$S/create_rc" ]] && exit "$(cat "$S/create_rc")"
     echo "https://github.example/acme/repo/issues/$((100 + n))" ;;
   "issue comment") [[ "$3" =~ ^[0-9]+$ ]] || refuse "$@"; cp "$(arg_after --body-file "$@")" "$STUB/comment_body_$3.md"; echo "$3" >> "$STUB/issues_commented.log" ;;
   "issue close") [[ "$3" =~ ^[0-9]+$ ]] || refuse "$@"; [[ -f "$S/issue_close_rc" ]] && exit "$(cat "$S/issue_close_rc")"; echo "$3" >> "$STUB/issues_closed.log" ;;
@@ -820,16 +829,35 @@ SH
 # STRICT: GET */hooks/deploy-status and POST */hooks/deploy only. The merged status is composed from per-host frames:
 #   state/vself           the responding host's ip;  state/vframe_<ip>  one JSON frame per host
 #   state/vskip_<ip>      when present, a "restart vector" POST does NOT update this host's frame
+#   state/vskip_once_<ip> when present, only the FIRST "restart vector" POST skips this host (then is consumed)
+#   state/vbusy_<ip>      when present, holds N: the host's deploy is in flight for the next N status reads (its slot
+#                         serves the running frame, or state/vbusyframe_<ip>'s content — e.g. a lock_contention frame);
+#                         when the counter drains the deploy's terminal ok frame lands in vframe_<ip>
 cat >/dev/null 2>&1 || true   # the --config - channel (stdin)
 S="$STUB/state"; method=GET; out=""; data=""; url=""
 prev=""; for a in "$@"; do case "$prev" in -X) method="$a" ;; -o) out="$a" ;; -d|--data-binary) data="$a" ;; esac; [[ "$a" == http* ]] && url="$a"; prev="$a"; done
 echo "curl $method $url" >> "$STUB/curl.log"
 refuse() { echo "curl REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 emit() { [[ -n "$out" ]] && printf '%s' "$2" > "$out"; printf '%s' "$1"; }
+frame_of() { # <ip> -> the host's current frame (a busy host reports its in-flight deploy frame)
+  local ip="$1" n
+  if [[ -f "$S/vbusy_$ip" ]]; then
+    n=$(( $(cat "$S/vbusy_$ip") - 1 )); echo "$n" > "$S/vbusy_$ip"
+    if (( n <= 0 )); then
+      rm -f "$S/vbusy_$ip"
+      # the deploy that held the lock finishes: its terminal frame (start_ts one tick older than the next write)
+      printf '{"component":"web-platform","reason":"ok","start_ts":%s,"exit_code":0}\n' "$(( $(cat "$S/now") - 1 ))" > "$S/vframe_$ip"
+      cat "$S/vframe_$ip"; return
+    fi
+    if [[ -f "$S/vbusyframe_$ip" ]]; then cat "$S/vbusyframe_$ip"; else printf '{"component":"web-platform","reason":"running","start_ts":%s,"exit_code":-1}\n' "$(cat "$S/now")"; fi
+    return
+  fi
+  cat "$S/vframe_$ip"
+}
 compose() {
   local self base ip f pj
-  self="$(cat "$S/vself")"; base="$(cat "$S/vframe_$self")"; pj='{}'
-  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"; [[ "$ip" == "$self" ]] && continue; pj="$(jq -c --arg ip "$ip" --argjson fr "$(cat "$f")" '. + {($ip): $fr}' <<<"$pj")"; done
+  self="$(cat "$S/vself")"; base="$(frame_of "$self")"; pj='{}'
+  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"; [[ "$ip" == "$self" ]] && continue; pj="$(jq -c --arg ip "$ip" --argjson fr "$(frame_of "$ip")" '. + {($ip): $fr}' <<<"$pj")"; done
   jq -nc --argjson base "$base" --argjson pj "$pj" '$base + {peers: $pj}'
 }
 if [[ "$method" == POST && "$url" == */hooks/deploy ]]; then
@@ -837,7 +865,13 @@ if [[ "$method" == POST && "$url" == */hooks/deploy ]]; then
   echo "webhook restart-vector peers=$(jq -r '.peers // ""' <<<"$data")" >> "$STUB/webhook.log"
   [[ -f "$S/post_rc" ]] && exit "$(cat "$S/post_rc")"
   ts="$(cat "$S/now")"
-  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"; [[ -f "$S/vskip_$ip" ]] && continue; printf '{"component":"vector","reason":"success","start_ts":%s,"exit_code":0}\n' "$ts" > "$f"; done
+  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"
+    [[ -f "$S/vskip_$ip" ]] && continue
+    # a host mid-deploy holds the lock: the fanned-out restart loses flock -n, its transient frame is then overwritten
+    # by the deploy's terminal frame — the host NEVER lands a vector/success frame from this POST (#12299's race)
+    if [[ -f "$S/vbusy_$ip" ]]; then echo "peer $ip lost the lock race (a deploy held the lock)" >> "$STUB/webhook.log"; continue; fi
+    [[ -f "$S/vskip_once_$ip" ]] && { rm -f "$S/vskip_once_$ip"; continue; }
+    printf '{"component":"vector","reason":"success","start_ts":%s,"exit_code":0}\n' "$ts" > "$f"; done
   printf '202'; exit 0
 fi
 if [[ "$method" == GET && "$url" == */hooks/deploy-status ]]; then
@@ -1404,7 +1438,11 @@ eq "C7.13c R4: a notify RE-RUN (attempt 2) finds the identical open issue and st
 fresh; run_g notify n_env "$DEVK" rotate failure true apply_failed skipped "" GITHUB_RUN_ATTEMPT=2
 eq "C7.13d R4: a notify RE-RUN with NO existing issue still files it (the quiet path is only for an existing identical title)" "$RC|$(nlog "$D/issues_created.log" .)" '0|1'
 fresh; touch_state create_vanishes; run_g notify n_env "$DEVK" rotate failure true apply_failed skipped ""
-eq "C7.14 issue_unfiled: the create call succeeds but the re-list shows no match -> a loud error and a non-zero exit" "$RC|$(verdict_of)|$(grep -c '::error::key-rotate verdict=issue_unfiled' <<<"$OUT")" '1|issue_unfiled|1'
+eq "C7.14 issue_unfiled: the create call fails and nothing matching appears on the bounded re-list -> a loud error and a non-zero exit" "$RC|$(verdict_of)|$(grep -c '::error::key-rotate verdict=issue_unfiled' <<<"$OUT")" '1|issue_unfiled|1'
+fresh; set_state create_rc 1; run_g notify n_env "$DEVK" rotate failure true apply_failed skipped ""
+eq "C7.14e a lost create RESPONSE (the issue landed but the client saw a failure) is verified by the bounded re-list, not issue_unfiled (#12299)" "$RC|$(verdict_of)|$(nlog "$D/issues_created.log" .)|$(nlog "$D/gh.log" 'gh issue list')" '0||1|2'
+fresh; run_g notify n_env "$DEVK" rotate failure true apply_failed skipped ""
+eq "C7.14f a create that returns its URL is verified by the URL itself - no racing re-list at all" "$RC|$(nlog "$D/gh.log" 'gh issue list')" '0|1'
 fresh; printf '%s' '[{"name":"action-required"}]' > "$D/state/labels.json"; run_g notify n_env github_webhook_secret rotate success true "" failure owner_step_pending
 eq "C7.14b a missing owner_step_pending label: issue_unfiled" "$RC|$(verdict_of)" '1|issue_unfiled'
 fresh; jq -cn '[range(0;1000) | {number:., title:"x"}]' > "$D/state/issues.json"; run_g notify n_env "$DEVK" rotate failure true apply_failed skipped ""
@@ -1484,6 +1522,21 @@ eq "C9.3c an unreadable baseline fails closed" "$RC" '1'
 fresh; run_script "redeploy vector" "${VEC_ENV[@]/egress_audit_ingest_token/inngest_signing_key_dev}"
 eq "C9.3d the vector leg refuses a non-egress key" "$RC|$(verdict_of)" '1|internal_error'
 
+# #12299: the settle gate. A peer mid-deploy reports a running slot; the gate waits for a terminal frame on every host
+# before the restart is dispatched (without the gate the fan-out loses the peer's flock and the leg times out red)
+fresh; set_state vbusy_10.0.1.11 3; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.7 a peer mid-deploy makes the settle gate wait (per-poll slot rows logged); the restart is dispatched only after every slot is terminal - no lock race" \
+  "$RC|$(nlog "$D/webhook.log" 'lost the lock race')|$(nlog "$D/webhook.log" 'restart-vector')|$(grep -c '10.0.1.11 web-platform/running' <<<"$OUT")" '0|0|1|2'
+fresh; set_state vbusy_10.0.1.11 2; set_state vbusyframe_10.0.1.11 '{"component":"vector","reason":"lock_contention","start_ts":1,"exit_code":1}'; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.7b a transient vector/lock_contention slot is NON-terminal for the gate (exit_code 1 but the reason proves the lock is still held): the gate waits it out" \
+  "$RC|$(grep -c '10.0.1.11 vector/lock_contention' <<<"$OUT")|$(nlog "$D/webhook.log" 'restart-vector')" '0|1|1'
+fresh; set_state vbusy_10.0.1.11 60; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.7c a peer that never settles: the gate times out at 90 s, dumps the per-host table and dispatches nothing" \
+  "$RC|$(nlog "$D/webhook.log" .)|$(grep -c 'Per-host table' <<<"$OUT")" '1|0|1'
+fresh; touch_state "vskip_once_10.0.1.11"; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.7d a peer that misses the first fan-out is caught by the single mid-window re-dispatch (idempotent try-restart)" \
+  "$RC|$(nlog "$D/webhook.log" 'webhook restart-vector')" '0|2'
+
 fresh; printf 'stale-previous-value' > "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; run_g clear a_env rotate egress_audit_ingest_token
 eq "C9.4 the clear replaces PREVIOUS with the var default and verifies it reads empty" \
   "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")|$(tfapplied)" '0|rotate_ok||1'
@@ -1492,6 +1545,13 @@ eq "C9.4b a clear that leaves PREVIOUS populated reports previous_not_cleared" \
   "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" '1|previous_not_cleared|stale-previous-value'
 fresh; run_g clear a_env rotate inngest_signing_key_dev
 eq "C9.4c the clear refuses a non-egress key" "$RC|$(verdict_of)" '1|internal_error'
+
+# #12299: the doppler-run stub injects a stale TF_VAR_egress_audit_ingest_token_previous for every unset call (the live
+# prd_terraform config carries such a copy). The clear's shadow export closes the slot before the first value-bearing
+# call, so only the pre-export init logs an injection and the -replace create writes the emptied var.
+fresh; set_state copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS stale-previous-value; run_g clear a_env rotate egress_audit_ingest_token
+eq "C9.4d the clear env carries the emptied TF_VAR (the kk_egress_previous_feed precedent): the stale prd_terraform tf-var injection fires only at the pre-export init, never at plan, show or apply, and PREVIOUS reads back empty" \
+  "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")|$(nlog "$D/injected.log" .)" '0|rotate_ok||1'
 
 fresh; run_g apply a_env rotate egress_audit_ingest_token
 CUR="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN")"; PRV="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")"
@@ -1874,10 +1934,12 @@ KR_TMP_ALLOW="$TMP/kr-tmp-allow.txt"
 cat > "$KR_TMP_ALLOW" <<'ALLOW'
 printf '%s' "$body" > "$KR_TMP/issue.md"
 gh issue comment "$num" --repo "$repo" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || { kr_refuse issue_unfiled "the follow-up comment could not be posted"; return 1; }
-gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || true
+url="$(gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" 2>/dev/null)" || url=""
 f="$KR_TMP/redaction.out"
 KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?
 http="$(kk_vector_status "$KR_TMP/vbase.json")"
+if [[ "$http" == 200 ]] && kk_vector_settled "$KR_TMP/vbase.json"; then
+while IFS= read -r row; do kk_say "  ${row}"; done < <(kk_vector_slot_rows "$KR_TMP/vbase.json")
 KK_VBASE_SELF="$(jq -r '.start_ts // 0' "$KR_TMP/vbase.json" 2>/dev/null)"
 b="$(jq -r --arg ip "$ip" '.peers[$ip].start_ts // empty' "$KR_TMP/vbase.json" 2>/dev/null)"
 http="$(kk_vector_status "$KR_TMP/vpoll.json")"
@@ -1897,8 +1959,8 @@ tf_class_readers() { # lines of kk_tf_class that use "$f" other than as the file
 tf_gate_readers() { fn_text kk_gate_plan "$1" | grep -o 'tf-' | wc -l | tr -d ' '; }
 tf_clean_lines() { fn_text kk_tf_clean "$1" | grep 'tf-' | grep -vc '^  rm -f -- '; }
 tf_fn_tmp_lines() { fn_text "$1" "$2" | grep -v '^ *#' | grep -Ec 'KR_TMP|\*\.(out|err)'; }   # per-function pin: the lines that reach the temp dir
-eq "D6.3 N1 static (allow-list): no line outside kk_tf_class, kk_tf_clean and kk_gate_plan reaches the temp dir except the 15 pinned ones (all 15 present); the saved plan nowhere outside those, kk_cmd_apply and kk_cmd_clear; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once and has exactly 4 temp-dir lines; kk_tf_class 1; kk_tf_clean 2, both rm's" \
-  "$(tf_stream_outside "$BODY")|$(tf_allow_present "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")|$(tf_fn_tmp_lines kk_gate_plan "$BODY")|$(tf_fn_tmp_lines kk_tf_class "$BODY")|$(tf_fn_tmp_lines kk_tf_clean "$BODY")" '0|15|0|0|1|0|4|1|2'
+eq "D6.3 N1 static (allow-list): no line outside kk_tf_class, kk_tf_clean and kk_gate_plan reaches the temp dir except the 17 pinned ones (all 17 present); the saved plan nowhere outside those, kk_cmd_apply and kk_cmd_clear; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once and has exactly 4 temp-dir lines; kk_tf_class 1; kk_tf_clean 2, both rm's" \
+  "$(tf_stream_outside "$BODY")|$(tf_allow_present "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")|$(tf_fn_tmp_lines kk_gate_plan "$BODY")|$(tf_fn_tmp_lines kk_tf_class "$BODY")|$(tf_fn_tmp_lines kk_tf_clean "$BODY")" '0|17|0|0|1|0|4|1|2'
 tfm_n=0
 tfm_try() { # id desc inserted-line(s): the line is added to kk_cmd_apply right after the apply call; the allow-list check must see exactly one unlisted line
   local f="$TMP/m/tfm$((++tfm_n)).body"
@@ -1916,7 +1978,7 @@ tfm_try D6.3h 'a quoted-prefix reader ("$KR_TMP/tf-"x)' '  cat "$KR_TMP/tf-"x >&
 tfm_try D6.3i 'a for-loop over "$KR_TMP"/*' '  for f in "$KR_TMP"/*; do cat "$f" >&2; done'
 tfm_try D6.3j 'an alias of the temp dir (d="$KR_TMP"; cat "$d"/*)' '  d="$KR_TMP"; cat "$d"/* >&2'
 # a pinned allow-list line removed from the script leaves the list stale: the presence count (5) is what notices
-mut_ok "$TMP/m/tfmk.body" "$BODY" $'f="$KR_TMP/redaction.out"' $'f="$KR_TMP/redaction.log"' && eq "D6.3k mutant: an allow-list line edited in the script is seen twice (one unlisted line, one stale entry: presence 4)" "$(tf_stream_outside "$TMP/m/tfmk.body")|$(tf_allow_present "$TMP/m/tfmk.body")" '1|14'
+mut_ok "$TMP/m/tfmk.body" "$BODY" $'f="$KR_TMP/redaction.out"' $'f="$KR_TMP/redaction.log"' && eq "D6.3k mutant: an allow-list line edited in the script is seen twice (one unlisted line, one stale entry: presence 16)" "$(tf_stream_outside "$TMP/m/tfmk.body")|$(tf_allow_present "$TMP/m/tfmk.body")" '1|16'
 # the post-apply clean runs BEFORE the post-state read (the EXIT-trap shim reads at exit only, so a move would stay green at runtime)
 order_clean_post() { fn_text kk_cmd_apply "$1" | awk '/^  kk_tf_clean$/ { c = NR } /^  kk_post_state$/ { p = NR } END { print (c && p && c < p) ? "clean-first" : "post-first" }'; }
 eq "D6.2f N1 static: in kk_cmd_apply the post-apply kk_tf_clean precedes kk_post_state (the stream files are gone before the Doppler read-back starts)" "$(order_clean_post "$BODY")" 'clean-first'
@@ -1992,6 +2054,11 @@ eq "D6.12b mutant: a scan_streams that inlines a global (not stop-line-scoped) n
 # N12: the kb budget pin sees a missing Re-checks term
 mut_ok "$TMP/m/bud.body" "$BODY" 'KK_RECHECK_STEP_S=600' 'KK_RECHECK_STEP_S=0' && eq "D6.13 N12 mutant: dropping the Re-checks term from the budget turns B31b" "$([[ "$(bud2_of "$(ptree bud "$TMP/m/bud.body")")" != '8100 6900 600 6300' ]] && echo differs)" 'differs'
 
+# N13 (#12299): the fixture's stale prd_terraform injection is load-bearing on the clear leg — drop the shadow export and
+# the injected OLD token reaches the plan, show and apply calls; the -replace create rewrites it and the read-back refuses.
+sc_clear_shadow() { fresh; set_state copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS stale-previous-value; run_g clear a_env rotate egress_audit_ingest_token; printf '%s:%s:inj%s' "$(v)" "$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" "$(nlog "$D/injected.log" .)"; }
+M D6.14 "N13 the clear's empty TF_VAR shadow export removed: the stale prd_terraform tf-var injection reaches terraform at every call and the -replace create rewrites the OLD token" sc_clear_shadow body "rotate_ok::inj1" "previous_not_cleared:stale-prd_terraform-copy:inj4" $'  export TF_VAR_egress_audit_ingest_token_previous=""\n' '' kk_cmd_clear
+
 # --- final accounting for the whole run
 sleep 0.2
 SCAN_N="$(wc -l < "$TMP/scans.cnt" | tr -d ' ')"; RUN_N="$(wc -l < "$TMP/runs.cnt" | tr -d ' ')"
@@ -2001,7 +2068,7 @@ eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=639
+FLOOR=647
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
