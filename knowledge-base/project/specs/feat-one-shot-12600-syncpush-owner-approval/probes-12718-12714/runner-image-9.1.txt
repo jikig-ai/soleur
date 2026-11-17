@@ -1,0 +1,154 @@
+# Task 9.1: probe1-5 and probe7 rerun in the built runner image (2026-11-17)
+#
+# Image: docker build --target runner of apps/web-platform/Dockerfile at fa7de7d415 (plugin vendored as CI does),
+# plus python3 layered on top for probe3's logging servers only (the git binary is the image's).
+# Host: git version 2.56.0. Image: git version 2.39.5.
+#
+# Differences from the host run (sha-normalised diff), each judged:
+#  - probe1: hint/advice wording only; every rc, MERGE_HEAD, marker, stash and status column is equal (M1-M11 hold).
+#  - probe2: the DEFAULT alternateRefsCommand arm spawns 2 workspace children (host: 4); with =true both are 0 (F1/F2 hold).
+#  - probe5 depth=1 arm (the REJECTED arm): merge rc 128 'refusing to merge unrelated histories' (host: rc 0 'Already up
+#    to date.'). shallow changed and fsck rc 2 in both, so F6's ruling (no --depth, refuse shallow_changed) holds; the chosen
+#    no-depth arm is identical (shallow unchanged, merge rc 0, rev-list rc 0, fsck rc 0). Not a stopping row.
+#  - probe3, probe4, probe7: identical.
+# probe7 (new): merge --no-overwrite-ignore over an ignored file at an upstream-added path exits 1 with no MERGE_HEAD and the
+# file intact (merge_refused); merge-tree --write-tree exits 0 clean, 1 conflict, 128 unrelated histories, and 1 for a
+# missing object (so the pre-check also requires a HEX40 tree on stdout); merge-base of unrelated commits exits 1.
+
+##### probe1
+git: git version 2.39.5
+[clean/pull] rc=0 :: From file:///tmp/claude-1000/kbpull-probe/p1/clean-pull/o|Updating b4456a9..35991a6|Fast-forward|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[]
+[clean/merge] rc=0 :: Updating b4456a9..35991a6|Fast-forward|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[]
+[clean/ffonly] rc=0 :: Updating b4456a9..35991a6|Fast-forward|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[]
+[dirty_kb_autocommitted/pull] rc=0 :: From file:///tmp/claude-1000/kbpull-probe/p1/dirty_kb_autocommitted-pull/o|Merge made by the 'ort' strategy.|
+   MERGE_HEAD=no markers=[] stash=0 head='Merge branch 'main' of file:///tmp/claude-1000/kbpull-probe/p1/dirty_kb_autocommitted-pull/o' status=[]
+[dirty_kb_autocommitted/merge] rc=0 :: Merge made by the 'ort' strategy.|
+   MERGE_HEAD=no markers=[] stash=0 head='Merge commit '9b7dd587d4e2196701b72d3925f18d415cc50dfc'' status=[]
+[dirty_kb_autocommitted/ffonly] rc=128 :: fatal: Not possible to fast-forward, aborting.|
+   MERGE_HEAD=no markers=[] stash=0 head='Auto-commit before sync pull' status=[]
+[dirty_kb_uncommitted_untouched/pull] rc=0 :: Created autostash: aa0d3e0|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M knowledge-base/c.md;]
+[dirty_kb_uncommitted_untouched/merge] rc=0 :: Created autostash: aa0d3e0|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M knowledge-base/c.md;]
+[dirty_kb_uncommitted_untouched/ffonly] rc=0 :: Created autostash: 0e14772|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M knowledge-base/c.md;]
+[dirty_kb_uncommitted_overlap/pull] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[knowledge-base/a.md,] stash=1 head='c2' status=[UU knowledge-base/a.md;]
+[dirty_kb_uncommitted_overlap/merge] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[knowledge-base/a.md,] stash=1 head='c2' status=[UU knowledge-base/a.md;]
+[dirty_kb_uncommitted_overlap/ffonly] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[knowledge-base/a.md,] stash=1 head='c2' status=[UU knowledge-base/a.md;]
+[dirty_nonkb_untouched/pull] rc=0 :: Created autostash: ddd8816|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M README;]
+[dirty_nonkb_untouched/merge] rc=0 :: Created autostash: ddd8816|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M README;]
+[dirty_nonkb_untouched/ffonly] rc=0 :: Created autostash: f621304|Fast-forward|Applied autostash.|
+   MERGE_HEAD=no markers=[] stash=0 head='c2' status=[ M README;]
+[dirty_nonkb_overlap/pull] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[src/x.ts,] stash=1 head='c2' status=[UU src/x.ts;]
+[dirty_nonkb_overlap/merge] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[src/x.ts,] stash=1 head='c2' status=[UU src/x.ts;]
+[dirty_nonkb_overlap/ffonly] rc=0 :: Applying autostash resulted in conflicts.|Your changes are safe in the stash.|You can run "git stash pop" or "git stash drop" at any time.|
+   MERGE_HEAD=no markers=[src/x.ts,] stash=1 head='c2' status=[UU src/x.ts;]
+[untracked_collide/pull] rc=1 :: 	src/new.ts|Please move or remove them before you merge.|Aborting|
+   MERGE_HEAD=no markers=[] stash=0 head='c1' status=[?? src/new.ts;]
+[untracked_collide/merge] rc=1 :: 	src/new.ts|Please move or remove them before you merge.|Aborting|
+   MERGE_HEAD=no markers=[] stash=0 head='c1' status=[?? src/new.ts;]
+[untracked_collide/ffonly] rc=1 :: 	src/new.ts|Please move or remove them before you merge.|Aborting|
+   MERGE_HEAD=no markers=[] stash=0 head='c1' status=[?? src/new.ts;]
+[conflict_committed/pull] rc=1 :: CONFLICT (content): Merge conflict in knowledge-base/a.md|Automatic merge failed; fix conflicts and then commit the result.|When finished, apply stashed changes with `git stash pop`|
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+[conflict_committed/merge] rc=1 :: CONFLICT (content): Merge conflict in knowledge-base/a.md|Automatic merge failed; fix conflicts and then commit the result.|When finished, apply stashed changes with `git stash pop`|
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+[conflict_committed/ffonly] rc=128 :: fatal: Not possible to fast-forward, aborting.|
+   MERGE_HEAD=no markers=[] stash=0 head='Auto-commit before sync pull' status=[]
+[conflict_plus_dirty_nonkb/pull] rc=1 :: CONFLICT (content): Merge conflict in knowledge-base/a.md|Automatic merge failed; fix conflicts and then commit the result.|When finished, apply stashed changes with `git stash pop`|
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+[conflict_plus_dirty_nonkb/merge] rc=1 :: CONFLICT (content): Merge conflict in knowledge-base/a.md|Automatic merge failed; fix conflicts and then commit the result.|When finished, apply stashed changes with `git stash pop`|
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+[conflict_plus_dirty_nonkb/ffonly] rc=128 :: fatal: Not possible to fast-forward, aborting.|
+   MERGE_HEAD=no markers=[] stash=0 head='Auto-commit before sync pull' status=[ M README;]
+##### probe2
+== A. conflict + dirty non-KB: where does the dirty edit go, and what do abort / reset --hard / a second merge do
+[none] after conflicted merge: MERGE_AUTOSTASH=yes README=r1
+   README=r1 MERGE_AUTOSTASH=yes stash_list=0
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+[abort] after conflicted merge: MERGE_AUTOSTASH=yes README=r1
+   merge --abort rc=0 :: Applied autostash.
+   README=r-local MERGE_AUTOSTASH=no stash_list=0
+   MERGE_HEAD=no markers=[] stash=0 head='Auto-commit before sync pull' status=[ M README;]
+[reset] after conflicted merge: MERGE_AUTOSTASH=yes README=r1
+   reset --hard rc=0 :: You can run "git stash pop" or "git stash drop" at any time.
+   README=r1 MERGE_AUTOSTASH=no stash_list=1
+   MERGE_HEAD=no markers=[] stash=1 head='Auto-commit before sync pull' status=[]
+[second_merge] after conflicted merge: MERGE_AUTOSTASH=yes README=r1
+   second merge rc=128 :: hint: as appropriate to mark resolution and make a commit.|fatal: Exiting because of an unresolved conflict.|
+   README=r1 MERGE_AUTOSTASH=yes stash_list=0
+   MERGE_HEAD=yes markers=[knowledge-base/a.md,] stash=0 head='Auto-commit before sync pull' status=[UU knowledge-base/a.md;A  src/new.ts;M  src/x.ts;]
+== B. autostash-pop conflict (no MERGE_HEAD) then the push-side auto-commit would add KB markers
+   merge rc=0
+   MERGE_HEAD=no porcelain-z-kb=UU knowledge-base/a.md;
+   add+commit rc=0 :: 
+   committed blob has markers: 1
+== C. pack size: haves ref vs none
+   haves=yes objects-received=7 have-lines=2 shallow-changed=no
+   haves=no objects-received=7 have-lines=2 shallow-changed=no
+== D. alternate refs: does the isolated fetch spawn a git child against the workspace .git?
+   alternateRefsCommand=default: child runs into workspace: 2 ; sample: run_command: unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_DIR GIT_PREFIX; git --git-dir=/tmp/claude-1000/kbpull-probe/p2/D-default/ws/.git for-each-ref '--format=
+   alternateRefsCommand=true: child runs into workspace: 0 ; sample: 
+== E. force-pushed (unrelated) upstream
+   merge rc=128 :: fatal: refusing to merge unrelated histories
+##### probe3
+git: git version 2.39.5
+== legacy arm (workspace .git/config read; scrubbed env; image global identity file)
+   pull (remote origin):
+     EVIL path=/o/r.git/info/refs auth=None x-evil=repo-unscoped
+     EVIL path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=repo-unscoped
+   pull (remote.origin.url rewritten by the agent):
+     EVIL path=/o/r.git/info/refs auth=None x-evil=repo-unscoped
+     EVIL path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=repo-unscoped
+== hardened isolated arm (server-written GIT_DIR, HOME=isolated dir, allowlisted env, literal URL)
+   [plain/as-built]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-global/as-built]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-global/forced]
+     EVIL path=/o/r.git/info/refs auth=None x-evil=None
+     EVIL path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-system/as-built]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-system/forced]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-xdg/as-built]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+   [env-xdg/forced]
+     LIT path=/o/r.git/info/refs auth=None x-evil=None
+     LIT path=/o/r.git/info/refs auth=x-access-token:TOKEN-SENTINEL x-evil=None
+== show-origin in the hardened child env
+      7 command
+      2 file:/tmp/claude-1000/kbpull-probe/p3/iso/config
+##### probe4
+== C'. with alternateRefsCommand=true: haves ref needed?
+   haves=yes rc=0 received=7 have-lines=2 handover-objects=7
+   haves=no rc=0 received=7 have-lines=0 handover-objects=7
+== push from the isolated dir: alternate-refs child?
+   push rc=0 child-into-workspace=0
+##### probe5
+depth=none isolated-shallow-changed=no merge rc=0 ( 1 file changed, 3 insertions(+)) rev-list rc=0 () fsck rc=0 ()
+depth=1 isolated-shallow-changed=yes merge rc=128 (fatal: refusing to merge unrelated histories) rev-list rc=0 () fsck rc=2 ()
+##### probe7
+git: git version 2.39.5
+no-overwrite-ignore: rc=1 MERGE_HEAD=no file=local-ignored msg=Updating a14f248..4773c96
+merge-tree clean: rc=0
+merge-tree conflict: rc=1
+merge-tree unrelated: rc=128
+merge-tree missing object: rc=1
+merge-base unrelated: rc=1
