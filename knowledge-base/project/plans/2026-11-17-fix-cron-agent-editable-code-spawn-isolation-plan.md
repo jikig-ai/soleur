@@ -1089,7 +1089,8 @@ None. Checked 96 open `code-review` issues against the substrate, `cron-bug-fixe
   reason `cron-containment: write outside run roots`, and every write site the work phase enumerated for
   the 18 callers' prompts and skills is inside the two roots or has a recorded degrade disposition.
 - **AC21** The spawn env carries `GIT_CONFIG_COUNT=3` with `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
-  `safe.bareRepository=explicit`, and no other site sets `GIT_CONFIG_COUNT`.
+  `safe.bareRepository=explicit`, and no other site sets `GIT_CONFIG_COUNT`. (QA 2026-11-17: true under
+  `server/inngest`, which row 4f pins; `server/agent-env.ts` sets its own for founder agent sessions.)
 - **AC17** community-monitor's `setupEphemeralWorkspace` passes the hook self-test with the substituted
   router lines (Guard 2 row 9).
 - **AC18** A red census prints, per finding, the cron, the path, the executed source (argv, allowlist line,

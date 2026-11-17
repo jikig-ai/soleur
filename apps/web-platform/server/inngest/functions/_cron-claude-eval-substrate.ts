@@ -924,7 +924,8 @@ export function isPluginDirFlag(flag: string): boolean {
 /**
  * #12824 (CTO S5) — command-level git config for every claude child, which outranks the clone's
  * `.git/config`: no repo hook runs, no fsmonitor command runs, and git never treats a planted bare repo
- * as the repository. The only `GIT_CONFIG_COUNT` setter under server/ (cron-spawn-git-config-pin.test.ts).
+ * as the repository. The only `GIT_CONFIG_COUNT` setter under server/inngest (cron-spawn-git-config-pin.test.ts
+ * row 4f); `server/agent-env.ts` sets its own for founder agent sessions, which no cron spawn uses.
  */
 export const CRON_GIT_HARDENING: Readonly<Record<string, string>> = Object.freeze({
   GIT_CONFIG_COUNT: "3",
