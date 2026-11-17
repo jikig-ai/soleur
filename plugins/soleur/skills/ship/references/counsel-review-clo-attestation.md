@@ -49,7 +49,7 @@ while IFS= read -r sui_p; do
       END { exit !f }' <<<"$sui_plans" || sui_unknown=1
     continue
   fi
-  grep -qE "^brand_survival_threshold:[[:space:]]*[\"']?single-user[- ]incident" "$sui_top/$sui_p" && sui_threshold="$sui_p"
+  grep -qE "^brand_survival_threshold:[[:space:]]*[\"']?single-user[- ][i]ncident" "$sui_top/$sui_p" && sui_threshold="$sui_p"
 done <<<"$sui_cited"$'\n'"$sui_plans"
 [ -n "$sui_threshold" ] || [ -z "$sui_unknown" ] || sui_threshold=unknown
 # Fires when legal docs changed AND (single-user incident OR a DRAFT marker). Fail closed: an unknown legal_touch counts as
