@@ -1956,7 +1956,7 @@ async function readKbSyncHeldForAgentLine(
   tenant: Awaited<ReturnType<typeof getFreshTenantClient>>,
   userId: string,
   workspaceId: string,
-): Promise<{ heldFiles: unknown; checkedAt: string | null } | null> {
+): Promise<{ heldFiles: number | null; checkedAt: string | null } | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const read = (async () => {
@@ -1975,7 +1975,7 @@ async function readKbSyncHeldForAgentLine(
     if (!row || typeof row !== "object") return null;
     // The builder validates the count (an integer in 1..10000, D29(8)); only the time's type is narrowed here.
     return {
-      heldFiles: row.kb_sync_held_files,
+      heldFiles: typeof row.kb_sync_held_files === "number" ? row.kb_sync_held_files : null,
       checkedAt: typeof row.kb_sync_held_checked_at === "string" ? row.kb_sync_held_checked_at : null,
     };
   } catch (err) {
@@ -2808,6 +2808,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           owner,
           repo,
           workspacePath,
+          workspaceId: activeWorkspaceId,
           // #8739 — a successful Concierge `.c4` save pushes a
           // `c4_diagram_saved` frame on the user's one live socket
           // (supersedeExistingUserSocket) so an open C4Workspace refetches
