@@ -642,7 +642,7 @@ case_row W-armed          kill "notification channel armed"         ""
 case_row W-conf           kill "confirmation_period = 1200"         ""
 case_row W-foreach        kill "no count/for_each gate"             ""
 case_row W-ignore         kill "no lifecycle ignore_changes"        ""
-case_row W-sentry-name    kill "no sentry_uptime_monitor probes a marketing host" ""
+case_row W-sentry-name    kill "declares exactly one sentry_uptime_monitor, on app.soleur.ai" ""
 case_row W-sentry-array   kill "declares no SENTRY_MONITORS array"  ""
 case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
 

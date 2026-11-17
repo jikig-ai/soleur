@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # that has never been driven red is a reading, not a test.
 WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=34
+EXPECTED_TESTS=35
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -542,6 +542,20 @@ t_w10_uptime_clean() {
     _report "W10 a clean uptime marker yields uptime_verdict=clean beside verdict=clean, green step" ok
   else _report "W10 uptime clean" fail "rc=$_rc out='$_out'"; fi
 }
+# W17 (#12844 review): the step's parse is ANCHORED. A presence grep for the
+# anchor text cannot see it dropped (the sed on the same line carries it), so the
+# row drives a forged INDENTED clean marker ahead of the real unavailable one.
+STUB_FORGED_INDENTED='#!/usr/bin/env bash
+echo "  SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1"
+echo "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1"
+echo "sentry_alert live fidelity: PASS (all 28 in-scope rules match the committed reference field-for-field)"
+exit 0'
+t_w17_indented_marker_is_not_read() {
+  _drive "$STUB_FORGED_INDENTED"
+  if [[ "$(_uv)" == "unavailable" ]]; then
+    _report "W17 an indented forged clean marker ahead of the real one is not read: uptime_verdict=unavailable" ok
+  else _report "W17 anchored marker parse" fail "uptime_verdict='$(_uv)' rc=$_rc out='$_out'"; fi
+}
 t_w11_missing_marker_is_unavailable() {
   _drive "$STUB_UP_NOMARKER"
   if [[ "$_rc" == "1" && "$(_uv)" == "unavailable" ]] && grep -q '^verdict=clean$' <<<"$_out"; then
@@ -612,9 +626,11 @@ t_w15_apply_probe_pins_fixture_uptime() {
 t_w16_drift_body_names_uptime_unmanaged() {
   local run
   run=$(_step_field "$WF" id file_drift run 2>&1) || { _report "W16 drift body" fail "$run"; return; }
-  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it' <<<"$run"; then
+  # shellcheck disable=SC2016 # literal Markdown backticks matched with grep -F
+  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it' <<<"$run" \
+     && ! grep -qF -- 'Import = ' <<<"$run"; then
     _report "W16 the drift issue body explains UPTIME UNMANAGED (DELETE through the API; an apply does not fix it)" ok
-  else _report "W16 drift body names UPTIME UNMANAGED" fail "bullet absent from the file_drift run block"; fi
+  else _report "W16 drift body names UPTIME UNMANAGED" fail "bullet absent from the file_drift run block, or it still offers the import recipe the D2 re-ruling removed"; fi
 }
 t_g1_mutants() {
   local f why
@@ -660,6 +676,7 @@ t_g1_row8_rule_drift_uptime_unavailable
 t_w14_drift_probe_pins_fixture_uptime
 t_w15_apply_probe_pins_fixture_uptime
 t_w16_drift_body_names_uptime_unmanaged
+t_w17_indented_marker_is_not_read
 t_g1_mutants
 
 echo "=== $pass passed, $fail failed ==="

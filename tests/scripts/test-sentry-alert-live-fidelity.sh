@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=89
+EXPECTED_TESTS=94
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -508,10 +508,17 @@ t_pinned_path_end_to_end() {
   for cf in "$_shim_dir"/call.*.argv; do
     [[ "$(head -1 "$cf")" == "--disable" ]] || why+=("$(basename "$cf"): argv[1]='$(head -1 "$cf")', want --disable")
     grep -qx -- '--noproxy' "$cf" && grep -qx -- '=https' "$cf" && grep -qx -- '@-' "$cf" || why+=("$(basename "$cf"): --noproxy/--proto =https/--header @- missing")
+    # Per call, not over the union: the workflows GET carries these too, so a
+    # union check cannot see them dropped from the detectors GET alone.
+    grep -qx -- '\*' "$cf" && grep -qx -- '-fsS' "$cf" && grep -qx -- '--max-time' "$cf" || why+=("$(basename "$cf"): noproxy '*', -fsS or --max-time missing")
   done
   [[ "$(find "$_shim_dir" -maxdepth 1 -name 'call.*.argv' | wc -l)" -eq 2 ]] || why+=("want exactly 2 curl calls")
-  grep -qx 'SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=[1-9][0-9]*' <<<"$out" || why+=("no LIVE (non-FIXTURE) clean uptime marker")
+  grep -qx 'SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1' <<<"$out" || why+=("no LIVE (non-FIXTURE) clean uptime marker")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
+  # A correct PREFIX can be re-opened by a later argument, so the transport
+  # property is also a NEGATIVE over every call's full argv (#12844 review: an
+  # `--insecure --resolve` appended to the detectors GET alone stayed green).
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-k|--insecure|--resolve|--connect-to|-x|--proxy|--proxy-insecure|--preproxy|--socks5|--socks5-hostname|-K|--config|--proto-redir|--doh-url|--cacert|--capath|--interface|--unix-socket|--abstract-unix-socket' && why+=("a transport-reopening flag is present in some call")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '-fsS' || why+=("-fsS absent")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--max-time' || why+=("--max-time absent")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--proto' || why+=("--proto absent")
@@ -1474,11 +1481,11 @@ t_leaf_key_is_scrubbed() {
 }
 
 # ── Guard 1 — no unmanaged Sentry uptime monitor (#6606) ─────────────────────
-# PROPERTY: every live uptime detector is `mode == 1` (manual, i.e. Terraform-
-# created or imported), and the live count is not greater than the number of
-# declared `resource "sentry_uptime_monitor"` blocks. Sentry re-creates an
-# auto-detected (mode 3) monitor on its own; an apply never removes it, so a
-# probe is the only thing that sees one come back.
+# PROPERTY: every live uptime detector is `mode == 1` (manual: created by
+# Terraform, the UI or the API), and the live count equals the number of
+# declared `resource "sentry_uptime_monitor"` blocks. An auto-detected (mode 3)
+# monitor, or one made in the UI, is never removed by an apply, so a probe is
+# the only thing that sees one appear.
 #
 # Every row is FIXTURE-driven (SENTRY_FIXTURE_UPTIME), with the declared side read
 # from a scratch directory (SENTRY_UPTIME_TF_DIR, honoured in fixture mode ONLY),
@@ -1520,7 +1527,7 @@ resource "sentry_uptime_monitor" "block_comment" {
 */
 TF
 # H2's declared side: odd whitespace (tabs, runs of spaces) and a trailing comment.
-printf 'resource \t "sentry_uptime_monitor"    "app"\t{   # adopted from Sentry id 9000001\n  url = "https://app.soleur.ai"\n}\n' \
+printf 'resource \t "sentry_uptime_monitor"    "app"\t{   # declared app monitor\n  url = "https://app.soleur.ai"\n}\n' \
   > "$UP_TFWS/uptime-monitors.tf"
 
 _up_row() { # id mode-json url -> one API-shaped uptime detector row
@@ -1636,13 +1643,65 @@ t_g1_runs_before_rule_side_exit() {
 }
 t_g1_url_is_scrubbed() {
   local fx; fx=$(_up_fixture g1url "$(_up_row 9000009 3 'https://g1user:g1pass@app.soleur.ai/health?token=g1querysecret#g1frag')")
-  _run_up "$fx" SENTRY_UPTIME_TF_DIR="$UP_TF2"
+  _run_up "$fx"
   local why=()
-  grep -qF -- 'UPTIME UNMANAGED: 9000009:3:https://app.soleur.ai/health ' <<<"$_out" || why+=("finding is not id:mode:scheme://host/path")
+  # The authority carries userinfo, so the host prints as a placeholder: the part
+  # after `@` is attacker-chosen and could name the real host (#12844 review).
+  grep -qF -- 'UPTIME UNMANAGED: 9000009:3:https://<userinfo-host>/health ' <<<"$_out" || why+=("finding is not id:mode:scheme://<userinfo-host>/path")
   grep -qE -- 'g1user|g1pass|g1querysecret|g1frag|token=' <<<"$_out" && why+=("userinfo, query or fragment leaked")
   if [[ ${#why[@]} -eq 0 ]]; then
-    _report "G1-9 a URL carrying user:pass@ and ?token= prints scheme, host and path only" ok
+    _report "G1-9 a URL carrying user:pass@ and ?token= prints scheme, a host placeholder and path only" ok
   else _report "G1-9 URL scrubbed" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+# G1-13..G1-17 (#12844 review): states the guard cannot establish are
+# UNAVAILABLE, never clean and never an exit that skips the rule-side check.
+t_g1_empty_live_is_unavailable() {
+  local fx; fx=$(_up_fixture g1empty)
+  _run_up "$fx"
+  if [[ "$_rc" -eq 0 && "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=0 declared=1" ]]; then
+    _report "G1-13 an empty detectors list against one declared block (live < declared) is UNAVAILABLE, never clean" ok
+  else _report "G1-13 empty live" fail "rc=$_rc marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_bad_shape_is_unavailable() {
+  local bad=() fx label row
+  for label in cfgstr dsobj; do
+    case "$label" in
+      cfgstr) row=$(_up_row 9000001 1 https://app.soleur.ai | jq -c '.config = "x"') ;;
+      dsobj)  row=$(_up_row 9000001 3 https://app.soleur.ai | jq -c '.dataSources = {queryObj: {url: "https://app.soleur.ai"}}') ;;
+    esac
+    fx=$(_up_fixture "g1shape.$label" "$row")
+    _run_up "$fx"
+    [[ "$_rc" -eq 0 ]] || bad+=("$label: rc=$_rc (want 0)")
+    grep -q '^SENTRY_UPTIME uptime_verdict=unavailable ' <<<"$_out" || bad+=("$label: marker '$(_up_marker)'")
+    grep -q 'live fidelity: PASS' <<<"$_out" || bad+=("$label: rule side did not run to PASS")
+  done
+  if [[ ${#bad[@]} -eq 0 ]]; then
+    _report "G1-14 a row whose config is a string, or whose dataSources is an object, is UNAVAILABLE and the rule side still runs" ok
+  else _report "G1-14 bad row shape" fail "${bad[*]}"; fi
+}
+t_g1_nonnumeric_id_is_unavailable() {
+  local fx; fx=$(_up_fixture g1id "$(_up_row 9000001 1 https://app.soleur.ai)" "$(_up_row '::warning::forged' 1 https://app.soleur.ai)")
+  _run_up "$fx"
+  local why=()
+  grep -q '^SENTRY_UPTIME uptime_verdict=unavailable ' <<<"$_out" || why+=("marker '$(_up_marker)'")
+  grep -qE '^[[:space:]]*::warning::forged' <<<"$_out" && why+=("a forged workflow command reached the start of a line")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-15 a non-numeric detector id is UNAVAILABLE and never starts a line" ok
+  else _report "G1-15 non-numeric id" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_nonnumeric_mode_is_unavailable() {
+  local fx; fx=$(_up_fixture g1mode "$(_up_row 9000001 '"1"' https://app.soleur.ai)")
+  _run_up "$fx"
+  if grep -q '^SENTRY_UPTIME uptime_verdict=unavailable ' <<<"$_out" && ! grep -qF 'UPTIME UNMANAGED' <<<"$_out"; then
+    _report "G1-16 a string mode is UNAVAILABLE, not drift (it is not evidence of an auto-detected monitor)" ok
+  else _report "G1-16 string mode" fail "marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_backslash_authority_placeholder() {
+  local fx; fx=$(_up_fixture g1bs "$(_up_row 9000011 3 'https://evil.example\\@app.soleur.ai/x')")
+  _run_up "$fx"
+  if grep -qF -- 'UPTIME UNMANAGED: 9000011:3:https://<userinfo-host>/x ' <<<"$_out" && ! grep -qF -- '://app.soleur.ai/x' <<<"$_out"; then
+    _report "G1-17 an authority with a backslash before @ never displays the host after the @" ok
+  else _report "G1-17 backslash authority" fail "output: $(head -c 400 <<<"$_out")"; fi
 }
 t_g1_h1_clean() {
   _run_up "$UP_CLEAN"
@@ -1698,7 +1757,7 @@ t_g1_tf_dir_seam_ignored_live() {
   local d; d=$(_up_live_stub g1seam "$UP_CLEAN" 0)
   _run_up_live "$d" SENTRY_UPTIME_TF_DIR="$UP_TF0"
   local m; m=$(_up_marker)
-  if [[ "$m" =~ ^SENTRY_UPTIME\ uptime_verdict=clean\ unmanaged=0\ live=1\ declared=[1-9][0-9]*$ ]]; then
+  if [[ "$m" =~ ^SENTRY_UPTIME\ uptime_verdict=clean\ unmanaged=0\ live=1\ declared=1$ ]]; then
     _report "G1-12 SENTRY_UPTIME_TF_DIR is ignored on the live branch (declared read from the committed root; live marker carries no FIXTURE)" ok
   else _report "G1-12 declared-dir seam ignored live" fail "rc=$_rc marker '$m'; output: $(head -c 400 <<<"$_out")"; fi
 }
@@ -1805,6 +1864,11 @@ t_g1_h2_whitespace_and_comment
 t_g1_foreign_type_is_unavailable
 t_g1_transport_failure_is_unavailable
 t_g1_tf_dir_seam_ignored_live
+t_g1_empty_live_is_unavailable
+t_g1_bad_shape_is_unavailable
+t_g1_nonnumeric_id_is_unavailable
+t_g1_nonnumeric_mode_is_unavailable
+t_g1_backslash_authority_placeholder
 
 echo "=== $pass passed, $fail failed ==="
 

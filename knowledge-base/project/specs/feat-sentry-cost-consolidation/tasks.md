@@ -63,10 +63,13 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 - [ ] 4.3 C4 tests pass (AC8); discoverability test passes (AC15).
 - [ ] 4.4 Grep sweep prints nothing (AC7); resource counts per AC3.
 
+## Phase 4b: Pre-merge (agent-run)
+
+- [ ] 5.0 Before the merge, with the operator's go-ahead on the exact commands (given 2026-11-17): GET, DELETE, GET (404) of 1422253 (D3a); plan Phase 7 step 0.
+
 ## Phase 5: Post-merge (agent-run, same session)
 
 - [ ] 5.1 Watch both apply workflows to completion with Monitor.
-- [ ] 5.0 Before the merge, with the operator's go-ahead on the exact commands: GET, DELETE, GET (404) of 1422253 (D3a).
 - [ ] 5.2 Read back the new `.app` monitor: `mode: 1`, `workflowIds == []`, a passing check; 1422253 and the 4 marketing monitors 404; Better Stack changelog up.
 - [ ] 5.3 Fidelity script prints `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`.
 - [x] 5.4 Superseded 2026-11-17 (the delete is 5.0). Was: Fallback only if mode is still 3: `removed` + new monitor PR with `[ack-destroy]`

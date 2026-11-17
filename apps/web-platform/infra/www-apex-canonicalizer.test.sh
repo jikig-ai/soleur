@@ -677,7 +677,10 @@ sentry_array_n="$(count_matches '^[[:space:]]*((declare|local|readonly|typeset)[
 eq_case '0' "$sentry_array_n" \
   "cutover-verify.sh declares no SENTRY_MONITORS array (CUT8 grades Better Stack only, ADR-328)"
 
-SENTRY_UPTIME_SCAN="$(strip_comments "$SENTRY_TF" | awk '
+# Read EVERY .tf in the Sentry root, not only uptime-monitors.tf: the one-slot property
+# (ADR-328) is a property of the root, and a monitor declared in a new file bills the same
+# second slot (#12844 review). Exactly one block, and its host is app.soleur.ai.
+SENTRY_UPTIME_SCAN="$(for _tf in "$SCRIPT_DIR"/sentry/*.tf; do strip_comments "$_tf"; done | awk '
   !inb && /^resource[[:space:]]+"sentry_uptime_monitor"[[:space:]]+"/ { inb = 1; depth = 0; blocks++ }
   inb {
     if ($0 ~ /^[[:space:]]*url[[:space:]]*=/) {
@@ -685,19 +688,23 @@ SENTRY_UPTIME_SCAN="$(strip_comments "$SENTRY_TF" | awk '
       sub(/^[[:alpha:]]+:\/\//, "", h); sub(/[\/:?#].*$/, "", h); sub(/[[:space:]]+$/, "", h)
       h = tolower(h); sub(/\.$/, "", h)
       if (h == "soleur.ai" || h == "www.soleur.ai") { bad = bad (bad == "" ? "" : ",") h }
+      if (h == "app.soleur.ai") app++
     }
     d = gsub(/\{/, "{"); depth += d
     d = gsub(/\}/, "}"); depth -= d
     if (depth <= 0) { inb = 0 }
   }
-  END { printf "%d %s", blocks + 0, bad }
+  END { printf "%d %d %s", blocks + 0, app + 0, bad }
 ')"
 sentry_blocks="${SENTRY_UPTIME_SCAN%% *}"
-sentry_marketing="${SENTRY_UPTIME_SCAN#* }"
+_scan_rest="${SENTRY_UPTIME_SCAN#* }"
+sentry_app="${_scan_rest%% *}"
+sentry_marketing="${_scan_rest#* }"
+[[ "$sentry_marketing" == "$_scan_rest" ]] && sentry_marketing=""
 sentry_rc=1
-if [[ "$sentry_blocks" =~ ^[0-9]+$ && "$sentry_blocks" -ge 1 && -z "$sentry_marketing" ]]; then sentry_rc=0; fi
+if [[ "$sentry_blocks" == "1" && "$sentry_app" == "1" && -z "$sentry_marketing" ]]; then sentry_rc=0; fi
 verdict "$sentry_rc" \
-  "no sentry_uptime_monitor probes a marketing host (soleur.ai/www.soleur.ai; ADR-328) over a non-empty block set; found ${sentry_blocks} block(s), marketing hosts [${sentry_marketing}]"
+  "the Sentry root declares exactly one sentry_uptime_monitor, on app.soleur.ai, and none probes a marketing host (soleur.ai/www.soleur.ai; ADR-328); found ${sentry_blocks} block(s), ${sentry_app} on app.soleur.ai, marketing hosts [${sentry_marketing}]"
 
 # W15/W16 — the bracket must not come back, asserted on the PROPERTY rather than on the
 # deleted step's spelling. deploy-docs.yml used to PAUSE the Sentry www monitor around each

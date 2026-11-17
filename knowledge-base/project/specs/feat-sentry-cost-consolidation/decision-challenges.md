@@ -36,9 +36,10 @@ have an `operator (scope)` row each so the operator sees the change.
 
 - **What you said:** keep the ACME probe as Sentry's one free uptime check, and delete the
   auto-detected app.soleur.ai monitor.
-- **What we recommend:** keep app.soleur.ai as Sentry's one free check. It is imported into
-  Terraform, which turns it from an auto-detected monitor into a normal managed one, so
-  nothing auto-detected is left. Delete the ACME probe.
+- **What we recommend:** keep app.soleur.ai as Sentry's one free check, as a new monitor
+  declared in Terraform; the auto-detected one is deleted through the API, so nothing
+  auto-detected is left (updated 2026-11-17 after the D2 re-ruling; earlier text said it was
+  imported). Delete the ACME probe.
 - **Why:** the app monitor is Sentry's only watch on the live product. On 2026-07-17 you
   ruled not to delete it (DC-1, #6606) so the product stays on two vendors. The ACME probe
   always reports healthy since the move to Cloudflare Pages, so it watches nothing.

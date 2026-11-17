@@ -1384,7 +1384,14 @@ jobs:
           SENTRY_VENDOR_DEFAULTS_FILE: ""
         run: |
           set -euo pipefail
-          bash scripts/sentry-alert-live-fidelity.sh
+          bash scripts/sentry-alert-live-fidelity.sh | tee "${RUNNER_TEMP}/post-apply-probe.txt"
+          # An UNAVAILABLE uptime check does not move the script's exit code, so
+          # rc alone would green this step on a run that checked no uptime monitor.
+          uv=$(grep -m1 -oE '^SENTRY_UPTIME uptime_verdict=[a-z-]+' "${RUNNER_TEMP}/post-apply-probe.txt" | sed 's/^SENTRY_UPTIME uptime_verdict=//' || true)
+          if [[ "$uv" != "clean" ]]; then
+            echo "::error::post-apply uptime check read uptime_verdict=${uv:-<no marker>}, not clean: the SENTRY_UPTIME section above says why. An unavailable check is a red, not a pass (#6606)."
+            exit 1
+          fi
 
       - name: Upload state forensics (pre + post)
         # `failure()`, NOT `always()`, and placed AFTER the post-apply probes.

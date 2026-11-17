@@ -151,7 +151,7 @@ handled as User-Challenges in `decision-challenges.md`. The live counts in the b
   emitter feeding them they would bill or page falsely.
 
 **Value-proposition measurement.** The saving is measured, not asserted:
-`doppler run -p soleur -c prd_terraform -- curl -sS -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" https://jikigai-eu.sentry.io/api/0/customers/jikigai-eu/ | jq '.categories | {monitorSeats, uptime}'`
+`doppler run -p soleur -c prd_terraform --command 'printf "Authorization: Bearer %s\n" "$SENTRY_IAC_AUTH_TOKEN" | curl --disable --noproxy "*" -sS -H @- https://jikigai-eu.sentry.io/api/0/customers/jikigai-eu/' | jq '.categories | {monitorSeats, uptime}'` (amended 2026-11-17: the earlier `-- curl -H "...$SENTRY_IAC_AUTH_TOKEN"` form expanded the variable in the outer shell, before Doppler set it)
 returned uptime usage 5, reserved 1, onDemandSpendUsed 400 (cents). Direct saving: $4.00/mo.
 
 **Import target, measured read-only 2026-11-17.**
@@ -524,11 +524,18 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
 
 ### Phase 7: Post-merge (agent-run, same session)
 
-0. **Immediately before the merge (amended 2026-11-17, D2/D3a), with the operator's explicit
-   go-ahead on the exact commands:** GET `organizations/jikigai-eu/detectors/1422253/` (expect
-   `uptime_domain_failure`, mode 3, url `https://app.soleur.ai`), DELETE the same path, GET again
-   (expect 404). If the apply then refuses to create `.app`, Better Stack keeps paging for the app
-   and the apply is fixed in a follow-up PR.
+0. **Immediately before the merge (amended 2026-11-17, D2/D3a).** Operator go-ahead given
+   2026-11-17 for exactly this command. Preconditions on the final head SHA: every required check
+   green, `plan_pr` shows `1 to add, 0 to change, 4 to destroy`, `sentry-destroy-required` green,
+   and `[ack-destroy]` in a branch commit body. Then, with `U=https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/1422253/`:
+   GET (expect 200, `uptime_domain_failure`, `config.mode` 3, url `https://app.soleur.ai`,
+   `workflowIds` `[]`, read 2026-11-17), then
+   `doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$SENTRY_IAC_AUTH_TOKEN" | curl --disable --noproxy "*" -sS --max-time 15 -H @- -X DELETE -w "\nHTTP %{http_code}\n" "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/1422253/"'`
+   (expect 2xx), then GET (expect 404). Any other result stops the merge. On 403, the token's
+   scope does not cover the detectors path: stop and report. Then merge directly
+   (`gh pr merge --squash`, not `--auto`), so the gap is the apply's duration. If the apply then
+   refuses to create `.app`, Better Stack keeps paging for the app and the apply is fixed in a
+   follow-up PR.
 1. Watch `apply-sentry-infra.yml` and `apply-web-platform-infra.yml` on the merge commit to
    completion (Monitor tool with an until-loop on `gh run view`, per
    `hr-monitor-not-run-in-background-for-polling`). The apply runs only through these workflows,
@@ -540,7 +547,7 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    such as a Cloudflare challenge, would open false downtime issues); 1422253 and
    1221114-1221117 are gone (404). Better Stack
    lists `soleur dot ai changelog deep path` and it is up.
-3. Run `doppler run -p soleur -c prd_terraform -- bash scripts/sentry-alert-live-fidelity.sh`:
+3. Run `doppler run -p soleur -c prd_terraform --command 'SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_ORG=jikigai-eu bash scripts/sentry-alert-live-fidelity.sh'`:
    expect `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1` and a clean verdict.
 4. **Superseded 2026-11-17** (the delete of 1422253 is now Phase 7 step 0, before the merge).
    Kept for the record: **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
@@ -698,23 +705,28 @@ delete lands later (Phase 7 step 4); the ADR states that order.
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** an app.soleur.ai outage detected by one vendor
-  only (if the import fails and the monitor is lost; Better Stack still pages for the app), or a
-  marketing-site outage (soleur.ai, www, changelog) that pages through Better Stack only and
-  stays silent if Better Stack is also down.
+  only. From the pre-merge delete of 1422253 until the apply creates the new Sentry monitor, and
+  indefinitely if that apply fails, Sentry does not watch the app; Better Stack still pages for it
+  (about 4 min email, 6 min email and push) throughout. Or a marketing-site outage (soleur.ai, www,
+  changelog) that pages through Better Stack only and stays silent if Better Stack is also down;
+  that includes the terms and privacy pages a signed-in user opens from the accept-terms and signup
+  screens (amended 2026-11-17).
 - **If this leaks, the user's data is exposed via:** nothing new. The change moves synthetic
   HTTP probes of public URLs between two vendors already holding them; no user data, no new
   credential, no new egress.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the one surface where a single user's incident lives,
-  the app, keeps both vendors and the same monitor id (adopted, not replaced); the surfaces that
-  lose a vendor are static marketing pages, where harm comes from a pattern of unnoticed
-  downtime, not from one user.
+  the app, keeps both vendors (amended 2026-11-17: through a new monitor id that replaces 1422253,
+  whose check history is lost); the surfaces that lose a vendor are static marketing pages, where
+  harm comes from a pattern of unnoticed downtime, not from one user. A legal page that is down
+  while Better Stack is also down is a double fault; the legal pages' final 200 URL was already
+  unwatched by either vendor before this PR (follow-up issue).
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "Sentry uptime monitor soleur-app-reachability (adopted id 1422253, https://app.soleur.ai, 2xx) as a detection second source; Better Stack monitors app, app_health and 'soleur dot ai changelog deep path' as the paging source; the SENTRY_UPTIME section of sentry-alert-live-fidelity.sh in scheduled-sentry-alert-drift.yml"
+  what: "Sentry uptime monitor soleur-app-reachability (declared new, replacing auto-detected 1422253, https://app.soleur.ai, 2xx) as a detection second source; Better Stack monitors app, app_health and 'soleur dot ai changelog deep path' as the paging source; the SENTRY_UPTIME section of sentry-alert-live-fidelity.sh in scheduled-sentry-alert-drift.yml"
   cadence: "Sentry 60s (3 failures open an issue); Better Stack 180s (60s confirmation); uptime check every scheduled drift run"
   alert_target: "Better Stack email (pages); Sentry opens an issue with no alert route (model.c4 sentry -> founder edge); a drift verdict opens a ci/sentry-alert-drift GitHub issue"
   configured_in: "apps/web-platform/infra/sentry/uptime-monitors.tf; apps/web-platform/infra/uptime-alerts.tf; scripts/sentry-alert-live-fidelity.sh; .github/workflows/scheduled-sentry-alert-drift.yml"
@@ -952,7 +964,7 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
 - Given a `SENTRY_MONITORS=(x)` line re-added to `cutover-verify.sh`, when the canonicalizer
   runs, then W14 fails. (unit, mutation)
 - Plan verify (pre-merge): the Phase 1 step 7 identity command shows `update` with the import id.
-- API verify (post-merge): `doppler run -p soleur -c prd_terraform -- bash scripts/sentry-alert-live-fidelity.sh`
+- API verify (post-merge): `doppler run -p soleur -c prd_terraform --command 'SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_ORG=jikigai-eu bash scripts/sentry-alert-live-fidelity.sh'`
   expects `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`.
 
 ## Dependencies & Risks

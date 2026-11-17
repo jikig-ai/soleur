@@ -96,7 +96,10 @@ and the host-kernel cron monitors land in #12386.
 - The production app keeps two vendors: Better Stack pages and Sentry detects, so a Sentry outage
   is still survivable for the app.
 - **Dissent, recorded:** a Better Stack outage leaves soleur.ai (apex, www and the deep path)
-  unwatched. This is accepted because the marketing site holds no user data. A hard 522 on www is
+  unwatched. This is accepted because the marketing site holds no user data. It does carry the
+  terms and privacy pages a signed-in user opens from the accept-terms and signup screens; their
+  final URL was already unwatched by either vendor before this decision, and a follow-up issue adds
+  a Better Stack monitor for it. A hard 522 on www is
   now detected only by `soleur_www_redirect`, in about 23 min worst case instead of about 15 min
   through the deleted Sentry www monitor.
 - **Dissent, recorded (D4):** after #12386 arms the host-kernel monitors on Sentry, one outage of
@@ -104,9 +107,9 @@ and the host-kernel cron monitors land in #12386.
 - The ACME carve-out property is no longer watched at runtime by any vendor; it stays tracked on
   #7799, as it effectively was since the Pages cutover.
 - `cutover-verify.sh` CUT8 no longer grades Sentry monitors: Sentry watches no marketing URL.
-- Sentry could auto-detect a new monitor again. Its own code turns the option off after the first
-  auto monitor and does not re-create deleted ones; if it does, the uptime check reports it within
-  one scheduled run.
+- Sentry could auto-detect a new monitor again. Its code, read for this decision, turns the option
+  off after the first auto monitor and does not re-create deleted ones; that is not verified live.
+  If one appears, the uptime check reports it within one daily run.
 - ADR-204 is amended by pointer at its apex second-sourcing consequence and at its rejected
   "delete `sentry_uptime_monitor.soleur_www` outright" row. Its accepted body is unchanged.
 
@@ -114,7 +117,8 @@ and the host-kernel cron monitors land in #12386.
 
 - Sentry uptime: $4.00/mo becomes $0. That is the whole direct saving.
 - The Sentry line read live on 2026-11-17 is $54.06 ($29 base + $21.06 cron for 27 billable
-  monitors + $4.00 uptime accrued). The 2026-12-16 invoice is $50.06 to $54.06, depending on whether
+  monitors + $4.00 uptime accrued). The 2026-12-16 invoice is $50.06 to $55.06 (the top end if the new app monitor counts as a sixth
+  uptime monitor this period), depending on whether
   the accrued $4.00 is refunded (unverified). Steady state is $50.06/mo, and $53.18/mo after #12386
   adds four cron monitors. The 2026-11-17 invoice of $84.48 is billing lag from the 2026-10-29
   monitor prune, not a figure from this decision.

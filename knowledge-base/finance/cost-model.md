@@ -299,7 +299,8 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > **≤45.82%** net (≤58.65% on the post-fix projection). The Totals list, Break-Even, margin and
 > Gate #4 sections below still read the 2026-09-29 basis (359.47 / 1,299.32), as the 2026-11-16
 > correction left them, and are re-derived at the next monthly review. Projection: the 2026-12-16
-> invoice is $50.06 to $54.06, depending on whether the accrued $4.00 uptime is refunded
+> invoice is $50.06 to $55.06 (the top end if the new app monitor counts as a sixth uptime monitor
+> this period), depending on whether the accrued $4.00 uptime is refunded
 > (unverified); steady state **$50.06/mo** ($29 + 27 × $0.78), giving COGS 356.57 and all-in
 > ≥1,296.42 (8 / 8 and 27 / 28 users); **$53.18/mo** once #12386 adds 4 host-kernel cron monitors
 > ($29 + 31 × $0.78), giving COGS 359.69 and all-in ≥1,299.54 (8 / 8 and 27 / 28). That re-route

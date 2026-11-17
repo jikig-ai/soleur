@@ -7,7 +7,8 @@
 #   Sentry includes ONE uptime monitor on this plan; every further monitor bills
 #   $1.00/mo. That one slot goes to the production app, declared here as a new
 #   manual monitor that replaces the one Sentry auto-detected for the web-platform
-#   project (detector 1422253, deleted through the API after the first apply), so
+#   project (detector 1422253, deleted through the API immediately before the
+#   merge that creates this one; ADR-328 Sequencing), so
 #   the app is second-sourced across two vendors (DC-1, #6606): Better Stack
 #   PAGES for this URL (betteruptime_monitor.app, betteruptime_monitor.app_health
 #   in ../uptime-alerts.tf); this monitor DETECTS (opens a Sentry issue) without
@@ -67,10 +68,12 @@ locals {
 
 # CREATED, NOT IMPORTED (ADR-328; decision-challenges D2). Sentry auto-detected
 # https://app.soleur.ai and runs it as detector 1422253 in mode 3 (auto-detected).
-# This block creates a separate manual monitor for the same URL. After its first
-# apply shows three passing checks, 1422253 is deleted through the API
-# (GET, DELETE, GET expecting 404; D3a). Until then two uptime monitors are
-# live and the scheduled drift check correctly reports UPTIME UNMANAGED.
+# This block creates a separate manual monitor for the same URL. 1422253 is
+# deleted through the API (GET, DELETE, GET expecting 404; D3a) immediately
+# BEFORE the merge that adds this block, not after: the post-apply fidelity probe
+# in apply-sentry-infra.yml fails on any live non-manual uptime monitor, so a
+# later delete would red the merge's own apply run. Better Stack pages for the
+# app in the minutes between the delete and the apply.
 # An `import {}` is not usable here: scripts/sentry-adoption-plan-assert.sh
 # reads any import or forget row as the #7650 alert adoption and fails the plan.
 resource "sentry_uptime_monitor" "app" {
