@@ -7,13 +7,15 @@
 // protocol clamp is widened to `file` for the token-bearing arm only (the token-free runner keeps `none`). Synthesized
 // data only (cq-test-fixtures-synthesized-only): the token is built by concatenation.
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitFixtureEnv } from "./helpers/git-fixture-env";
 
 const USER = "77777777-7777-4777-8777-777777777777";
+const WS_ID = "11111111-1111-4111-8111-111111111111";
+const LITERAL_URL = "https://github.com/acme/widget.git";
 const TOKEN = ["ghs", "_", "c".repeat(36)].join("");
 
 const H = vi.hoisted(() => ({
@@ -27,6 +29,9 @@ const H = vi.hoisted(() => ({
   /** Called after each token-bearing call returns (args[0] = verb). */
   afterTokenCall: null as null | ((verb: string) => void),
   tokenVerbs: [] as string[],
+  /** The fixture remote the literal URL is rewritten to on the hardened arm (D27: the held-commits merge). */
+  remoteUrl: "",
+  writeRepoCols: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -38,6 +43,20 @@ vi.mock("@/server/observability", () => ({
 }));
 vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.log }));
 vi.mock("@/server/github-app", () => ({ generateInstallationToken: async () => ["ghs", "_", "c".repeat(36)].join("") }));
+// D27: the held-commits merge resolves the literal URL from the workspace row and never stamps.
+vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols }));
+vi.mock("@/lib/supabase/tenant", () => ({ RuntimeAuthError: class RuntimeAuthError extends Error {}, getFreshTenantClient: async () => ({}) }));
+vi.mock("@/server/git-hardened-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/git-hardened-env")>();
+  return {
+    ...actual,
+    buildIsolatedGitEnv: (dir: import("@/server/git-hardened-env").IsolatedPushDir, extra: Readonly<Record<string, string>> = {}) => ({
+      ...actual.buildIsolatedGitEnv(dir, extra),
+      GIT_ALLOW_PROTOCOL: "https:file",
+    }),
+  };
+});
 vi.mock("@/server/git-auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/git-auth")>();
   return {
@@ -45,7 +64,7 @@ vi.mock("@/server/git-auth", async (importOriginal) => {
     gitWithInstallationAuth: async (args: string[], id: number, opts: import("@/server/git-auth").GitExecOptions = {}) => {
       H.tokenVerbs.push(args[0]);
       try {
-        return await actual.gitWithInstallationAuth(args, id, opts);
+        return await actual.gitWithInstallationAuth(args.map((a) => (a === LITERAL_URL ? H.remoteUrl : a)), id, opts);
       } finally {
         H.afterTokenCall?.(args[0]);
       }
@@ -132,6 +151,7 @@ function newRow(): Row {
   mkdirSync(join(root, "tmp"));
   process.env.HOME = join(root, "home");
   process.env.TMPDIR = join(root, "tmp");
+  H.remoteUrl = `file://${remote}`;
   return { root, remote, ws };
 }
 
@@ -154,7 +174,19 @@ function localCommit(r: Row, edit: (dir: string) => void, msg = "local"): string
   return git(r.ws, "rev-parse", "HEAD");
 }
 
-const heal = (r: Row) => syncWorkspace(1, r.ws, H.log as never, { userId: USER, op: "push" });
+const heal = (r: Row) => syncWorkspace(1, r.ws, H.log as never, { userId: USER, workspaceId: WS_ID, op: "push" });
+const isAncestor = (r: Row, a: string, b: string): boolean => {
+  try {
+    git(r.ws, "merge-base", "--is-ancestor", a, b);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const mergeHeadPresent = (r: Row): boolean => existsSync(join(r.ws, ".git", "MERGE_HEAD"));
+/** `git ls-files -s` plus every tracked file's bytes: equal before and after = the tracked tree is byte-identical. */
+const treeBytes = (r: Row): string =>
+  git(r.ws, "ls-files", "-s") + git(r.ws, "ls-files").split("\n").filter(Boolean).map((f) => `\n${f}:${read(join(r.ws, f))}`).join("");
 const localMain = (r: Row): string => git(r.ws, "rev-parse", "refs/heads/main");
 const recoveryBranches = (r: Row): string => git(r.ws, "for-each-ref", "--format=%(refname)", "refs/heads/soleur/");
 const warnOps = (): Array<{ op?: string; tags?: Record<string, string> }> =>
@@ -169,6 +201,7 @@ beforeEach(() => {
   H.localViaTokenArm = false;
   H.afterTokenCall = null;
   H.tokenVerbs.length = 0;
+  H.writeRepoCols.mockClear();
   for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.log.info, H.log.warn, H.log.error, H.log.debug]) f.mockClear();
 });
 
@@ -219,36 +252,73 @@ describe("self-heal: a dirty tracked tree is never reset (D6a/b, real git)", { t
   });
 });
 
-describe("self-heal: held commits reset only when their content is upstream (D6c interim, real git)", { timeout: 30_000 }, () => {
-  test("held code commit + upstream KB push -> not reset, not branched aside; op self-heal-aborted-held-commits held_kind nonkb", async () => {
+describe("self-heal: held commits are merged, never reset (D27 amending D6(c), real git)", { timeout: 30_000 }, () => {
+  test("held code commit + upstream KB push -> merged (hardened pull merge): no reset, no recovery branch, no stamp", async () => {
     const r = newRow();
     const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
-    upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nupstream kb\n"));
+    const up = upstreamCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nupstream kb\n"));
     const result = await heal(r);
-    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward" }));
-    expect(localMain(r)).toBe(held);
+    expect(result).toEqual({ ok: true });
+    expect(isAncestor(r, held, "HEAD")).toBe(true);
+    expect(isAncestor(r, up, "HEAD")).toBe(true);
     expect(git(r.ws, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(read(join(r.ws, "src", "s.ts"))).toBe("export const s = 2; // held code\n");
+    expect(read(join(r.ws, "knowledge-base", "a.md"))).toBe("a\nupstream kb\n");
     expect(recoveryBranches(r)).toBe("");
-    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "nonkb", reason: "merge_not_attempted" } })]);
+    expect(allOps()).not.toContain("self-heal-recovered-diverged");
+    expect(allOps()).not.toContain("self-heal-aborted-held-commits");
+    expect(H.writeRepoCols).not.toHaveBeenCalled();
+    // the merge's token-bearing calls are the hardened ls-remote and fetch; the legacy pull and fetch stay (X3)
+    expect(H.tokenVerbs).toEqual(["pull", "fetch", "ls-remote", "fetch"]);
   });
 
-  test("KB-only unpublished local commit, upstream moves elsewhere -> not stranded on a recovery branch; held_kind kb", async () => {
+  test("held code commit + a conflicting upstream change -> merge_conflict_precheck: no MERGE_HEAD, tree byte-identical, one report", async () => {
+    const r = newRow();
+    const held = localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 3; // upstream\n"));
+    const before = treeBytes(r);
+    const result = await heal(r);
+    expect(result).toEqual(expect.objectContaining({ ok: false, errorClass: "non_fast_forward", held: "held_commits" }));
+    expect(localMain(r)).toBe(held);
+    expect(mergeHeadPresent(r)).toBe(false);
+    expect(treeBytes(r)).toBe(before);
+    expect(recoveryBranches(r)).toBe("");
+    expect(warnOps()).toEqual([
+      expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "nonkb", reason: "merge_conflict_precheck" } }),
+    ]);
+    expect(H.writeRepoCols).not.toHaveBeenCalled();
+  });
+
+  test("held code commit + an ignored local file at an upstream-added path -> refused, the file byte-identical", async () => {
+    const r = newRow();
+    localCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // held code\n"));
+    write(join(r.ws, ".gitignore"), "build/\n");
+    git(r.ws, "add", ".gitignore");
+    git(r.ws, "commit", "-q", "-m", "ignore build");
+    write(join(r.ws, "build", "out.txt"), "local ignored bytes\n");
+    upstreamCommit(r, (d) => write(join(d, "build", "out.txt"), "upstream tracked\n"));
+    const result = await heal(r);
+    expect(result.ok).toBe(false);
+    expect(read(join(r.ws, "build", "out.txt"))).toBe("local ignored bytes\n");
+    expect(mergeHeadPresent(r)).toBe(false);
+    expect(H.writeRepoCols).not.toHaveBeenCalled();
+  });
+
+  test("KB-only unpublished local commit, upstream moves elsewhere -> merged, never stranded on a recovery branch", async () => {
     const r = newRow();
     const kbCommit = localCommit(r, (d) => write(join(d, "knowledge-base", "a.md"), "a\nunpublished kb\n"), "Soleur: sync knowledge-base");
     upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 2\n"));
     const result = await heal(r);
-    expect(result.ok).toBe(false);
-    expect(localMain(r)).toBe(kbCommit);
+    expect(result).toEqual({ ok: true });
+    expect(isAncestor(r, kbCommit, "HEAD")).toBe(true);
     expect(read(join(r.ws, "knowledge-base", "a.md"))).toBe("a\nunpublished kb\n");
     expect(recoveryBranches(r)).toBe("");
-    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "kb", reason: "merge_not_attempted" } })]);
   });
 
   test("a path that CONTAINS knowledge-base/ without starting with it (src/knowledge-base/x.ts) counts as non-KB", async () => {
     const r = newRow();
     const held = localCommit(r, (d) => write(join(d, "src", "knowledge-base", "x.ts"), "export const k = 1;\n"));
-    upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 2\n"));
+    upstreamCommit(r, (d) => write(join(d, "src", "knowledge-base", "x.ts"), "export const k = 2;\n"));
     const result = await heal(r);
     expect(result.ok).toBe(false);
     expect(localMain(r)).toBe(held);
@@ -411,10 +481,12 @@ describe("self-heal: the gate reads the remote-tracking ref, never an agent-writ
     git(r.ws, "config", "branch.main.merge", "refs/heads/decoy");
     expect(git(r.ws, "rev-list", "--count", "@{u}..HEAD")).toBe("0");
     const result = await heal(r);
-    expect(result).toEqual(expect.objectContaining({ ok: false, held: "held_commits" }));
-    expect(localMain(r)).toBe(held);
+    // D27: the held commit is kept by a merge with the remote tip ls-remote names, never reset away
+    expect(result).toEqual({ ok: true });
+    expect(isAncestor(r, held, "HEAD")).toBe(true);
+    expect(isAncestor(r, git(r.remote, "rev-parse", "refs/heads/main"), "HEAD")).toBe(true);
     expect(read(join(r.ws, "src", "s.ts"))).toBe("export const s = 2; // held code\n");
-    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: { held_kind: "nonkb", reason: "merge_not_attempted" } })]);
+    expect(recoveryBranches(r)).toBe("");
   });
 
   test("a local branch named origin/main (refs/heads/origin/main, which DWIM prefers) does not stand in for the remote", async () => {
@@ -423,10 +495,10 @@ describe("self-heal: the gate reads the remote-tracking ref, never an agent-writ
     upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 3\n"));
     git(r.ws, "update-ref", "refs/heads/origin/main", held);
     const result = await heal(r);
-    expect(result).toEqual(expect.objectContaining({ ok: false, held: "held_commits" }));
-    expect(localMain(r)).toBe(held);
+    expect(result).toEqual({ ok: true });
+    expect(isAncestor(r, held, "refs/heads/main")).toBe(true);
+    expect(isAncestor(r, git(r.remote, "rev-parse", "refs/heads/main"), "refs/heads/main")).toBe(true);
     expect(git(r.ws, "for-each-ref", "--format=%(refname)", "refs/heads/soleur/")).toBe("");
-    expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: expect.objectContaining({ held_kind: "nonkb" }) })]);
   });
 });
 
