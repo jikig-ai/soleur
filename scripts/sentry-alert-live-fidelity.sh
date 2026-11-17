@@ -172,10 +172,11 @@ _finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
 # a monitor created in the UI is just as invisible to Terraform. Either way it
 # bills a slot and no apply ever removes it. The PROPERTY: every live uptime
 # detector in the org has `mode == 1` (manual: created by Terraform, the UI or the
-# API; a mode != 1 row is always an auto-detected one), and the live count EQUALS
-# the number of declared `resource "sentry_uptime_monitor"` blocks in
-# apps/web-platform/infra/sentry/*.tf. A UI-made monitor is mode 1, so only the
-# count can see it.
+# API; a mode != 1 row is always an auto-detected one), and the live count is not
+# above the number of declared `resource "sentry_uptime_monitor"` blocks in
+# apps/web-platform/infra/sentry/*.tf (ruling D-F-B): more live than declared is
+# drift, and fewer is UNAVAILABLE (the check cannot vouch for a monitor it cannot
+# see). A UI-made monitor is mode 1, so only the count can see it.
 #
 # PLACED BEFORE every rule-side `exit`, so a rule-side refusal cannot skip it.
 # It never exits on its own except at the destination pin (exit 2, as above):
@@ -293,7 +294,14 @@ if [[ -z "$uptime_unavail" ]]; then
           | if $c == null then "<unparsed-url>" else
               ($c.r | index("/")) as $i
               | (if $i == null then $c.r else $c.r[:$i] end) as $a
-              | (if ($a | test("[@\\\\]")) then "<userinfo-host>" else ($a | sub(":[0-9]*$"; "")) end) as $h
+              # A host that can be shown must be plain ASCII host characters. An
+              # authority with userinfo (`@`, or a backslash some parsers read as
+              # `/`), an empty one (`https:///…`, which a WHATWG parser resolves
+              # past), or any other byte (a homoglyph such as Cyrillic `а`) prints
+              # as a placeholder, so a crafted URL cannot display as the real host.
+              | (if ($a | test("[@\\\\]")) then "<userinfo-host>"
+                 elif ($a == "" or ($a | test("^[A-Za-z0-9.:\\[\\]-]+$") | not)) then "<unprintable-host>"
+                 else ($a | sub(":[0-9]*$"; "")) end) as $h
               | (if $i == null then "" else $c.r[$i:] end) as $p
               | "\($c.s)://\($h)\($p)"
             end
@@ -326,12 +334,12 @@ else
     [[ -n "$up_id" ]] || continue
     if [[ "$up_mode" != "1" ]]; then
       uptime_bad_mode=$((uptime_bad_mode + 1))
-      _finding "UPTIME UNMANAGED: $(_safe "${up_id}:${up_mode}:${up_url}") name=$(_safe "$up_name") — this uptime monitor is not in manual mode (1), so Sentry auto-detected it. DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running the apply does not fix it."
+      _finding "UPTIME UNMANAGED: $(_safe "${up_id}:${up_mode}:${up_url}") name=$(_safe "$up_name") — this uptime monitor is not in manual mode (1), so Sentry auto-detected it. DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh): GET https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/<id>/, DELETE the same URL, GET again expecting 404. Re-running the apply does not fix it."
     fi
   done <<<"$uptime_lines"
   uptime_excess=$(( uptime_live - uptime_declared ))
   if (( uptime_excess > 0 )); then
-    _finding "UPTIME UNMANAGED: live=${uptime_live} > declared=${uptime_declared} — the org has more uptime monitors than resource \"sentry_uptime_monitor\" blocks in apps/web-platform/infra/sentry/*.tf, so at least ${uptime_excess} of them is managed by nothing. Keep the monitor whose name matches a declared \`name =\` in that directory (GET each id below first); DELETE only the others through the API (an import block fails sentry-adoption-plan-assert.sh). If the latest apply-sentry-infra run did not finish, the extras may be monitors it was about to destroy: re-run that apply first. Live mode-1 monitors (one of these is the extra unless a mode != 1 finding above names it):"
+    _finding "UPTIME UNMANAGED: live=${uptime_live} > declared=${uptime_declared} — the org has more uptime monitors than resource \"sentry_uptime_monitor\" blocks in apps/web-platform/infra/sentry/*.tf, so at least ${uptime_excess} of them is managed by nothing. Keep the monitor whose id Terraform holds: the \`sentry_uptime_monitor.<name>: Refreshing state... [id=<n>]\` line in the latest apply-sentry-infra run log (names are not unique in Sentry, so a name match is not proof). DELETE only the others through the API (an import block fails sentry-adoption-plan-assert.sh): GET https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/<id>/, DELETE the same URL, GET again expecting 404. If the latest apply-sentry-infra run did not finish, the extras may be monitors it was about to destroy: re-run that apply first. Live mode-1 monitors (one of these is the extra unless a mode != 1 finding above names it):"
     while IFS=$'\t' read -r up_id up_mode up_url up_name; do
       [[ -n "$up_id" && "$up_mode" == "1" ]] || continue
       _finding "         $(_safe "${up_id}:${up_mode}:${up_url}") name=$(_safe "$up_name")"

@@ -27,7 +27,11 @@ new monitor, and 1422253 is deleted through the API (GET, DELETE, GET expecting 
 delete runs immediately before the merge, because the post-apply fidelity probe runs under `set -e`
 and fails on any live non-manual uptime monitor. Better Stack pages for the app in the minutes
 between the delete and the apply. The import text in the sections below is kept as the record of
-the first ruling; the amended steps are Phase 7 steps 0, 2 and 4 and AC1, AC3 and AC11.
+the first ruling; the amended steps are Phase 7 steps 0, 2 and 4 and AC1, AC3 and AC11, plus (at
+review, 2026-11-17) User-Brand Impact, the Observability block, Phase 6, the Test Scenarios plan
+verify, and the vendor-split slot count. Any other line that says the monitor is imported, that a
+first apply flips it from mode 3 to 1, or that a delete happens only on a fallback describes the
+superseded ruling and is not an instruction.
 
 ## Enhancement Summary
 
@@ -559,7 +563,11 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    `sentry_uptime_monitor.app` detector has `mode: 1`, name `soleur-app-reachability`, url
    `https://app.soleur.ai`, environment `production`, bound to no workflow (`workflowIds == []`,
    so it detects and does not page), and at least one passing check (a non-2xx final response,
-   such as a Cloudflare challenge, would open false downtime issues); 1422253 and
+   such as a Cloudflare challenge, would open false downtime issues). The check, at least 10 min
+   after the apply (3 failures at 60 s open an issue): `doppler run -p soleur -c prd_terraform --command 'printf "Authorization: Bearer %s\n" "$SENTRY_IAC_AUTH_TOKEN" | curl --disable --noproxy "*" -sS --max-time 15 -H @- "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?project=-1&statsPeriod=1h&query=is:unresolved%20issue.category:uptime"'`
+   returns `[]`. A 400 means Sentry does not accept that filter: record it on the tracking issue
+   and read the same URL without `issue.category:uptime`, looking for an issue titled for
+   `app.soleur.ai`; 1422253 and
    1221114-1221117 are gone (404). Better Stack
    lists `soleur dot ai changelog deep path` and `soleur dot ai legal terms page` (added at
    review) and both are up.
@@ -761,8 +769,8 @@ failure_modes:
   - mode: "Sentry re-creates an auto-detected uptime monitor, or someone adds one by hand"
     detection: "SENTRY_UPTIME reports unmanaged>0 (mode != 1) or live>declared; the fidelity script prints FAILED and exits 1"
     alert_route: "ci/sentry-alert-drift GitHub issue; layer: GitHub Actions workflow run log (::error:: + SENTRY_UPTIME line)"
-  - mode: "the import did not flip the app monitor to manual"
-    detection: "apply-sentry-infra.yml post-apply probe (set -e) reds on the merge's own apply; Phase 7 step 2 read-back shows mode 3"
+  - mode: "1422253 still live at the apply, or the new app monitor not created (amended 2026-11-17: no import)"
+    detection: "apply-sentry-infra.yml post-apply probe reds unless uptime_verdict=clean (a mode-3 row is drift, fewer live than declared is unavailable); Phase 7 step 2 read-back"
     alert_route: "failed apply workflow run + agent read-back in the post-merge session; layer: GitHub Actions workflow run log"
   - mode: "declared app monitor deleted outside Terraform"
     detection: "scheduled-terraform-drift.yml Sentry leg plans a create"
@@ -988,7 +996,8 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
   fails. (unit, mutation)
 - Given a `SENTRY_MONITORS=(x)` line re-added to `cutover-verify.sh`, when the canonicalizer
   runs, then W14 fails. (unit, mutation)
-- Plan verify (pre-merge): the Phase 1 step 7 identity command shows `update` with the import id.
+- Plan verify (pre-merge; amended 2026-11-17, no import): the Phase 1 step 7 identity command shows
+  `create` for `sentry_uptime_monitor.app`, `delete` for the 4 removed addresses, and no import row.
 - API verify (post-merge): `doppler run -p soleur -c prd_terraform --command 'SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_ORG=jikigai-eu bash scripts/sentry-alert-live-fidelity.sh'`
   expects `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`.
 

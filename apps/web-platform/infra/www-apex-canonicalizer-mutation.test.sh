@@ -462,6 +462,15 @@ def w_sentry_name():
                    '}\n')
 
 
+# W14(b), slots (#12844 review, FR-TD2): one block that expands to two bills two slots,
+#         so `count = 2` on the app block must fail the one-slot case.
+def w_sentry_count():
+    t = rd(SENTRY)
+    head = 'resource "sentry_uptime_monitor" "app" {\n'
+    assert head in t, "sentry file has no app uptime monitor block"
+    wr(SENTRY, t.replace(head, head + '  count = 2\n', 1))
+
+
 # W14(a): CUT8 re-grows a Sentry array. Sentry watches no marketing URL after ADR-328, so a
 #         SENTRY_MONITORS row in the cutover gate would grade a monitor that does not watch it.
 def w_sentry_array():
@@ -498,7 +507,7 @@ ROWS = {
     "G-stage": g_stage, "G-pinned": g_pinned, "G-unpinned": g_unpinned, "H2": h2,
     "W-url": w_url, "W-type": w_type, "W-paused": w_paused, "W-armed": w_armed,
     "W-conf": w_conf, "W-foreach": w_foreach, "W-ignore": w_ignore,
-    "W-sentry-name": w_sentry_name, "W-sentry-array": w_sentry_array,
+    "W-sentry-name": w_sentry_name, "W-sentry-count": w_sentry_count, "W-sentry-array": w_sentry_array,
     "W-pause-reworded": w_pause_reworded,
     "G-uptime-fmt": g_uptime_fmt,
 }
@@ -631,7 +640,7 @@ case_row M8  kill "vacuity floor" ""
 case_row H1  kill "vacuity floor" ""
 
 # --- GUARD 1 (#7798): the www-redirect alarm ---------------------------------------------
-# Ten kills + one far-side green (W-sentry-array joined at ADR-328). Before these, uptime-alerts.tf was copied into the
+# Eleven kills + one far-side green (W-sentry-array joined at ADR-328, W-sentry-count at #12844). Before these, uptime-alerts.tf was copied into the
 # sandbox and mutated by nothing: replacing the entire Guard 1 section with tautologies
 # left this battery reporting 18/18.
 case_row G-uptime-fmt     green ""                                  "a terraform fmt-legal multi-line status-code list is accepted"
@@ -643,6 +652,7 @@ case_row W-conf           kill "confirmation_period = 1200"         ""
 case_row W-foreach        kill "no count/for_each gate"             ""
 case_row W-ignore         kill "no lifecycle ignore_changes"        ""
 case_row W-sentry-name    kill "declares exactly one sentry_uptime_monitor, on app.soleur.ai" ""
+case_row W-sentry-count   kill "count-or-for_each"                  ""
 case_row W-sentry-array   kill "declares no SENTRY_MONITORS array"  ""
 case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
 
@@ -652,7 +662,7 @@ case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
 # which is the vacuity class this file exists to close, one level up. Bump it deliberately
 # when you add a row.
 # ---------------------------------------------------------------------------------------
-EXPECTED_ROWS=29
+EXPECTED_ROWS=30
 if [[ "$TOTAL" -ne "$EXPECTED_ROWS" ]]; then
   printf '[FATAL] battery cardinality: %d rows executed, expected exactly %d — a row was deleted, skipped, or added without updating EXPECTED_ROWS\n' \
     "$TOTAL" "$EXPECTED_ROWS" >&2

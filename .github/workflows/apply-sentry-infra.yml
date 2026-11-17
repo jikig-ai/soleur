@@ -1369,8 +1369,8 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_REFERENCE_FILE: ${{ runner.temp }}/sentry-alert-reference.json
           # Pinned empty, as the drift job pins it: the probe's fixture mode is a
-          # self-comparison that exits 0, and this step branches on rc only, so
-          # a future `$GITHUB_ENV` write of this name would turn the one
+          # self-comparison that exits 0, and this step reds on the script's rc
+          # (and on a non-clean uptime marker), so a future `$GITHUB_ENV` write of this name would turn the one
           # post-apply probe into a green no-op with a log warning nobody reads.
           SENTRY_FIXTURE_RULES: ""
           # Same for the uptime section's fixture seam (#6606): an unmanaged
@@ -1387,7 +1387,7 @@ jobs:
           bash scripts/sentry-alert-live-fidelity.sh | tee "${RUNNER_TEMP}/post-apply-probe.txt"
           # An UNAVAILABLE uptime check does not move the script's exit code, so
           # rc alone would green this step on a run that checked no uptime monitor.
-          uv=$(grep -m1 -oE '^SENTRY_UPTIME uptime_verdict=[a-z-]+' "${RUNNER_TEMP}/post-apply-probe.txt" | sed 's/^SENTRY_UPTIME uptime_verdict=//' || true)
+          uv=$(grep -m1 -oE '^SENTRY_UPTIME uptime_verdict=[^ ]+' "${RUNNER_TEMP}/post-apply-probe.txt" | sed 's/^SENTRY_UPTIME uptime_verdict=//' || true)
           if [[ "$uv" != "clean" ]]; then
             echo "::error::post-apply uptime check read uptime_verdict=${uv:-<no marker>}, not clean: the SENTRY_UPTIME section above says why. An unavailable check is a red, not a pass (#6606)."
             exit 1
@@ -1486,6 +1486,8 @@ jobs:
             printf -- '2. **Do NOT `workflow_dispatch`.** A dispatch has neither `head_commit` nor `event.commits`, so it can never supply the ack, and a plan needing one will red again for a different reason.\n'
             printf -- '3. **Do NOT revert.** A revert re-adds the `sentry_issue_alert` blocks for addresses that are no longer in state and removes the `sentry_alert` blocks for addresses that now are, which plans as a destroy of live paging rules.\n'
             printf -- '4. **Do NOT restore state from a backup.** The forensics artifacts on this run are for reading, not for writing back; a state restore re-asserts management over addresses whose live objects have already moved.\n\n'
+            printf '### If the post-apply probe failed on uptime (#6606)\n\n'
+            printf 'Its `::error::` line reads `uptime_verdict=` something other than `clean`. **Re-running does not fix `drift`**: a live uptime monitor Terraform does not manage stays live. The `UPTIME UNMANAGED` line in the log names it and gives the GET, DELETE and GET-expecting-404 URLs on `https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/<id>/`; keep the monitor whose id this run'"'"'s `sentry_uptime_monitor.<name>: Refreshing state... [id=<n>]` line shows. For `unavailable`, the `ERROR: sentry uptime: UNAVAILABLE` line gives the reason; fewer live monitors than declared means this apply did not create the declared one, so fix that and re-run the job.\n\n'
             printf '### If the failure was a Sentry 410\n\n'
             printf 'The plan step runs `terraform plan` once and does not retry. Its `::error::` line names each address Sentry answered with HTTP 410. A 410 that persists across runs means the endpoint was removed (as the legacy alert-rule API was, #8451): move the named resource off it. One that clears on a re-run was a brownout.\n\n'
             printf '### The check that decides whether this is an emergency\n\n'

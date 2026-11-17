@@ -24,10 +24,11 @@
 #   serves its own 404 regardless of Rule 10, so its `equals 404` assertion could
 #   not fail. The lost carve-out property stays open on #7799.
 #
-#   A second sentry_uptime_monitor here bills a second slot. The scheduled
-#   sentry-alert drift check reports any live uptime monitor this file does not
-#   declare, and www-apex-canonicalizer.test.sh fails the PR if a monitor here
-#   probes soleur.ai or www.soleur.ai.
+#   A second sentry_uptime_monitor anywhere in this directory bills a second slot.
+#   The scheduled sentry-alert drift check counts the blocks in every .tf here and
+#   reports any live uptime monitor beyond them, and www-apex-canonicalizer.test.sh
+#   fails the PR unless the directory declares exactly one, on app.soleur.ai, with
+#   no count/for_each, and none probing soleur.ai or www.soleur.ai.
 #
 # AUTO-APPLY NOTE: `.github/workflows/apply-sentry-infra.yml` plans and applies
 # the FULL ROOT of this directory on push-to-`main` (#6589) — every resource

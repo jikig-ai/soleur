@@ -689,12 +689,22 @@ SENTRY_UPTIME_SCAN="$(for _tf in "$SCRIPT_DIR"/sentry/*.tf; do strip_comments "$
       if (h == "soleur.ai" || h == "www.soleur.ai") { bad = bad (bad == "" ? "" : ",") h }
       if (h == "app.soleur.ai") app++
     }
+    # A block that can expand bills more than one slot (#12844 review, FR-TD2):
+    # the property is SLOTS, so `count` / `for_each` inside it fails the case.
+    if ($0 ~ /^[[:space:]]*(count|for_each)[[:space:]]*=/) { bad = bad (bad == "" ? "" : ",") "count-or-for_each"
+    }
     d = gsub(/\{/, "{"); depth += d
     d = gsub(/\}/, "}"); depth -= d
     if (depth <= 0) { inb = 0 }
   }
+  /^module[[:space:]]+"/ { bad = bad (bad == "" ? "" : ",") "module-block" }
   END { printf "%d %d %s", blocks + 0, app + 0, bad }
 ')"
+# A *.tf.json in the Sentry root is HCL this text scan cannot read, so it is refused.
+for _tfj in "$SCRIPT_DIR"/sentry/*.tf.json; do
+  [[ -e "$_tfj" ]] || continue
+  SENTRY_UPTIME_SCAN="${SENTRY_UPTIME_SCAN},tf-json:${_tfj##*/}"
+done
 sentry_blocks="${SENTRY_UPTIME_SCAN%% *}"
 _scan_rest="${SENTRY_UPTIME_SCAN#* }"
 sentry_app="${_scan_rest%% *}"
@@ -703,7 +713,7 @@ sentry_marketing="${_scan_rest#* }"
 sentry_rc=1
 if [[ "$sentry_blocks" == "1" && "$sentry_app" == "1" && -z "$sentry_marketing" ]]; then sentry_rc=0; fi
 verdict "$sentry_rc" \
-  "the Sentry root declares exactly one sentry_uptime_monitor, on app.soleur.ai, and none probes a marketing host (soleur.ai/www.soleur.ai; ADR-328); found ${sentry_blocks} block(s), ${sentry_app} on app.soleur.ai, marketing hosts [${sentry_marketing}]"
+  "the Sentry root declares exactly one sentry_uptime_monitor, on app.soleur.ai, and none probes a marketing host (soleur.ai/www.soleur.ai; ADR-328), with no count/for_each, module block or *.tf.json; found ${sentry_blocks} block(s), ${sentry_app} on app.soleur.ai, other problems [${sentry_marketing}]"
 
 # W15/W16 — the bracket must not come back, asserted on the PROPERTY rather than on the
 # deleted step's spelling. deploy-docs.yml used to PAUSE the Sentry www monitor around each

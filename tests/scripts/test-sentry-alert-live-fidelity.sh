@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=94
+EXPECTED_TESTS=95
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -513,6 +513,18 @@ t_pinned_path_end_to_end() {
     grep -qx -- '\*' "$cf" && grep -qx -- '-fsS' "$cf" && grep -qx -- '--max-time' "$cf" || why+=("$(basename "$cf"): noproxy '*', -fsS or --max-time missing")
   done
   [[ "$(find "$_shim_dir" -maxdepth 1 -name 'call.*.argv' | wc -l)" -eq 2 ]] || why+=("want exactly 2 curl calls")
+  # EXACT argv per call (#12844 review, security FR-1). A denylist matches whole
+  # tokens only, so a combined short flag (`-Sk`), an attached value
+  # (`-x203.0.113.9:8080`), a proxy spelling it does not list, or a schemeless
+  # `--url` behind `--proto-default` all stayed green. Equality is the property:
+  # nothing may be added, dropped or reordered on either credentialed call.
+  local _pre=(--disable --noproxy '*' --proto '=https' -g -fsS --max-time 15 --header @-)
+  local _base="https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu"
+  local _want1 _want2
+  _want1=$(printf '%s\n' "${_pre[@]}" "${_base}/detectors/?query=type:uptime_domain_failure&project=-1&per_page=100")
+  _want2=$(printf '%s\n' "${_pre[@]}" "${_base}/workflows/?per_page=100")
+  [[ "$(cat "$_shim_dir/call.1.argv" 2>/dev/null)" == "$_want1" ]] || why+=("call.1 (detectors) argv is not exactly the pinned 11: $(tr '\n' ' ' < "$_shim_dir/call.1.argv" 2>/dev/null)")
+  [[ "$(cat "$_shim_dir/call.2.argv" 2>/dev/null)" == "$_want2" ]] || why+=("call.2 (workflows) argv is not exactly the pinned 11: $(tr '\n' ' ' < "$_shim_dir/call.2.argv" 2>/dev/null)")
   grep -qx 'SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1' <<<"$out" || why+=("no LIVE (non-FIXTURE) clean uptime marker")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
   # A correct PREFIX can be re-opened by a later argument, so the transport
@@ -1482,8 +1494,9 @@ t_leaf_key_is_scrubbed() {
 
 # ── Guard 1 — no unmanaged Sentry uptime monitor (#6606) ─────────────────────
 # PROPERTY: every live uptime detector is `mode == 1` (manual: created by
-# Terraform, the UI or the API), and the live count equals the number of
-# declared `resource "sentry_uptime_monitor"` blocks. An auto-detected (mode 3)
+# Terraform, the UI or the API), and the live count is not above the number of
+# declared `resource "sentry_uptime_monitor"` blocks (more is drift; fewer is
+# UNAVAILABLE, ruling D-F-B). An auto-detected (mode 3)
 # monitor, or one made in the UI, is never removed by an apply, so a probe is
 # the only thing that sees one appear.
 #
@@ -1697,11 +1710,42 @@ t_g1_nonnumeric_mode_is_unavailable() {
   else _report "G1-16 string mode" fail "marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
 }
 t_g1_backslash_authority_placeholder() {
-  local fx; fx=$(_up_fixture g1bs "$(_up_row 9000011 3 'https://evil.example\\@app.soleur.ai/x')")
-  _run_up "$fx"
-  if grep -qF -- 'UPTIME UNMANAGED: 9000011:3:https://<userinfo-host>/x ' <<<"$_out" && ! grep -qF -- '://app.soleur.ai/x' <<<"$_out"; then
-    _report "G1-17 an authority with a backslash before @ never displays the host after the @" ok
-  else _report "G1-17 backslash authority" fail "output: $(head -c 400 <<<"$_out")"; fi
+  # Two arms (#12844 review, test-design FR-TD3): the backslash-ONLY arm is the
+  # one that pins the backslash in the userinfo test; the `\@` arm alone is
+  # already caught by the `@` and so cannot tell the two regexes apart.
+  local bad=() fx label url
+  for label in bsat bsonly; do
+    case "$label" in
+      bsat)   url='https://evil.example\\@app.soleur.ai/x' ;;
+      bsonly) url='https://evil.example\\app.soleur.ai/x' ;;
+    esac
+    fx=$(_up_fixture "g1bs.$label" "$(_up_row 9000011 3 "$url")")
+    _run_up "$fx"
+    grep -qF -- 'UPTIME UNMANAGED: 9000011:3:https://<userinfo-host>/x ' <<<"$_out" || bad+=("$label: no <userinfo-host> finding")
+    grep -qF -- 'app.soleur.ai/x' <<<"$_out" && bad+=("$label: the host after the backslash was displayed")
+  done
+  if [[ ${#bad[@]} -eq 0 ]]; then
+    _report "G1-17 an authority carrying a backslash, with or without @, never displays the host after it" ok
+  else _report "G1-17 backslash authority" fail "${bad[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_unprintable_host_placeholder() {
+  # #12844 review, security FR-3: a homoglyph host (Cyrillic U+0430 for `a`)
+  # displays identically to the real one, and an empty authority
+  # (`https:///app.soleur.ai@evil.tld/`) is resolved past by a WHATWG parser.
+  # Both print a placeholder, never a host that reads as app.soleur.ai.
+  local bad=() fx label url
+  for label in homoglyph emptyauth; do
+    case "$label" in
+      homoglyph) url=$'https://\xd0\xb0pp.soleur.ai/x' ;;
+      emptyauth) url='https:///app.soleur.ai@evil.tld/' ;;
+    esac
+    fx=$(_up_fixture "g1unp.$label" "$(_up_row 9000012 3 "$url")")
+    _run_up "$fx"
+    grep -qF -- 'UPTIME UNMANAGED: 9000012:3:https://<unprintable-host>/' <<<"$_out" || bad+=("$label: no <unprintable-host> finding")
+  done
+  if [[ ${#bad[@]} -eq 0 ]]; then
+    _report "G1-18 a homoglyph host and an empty authority print <unprintable-host>, never a look-alike of the real host" ok
+  else _report "G1-18 unprintable host" fail "${bad[*]}; output: $(head -c 400 <<<"$_out")"; fi
 }
 t_g1_h1_clean() {
   _run_up "$UP_CLEAN"
@@ -1869,6 +1913,7 @@ t_g1_bad_shape_is_unavailable
 t_g1_nonnumeric_id_is_unavailable
 t_g1_nonnumeric_mode_is_unavailable
 t_g1_backslash_authority_placeholder
+t_g1_unprintable_host_placeholder
 
 echo "=== $pass passed, $fail failed ==="
 

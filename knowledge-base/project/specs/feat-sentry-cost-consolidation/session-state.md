@@ -13,7 +13,7 @@
 - Grep-sweep pathspec now excludes archive folders.
 
 ### Decisions
-- app.soleur.ai (1422253) holds Sentry's one included uptime slot, imported into Terraform (first apply flips mode 3 -> 1); apex, www_reachability, changelog_deep, acme_probe destroyed with [ack-destroy]; changelog moves to Better Stack.
+- app.soleur.ai holds Sentry's one included uptime slot through the new `sentry_uptime_monitor.app` (D2 second re-ruling, 2026-11-17: 1422253 is deleted through the API before the merge, not imported); apex, www_reachability, changelog_deep, acme_probe destroyed with [ack-destroy]; changelog moves to Better Stack.
 - No auto-detection setting exists; an "unmanaged uptime" section is added to sentry-alert-live-fidelity.sh as the lasting check.
 - Sentry leg of CUT8 deleted; BETTERSTACK_MONITORS append + baseline regen in a post-merge follow-up PR.
 - Host-kernel signal routes to 4 Sentry cron monitors, built in #12386; recorded as a comment + uptime-alerts.tf pointer.
