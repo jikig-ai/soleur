@@ -194,7 +194,7 @@ Each read (apply +25 min and apply +4 h) records, read-only: the production aler
 ## Files to Edit (PR-A)
 
 - `apps/web-platform/infra/betterstack-logs-alerts.tf`: new SQL in `inngest_cutover_flip_silent_sql`; `operator`/`value` on the alert; `incident_cause` addition; new `inngest_cutover_flip_silent_canary_sql` local (derived with `replace()`), canary exploration and alert; rewrite the "WAS PAUSED PENDING #11869", "WINDOW" and "INCIDENT LIFECYCLE" comment paragraphs into a record of what was done, plus the false-silence residual.
-- `.github/workflows/apply-web-platform-infra.yml`: two `-target=` lines for the canary pair in the MAIN plan step, next to the production pair. The workflow applies a saved plan (`terraform plan ... -out=tfplan`, then `terraform apply ... tfplan`), so the lines go in the plan step only.
+- `.github/workflows/apply-web-platform-infra.yml`: two `-target=` lines for the canary pair in the MAIN plan step, next to the production pair. The workflow plans once into a saved `tfplan` file (`terraform plan ... -out=tfplan`) and a later step consumes that file, so the lines go in the plan step only.
 - `apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh`: header text; `EXPECT_SQL`; operator/value rows; no-`GROUP BY` row; canary rows; new mutation rows; `PRESENCE_ROWS`, `MUT_ROWS_EXPECTED` and the assertion floor re-derived from a run.
 - `apps/web-platform/infra/betterstack-alert-structure.test.sh`: census floors re-derived from its printed output (+1 alert, +1 exploration). No new row: its header contract ("No family-wide attribute VALUE pins") stays as it is (CTO F4).
 - `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`: `EXPECT_BLOCKS` re-derived (+1).

@@ -97,8 +97,8 @@ REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert 
 OPTIONAL_ATTRS=""
 # 22 = the 18 permanent alerts, the three session-relay probe alerts (#12167) and inngest_registry_empty (#10538). The throwaway egress_gw_probe_silent_canary
 # pair (#12180) took these floors to 19 while it lived; #12189 deleted it. The floors are -ge, so the exact pins elsewhere carry growth.
-CENSUS_FLOOR_ALERTS=22
-CENSUS_FLOOR_EXPLORATIONS=22
+CENSUS_FLOOR_ALERTS=23
+CENSUS_FLOOR_EXPLORATIONS=23
 GUARD_CENSUS_FLOOR=19
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"

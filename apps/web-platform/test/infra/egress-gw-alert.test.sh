@@ -665,8 +665,11 @@ s = s.replace(old, "greatest(toInt64(2) - toInt64(")' \
     "silent predicate"
   mutate_red "silent: DISTINCT host_name regresses to count(*) (the host-mask defect)" TF \
     'old = "toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27)))"
-assert s.count(old) == 1
-s = s.replace(old, "toInt64(count(*))")' \
+# Anchored to the egress local: #12726 gave inngest_cutover_flip_silent_sql the same value expression verbatim.
+i = s.index("  egress_gw_probe_silent_sql = <<-SQL")
+j = s.index(old, i)
+assert j < s.index("\n  SQL\n", i), "anchor is not inside egress_gw_probe_silent_sql"
+s = s[:j] + "toInt64(count(*))" + s[j + len(old):]' \
     "host-mask defect"
   mutate_red "silent: GROUP BY time reintroduced (per-bucket row counts again)" TF \
     'old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27egress-gw-probe\x27\n  SQL\n\n  # Verdict failures"
