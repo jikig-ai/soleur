@@ -3,7 +3,7 @@ title: "An Approval Only Covers the Version It Saw"
 type: pillar
 publish_date: 2026-12-09
 channels: x, bluesky, linkedin-personal, discord
-status: draft
+status: scheduled
 issue_reference: "#12658"
 ---
 
