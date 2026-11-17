@@ -176,6 +176,7 @@ export const NEW_RULE_IDS = [
   "protected-xdg-git",
   "protected-trust-root",
   "write-outside-roots", // #12824 — counted only when the caller passes the run's write roots
+  "body-file-secret-path", // #12847 — a gh body/input file naming a Read-gate secret path
 ] as const;
 export type NewRuleId = (typeof NEW_RULE_IDS)[number];
 

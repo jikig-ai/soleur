@@ -578,7 +578,7 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
    `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
    writable HOME would be a write-then-execute path. The check uses the realpath of the nearest existing ancestor, so
    a dangling link fails closed, and the protected-path patterns are re-checked on that realpath. The deny reason is
-   `cron-containment: write outside run roots` and names the working directory and `$TMPDIR` as the places to write;
+   `cron-containment: write outside run roots` and names the working directory and the literal `<HOME>/tmp` path as the places to write;
    the off-box new-rule metric counts it as `write-outside-roots`. This is an allow-list, not a new deny pattern; the 2026-11-16
    ruling against more write-protect patterns stands.
 5. **Memory files cannot import secrets (CTO S3).** A nested `CLAUDE.md` the agent writes is loaded lazily, and its
@@ -586,8 +586,8 @@ allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's
    cron `settings.json` carries `claudeMdExcludes` (`cronClaudeMdExcludes()`): nested memory files, any import under
    `.git/`, the pseudo-filesystems and the secret paths the hook's Read gate refuses (`/run/secrets`, `.env*`,
    `.ssh`, `.aws`, `.config`, `.netrc`, `.npmrc`, `storage-state.json`, the ux-audit dirs and others) are not
-   loaded, while the clone's root `CLAUDE.md` still is. Only the `.git` entry was measured against the CLI (Phase
-   0.7h); the others are checked with picomatch, the CLI's matcher. The
+   loaded, while the clone's root `CLAUDE.md` still is. Only the original seven entries were measured against the CLI
+   (Phase 0.7h); the secret-path entries are checked with picomatch, the CLI's matcher. The
    self-test refuses a spawn whose `settings.json` lacks the list. This uses the CLI's own exclusion, so no
    `CLAUDE.md` write-deny was added.
 6. **No cron holds a code-exec verb.** Bug-fixer loses `./node_modules/.bin/vitest run` and sets

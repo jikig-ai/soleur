@@ -637,17 +637,19 @@ The bullets above are the plan-time statement and are kept as written. The revie
   This predates the PR and is out of its scope; filed as #12863.
 - **Write roots are the clone and `<HOME>/tmp`, not HOME.** gh, curl, git and the CLI read config from HOME,
   so a writable HOME was itself a write-then-execute path. A cron that writes into HOME now gets the
-  `write outside run roots` deny, whose message names the working directory and `$TMPDIR` as the places to
-  write instead.
-- **A mid-run reseed is partly fixed.** The run is marked not-ok (`pluginReseeded`), and
-  `classifyEvalFatal` makes the heartbeat red for best-effort crons. Output-aware crons still get only the
-  tagged Sentry event (`plugin-reseeded-mid-run`). F3 is still the full fix.
+  `write outside run roots` deny, whose message names the working directory and the literal `<HOME>/tmp`
+  path as the places to write instead.
+- **A mid-run reseed is partly fixed.** The run is marked not-ok (`pluginReseeded`) and reported
+  (`plugin-reseeded-mid-run`). The heartbeat goes red for best-effort crons (`classifyEvalFatal`), for the
+  output-aware crons that load the plugin (`resolveOutputAwareOk`; their safe-commit step is skipped), and for
+  community-monitor, which runs plugin scripts without loading the plugin (its digest is still committed, as on
+  a collector failure). F3 is still the full fix.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
+  what: "the existing per-cron Sentry cron heartbeat (postSentryHeartbeat, _cron-shared.ts) and output-aware run verdict; a resolver refusal (thrown inside the setup-workspace step) lands in each cron's existing setup-failure catch, which reports op setup-ephemeral-workspace and posts heartbeat ok:false, so the monitor goes red (it emails nobody until #12859 declares the monitors; AC15 falsified in review); that catch files no FAILED self-report issue, so none is claimed. A spawn-HOME create fault throws inside the claude-eval step and takes the existing claude-eval failure path, except for cron-legal-audit and cron-agent-native-audit, whose try/finally has no catch, so for them it is a missed check-in. New ops: three error (cron-plugin-root-untrusted, cron-spawn-home-create, plugin-reseeded-mid-run) and one warning (cron-spawn-home-teardown); no new monitor."
   cadence: "per cron run, on each cron's own schedule"
   alert_target: "each cron's Sentry heartbeat monitor (ok:false; not routed to email until #12859 declares the monitors) and the Sentry issue for op cron-plugin-root-untrusted"
   configured_in: "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts (resolveCronPluginRoot, spawnClaudeEvalUnguarded); apps/web-platform/server/inngest/functions/_cron-shared.ts (heartbeat)"

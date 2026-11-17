@@ -1018,7 +1018,7 @@ export function cronClaudeMdExcludes(spawnCwd: string): string[] {
     // #12847 review (architecture P2) — an `@`-import is a read the containment hook never sees, so the
     // secret paths an import can reach are excluded here too. These globs approximate SECRET_PATH_PATTERNS
     // (picomatch globs cannot express every regex suffix form; `.claude/` stays loadable for the clone's
-    // own rules); only the `.git` entry was measured against the CLI (Phase 0.7h).
+    // own rules). The seven entries above were measured against the CLI (Phase 0.7h); none below was.
     g("", "run", "secrets", "**"),
     g("**", ".env"),
     g("**", ".env.*"),
@@ -1805,6 +1805,9 @@ async function spawnClaudeEvalUnguarded(args: {
   }
   // Before any side effect: a refused root reports once and throws NonRetriableError.
   const plugin = loadPlugin ? await resolveCronPluginRootOrFail(cronName) : null;
+  // #12847 fix round 2 — a cron that runs plugin scripts without loading the plugin (community-monitor) gets
+  // the same reseed baseline, read without the resolver's sentinel wait: setup already resolved the root.
+  const reseedBaseline = plugin ?? (cronUsesPluginRoot(cronName) ? pluginSeedSnapshot() : null);
 
   // Child output is redacted for the installation token AND the operator Anthropic key the child
   // runs with, so a model answer that quotes its environment never reaches logs or Sentry.
@@ -2224,7 +2227,7 @@ async function spawnClaudeEvalUnguarded(args: {
       );
     });
     // Only on a settled run, and inside the try so the downgrade shapes the returned verdict.
-    return pluginReseededDuringRun(plugin, cronName) ? { ...result, ok: false, pluginReseeded: true } : result;
+    return pluginReseededDuringRun(reseedBaseline, cronName) ? { ...result, ok: false, pluginReseeded: true } : result;
   } finally {
     clearTimeout(timer);
     // #5766 — guarantee the heartbeat interval is cleared even if the Promise
@@ -2255,9 +2258,10 @@ async function spawnClaudeEvalUnguarded(args: {
  */
 function pluginReseededDuringRun(plugin: CronPluginRoot | null, cronName: string): boolean {
   if (!plugin) return false;
+  // An unreadable sentinel reads as null, which differs from a spawn-time tag: counted as a reseed (fail closed).
+  const tagNow = seedTagOf(spawnFs.readTextOrNull(join(plugin.root, ".seed-complete")));
+  if (tagNow === plugin.seedTag) return false;
   try {
-    const tagNow = seedTagOf(spawnFs.readTextOrNull(join(plugin.root, ".seed-complete")));
-    if (tagNow === plugin.seedTag) return false;
     reportSilentFallback(null, {
       feature: "cron-claude-eval",
       op: "plugin-reseeded-mid-run",
@@ -2265,16 +2269,19 @@ function pluginReseededDuringRun(plugin: CronPluginRoot | null, cronName: string
       tags: { cron: cronName },
       extra: { cron: cronName, seedTagAtSpawn: plugin.seedTag, seedTagAtExit: tagNow },
     });
-    return true;
-  } catch (err) {
-    // review: swallowed — an unreadable sentinel cannot prove a reseed; the run keeps its verdict, visibly.
-    warnSilentFallback(null, {
-      feature: "cron-claude-eval",
-      op: "plugin-reseed-check-failed",
-      message: "the mid-run reseed check could not read the plugin sentinel; the verdict is unchanged",
-      tags: { cron: cronName },
-      extra: { cron: cronName, detail: err instanceof Error ? err.message : String(err) },
-    });
-    return false;
+  } catch {
+    // review: swallowed — a reporting failure must not turn a detected reseed back into an ok run
+  }
+  return true;
+}
+
+/** The reseed baseline for a cron that runs plugin scripts without `--plugin-dir`; null when unresolvable. */
+function pluginSeedSnapshot(): CronPluginRoot | null {
+  try {
+    const root = assertTrustedPluginPath(getPluginPath());
+    return { root, seedTag: seedTagOf(spawnFs.readTextOrNull(join(root, ".seed-complete"))) };
+  } catch {
+    // review: swallowed — setup already refused an untrusted root (reported); this spawn is then unreachable
+    return null;
   }
 }

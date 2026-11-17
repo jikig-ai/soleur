@@ -485,11 +485,11 @@ const GITCONFIG_FILE_RE = /(^|\/)\.gitconfig$/;
 const XDG_GIT_DIR_RE = /(^|\/)\.config\/git(\/|$)/;
 const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
 
+const UX_AUDIT_OUTPUT_DIR_RE = /(^|\/)tmp\/ux-audit(\/|$)/;
 // Secret / credential paths that must never be read by ANY tool (Bash cat,
 // Read, Glob, Grep). Matched as substrings against the resolved path argument.
 // `.git` is load-bearing: `buildAuthenticatedCloneUrl` writes the GH_TOKEN into
 // remote.origin.url → .git/config (SECURITY PANEL P0-A).
-const UX_AUDIT_OUTPUT_DIR_RE = /(^|\/)tmp\/ux-audit(\/|$)/;
 const SECRET_PATH_PATTERNS = [
   /(^|\/)\.git(\/|$)/, // .git/config, .git/logs/HEAD, packed-refs
   /(^|\/)proc(\/|$)/, // /proc/self/environ, /proc/*/cmdline
@@ -503,6 +503,7 @@ const SECRET_PATH_PATTERNS = [
   GITCONFIG_FILE_RE,
   /(^|\/)\.git-credentials$/, // git credential-store plaintext (defense-in-depth)
   /(^|\/)\.claude(\/|$)/, // the spawn settings + this hook's allowlist file
+  /(^|\/)\.claude\.json$/, // #12847 fix round 2 — the CLI's per-HOME state file (a read deny, not a write-protect)
   /(^|\/)settings\.json$/,
   /(^|\/)hosts\.ya?ml$/,
   /(^|\/)run\/secrets(\/|$)/,
@@ -517,9 +518,11 @@ const SECRET_PATH_PATTERNS = [
   UX_AUDIT_OUTPUT_DIR_RE,
   /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
-// #12847 fix round — the secret paths a `--body-file` may not name. ux-audit's own issue bodies live in
-// UX_AUDIT_OUTPUT_DIR (`tmp/ux-audit/body-<hash>.md`, SKILL "File mode"), so that directory is the one
-// read-secret entry left out; the session file and browser profile in it stay denied by their own entries.
+// #12847 fix round — the secret paths a gh body file (`--body-file`, `-F`, `--input`, `--recover`) may not
+// name. ux-audit's own issue bodies are `<clone>/tmp/ux-audit/body-<hash>.md` (SKILL "File mode"), so that
+// directory is the one read-secret entry left out. What that gives up: gh may post the findings and
+// screenshots the Read gate keeps out of context, which the agent wrote itself. The session file and the
+// browser profile live in `<ephemeralRoot>/workspace/` and stay denied by their own entries.
 const BODY_FILE_SECRET_PATTERNS = SECRET_PATH_PATTERNS.filter((re) => re !== UX_AUDIT_OUTPUT_DIR_RE);
 
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
@@ -548,7 +551,14 @@ const NEW_WRITE_RULES = new Map([
 // Every id classifyNewRuleDeny can return. cron-filing-deny-marker.test.ts asserts the TS-side
 // NEW_RULE_IDS equals this list, so a new hook id cannot be dropped silently by that filter.
 // `write-outside-roots` (#12824) is classified only when the caller passes the run's write roots.
-export const HOOK_NEW_RULE_IDS = Object.freeze(["git-gh-shape", ...NEW_WRITE_RULES.values(), "write-outside-roots"]);
+export const HOOK_NEW_RULE_IDS = Object.freeze([
+  "git-gh-shape",
+  ...NEW_WRITE_RULES.values(),
+  "write-outside-roots",
+  "body-file-secret-path",
+]);
+// The deny-reason prefix classifyNewRuleDeny maps to `body-file-secret-path`.
+const BODY_FILE_SECRET_REASON = "secret-path body file via";
 
 // The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
 // Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
@@ -748,6 +758,8 @@ export function tokenize(segment) {
 // leading verb is allowlisted (SECURITY PANEL P0-B). Returns a deny reason or
 // null if clean.
 function argumentInjectionReason(tokens) {
+  // `-F` is --body-file on every gh subcommand but `gh api`, where it is a field flag (#12847 fix round 2).
+  const ghBody = tokens[0] === "gh" && tokens[1] !== "api";
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     // gh/curl-style file-as-body flags read a file the model never saw and post
@@ -757,16 +769,18 @@ function argumentInjectionReason(tokens) {
       const v = tokens[i + 1] || "";
       if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
         return `file-as-arg via ${t}`;
-      // #12847 fix round (security P1) — gh reads the body file itself, so the paths the Read gate
-      // refuses are refused here too (storage-state.json, a spawn HOME's .claude/ transcripts,
-      // hosts.yml, /run/secrets), on the raw value and on the path it resolves to from the clone.
-      if (
-        t === "--body-file" &&
-        (pathPatternMatches(BODY_FILE_SECRET_PATTERNS, v).length ||
-          pathPatternMatches(BODY_FILE_SECRET_PATTERNS, resolve(hookSpawnCwd() ?? "/", v)).length)
-      )
-        return `secret-path body file via ${t}`;
     }
+    // #12847 fix round (security P1) — gh reads a body or input file itself, so the paths the Read gate
+    // refuses are refused here too (storage-state.json, a spawn HOME's .claude/ transcripts, hosts.yml,
+    // /run/secrets). A file path is never shell-expanded here (`~`, `$` are refused earlier).
+    if (
+      (t === "--body-file" || t === "--input" || t === "--recover" || (t === "-F" && ghBody)) &&
+      pathPatternMatches(BODY_FILE_SECRET_PATTERNS, tokens[i + 1] || "").length
+    )
+      return `${BODY_FILE_SECRET_REASON} ${t} -- write the body under the working directory instead`;
+    // An attached or clustered short -F (`-F<path>`, `-F=<path>`, `-wF <path>`) would skip every check above.
+    if (ghBody && /^-[A-Za-z]*F./.test(t)) return "file-as-arg via attached -F";
+    if (ghBody && /^-[A-Za-z]+F$/.test(t)) return "file-as-arg via clustered -F";
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
     if (/=@/.test(t) || /^@/.test(t)) return "@file argument";
     // VAR=val prefix (env indirection before the verb) — leading token only
@@ -1383,7 +1397,8 @@ export function decide(input, allowPrefixes, opts = {}) {
 }
 
 // #12757 (CTO H3) — which new containment rule a denied tool call hit, as a closed id
-// (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`), or null.
+// (HOOK_NEW_RULE_IDS: `git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`,
+// `write-outside-roots`, `body-file-secret-path`), or null.
 // The deny reason never leaves the host (permission_denials[] carries only the tool input), so
 // the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
 // function, which runs the same predicates decide() gates on (commandWordShapeReason,
@@ -1416,7 +1431,9 @@ export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
       if (dangerousMetacharReason(command)) return null;
       for (const seg of splitSegments(command)) {
         const tokens = tokenize(seg);
-        if (tokens === null || !tokens.length || argumentInjectionReason(tokens)) return null;
+        if (tokens === null || !tokens.length) return null;
+        const injection = argumentInjectionReason(tokens);
+        if (injection) return injection.startsWith(BODY_FILE_SECRET_REASON) ? "body-file-secret-path" : null;
         if (commandWordShapeReason(tokens)) return "git-gh-shape";
         if (gitVerbReason(tokens)) return null;
         if (tokens[0] === "gh" && tokens[1] === "api" && tokens.some(hasDotSegment)) return null;

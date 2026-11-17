@@ -1415,6 +1415,9 @@ export async function cronCommunityMonitorHandler({
     //     true for a trailing-step failure -- so the page was silently lost on
     //     exactly the compound-failure run. The catch falls through to here.
     if (collectorSignalRed) heartbeatOk = false;
+    // #12847 fix round 2 — the plugin mount was reseeded while the router scripts ran (Sentry
+    // `plugin-reseeded-mid-run`): red, applied after persistence for the same reason as the collector gate.
+    if (spawnResult?.pluginReseeded) heartbeatOk = false;
 
     // #6714 — the liveness signal APPLIED. Same two reasons as #6695 above:
     // after persistence (heartbeatOk gates safeCommitAndPr, so lowering it any

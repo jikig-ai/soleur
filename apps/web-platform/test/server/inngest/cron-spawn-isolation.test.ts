@@ -403,6 +403,17 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     expect(classifyEvalFatal(result)).toMatchObject({ fatal: true, fatalClass: "plugin-reseeded" });
   });
 
+  it("row 7b: a cron that runs plugin scripts without loading the plugin (community-monitor) is also downgraded", async () => {
+    spawnSpy.mockImplementation(
+      fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded tag=v9\n")),
+    );
+    const { spawnCwd } = workspace();
+    const result = await run(spawnCwd, { cronName: "cron-community-monitor", loadPlugin: false });
+    expect(reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run")).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    expect(result.pluginReseeded).toBe(true);
+  });
+
   it("row 7 control: an unchanged tag reports nothing and keeps the verdict", async () => {
     const { spawnCwd } = workspace();
     const result = await run(spawnCwd, { loadPlugin: true });

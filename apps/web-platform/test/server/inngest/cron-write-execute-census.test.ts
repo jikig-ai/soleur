@@ -83,6 +83,9 @@ const POPULATION: Record<string, { cronName: string; loadPlugin: boolean }> = {
   "inngest/functions/oneshot-recheck-4217-calibration.ts": { cronName: "oneshot-recheck-4217-calibration", loadPlugin: false },
 };
 
+/** The two crons that run in the server's cwd and clone nothing (no setupEphemeralWorkspace). */
+const SERVER_CWD_CRONS = new Set(["cron-daily-triage", "cron-follow-through-monitor"]);
+
 /** (cron, path) pairs allowed to be both written and executed, each naming an open issue. MUST stay empty. */
 const EXEMPTIONS: Record<string, { path: string; issue: string }[]> = {};
 
@@ -434,7 +437,7 @@ describe("Guard 1 — population (identity map)", () => {
     expect([...CRON_PLUGIN_LOADERS].sort()).toEqual(loaders);
   });
 
-  it("the crons whose prompt invokes a /soleur: skill are exactly CRON_PLUGIN_LOADERS (AC8 survivor G1-12b)", () => {
+  it("every cron whose prompt invokes a /soleur: skill is in CRON_PLUGIN_LOADERS (AC8 survivor G1-12b)", () => {
     // #12847 fix round — any position (`Run /soleur:x`), not only after a quote, which matched 1 of 12.
     const invokes = Object.entries(POPULATION)
       .filter(([file]) => /(?:^|[\s`"'(])\/soleur:[a-z][a-z-]*/m.test(stripComments(readFileSync(join(SERVER, file), "utf-8"))))
@@ -448,17 +451,20 @@ describe("Guard 1 — population (identity map)", () => {
     expect(mcpCommands('const c = { mcpServers: { p: { "command": "npx", args: [] } } };')).toEqual(["npx"]);
     expect(mcpCommands('const c = { mcpServers: { p: { command: CMD } } }; // command: "/abs"')).toEqual([null]);
     expect(mcpCommands("const c = { other: { command: \"x\" } };")).toEqual([]);
+    // The real overlay yields its one command (a shorthand or computed key would yield none and fail here).
+    expect(mcpCommands(readFileSync(join(SERVER, "inngest/functions/cron-ux-audit.ts"), "utf-8"))).toEqual([
+      "/app/node_modules/.bin/playwright-mcp",
+    ]);
   });
 
   it("an unknown gh/git subcommand is UNCLASSIFIED (negative control for GH_KNOWN / GIT_KNOWN)", () => {
-    const c = classifyLines("cron-x", ["gh extension install x/y", "git rebase -x sh", "gh issue list"], "");
-    expect(c.unclassified).toHaveLength(2);
+    const c = classifyLines("cron-x", ["gh extension install x/y", "git rebase -x sh", "gh issue list", "gh pr checkout 1"], "");
+    expect(c.unclassified).toHaveLength(3); // `gh pr checkout`: a known group, an unknown verb
     expect(c.unclassified.join("\n")).toMatch(/gh extension install/);
     expect(c.unclassified.join("\n")).toMatch(/git rebase/);
   });
 
   it("every allowlist key is a spawning cron, and setupEphemeralWorkspace uses the same cronName as the spawn", () => {
-    let setupCalls = 0;
     const crons = new Set(Object.values(POPULATION).map((p) => p.cronName));
     for (const key of Object.keys(CRON_BASH_ALLOWLISTS)) expect(crons.has(key), `allowlist key ${key}`).toBe(true);
     for (const [file, { cronName }] of Object.entries(POPULATION)) {
@@ -487,9 +493,20 @@ describe("Guard 1 — population (identity map)", () => {
       };
       visit(sf);
       for (const n of names) expect(n, `${file}: setupEphemeralWorkspace cronName`).toBe(cronName);
-      setupCalls += names.length;
+      // Each clone-based cron calls it at least once (an aliased call would hide from this walk); the
+      // two server-cwd crons clone nothing.
+      if (!SERVER_CWD_CRONS.has(cronName)) expect(names.length, `${file}: setupEphemeralWorkspace call`).toBeGreaterThanOrEqual(1);
     }
-    expect(setupCalls, "non-vacuous: the clone-based crons call setupEphemeralWorkspace").toBeGreaterThanOrEqual(12);
+  });
+
+  it("every plugin-loading cron judged by its output passes the reseed flag; community-monitor applies it (#12847)", () => {
+    const src = (f: string) => stripComments(readFileSync(join(SERVER, f), "utf-8"));
+    const outputAware = Object.entries(POPULATION).filter(
+      ([f, p]) => CRON_PLUGIN_LOADERS.has(p.cronName) && /resolveOutputAwareOk\(/.test(src(f)),
+    );
+    expect(outputAware.map(([, p]) => p.cronName).sort()).toHaveLength(7);
+    for (const [f] of outputAware) expect(src(f), f).toMatch(/pluginReseeded: spawnResult!?\.pluginReseeded/);
+    expect(src("inngest/functions/cron-community-monitor.ts")).toMatch(/if \(spawnResult\?\.pluginReseeded\)\s*heartbeatOk = false;/);
   });
 
   it("every call passes loadPlugin as a boolean LITERAL and the flags carry no --plugin-dir", () => {

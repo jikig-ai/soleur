@@ -100,6 +100,9 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       expect(src).toMatch(/stderrTail: spawnResult!?\.stderrTail/);
       expect(src).toMatch(/exitCode: spawnResult!?\.exitCode/);
       expect(src).toMatch(/stdoutTail: spawnResult!?\.stdoutTail/);
+      // #12847 fix round 2 — a plugin-loading producer passes the reseed flag, so a mixed-tree run is not
+      // committed (resolveOutputAwareOk returns false on it; the argument is optional, so pin the wire).
+      if (/loadPlugin:\s*true/.test(src)) expect(src).toMatch(/pluginReseeded: spawnResult!?\.pluginReseeded/);
 
       // #4960/#4978 — the handler-level silence-hole fallback. When the
       // output-aware check found no labeled issue in the run window (mid-eval
