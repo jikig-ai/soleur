@@ -21,7 +21,7 @@ the merge base. It runs in the `guards-ruleset` job of `ci.yml`, on both
 `pull_request` and `merge_group`.
 
 On the PR, `postmerge/SKILL.md` was 47998 bytes, 2 under its 48000 ceiling. The PR
-check measures `refs/pull/N/merge`: the PR merged with main as of the last push.
+check measures `refs/pull/N/merge`: the PR merged with main as of the last PR event.
 While #12821 waited in the queue (enqueued 14:26Z), #12736 merged at 14:46Z and added
 8 bytes to the same file. The merge-group build measured main as it was when the
 PR's turn came, read 48006, and the queue ejected the PR at 16:26Z. Commit
@@ -39,9 +39,9 @@ budgeted files on main are under 50 bytes spare (work 2, qa 11, plan 11, postmer
 The required contexts `cla-check` (workflow `CLA Assistant`, `cla.yml`) and
 `cla-evidence` run on `pull_request_target`. At 16:29:20Z on head `4af860cf93` both
 ended in `startup_failure`: zero jobs, `run_attempt` 1. Two other branches hit
-`startup_failure` on the same workflows between 16:01Z and 16:44Z, and the workflow
-files had not changed since 2026-10-01, so the cause looks GitHub-side and is
-undiagnosed. No re-run was attempted.
+`startup_failure` on the same workflows between 16:01Z and 16:44Z, and neither
+workflow file had changed in weeks (`cla.yml` last on 2026-10-01, `cla-evidence.yml`
+on 2026-09-07), so the cause looks GitHub-side and is undiagnosed. No re-run was attempted.
 
 A PR comment re-fires the workflows on `issue_comment`, and those runs attach to
 main's commit (`branch=main`, head `c02b95289e`), not the PR head. The PR's
@@ -59,7 +59,10 @@ The reopen has costs that the first draft of this learning missed:
   for `ci/`, `bot-fix`, `learning-`, `review-` and `soleur/inngest-pin-` prefixes
   without checking for a reopen. #12821's branch did not match; one of the other
   `startup_failure` branches (`ci/campaign-calendar-…`) would have.
-- `reopened` also re-runs `ci.yml`.
+- `reopened` re-runs every PR workflow, including `ci.yml` and the paid Claude
+  review, so a re-fire during an ongoing GitHub incident is not free to repeat.
+- `dev-ledger-reconcile.yml` also fires on the close; it re-checks the PR state
+  inside its lock and skips once the PR is reopened.
 
 ### (c) `autoMergeRequest` reads `null` while the PR is queued
 
@@ -79,12 +82,15 @@ caveat in `plugins/soleur/skills/ship/references/ready-run-wait.md`, and
   +138 and +287 in single PRs), so re-measure after merging main. Added to
   `plugins/soleur/skills/plan/references/plan-sharp-edges.md` (plan time) and to
   the local gate list in `ready-run-wait.md` (ready time).
-- (b) On a `startup_failure` of `cla-check` or `cla-evidence`, do not comment. On a
-  branch without one of the bot prefixes above, close and reopen, then re-arm
-  auto-merge through the arm check. On a bot-prefixed branch, push a new commit
-  instead (it needs fresh review evidence before arming). Added under the
-  `RECOVERY no cancelled run at this head` line in `ready-run-wait.md`, which is
-  the line `ci-head-verdict.sh required` prints for this state.
+- (b) On a `startup_failure` of `cla-check` or `cla-evidence`, do not comment.
+  Detect it by workflow path, re-fire once, and report if it fails again. If the
+  PR is behind main, `gh pr update-branch` (a merge commit passes the arm check
+  without a new review). Otherwise, on a branch without a bot prefix, close and
+  reopen and re-arm. On a bot-prefixed branch, push an empty commit and re-review.
+  Added to `ready-run-wait.md` as its own bullet keyed on the context name, not on
+  one RECOVERY line: when a CI run at the head was cancelled (readying a draft
+  cancels the in-flight run), `ci-head-verdict.sh required` prints the candidate
+  lines, not `no cancelled run`.
 - (c) Use the Phase 7 poll or `plugins/soleur/scripts/monitor-pr-checks.sh`, not an
   ad hoc loop. Both read the queue state; the full rules (including `dequeued` and
   exit 4) are in `ready-run-wait.md`.
@@ -107,9 +113,9 @@ what else that event triggers.
    `plugins/soleur/skills/ship/references/ready-run-wait.md`.
 2. **`cla-check` and `cla-evidence` ended in `startup_failure`; a comment re-run
    attached the checks to main's commit.** Recovery: closed and reopened the PR,
-   then re-armed auto-merge. — **Prevention:** the remedy, its branch-prefix guard
-   and the re-arm step are in `ready-run-wait.md` under the RECOVERY line the
-   resolver prints.
+   then re-armed auto-merge. — **Prevention:** the remedy (detection read, retry
+   cap, branch-prefix guard, re-arm) is a `ready-run-wait.md` bullet keyed on the
+   absent context, so it is reached whichever RECOVERY line the resolver prints.
 3. **The merge monitor read `autoMergeRequest: null` on a queued PR as "disarmed".**
    Recovery: checked the queue state, which said queued. — **Prevention:** monitor
    with the Phase 7 poll or `monitor-pr-checks.sh`, never an ad hoc loop.
@@ -125,7 +131,8 @@ what else that event triggers.
    Recovery: replaced it with #12848 and ran `gh pr edit`. — **Prevention:** after
    `gh pr create` returns the number, grep the body for `#N` before moving on.
 7. **This session: the first draft of the close-and-reopen remedy omitted the
-   auto-merge re-arm and the branch-deleting `closed` workflow.** Found by review.
+   auto-merge re-arm and the branch-deleting `closed` workflow, and the second draft
+   hung it on a RECOVERY line the resolver often does not print.** Found by review.
    — **Prevention:** before prescribing a GitHub event as a remedy, grep
    `.github/workflows/` for every workflow that event (and its inverse, here
    `closed`) triggers.
