@@ -209,7 +209,7 @@ phase, and record that phase's RED runs with it.
 - [x] 11.1 `server/kb-sync-held.ts`: `computeHeldFiles` -> `{ total, onRecovered }` over `<T>...<headSha>` (HEX40 only);
   `readRecoveredKbSyncTips` (lstat, refuses symlinks, at most 20 files of at most 64 B, `packed-refs` lines from a file
   of at most 1 MiB). TW1, TW1-b and TW4-a/b/c real-git rows first.
-- [ ] 11.2 Wire and write the count (D29(1), D29(9)): the `onHeldFiles` hook in `publishKbOnly` (before the isolated
+- [x] 11.2 Wire and write the count (D29(1), D29(9)): the `onHeldFiles` hook in `publishKbOnly` (before the isolated
   dir is disposed, held exits included), the write from a `finally` in `syncPush`, and the computation in `syncPull`.
   Service client, a SEPARATE UPDATE (not folded into `updateLastSynced`), written every time with
   `kb_sync_held_checked_at = now()`. Disconnect and setup (`app/api/repo/disconnect/route.ts`,
@@ -221,7 +221,7 @@ phase, and record that phase's RED runs with it.
   viewer's `userId`, a transient result). `cc-dispatcher.ts`: the RPC in the same `Promise.all`, keyed on the
   `activeWorkspaceId` passed to `resolveCcGithubPushRegistration` (a failure: no line, one warning); the line in the
   query factory's `effectiveSystemPrompt` next to `c4PromptAddendum` (TW3, TW3-b).
-- [ ] 11.3b Legacy-runner line (D29(4)): `server/agent-runner.ts` appends the held line from `syncPull`'s
+- [x] 11.3b Legacy-runner line (D29(4)): `server/agent-runner.ts` appends the held line from `syncPull`'s
   `{ heldFiles, pullReason }`; both runners append the `merge_conflict` / `unresolved_merge` line. Agent strings per
   D29(6) (counted until merged into the main branch; check `github_list_pull_requests` before pushing again; recovered
   branches and the checkout; an "as of" time, no line when null; a `git diff --name-only` command), in agreement with
