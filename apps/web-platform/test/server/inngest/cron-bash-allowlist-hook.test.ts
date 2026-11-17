@@ -363,11 +363,17 @@ describe("Bash — argument injection via allowlisted verbs (P0-B)", () => {
     expect(verdict(bash("gh api repos/jikig-ai/soleur/contents/x --input tmp/x.json"))).toBe("allow");
     expect(verdict(bash("gh api repos/jikig-ai/soleur/contents/x --input=tmp/x.json"))).toBe("allow");
   });
+  // #12847 round 4 (security P1) — a value-flag skip is chainable (`--title --label -F<path>`: gh takes
+  // `--label` as the title and reads the file), so -F is refused on every token. Accepted over-deny last.
   it.each([
-    'gh issue create --title "-Fix the flaky test" --body b --label meta/machinery',
-    'gh issue create --title t --body "-Fast path" --label meta/machinery',
-  ])("a `-F…` that is a gh flag's value is text, not a body file: %s", (cmd) => {
-    expect(verdict(bash(cmd))).toBe("allow");
+    [`gh issue create --label meta/machinery --title --label -F${SECRET}`, /attached -F/],
+    [`gh pr create --title --label -dF ${SECRET}`, /clustered -F/],
+    [`gh issue create --repo o/r --title -F${SECRET} --label meta/machinery`, /attached -F/],
+    [`gh issue edit 1 --title --milestone -F/run/secrets/x`, /attached -F/],
+    ['gh issue create --title "-Fix the flaky test" --body b --label meta/machinery', /attached -F/],
+  ])("refuses -F wherever it stands, a flag's value included: %s", (cmd, why) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+    expect(reason(bash(cmd))).toMatch(why);
   });
   it("allows -F of ux-audit's own issue body (the --body-file allow, short form)", () => {
     expect(verdict(bash("gh issue create --title t -F tmp/ux-audit/body-abc.md --label meta/machinery"))).toBe("allow");
