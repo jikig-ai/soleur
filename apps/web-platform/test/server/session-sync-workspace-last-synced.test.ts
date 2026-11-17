@@ -23,6 +23,8 @@ const {
   mockHead,
   mergeHead,
   mockMirrorWarn,
+  mockMerge,
+  mockAdopt,
 } = vi.hoisted(() => {
   const mockTenantUpdateEq = vi.fn().mockResolvedValue({ error: null });
   const mockTenantUpdate = vi.fn(() => ({ eq: mockTenantUpdateEq }));
@@ -38,6 +40,10 @@ const {
     mockHead: vi.fn(),
     mergeHead: { present: false },
     mockMirrorWarn: vi.fn(),
+    // #12718: the hardened pull's two steps are the seam here (their git is asserted on real git in
+    // test/session-sync-pull-isolated-real-git.test.ts); this suite pins only the stamp around them.
+    mockMerge: vi.fn(),
+    mockAdopt: vi.fn(),
   };
 });
 
@@ -108,6 +114,17 @@ vi.mock("@/server/kb-sync-publish", async (importOriginal) => ({
   publishKbOnly: mockPublish,
 }));
 
+vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
+vi.mock("@/server/git-isolated-push-dir", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/git-isolated-push-dir")>()),
+  createIsolatedPushDir: () => ({ gitDir: "/tmp/iso", dispose: () => {} }),
+}));
+vi.mock("@/server/kb-sync-pull", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/kb-sync-pull")>()),
+  mergeVerifiedDefault: mockMerge,
+  adoptSideTip: mockAdopt,
+}));
+
 import { syncPull, syncPush } from "@/server/session-sync";
 
 const SERVICE = { __service: true } as never;
@@ -125,6 +142,8 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     mockPublish.mockResolvedValue({ kind: "pushed" });
     mockHead.mockReturnValue({ sha: "c".repeat(40), refName: "refs/heads/main" });
     mergeHead.present = false;
+    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: "f".repeat(40), sideTip: null } });
+    mockAdopt.mockResolvedValue(null);
   });
 
   // Scenario 7 — write lands on workspaces, keyed on resolved workspace id.
@@ -142,6 +161,32 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     );
   });
 
+  // #12718 X1: the stamp follows the pull's reason: in sync with GitHub after up_to_date, merged and autostash_conflict
+  // (a merge that exited 0); never after a held, refused or conflicted pull, or a non-default branch.
+  test.each([
+    ["up_to_date", 1],
+    ["merged", 1],
+    ["autostash_conflict", 1],
+    ["merge_conflict", 0],
+    ["merge_refused", 0],
+    ["fetch_failed", 0],
+    ["tip_mismatch", 0],
+    ["remote_state", 0],
+    ["non_default_branch", 0],
+  ] as const)("syncPull %s -> %i repo_last_synced_at write(s)", async (reason, writes) => {
+    mockMerge.mockResolvedValue({ reason, remote: null });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: reason });
+    expect(mockWriteRepoCols).toHaveBeenCalledTimes(writes);
+    if (writes) expect(mockWriteRepoCols.mock.calls[0][1]).toBe(TEAM_WORKSPACE_ID);
+  });
+
+  test("syncPull: a half-done merge (MERGE_HEAD) refuses before the pull: no merge, no stamp", async () => {
+    mergeHead.present = true;
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: "unresolved_merge" });
+    expect(mockMerge).not.toHaveBeenCalled();
+    expect(mockWriteRepoCols).not.toHaveBeenCalled();
+  });
+
   // Scenario 8 — read-back parity is structural: the write targets the same
   // workspaces.id the repo/status read keys on. Asserted via the id threading.
   test("syncPush → writes to the SAME workspace id the caller resolved", async () => {
@@ -155,7 +200,10 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
   // scope, which mocks it); session-sync's contract here is only no-throw.
   test("syncPull does not throw when the write is a best-effort no-op", async () => {
     mockWriteRepoCols.mockResolvedValue(undefined);
-    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: "merged" });
+    mockWriteRepoCols.mockRejectedValueOnce(new Error("0 rows"));
+    // a write that throws lands in the pull's outer catch: reported, and the pull still resolves
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, pullReason: null });
   });
 
   // Scenario 10 — team-active member writes to the TEAM workspace, never userId.

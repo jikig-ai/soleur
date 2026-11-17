@@ -92,7 +92,7 @@ vi.mock("@/server/host-git", async (importOriginal) => {
   };
 });
 
-import { syncPush } from "@/server/session-sync";
+import { kbPullWriter, syncPush } from "@/server/session-sync";
 import { ensureWorkspaceRepoCloned, __setGraftForTests } from "@/server/ensure-workspace-repo";
 import { gitWithInstallationAuth, gitWithPrivateKeyAuth, KEY_AUTH_ALLOW_PROTOCOL, LEGACY_ALLOW_PROTOCOL } from "@/server/git-auth";
 import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "@/server/host-git";
@@ -336,7 +336,51 @@ const checkpointDriver: Driver = {
   },
 };
 
-const DRIVERS: Driver[] = [syncPushDriver, overlayDriver, keyAuthPushDriver, legacyPullDriver, checkpointDriver];
+/**
+ * #12718 (D25(2), D26(2)): the session-start pull's ONE workspace git verb that is new, the pinned `merge` of the verified
+ * tip (the fetch and every object read run in the isolated directory, not the workspace; the hand-over and the tracking
+ * ref are the push writer's verbs, covered by syncPush). The workspace and the target diverge, so the merge writes a
+ * commit (hooks, signing and the reference transaction all get their chance to fire).
+ */
+const pullMergeDriver: Driver = {
+  id: "session-sync syncPull merge (kbPullWriter)",
+  closable: [
+    "fsmonitor-in-git-config",
+    "fsmonitor-in-config-worktree",
+    "hook-pre-commit",
+    "hook-reference-transaction",
+    "signing-program",
+    "core-worktree-foreign",
+  ],
+  residual: ["filter-via-git-config", "filter-via-info-attributes"],
+  refused: ["fsmonitor-via-commondir", "filter-via-commondir"],
+  refusedCheck(c) {
+    expect(w.git(c.ws, "-c", "core.fsmonitor=false", "rev-list", "--count", "HEAD")).toBe("2");
+  },
+  async prepare() {
+    const { ws, upstream } = newWorkspace(w);
+    w.git(ws, "checkout", "-q", "-b", "up");
+    writeFileSync(join(ws, "knowledge-base", "up.md"), "up\n");
+    w.git(ws, "add", "--", "knowledge-base/up.md");
+    w.git(ws, "commit", "-q", "-m", "upstream moves");
+    const storeTip = w.git(ws, "rev-parse", "HEAD");
+    w.git(ws, "checkout", "-q", "main");
+    w.git(ws, "branch", "-q", "-D", "up");
+    writeFileSync(join(ws, "knowledge-base", "local.md"), "local\n");
+    w.git(ws, "add", "--", "knowledge-base/local.md");
+    w.git(ws, "commit", "-q", "-m", "local moves");
+    return { ws, upstream, storeTip };
+  },
+  async run(c) {
+    c.note = kbPullWriter(c.ws).merge(c.storeTip as string);
+  },
+  verify(c) {
+    expect(c.note).toBe("clean");
+    expect(w.git(c.ws, "-c", "core.fsmonitor=false", "log", "-1", "--format=%P|%s")).toMatch(/^[0-9a-f]{40} [0-9a-f]{40}\|Soleur: merge GitHub before session$/);
+  },
+};
+
+const DRIVERS: Driver[] = [syncPushDriver, overlayDriver, keyAuthPushDriver, legacyPullDriver, checkpointDriver, pullMergeDriver];
 
 let currentPlanters: Planter[] = [];
 

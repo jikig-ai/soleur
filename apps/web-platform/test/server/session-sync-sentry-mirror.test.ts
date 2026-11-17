@@ -12,7 +12,9 @@ import { stripHostGitBlock } from "../helpers/host-git-block";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
 
-const { reportSilentFallbackSpy, gitWithInstallationAuthSpy, captureMessageSpy, childLog } = vi.hoisted(() => ({
+const { reportSilentFallbackSpy, gitWithInstallationAuthSpy, captureMessageSpy, childLog, headThrows } = vi.hoisted(() => ({
+  /** #12718: the pull's outer catch is driven by a throw inside its try (the HEAD read), never by a git error. */
+  headThrows: { value: false },
   reportSilentFallbackSpy: vi.fn(),
   captureMessageSpy: vi.fn(),
   childLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -84,7 +86,10 @@ vi.mock("../../server/current-repo-url", () => ({ getCurrentRepoUrl: async () =>
 vi.mock("../../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
 vi.mock("../../server/approval/workspace-head", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../server/approval/workspace-head")>()),
-  readWorkspaceHeadRef: () => ({ sha: "d".repeat(40), refName: "refs/heads/main" }),
+  readWorkspaceHeadRef: () => {
+    if (headThrows.value) throw new Error(`HEAD unreadable at https://github.com/acme/widget ${"e".repeat(40)}`);
+    return { sha: "d".repeat(40), refName: "refs/heads/main" };
+  },
 }));
 
 // gitWithInstallationAuth is the throw point we toggle per test to drive
@@ -98,7 +103,7 @@ vi.mock("../../server/logger", () => ({
   createChildLogger: () => childLog,
 }));
 
-import { syncPull, syncPush } from "../../server/session-sync";
+import { reportPullHeld, syncPull, syncPush } from "../../server/session-sync";
 import { reportPushHeld } from "../../server/kb-sync-publish";
 import { __resetMirrorDebounceForTests } from "../../server/observability";
 
@@ -119,6 +124,7 @@ beforeEach(() => {
   gitWithInstallationAuthSpy.mockReset();
   gitWithInstallationAuthSpy.mockResolvedValue(Buffer.from(""));
   throwOnPullPush = null;
+  headThrows.value = false;
   captureMessageSpy.mockReset();
   childLog.info.mockReset();
   __resetMirrorDebounceForTests();
@@ -126,12 +132,10 @@ beforeEach(() => {
 
 describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
   test("syncPull catch fires reportSilentFallback{feature:session-sync, op:syncPull}", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(async (argv: string[]) => {
-      if (argv[0] === "pull") throw new Error("pull broke");
-      return Buffer.from("");
-    });
+    // #12718: no legacy token pull is left to throw; an unexpected throw inside the pull's try is the catch's input.
+    headThrows.value = true;
 
-    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
+    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1")).resolves.toEqual({ heldFiles: null, pullReason: null });
 
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>
@@ -147,6 +151,13 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
         message: expect.stringMatching(/sync pull failed/i),
       }),
     );
+    // D25(7): no raw error reaches Sentry: a null error, the class name and an app frame only, never the URL or a sha
+    const [err, full] = matching[0] as [unknown, { extra: Record<string, unknown> }];
+    expect(err).toBeNull();
+    expect(full.extra).toEqual(expect.objectContaining({ userId: "user-1", errName: "Error" }));
+    expect(Object.keys(full.extra).filter((k) => !["userId", "errName", "frame"].includes(k))).toEqual([]);
+    expect(JSON.stringify(full)).not.toMatch(/github\.com|[0-9a-f]{40}/);
+    expect(gitWithInstallationAuthSpy).not.toHaveBeenCalled();
   });
 
   test("syncPush outer catch fires reportSilentFallback{feature:session-sync, op:syncPush}", async () => {
@@ -183,6 +194,41 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
         message: expect.stringMatching(/sync push failed/i),
       }),
     );
+  });
+});
+
+describe("kb-sync.pull-held observability (#12718, D25(6))", () => {
+  const pullLines = () =>
+    childLog.info.mock.calls.filter(([o]) => (o as { op?: string } | undefined)?.op === "kb-sync.pull-held");
+
+  test("a workspace that is not on disk: one pull-held line (isolated_refused), one Sentry warning, no catch report, never throws", async () => {
+    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "ws-1")).resolves.toEqual({ heldFiles: null, pullReason: "isolated_refused" });
+    expect(pullLines()).toHaveLength(1);
+    expect(pullLines()[0][0]).toEqual({ op: "kb-sync.pull-held", reason: "isolated_refused", workspaceId: "ws-1" });
+    expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+    const [, payload] = captureMessageSpy.mock.calls[0] as [string, { level: string; tags: Record<string, string> }];
+    expect(payload.level).toBe("warning");
+    expect(payload.tags).toEqual({ feature: "session-sync", op: "kb-sync.pull-held", reason: "isolated_refused" });
+    expect(reportSilentFallbackSpy.mock.calls.filter(([, c]) => (c as { op?: string }).op === "syncPull")).toEqual([]);
+    expect(gitWithInstallationAuthSpy).not.toHaveBeenCalled(); // refused before any token-bearing read
+  });
+
+  test("an info reason (up_to_date, merged, side_linked) is a pino line only; a fetch-stage reason tags which fetch", () => {
+    for (const r of ["up_to_date", "merged", "side_linked", "non_default_branch"] as const) reportPullHeld(r, { userId: "user-1", workspaceId: "ws-1" });
+    expect(captureMessageSpy).not.toHaveBeenCalled();
+    expect(pullLines()).toHaveLength(4);
+    reportPullHeld("fetch_failed", { userId: "user-1", workspaceId: "ws-2" }, "side");
+    expect(pullLines()[4][0]).toEqual({ op: "kb-sync.pull-held", reason: "fetch_failed", ref: "side", workspaceId: "ws-2" });
+    const [, payload] = captureMessageSpy.mock.calls[0] as [string, { tags: Record<string, string>; extra: Record<string, unknown> }];
+    expect(payload.tags).toEqual({ feature: "session-sync", op: "kb-sync.pull-held", reason: "fetch_failed", ref: "side" });
+    expect(Object.keys(payload.extra).filter((k) => k !== "err")).toEqual(["userIdHash"]);
+  });
+
+  test("the same warning reason twice for one workspace is debounced to one Sentry warning; the info line is per run", async () => {
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "ws-1");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "ws-1");
+    expect(pullLines()).toHaveLength(2);
+    expect(captureMessageSpy).toHaveBeenCalledTimes(1);
   });
 });
 
