@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 HELPER = Path(__file__).with_name('holder-evidence-guard-fixture.py')
+SYNTHETIC_ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent'}
 HOLDER = r'''
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1], timeout=5)
@@ -45,7 +46,7 @@ runpy.run_path(script, run_name='__main__')
 class SyntheticGuardContention(unittest.TestCase):
     def helper(self, path, operation):
         result = subprocess.run([sys.executable, str(HELPER), str(path), operation],
-                                capture_output=True, text=True, timeout=8, check=True)
+                                capture_output=True, text=True, timeout=8, check=True, env=SYNTHETIC_ENV)
         return json.loads(result.stdout)
 
     def test_committed_lock_order_and_crash_rollback(self):
@@ -58,7 +59,8 @@ class SyntheticGuardContention(unittest.TestCase):
                 path = Path(tmp) / 'fixture.sqlite'
                 self.assertEqual(self.helper(path, 'initialize')['state'], 'active')
                 owner = subprocess.Popen([sys.executable, '-c', HOLDER, str(path), held],
-                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                         env=SYNTHETIC_ENV)
                 waiter = None
                 try:
                     with selectors.DefaultSelector() as selector:
@@ -66,7 +68,7 @@ class SyntheticGuardContention(unittest.TestCase):
                         self.assertTrue(selector.select(5), 'holder did not signal its lock')
                     self.assertEqual(owner.stdout.readline().strip(), 'locked')
                     waiter = subprocess.Popen([sys.executable, '-c', WAITER, str(HELPER), str(path), competitor],
-                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=SYNTHETIC_ENV)
                     with selectors.DefaultSelector() as selector:
                         selector.register(waiter.stdout, selectors.EVENT_READ)
                         self.assertTrue(selector.select(5), 'competitor did not report lock contention')

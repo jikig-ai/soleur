@@ -19,7 +19,8 @@ import {
   getMyRevocationStatus,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
-import { getCurrentRepoUrl } from "@/server/current-repo-url";
+import { getCurrentRepoUrl, readCurrentRepoUrlResult } from "@/server/current-repo-url";
+import { verifyCodexWorkspace } from "./codex-workspace-admission";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
@@ -1422,15 +1423,16 @@ async function dispatchCodexChatTurn(
     .eq("user_id", userId)
     .single();
   assertCurrent();
-  const currentRepoUrl = await getCurrentRepoUrl(userId);
-  assertCurrent();
   const owned = row as { id?: string; workspace_id?: string; repo_url?: string | null } | null;
-  if (error || owned?.id !== conversationId || !owned.workspace_id || owned.repo_url !== currentRepoUrl) {
+  if (error || owned?.id !== conversationId || !owned.workspace_id) {
     throw new Error("Codex conversation not found in the current workspace");
   }
   if (binding.engineId !== "codex" || binding.workspaceId !== owned.workspace_id) {
     throw new Error("Codex conversation binding changed");
   }
+  await verifyCodexWorkspace({ conversationWorkspaceId: owned.workspace_id, bindingWorkspaceId: binding.workspaceId,
+    conversationRepoUrl: owned.repo_url, readWorkspace: () => readWorkspaceIdFromDb(userId, tenant),
+    readRepo: (workspaceId) => readCurrentRepoUrlResult(userId, workspaceId), assertCurrent });
   const authModeGeneration = binding.authModeGeneration ?? 0;
   if (authModeGeneration > 0) {
     const { data: historyTransferAcknowledged, error: acknowledgementError } = await tenant.rpc(

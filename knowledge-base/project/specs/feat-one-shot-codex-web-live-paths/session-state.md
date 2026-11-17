@@ -4277,9 +4277,14 @@
   legal SHA check passed and the mirror ratchet passed with an explicit warning:
   80 existing drift lines remain beyond the target date, tracked by open issue
   #7465. The ratchet is not a legal review or an equivalence proof. The merged
-  merged shell suite passed 658 assertions; its floor was raised to that
+  shell suite passed 658 assertions; its floor was raised to that
   measured count and the complete suite passed again with 658 assertions.
   Merged-head qualification, CLO review and final reconciliation remain open.
+  Independent merge review found the filename-keyed runner's fresh lexical
+  replay can order the branch's 165–175 migrations differently from adding
+  them to an existing main database already at 186. Compare effective schemas,
+  grants and ledger in disposable databases before any shared reconciliation;
+  the review did not observe a shared ledger or qualify another migration path.
 - On that merged tree, the collector's disposable PostgreSQL fixture passed,
   as did 30 focused collector lifecycle tests and 23 focused socket-admission
   tests. The test fixture's outer subprocess timeout was raised to 90 seconds
@@ -4301,6 +4306,35 @@
   Re-review found no further concrete issue within that narrow model, but did
   not run tests. The helper operation itself has not been observed waiting at
   its lock, and this proves neither production fencing nor restart recovery.
+- Independent review of the merge found same-repository or null URL matching
+  did not establish the current workspace on the held Codex dispatch path.
+  A provisional helper now checks owner-scoped current workspace identity
+  before and after a healthy non-null repository observation and checks the
+  active session after each await. Focused synthetic tests include sibling
+  workspaces, degraded and empty repositories, failed reads, changes and
+  session replacement. It rejects repo-less Codex conversations. Independent
+  re-review confirmed the narrow observation, not an atomic fence: a switch
+  after the last read (including ABA) remains possible, and real-handler
+  wiring needs a controlled test. A degraded-state mutation failed the added
+  positive-URL test. The unconditional dispatch hold remains.
+- An unwired Ed25519 proof primitive binds a signature to canonical reservation
+  bytes, purpose, attempt, challenge, token hash and supplied public-key
+  fingerprint. Three offline tests, including an independently computed fixed
+  vector, passed and independent review found no blocker to a local checkpoint;
+  a changed domain string was detected by that vector.
+  A caller-supplied key, challenge and token hash establish no approved identity,
+  freshness, durable replay protection or authority; repeated proofs can verify.
+  All authorization flags stay false and Firestore POST stays hard-disabled.
+- Preliminary CLO review corrected conditional disclosure wording in the
+  data-protection, Privacy and GDPR Policy mirrors and their raw SHA pins,
+  preserving main's migration-138 baseline and dated history. The authoring
+  reviewer ran the SHA guard, 37 legal document consistency tests and the
+  mirror ratchet successfully; the ratchet warns of 80 existing drift lines
+  past its target date and does not prove equivalence. An independent source
+  review caught a further premature erasure claim; it was made conditional in
+  both disclosure mirrors and CLO re-review confirmed that narrow correction.
+  Full access, rights, erasure, retention, rendering and final independent CLO
+  clearance remain open.
 
 ### Earlier local experiments — 2026-11-06
 
