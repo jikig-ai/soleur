@@ -477,7 +477,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     // same read with the cap lifted succeeds, so the row above passed because the pack is small, not because no cap applied.
     const { createIsolatedPushDir } = await import("@/server/git-isolated-push-dir");
     const { runIsolatedGitLocal } = await import("@/server/git-isolated-local");
-    const { disposeIsolated } = await import("@/server/push-branch");
+    const { disposeIsolated } = await import("@/server/git-isolated-dispose");
     const iso = createIsolatedPushDir(row.ws);
     try {
       const blob = git(row.ws, "rev-parse", `${S}:knowledge-base/big.bin`);

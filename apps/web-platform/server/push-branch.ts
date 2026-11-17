@@ -25,6 +25,8 @@ import {
   type IsolatedPushDirHandle,
   type IsolatedPushDirReason,
 } from "./git-isolated-push-dir";
+import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME } from "./agent-git-identity";
+import { disposeIsolated } from "./git-isolated-dispose";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -35,9 +37,6 @@ const log = createChildLogger("push-branch");
 // ---------------------------------------------------------------------------
 
 export const PROTECTED_BRANCHES = ["main", "master"] as const;
-/** The Soleur identity of every server-built commit (the KB sync too, CTO ruling L). */
-export const AGENT_AUTHOR_NAME = "Soleur Agent";
-export const AGENT_AUTHOR_EMAIL = "agent@soleur.ai";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,7 +95,6 @@ const PUSH_FEATURE = "cc-push";
 /** Static, per-op Sentry messages: a Sentry group is one condition, never the shared `cc-push silent fallback` default. */
 const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";
 const PUSH_FAILED_MESSAGE = "cc-push: the hardened push failed after the Owner's approval was consumed";
-const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not be removed";
 
 /** Shown to the model for an infrastructure refusal (the server's state, not the workspace): static, no path, no cause. */
 const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem)";
@@ -199,24 +197,6 @@ function classifyPushFailure(err: unknown, stderr: string, names: PushFailureNam
   }
   if (/non-fast-forward|fetch first|^rejected\b/im.test(text)) return "non_fast_forward";
   return "other";
-}
-
-/** A failing `dispose()` never changes the push result: it is reported by errno code only (no path, no message). */
-export function disposeIsolated(isolated: IsolatedPushDirHandle | undefined): void {
-  if (!isolated) return;
-  try {
-    isolated.dispose();
-  } catch (err) {
-    const code = (err as { code?: unknown } | undefined)?.code;
-    const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";
-    reportSilentFallback(null, {
-      feature: PUSH_FEATURE,
-      op: "isolated-dir-dispose-failed",
-      message: DISPOSE_FAILED_MESSAGE,
-      tags: { class: cls },
-      extra: { class: cls },
-    });
-  }
 }
 
 type CommitCheck = "present" | "absent" | "timeout" | "failed";

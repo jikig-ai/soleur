@@ -3,7 +3,7 @@
 // `refs/heads/soleur/kb-sync`; other refs the tail-matching patterns return are ignored; anything duplicated or malformed
 // throws `remote_state_invalid`. Synthesized shas only.
 import { describe, expect, test } from "vitest";
-import { KbSyncError, parseRemoteState } from "../server/kb-sync-publish";
+import { KbRemoteError, parseRemoteState } from "../server/kb-sync-remote";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -16,8 +16,8 @@ const invalid = (out: string): void => {
   } catch (err) {
     caught = err;
   }
-  expect(caught).toBeInstanceOf(KbSyncError);
-  expect((caught as KbSyncError).reason).toBe("remote_state_invalid");
+  expect(caught).toBeInstanceOf(KbRemoteError);
+  expect((caught as KbRemoteError).reason).toBe("remote_state_invalid");
 };
 
 describe("parseRemoteState (#12600)", () => {

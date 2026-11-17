@@ -9,13 +9,29 @@
 
 import { mirrorWarnWithDebounce } from "@/server/observability";
 import { HEX40 } from "./approval/workspace-head";
-import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
-import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
+import { disposeIsolated } from "./git-isolated-dispose";
+import { runIsolatedGitLocal } from "./git-isolated-local";
 import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle, type IsolatedPushDirReason } from "./git-isolated-push-dir";
 import { KB_ROOT } from "./kb-root";
+import {
+  commitTree,
+  entryKey,
+  handOver,
+  IDENTITY_PREFIX,
+  isAncestor,
+  isCommitPresent,
+  KbObjectsError,
+  kbOf,
+  mktreeInput,
+  readVerified,
+  TREE_MODE,
+  type TreeEntry,
+  type VerifiedCommit,
+} from "./kb-sync-objects";
+import { KbRemoteError, readRemoteState, resolveRepoUrl, SIDE_REF, type RemoteState } from "./kb-sync-remote";
+import { createKbSyncPr, ensureKbSyncPr, readSidePrState } from "./kb-sync-side-pr";
 import { createChildLogger } from "./logger";
-import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME, disposeIsolated } from "./push-branch";
 
 const log = createChildLogger("session-sync");
 
@@ -73,66 +89,14 @@ export function isRejectedPush(err: unknown): boolean {
   return stderrLines(err).some((line) => REJECTED_LINE_RE.test(line));
 }
 
-// #5426 — protected-branch fallback. When the user's default branch is
-// protected, the post-session KB commit can't be pushed onto it; instead a side
-// commit (built on the remote tip like S, #12600 R17) accretes onto a durable
-// side branch in the user's OWN repo, with a never-auto-merged PR into the
-// default branch.
-const KB_SYNC_SIDE_BRANCH = "soleur/kb-sync";
-const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
-const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
-
-// GitHub owner/repo charset (the same as the `GITHUB_NAME_RE` owner/repo check in server/agent-runner.ts).
-const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
-
-function kbSyncPrBody(defaultBranch: string): string {
-  return [
-    "Soleur keeps your knowledge-base in sync after every session.",
-    "",
-    `Your default branch (\`${defaultBranch}\`) is protected, so these`,
-    `knowledge-base updates were routed to the \`${KB_SYNC_SIDE_BRANCH}\` branch`,
-    "instead of being pushed directly.",
-    "",
-    "Merge this PR whenever you're ready — Soleur will never auto-merge it.",
-    "Future sessions accrete onto this same branch and PR.",
-  ].join("\n");
-}
-
-/**
- * Parse `{owner, repo}` from a connected-repo URL using the same shape as
- * agent-runner.ts (URL pathname split + GITHUB_NAME_RE guard, ADR-044 canonical
- * workspace read). `getCurrentRepoUrl` already strips a trailing `.git` via
- * `normalizeRepoUrl`; the defensive strip here tolerates an un-normalized row.
- * Returns empty strings when the URL is null/malformed — the caller treats that
- * as a fallback abort (writes preserved).
- */
-function parseOwnerRepo(repoUrl: string | null): {
-  owner: string;
-  repo: string;
-} {
-  if (!repoUrl) return { owner: "", repo: "" };
-  let owner = "";
-  let repo = "";
-  try {
-    const segments = new URL(repoUrl).pathname.split("/").filter(Boolean);
-    owner = segments[0] ?? "";
-    repo = (segments[1] ?? "").replace(/\.git$/i, "");
-  } catch {
-    return { owner: "", repo: "" };
-  }
-  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
-    return { owner: "", repo: "" };
-  }
-  return { owner, repo };
-}
-
 // ---------------------------------------------------------------------------
 // The KB-only publish (#12600, CTO ruling R14): the sync pushes only a commit the server built.
 // ---------------------------------------------------------------------------
 
-const TREE_MODE = "40000";
-const SIDE_REF = `refs/heads/${KB_SYNC_SIDE_BRANCH}`;
-const LS_REMOTE_TIMEOUT_MS = 30_000;
+// #5426 — protected-branch fallback: when the user's default branch is protected, a side commit (built on the remote tip
+// like S, #12600 R17) accretes onto the durable side branch `soleur/kb-sync` (server/kb-sync-remote.ts) in the user's OWN
+// repo, with a never-auto-merged PR into the default branch (server/kb-sync-side-pr.ts).
+const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
 const PUSH_TIMEOUT_MS = 60_000;
 
 /** Every reason a turn's KB push is held (R7). Warning-level reasons carry a static Sentry message; the rest log only. */
@@ -238,199 +202,11 @@ class KbHeld extends Error {
   }
 }
 
-export interface RemoteState {
-  readonly defaultBranch: string;
-  readonly tip: string;
-  readonly sideTip: string | null;
-}
-
-/**
- * Parse `ls-remote --symref <url> HEAD refs/heads/soleur/kb-sync` (R2, R17): exactly one `ref: refs/heads/<D>\tHEAD`
- * line, one `<sha>\tHEAD` line, at most one exact `refs/heads/soleur/kb-sync` line. Other refs the tail-matching
- * patterns may return (`refs/x/HEAD`) are ignored; a duplicate or malformed line of the three throws. `null` = the remote
- * has no resolvable HEAD (`remote_branch_absent`).
- */
-export function parseRemoteState(out: string): RemoteState | null {
-  let defaultBranch: string | null = null;
-  let tip: string | null = null;
-  let sideTip: string | null = null;
-  let seenSide = false;
-  for (const line of out.split("\n")) {
-    if (line === "") continue;
-    const tab = line.indexOf("\t");
-    if (tab < 0) throw new KbSyncError("remote_state_invalid");
-    const left = line.slice(0, tab);
-    const name = line.slice(tab + 1);
-    if (left.startsWith("ref: ")) {
-      if (name !== "HEAD") continue;
-      if (defaultBranch !== null) throw new KbSyncError("remote_state_invalid");
-      const target = left.slice("ref: ".length);
-      if (!target.startsWith("refs/heads/")) throw new KbSyncError("remote_state_invalid");
-      const branch = target.slice("refs/heads/".length);
-      try {
-        validateBranchFormat(branch);
-      } catch {
-        throw new KbSyncError("remote_state_invalid");
-      }
-      defaultBranch = branch;
-      continue;
-    }
-    if (!HEX40.test(left)) throw new KbSyncError("remote_state_invalid");
-    if (name === "HEAD") {
-      if (tip !== null) throw new KbSyncError("remote_state_invalid");
-      tip = left;
-    } else if (name === SIDE_REF) {
-      if (seenSide) throw new KbSyncError("remote_state_invalid");
-      seenSide = true;
-      sideTip = left;
-    }
-  }
-  if (defaultBranch === null || tip === null) return null;
-  return { defaultBranch, tip, sideTip };
-}
-
-/** One hardened `ls-remote --symref` against the literal URL; no agent-chosen name in argv. */
-export async function readRemoteState(
-  isolated: IsolatedPushDirHandle,
-  installationId: number,
-  url: string,
-): Promise<RemoteState | null> {
-  let out: Buffer;
-  try {
-    out = await gitWithInstallationAuth(["ls-remote", "--symref", url, "HEAD", SIDE_REF], installationId, {
-      hardened: isolated,
-      timeout: LS_REMOTE_TIMEOUT_MS,
-    });
-  } catch {
-    throw new KbSyncError("ls_remote_failed");
-  }
-  return parseRemoteState(out.toString("utf8"));
-}
-
-interface TreeEntry {
-  readonly mode: string;
-  /** latin1, so the bytes round-trip exactly into `mktree -z`. */
-  readonly name: string;
-  readonly id: string;
-}
-
-/** Parse raw tree object bytes (`<mode> <name>\0<20-byte id>`, repeated); `null` on any malformed entry. */
-function parseTree(bytes: Buffer): TreeEntry[] | null {
-  const out: TreeEntry[] = [];
-  let i = 0;
-  while (i < bytes.length) {
-    const sp = bytes.indexOf(0x20, i);
-    if (sp < 0) return null;
-    const nul = bytes.indexOf(0x00, sp + 1);
-    if (nul < 0 || nul + 21 > bytes.length) return null;
-    const mode = bytes.toString("latin1", i, sp);
-    if (!/^[0-7]{5,6}$/.test(mode)) return null;
-    out.push({ mode, name: bytes.toString("latin1", sp + 1, nul), id: bytes.toString("hex", nul + 1, nul + 21) });
-    i = nul + 21;
-  }
-  return out;
-}
-
-interface CommitHeader {
-  readonly tree: string;
-  readonly parents: readonly string[];
-  readonly author: string;
-  readonly committer: string;
-  readonly message: string;
-}
-
-function parseCommit(bytes: Buffer): CommitHeader | null {
-  const text = bytes.toString("latin1");
-  const end = text.indexOf("\n\n");
-  if (end < 0) return null;
-  let tree = "";
-  let author = "";
-  let committer = "";
-  const parents: string[] = [];
-  for (const line of text.slice(0, end).split("\n")) {
-    if (line.startsWith("tree ")) tree = line.slice(5);
-    else if (line.startsWith("parent ")) parents.push(line.slice(7));
-    else if (line.startsWith("author ")) author = line.slice(7);
-    else if (line.startsWith("committer ")) committer = line.slice(10);
-  }
-  if (!HEX40.test(tree) || !parents.every((p) => HEX40.test(p))) return null;
-  return { tree, parents, author, committer, message: text.slice(end + 2) };
-}
-
-/** A commit with its hash-verified root tree. */
-interface VerifiedCommit {
-  readonly id: string;
-  readonly commit: CommitHeader;
-  readonly root: readonly TreeEntry[];
-}
-
-/** `verifyObject`'s verified bytes, `null` when unverified; a child that could not run is `local_git_failed` (D13). */
-async function verifiedBytes(isolated: IsolatedPushDirHandle, type: "commit" | "tree", id: string): Promise<Buffer | null> {
-  const v = await verifyObject(isolated, type, id);
-  if (v.kind === "failed") throw new KbSyncError("local_git_failed");
-  return v.kind === "verified" ? v.bytes : null;
-}
-
-/** Hash-verify a commit and its root tree (R14, R15); the parse reads exactly the verified bytes. */
-async function readVerified(isolated: IsolatedPushDirHandle, id: string): Promise<VerifiedCommit | null> {
-  const commitBytes = await verifiedBytes(isolated, "commit", id);
-  const commit = commitBytes ? parseCommit(commitBytes) : null;
-  if (!commit) return null;
-  const treeBytes = await verifiedBytes(isolated, "tree", commit.tree);
-  const root = treeBytes ? parseTree(treeBytes) : null;
-  return root ? { id, commit, root } : null;
-}
-
-const kbOf = (root: readonly TreeEntry[]): TreeEntry | undefined => root.find((e) => e.name === KB_ROOT);
-const entryKey = (e: TreeEntry): string => `${e.mode} ${e.id}\t${e.name}`;
-
-/**
- * `cat-file -t` says `commit`: the object is present (its bytes are verified separately). Tri-state (D13): a child that
- * could not run (code -1: spawn failure, timeout, kill) is `local_git_failed`, never "absent".
- */
-async function isCommitPresent(isolated: IsolatedPushDirHandle, id: string): Promise<boolean> {
-  const r = await runIsolatedGitLocal(isolated, ["cat-file", "-t", id]);
-  if (r.code === -1) throw new KbSyncError("local_git_failed");
-  return r.code === 0 && r.stdout.toString("utf8").trim() === "commit";
-}
-
-/** `merge-base --is-ancestor`: 0 yes, 1 no, anything else a local git failure. */
-async function isAncestor(isolated: IsolatedPushDirHandle, ancestor: string, of: string): Promise<boolean> {
-  const r = await runIsolatedGitLocal(isolated, ["merge-base", "--is-ancestor", ancestor, of]);
-  if (r.code === 0) return true;
-  if (r.code === 1) return false;
-  throw new KbSyncError("local_git_failed");
-}
-
-const IDENTITY_ARGS = ["-c", `user.name=${AGENT_AUTHOR_NAME}`, "-c", `user.email=${AGENT_AUTHOR_EMAIL}`] as const;
-const IDENTITY_PREFIX = `${AGENT_AUTHOR_NAME} <${AGENT_AUTHOR_EMAIL}> `;
-
-function mktreeInput(entries: readonly TreeEntry[]): Buffer {
-  return Buffer.concat(
-    entries.map((e) => {
-      const type = e.mode === TREE_MODE ? "tree" : e.mode === "160000" ? "commit" : "blob";
-      return Buffer.from(`${e.mode.padStart(6, "0")} ${type} ${e.id}\t${e.name}\0`, "latin1");
-    }),
-  );
-}
-
-async function commitTree(
-  isolated: IsolatedPushDirHandle,
-  tree: string,
-  parents: readonly string[],
-  message: string,
-): Promise<string> {
-  const r = await runIsolatedGitLocal(isolated, [
-    ...IDENTITY_ARGS,
-    "commit-tree",
-    tree,
-    ...parents.flatMap((p) => ["-p", p]),
-    "-m",
-    message,
-  ]);
-  const sha = r.stdout.toString("utf8").trim();
-  if (r.code !== 0 || !HEX40.test(sha)) throw new KbSyncError("local_git_failed");
-  return sha;
+/** The leaves' neutral errors (D25(1)) in the push's terms: a failed hand-over is held, the rest keep their closed reason. */
+function asKbError(err: unknown): unknown {
+  if (err instanceof KbRemoteError) return new KbSyncError(err.reason);
+  if (err instanceof KbObjectsError) return err.reason === "unpack_failed" ? new KbHeld("unpack_failed") : new KbSyncError("local_git_failed");
+  return err;
 }
 
 /**
@@ -534,24 +310,12 @@ export interface KbWorkspaceWriter {
   setTracking(branch: string, sha: string): void;
 }
 
-/**
- * Hand the server-built objects to the workspace (CTO ruling D10): `pack-objects --stdout -q` over an EXPLICIT object list
- * (no `--revs`), piped to `unpack-objects -q`. Every parent of a server-built commit is already in the workspace (T,
- * headSha, a present side tip P, or a commit this function handed over earlier), and the KB subtree is HEAD's, so the only
- * missing objects are the new commit and its new root tree:
- *   S -> S + S^{tree};  M -> S + S^{tree} + M (M's tree is headSha's);  side -> side + side^{tree};  M' -> side + side^{tree} + M'.
- * A `--revs` walk re-sent the KB change set (`^headSha` is not an edge of S) and hit the stdout cap above 64 MB.
- */
-async function handOver(isolated: IsolatedPushDirHandle, writer: KbWorkspaceWriter, objects: readonly string[]): Promise<void> {
-  if (!objects.every((o) => HEX40.test(o))) throw new KbHeld("unpack_failed");
-  const pack = await runIsolatedGitLocal(isolated, ["pack-objects", "--stdout", "-q"], { input: `${objects.join("\n")}\n` });
-  if (pack.code !== 0) throw new KbHeld("unpack_failed");
-  try {
-    writer.unpack(pack.stdout);
-  } catch {
-    throw new KbHeld("unpack_failed");
-  }
-}
+// The hand-over (CTO ruling D10, server/kb-sync-objects.ts `handOver`): every parent of a server-built commit is already in
+// the workspace (T, headSha, a present side tip P, or a commit handed over earlier), and the KB subtree is HEAD's, so the only
+// missing objects are the new commit and its new root tree:
+//   S -> S + S^{tree};  M -> S + S^{tree} + M (M's tree is headSha's);  side -> side + side^{tree};  M' -> side + side^{tree} + M'.
+// A `--revs` walk re-sent the KB change set (`^headSha` is not an edge of S) and hit the stdout cap above 64 MB. A failed
+// hand-over is `unpack_failed` (`KbObjectsError`, mapped by `asKbError`).
 
 /** The `--no-deref` CAS of the local branch: a moved branch (`but expected`) is `head_moved`, anything else `ref_update_failed`. */
 function casLocalBranch(writer: KbWorkspaceWriter, branch: string, next: string, prev: string): void {
@@ -586,14 +350,6 @@ function setTrackingBestEffort(writer: KbWorkspaceWriter, branch: string, sha: s
   }
 }
 
-/** The literal `https://github.com/<owner>/<repo>.git` push URL (R2): never `remote.origin.url`. */
-async function resolvePushUrl(userId: string, workspaceId: string): Promise<{ url: string; owner: string; repo: string }> {
-  const { getCurrentRepoUrl } = await import("./current-repo-url");
-  const { owner, repo } = parseOwnerRepo(await getCurrentRepoUrl(userId, workspaceId));
-  if (!owner || !repo) throw new KbSyncError("remote_state_invalid");
-  return { url: `https://github.com/${owner}/${repo}.git`, owner, repo };
-}
-
 /** Why the protected-branch fallback did not deliver (the `fallback_reason` tag, closed). */
 export type KbFallbackReason = "side_hash_mismatch" | "side_guard_failed" | "side_push_rejected" | "side_push_transient" | "pr_failed";
 
@@ -605,6 +361,13 @@ export type KbPublishResult =
   /** `pushErr` is null when no push ran this turn (the `side_pending` PR re-check, D17). */
   | { readonly kind: "fallback_failed"; readonly fallbackReason: KbFallbackReason; readonly pushErr: KbSyncError | null };
 
+/** What `onHeldFiles` receives: the turn's isolated directory (still live), the remote tip and the frozen HEAD. */
+export interface KbHeldFilesProbe {
+  readonly isolatedDir: IsolatedPushDirHandle;
+  readonly T: string;
+  readonly headSha: string;
+}
+
 export interface KbPublishInput extends KbSyncContext {
   readonly workspacePath: string;
   readonly installationId: number;
@@ -612,19 +375,21 @@ export interface KbPublishInput extends KbSyncContext {
   readonly headSha: string;
   readonly refName: string;
   readonly writer: KbWorkspaceWriter;
+  /**
+   * #12714 seam (D29(1)): called once per turn BEFORE the isolated directory is disposed, on every exit that read the remote
+   * tip (held exits too). A throw or rejection never changes the turn's result.
+   */
+  readonly onHeldFiles?: (probe: KbHeldFilesProbe) => void | Promise<void>;
 }
 
-interface SideFallbackInput {
+/** The fallback's state: the turn's input plus what steps 2-4 established (D25(4): no re-declared turn fields). */
+interface SideFallbackInput extends KbPublishInput {
   readonly isolated: IsolatedPushDirHandle;
-  readonly installationId: number;
   readonly url: string;
   readonly owner: string;
   readonly repo: string;
-  readonly writer: KbWorkspaceWriter;
-  readonly ctx: KbSyncContext;
   readonly remote: RemoteState;
   readonly tV: VerifiedCommit;
-  readonly headSha: string;
   /** HEAD's verified root tree (the tree of `M` and `M'`). */
   readonly headTree: string;
   readonly headKb: TreeEntry;
@@ -635,19 +400,10 @@ interface SideFallbackInput {
   readonly pushErr: KbSyncError;
 }
 
-/** Find or create the never-auto-merged PR `soleur/kb-sync` -> `D` in the user's own repo. */
-async function ensureKbSyncPr(installationId: number, owner: string, repo: string, D: string): Promise<string> {
-  // Dynamic import keeps github-app out of the static graph (sibling tests mock git-auth but not github-app).
-  const { createPullRequest, findOpenPullRequest } = await import("./github-app");
-  const existing = await findOpenPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D);
-  if (existing) return existing.htmlUrl;
-  const pr = await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D));
-  return pr.htmlUrl;
-}
-
 /**
- * D17: the side branch already carries HEAD's KB (`side_pending`). One GET (`state=all`) re-checks its PR, because the link
- * now precedes the PR (D14(2)) and a single REST failure would otherwise leave the KB on a branch no Owner sees:
+ * D17: the side branch already carries HEAD's KB (`side_pending`). One GET (`state=all`) re-checks its PR through the shared
+ * table (server/kb-sync-side-pr.ts), because the link now precedes the PR (D14(2)) and a single REST failure would otherwise
+ * leave the KB on a branch no Owner sees:
  *   - an open PR, or a merged one on `P`: `side_pending` (info, nothing to do);
  *   - a closed, unmerged PR whose head is `P`: the Owner declined this exact content, never reopened: `side_declined` (info);
  *   - no PR on `P`: create it (the `pr_failed` retry): `side_pr_created` (info; nothing was pushed, so no protected-fallback
@@ -655,19 +411,12 @@ async function ensureKbSyncPr(installationId: number, owner: string, repo: strin
  *   - the GET fails (any cause): `side_pr_unknown`, a debounced warning, nothing created (fail toward no duplicate PR, D23).
  */
 async function recheckSidePr(installationId: number, owner: string, repo: string, D: string, P: string, ctx: KbSyncContext): Promise<KbPublishResult> {
-  const { createPullRequest, listPullRequestsForHead } = await import("./github-app");
-  let prs: Awaited<ReturnType<typeof listPullRequestsForHead>>;
+  const state = await readSidePrState(installationId, owner, repo, D, P);
+  if (state === "unknown") throw new KbHeld("side_pr_unknown");
+  if (state === "open" || state === "merged") throw new KbHeld("side_pending");
+  if (state === "declined") throw new KbHeld("side_declined");
   try {
-    prs = await listPullRequestsForHead(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D);
-  } catch {
-    throw new KbHeld("side_pr_unknown");
-  }
-  if (prs.some((pr) => pr.state === "open")) throw new KbHeld("side_pending");
-  const onP = prs.filter((pr) => pr.headSha === P);
-  if (onP.some((pr) => !pr.merged)) throw new KbHeld("side_declined");
-  if (onP.length > 0) throw new KbHeld("side_pending");
-  try {
-    await createPullRequest(installationId, owner, repo, KB_SYNC_SIDE_BRANCH, D, KB_SYNC_PR_TITLE, kbSyncPrBody(D));
+    await createKbSyncPr(installationId, owner, repo, D);
   } catch {
     reportPushHeld("pr_failed", "held", ctx);
     return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: null };
@@ -686,11 +435,11 @@ function rollbackBestEffort(f: SideFallbackInput): void {
     casLocalBranch(f.writer, f.remote.defaultBranch, f.headSha, f.localNext);
   } catch (err) {
     const reason = err instanceof KbHeld ? err.reason : "ref_update_failed";
-    log.warn({ op: "kb-sync.rollback", reason, workspaceId: f.ctx.workspaceId }, "KB sync: the local branch rollback failed");
+    log.warn({ op: "kb-sync.rollback", reason, workspaceId: f.workspaceId }, "KB sync: the local branch rollback failed");
     mirrorWarnWithDebounce(
       null,
-      { feature: "session-sync", op: "kb-sync.rollback", message: "KB sync: the local branch rollback failed", tags: { reason }, extra: { userId: f.ctx.userId } },
-      f.ctx.workspaceId,
+      { feature: "session-sync", op: "kb-sync.rollback", message: "KB sync: the local branch rollback failed", tags: { reason }, extra: { userId: f.userId } },
+      f.workspaceId,
       "kb-sync-rollback-failed",
     );
   }
@@ -798,15 +547,15 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
     return step;
   }
   const D = f.remote.defaultBranch;
-  setTrackingBestEffort(f.writer, D, f.remote.tip, f.ctx);
+  setTrackingBestEffort(f.writer, D, f.remote.tip, f);
   let prUrl: string;
   try {
     prUrl = await ensureKbSyncPr(f.installationId, f.owner, f.repo, D);
   } catch {
-    reportPushHeld("pr_failed", "side_pushed", f.ctx);
+    reportPushHeld("pr_failed", "side_pushed", f);
     return { kind: "fallback_failed", fallbackReason: "pr_failed", pushErr: f.pushErr };
   }
-  reportPushHeld("synthetic_pushed", "side_pushed", f.ctx);
+  reportPushHeld("synthetic_pushed", "side_pushed", f);
   return { kind: "fallback", prUrl, commitCount: 1 };
 }
 
@@ -818,8 +567,11 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
 export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishResult> {
   const { headSha, installationId, writer } = input;
   let isolated: IsolatedPushDirHandle | undefined;
+  let tipRead: string | undefined;
   try {
-    const { url, owner, repo } = await resolvePushUrl(input.userId, input.workspaceId);
+    const { url, owner, repo } = await resolveRepoUrl(input.userId, input.workspaceId).catch((err: unknown) => {
+      throw asKbError(err);
+    });
     try {
       isolated = createIsolatedPushDir(input.workspacePath);
     } catch (err) {
@@ -827,6 +579,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     }
     const remote = await readRemoteState(isolated, installationId, url);
     if (!remote) throw new KbHeld("remote_branch_absent");
+    tipRead = remote.tip;
     const D = remote.defaultBranch;
     if (input.refName !== `refs/heads/${D}`) throw new KbHeld("non_default_branch");
     const T = remote.tip;
@@ -881,8 +634,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     } catch (err) {
       if (!(err instanceof KbSyncError) || err.pushClass !== "protected_branch") throw err;
       return await runSideFallback({
-        isolated, installationId, url, owner, repo, writer, ctx: input, remote, tV, headSha, headTree: hV.commit.tree, headKb,
-        guardedS, localNext, pushErr: err,
+        ...input, isolated, url, owner, repo, remote, tV, headTree: hV.commit.tree, headKb, guardedS, localNext, pushErr: err,
       });
     }
     setTrackingBestEffort(writer, D, S, input);
@@ -892,13 +644,21 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     if (localNext !== S && sTree === hV.commit.tree) relinkBestEffort(writer, D, S, localNext, input);
     reportPushHeld("synthetic_pushed", "pushed", input);
     return { kind: "pushed" };
-  } catch (err) {
+  } catch (caught) {
+    const err = asKbError(caught);
     if (err instanceof KbHeld) {
       reportPushHeld(err.reason, "held", input);
       return { kind: "held", reason: err.reason };
     }
     throw err;
   } finally {
+    if (isolated && tipRead !== undefined && input.onHeldFiles) {
+      try {
+        await input.onHeldFiles({ isolatedDir: isolated, T: tipRead, headSha });
+      } catch {
+        // The hook owns its own reporting (#12714); the turn's result never changes.
+      }
+    }
     disposeIsolated(isolated);
   }
 }
