@@ -4277,8 +4277,30 @@
   legal SHA check passed and the mirror ratchet passed with an explicit warning:
   80 existing drift lines remain beyond the target date, tracked by open issue
   #7465. The ratchet is not a legal review or an equivalence proof. The merged
-  shell-test floor retains main's 656 pending the complete measured run.
+  merged shell suite passed 658 assertions; its floor was raised to that
+  measured count and the complete suite passed again with 658 assertions.
   Merged-head qualification, CLO review and final reconciliation remain open.
+- On that merged tree, the collector's disposable PostgreSQL fixture passed,
+  as did 30 focused collector lifecycle tests and 23 focused socket-admission
+  tests. The test fixture's outer subprocess timeout was raised to 90 seconds
+  after the expanded local run took 43 seconds including setup and teardown.
+  Typecheck initially aborted at Node's default heap limit; it passed with
+  `NODE_OPTIONS=--max-old-space-size=4096`. The socket tests emitted the
+  previously investigated Node DEP0205 deprecation warning. None of these
+  results clears the broader client-suite failures or the collection gate.
+  A further 34 injected authority/reservation tests and 17 offline Firestore
+  transport tests passed; the transport continues to refuse POST before
+  credentials or network access. Injected tests do not prove real authority.
+- A separate local SQLite experiment held an immediate transaction while a
+  second process's probe observed `SQLITE_BUSY`; a later helper operation then
+  produced the expected synthetic result for committed write-first,
+  committed quarantine-first, and a killed uncommitted writer. Independent
+  review caught the initial startup-only handshake, which did not establish
+  contention; releasing the lock before the replacement probe makes the test
+  fail. Removing the fixture write's epoch predicate also fails the test.
+  Re-review found no further concrete issue within that narrow model, but did
+  not run tests. The helper operation itself has not been observed waiting at
+  its lock, and this proves neither production fencing nor restart recovery.
 
 ### Earlier local experiments — 2026-11-06
 

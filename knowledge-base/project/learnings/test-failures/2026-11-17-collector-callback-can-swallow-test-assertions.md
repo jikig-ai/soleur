@@ -20,6 +20,10 @@ The disposable PostgreSQL harness also requires a locally present
 `postgres:17-alpine` image and deliberately refuses to pull one itself. If
 image inspection reports it missing, restore the test image before rerunning;
 do not mistake a fixture setup error for a passing collector test.
+The merged recovery typecheck also exceeded Node's default approximately 2 GiB
+heap and aborted. Inspect the process cgroup and host headroom before retrying
+with a larger `NODE_OPTIONS=--max-old-space-size` limit; a retry must still
+finish successfully before typecheck is reported as passed.
 
 ## Limits
 

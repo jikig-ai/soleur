@@ -34,7 +34,9 @@ class RunnerTest(unittest.TestCase):
                 env = {**ENV, 'SYNTHETIC_DB': NAME, 'SYNTHETIC_CONTAINER_ID': db.container_id,
                        'SYNTHETIC_CONTAINER_IMAGE': db.image, 'SYNTHETIC_CONTAINER_MARKER': db.marker,
                        'SYNTHETIC_PASSWORD': db.password}
-                result = subprocess.run([node, str(script)], env=env, text=True, capture_output=True, timeout=40)
+                # The integration fixture now includes a naturally completing
+                # delayed query and several separate guard processes.
+                result = subprocess.run([node, str(script)], env=env, text=True, capture_output=True, timeout=90)
                 location = re.search(r'holder-evidence-db-runner-local\.test\.mjs:(\d+):\d+', result.stderr)
                 line = location.group(1) if location else 'unknown'
                 self.assertEqual(result.returncode, 0, f'synthetic runner returned failure at fixture line {line}')
