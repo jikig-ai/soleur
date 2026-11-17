@@ -35,7 +35,7 @@
 // (2) add a WRITE_PROTECTED_PATTERNS entry in cron-bash-allowlist-hook.mjs; (3) only then an EXEMPTIONS entry
 // naming an open issue. A red from the identity map says "add `file → cronName`". Any new exemption is a review
 // finding: a diff that edits both a producer and this map proves consistency, not integrity.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
@@ -47,6 +47,7 @@ import {
   buildClaudeArgv,
   buildCronEvalSettings,
   CRON_BASH_ALLOWLISTS,
+  CRON_PLUGIN_LOADERS,
   PLUGIN_ROOT_TOKEN,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import { SOLEUR_PLUGIN_PATH_DEFAULT } from "@/server/plugin-path";
@@ -119,7 +120,8 @@ function walk(dir: string): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) out.push(...walk(p));
-    else if (e.name.endsWith(".ts") && !e.name.endsWith(".d.ts") && !e.name.endsWith(".test.ts")) out.push(p);
+    else if (/\.[cm]?[tj]sx?$/.test(e.name) && !/\.d\.[cm]?ts$/.test(e.name) && !/\.test\.[cm]?[tj]sx?$/.test(e.name))
+      out.push(p);
   }
   return out;
 }
@@ -240,6 +242,19 @@ function writeRoute(fn: DecideFn, lines: string[], p: string): string | null {
 const DIRECTIVE = /^(mcp-allow|navigate-origin|run-report-label) |^no-file-tools$/;
 const INSTALLERS = new Set(["npm", "npx", "bun", "bunx", "pnpm", "yarn", "pip", "pip3", "uv", "gem", "cargo", "go"]);
 const INTERPRETERS = new Set(["node", "python", "python3", "ruby", "perl", "deno", "tsx", "ts-node", "php"]);
+// #12847 review (structural P2) — gh/git lines are judged by decide() through the probe forms, but only for the
+// subcommands below: `git rebase`/`bisect`/`submodule`, `gh extension`/`alias` and anything new can run code, so an
+// unknown subcommand is UNCLASSIFIED (red) until it is reviewed and added here.
+const GH_KNOWN: Record<string, ReadonlySet<string> | "any"> = {
+  api: "any", // judged by decide()'s gh api grammar (method / field / endpoint rules)
+  issue: new Set(["close", "comment", "create", "edit", "list", "view"]),
+  label: new Set(["create", "list"]),
+  pr: new Set(["comment", "create", "edit", "list", "view"]),
+};
+const GIT_KNOWN = new Set(["add", "branch", "checkout", "commit", "diff", "log", "push", "rev-parse", "show", "status", "switch", "worktree"]);
+/** Source with `//` line comments and block comments removed (a commented-out literal must not satisfy a pin). */
+const stripComments = (src: string): string =>
+  ts.transpileModule(src, { compilerOptions: { removeComments: true, target: ts.ScriptTarget.ESNext } }).outputText;
 
 interface Classified {
   executed: { path: string; source: string }[];
@@ -254,7 +269,17 @@ function classifyLines(cron: string, lines: string[], cronSource: string): Class
     if (DIRECTIVE.test(line)) continue;
     const t = line.split(/\s+/);
     const head = t[0];
-    if (head === "gh" || head === "git") continue; // verbs, judged by decide() through the probe forms
+    if (head === "gh") {
+      const known = GH_KNOWN[t[1] ?? ""];
+      if (known === "any" || (known && known.has(t[2] ?? ""))) continue; // judged by decide() through the probe forms
+      out.unclassified.push(`${line} (gh subcommand not in GH_KNOWN)`);
+      continue;
+    }
+    if (head === "git") {
+      if (GIT_KNOWN.has(t[1] ?? "")) continue;
+      out.unclassified.push(`${line} (git subcommand not in GIT_KNOWN)`);
+      continue;
+    }
     if (head === "bash" || head === "sh") {
       const script = t[1] ?? "";
       if (!script.startsWith(ROOT + "/")) {
@@ -262,7 +287,7 @@ function classifyLines(cron: string, lines: string[], cronSource: string): Class
         continue;
       }
       out.executed.push({ path: script, source: `allowlist line \`${line}\`` });
-      if (/worktree-manager\.sh$/.test(script) && !/SOLEUR_WORKTREE_SKIP_INSTALL:\s*"1"/.test(cronSource)) {
+      if (/worktree-manager\.sh$/.test(script) && !/SOLEUR_WORKTREE_SKIP_INSTALL:\s*"1"/.test(stripComments(cronSource))) {
         out.allWritable.push(`${line} (worktree create runs install_deps: set SOLEUR_WORKTREE_SKIP_INSTALL=1 in ${cron}'s spawn env)`);
       }
       continue;
@@ -280,11 +305,25 @@ function classifyLines(cron: string, lines: string[], cronSource: string): Class
   return out;
 }
 
-/** MCP server `command` literals a cron writes into its `.mcp.json` overlay. */
-function mcpCommands(src: string): string[] {
-  const block = src.indexOf("mcpServers");
+/**
+ * MCP server `command` values a cron writes into its MCP overlay, from comment-stripped source. A `command:` whose
+ * value is not a plain string literal (an identifier, a template, a call) is returned as null: the census cannot
+ * judge it, so it is reported rather than skipped.
+ */
+function mcpCommands(src: string): (string | null)[] {
+  const code = stripComments(src);
+  const block = code.indexOf("mcpServers");
   if (block === -1) return [];
-  return [...src.slice(block).matchAll(/\bcommand:\s*"([^"]+)"/g)].map((m) => m[1]).slice(0, 8);
+  return [...code.slice(block).matchAll(/\bcommand:\s*([^,\n}]+)/g)].map((m) => {
+    const lit = /^"([^"]+)"$/.exec(m[1].trim());
+    return lit ? lit[1] : null;
+  });
+}
+
+/** The `--mcp-config` file a cron's flags name, resolved against the spawn cwd (null when none). */
+function mcpConfigPath(src: string): string | null {
+  const m = /"--mcp-config",\s*"([^"]+)"/.exec(stripComments(src));
+  return m ? resolve(SPAWN_CWD, m[1]) : null;
 }
 
 interface Finding {
@@ -328,8 +367,14 @@ function census(fn: DecideFn = realDecide): { findings: Finding[]; allWritable: 
         }
       }
     }
-    // (4) MCP server commands
+    // (4) MCP server commands, and the MCP config file the CLI reads them from
+    const cfg = mcpConfigPath(src);
+    if (cfg) executed.push({ path: cfg, source: "--mcp-config file (names the commands the CLI launches)" });
     for (const cmd of mcpCommands(src)) {
+      if (cmd === null) {
+        allWritable.push(`${cronName}: an MCP \`command:\` that is not a string literal (the census cannot judge it)`);
+        continue;
+      }
       if (!cmd.startsWith("/")) {
         allWritable.push(`${cronName}: MCP command \`${cmd}\` is resolved through PATH/npx, not an absolute image path`);
         continue;
@@ -369,6 +414,43 @@ describe("Guard 1 — population (identity map)", () => {
     const actual = Object.fromEntries(d.calls.map((c) => [c.file, { cronName: c.cronName, loadPlugin: c.loadPlugin }]));
     expect(new Set(d.calls.map((c) => c.file)).size, "one spawnClaudeEval call per file").toBe(d.calls.length);
     expect(actual, "a new or renamed call site: add `file → { cronName, loadPlugin }` to POPULATION").toEqual(POPULATION);
+  });
+
+  it("CRON_PLUGIN_LOADERS (setup resolves the root for these) equals the loadPlugin:true call sites", () => {
+    const loaders = Object.values(POPULATION).filter((p) => p.loadPlugin).map((p) => p.cronName).sort();
+    expect([...CRON_PLUGIN_LOADERS].sort()).toEqual(loaders);
+  });
+
+  it("a cron whose prompt invokes a /soleur: skill loads the plugin (AC8 survivor G1-12b)", () => {
+    for (const [file, { cronName, loadPlugin }] of Object.entries(POPULATION)) {
+      const code = stripComments(readFileSync(join(SERVER, file), "utf-8"));
+      if (/[`"']\/soleur:[a-z][a-z-]*/.test(code)) expect(loadPlugin, `${cronName} invokes a /soleur: skill`).toBe(true);
+    }
+  });
+
+  it("every allowlist key is a spawning cron, and setupEphemeralWorkspace uses the same cronName as the spawn", () => {
+    const crons = new Set(Object.values(POPULATION).map((p) => p.cronName));
+    for (const key of Object.keys(CRON_BASH_ALLOWLISTS)) expect(crons.has(key), `allowlist key ${key}`).toBe(true);
+    for (const [file, { cronName }] of Object.entries(POPULATION)) {
+      const sf = ts.createSourceFile(file, readFileSync(join(SERVER, file), "utf-8"), ts.ScriptTarget.Latest, true);
+      const names: (string | null)[] = [];
+      const visit = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "setupEphemeralWorkspace") {
+          const arg = n.arguments[0];
+          let name: string | null = null;
+          if (arg && ts.isObjectLiteralExpression(arg)) {
+            for (const prop of arg.properties) {
+              if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === "cronName")
+                name = stringValue(sf, prop.initializer);
+            }
+          }
+          names.push(name);
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      for (const n of names) expect(n, `${file}: setupEphemeralWorkspace cronName`).toBe(cronName);
+    }
   });
 
   it("every call passes loadPlugin as a boolean LITERAL and the flags carry no --plugin-dir", () => {
@@ -454,9 +536,35 @@ describe("Guard 1 — write confinement probes through the real decide() (CTO S1
     expect(verdict(p)).toBe("deny");
   });
 
-  it("allows the run's own clone and HOME", () => {
+  it("allows the run's own clone and the spawn TMPDIR (<HOME>/tmp)", () => {
+    expect(ROOTS).toEqual([SPAWN_CWD, join(HOME, "tmp")]);
     expect(verdict(join(SPAWN_CWD, "x"))).toBe("allow");
-    expect(verdict(join(HOME, "x"))).toBe("allow");
+    expect(verdict(join(HOME, "tmp", "x"))).toBe("allow");
+  });
+
+  // #12847 review (security P1) — HOME is not a write root: programs the allowlists run read their config from it,
+  // so a writable HOME is a write-then-execute path that names no file in any allowlist line.
+  it.each([
+    [".config/gh/config.yml", "gh: the browser / editor / pager it launches"],
+    [".curlrc", "curl: proxy, output and config options"],
+    [".gitconfig", "git: aliases, hooks, pager"],
+    [".claude.json", "claude CLI: per-user state and MCP servers"],
+    ["x", "any other file in HOME"],
+  ])("denies a write to $HOME/%s (%s)", (rel) => {
+    expect(verdict(join(HOME, rel))).toBe("deny");
+  });
+
+  it("denies a write through an in-clone symlink that points outside the roots (AC8 row 15)", () => {
+    const outside = join(BASE, "outside-target");
+    mkdirSync(outside, { recursive: true });
+    const link = join(SPAWN_CWD, "out-link");
+    if (!existsSync(link)) symlinkSync(outside, link);
+    expect(verdict(join(link, "x"))).toBe("deny");
+  });
+
+  it("denies a sibling whose name starts with a root's name (repo-evil, home-abc123x)", () => {
+    expect(verdict(join(EPHEMERAL, "repo-evil", "x"))).toBe("deny");
+    expect(verdict(join(EPHEMERAL, "home-abc123x", "tmp", "x"))).toBe("deny");
   });
 
   it("a HOME that is not a home-* child of dirname(spawnCwd) does not widen the area", () => {

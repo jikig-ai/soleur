@@ -161,6 +161,9 @@ const CLAUDE_CODE_FLAGS = [
 function fixIssuePrompt(issueNumber: number): string {
   return (
     `/soleur:fix-issue ${issueNumber} ` +
+    // #12824 — the containment denies every test command (a test run would execute code the agent just
+    // wrote); the flag makes fix-issue skip Phases 2 and 4 instead of retrying a denied verb.
+    `--no-local-tests ` +
     `--exclude-label ux-audit ` +
     `--exclude-label 'agent:*' ` +
     `--exclude-label content-publisher`

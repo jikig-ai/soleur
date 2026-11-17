@@ -16,6 +16,7 @@
 // @/server/github-app (generateInstallationToken).
 
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (hoisted by vitest) --------------------------------------
@@ -792,6 +793,13 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(args[lastIdx - 1]).toBe("--");
     expect(args[lastIdx]).toContain("/soleur:fix-issue 600");
     expect(args[lastIdx]).toContain("--exclude-label ux-audit");
+    // #12824 — the containment denies every test command; the flag makes fix-issue skip its test phases
+    // (a denied verb otherwise burns turns or reads as a failed phase). The skill must define the flag.
+    expect(args[lastIdx]).toContain("--no-local-tests");
+    const realFs = await vi.importActual<typeof import("node:fs")>("node:fs"); // node:fs is mocked in this file
+    const skill = realFs.readFileSync(resolve(__dirname, "../../../../../plugins/soleur/skills/fix-issue/SKILL.md"), "utf-8");
+    expect(skill).toMatch(/elif tokens\[i\] == "--no-local-tests":/);
+    expect(skill).toMatch(/If `NO_LOCAL_TESTS` is set, skip this phase and Phase 4/);
 
     // #12824 — the substrate inserts `--plugin-dir <read-only root>` right
     // after the `--append-system-prompt <preamble>` pair, before the caller's

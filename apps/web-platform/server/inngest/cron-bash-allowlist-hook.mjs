@@ -45,7 +45,7 @@
 // =============================================================================
 
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, posix, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
@@ -57,8 +57,12 @@ import { fileURLToPath } from "node:url";
 // founder's `/workspaces/<uuid>/…`. This is an allow-list, not another deny pattern.
 //
 // spawnCwd is a fixed walk up from THIS file (`<spawnCwd>/apps/web-platform/server/inngest/<hook>`),
-// never an env value. The HOME root is admitted only when `process.env.HOME` is exactly a `home-*`
-// child of dirname(spawnCwd) (the substrate's mkdtemp shape), so an env value cannot widen the area.
+// never an env value. The second root is `<HOME>/tmp` (the spawn's TMPDIR), admitted only when
+// `process.env.HOME` is exactly a `home-*` child of dirname(spawnCwd) (the substrate's mkdtemp shape),
+// so an env value cannot widen the area. HOME itself is NOT a root: programs the allowlist runs read
+// their config from it (`~/.config/gh/config.yml` names a browser/editor gh launches, `~/.curlrc`,
+// `~/.gitconfig`, `~/.claude.json`), and a write root that holds a config file an allowlisted program
+// loads is a write-then-execute path. Nothing reads config from TMPDIR. (#12847 review, security P1)
 // Computed lazily, inside a try: a module-init throw in the server bundle would take down every cron.
 export function hookSpawnCwd() {
   try {
@@ -68,7 +72,7 @@ export function hookSpawnCwd() {
   }
 }
 
-/** The allowed write roots: [spawnCwd] plus the spawn HOME when its shape checks out; null fails closed. */
+/** The allowed write roots: [spawnCwd] plus `<spawn HOME>/tmp` when HOME's shape checks out; null fails closed. */
 export function deriveWriteRoots(spawnCwd = hookSpawnCwd(), envHome = process.env.HOME) {
   if (typeof spawnCwd !== "string" || !isAbsolute(spawnCwd)) return null;
   const roots = [spawnCwd];
@@ -79,7 +83,7 @@ export function deriveWriteRoots(spawnCwd = hookSpawnCwd(), envHome = process.en
     dirname(envHome) === dirname(spawnCwd) &&
     /^home-[A-Za-z0-9]+$/.test(basename(envHome))
   ) {
-    roots.push(envHome);
+    roots.push(join(envHome, "tmp"));
   }
   return roots;
 }
@@ -115,7 +119,9 @@ function realpathOfNearestExisting(abs) {
 
 /** null when `p` may be written; otherwise the deny reason. Relative paths resolve against spawnCwd. */
 export function writeOutsideRootsReason(p, roots) {
-  const shown = `write outside run roots: ${String(p).slice(0, 60)}`;
+  const shown =
+    `write outside run roots: ${String(p).slice(0, 60)} -- write under the working directory or $TMPDIR instead, ` +
+    "or report the failure";
   if (!Array.isArray(roots) || roots.length === 0) return "write roots unresolvable (fail-closed)";
   const real = realpathOfNearestExisting(resolve(roots[0], p));
   if (!real) return shown;
@@ -130,6 +136,12 @@ export function writeOutsideRootsReason(p, roots) {
     if (real === rr || real.startsWith(rr + sep)) return null;
   }
   return shown;
+}
+
+/** The realpath a write to `p` lands on (nearest existing ancestor), or null. Relative to roots[0]. */
+export function resolvedWriteTarget(p, roots) {
+  if (!Array.isArray(roots) || roots.length === 0) return null;
+  return realpathOfNearestExisting(resolve(roots[0], p));
 }
 
 // --- Filing justification (#8038) ----------------------------------------
@@ -528,7 +540,8 @@ const NEW_WRITE_RULES = new Map([
 ]);
 // Every id classifyNewRuleDeny can return. cron-filing-deny-marker.test.ts asserts the TS-side
 // NEW_RULE_IDS equals this list, so a new hook id cannot be dropped silently by that filter.
-export const HOOK_NEW_RULE_IDS = Object.freeze(["git-gh-shape", ...NEW_WRITE_RULES.values()]);
+// `write-outside-roots` (#12824) is classified only when the caller passes the run's write roots.
+export const HOOK_NEW_RULE_IDS = Object.freeze(["git-gh-shape", ...NEW_WRITE_RULES.values(), "write-outside-roots"]);
 
 // The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
 // Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
@@ -735,7 +748,7 @@ function argumentInjectionReason(tokens) {
     // -f body=@file, gh's `@-`/`@file` value forms.
     if (t === "--body-file" || t === "-F" || t === "--field" || t === "-f") {
       const v = tokens[i + 1] || "";
-      if (v.includes("@") || /\.\.|\/(proc|etc|root|home)\b|\.git|\.env/.test(v))
+      if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
         return `file-as-arg via ${t}`;
     }
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
@@ -1298,8 +1311,14 @@ export function decide(input, allowPrefixes, opts = {}) {
               : ""),
         );
       // #12824 (CTO S1) — after the pattern gate: protected paths inside the roots stay denied.
-      const outside = writeOutsideRootsReason(p, opts.writeRoots ?? deriveWriteRoots());
+      const roots = opts.writeRoots ?? deriveWriteRoots();
+      const outside = writeOutsideRootsReason(p, roots);
       if (outside) return denyDecision(outside);
+      // #12847 review — the pattern gate again on the path the write LANDS on: an in-clone symlink
+      // aliasing `.claude/` (or any protected name) must not launder a protected write.
+      const landed = resolvedWriteTarget(p, roots);
+      if (landed && protectedWriteMatches(landed).length)
+        return denyDecision(`protected-path write: ${p.slice(0, 60)} (resolves to a protected path)`);
       return allowDecision();
     }
     case "ToolSearch":
@@ -1364,7 +1383,13 @@ export function decide(input, allowPrefixes, opts = {}) {
 // therefore skips this metric for the CRON_NO_FILE_TOOLS crons. It is an attribution metric: a
 // command that was never allowlisted (`git -C dir status`) and is now refused by the shape rule
 // first counts as git-gh-shape, so a non-zero count is a pointer to read, not proof of an over-deny.
-export function classifyNewRuleDeny(toolName, toolInput) {
+/**
+ * @param {unknown} toolName
+ * @param {unknown} toolInput
+ * @param {readonly string[] | null} [writeRoots] the run's write roots; without them write-outside-roots is never named
+ * @returns {string | null}
+ */
+export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
   try {
     const ti = toolInput && typeof toolInput === "object" ? toolInput : {};
     if (toolName === "Bash") {
@@ -1380,8 +1405,16 @@ export function classifyNewRuleDeny(toolName, toolInput) {
       }
       return null;
     }
-    if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit")
-      return newWriteRule(protectedWriteMatches(ti.file_path || ti.path || ""));
+    if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") {
+      const p = ti.file_path || ti.path || "";
+      if (typeof p !== "string" || !p) return null;
+      const matches = protectedWriteMatches(p);
+      if (matches.length) return newWriteRule(matches);
+      // #12824 — decide()'s next gate. Id only: the path never leaves this function.
+      if (Array.isArray(writeRoots) && writeRoots.length && writeOutsideRootsReason(p, writeRoots))
+        return "write-outside-roots";
+      return null;
+    }
     return null;
   } catch {
     return null;

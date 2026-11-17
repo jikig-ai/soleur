@@ -40,7 +40,12 @@ export function probeWritable(p: string): { writable: boolean; code: string | nu
  */
 export function createSpawnHome(parent: string, prefix: string): string {
   const home = mkdtempSync(join(parent, prefix));
-  mkdirSync(join(home, "tmp"), { mode: 0o700 });
+  try {
+    mkdirSync(join(home, "tmp"), { mode: 0o700 });
+  } catch (err) {
+    rmSync(home, { recursive: true, force: true }); // never orphan a half-made HOME (ENOSPC)
+    throw err;
+  }
   return home;
 }
 

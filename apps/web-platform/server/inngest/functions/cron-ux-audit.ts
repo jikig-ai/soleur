@@ -87,12 +87,14 @@ export const CLAUDE_CODE_FLAGS = [
   // which ignores ALL MCP configs except those named via `--mcp-config`. This
   // re-supplies ONLY the Playwright server so ux-audit keeps its screenshot
   // tools while the four plugin-bundled remote MCP servers stay suppressed. The
-  // relative `.mcp.json` resolves against spawnCwd → the per-fire overlay
-  // ux-audit writes at setup below (pinned @playwright/mcp@0.0.75, container
-  // profile, prefer-offline), NOT the repo-root dev .mcp.json. Must sit BEFORE
-  // the trailing `--` or the CLI reads it as a positional prompt arg.
+  // relative path resolves against spawnCwd (`<ephemeralRoot>/repo`) → the per-fire
+  // overlay ux-audit writes at setup below in `<ephemeralRoot>/workspace/`, NOT the
+  // repo-root dev .mcp.json. #12847 review — outside the clone on purpose: the agent
+  // can Write the clone, and a retried claude-eval step would launch whatever
+  // `command` it wrote there (the hook allows writes only to the clone and TMPDIR).
+  // Must sit BEFORE the trailing `--` or the CLI reads it as a positional prompt arg.
   "--mcp-config",
-  ".mcp.json",
+  "../workspace/mcp.json",
   "--",
 ];
 
@@ -345,14 +347,9 @@ export async function cronUxAuditHandler({
           },
         },
       };
-      await writeFile(
-        join(base.spawnCwd, ".mcp.json"),
-        JSON.stringify(mcpConfig, null, 2) + "\n",
-        "utf-8",
-      );
-
-      // Workspace dir for storageState + findings output
+      // Workspace dir for storageState, findings output and the MCP overlay (outside the write roots).
       await mkdir(wDir, { recursive: true, mode: 0o700 });
+      await writeFile(join(wDir, "mcp.json"), JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
 
       return { ...base, workspaceDir: wDir };
     });

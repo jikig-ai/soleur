@@ -1584,7 +1584,9 @@ export type EvalFatalClass =
   | "timeout"
   // #8611: the run hit its per-run `--max-budget-usd` ceiling (result subtype
   // `error_max_budget_usd`) and stopped before finishing its work.
-  | "budget-capped";
+  | "budget-capped"
+  // #12824: a deploy reseeded the read-only plugin mount while the child ran (SpawnResult.pluginReseeded).
+  | "plugin-reseeded";
 
 // The claude CLI's result-event subtype for a run stopped by `--max-budget-usd`
 // (string taken from the pinned @anthropic-ai/claude-code binary; #8611).
@@ -1597,9 +1599,16 @@ export const CLAUDE_BUDGET_STOP_SUBTYPE = "error_max_budget_usd";
 export function classifyEvalFatal(
   spawnResult: Pick<
     SpawnResult,
-    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype"
+    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype" | "pluginReseeded"
   >,
 ): { fatal: boolean; fatalClass?: EvalFatalClass; reason?: string } {
+  if (spawnResult.pluginReseeded === true) {
+    return {
+      fatal: true,
+      fatalClass: "plugin-reseeded",
+      reason: "the read-only plugin mount was reseeded while claude-eval ran (it may have loaded two plugin versions)",
+    };
+  }
   // Read from the parsed result event, not the tail: whatever the exit code, a
   // capped run did not finish, and a green monitor would hide it (#8611).
   if (spawnResult.subtype === CLAUDE_BUDGET_STOP_SUBTYPE) {
@@ -1679,6 +1688,7 @@ export function resolveBestEffortEvalOk(
     | "stdoutTail"
     | "stderrTail"
     | "subtype"
+    | "pluginReseeded"
   >,
 ): EvalHeartbeatDecision {
   const sentryExtra: Record<string, unknown> = {

@@ -147,13 +147,12 @@ describe("#5691 — Playwright survives --strict-mcp-config (substrate prepends 
   // and posts a zero-screenshot exit-0 GREEN run (the runtime Sentry Crons
   // monitor is liveness-only and cannot catch this — obs P1-c). This static
   // assertion is the PRIMARY pre-merge guard against that silent-degradation.
-  it("re-supplies the Playwright MCP server via --mcp-config .mcp.json, before the trailing --", () => {
+  it("re-supplies the Playwright MCP server via --mcp-config ../workspace/mcp.json, before the trailing --", () => {
     const mcpIdx = CLAUDE_CODE_FLAGS.indexOf("--mcp-config");
     expect(mcpIdx).toBeGreaterThan(-1);
-    // The relative .mcp.json resolves against spawnCwd → the per-fire overlay
-    // ux-audit writes at setup (the writeFile(join(spawnCwd, ".mcp.json"), …) in
-    // the setup-workspace step), not the repo-root dev file.
-    expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe(".mcp.json");
+    // Resolves against spawnCwd (`<ephemeralRoot>/repo`) → the per-fire overlay ux-audit writes at setup in
+    // `<ephemeralRoot>/workspace/`, outside the clone the agent can Write (#12847 review), not the dev file.
+    expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe("../workspace/mcp.json");
     // Must precede the trailing `--` end-of-options marker, else the CLI reads
     // `.mcp.json` as a positional prompt arg rather than a flag value.
     const lastSeparatorIdx = CLAUDE_CODE_FLAGS.lastIndexOf("--");

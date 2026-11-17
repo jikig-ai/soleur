@@ -45,6 +45,7 @@ vi.mock("@/server/inngest/functions/_cron-spawn-fs", async (importOriginal) => (
 }));
 
 import { NonRetriableError } from "inngest";
+import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
 import {
   CRON_GIT_HARDENING,
   CronPluginRootError,
@@ -87,6 +88,9 @@ interface Seen {
   homeMode: number | null;
   tmpExisted: boolean;
   tmpMode: number | null;
+  // AC8 survivor G2-4b — read just before the child's `exit`, so a HOME removed while the child runs is seen.
+  homeAtExit?: boolean;
+  tmpAtExit?: boolean;
 }
 let seen: Seen[];
 
@@ -96,20 +100,28 @@ function fakeSpawnImpl(onSpawn?: () => void) {
     const env = structuredClone(opts.env) as Record<string, string | undefined>;
     const home = env.HOME ?? "";
     const tmp = env.TMPDIR ?? "";
-    seen.push({
+    const record: Seen = {
       argv: [...argv],
       env,
       homeExisted: home !== "" && existsSync(home),
       homeMode: home !== "" && existsSync(home) ? statSync(home).mode & 0o777 : null,
       tmpExisted: tmp !== "" && existsSync(tmp),
       tmpMode: tmp !== "" && existsSync(tmp) ? statSync(tmp).mode & 0o777 : null,
-    });
+    };
+    seen.push(record);
     onSpawn?.();
     const child = new EventEmitter() as EventEmitter & { stdout: null; stderr: null; pid: number };
     child.stdout = null;
     child.stderr = null;
     child.pid = 4242;
-    queueMicrotask(() => child.emit("exit", 0, null));
+    queueMicrotask(() => {
+      child.emit("spawn");
+      setImmediate(() => {
+        record.homeAtExit = home !== "" && existsSync(home);
+        record.tmpAtExit = tmp !== "" && existsSync(tmp);
+        child.emit("exit", 0, null);
+      });
+    });
     return child;
   };
 }
@@ -165,6 +177,8 @@ describe("Guard 2 — per-spawn HOME (AC3)", () => {
     expect(env.TMPDIR).toBe(join(home, "tmp"));
     expect(seen[0].tmpExisted).toBe(true);
     expect(seen[0].tmpMode).toBe(0o700);
+    expect(seen[0].homeAtExit, "HOME must survive while the child runs").toBe(true);
+    expect(seen[0].tmpAtExit, "TMPDIR must survive while the child runs").toBe(true);
     expect(existsSync(home), "HOME must be removed after the spawn resolves").toBe(false);
   });
 
@@ -195,7 +209,21 @@ describe("Guard 2 — per-spawn HOME (AC3)", () => {
     vi.stubEnv("CRON_WORKSPACE_ROOT", join(scratch, "does-not-exist"));
     await expect(run(process.cwd(), { cronName: "cron-daily-triage" })).rejects.toThrow();
     expect(spawnSpy).not.toHaveBeenCalled();
-    expect(reportSpy.mock.calls.map((c) => c[1]?.op)).toContain("cron-spawn-home-create");
+    const call = reportSpy.mock.calls.find((c) => c[1]?.op === "cron-spawn-home-create");
+    expect(call).toBeDefined();
+    // #8629 — an Error first arg is captured untagged under pino-mirror and the tagged capture is deduped away.
+    expect(call![0]).toBeNull();
+    expect(call![1].tags).toEqual({ cron: "cron-daily-triage" });
+  });
+
+  it("M16: the hardening triple wins over a cron env that sets its own GIT_CONFIG_COUNT", async () => {
+    const { spawnCwd } = workspace();
+    await run(spawnCwd, {
+      buildSpawnEnv: (token) =>
+        ({ PATH: "/usr/bin", GH_TOKEN: token, GIT_CONFIG_COUNT: "0", GIT_CONFIG_KEY_0: "core.pager" }) as unknown as NodeJS.ProcessEnv,
+    });
+    expect(seen[0].env.GIT_CONFIG_COUNT).toBe("3");
+    expect(seen[0].env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
   });
 
   it("AC3/AC21: the git pin still lands, after the S5 hardening triple", async () => {
@@ -231,6 +259,13 @@ describe("Guard 2 — --plugin-dir is substrate-owned (AC2)", () => {
     expect(i).toBeLessThan(argv.indexOf("--print"));
     expect(i).toBeLessThan(argv.lastIndexOf("--"));
     expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(1);
+  });
+
+  it("row 8 (runtime half): a call with no boolean loadPlugin, or loadPlugin:true for a cron outside CRON_PLUGIN_LOADERS, rejects", async () => {
+    const { spawnCwd } = workspace();
+    await expect(run(spawnCwd, { loadPlugin: undefined as unknown as boolean })).rejects.toBeInstanceOf(NonRetriableError);
+    await expect(run(spawnCwd, { loadPlugin: true, cronName: "cron-roadmap-review" })).rejects.toThrow(/CRON_PLUGIN_LOADERS/);
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 
   it("H2: loadPlugin:false carries no --plugin-dir", async () => {
@@ -298,6 +333,16 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     await expect(resolveCronPluginRoot(pluginRoot, noSleep)).rejects.toMatchObject({ reason: "manifest-missing" });
   });
 
+  it("a half-deleted tree (reseed in progress: no sentinel AND no manifest) waits once before refusing", async () => {
+    rmSync(join(pluginRoot, ".claude-plugin"), { recursive: true });
+    rmSync(join(pluginRoot, ".seed-complete"));
+    const sleep = vi.fn(async () => {
+      seedPluginRoot(pluginRoot, { tag: "v3" }); // the copy finishes during the wait
+    });
+    await expect(resolveCronPluginRoot(pluginRoot, { sleep })).resolves.toEqual({ root: pluginRoot, seedTag: "v3" });
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("rows 2/6: a sentinel that never appears throws seed-incomplete after exactly ONE wait", async () => {
     rmSync(join(pluginRoot, ".seed-complete"));
     await expect(resolveCronPluginRoot(pluginRoot, noSleep)).rejects.toMatchObject({ reason: "seed-incomplete" });
@@ -328,6 +373,7 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
     expect((err as NonRetriableError).cause).toBeInstanceOf(CronPluginRootError);
     const ops = reportSpy.mock.calls.filter((c) => c[1]?.op === "cron-plugin-root-untrusted");
     expect(ops).toHaveLength(1);
+    expect(ops[0][0], "#8629: null first arg keeps the op/cron/reason tags").toBeNull();
     expect(ops[0][1].tags).toEqual({ cron: "cron-bug-fixer", reason: "writable" });
   });
 
@@ -344,16 +390,30 @@ describe("Guard 3 — resolveCronPluginRoot (AC1)", () => {
       fakeSpawnImpl(() => writeFileSync(join(pluginRoot, ".seed-complete"), "seeded tag=v9\n")),
     );
     const { spawnCwd } = workspace();
-    await run(spawnCwd, { loadPlugin: true });
+    const result = await run(spawnCwd, { loadPlugin: true });
     const reseed = reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run");
     expect(reseed).toHaveLength(1);
     expect(reseed[0][1].extra).toMatchObject({ seedTagAtSpawn: "v1", seedTagAtExit: "v9" });
+    // The verdict is downgraded, so classifyEvalFatal flips a best-effort cron's heartbeat red.
+    expect(result.ok).toBe(false);
+    expect(result.pluginReseeded).toBe(true);
+    expect(classifyEvalFatal(result)).toMatchObject({ fatal: true, fatalClass: "plugin-reseeded" });
   });
 
-  it("row 7 control: an unchanged tag reports nothing", async () => {
+  it("row 7 control: an unchanged tag reports nothing and keeps the verdict", async () => {
     const { spawnCwd } = workspace();
-    await run(spawnCwd, { loadPlugin: true });
+    const result = await run(spawnCwd, { loadPlugin: true });
     expect(reportSpy.mock.calls.filter((c) => c[1]?.op === "plugin-reseeded-mid-run")).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    expect(result.pluginReseeded).toBeUndefined();
+  });
+
+  it("M22: the real probeWritable reports a writable temp dir as writable and a missing path as ENOENT", async () => {
+    const real = await vi.importActual<typeof import("@/server/inngest/functions/_cron-spawn-fs")>(
+      "@/server/inngest/functions/_cron-spawn-fs",
+    );
+    expect(real.probeWritable(scratch)).toEqual({ writable: true, code: null });
+    expect(real.probeWritable(join(scratch, "no-such-dir"))).toEqual({ writable: false, code: "ENOENT" });
   });
 });
 

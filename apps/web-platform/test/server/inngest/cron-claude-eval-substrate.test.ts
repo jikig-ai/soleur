@@ -164,12 +164,38 @@ describe("cron eval overlay — hook-primary containment (#5018/#5000/#5004)", (
       `${cwd}/.git/config`,
       `${cwd}/sub/.git/config`,
       "/proc/self/environ",
+      "/proc/1/environ", // the server process's environment (AC8 test-design M7c)
+      "/proc/thread-self/environ",
+      "/tmp/ephemeral/other-run/repo/.git/config", // any .git, not only this clone's (M7b)
+      `${cwd}/.worktrees/bot-fix-1/CLAUDE.md`, // dot directories match: the CLI uses picomatch { dot: true }
+      `${cwd}/.github/CLAUDE.md`,
       "/sys/kernel/x",
       "/dev/stdin",
+      // #12847 review (architecture P2) — every secret path the hook's Read gate refuses.
+      `${cwd}/.env`,
+      `${cwd}/apps/web-platform/.env.local`,
+      "/run/secrets/doppler",
+      "/tmp/ephemeral/workspace/storage-state.json",
+      `${cwd}/tmp/ux-audit/findings.json`,
+      "/tmp/ephemeral/workspace/playwright-mcp-profile/Default/Cookies",
+      "/tmp/ephemeral/home-abc/.config/gh/hosts.yml",
+      `${cwd}/.npmrc`,
+      "/tmp/ephemeral/home-abc/.netrc",
+      "/tmp/ephemeral/home-abc/.gitconfig",
+      `${cwd}/.claude/settings.json`,
+      "/tmp/ephemeral/home-abc/.ssh/id_ed25519",
     ]) {
       expect(isExcluded(p), p).toBe(true);
     }
-    for (const p of [`${cwd}/CLAUDE.md`, `${cwd}/AGENTS.md`, `${cwd}/CLAUDE.local.md`, `${cwd}/sub/file.md`]) {
+    for (const p of [
+      `${cwd}/CLAUDE.md`,
+      `${cwd}/AGENTS.md`,
+      `${cwd}/CLAUDE.local.md`,
+      `${cwd}/sub/file.md`,
+      `${cwd}/.github/x.md`,
+      `${cwd}/.claude/rules/x.md`, // the clone root's own rules still load; only nested rules dirs are dropped
+      `${cwd}/knowledge-base/engineering/x.md`,
+    ]) {
       expect(isExcluded(p), p).toBe(false);
     }
   });
@@ -697,6 +723,29 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
     ).not.toThrow();
   });
 
+  // AC8 test-design M8/M8b — the delivery cross-check is exact: missing, one extra entry, or a reordered list.
+  it.each([
+    ["missing", (_l: string[]): string[] | undefined => undefined],
+    ["one extra entry", (l: string[]): string[] | undefined => [...l, "/tmp/extra/**"]],
+    ["reversed", (l: string[]): string[] | undefined => [...l].reverse()],
+  ])("throws when settings.json's claudeMdExcludes is %s", (_what, edit) => {
+    const spawnCwd = makeSpawnCwd();
+    const next = { ...(buildCronEvalSettings(spawnCwd) as Record<string, unknown>) };
+    const edited = edit(next.claudeMdExcludes as string[]);
+    if (edited === undefined) delete next.claudeMdExcludes;
+    else next.claudeMdExcludes = edited;
+    writeFileSync(join(spawnCwd, ".claude/settings.json"), JSON.stringify(next, null, 2) + "\n", "utf-8");
+    expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(/claudeMdExcludes/);
+  });
+
+  // AC8 test-design M10/M10b — the self-test probes the write root the hook derives in the clone.
+  it("throws when the hook's write root is wider than the clone (a deeper hookSpawnCwd walk)", () => {
+    const wider = readFileSync(REAL_HOOK, "utf-8").replace('"../../../.."', '"../../../../.."');
+    expect(wider).not.toBe(readFileSync(REAL_HOOK, "utf-8"));
+    const spawnCwd = makeSpawnCwd({ hookSource: wider });
+    expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(/wider than this clone/);
+  });
+
   it("passes with a non-empty allowlist (first verb allows)", () => {
     const spawnCwd = makeSpawnCwd({ allow: ["gh issue list"] });
     expect(() =>
@@ -1058,8 +1107,11 @@ const input = JSON.parse(readFileSync(0, "utf-8"));
 let v = "deny";
 if (input.tool_name === "Bash") {
   v = /\/proc\//.test(String(input.tool_input?.command ?? "")) ? "deny" : "allow";
-} else if (["Write", "Grep", "Task", "Skill"].includes(input.tool_name)) {
+} else if (["Grep", "Task", "Skill"].includes(input.tool_name)) {
   v = "allow";
+} else if (input.tool_name === "Write") {
+  // #12824 — allows a Write into the clone only, so it passes the write-root self-test probe.
+  v = String(input.tool_input?.file_path ?? "").includes("knowledge-base/") ? "allow" : "deny";
 }
 process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
 process.exit(0);
