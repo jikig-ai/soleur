@@ -1995,7 +1995,7 @@ async function readKbSyncHeldForAgentLine(
 /**
  * #12714 (D29(4)): an unfinished merge in the workspace, for the cc agent line. lstat only (no git child on the
  * agent-writable repo, no symlink follow): `.git/MERGE_HEAD` or `.git/MERGE_AUTOSTASH` present, the same files
- * session-sync's `mergeInProgress` treats as a merge in progress. Absent (or any read error, which claims nothing) is null.
+ * connected-repo-git's `mergeInProgress` treats as a merge in progress. Absent (or any read error, which claims nothing) is null.
  */
 async function readCcMergeBlockedReason(workspacePath: string): Promise<KbSyncMergeBlockedReason | null> {
   for (const name of ["MERGE_HEAD", "MERGE_AUTOSTASH"]) {

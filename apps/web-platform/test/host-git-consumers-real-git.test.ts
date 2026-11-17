@@ -92,7 +92,8 @@ vi.mock("@/server/host-git", async (importOriginal) => {
   };
 });
 
-import { kbPullWriter, syncPush } from "@/server/session-sync";
+import { kbPullWriter } from "@/server/connected-repo-git";
+import { syncPush } from "@/server/session-sync";
 import { ensureWorkspaceRepoCloned, __setGraftForTests } from "@/server/ensure-workspace-repo";
 import { gitWithInstallationAuth, gitWithPrivateKeyAuth, KEY_AUTH_ALLOW_PROTOCOL, LEGACY_ALLOW_PROTOCOL } from "@/server/git-auth";
 import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "@/server/host-git";
@@ -372,7 +373,7 @@ const pullMergeDriver: Driver = {
     return { ws, upstream, storeTip };
   },
   async run(c) {
-    c.note = kbPullWriter(c.ws).merge(c.storeTip as string);
+    c.note = await kbPullWriter(c.ws).merge(c.storeTip as string);
   },
   verify(c) {
     expect(c.note).toBe("clean");
@@ -906,8 +907,9 @@ describe("census: every host-side git exec site is classified (consistency with 
   // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
   const SERVER = join(__dirname, "..", "server");
   // ensure-workspace-repo.ts left this list with #12600 D21: it now reaches host git only through workspace-local-git.ts
-  // (the runner twin is merged), pinned by the row below.
-  const IN_SCOPE = ["session-sync.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts", "workspace-local-git.ts"];
+  // (the runner twin is merged), pinned by the row below. session-sync.ts left it with the review's Phase 0: its wrapper
+  // (`runConnectedRepoGit`) moved verbatim to connected-repo-git.ts, and session-sync now has no exec site (row below).
+  const IN_SCOPE = ["connected-repo-git.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts", "context-queries-hook.ts", "workspace.ts", "git-data-url-guard.ts", "worktree-config-seed.ts", "workspace-local-git.ts"];
   const CENSUS_ONLY: Record<string, string> = {
     "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
     "git-config-atomic.ts": "census-only: atomic config writes; executes host git on an agent-authored `.git` without the shared hardening, and its write follows a gitfile or commondir redirect (read from source, not measured)",
@@ -984,6 +986,13 @@ describe("census: every host-side git exec site is classified (consistency with 
     expect(src).toMatch(/import \{[^}]*\brunWorkspaceLocalGit\b[^}]*\} from "@\/server\/workspace-local-git"/);
     // the default overlay runner is the shared one (the test seam replaces it only in tests)
     expect(src).toMatch(/const realLocalGit: LocalGitFn = async \(args, cwd\) => \(\{\s*stdout: \(await runWorkspaceLocalGit\(args, \{ cwd, timeout: 30_000 \}\)\)\.toString\(\),?\s*\}\);/);
+  });
+
+  it("session-sync.ts runs its workspace git through connected-repo-git.ts, with no exec site of its own (Phase 0)", () => {
+    const src = code(join(SERVER, "session-sync.ts"));
+    expect(src.match(GIT_EXEC) ?? []).toEqual([]);
+    expect(src).not.toMatch(/\bexecFile(Sync)?\b|\bhostGitInvocation\(/);
+    expect(src).toMatch(/import \{[^}]*\brunConnectedRepoGit\b[^}]*\} from "\.\/connected-repo-git"/);
   });
 
   it("production call sites pass only the three allowProtocol constants, each with its pinned value", () => {

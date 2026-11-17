@@ -38,7 +38,12 @@ export interface RemoteState {
   readonly defaultBranch: string;
   readonly tip: string;
   readonly sideTip: string | null;
+  /** When this run's `ls-remote` returned `tip` (D39(f): the held count's `checkedAt`, not the instant of the write). */
+  readonly readAt: Date;
 }
+
+/** What the `ls-remote` output alone says: the remote state without the instant it was read. */
+export type ParsedRemoteState = Omit<RemoteState, "readAt">;
 
 /** A default-branch name the sync may put in an argv: git's ref-format rules and no leading `-` (D26(5)). */
 function isSafeBranchName(branch: string): boolean {
@@ -57,7 +62,7 @@ function isSafeBranchName(branch: string): boolean {
  * patterns may return (`refs/x/HEAD`) are ignored; a duplicate or malformed line of the three throws. `null` = the remote
  * has no resolvable HEAD (`remote_branch_absent`).
  */
-export function parseRemoteState(out: string): RemoteState | null {
+export function parseRemoteState(out: string): ParsedRemoteState | null {
   let defaultBranch: string | null = null;
   let tip: string | null = null;
   let sideTip: string | null = null;
@@ -107,7 +112,9 @@ export async function readRemoteState(
   } catch {
     throw new KbRemoteError("ls_remote_failed");
   }
-  return parseRemoteState(out.toString("utf8"));
+  const readAt = new Date();
+  const parsed = parseRemoteState(out.toString("utf8"));
+  return parsed === null ? null : { ...parsed, readAt };
 }
 
 // GitHub owner/repo charset (the same as the `GITHUB_NAME_RE` owner/repo check in server/agent-runner.ts).

@@ -78,7 +78,8 @@ vi.mock("../../server/logger", () => {
   return { default: l, createChildLogger: () => l };
 });
 
-import { CONNECTED_REPO_GIT_TIMEOUT_MS, syncPush } from "@/server/session-sync";
+import { CONNECTED_REPO_GIT_TIMEOUT_MS } from "@/server/connected-repo-git";
+import { syncPush } from "@/server/session-sync";
 import { KbSyncError } from "../../server/kb-sync-publish";
 
 const STUB_SERVICE = {} as never;

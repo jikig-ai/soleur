@@ -44,7 +44,7 @@ vi.mock("@/server/git-hardened-env", async (importOriginal) => {
 });
 
 import { createIsolatedPushDir, type IsolatedPushDirHandle } from "@/server/git-isolated-push-dir";
-import { mergeVerifiedDefault, type KbMergeOutcome, type KbPullWriter } from "@/server/kb-sync-pull";
+import { KB_PULL_HELD_MESSAGES, mergeVerifiedDefault, type KbMergeOutcome, type KbPullWriter } from "@/server/kb-sync-pull";
 
 let base = "";
 let dateTick = 1_700_000_000;
@@ -115,23 +115,24 @@ function fixture(): Fixture {
 }
 
 /** A writer that records every call and applies it with plain git; `swapTracking` writes another value than asked. */
-function recordingWriter(f: Fixture, opts: { swapTracking?: string } = {}) {
+function recordingWriter(f: Fixture, opts: { swapTracking?: string; outcome?: KbMergeOutcome } = {}) {
   const calls: Array<[string, ...string[]]> = [];
   const writer: KbPullWriter = {
-    unpack: (pack) => {
+    unpack: async (pack) => {
       calls.push(["unpack"]);
       execFileSync("git", ["unpack-objects", "-q"], { cwd: f.ws, input: pack, env: fixtureEnv(f.ws) });
     },
-    setTracking: (branch, sha) => {
+    setTracking: async (branch, sha) => {
       calls.push(["setTracking", branch, sha]);
       git(f.ws, "update-ref", "--no-deref", `refs/remotes/origin/${branch}`, opts.swapTracking ?? sha);
     },
-    casBranch: (branch, next, prev) => {
+    casBranch: async (branch, next, prev) => {
       calls.push(["casBranch", branch, next, prev]);
       git(f.ws, "update-ref", "--no-deref", `refs/heads/${branch}`, next, prev);
     },
-    merge: (target): KbMergeOutcome => {
+    merge: async (target): Promise<KbMergeOutcome> => {
       calls.push(["merge", target]);
+      if (opts.outcome !== undefined) return opts.outcome; // a writer-reported outcome, no merge run
       git(f.ws, "merge", "-q", "--no-edit", target);
       return "clean";
     },
@@ -146,6 +147,8 @@ describe("mergeVerifiedDefault with a recording writer (TX1-e equality half, D26
     const { writer, calls } = recordingWriter(f);
     const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
     expect(r.reason).toBe("merged");
+    // D39(f): the remote state carries the instant this run's ls-remote returned T.
+    expect(r.remote?.readAt).toBeInstanceOf(Date);
     const tracking = calls.find((c) => c[0] === "setTracking");
     const merge = calls.find((c) => c[0] === "merge");
     expect(tracking).toEqual(["setTracking", "main", f.T]);
@@ -168,6 +171,30 @@ describe("mergeVerifiedDefault with a recording writer (TX1-e equality half, D26
     await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
     expect(() => git(iso!.gitDir, "rev-parse", "--git-dir")).not.toThrow();
   });
+});
+
+// Review Phase 0 (cq-union-widening-grep-three-patterns): the widened merge outcomes map to their closed reasons, and
+// every widened reason is a warning (a non-null message). Later packages return them; the mapping is frozen here.
+describe("Phase 0: the widened merge outcomes and pull reasons", { timeout: 30_000 }, () => {
+  test.each([
+    ["collision", "untracked_collision"],
+    ["unverified", "merge_unverified"],
+    ["in_progress", "unresolved_merge"],
+  ] as const)("writer outcome %s -> %s", async (outcome, reason) => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer, calls } = recordingWriter(f, { outcome });
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
+    expect(r.reason).toBe(reason);
+    expect(calls.find((c) => c[0] === "merge")).toEqual(["merge", f.T]);
+  });
+
+  test.each(["untracked_collision", "merge_unverified", "pull_deadline", "side_pr_create_failed", "pull_unexpected"] as const)(
+    "%s is a warning reason (a static message)",
+    (reason) => {
+      expect(typeof KB_PULL_HELD_MESSAGES[reason]).toBe("string");
+    },
+  );
 });
 
 describe("TX1-j (D26(5)): an option-shaped or malformed default branch from ls-remote is remote_state", { timeout: 30_000 }, () => {

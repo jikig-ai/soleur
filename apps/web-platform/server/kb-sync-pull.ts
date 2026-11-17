@@ -23,7 +23,7 @@ import { createKbSyncPr, readSidePrState } from "./kb-sync-side-pr";
 /** The one observability op of a session-start pull (one line per run, D25(6)). */
 export const KB_PULL_HELD_OP = "kb-sync.pull-held";
 
-/** The message of the session-start merge commit: the merge argv guard (server/session-sync.ts) pins exactly this value. */
+/** The message of the session-start merge commit: the merge argv guard (server/connected-repo-git.ts) pins exactly this value. */
 export const AUTO_MERGE_MSG_PULL = "Soleur: merge GitHub before session";
 
 /** The message of the link commit `commit-tree(HEAD^{tree}, [HEAD, P])` (D28(4)): no file change, P joins HEAD's history. */
@@ -64,7 +64,13 @@ export type KbPullHeldReason =
   | "side_declined"
   | "side_pr_created"
   | "side_linked"
-  | "side_conflict";
+  | "side_conflict"
+  // Review Phase 0 (D35, D36(b), D38(2), D45(h), obs F3): widened ahead of the packages that return them.
+  | "untracked_collision"
+  | "merge_unverified"
+  | "pull_deadline"
+  | "side_pr_create_failed"
+  | "pull_unexpected";
 
 export const KB_PULL_HELD_MESSAGES: Record<KbPullHeldReason, string | null> = {
   remote_state: "KB sync pull: the remote state could not be read",
@@ -82,6 +88,11 @@ export const KB_PULL_HELD_MESSAGES: Record<KbPullHeldReason, string | null> = {
   merge_conflict_precheck: "KB sync self-heal: the merge pre-check conflicted",
   side_not_kb_only: "KB sync pull: the side branch changes files outside knowledge-base",
   side_pr_unknown: "KB sync pull: the side branch pull request could not be read",
+  untracked_collision: "KB sync pull: an untracked or ignored file is in the merge's way",
+  merge_unverified: "KB sync pull: the merge result could not be verified",
+  pull_deadline: "KB sync pull: the pull ran out of time before a step could start",
+  side_pr_create_failed: "KB sync pull: the side branch pull request could not be created",
+  pull_unexpected: "KB sync pull: an unexpected error stopped the pull",
   up_to_date: null,
   merged: null,
   non_default_branch: null,
@@ -94,19 +105,23 @@ export const KB_PULL_HELD_MESSAGES: Record<KbPullHeldReason, string | null> = {
 /** Which fetch a fetch-stage reason came from (the `ref` tag, D25(6)). */
 export type KbPullRef = "default" | "side";
 
-/** The workspace merge's result, as session-sync's writer reads it (D26(4): an autostash conflict is never `clean`). */
-export type KbMergeOutcome = "clean" | "autostash_conflict" | "conflict" | "refused";
+/**
+ * The workspace merge's result, as the connected-repo writer reads it (D26(4): an autostash conflict is never `clean`).
+ * `collision` (D35), `unverified` (D36(b)) and `in_progress` (D37(1)) are widened ahead of the writer that returns them.
+ */
+export type KbMergeOutcome = "clean" | "autostash_conflict" | "conflict" | "refused" | "collision" | "unverified" | "in_progress";
 
 /**
- * The workspace writes a pull makes, injected by server/session-sync.ts (its guarded `runConnectedRepoGit`): the hand-over
- * `unpack-objects -q`, the `--no-deref` tracking ref and branch CAS, and the pinned merge of a 40-hex target. Each but
- * `merge` throws on failure; `merge` returns its outcome.
+ * The workspace writes a pull makes, injected by its caller (server/connected-repo-git.ts `kbPullWriter`, the guarded
+ * `runConnectedRepoGit`): the hand-over `unpack-objects -q`, the `--no-deref` tracking ref and branch CAS, and the pinned
+ * merge of a 40-hex target. Async verbs (frozen contract): each but `merge` rejects on failure; `merge` resolves to its
+ * outcome.
  */
 export interface KbPullWriter {
-  unpack(pack: Buffer): void;
-  setTracking(branch: string, sha: string): void;
-  casBranch(branch: string, next: string, prev: string): void;
-  merge(target: string): KbMergeOutcome;
+  unpack(pack: Buffer): Promise<void>;
+  setTracking(branch: string, sha: string): Promise<void>;
+  casBranch(branch: string, next: string, prev: string): Promise<void>;
+  merge(target: string): Promise<KbMergeOutcome>;
 }
 
 /** Test seams (TX1-l). Production callers pass nothing. */
@@ -128,11 +143,14 @@ const MERGE_REASON: Record<KbMergeOutcome, KbPullHeldReason> = {
   autostash_conflict: "autostash_conflict",
   conflict: "merge_conflict",
   refused: "merge_refused",
+  collision: "untracked_collision",
+  unverified: "merge_unverified",
+  in_progress: "unresolved_merge",
 };
 
-function mergeSafely(writer: KbPullWriter, target: string): KbPullHeldReason {
+async function mergeSafely(writer: KbPullWriter, target: string): Promise<KbPullHeldReason> {
   try {
-    return MERGE_REASON[writer.merge(target)];
+    return MERGE_REASON[await writer.merge(target)];
   } catch {
     return "merge_refused";
   }
@@ -252,11 +270,11 @@ export async function mergeVerifiedDefault(input: MergeDefaultInput): Promise<Me
     const moved = await transfer(isolated, writer, T, [headSha], input.limits ?? {});
     if (moved) return done(moved);
     try {
-      writer.setTracking(D, T);
+      await writer.setTracking(D, T);
     } catch {
       return done("handover_failed");
     }
-    return done(mergeSafely(writer, T));
+    return done(await mergeSafely(writer, T));
   } catch {
     // A local child that could not run (KbObjectsError) or anything unforeseen: a closed reason, never a raw throw.
     return done("handover_failed");
@@ -359,7 +377,7 @@ export async function adoptSideTip(input: AdoptSideInput): Promise<KbPullStep | 
     const moved = await transfer(isolated, writer, P, [T, headSha], input.limits ?? {});
     if (moved) return step(moved, "side");
     try {
-      writer.setTracking(KB_SYNC_SIDE_BRANCH, P);
+      await writer.setTracking(KB_SYNC_SIDE_BRANCH, P);
     } catch {
       return step("handover_failed", "side");
     }
@@ -370,13 +388,13 @@ export async function adoptSideTip(input: AdoptSideInput): Promise<KbPullStep | 
       const moveLink = await transfer(isolated, writer, M, [headSha, P], input.limits ?? {});
       if (moveLink) return step(moveLink, "side");
       try {
-        writer.casBranch(D, M, headSha);
+        await writer.casBranch(D, M, headSha);
       } catch {
         return step("handover_failed");
       }
       return step("side_linked");
     }
-    const merged = mergeSafely(writer, P);
+    const merged = await mergeSafely(writer, P);
     return step(merged === "merged" && created ? "side_pr_created" : merged);
   } catch {
     return step("handover_failed");

@@ -116,7 +116,8 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 
-import { assertConnectedRepoArgv, MERGE_CONFIG_PINS, mergeArgv, syncPull, syncPush } from "../server/session-sync";
+import { assertConnectedRepoArgv, MERGE_CONFIG_PINS, mergeArgv } from "../server/connected-repo-git";
+import { syncPull, syncPush } from "../server/session-sync";
 import { AUTO_MERGE_MSG_PULL } from "../server/kb-sync-pull";
 
 // ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved

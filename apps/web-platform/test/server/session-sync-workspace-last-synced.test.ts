@@ -165,7 +165,7 @@ function publishWith(outcome: { result?: unknown; throws?: unknown; hook?: boole
   };
 }
 
-const heldWrites = (): Array<[string, { kb_sync_held_files: number; kb_sync_held_checked_at: string }]> =>
+const heldWrites = (): Array<[string, { heldFiles: number | null; checkedAt: Date }]> =>
   mockWriteHeld.mock.calls.map(([, ws, patch]) => [ws, patch]);
 
 describe("session-sync write relocation (ADR-044 PR-B)", () => {
@@ -211,6 +211,12 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     ["tip_mismatch", 0],
     ["remote_state", 0],
     ["non_default_branch", 0],
+    // Review Phase 0: the widened reasons never stamp.
+    ["untracked_collision", 0],
+    ["merge_unverified", 0],
+    ["pull_deadline", 0],
+    ["side_pr_create_failed", 0],
+    ["pull_unexpected", 0],
   ] as const)("syncPull %s -> %i repo_last_synced_at write(s)", async (reason, writes) => {
     mockMerge.mockResolvedValue({ reason, remote: null });
     await expect(syncPull(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID)).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: reason, checkedAt: null });
@@ -329,9 +335,9 @@ describe("held-files write (TW2)", () => {
     await syncPush(USER_ID, WS_PATH, SERVICE, TEAM_WORKSPACE_ID);
 
     expect(heldWrites()).toEqual([
-      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 2, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }],
-      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T11:00:00.000Z" }],
-      [TEAM_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T12:00:00.000Z" }],
+      [TEAM_WORKSPACE_ID, { heldFiles: 2, checkedAt: new Date("2026-11-17T10:00:00.000Z") }],
+      [TEAM_WORKSPACE_ID, { heldFiles: 0, checkedAt: new Date("2026-11-17T11:00:00.000Z") }],
+      [TEAM_WORKSPACE_ID, { heldFiles: 0, checkedAt: new Date("2026-11-17T12:00:00.000Z") }],
     ]);
     expect(mockWriteHeld.mock.calls.every(([svc]) => svc === SERVICE)).toBe(true);
     // Separate from the stamp: the push never stamps (W5), so the only workspace write is the held one.
@@ -351,7 +357,7 @@ describe("held-files write (TW2)", () => {
   test("push: a thrown turn after the remote read still writes (the finally path), and is still reported", async () => {
     mockPublish.mockImplementationOnce(publishWith({ throws: new KbSyncError("local_git_failed") }));
     await expect(syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { kb_sync_held_files: 2, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 2, checkedAt: new Date("2026-11-17T10:00:00.000Z") }]]);
     expect(mockReport.mock.calls.some(([, o]) => o?.op === "syncPush")).toBe(true);
   });
 
@@ -413,7 +419,7 @@ describe("held-files write (TW2)", () => {
     });
     expect(mockAdopt.mock.invocationCallOrder[0]).toBeLessThan(mockCompute.mock.invocationCallOrder[0]);
     expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: expect.objectContaining({ gitDir: "/tmp/iso" }), base: T_SHA, head: merged, recovered: [] });
-    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { kb_sync_held_files: 3, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: new Date("2026-11-17T10:00:00.000Z") }]]);
     // The stamp is its own write (D29(1): never folded together).
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
     expect(mockWriteRepoCols.mock.calls[0][2]).not.toHaveProperty("kb_sync_held_files");
@@ -427,7 +433,7 @@ describe("held-files write (TW2)", () => {
       pullReason: "up_to_date",
       checkedAt: "2026-11-17T10:00:00.000Z",
     });
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: new Date("2026-11-17T10:00:00.000Z") }]]);
   });
 
   test("pull: no remote read (remote null), a null count or an unresolved merge -> no count, no write", async () => {

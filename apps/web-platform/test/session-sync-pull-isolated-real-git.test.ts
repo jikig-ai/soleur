@@ -304,7 +304,7 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     // #12714: the count is computed on the pull's own isolated dir after the merge (nothing local is held here) and written
     expect(result).toEqual({ heldFiles: 0, onRecovered: 0, pullReason: "merged", checkedAt: expect.any(String) });
     expect(H.writeHeld).toHaveBeenCalledTimes(1);
-    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: result.checkedAt }]);
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: new Date(result.checkedAt as string) }]);
     for (const u of ups) expect(isAncestor(r, u, "HEAD")).toBe(true);
     expect(gitOk(r.ws, "rev-list", "--objects", "HEAD")).toBe(true);
     expect(gitOk(r.ws, "fsck", "--connectivity-only")).toBe(true);

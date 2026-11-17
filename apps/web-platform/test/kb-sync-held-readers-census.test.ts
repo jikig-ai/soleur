@@ -56,15 +56,12 @@ const sources = new Map(files.map((f) => [path.relative(APP, f).split(path.sep).
 type Role = { role: string; required: boolean };
 
 // Every app file whose code names a held column or the RPC, each required to name it (task 11.2 landed the session-sync
-// writer).
+// writer; the review's Phase 0 moved it to server/kb-sync-held-refresh.ts, whose patch is the frozen `{ heldFiles,
+// checkedAt }`, so only server/workspace-repo-mirror.ts maps it to the column names).
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
   "server/workspace-repo-mirror.ts": {
     role: "type: WorkspaceRepoCols; writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (each sync, D29(1))",
-    required: true,
-  },
-  "server/session-sync.ts": {
-    role: "writer: the patch for writeKbSyncHeldCols, a separate service-client UPDATE after each sync (D29(1))",
     required: true,
   },
   "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
@@ -93,8 +90,20 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
   });
 
   it("session-sync writes the held columns only through writeKbSyncHeldCols, never folded into the stamp (D29(1))", () => {
+    // The write lives in kb-sync-held-refresh.ts (Phase 0 move): one writeKbSyncHeldCols call, the frozen patch shape.
+    const refresh = sources.get("server/kb-sync-held-refresh.ts") ?? "";
+    expect([...refresh.matchAll(/\bwriteKbSyncHeldCols\(/g)]).toHaveLength(1);
+    expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service,\s*workspaceId,\s*\{\s*heldFiles: held\.total,\s*checkedAt: new Date\(held\.checkedAt\)\s*\}\s*\)/);
+    expect(refresh).not.toMatch(/writeRepoColsToWorkspace/);
+    // workspace-repo-mirror.ts maps the patch to exactly the two migration-187 columns.
+    expect(sources.get("server/workspace-repo-mirror.ts") ?? "").toMatch(
+      /\.update\(\{\s*kb_sync_held_files: patch\.heldFiles,\s*kb_sync_held_checked_at: patch\.checkedAt\.toISOString\(\)\s*\}\)/,
+    );
     const src = sources.get("server/session-sync.ts") ?? "";
-    expect(src).toMatch(/writeKbSyncHeldCols\(\s*service,\s*workspaceId,\s*\{\s*kb_sync_held_files:/);
+    // session-sync reaches the held write only through the moved helper, never writeKbSyncHeldCols directly.
+    expect(src).not.toMatch(/\bwriteKbSyncHeldCols\b/);
+    expect(src).toMatch(/import \{[^}]*\bwriteHeldCount\b[^}]*\} from "\.\/kb-sync-held-refresh"/);
+    expect([...src.matchAll(/\bwriteHeldCount\(service, workspaceId, held\)/g)]).toHaveLength(2); // syncPull and syncPush
     // The only `writeRepoColsToWorkspace(` call is the stamp, and it names no held column.
     const repoWrites = [...src.matchAll(/writeRepoColsToWorkspace\(([^)]*)\)/g)].map((m) => m[1]);
     expect(repoWrites.length).toBeGreaterThan(0);

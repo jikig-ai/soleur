@@ -143,15 +143,26 @@ export async function clearKbSyncHeldCols(service: HeldClearClientLike, workspac
   }
 }
 
-/** The held-files write: both columns, always together, never null (a null count is "write nothing", decided by the caller). */
+/**
+ * Why the self-heal is blocked from pulling (D42): the closed values of `workspaces.kb_sync_pull_blocked`, which lands
+ * with WP3's amendment of migration 187.
+ */
+export type KbSyncPullBlocked = "merge_conflict_precheck" | "untracked_collision";
+
+/**
+ * The held-files write (frozen signature, review Phase 0): the count (null = unknown) and the instant it was computed,
+ * always together. `pullBlocked` undefined leaves that column untouched; in Phase 0 the column does not exist yet, so
+ * `pullBlocked` is accepted and never written (WP3 writes it).
+ */
 export interface KbSyncHeldPatch {
-  kb_sync_held_files: number;
-  kb_sync_held_checked_at: string;
+  heldFiles: number | null;
+  checkedAt: Date;
+  pullBlocked?: KbSyncPullBlocked | null;
 }
 
 interface HeldWriteClientLike {
   from: (table: string) => {
-    update: (patch: KbSyncHeldPatch) => {
+    update: (patch: { kb_sync_held_files: number | null; kb_sync_held_checked_at: string }) => {
       eq: (col: string, val: string) => {
         select: (cols: string) => PromiseLike<{ data: Array<{ id: string }> | null; error: unknown }>;
       };
@@ -179,7 +190,7 @@ export async function writeKbSyncHeldCols(
   try {
     const { data, error } = await service
       .from("workspaces")
-      .update({ kb_sync_held_files: patch.kb_sync_held_files, kb_sync_held_checked_at: patch.kb_sync_held_checked_at })
+      .update({ kb_sync_held_files: patch.heldFiles, kb_sync_held_checked_at: patch.checkedAt.toISOString() })
       .eq("id", workspaceId)
       .select("id");
     if (error) {

@@ -35,7 +35,7 @@ vi.mock("@/server/git-isolated-push-dir", () => ({
   IsolatedPushDirRefusal: class IsolatedPushDirRefusal extends Error {},
   createIsolatedPushDir: () => ({ gitDir: "/tmp/iso", dispose: disposeSpy }),
 }));
-vi.mock("@/server/session-sync", () => ({ kbPullWriter: () => ({}) }));
+vi.mock("@/server/connected-repo-git", () => ({ kbPullWriter: () => ({}) }));
 
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: gitSpy }));
 vi.mock("@/server/workspace-local-git", () => ({ runWorkspaceLocalGit: localSpy }));

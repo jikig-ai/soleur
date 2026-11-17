@@ -25,6 +25,9 @@ export class KbObjectsError extends Error {
 
 export const TREE_MODE = "40000";
 
+/** The pathspec that excludes the knowledge base: `:(exclude)knowledge-base/` (the one spelling, pattern P3-11). */
+export const KB_EXCLUDE_PATHSPEC = `:(exclude)${KB_ROOT}/`;
+
 export interface TreeEntry {
   readonly mode: string;
   /** latin1, so the bytes round-trip exactly into `mktree -z`. */
@@ -158,9 +161,12 @@ export async function commitTree(
   return sha;
 }
 
-/** The one workspace write the hand-over needs: `unpack-objects -q` with the pack on stdin (throws on failure). */
+/**
+ * The one workspace write the hand-over needs: `unpack-objects -q` with the pack on stdin (throws or rejects on failure).
+ * Sync for the push writer, async for the pull writer (review Phase 0 frozen contract); the hand-over awaits either.
+ */
 export interface KbUnpacker {
-  unpack(pack: Buffer): void;
+  unpack(pack: Buffer): void | Promise<void>;
 }
 
 /**
@@ -180,7 +186,7 @@ export async function handOver(
   });
   if (pack.code !== 0) throw new KbObjectsError("unpack_failed");
   try {
-    writer.unpack(pack.stdout);
+    await writer.unpack(pack.stdout);
   } catch {
     throw new KbObjectsError("unpack_failed");
   }
@@ -197,7 +203,7 @@ export async function isKbOnlySide(isolated: IsolatedPushDirHandle, T: string, P
   const mergeBase = base.stdout.toString("utf8").trim();
   if (base.code === 1) return false;
   if (base.code !== 0 || !HEX40.test(mergeBase)) throw new KbObjectsError("local_git_failed");
-  const diff = await runIsolatedGitLocal(isolated, ["diff", "--quiet", "--no-renames", mergeBase, P, "--", ".", `:(exclude)${KB_ROOT}/`]);
+  const diff = await runIsolatedGitLocal(isolated, ["diff", "--quiet", "--no-renames", mergeBase, P, "--", ".", KB_EXCLUDE_PATHSPEC]);
   if (diff.code === 1) return false;
   if (diff.code !== 0) throw new KbObjectsError("local_git_failed");
   return true;

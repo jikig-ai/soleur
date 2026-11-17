@@ -78,6 +78,9 @@ const PUSH_FREE_MODULES = [
   "server/workspace-sync.ts",
   "server/git-isolated-dispose.ts",
   "server/agent-git-identity.ts",
+  // Review Phase 0: the leaves the pull and the self-heal reach (the collision precheck, the held-count path).
+  "server/workspace-collision.ts",
+  "server/kb-sync-held-refresh.ts",
 ];
 
 /** Files whose push-verb tokens in an argv position are allowed, with the reason. */
@@ -279,6 +282,27 @@ describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
     // D25(5): the pull leaves and the held count never carry the token, and session-sync no longer does at all
     for (const f of KB_SYNC_TOKEN_FREE) expect(c.gitAuth.filter((x) => x.startsWith(`${f} `)), f).toEqual([]);
     expect(c.gitAuth.filter((x) => x.startsWith("server/session-sync.ts "))).toEqual([]);
+    // Phase 0: the connected-repo wrapper (moved out of session-sync) carries no token either.
+    expect(c.gitAuth.filter((x) => x.startsWith("server/connected-repo-git.ts "))).toEqual([]);
+  });
+
+  test("Phase 0: connected-repo-git.ts reaches the push module for a type only (no runtime edge to kb-sync-publish or push-branch)", () => {
+    const f = "server/connected-repo-git.ts";
+    expect(SERVER_FILES).toContain(f);
+    const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
+    const runtime: string[] = [];
+    const visit = (n: ts.Node): void => {
+      if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+        const typeOnly = ts.isImportDeclaration(n) ? n.importClause?.isTypeOnly === true : n.isTypeOnly;
+        if (!typeOnly) runtime.push(n.moduleSpecifier.text);
+      }
+      if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        runtime.push(n.arguments[0] ? (literalText(n.arguments[0]) ?? "<computed>") : "<computed>");
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    expect(runtime.filter((m) => /(^|\/)(kb-sync-publish|push-branch|session-sync)$/.test(m) || m === "<computed>")).toEqual([]);
   });
 
   test("D25(5): no literal git exec in the token-free KB sync modules; their isolated-runner call sites are the known counts", () => {
@@ -331,6 +355,7 @@ describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
     for (const s of argv) expect(Object.keys(ARGV_ALLOWED), s).toContain(s.split(" ")[0]);
     expect(argv.filter((s) => s.startsWith("server/kb-sync-publish.ts "))).toHaveLength(1);
     expect(argv.filter((s) => s.startsWith("server/session-sync.ts "))).toEqual([]);
+    expect(argv.filter((s) => s.startsWith("server/connected-repo-git.ts "))).toEqual([]);
   });
 
   test("no non-test file outside server/ can reach gitWithInstallationAuth (D19(2))", () => {

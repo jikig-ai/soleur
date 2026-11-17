@@ -338,7 +338,7 @@ function foreignPlusKb(r: Row, { kb = true, dirtyCode = true } = {}): string {
 
 const run = (r: Row): Promise<void> => syncPush(USER, r.ws, {} as never, WS_ID);
 /** #12714 TW2: the held counts this turn wrote (one per turn that computed one). */
-const heldCounts = (): number[] => H.writeHeld.mock.calls.map((c) => ((c as unknown[])[2] as { kb_sync_held_files: number }).kb_sync_held_files);
+const heldCounts = (): number[] => H.writeHeld.mock.calls.map((c) => ((c as unknown[])[2] as { heldFiles: number }).heldFiles);
 
 beforeEach(() => {
   for (const k of ["HOME", "TMPDIR"]) savedEnv[k] = process.env[k];
@@ -394,7 +394,7 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     // W5 (D29(9)): the push never stamps `repo_last_synced_at`; #12714: it writes the held count (KB-only: 0 code files)
     expect(H.writeRepoCols).not.toHaveBeenCalled();
     expect(H.writeHeld).toHaveBeenCalledTimes(1);
-    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { kb_sync_held_files: 0, kb_sync_held_checked_at: expect.any(String) }]);
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: expect.any(Date) }]);
     // D10: the hand-over packs exactly S and its root tree, from an explicit object list (no --revs walk)
     const sTree = git(row.remote, "rev-parse", `${S}^{tree}`);
     expect(packs()).toEqual([{ args: ["pack-objects", "--stdout", "-q"], objects: [S, sTree], count: 2 }]);

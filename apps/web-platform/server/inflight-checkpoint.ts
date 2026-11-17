@@ -63,8 +63,8 @@ type PlumbingResult = { ok: boolean; stdout: string; stderr: string };
  * Private git-plumbing exec wrapper. The plumbing verbs
  * (`write-tree`/`commit-tree`/`update-ref`/`read-tree`/`checkout-index`/
  * `for-each-ref`) are greenfield in server code — they are NOT in
- * `session-sync.ts ALLOWED_GIT_SUBCOMMANDS`, and `runConnectedRepoGit` is
- * private to that module, so this is a deliberate sibling modeled on
+ * `connected-repo-git.ts ALLOWED_GIT_SUBCOMMANDS`, and `runConnectedRepoGit`'s
+ * guard refuses them, so this is a deliberate sibling modeled on
  * `_cron-safe-commit.ts runGit`: async `promisify(execFile)`, no-throw
  * `{ ok, stdout, stderr }` return, host-config isolation.
  *

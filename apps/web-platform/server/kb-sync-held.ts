@@ -40,6 +40,11 @@ export const HELD_FILES_MAX = 10_000;
 export const RECOVERED_TIPS_MAX = 20;
 /** The branch prefix the legacy self-heal set work aside on (`server/workspace-sync.ts`, the recovery-branch block). */
 export const RECOVERED_REF_PREFIX = "refs/heads/soleur/recovered-kb-sync-";
+/**
+ * The branch prefix the git-data overlay parks a rescued store tip on (`soleur-store-tip-<12 hex>`). D39(d) adds these
+ * tips to the count with WP3; Phase 0 exports the prefix only.
+ */
+export const STORE_TIP_REF_PREFIX = "refs/heads/soleur-store-tip-";
 
 const RECOVERED_LEAF = /^recovered-kb-sync-[0-9A-Za-z_-]{1,64}$/;
 const RECOVERED_REF = /^refs\/heads\/soleur\/recovered-kb-sync-[0-9A-Za-z_-]{1,64}$/;

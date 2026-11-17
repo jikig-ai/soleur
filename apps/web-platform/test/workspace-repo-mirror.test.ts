@@ -192,7 +192,9 @@ describe("clearKbSyncHeldCols", () => {
 describe("writeKbSyncHeldCols", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  const PATCH = { kb_sync_held_files: 3, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" };
+  const PATCH = { heldFiles: 3, checkedAt: new Date("2026-11-17T10:00:00.000Z") };
+  /** The two columns the UPDATE carries for PATCH (the frozen `{ heldFiles, checkedAt }` mapped to migration 187's names). */
+  const COLS = { kb_sync_held_files: 3, kb_sync_held_checked_at: "2026-11-17T10:00:00.000Z" };
 
   function writeService(result: { data?: Array<{ id: string }> | null; error?: unknown; reject?: unknown } = {}) {
     const data = result.data === undefined ? [{ id: "ws-team" }] : result.data;
@@ -210,7 +212,7 @@ describe("writeKbSyncHeldCols", () => {
     await writeKbSyncHeldCols(svc.client, "ws-team", PATCH);
     expect(svc.from).toHaveBeenCalledWith("workspaces");
     expect(svc.update).toHaveBeenCalledTimes(1);
-    expect(svc.update).toHaveBeenCalledWith(PATCH);
+    expect(svc.update).toHaveBeenCalledWith(COLS);
     expect(svc.eq).toHaveBeenCalledWith("id", "ws-team");
     const { reportSilentFallback } = await import("@/server/observability");
     expect(reportSilentFallback).not.toHaveBeenCalled();
@@ -218,8 +220,14 @@ describe("writeKbSyncHeldCols", () => {
 
   it("writes a 0 too (a clean sync clears the notice)", async () => {
     const svc = writeService();
-    await writeKbSyncHeldCols(svc.client, "ws-1", { ...PATCH, kb_sync_held_files: 0 });
-    expect(svc.update).toHaveBeenCalledWith({ ...PATCH, kb_sync_held_files: 0 });
+    await writeKbSyncHeldCols(svc.client, "ws-1", { ...PATCH, heldFiles: 0 });
+    expect(svc.update).toHaveBeenCalledWith({ ...COLS, kb_sync_held_files: 0 });
+  });
+
+  it("pullBlocked undefined leaves the payload at exactly the two held columns (frozen contract)", async () => {
+    const svc = writeService();
+    await writeKbSyncHeldCols(svc.client, "ws-1", { ...PATCH, pullBlocked: undefined });
+    expect(svc.update).toHaveBeenCalledWith(COLS);
   });
 
   it("an UPDATE error (column missing, D33) resolves, and mirrors exactly once", async () => {

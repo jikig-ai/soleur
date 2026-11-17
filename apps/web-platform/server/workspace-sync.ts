@@ -7,13 +7,13 @@
 //
 // Deliberately imports NOTHING from `@/lib/supabase/server` (next/headers).
 // Deps: observability (clean), a type-only KbSyncErrorClass, pino's Logger
-// type, the token-free local runner (a host-git leaf), node:fs/promises, two
-// import-free leaves (branch-validation, kb-root), and a LAZY `@/server/git-auth`
+// type, the token-free local runner (a host-git leaf), the collision precheck
+// (workspace-collision, node:fs/promises), two import-free leaves
+// (branch-validation, kb-root), and a LAZY `@/server/git-auth`
 // import inside syncWorkspace. The held-commits merge (#12718, D27) imports its
 // modules LAZILY inside that branch: the pull leaves (kb-sync-pull, kb-sync-remote,
 // never kb-sync-publish or push-branch, census row D25(3)), the isolated-dir
-// creator and dispose leaf, and session-sync's guarded writer (`kbPullWriter`).
-import { lstat } from "node:fs/promises";
+// creator and dispose leaf, and the connected-repo guarded writer (`kbPullWriter`, server/connected-repo-git.ts).
 import {
   mirrorWarnWithDebounce,
   mirrorWithDebounce,
@@ -25,6 +25,7 @@ import { runWorkspaceLocalGit, type WorkspaceLocalGitRunner } from "@/server/wor
 import type { Logger } from "pino";
 import { firstAppFrame } from "@/server/error-frame";
 import { validateBranchFormat } from "@/server/branch-validation";
+import { hasUntrackedCollision } from "@/server/workspace-collision";
 import { KB_ROOT } from "./kb-root";
 
 // Re-declared as local constants typed by the shared union (the union is the
@@ -228,7 +229,7 @@ async function mergeHeldCommits(
       import("@/server/git-isolated-dispose"),
       import("@/server/kb-sync-remote"),
       import("@/server/kb-sync-pull"),
-      import("@/server/session-sync"),
+      import("@/server/connected-repo-git"),
     ]);
   let repo: { url: string };
   try {
@@ -267,109 +268,6 @@ async function mergeHeldCommits(
  * and tags before `refs/remotes/`, D15(c)). Used in the rev-list, both content diffs, the precheck and the reset.
  */
 const remoteTrackingRef = (defaultBranch: string): string => `refs/remotes/origin/${defaultBranch}`;
-
-/** `diff --name-status -z` output as raw added and deleted path bytes (a filename is bytes, not UTF-8). */
-function parseNameStatusZ(out: Buffer): { added: Buffer[]; deleted: Buffer[] } {
-  const fields: Buffer[] = [];
-  let start = 0;
-  for (let i = 0; i < out.length; i++) {
-    if (out[i] === 0) {
-      fields.push(out.subarray(start, i));
-      start = i + 1;
-    }
-  }
-  if (start !== out.length || fields.length % 2 !== 0) throw new Error("untracked-collision precheck: malformed diff output");
-  const added: Buffer[] = [];
-  const deleted: Buffer[] = [];
-  for (let i = 0; i < fields.length; i += 2) {
-    const status = fields[i].toString("latin1");
-    if (status === "A") added.push(fields[i + 1]);
-    else if (status === "D") deleted.push(fields[i + 1]);
-    else throw new Error("untracked-collision precheck: unexpected diff status");
-  }
-  return { added, deleted };
-}
-
-/** `lstat` without following a symlink; null when nothing is there (or a leading component is not a directory). */
-async function lstatOrNull(path: Buffer): Promise<Awaited<ReturnType<typeof lstat>> | null> {
-  try {
-    return await lstat(path);
-  } catch (err) {
-    const code = (err as { code?: unknown }).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return null;
-    throw err;
-  }
-}
-
-const SLASH = 0x2f;
-
-/** Every proper leading directory of `p` (`a`, `a/b` for `a/b/c`), as subarrays of `p`. */
-function leadingDirs(p: Buffer): Buffer[] {
-  const out: Buffer[] = [];
-  for (let i = p.indexOf(SLASH); i > 0; i = p.indexOf(SLASH, i + 1)) out.push(p.subarray(0, i));
-  return out;
-}
-
-/**
- * CTO ruling D15(a): true when the reset to `target` would replace or remove an on-disk entry that HEAD does not track.
- * The tracked tree is already clean (D6b), so the index equals HEAD and every entry the reset can touch is a path that
- * `diff --name-status -z --no-renames --diff-filter=AD HEAD <target>` lists (`--name-status` rather than `--name-only`
- * so one call tells an added path from a deleted one). Three shapes refuse:
- *  1. an existing entry (lstat, no symlink follow) at an added path, unless it is a tracked directory the target turns
- *     into a file, which is shape 3;
- *  2. an existing non-directory at a leading directory of an added path that is not itself a deleted tracked path;
- *  3. an untracked OR IGNORED entry under a tracked directory an added path turns into a file:
- *     `ls-files -z --others --directory -- :(literal)<p>/` with no `--exclude-standard`, so ignored files are listed
- *     too; `--directory` (D23) lists a wholly-untracked subdirectory as one entry instead of every file under it (an
- *     ignored build tree would otherwise overflow the runner's buffer), and still lists empty directories.
- * `reset --keep` refuses shapes 1-2 for untracked files by itself but overwrites an IGNORED file (measured, git 2.56),
- * which is why this precheck, not `--keep`, is the guard; a `--keep` refusal reaching the catch means a missed shape.
- * A path that is not valid UTF-8 cannot be passed as an argv pathspec, so shape 3 on such a path refuses (fail closed).
- * Leading-directory lstats are memoised per call (D23): added paths share prefixes, and an import of N files at depth d
- * would otherwise cost N x d sequential lstats inside a user's KB write.
- */
-async function hasUntrackedCollision(
-  runLocal: WorkspaceLocalGitRunner,
-  workspacePath: string,
-  target: string,
-  gitOpts: { cwd: string; timeout: number },
-): Promise<boolean> {
-  const listing = await runLocal(
-    ["diff", "--name-status", "-z", "--no-renames", "--diff-filter=AD", "HEAD", target, "--"],
-    gitOpts,
-  );
-  const { added, deleted } = parseNameStatusZ(Buffer.isBuffer(listing) ? listing : Buffer.from(String(listing)));
-  if (added.length === 0) return false;
-  const deletedPaths = new Set(deleted.map((p) => p.toString("latin1")));
-  const deletedDirs = new Set(deleted.flatMap((p) => leadingDirs(p).map((d) => d.toString("latin1"))));
-  const onDisk = (rel: Buffer): Buffer => Buffer.concat([Buffer.from(`${workspacePath}/`), rel]);
-  const dirStats = new Map<string, Awaited<ReturnType<typeof lstatOrNull>>>();
-  const lstatDir = async (dir: Buffer): Promise<Awaited<ReturnType<typeof lstatOrNull>>> => {
-    const key = dir.toString("latin1");
-    if (!dirStats.has(key)) dirStats.set(key, await lstatOrNull(onDisk(dir)));
-    return dirStats.get(key) ?? null;
-  };
-
-  for (const p of added) {
-    const at = await lstatOrNull(onDisk(p));
-    if (at) {
-      if (!(at.isDirectory() && deletedDirs.has(p.toString("latin1")))) return true; // shape 1
-      const name = p.toString("utf8");
-      if (!Buffer.from(name, "utf8").equals(p)) return true;
-      const others = await runLocal(["ls-files", "-z", "--others", "--directory", "--", `:(literal)${name}/`], gitOpts);
-      if (others.length > 0) return true; // shape 3
-      continue;
-    }
-    for (const dir of leadingDirs(p)) {
-      const lead = await lstatDir(dir);
-      if (!lead) break;
-      if (lead.isDirectory()) continue;
-      if (deletedPaths.has(dir.toString("latin1"))) break; // a tracked file the reset removes first
-      return true; // shape 2
-    }
-  }
-  return false;
-}
 
 /**
  * Gated self-heal for a `non_fast_forward` clone (#12600, CTO rulings D6-D8, D15, D16, D20). The `reset --keep` runs only
@@ -514,7 +412,7 @@ async function selfHealNonFastForward(
       if (nonKbHeld || kbHeld) {
         // D27: the D15 untracked precheck first (an untracked or ignored entry at an incoming path refuses as below), then
         // the hardened merge. `merged` keeps the held commits and the upstream ones: no reset, no branch-aside.
-        if (await hasUntrackedCollision(runLocal, workspacePath, target, gitOpts)) {
+        if (await hasUntrackedCollision((argv) => runLocal(argv, gitOpts), workspacePath, target)) {
           return refuseUntrackedCollision("diverged");
         }
         const reason = await mergeHeldCommits(installationId, workspacePath, context);
@@ -546,7 +444,7 @@ async function selfHealNonFastForward(
 
     // D15(a): nothing the reset can replace may be an entry HEAD does not track (untracked or ignored). Both arms; before
     // the branch-aside, so a refusal leaves no recovery branch behind.
-    if (await hasUntrackedCollision(runLocal, workspacePath, target, gitOpts)) {
+    if (await hasUntrackedCollision((argv) => runLocal(argv, gitOpts), workspacePath, target)) {
       return refuseUntrackedCollision(localCommits > 0 ? "diverged" : "phantom");
     }
 
