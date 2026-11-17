@@ -322,9 +322,10 @@ export type RestoreResult = {
  *   - working tree CLEAN (`git status --porcelain` empty), AND
  *   - the checkpoint's parent still equals current HEAD (HEAD-parity) — the
  *     clean-tree check alone is NOT sufficient: the workspace clone's HEAD can
- *     advance between checkpoint and resume (`git pull --autostash` runs on every
- *     `startAgentSession` via `gitWithInstallationAuth` in `session-sync.ts`, and
- *     `workspace-sync.ts` does `pull --ff-only` / `reset --hard`). A clean tree at
+ *     advance between checkpoint and resume (the session-start `syncPull` in
+ *     `session-sync.ts` merges GitHub's default branch on the hardened arm, #12718,
+ *     and `workspace-sync.ts` does `pull --ff-only`, a held-commits merge or a
+ *     `reset --keep`; TX5-b pins the refusal after a pull merge). A clean tree at
  *     HEAD=B does not make a HEAD=A-based snapshot safe to materialize — the
  *     full-tree write would revert every file changed between A and B, AND
  *   - no sibling slot active — a concurrent sibling conversation on the SAME
