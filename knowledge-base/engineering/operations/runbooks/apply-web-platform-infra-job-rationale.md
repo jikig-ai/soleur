@@ -589,6 +589,24 @@ the two counters above). Source of truth:
 tests/scripts/lib/destroy-guard-filter-web-platform.jq.
 ```
 
+Verbatim, the narrative half of the `Terraform plan (allow-list)` step's
+ALLOW-LIST MAINTENANCE comment (relocated under the 490 KB workflow-file
+gate, #9294 — the instruction itself stays in the workflow):
+
+```text
+This instruction already said so and did not hold: it landed 2026-05-20
+and `terraform_data.inngest_consumer_probe_install` was appended six
+lines beneath it on 2026-08-12, batched beside the other
+inngest-consumer resources by feature (#7539). Prose is not the
+enforcement -- Guard 1 in
+plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+the PR rather than the apply.
+
+`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+resource; it did not surface #7539, because a MISPLACED resource is
+declared and targeted -- just on the stage that cannot provision it.
+```
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
