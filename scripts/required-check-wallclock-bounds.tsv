@@ -41,6 +41,13 @@
 # time. Durations from the #12089 tracker table (dispatch 42231989547),
 # rounded UP to the next minute; margin 0.30 unchanged.
 #
+# oracle-review-required seeded 2026-11-17: the check went required via
+# #12329 (2026-11-08) without a bound row — every scheduled watch run
+# flagged `unbound` until this landed. Seed = measured p90 of the last ~30
+# completed+success ci.yml runs per surface (probe dry-run 2026-11-17):
+# PR p90 139 s (n=30) / merge_group p90 100 s (n=29), rounded UP to the
+# next minute -> 180/120; margin 0.30 unchanged.
+#
 # Blank lines and #-comments are ignored. A row with an unparsable number or a
 # wrong column count is a cannot-establish error in the probe, never a silent
 # skip.
@@ -56,5 +63,6 @@ secret-guards	360	240	0.30
 tenant-integration-required	300	180	0.30
 sentry-destroy-required	180	120	0.30
 vendor-pin-required	180	120	0.30
+oracle-review-required	180	120	0.30
 cla-check	240	120	0.30
 cla-evidence	180	120	0.30

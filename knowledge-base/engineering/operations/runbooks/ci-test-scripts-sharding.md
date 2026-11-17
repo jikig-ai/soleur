@@ -469,6 +469,17 @@ span to the NEXT registered mark.
   deferred to the #11679 umbrella. Headers refreshed by a real
   `--incremental --durations` pass (no `--runs 5`: same drifter trap as
   the 2026-10-31 entry).
+- **2026-11-17 `oracle-review-required` bound-row seed:** the check went
+  required via #12329 (2026-11-08) without a
+  `required-check-wallclock-bounds.tsv` row, so every scheduled
+  wallclock-p90-watch run since flagged `unbound` (a required context with
+  no bound row is itself a ratchet finding). Probe dry-run 2026-11-17,
+  last ~30 completed+success `ci.yml` runs per surface: PR p90 **139 s**
+  (n=30, p50 35, p90 dur 28) / merge_group p90 **100 s** (n=29, p50 27,
+  p90 dur 29) — the sentinel's latency is queue+predecessor serialization,
+  its execution is sub-30 s. Committed bounds 180/120 (next-minute
+  ceilings) at margin 0.30 — comfortably inside the epic goals
+  (PR ≤ 1200 s / MQ ≤ 900 s).
 
 ## Runner-availability data (why extra legs are not free)
 
