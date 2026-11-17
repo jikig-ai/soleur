@@ -10,7 +10,15 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+// The count's own log lines (`kb-sync.held-files` with its closed nullCause, `tips_truncated`) are observed here; the
+// git children run for real.
+const { logSpy } = vi.hoisted(() => ({ logSpy: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+vi.mock("../server/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/logger")>()),
+  createChildLogger: () => logSpy,
+}));
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 import { createIsolatedPushDir, type IsolatedPushDirHandle } from "../server/git-isolated-push-dir";
 import {
@@ -19,6 +27,12 @@ import {
   RECOVERED_TIPS_MAX,
   readRecoveredKbSyncTips,
 } from "../server/kb-sync-held";
+
+/** The `kb-sync.held-files` lines logged so far (one per computed or failed count). */
+const heldLines = (): Array<Record<string, unknown>> =>
+  [...logSpy.info.mock.calls, ...logSpy.warn.mock.calls]
+    .map((c) => c[0] as Record<string, unknown>)
+    .filter((o) => o?.op === "kb-sync.held-files");
 
 const git = (cwd: string, ...args: string[]): string =>
   execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
@@ -52,6 +66,7 @@ describe("kb-sync-held (real git)", () => {
   const recoveredRef = (name: string): string => join(ws, ".git", "refs", "heads", "soleur", name);
 
   beforeEach(() => {
+    vi.clearAllMocks();
     for (const k of ["HOME", "TMPDIR"]) saved[k] = process.env[k];
     root = realpathSync(mkdtempSync(join(tmpdir(), "kb-held-")));
     mkdirSync(join(root, "home"));
@@ -149,6 +164,24 @@ describe("kb-sync-held (real git)", () => {
     expect(await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: ["not-a-sha"] })).toBeNull();
     // A HEX40 value that names no object is a git failure: null.
     expect(await computeHeldFiles({ isolated: iso(), base: "1".repeat(40), head: head(), recovered: [] })).toBeNull();
+    // Each null names its closed cause (obs F6, D39(b)), in the order the five calls above ran.
+    // A HEX40 value naming no object is an invalid revision too (git: "bad object").
+    expect(heldLines().map((l) => l.nullCause)).toEqual(["no_merge_base", "invalid_rev", "invalid_rev", "invalid_rev", "invalid_rev"]);
+    for (const l of heldLines()) expect(l.bucket).toBe("null");
+  });
+
+  test("a computed count logs one kb-sync.held-files line with its bucket and no nullCause", async () => {
+    commitCode(ws, "src/feature.ts", "export const f = 1;\n", "F1");
+    await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: [] });
+    expect(heldLines()).toHaveLength(1);
+    expect(heldLines()[0]).toMatchObject({ bucket: "1-9", onRecoveredBucket: "0" });
+    expect(heldLines()[0]).not.toHaveProperty("nullCause");
+  });
+
+  test("D38(5): an expired budget gives null with nullCause budget, never a partial count", async () => {
+    commitCode(ws, "src/feature.ts", "export const f = 1;\n", "F1");
+    expect(await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: [] }, { budgetMs: 0 })).toBeNull();
+    expect(heldLines()).toEqual([expect.objectContaining({ bucket: "null", nullCause: "budget" })]);
   });
 
   test("a value above the cap is clamped to HELD_FILES_MAX", async () => {
@@ -234,7 +267,7 @@ describe("kb-sync-held (real git)", () => {
       expect(readRecoveredKbSyncTips(ws)).toEqual([]);
     });
 
-    test(`at most ${RECOVERED_TIPS_MAX} recovered tips are read (newest names first), duplicates collapse`, () => {
+    test(`at most ${RECOVERED_TIPS_MAX} set-aside tips are read (the first in sorted ref order), duplicates collapse`, () => {
       const shas: string[] = [];
       for (let i = 0; i < RECOVERED_TIPS_MAX + 5; i++) {
         shas.push(commitCode(ws, `src/r${i}.ts`, `export const r = ${i};\n`, `R${i}`));
@@ -242,13 +275,84 @@ describe("kb-sync-held (real git)", () => {
       }
       const tips = readRecoveredKbSyncTips(ws)!;
       expect(tips).toHaveLength(RECOVERED_TIPS_MAX);
-      expect(new Set(tips)).toEqual(new Set(shas.slice(5).reverse()));
+      expect(tips).toEqual(shas.slice(0, RECOVERED_TIPS_MAX));
       // Two names at one sha read as one tip.
       rmSync(join(ws, ".git", "refs", "heads", "soleur"), { recursive: true, force: true });
       rmSync(join(ws, ".git", "packed-refs"), { force: true });
       git(ws, "branch", "soleur/recovered-kb-sync-1", shas[0]);
       git(ws, "branch", "soleur/recovered-kb-sync-2", shas[0]);
       expect(readRecoveredKbSyncTips(ws)).toEqual([shas[0]]);
+    });
+
+    test("D39(c) (arch F3): a recovered tip whose work GitHub squash-merged is not counted; an unmerged one is", async () => {
+      // Recovered branch R adds src/merged.ts; main squash-merges the same content as a NEW commit S, so R never becomes an
+      // ancestor of the tip and the three-dot diff alone would count src/merged.ts forever.
+      const R = commitCode(ws, "src/merged.ts", "export const m = 1;\n", "R");
+      git(ws, "branch", "soleur/recovered-kb-sync-1700000000010", R);
+      git(ws, "reset", "-q", "--hard", T);
+      const S = commitCode(up, "src/merged.ts", "export const m = 1;\n", "S (squash of R)");
+      git(up, "push", "-q", "origin", "main");
+      git(ws, "fetch", "-q", "origin");
+      git(ws, "merge", "-q", "--no-edit", "origin/main");
+      expect(git(ws, "diff", "--name-only", `${S}...${R}`, "--", ".", ":(exclude)knowledge-base/")).toBe("src/merged.ts");
+      expect(await computeHeldFiles({ isolated: iso(), base: S, head: head(), recovered: readRecoveredKbSyncTips(ws)! })).toEqual({
+        total: 0,
+        onRecovered: 0,
+      });
+      // An unmerged recovered tip (a file GitHub does not have) is still counted.
+      const R2 = commitCode(ws, "src/unmerged.ts", "export const u = 1;\n", "R2");
+      git(ws, "branch", "soleur/recovered-kb-sync-1700000000011", R2);
+      git(ws, "reset", "-q", "--hard", S);
+      expect(await computeHeldFiles({ isolated: iso(), base: S, head: head(), recovered: readRecoveredKbSyncTips(ws)! })).toEqual({
+        total: 1,
+        onRecovered: 1,
+      });
+    });
+
+    test("D39(d): a soleur-store-tip-<12 hex> rescue branch is counted (loose and packed); other flat names are not", async () => {
+      const P = commitCode(ws, "src/rescued.ts", "export const p = 1;\n", "P (store tip)");
+      git(ws, "branch", `soleur-store-tip-${P.slice(0, 12)}`, P);
+      git(ws, "branch", "soleur-store-tip-nothex", P);
+      git(ws, "branch", `soleur-store-tip-${P.slice(0, 11)}`, P);
+      git(ws, "reset", "-q", "--hard", T);
+      expect(readRecoveredKbSyncTips(ws)).toEqual([P]);
+      expect(await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: readRecoveredKbSyncTips(ws)! })).toEqual({
+        total: 1,
+        onRecovered: 1,
+      });
+      git(ws, "pack-refs", "--all");
+      expect(readRecoveredKbSyncTips(ws)).toEqual([P]);
+    });
+
+    test("D39(d): a symlinked or oversized store-tip ref gives null (same bounds as the recovered refs)", () => {
+      const P = commitCode(ws, "src/rescued.ts", "export const p = 1;\n", "P");
+      const leaf = join(ws, ".git", "refs", "heads", `soleur-store-tip-${P.slice(0, 12)}`);
+      const target = join(root, "planted-store-ref");
+      write(target, `${P}\n`);
+      symlinkSync(target, leaf);
+      expect(readRecoveredKbSyncTips(ws)).toBeNull();
+      rmSync(leaf);
+      write(leaf, "a".repeat(65));
+      expect(readRecoveredKbSyncTips(ws)).toBeNull();
+    });
+
+    test("D39(d) (quality P3-5): 21 tips across both families: the first 20 in sorted ref order are counted, tips_truncated logged", async () => {
+      const shas: string[] = [];
+      // Independent tips (each one file over T), so the count shows exactly which tips were read.
+      for (let i = 0; i < RECOVERED_TIPS_MAX; i++) {
+        git(ws, "reset", "-q", "--hard", T);
+        shas.push(commitCode(ws, `src/r${i}.ts`, `export const r = ${i};\n`, `R${i}`));
+        git(ws, "branch", `soleur/recovered-kb-sync-${1700000000100 + i}`, shas[i]);
+      }
+      git(ws, "reset", "-q", "--hard", T);
+      const P = commitCode(ws, "src/store.ts", "export const s = 1;\n", "P");
+      git(ws, "branch", `soleur-store-tip-${P.slice(0, 12)}`, P);
+      git(ws, "reset", "-q", "--hard", T);
+      const tips = readRecoveredKbSyncTips(ws)!;
+      // `refs/heads/soleur-store-tip-*` sorts before `refs/heads/soleur/` ('-' < '/'), so the newest recovered name drops.
+      expect(tips).toEqual([P, ...shas.slice(0, RECOVERED_TIPS_MAX - 1)]);
+      expect(logSpy.warn.mock.calls.filter((c) => (c[0] as { reason?: string })?.reason === "tips_truncated")).toHaveLength(1);
+      expect((await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: tips }))?.onRecovered).toBe(RECOVERED_TIPS_MAX);
     });
 
     test("no .git/refs/heads/soleur and no packed-refs reads as no tips ([]), not null", () => {
