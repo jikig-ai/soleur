@@ -123,7 +123,7 @@ The stale tree row after dismissing the notice is a follow-up. |
 
 ## Extension-range review rulings (2026-11-17, PANEL_SHA a53a42875e)
 
-From the 14-seat review of d46340290b..a53a42875e. D34-D47 by the CTO agent, V7-V12 by the CPO agent. Full work packages and evidence: see the PR Review-Evidence comment.
+From the 14-seat review of d46340290b..a53a42875e. D34-D47 by the CTO agent, V7-V12 by the CPO agent. Work packages, frozen contracts and evidence: review-ext-rulings.md (this dir).
 
 | id. question | class | ruling | rationale |
 |---|---|---|---|
@@ -158,4 +158,3 @@ From the 14-seat review of d46340290b..a53a42875e. D34-D47 by the CTO agent, V7-
 - Technical items for the CTO/engineering (they decide how): the tri-state owner check (V10), and passing the count and route state into `DisconnectRepoDialog` (V8).
 - Not ruled here (outside this brief): F2 (rescue-branch count) and F3 (permanent precheck-conflict freeze on cc) are engineering or scope rulings. V11's hedge does not fix them. It only keeps the copy true while they exist.
 
-WROTE /var/tmp/soleur-review-12704/cpo-rulings.md
