@@ -484,8 +484,8 @@ fi
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
-PRESENCE_ROWS=32
-MUT_ROWS_EXPECTED=29
+PRESENCE_ROWS=54
+MUT_ROWS_EXPECTED=52
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }

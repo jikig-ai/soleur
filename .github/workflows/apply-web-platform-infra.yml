@@ -679,6 +679,8 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=logtail_exploration.inngest_cutover_flip_silent_canary \
+              -target=logtail_exploration_alert.inngest_cutover_flip_silent_canary \
               -target=logtail_exploration.relay_listener_down \
               -target=logtail_exploration_alert.relay_listener_down \
               -target=logtail_exploration.relay_probe_silent \
