@@ -597,11 +597,6 @@ export function C4CodePanel({
                 A+
               </button>
             </div>
-            {saveMsg && (
-              <span className="text-[11px] text-soleur-text-muted">
-                {saveMsg}
-              </span>
-            )}
             {saveAction.error && (
               <span role="alert" className="text-[11px] text-red-400">
                 {saveAction.error.message}
@@ -620,6 +615,13 @@ export function C4CodePanel({
           </div>
         )}
       </div>
+      {/* #12714 D31(2): the save message (up to ~230 characters with the held-workspace notice) is a full-width status
+          row directly under the header, so the header stays one line at any pane width. Same 11 px muted style. */}
+      {!isReadmeFile && saveMsg && (
+        <div role="status" className="border-b border-soleur-border-default px-3 py-2 text-[11px] leading-relaxed text-soleur-text-muted">
+          {saveMsg}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         {isReadmeFile ? (
           // Directory index, read-only: rendered markdown, no editor/Save/PUT.

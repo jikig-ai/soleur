@@ -251,6 +251,14 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
     expect(screen.getByText(kbWorkspaceSyncPendingNotice("save"))).toBeTruthy();
     expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
+
+    // #12714 D31(2): the message is a full-width status row directly under the one-line header, not an inline span
+    // inside it (the header holds the file picker, the font stepper and Save).
+    const msg = screen.getByText(kbWorkspaceSyncPendingNotice("save"));
+    const header = screen.getByRole("button", { name: /^save$/i }).closest("div.border-b") as HTMLElement;
+    expect(header).toBeTruthy();
+    expect(header.contains(msg)).toBe(false);
+    expect(header.nextElementSibling).toBe(msg);
   });
 
   it("#12600 D22(c): a hold on only the post-render resync says the workspace may not show the save yet", async () => {
