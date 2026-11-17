@@ -31,13 +31,16 @@
  * Every push still needs a fresh Owner approval at the gate.
  *
  * `github-tools` is imported LAZILY, only after every precondition held: the heavy GitHub graph stays out of the dark path
- * and out of every other module that imports this one (the dispatcher, the census tests).
+ * and out of every other module that imports this one (the dispatcher, the census tests). *
+ * It also exports `isCcGithubPushRouteAvailable` (#12714, D29(5)), the read-only answer the Settings held-files card needs:
+ * would the user's next session get this tool? It checks the same conditions minus the default-branch lookup and never
+ * builds or registers anything.
  */
 
 import { isApprovalQueueEnabled, type ApprovalFlagIdentity } from "./approval/flag";
 import type { ExecutionGrants } from "./approval/grants";
 import type { BuildGithubPushBranchToolOpts } from "./github-tools";
-import { infoSilentFallback, reportSilentFallback } from "./observability";
+import { infoSilentFallback, reportSilentFallback, warnSilentFallback } from "./observability";
 import {
   defaultFetchDefaultBranch,
   isSafeBranch,
@@ -294,4 +297,80 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
     requireGrant: true,
   });
   return done("registered", [tool], defaultBranch);
+}
+
+/**
+ * #12714 (rulings W3, D29(5), V6(3)): the publish-route predicate for the Settings held-files card. True exactly when the runner
+ * of the user's NEXT session registers `github_push_branch`:
+ *   - legacy runner: always (it registers the tool whenever a repo and an installation resolve). A new session is never
+ *     routed to it (`start_session` dispatches cc-soleur-go since #3270), so the next session's answer is the cc one below.
+ *   - cc: the registrar's conditions without the default-branch lookup (a network round trip per Settings render, and the
+ *     lookup decides only which branch the tool protects): a non-`support` persona (the next session is a `command_center`
+ *     one; support never writes), an installation, the workspace web-egress grant, and the `approval-queue` flag read through
+ *     `isApprovalQueueEnabled({ userId, workspaceId })`, the SAME function and identity the registrar and the gate use. This
+ *     function never creates, sets or flips the flag.
+ * `userId` is the VIEWER (the member's agent is the one that would push); `workspaceId` is the id the caller resolved once.
+ *
+ * Answers: `available`; `unavailable` when any condition is definitely false (a definite "off" wins over a blip elsewhere);
+ * `unknown` when a read failed or missed its deadline and none was definitely false: the card shows the transient copy,
+ * never the no-route sentence on a blip. Each read has its own deadline and they run in parallel, so the whole check is
+ * bounded by `CC_PUSH_ROUTE_TIMEOUT_MS`. The entitlement and installation reads are the STRICT ones (a fault is not "off");
+ * the flag function swallows its own read errors and answers off, exactly as the registrar sees it. Read-only.
+ */
+export type CcGithubPushRouteAvailability = "available" | "unavailable" | "unknown";
+
+/** Upper bound of each predicate read (the flag read keeps `CC_PUSH_FLAG_TIMEOUT_MS`, which is shorter). */
+export const CC_PUSH_ROUTE_TIMEOUT_MS = 2_500;
+
+/** Whether a session of this persona can have the tool at all (support never writes: ADR-113). */
+function personaMayRegister(persona: Persona): boolean {
+  return persona !== "support";
+}
+
+/** The persona of the session the Settings card describes: a new session is a `command_center` one. */
+const NEXT_SESSION_PERSONA: Persona = "command_center";
+
+type RouteCheck = boolean | "unknown";
+
+export async function isCcGithubPushRouteAvailable(args: { userId: string; workspaceId: string }): Promise<CcGithubPushRouteAvailability> {
+  if (!personaMayRegister(NEXT_SESSION_PERSONA)) return "unavailable";
+  const { userId, workspaceId } = args;
+  const failed: string[] = [];
+  const settle = async (name: string, ms: number, read: () => Promise<boolean>): Promise<RouteCheck> => {
+    try {
+      return await withDeadline(read, ms, name);
+    } catch {
+      failed.push(name);
+      return "unknown";
+    }
+  };
+
+  const checks = await Promise.all([
+    settle("flag", CC_PUSH_FLAG_TIMEOUT_MS, async () => (await isApprovalQueueEnabled({ userId, workspaceId })) === true),
+    settle("entitlement", CC_PUSH_ROUTE_TIMEOUT_MS, async () => {
+      const { resolveWebEgressStrict } = await import("./resolve-web-egress");
+      return (await resolveWebEgressStrict(userId, workspaceId)) === true;
+    }),
+    settle("installation", CC_PUSH_ROUTE_TIMEOUT_MS, async () => {
+      // The same member-checked RPC `resolveInstallationId` reads, without its swallow: an RPC fault is not "no installation".
+      const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
+      const tenant = await getFreshTenantClient(userId);
+      const { data, error } = await tenant.rpc("resolve_workspace_installation_id", { p_workspace_id: workspaceId });
+      if (error) throw new Error("installation read failed");
+      return typeof data === "number" || (typeof data === "string" && data !== "");
+    }),
+  ]);
+
+  if (checks.includes(false)) return "unavailable";
+  if (checks.includes("unknown")) {
+    // One warning per Settings render with a blip: visible, and the value the user sees is the honest transient copy.
+    warnSilentFallback(null, {
+      feature: "cc-dispatcher",
+      op: "cc-push-route-check",
+      extra: { userId, workspaceId, failed },
+      message: "publish-route check could not be completed; the transient copy is shown",
+    });
+    return "unknown";
+  }
+  return "available";
 }
