@@ -17,6 +17,36 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-17
+**Sections enhanced:** 7 (Research Insights, Phases 1, 4, 7, Observability, Guard Contract,
+Dependencies & Risks)
+**Agents used:** soleur:engineering:infra:terraform-architect,
+soleur:engineering:review:observability-coverage-reviewer; plus mechanical gate checks (guard
+contract lint, scope-check count, discoverability tokenizer, rule-id, label, issue-state and ADR
+ordinal probes on fresh `origin/main`).
+
+### Key Improvements
+
+1. The import would have planned a replace: `project` is never read back by provider 0.15.7, so
+   `sentry_uptime_monitor.app` carries `lifecycle { ignore_changes = [project] }` (verified in
+   the provider source and its own import test).
+2. The uptime check now routes through the fidelity script's existing `_finding`/FAILED path,
+   runs before any rule-side exit, writes its own `uptime_verdict` output that gates the
+   unavailable filer and both closers, and is pinned off fixture mode at both call sites.
+3. Every failure mode names its layer; a paused-changelog-monitor mode was added; public issue
+   output strips URL userinfo and query.
+4. HCL shown multi-line (one-line `import`/`removed` with two arguments does not parse); the
+   fallback commit carries `[ack-destroy]` because a `forget` counts as a destroy.
+
+### New Considerations Discovered
+
+- `eu.sentry.io`, `de.sentry.io` and `jikigai-eu.sentry.io` all answered the detector read with
+  200 today; the plan keeps the pinned org subdomain because the script refuses any other host.
+- The discoverability `expected_output` is a whitespace-free token (`uptime_verdict=clean`),
+  because Check 10 rejects an all-whitespace-token literal.
+
 ## Overview
 
 Sentry bills each uptime monitor beyond the one included at $1.00/mo. Live Sentry has five,
@@ -118,7 +148,10 @@ returned uptime usage 5, reserved 1, onDemandSpendUsed 400 (cents). Direct savin
 (id 4511404943671376), `enabled: true`, `mode: 3`, `url: "https://app.soleur.ai"` (no
 trailing slash), interval 60, `name: "Uptime Monitoring for https://app.soleur.ai"`,
 `environment` null. The work phase uses the repo's pinned host `jikigai-eu.sentry.io` for every
-call (the `sentry` element in `model.c4`: `eu.sentry.io` returns 302 then 401 on reads).
+call, because `sentry-alert-live-fidelity.sh` refuses any other host. (Measured 2026-11-17:
+`eu.sentry.io`, `de.sentry.io` and `jikigai-eu.sentry.io` all return 200 on this detector read.
+The `sentry` element in `model.c4` records a 302-then-401 on `eu.sentry.io` for other reads, so
+the pinned org subdomain is the safe choice; this plan does not depend on which is right.)
 
 **Relevant files.**
 
@@ -187,12 +220,32 @@ call (the `sentry` element in `model.c4`: `eu.sentry.io` returns 302 then 401 on
 
 **External facts (research, getsentry/sentry master and provider source, 2026-11-17).**
 
+- Provider pin: `sentry/versions.tf` and `.terraform.lock.hcl` both pin `jianyuan/sentry`
+  `0.15.7`, the version whose source the CTO read. The v0.15.7 docs
+  (`docs/resources/uptime_monitor.md`, `## Import`) give the import id as
+  `{organization}/{id}`, so `"${var.sentry_org}/1422253"` is the documented form; `organization`
+  and `project` are required attributes.
+
 - `UptimeMonitorMode`: MANUAL=1, AUTO_DETECTED_ONBOARDING=2, AUTO_DETECTED_ACTIVE=3. Mode 3
   takes an uptime seat like a manual monitor.
 - Provider jianyuan/sentry v0.15.7, `resource_uptime_monitor_impl.go`:
   `getUpdateJSONRequestBody` returns `getCreateJSONRequestBody`, so every update sends
   `config.mode = MANUAL` to `PUT /0/organizations/{org}/detectors/{id}/`. Only `organization`
   and `project` force a replace (`resource_uptime_monitor_gen.go`). (CTO re-ruling, D2.)
+- `project` is null after import: `ImportState` calls `ImportState2Part` (sets `organization`
+  and `id` only) and `Fill()` in `resource_uptime_monitor_impl.go` never sets `m.Project`. The
+  provider's own test says so: `ImportStateVerifyIgnore: []string{"project", "body", "assertion_json"}`
+  (`internal/provider/resource_uptime_monitor_test.go`, v0.15.7, lines 177 and 189). So
+  `sentry_uptime_monitor.app` carries `ignore_changes = [project]`. The update then sends an
+  empty `projectId`; Sentry's detector PUT reads the linked project from the detector and its
+  validator has no `projectId` field (getsentry master `organization_detector_details.py`,
+  `validators/base/detector.py`; terraform-architect deepen review). If the PUT rejects it anyway,
+  the apply errors on `.app` and Phase 7 step 4 (fallback) runs.
+- `environment` (live null) updates in place to `"production"`; `assertion_json` is a normalized
+  JSON type overwritten from the server response, so expect a one-time change and no repeat
+  diff (the four existing monitors with the same local already plan as no-op).
+- Terraform floor `required_version = ">= 1.9"` (CI 1.10.5): interpolated import ids (>= 1.6)
+  and `removed { lifecycle { destroy = false } }` (>= 1.7) are both valid.
 - Sentry `UptimeDomainCheckFailureConfigValidator.validate`
   (`src/sentry/uptime/endpoints/validators.py`) accepts `mode` on update and sets an
   auto-detected monitor to MANUAL when a non-superuser edits it. The "Mode can only be
@@ -239,15 +292,27 @@ only in learnings, post-mortems and archived plans (`git grep`), never in script
 
 1. Write the failing test changes first (Phase 3 and Phase 4 test edits) so they go RED against
    the current files, per `cq-write-failing-tests-before`.
-2. Add `import { to = sentry_uptime_monitor.app  id = "${var.sentry_org}/1422253" }`, with a
-   comment in the shape of the `issue-alerts.tf` precedent: why it is imported (DC-1, #6606),
-   and that the first apply flips it from mode 3 to manual.
-3. Add `resource "sentry_uptime_monitor" "app"`:
+2. Add a multi-line import block in the shape of the `issue-alerts.tf` precedent (a one-line
+   HCL block may hold only one argument, so the one-line form does not parse):
+
+   ```hcl
+   import {
+     to = sentry_uptime_monitor.app
+     id = "${var.sentry_org}/1422253" # uptime detector id (GET /organizations/{org}/detectors/)
+   }
+   ```
+
+   with a comment: why it is imported (DC-1, #6606), and that the first apply flips it from
+   mode 3 to manual.
+3. Add `resource "sentry_uptime_monitor" "app"`: `organization = var.sentry_org` and
    `project = data.sentry_project.web_platform.slug` (as every existing block has),
    `name = "soleur-app-reachability"`, `url = "https://app.soleur.ai"` (the exact live string,
    no trailing slash), `method = "GET"`, `interval_seconds = 60`, `timeout_ms = 10000`,
    `downtime_threshold = 3`, `recovery_threshold = 1`, `environment = "production"`,
-   `assertion_json = local.uptime_assertion_2xx`, and a `description` stating: the one included
+   `assertion_json = local.uptime_assertion_2xx`,
+   `lifecycle { ignore_changes = [project] }` (permanent: the provider's import and read never
+   set `project`, so state holds null and `project` has `RequiresReplace`; without this the
+   import plans a destroy-and-create; see External facts), and a `description` stating: the one included
    Sentry uptime slot; two-vendor coverage of the production app (DC-1, ADR-328); Better Stack
    pages for this URL (`betteruptime_monitor.app`, `betteruptime_monitor.app_health`), and this
    monitor detects (opens a Sentry issue) without paging.
@@ -263,7 +328,7 @@ only in learnings, post-mortems and archived plans (`git grep`), never in script
 7. Verify the plan by identity before pushing (agent-run, `prd_terraform` Doppler config, same
    as `apply-sentry-infra.yml`):
    `cd apps/web-platform/infra/sentry && terraform plan -out=tfplan`, then
-   `terraform show -json tfplan | jq -r '.resource_changes[] | select((.change.actions != ["no-op"]) or (.change.importing != null)) | "\(.change.actions|join(",")) \(.address) \(.change.importing.id // "")"'`.
+   `terraform show -json tfplan | jq -r '.resource_changes[] | select((.change.actions != ["no-op"]) or (.change.importing != null)) | "\(.change.actions|join(",")) \(.address) \(.change.importing.id // "")" | rtrimstr(" ")'`.
    The uptime lines must be exactly: `update sentry_uptime_monitor.app jikigai-eu/1422253` and
    `delete` for the 4 removed addresses. A `create` on `.app` means the import did not bind
    (`sentry-create-gate.sh` would pass it, so this check is the only stop); a
@@ -371,19 +436,36 @@ only in learnings, post-mortems and archived plans (`git grep`), never in script
    - Declared count: `resource "sentry_uptime_monitor"` blocks in
      `apps/web-platform/infra/sentry/*.tf` after stripping comments; 0 found is `unavailable`,
      never a pass.
-   - Fails (contributes `drift`) when any live uptime detector has `mode != 1`, or the live
-     count is greater than the declared count. Each failure names `id:mode:url`.
-   - One marker line: `SENTRY_UPTIME unmanaged=<n> live=<n> declared=<n>`.
+   - Fails when any live uptime detector has `mode != 1`, or the live count is greater than the
+     declared count. Each failure calls the script's existing `_finding` (one per monitor), so the
+     existing `ERROR: sentry_alert live fidelity FAILED` line and exit 1 carry it; the workflow
+     derives its verdict from those, not from the marker.
+   - Each finding prints `id:mode:` plus the URL's scheme, host and path only (userinfo and query
+     stripped) through `_safe`, because the drift issue body is public.
+   - The section runs BEFORE the first rule-side `exit` in the script, so a rule failure cannot
+     skip it.
+   - One marker line: `SENTRY_UPTIME uptime_verdict=<clean|drift|unavailable> unmanaged=<n> live=<n> declared=<n>`.
    - Fixture seam `SENTRY_FIXTURE_UPTIME=<json file>`, announced loudly in the same way as
-     `SENTRY_FIXTURE_RULES`.
+     `SENTRY_FIXTURE_RULES`; in fixture mode the marker reads `uptime_verdict=clean(FIXTURE)`
+     so a fixture run cannot satisfy the discoverability probe.
 2. Extend `tests/scripts/test-sentry-alert-live-fidelity.sh` with the Guard Contract rows.
-3. `.github/workflows/scheduled-sentry-alert-drift.yml`: no new step. The uptime section
-   changes the existing probe's verdict, so the existing filer, closer and `close_unavailable`
-   route it. Update the drift issue body template to say a drift may be an uptime finding and
-   point at the `SENTRY_UPTIME` marker line. Extend
-   `tests/scripts/test-sentry-alert-drift-workflow.sh` only if the body template is pinned
-   there.
-4. Bump `BASELINE_DECLARED_PROBES` in
+3. `.github/workflows/scheduled-sentry-alert-drift.yml` (no new step, no new trigger):
+   - The probe step also writes `uptime_verdict` to `$GITHUB_OUTPUT` from the marker line; a
+     missing marker counts as `unavailable`.
+   - The unavailable filer also fires when `uptime_verdict == 'unavailable'`;
+     `close_unavailable` and the drift closer add `&& steps.probe.outputs.uptime_verdict == 'clean'`,
+     so a rule drift cannot close an open uptime-unavailable issue.
+   - Pin `SENTRY_FIXTURE_UPTIME: ""` in the probe step env, next to `SENTRY_FIXTURE_RULES: ""`.
+   - Drift issue: keep the title (pinned by W9); add an `UPTIME UNMANAGED` bullet to the body:
+     "import the monitor or DELETE it; re-running the apply does not fix it".
+4. `.github/workflows/apply-sentry-infra.yml`: pin `SENTRY_FIXTURE_UPTIME: ""` in the post-apply
+   probe step env, next to `SENTRY_FIXTURE_RULES: ""`. (That post-apply probe runs under
+   `set -e`, so an unmanaged uptime monitor reds the merge's own apply: a synchronous signal.)
+5. `tests/scripts/test-sentry-alert-drift-workflow.sh`: W7 runs the real probe with only
+   `SENTRY_FIXTURE_RULES` set and would make a live GET once the uptime section exists, so W7 sets
+   `SENTRY_FIXTURE_UPTIME`; add rows for the `uptime_verdict` gates in step 3 and the two fixture
+   pins.
+6. Bump `BASELINE_DECLARED_PROBES` in
    `plugins/soleur/test/preflight-discoverability-test.test.ts` (97 -> 98) with the
    PLACEMENT/TRUTH/NO SUBSTITUTE comment its failure text asks for, because this plan's
    `discoverability_test` declares `credentials_required`.
@@ -438,12 +520,16 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
    `soleur-app-reachability`, environment `production`; 1221114-1221117 are gone. Better Stack
    lists `soleur dot ai changelog deep path` and it is up.
 3. Run `doppler run -p soleur -c prd_terraform -- bash scripts/sentry-alert-live-fidelity.sh`:
-   expect `SENTRY_UPTIME unmanaged=0 live=1 declared=1` and a clean verdict.
+   expect `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1` and a clean verdict.
 4. **Fallback, only if step 2 shows `mode: 3` or the apply errored on `.app`** (D2 fallback,
-   D3a): in a new PR, replace the `import` with
-   `removed { from = sentry_uptime_monitor.app  lifecycle { destroy = false } }`, declare a new
-   `sentry_uptime_monitor.app_reachability` on the same URL, merge, wait until it has at least 3
-   checks all `success`, then delete 1422253 with three agent-run calls: GET (expect mode 3 and
+   D3a): in a new PR, replace the `import` with a multi-line
+   `removed { from = sentry_uptime_monitor.app` / `lifecycle { destroy = false } }` block, declare
+   a new `sentry_uptime_monitor.app_reachability` on the same URL, and commit with `[ack-destroy]`
+   on its own line in the body (the `forget` counts as a destroy in
+   `destroy-guard-filter-sentry.jq`). Until the delete, live holds 2 monitors with one in mode 3,
+   so the post-apply probe reds that PR's apply and the scheduled check files drift: expected,
+   and it clears after the delete. Merge, wait until the new monitor has at least 3 checks all
+   `success`, then delete 1422253 with three agent-run calls: GET (expect mode 3 and
    URL `https://app.soleur.ai`), `DELETE /api/0/projects/jikigai-eu/web-platform/uptime/1422253/`
    (expect 202), GET (expect 404). Re-run step 3.
 5. Re-read billing: `.categories.uptime.usage` is informational in this period (the accrued $4
@@ -463,10 +549,11 @@ Per the CFO review. Dated notes are append-only; earlier notes stay untouched.
 - `apps/web-platform/infra/sentry/uptime-monitors.tf`
 - `apps/web-platform/infra/uptime-alerts.tf`
 - `.github/workflows/apply-web-platform-infra.yml`
-- `.github/workflows/scheduled-sentry-alert-drift.yml` (issue body template only)
+- `.github/workflows/scheduled-sentry-alert-drift.yml` (uptime_verdict output, gates, fixture pin, issue body)
+- `.github/workflows/apply-sentry-infra.yml` (`SENTRY_FIXTURE_UPTIME: ""` pin only)
 - `scripts/sentry-alert-live-fidelity.sh`
 - `tests/scripts/test-sentry-alert-live-fidelity.sh`
-- `tests/scripts/test-sentry-alert-drift-workflow.sh` (only if the body template is pinned)
+- `tests/scripts/test-sentry-alert-drift-workflow.sh`
 - `apps/web-platform/infra/cutover-verify.sh`
 - `apps/web-platform/infra/www-apex-canonicalizer.test.sh`
 - `apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh`
@@ -616,20 +703,23 @@ error_reporting:
 
 failure_modes:
   - mode: "Sentry re-creates an auto-detected uptime monitor, or someone adds one by hand"
-    detection: "SENTRY_UPTIME reports unmanaged>0 (mode != 1) or live>declared"
-    alert_route: "ci/sentry-alert-drift GitHub issue"
+    detection: "SENTRY_UPTIME reports unmanaged>0 (mode != 1) or live>declared; the fidelity script prints FAILED and exits 1"
+    alert_route: "ci/sentry-alert-drift GitHub issue; layer: GitHub Actions workflow run log (::error:: + SENTRY_UPTIME line)"
   - mode: "the import did not flip the app monitor to manual"
-    detection: "Phase 7 step 2 read-back shows mode 3; SENTRY_UPTIME reports unmanaged=1"
-    alert_route: "agent read-back in the post-merge session; ci/sentry-alert-drift issue on the next scheduled run"
+    detection: "apply-sentry-infra.yml post-apply probe (set -e) reds on the merge's own apply; Phase 7 step 2 read-back shows mode 3"
+    alert_route: "failed apply workflow run + agent read-back in the post-merge session; layer: GitHub Actions workflow run log"
   - mode: "declared app monitor deleted outside Terraform"
     detection: "scheduled-terraform-drift.yml Sentry leg plans a create"
-    alert_route: "existing terraform drift issue path"
+    alert_route: "existing terraform drift issue path; layer: GitHub Actions workflow run log"
   - mode: "changelog deep path starts returning 404 or 5xx"
     detection: "Better Stack monitor soleur dot ai changelog deep path goes down"
-    alert_route: "Better Stack email + Slack integration"
+    alert_route: "Better Stack email + Slack integration; layer: external synthetic probe, outside the app's layers 1-7 by design (ADR-328)"
   - mode: "Better Stack changelog monitor never applied (missing -target)"
     detection: "heartbeat-live-reconcile reports the declared monitor absent-live"
-    alert_route: "existing reconcile issue path"
+    alert_route: "existing reconcile issue path; layer: GitHub Actions workflow run log"
+  - mode: "Better Stack changelog monitor paused, or its email turned off, outside Terraform"
+    detection: "heartbeat-live-reconcile MonitorField diff on paused/email (monitor-config-drift)"
+    alert_route: "scheduled-terraform-drift.yml reconcile issue; layer: GitHub Actions workflow run log"
 
 logs:
   where: "GitHub Actions run logs of scheduled-sentry-alert-drift.yml (the SENTRY_UPTIME marker line); Sentry uptime check history per monitor"
@@ -637,7 +727,7 @@ logs:
 
 discoverability_test:
   command: "bash scripts/sentry-alert-live-fidelity.sh"
-  expected_output: "SENTRY_UPTIME unmanaged=0 live=1 declared=1"
+  expected_output: "uptime_verdict=clean"
   credentials_required: "SENTRY_IAC_AUTH_TOKEN read scope (alerts:read) via doppler soleur/prd_terraform, with SENTRY_API_HOST=jikigai-eu.sentry.io and SENTRY_ORG=jikigai-eu — the live uptime detector set is only readable through the authenticated Sentry organization API; no public endpoint lists it"
 ```
 
@@ -679,6 +769,9 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 | 4 | Fixture returns a non-array body (error JSON) | unavailable |
 | 5 | `SENTRY_API_HOST` set to a non-pinned value | refused, exit 2, token never sent |
 | 6 | Fixture returns 100 rows | refused (pagination ceiling), unavailable |
+| 7 | A rule-side failure that exits early, with an unmanaged uptime fixture | uptime finding still printed (section runs first) |
+| 8 | Workflow test: rule verdict drift + `uptime_verdict=unavailable` | unavailable issue filed and NOT closed |
+| 9 | Uptime fixture with a URL carrying `user:pass@` and `?token=` | finding prints scheme/host/path only |
 
 **Harness rows:**
 
@@ -728,7 +821,7 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 ### Split Assessment
 
 - Subsystems touched: 4 — `apps/web-platform`, `.github`, `scripts`/`tests`/`plugins`, `knowledge-base`
-- Planned files: 21 | Estimated changed lines: ~400
+- Planned files: 22 | Estimated changed lines: ~450
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the 4-root count is driven by doc/ledger and test files that
   must move with the IaC change (a split would leave CI red on W14 or leave docs stating
@@ -752,7 +845,9 @@ of `scripts/sentry-alert-live-fidelity.sh`.
       `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` pass, with
       `EXPECTED_ROWS=29` and both new W14 rows killed.
 - [ ] AC6: `bash tests/scripts/test-sentry-alert-live-fidelity.sh` and
-      `bash tests/scripts/test-sentry-alert-drift-workflow.sh` pass; every Guard 1 row is a case.
+      `bash tests/scripts/test-sentry-alert-drift-workflow.sh` pass; every Guard 1 row is a case;
+      `SENTRY_FIXTURE_UPTIME: ""` appears in both `scheduled-sentry-alert-drift.yml` and
+      `apply-sentry-infra.yml`.
 - [ ] AC7: the Phase 3 step 13 grep sweep prints nothing.
 - [ ] AC8: ADR-328 exists (ordinal checked free on every `origin/*` ref); ADR-204 carries the two
       "Amended by ADR-328" pointers; `model.c4` edits made and `model.likec4.json` regenerated;
@@ -767,7 +862,7 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 ### Post-merge (agent-run, Phase 7)
 
 - [ ] AC4: `sentry-alert-live-fidelity.sh` (prd_terraform Doppler) prints
-      `SENTRY_UPTIME unmanaged=0 live=1 declared=1`. The billing `.categories.uptime.usage`
+      `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`. The billing `.categories.uptime.usage`
       read is pasted as information; the ledger re-read after 2026-12-16 is on the tracking issue.
 - [ ] AC11: detector 1422253 reads back `mode: 1`, name `soleur-app-reachability` (or, on the
       fallback, is 404 and the new monitor reads `mode: 1`).
@@ -823,7 +918,7 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
 ## Test Scenarios
 
 - Given one live mode-1 detector and one declared block, when the fidelity script's uptime
-  section runs on a fixture, then it prints `SENTRY_UPTIME unmanaged=0 live=1 declared=1` and
+  section runs on a fixture, then it prints `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1` and
   the verdict is clean. (unit)
 - Given a fixture with an extra mode-3 row, when the uptime section runs, then the verdict is
   drift and the output names `1422253:3:https://app.soleur.ai`. (unit)
@@ -836,16 +931,19 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
   runs, then W14 fails. (unit, mutation)
 - Plan verify (pre-merge): the Phase 1 step 7 identity command shows `update` with the import id.
 - API verify (post-merge): `doppler run -p soleur -c prd_terraform -- bash scripts/sentry-alert-live-fidelity.sh`
-  expects `SENTRY_UPTIME unmanaged=0 live=1 declared=1`.
+  expects `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`.
 
 ## Dependencies & Risks
 
 - **Import does not flip mode:** if the provider or server behaves differently from the source
   read, 1422253 stays mode 3. Detection: Phase 7 step 2 read-back. Mitigation: the Phase 7
   step 4 fallback.
-- **Import becomes a replace:** a `project` mismatch forces a replace, which `[ack-destroy]`
-  would approve. Mitigation: `project = data.sentry_project.web_platform.slug` (live project is
-  `web-platform`) and the AC1 identity check.
+- **Import becomes a replace:** `project` is null after import and forces a replace, which
+  `[ack-destroy]` would approve. Mitigation: `ignore_changes = [project]` on `.app`, and the AC1
+  identity check refuses any `delete,create` on `.app`.
+- **Empty `projectId` on the update PUT:** with `project` ignored, the provider sends an empty
+  `projectId`. Source reading says the detector PUT ignores it; if it does not, the apply errors
+  on `.app` and the fallback runs.
 - **Re-creation risk:** Sentry could auto-detect again. Per research it turns the option off
   after its first auto monitor and does not re-create deleted ones; the uptime check reports any
   `mode != 1` monitor within one scheduled run.
@@ -867,6 +965,8 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
   the threshold will fail `deepen-plan` Phase 4.6.
 - `[ack-destroy]` is a boolean over the destroy count: any other destroy, or a replace of the
   imported monitor, rides on it. AC1 asserts the set by identity; do not skip it.
+- Do not drop `ignore_changes = [project]` from `sentry_uptime_monitor.app` in a later tidy-up:
+  the provider never reads `project` back, so removing it plans a replace of the app monitor.
 - An import whose config equals live plans as a no-op and does not flip the mode. The declared
   name and environment differ from live, so the first apply is an update; do not "tidy" them to
   match live before the first apply.
@@ -878,5 +978,5 @@ trimmed to one line. Not applied, with reasons in `decision-challenges.md`: DHH'
   an `unknown` row is refused by the capture.
 - Count resources by parsing `resource` blocks after stripping comments; both `.tf` files name
   the removed resources in comments.
-- Use `jikigai-eu.sentry.io` for every Sentry API call; `eu.sentry.io` returns 302 then 401 on
-  reads.
+- Use `jikigai-eu.sentry.io` for every Sentry API call: the fidelity script pins it and refuses
+  any other host.

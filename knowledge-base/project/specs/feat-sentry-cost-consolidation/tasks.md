@@ -23,15 +23,17 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 - [ ] 2.2 Sibling `pronounceable_name` count `eq_case '6'` -> `'7'`.
 - [ ] 2.3 Mutation suite: retarget `W-sentry-name`, add the `SENTRY_MONITORS` re-add row,
       `EXPECTED_ROWS` 28 -> 29.
-- [ ] 2.4 `test-sentry-alert-live-fidelity.sh`: Guard 1 rows 1-6 and H1-H2 with
+- [ ] 2.4 `test-sentry-alert-live-fidelity.sh`: Guard 1 rows 1-7, 9 and H1-H2 with
       `SENTRY_FIXTURE_UPTIME`.
+- [ ] 2.5 `test-sentry-alert-drift-workflow.sh`: W7 sets `SENTRY_FIXTURE_UPTIME`; Guard 1 row 8;
+      rows for the `uptime_verdict` gates and both fixture pins.
 
 ## Phase 3: Core implementation
 
 - [ ] 3.1 `sentry/uptime-monitors.tf`: `import` of `${var.sentry_org}/1422253` into
-      `sentry_uptime_monitor.app`; the `.app` block (project, name `soleur-app-reachability`,
+      `sentry_uptime_monitor.app`; the `.app` block (organization, project, name `soleur-app-reachability`,
       url `https://app.soleur.ai`, 60s, thresholds 3/1, environment production, 2xx,
-      description); delete the 4 marketing blocks and the `moved` block; rewrite the header.
+      description, `lifecycle { ignore_changes = [project] }`); multi-line HCL; delete the 4 marketing blocks and the `moved` block; rewrite the header.
 - [ ] 3.2 Commit with `[ack-destroy]` on its own line in the BODY.
 - [ ] 3.3 Identity check of the Sentry plan: `update .app` with importing id, `delete` x4,
       nothing else deleted. Paste into PR.
@@ -40,9 +42,12 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 - [ ] 3.5 `apply-web-platform-infra.yml`: `-target=betteruptime_monitor.soleur_changelog_deep`.
 - [ ] 3.6 `cutover-verify.sh`: delete the Sentry leg (array, 3 loops, Sentry probe branch,
       `CUT8_TOTAL` term); rewrite the comment. No `BETTERSTACK_MONITORS` append.
-- [ ] 3.7 `sentry-alert-live-fidelity.sh`: uptime "unmanaged" section with the
-      `SENTRY_UPTIME` marker line; drift issue body template in
-      `scheduled-sentry-alert-drift.yml`.
+- [ ] 3.7 `sentry-alert-live-fidelity.sh`: uptime "unmanaged" section before the first
+      rule-side exit; findings via `_finding` with scheme/host/path only; `SENTRY_UPTIME`
+      marker; `uptime_verdict=clean(FIXTURE)` in fixture mode.
+- [ ] 3.7a `scheduled-sentry-alert-drift.yml`: `uptime_verdict` output, unavailable filer and
+      both closers gated on it, `SENTRY_FIXTURE_UPTIME: ""`, `UPTIME UNMANAGED` body bullet.
+- [ ] 3.7b `apply-sentry-infra.yml`: `SENTRY_FIXTURE_UPTIME: ""` in the post-apply probe env.
 - [ ] 3.8 `preflight-discoverability-test.test.ts`: `BASELINE_DECLARED_PROBES` 97 -> 98.
 - [ ] 3.9 Comments and docs: `dns.tf`, `sentry/README.md`, `www-redirect-alarm.md`,
       `cloudflare-pages-cutover.md` (dated amendment).
@@ -63,8 +68,9 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 
 - [ ] 5.1 Watch both apply workflows to completion with Monitor.
 - [ ] 5.2 Read back 1422253 `mode: 1`, 4 marketing monitors gone, Better Stack changelog up.
-- [ ] 5.3 Fidelity script prints `SENTRY_UPTIME unmanaged=0 live=1 declared=1`.
-- [ ] 5.4 Fallback only if mode is still 3: `removed` + new monitor PR, 3 passing checks,
+- [ ] 5.3 Fidelity script prints `SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1`.
+- [ ] 5.4 Fallback only if mode is still 3: `removed` + new monitor PR with `[ack-destroy]`
+      (forget counts), expected red post-apply probe until the delete, 3 passing checks,
       GET/DELETE/GET of 1422253 (D3a).
 - [ ] 5.5 Billing read pasted (informational).
 - [ ] 5.6 Follow-up PR: `BETTERSTACK_MONITORS` append + baseline regeneration; auto-merge.
