@@ -59,6 +59,7 @@ Each verification pass then found a sibling shape. You approved going past the 2
 17. **The pre-push lane `fixture-dir-operand-assert` went RED on this host only** — Recovery: ran it directly (green) and left it to CI — Prevention: one-off.
 18. **A seat could not delete its scratch repo (`rm -rf` hook on a dir holding `.git`)** — Recovery: owner removes it — Prevention: brief seats to clean up with `find <dir> -delete`.
 19. **The scratchpad was wiped between sessions, so the verify brief was lost** — Recovery: rewrote it — Prevention: one-off; re-derive from the PR.
+20. **Round 4's skip arm keyed "no base" on a missing merge base alone, so a shallow clone (base ref resolves, no merge base) of a branch deleting every legal doc skipped.** The lead's battery passed because no fixture had a base ref that resolves with no merge base. The CTO ruling pass that ship's technical-ruling gate requires found it — Recovery: round 5 (owner-approved), which also requires the base tree to hold no legal doc, plus fixture G, battery 12/12 RED — Prevention: when a predicate reads "X cannot be read", add a fixture for each way X can be half-readable (the ref resolves but the merge base, tree or object is missing).
 
 ## Tags
 

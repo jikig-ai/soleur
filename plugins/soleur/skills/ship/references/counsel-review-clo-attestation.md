@@ -13,10 +13,13 @@ legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(d
 sui_plans=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/.*\.md$' --diff-filter=AMT refs/remotes/origin/main...HEAD) || { [ $? -eq 42 ] || sui_plans=unknown; }
 # Every read keeps its own exit status: a failed read is `unknown`, never an empty "nothing found". All paths are repo-relative.
 sui_top=$(git rev-parse --show-toplevel) || sui_top=.; sui_why=""
-# No base to diff against (no refs/remotes/origin/main, or no merge base with it, as in a shallow clone): when HEAD tracks no
-# legal doc at all, nothing legal changed. Any other unknown (a helper failure against a readable base) still fires.
+# No base to diff against (no refs/remotes/origin/main, or no merge base with it, as in a shallow clone): when HEAD's commit
+# holds no legal doc AND the base ref is missing or its own tree holds none either, nothing legal changed. A base tree that
+# holds legal docs HEAD lacks (a shallow clone of a branch deleting them all) fires, as does any other unknown.
 if [ "$legal_touch" = unknown ] && ! git -C "$sui_top" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 \
-  && sui_ls=$(git -C "$sui_top" ls-files -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/) && [ -z "$sui_ls" ]; then
+  && sui_ls=$(git -C "$sui_top" ls-tree -r --name-only HEAD -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/) && [ -z "$sui_ls" ] \
+  && { ! git -C "$sui_top" rev-parse -q --verify 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1 \
+    || { sui_ls=$(git -C "$sui_top" ls-tree -r --name-only refs/remotes/origin/main -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/) && [ -z "$sui_ls" ]; }; }; then
   legal_touch=""; sui_why=" reason=no-legal-docs-tracked"
 fi
 # Scope the marker grep to legal-doc dirs ONLY, from the repo root, as text, relative-, colour-, driver- and textconv-free;

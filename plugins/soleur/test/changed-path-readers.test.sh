@@ -150,6 +150,7 @@ NL=$'\n'
 CR=$'\r'
 
 fg() { local d="$1"; shift; assert_fixture_dir "$d"; git -C "$d" "$@"; }
+fgs() { fg "$@"; } # fg fed on stdin (shellcheck reads a bare `fg` as the job-control builtin)
 
 # ── the template: ONE base repository, a bare origin, copied per row (cp -a) ─────────────────────────────────────────────────
 TPL="$WORK_ROOT/tpl"
@@ -664,6 +665,44 @@ counsel_rows() { # <fixture B dir: a legal change plus one branch spec that is n
   counsel_expect "deleting every legal doc on a single-user plan fires" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
   counsel_run "$de" . "$ok" CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root" GH_JSON="$(gh_json "$P/sui-fixture.md")"
   counsel_expect "a failing helper against a READABLE base is not the no-legal-docs skip: fires" "COUNSEL_GATE=fire legal=unknown sui_threshold=$P/sui-fixture.md draft_marker=none"
+  # Fixture G (CTO V4): refs/remotes/origin/main resolves but shares no merge base with HEAD, as in a shallow clone. A base tree
+  # holding the legal docs this branch deleted fires; a base tree holding none still skips.
+  local gt gc
+  gt="$(fg "$de" rev-parse 'refs/remotes/origin/main^{tree}')" && gc="$(fg "$de" commit-tree -m orphan-base "$gt")" \
+    && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not build counsel row G"; return; }
+  if ! fg "$de" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 && fg "$de" ls-tree -r --name-only refs/remotes/origin/main -- docs/legal/ | grep -q .; then
+    h_ok "precondition counsel G: origin/main resolves, has no merge base with HEAD, and its tree tracks docs/legal/"
+  else h_bad "precondition counsel G: origin/main has a merge base with HEAD or tracks no legal doc"; fi
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, base tree holds the legal docs HEAD deleted: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  gt="$(fg "$de" rev-parse 'HEAD^{tree}')" && gc="$(fg "$de" commit-tree -m orphan-base-nolegal "$gt")" \
+    && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not rebuild counsel row G"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, neither base tree nor HEAD holds a legal doc: skips and says why" 'COUNSEL_GATE=skip reason=no-legal-docs-tracked'
+  # Each legal dir alone in the parentless base tree fires: <dir>/only.md built bottom-up with mktree.
+  local gb gp gn
+  for arm in docs/legal plugins/soleur/docs/pages/legal knowledge-base/legal; do
+    gb="$(printf 'x\n' | fgs "$de" hash-object -w --stdin)" && gt="$(printf '100644 blob %s\tonly.md\n' "$gb" | fgs "$de" mktree)" || { h_bad "could not build row G blob for $arm"; return; }
+    gp="$arm"
+    while [ -n "$gp" ]; do
+      gn="${gp##*/}"; gt="$(printf '040000 tree %s\t%s\n' "$gt" "$gn" | fgs "$de" mktree)" || { h_bad "could not build row G tree for $arm"; return; }
+      if [ "$gp" = "$gn" ]; then gp=""; else gp="${gp%/*}"; fi
+    done
+    gc="$(fg "$de" commit-tree -m "orphan-base-$gn" "$gt")" && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not point row G base at $arm"; return; }
+    counsel_run "$de" . "$ok"
+    counsel_expect "no merge base, only $arm/ in the base tree: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  done
+  # A base commit whose tree object is missing: the ref resolves, its tree read fails, so the skip cannot be proven: fires.
+  gc="$(printf 'tree %s\nauthor x <x@x> 0 +0000\ncommitter x <x@x> 0 +0000\n\nno tree\n' 1111111111111111111111111111111111111111 \
+    | fgs "$de" hash-object -t commit -w --literally --stdin)" && fg "$de" update-ref refs/remotes/origin/main "$gc" \
+    || { h_bad "could not build row G tree-less base"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, base commit's tree unreadable: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  # A READABLE base (HEAD itself) where neither tree holds a legal doc, with a failing helper: the skip is only for an unreadable
+  # base, so this fires.
+  fg "$de" update-ref refs/remotes/origin/main HEAD || { h_bad "could not point row G base at HEAD"; return; }
+  counsel_run "$de" . "$ok" CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root"
+  counsel_expect "a failing helper against a readable base with no legal doc on either side fires (not the skip)" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=none'
   assert_fixture_dir "$de"; rm -rf -- "$de"
   # The plan_refs capture lists no deleted path (AMT), so archiving a plan is never `unverifiable` (CTO C6c).
   new_row || { h_bad "could not build plan_refs archive row"; return; }
@@ -2731,7 +2770,7 @@ if [ "$SECTION" != all ]; then
   [ "$FAIL" -eq 0 ]
   exit
 fi
-MIN_HELPER_ROWS=211
+MIN_HELPER_ROWS=219
 if [ "$HELPER_ROWS" -lt "$MIN_HELPER_ROWS" ]; then
   printf '[FATAL] helper floor: only %s helper rows ran, want >=%s\n' "$HELPER_ROWS" "$MIN_HELPER_ROWS" >&2
   exit 1
@@ -2748,7 +2787,7 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   exit 1
 fi
 # Exact current total (the floor is the full count, not a margin below it): helper 211 + steps 187 + sentinel 122.
-MIN_TOTAL=520
+MIN_TOTAL=528
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
