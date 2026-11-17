@@ -1,0 +1,41 @@
+# Decision challenges — feat-one-shot-12824-cron-spawn-isolation
+
+Plan: `knowledge-base/project/plans/2026-11-17-fix-cron-agent-editable-code-spawn-isolation-plan.md`
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Scope of #12824 (fresh HOME, read-only plugin and scripts, measure paths 3/4, census; path 2 out) | technical | Ruled by CTO agent, 2026-11-17: scope as briefed - next P1 item in epic #9601 |
+| R1 plugin root target | technical | Ruled by CTO agent, 2026-11-17: load `getPluginPath()` (`/app/shared/plugins/soleur`, `:ro` bind) checked by `assertTrustedPluginPath()`, plus a runtime not-writable and `.seed-complete` check; never `/opt/soleur/plugin` or the clone - `/opt/soleur` is chowned to uid 1001 and the `/app/` prefix alone also admits the writable `.next` |
+| R2 who passes `--plugin-dir` | technical | Ruled by CTO agent, 2026-11-17: the substrate; refuse both caller forms; required `loadPlugin`; missing manifest throws - one owner, like `--max-budget-usd` |
+| R3 fresh HOME scope | technical | Ruled by CTO agent, 2026-11-17: every claude spawn at the chokepoint, after `buildSpawnEnv`, before `CRON_GIT_CONFIG_PIN`; keep per-cron HOME literals - spread order enforces it, removal is census churn |
+| R4 allowlisted script lines | technical | Ruled by CTO agent, 2026-11-17: bug-fixer and community-monitor both move to `bash <plugin-root>/...`; no `$` lines - one census rule, no conditional exemption |
+| R5 `install_deps` lifecycle-script vector | technical | Ruled by CTO agent, 2026-11-17: keep the install; one exemption with vitest tied to the path-2 follow-up - skipping it closes nothing while vitest is allowlisted |
+| R6 in-run `.bashrc` result | technical | Ruled by CTO agent, 2026-11-17: cross-run closed by fresh HOME; an in-run result joins the path-2 exemption, pinned to the measured CLI version - in-run execution is already open via path 2 |
+| R7 census anchor | technical | Ruled by CTO agent, 2026-11-17: real `decide()` or the `:ro` root (static mount check + runtime check); MCP commands are executed paths; a stale exemption fails - closes the anchor's gaps |
+| R8 cross-tenant Write/Edit reach | technical | Ruled by CTO agent, 2026-11-17: separate `type/security` issue (Write/Edit allow-list on `spawnCwd` and spawn HOME), not this PR - pre-existing, needs a new mechanism |
+| R9 ADR/C4 | technical | Ruled by CTO agent, 2026-11-17: amend ADR-033 (cron spawn); no new ADR; no C4 element change - it tightens that ADR's spawn rules |
+| A1 ux-audit Playwright MCP under a fresh HOME | technical | Ruled by CTO agent, 2026-11-17: measure locally first; fall back to the root-owned `/app/node_modules/.bin/` binary; never reuse `/home/soleur/.npm` - a shared npm cache is itself a cross-run write-then-execute path |
+| A2 spawn HOME `.claude` state | technical | Ruled by CTO agent, 2026-11-17: no new pattern; existing `.claude` read/write patterns cover it |
+| O1 priority of the cross-tenant Write issue (F2) | operator (priority) | pending - operator sets the priority label when F2 is filed; the plan files it without a priority label (no label edits in this PR) |
+| O2 if F1 cannot land soon: scope the bug-fixer token down or pause the cron (CPO condition 1) | operator (scope/schedule) | pending - surfaced in the PR body and F1; no change in this PR |
+| CPO plan-time sign-off (single-user incident) | taste | approved with conditions (2026-11-17): F1 p1 in the active milestone; F2 with CPO recommendation and CLO routing; plain "still open" PR paragraph; fail-closed alerts reach operator email |
+| Scoped advisor: serve the containment hook and settings from the `:ro` root | technical | Ruled by CTO agent, 2026-11-17 (A3): rejected for this PR - needs an image change and adds nothing for bug-fixer while vitest stays allowlisted; belongs with F1 |
+| A3 census writability model | technical | Ruled by CTO agent, 2026-11-17: real `decide()` over Write/Edit plus a fixed probe set of tree-writing Bash forms; "all paths writable in-run" by arbitrary-exec line shape, not cron name; one whole-cron bug-fixer exemption keyed to F1; PR and ADR state that bug-fixer gets only the cross-run half - same uid and env as vitest, so hook relocation gains nothing yet |
+| A3 dissent: remote branches in the depth-1 clone | technical | Ruled by CTO agent, 2026-11-17: Phase 0.7d probe; static read says `--depth=1` implies `--single-branch` and no cron allowlists `git fetch`/`git pull`; any extra remote branch makes it an in-PR fix, not an exemption |
+| A4 `npm_config_ignore_scripts` for bug-fixer | technical | Ruled by CTO agent, 2026-11-17: not in this PR; listed as an F1 part - no capability gain while vitest is allowlisted, untested postinstall regression |
+| A5 Phase 0 additions | technical | Ruled by CTO agent, 2026-11-17: decision branches written before measuring; git/gh empty-HOME, cold-cache install (accept degraded baseline, never share `/home/soleur` cache), docker `:ro` errno (EROFS/EACCES only), A1 MCP and A3 `git branch -r` probes - no API spend |
+| T1 in-place plugin reseed during running crons (arch, spec-flow) | technical | Ruled by CTO agent, 2026-11-17: no deploy-script change here; one ~30 s `.seed-complete` retry then NonRetriableError; seed-tag compare at exit -> `plugin-reseeded-mid-run`; follow-up F3 (atomic versioned seed); PR/ADR state the race is new for crons - dark-launch PR, small exposure, detection makes it visible |
+| T2 vendored copy lacks .py/.ts the crons' skills call (arch) | technical | Ruled by CTO agent, 2026-11-17: census coverage row + per-miss disposition, default degrade; clone-path fallback only for a cron with no Write/Edit and no exec verb, with exemption; no `.dockerignore` change - a writable cron's clone fallback reopens the class |
+| T3 mount check as canary readiness gate | technical | Ruled by CTO agent, 2026-11-17: out of scope, follow-up F4 - deploy-gate change |
+| T4 GC can sweep a live `soleur-home-*` | technical | Ruled by CTO agent, 2026-11-17: HOME = `mkdtemp(join(ephemeralRoot,"home-"))`, sibling of `repo/`, assert not under spawnCwd - shares existing teardown/GC, never in the git tree |
+| T5 shared /tmp carry-over | technical | Ruled by CTO agent, 2026-11-17: TMPDIR = `<spawn HOME>/tmp` (0700) - same cross-run class, one key |
+| T6 ux-audit MCP launch | technical | Ruled by CTO agent, 2026-11-17: switch to `/app/node_modules/.bin/` unconditionally; no PLAYWRIGHT_BROWSERS_PATH; Phase 0.6 in the pinned image as uid 1001 when pullable, else `unverified-in-image` - npx runs code from a HOME cache |
+| T7 census simplification (simplicity, DHH) | technical | Ruled by CTO agent, 2026-11-17: keep AST discovery; drop HOME rc-file source; cite `docker-run-tuple.test.sh` instead of re-checking `:ro`; reject deleting the census - grep misses aliasing; the census is operator ask 4 |
+| T8 resolver manifest/seed checks duplicate boot check | technical | Ruled by CTO agent, 2026-11-17: keep (boot check is report-only); replace injected seam with vi.mock on a small module |
+| T9 concurrent spawns share uid 1001 | technical | Ruled by CTO agent, 2026-11-17: reword P2 to "no state survives into a later spawn"; concurrent cross-HOME/TMPDIR writes go under F2; add the read-only worktree-manager Phase 0 arm |
+| Plan-review mechanical fixes (2026-11-17) | mechanical | Applied: self-test gets substituted lines; explicit `pluginRoot` params; resolve once in setup (13 crons); NonRetriableError once per run; mkdtemp inside try; rm after SIGKILL settles; `=X` refusal; `hooks/` W_OK probe; test-env bypass handled; shared fixture and spawn-test list; census failure-message spec (AC18); AC8/AC15 widened; probe-script guards; CLI-pin staleness test |
+| DHH: delete stale per-cron `HOME: process.env.HOME` lines; drop required `loadPlugin` or the refusal | taste | Not applied - R3 ruled keep-with-comment (those `buildSpawnEnv` maps also feed non-claude spawns); R2 ruled both (refusal catches drift, required flag forces each caller to decide); recorded for review |
+| DHH/simplicity: trim Phase 0 to 0.3-0.6 | taste | Not applied - CTO A5 ruled the additional arms in (each guards a fresh-HOME or read-only-root regression, no API spend) |
+| O3 follow-up priority for F3/F4/F5 | operator (priority) | pending - filed without a priority label |
