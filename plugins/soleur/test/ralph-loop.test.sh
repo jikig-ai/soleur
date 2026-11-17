@@ -1074,6 +1074,190 @@ assert_contains "$HOOK_OUT" '"decision": "block"' "block emitted with no ledger 
 cleanup_test "$TEST_DIR"
 echo ""
 
+# Insert one exact line before the closing --- of the first frontmatter block.
+insert_before_close() {
+  local file="$1" line="$2" tmp
+  assert_fixture_dir "$file"
+  tmp=$(mktemp)
+  awk -v line="$line" '/^---$/{ c++; if (c==2) print line } { print }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+front_has_exact() {
+  local file="$1" line="$2" front
+  front=$(awk '/^---$/{c++; next} c==1' "$file" 2>/dev/null || true)
+  printf '%s\n' "$front" | grep -qx "$line"
+}
+
+# Test 56: capped + exact grant 1 -> one block, grant consumed, latch unchanged.
+echo "Test 56: capped exact grant emits one block and consumes it"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+STATE="$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md"
+insert_before_close "$STATE" "retry_budget_grant: 1"
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>"$TEST_DIR/hook-stderr") || HOOK_RC=$?
+HOOK_ERR=$(cat "$TEST_DIR/hook-stderr" 2>/dev/null || true)
+assert_eq "0" "$HOOK_RC" "grant path exits 0"
+assert_contains "$HOOK_OUT" '"decision": "block"' "one keep-alive block after the grant is consumed"
+assert_contains "$HOOK_ERR" "SOLEUR_TALLY_CAPPED" "grant path still prints the capped marker"
+if front_has_exact "$STATE" "retry_budget_grant: 0"; then
+  echo "  PASS: read-back line is retry_budget_grant: 0"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: read-back line is retry_budget_grant: 0"
+  FAIL=$((FAIL + 1))
+fi
+if front_has_exact "$STATE" "retry_budget_consumed: 1"; then
+  echo "  PASS: consumed latch is set"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: consumed latch is set"
+  FAIL=$((FAIL + 1))
+fi
+assert_contains "$(cat "$CF")" "capped=ci_cycles" "capped= latch is unchanged"
+HOOK_OUT2=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_eq "" "$HOOK_OUT2" "second stop emits no further block"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 58: consumed already set, grant 1 again -> no block.
+echo "Test 58: consumed grant does not emit another block"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+STATE="$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md"
+insert_before_close "$STATE" "retry_budget_grant: 1"
+insert_before_close "$STATE" "retry_budget_consumed: 1"
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>"$TEST_DIR/hook-stderr") || HOOK_RC=$?
+assert_eq "0" "$HOOK_RC" "consumed grant exits 0"
+assert_eq "" "$HOOK_OUT" "consumed grant emits no block"
+if front_has_exact "$STATE" 'retry_budget_grant: 1'; then
+  echo "  PASS: a later grant 1 is not rewritten"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: a later grant 1 is not rewritten"
+  FAIL=$((FAIL + 1))
+fi
+if front_has_exact "$STATE" "retry_budget_consumed: 1"; then
+  echo "  PASS: consumed latch stays set"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: consumed latch stays set"
+  FAIL=$((FAIL + 1))
+fi
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 59: not capped, grant 1 -> today's block, grant unchanged.
+echo "Test 59: uncapped stop does not consume the grant"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+STATE="$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md"
+insert_before_close "$STATE" "retry_budget_grant: 1"
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUT" '"decision": "block"' "uncapped stop still blocks"
+if front_has_exact "$STATE" 'retry_budget_grant: 1'; then
+  echo "  PASS: uncapped stop leaves the grant at 1"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: uncapped stop leaves the grant at 1"
+  FAIL=$((FAIL + 1))
+fi
+if front_has_exact "$STATE" "retry_budget_consumed: 1"; then
+  echo "  FAIL: uncapped stop does not set consumed"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: uncapped stop does not set consumed"
+  PASS=$((PASS + 1))
+fi
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 60: quoted 1 is not a grant.
+echo "Test 60: quoted grant does not arm the hook"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+STATE="$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md"
+insert_before_close "$STATE" 'retry_budget_grant: "1"'
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || HOOK_RC=$?
+assert_eq "0" "$HOOK_RC" "quoted grant exits 0"
+assert_eq "" "$HOOK_OUT" "quoted grant emits no block"
+if front_has_exact "$STATE" 'retry_budget_grant: "1"'; then
+  echo "  PASS: quoted grant line is unchanged"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: quoted grant line is unchanged"
+  FAIL=$((FAIL + 1))
+fi
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 61: grant line only in the prompt body does not arm the hook.
+echo "Test 61: grant outside the first frontmatter does not arm the hook"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+STATE="$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md"
+assert_fixture_dir "$STATE"
+printf '\nretry_budget_grant: 1\n' >> "$STATE"
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || HOOK_RC=$?
+assert_eq "0" "$HOOK_RC" "body grant exits 0"
+assert_eq "" "$HOOK_OUT" "body grant emits no block"
+if front_has_exact "$STATE" "retry_budget_grant: 1"; then
+  echo "  FAIL: body grant is not in the first frontmatter"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: body grant is not in the first frontmatter"
+  PASS=$((PASS + 1))
+fi
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 62: the sweep keeps the current session file even when its pid looks dead.
+echo "Test 62: sweep keeps the current session file and removes another dead owner"
+TEST_DIR=$(setup_test)
+SAVED_PID="$TEST_PID"
+TEST_PID="2999998"
+export RALPH_LOOP_PID="$TEST_PID"
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+SIBLING="$TEST_DIR/.claude/ralph-loop.2999999.local.md"
+assert_fixture_dir "$SIBLING"
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$SIBLING" <<EOF
+---
+active: true
+iteration: 3
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$NOW_TS"
+---
+
+Dead sibling prompt
+EOF
+(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.2999998.local.md" "current dead-pid session file is kept"
+assert_file_not_exists "$SIBLING" "a different dead-pid sibling is removed"
+TEST_PID="$SAVED_PID"
+export RALPH_LOOP_PID="$TEST_PID"
+cleanup_test "$TEST_DIR"
+echo ""
+
 # --- RL-B3: the constant reminder in the model-visible `reason` (ADR-084 addendum, 2026-10-26; CTO ruling B3c) ---
 # Inside this loop every Stop after the first is unjudged by the closing gate, so the ralph block carries a constant reminder to route a
 # technical decision to the CTO before a turn ends with Blocked: or Paused:. The oracle is THIS literal, not the hook's own extraction;

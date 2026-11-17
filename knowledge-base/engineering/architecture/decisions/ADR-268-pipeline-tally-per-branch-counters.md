@@ -78,6 +78,10 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
   skills; the operator sees the cost shape mid-run, not just post-hoc.
 - A `budget-capped` halt is durable and resumable only via raised caps or an
   explicit `--reset` — a capped run cannot livelock or silently continue.
+- One consumed grant may run a single iteration, or move the parent to an
+  allow-listed earlier phase, while `capped=` stays set and the cap is not
+  raised. A second exhaustion is `fail` with no second spawn. `init --max-*`
+  remains `capped-reset` and is not that grant.
 - Counters can drift under prose-path discipline gaps; the
   `SOLEUR_TALLY_ABSENT` / `SOLEUR_TALLY_CAP_IGNORED` PR-body sentinels and the
   components.test.ts call-out sentinel bound the risk rather than hide it.
