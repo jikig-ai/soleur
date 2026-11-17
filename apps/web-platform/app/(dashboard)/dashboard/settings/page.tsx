@@ -32,7 +32,7 @@ export default async function SettingsPage() {
   const active = await resolveActiveWorkspace(user.id, service);
 
   // Parallelize all independent queries.
-  const [{ data: apiKey }, { data: oauthData, error: oauthError }, wsRes] = await Promise.all([
+  const [{ data: apiKey }, { data: oauthData, error: oauthError }, wsRes, heldRes] = await Promise.all([
     service
       .from("api_keys")
       .select("provider, is_valid, updated_at")
@@ -54,14 +54,32 @@ export default async function SettingsPage() {
       ? service
           .from("workspaces")
           .select(
-            // #12714: kb_sync_held_files is NOT in the `authenticated` column grant (migration 187), so it is
-            // read here, with the service client, keyed on the membership-verified active workspace id.
-            "repo_url, repo_status, repo_last_synced_at, github_installation_id, kb_sync_held_files",
+            "repo_url, repo_status, repo_last_synced_at, github_installation_id",
           )
           .eq("id", active.workspaceId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // #12714 (D29(3), D33(1)): the held count, in its OWN service-client select keyed on the membership-verified
+    // active workspace id (the `authenticated` column grant excludes it, migration 187). Separate so a missing column
+    // (an apply that lags, or a rollback) costs only the notice, never the repo card above.
+    active.ok
+      ? service
+          .from("workspaces")
+          .select("kb_sync_held_files")
+          .eq("id", active.workspaceId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
+
+  if (heldRes.error) {
+    // Debounced, constant key (as above): this runs on every Settings render while the read keeps failing.
+    mirrorWithDebounce(
+      heldRes.error,
+      { feature: "settings", op: "read-held-files", extra: { userId: user.id } },
+      "settings:read-held-files",
+      "settings_read_held_files",
+    );
+  }
 
   // A failed oauth read must not silently hide the Remove control: report it
   // and render the neutral state (no token UI) rather than guess a row.
@@ -94,7 +112,7 @@ export default async function SettingsPage() {
   // #12714 (D29(3), D29(5)): the held-files notice. The count is display-only; the publish-route predicate is asked
   // for the VIEWER (a member's agent is the one that would push) and only when a notice can render. A throw reads as
   // "unknown" (the transient copy), never "unavailable": a blip must not say publishing is impossible (V6(3)).
-  const rawHeldFiles: unknown = repoData?.kb_sync_held_files;
+  const rawHeldFiles: unknown = heldRes.error ? null : heldRes.data?.kb_sync_held_files;
   const heldFiles = isRenderableHeldCount(rawHeldFiles) ? rawHeldFiles : null;
   const heldRoutePromise: Promise<HeldRouteState> =
     active.ok && repoData?.repo_status === "ready" && heldFiles !== null

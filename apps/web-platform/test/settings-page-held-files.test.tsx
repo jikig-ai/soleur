@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Server-page test for the #12714 held-files notice (D29(3), D29(5), TW1-b's Settings half, AC18/AC19).
-// - the count is read with the SERVICE client from `workspaces`, keyed on the id the page's single
-//   `resolveActiveWorkspace` call returned (never a fresh `current_workspace_id` read, never the user id);
+// - the count is read with the SERVICE client from `workspaces` in a SEPARATE select (D33(1)), keyed on the id the page's
+//   single `resolveActiveWorkspace` call returned (never a fresh `current_workspace_id` read, never the user id); the
+//   repo-status select is unchanged, so a missing migration 187 can never turn the card into "not connected";
 // - the publish-route predicate is called with the VIEWER's user id and that same workspace id, and only when a notice
 //   could render (ready repo, a count in 1..10000);
 // - a predicate that throws reads as "unknown" (the transient copy), never as "unavailable".
@@ -13,7 +14,10 @@ const WS_ACTIVE = "ws-active";
 const state: {
   active: { ok: true; workspaceId: string } | { ok: false };
   ws: Record<string, unknown> | null;
-} = { active: { ok: true, workspaceId: WS_ACTIVE }, ws: null };
+  heldError: { message: string; code: string } | null;
+} = { active: { ok: true, workspaceId: WS_ACTIVE }, ws: null, heldError: null };
+
+const REPO_STATUS_SELECT = "repo_url, repo_status, repo_last_synced_at, github_installation_id";
 
 const wsCalls: Array<{ select: string; eq: [string, unknown] | null }> = [];
 const predicate = vi.hoisted(() => vi.fn());
@@ -37,7 +41,14 @@ vi.mock("@/lib/supabase/server", () => ({
             call.eq = [col, val];
             return chain;
           },
-          maybeSingle: async () => ({ data: state.ws, error: null }),
+          maybeSingle: async () => {
+            if (!/kb_sync_held/.test(call.select)) {
+              const { kb_sync_held_files: _held, ...repo } = state.ws ?? {};
+              return { data: state.ws ? repo : null, error: null };
+            }
+            if (state.heldError) return { data: null, error: state.heldError };
+            return { data: state.ws ? { kb_sync_held_files: state.ws.kb_sync_held_files ?? null } : null, error: null };
+          },
         };
         return chain;
       }
@@ -85,19 +96,38 @@ const READY = {
 beforeEach(() => {
   state.active = { ok: true, workspaceId: WS_ACTIVE };
   state.ws = null;
+  state.heldError = null;
   wsCalls.length = 0;
   predicate.mockReset();
   mirror.mockReset();
 });
 
 describe("settings/page.tsx — held-files notice (#12714)", () => {
-  it("selects kb_sync_held_files with the service client keyed on resolveActiveWorkspace's id", async () => {
+  it("reads kb_sync_held_files in a SEPARATE service select keyed on resolveActiveWorkspace's id (D33(1))", async () => {
     state.ws = { ...READY, kb_sync_held_files: 3 };
     predicate.mockResolvedValue("available");
     await pageProps();
-    expect(wsCalls).toHaveLength(1);
-    expect(wsCalls[0].select.split(",").map((c) => c.trim())).toContain("kb_sync_held_files");
-    expect(wsCalls[0].eq).toEqual(["id", WS_ACTIVE]);
+    expect(wsCalls).toHaveLength(2);
+    const repo = wsCalls.find((c) => !/kb_sync_held/.test(c.select));
+    const held = wsCalls.find((c) => /kb_sync_held/.test(c.select));
+    // The repo-status select is exactly what it was before #12714.
+    expect(repo?.select).toBe(REPO_STATUS_SELECT);
+    expect(repo?.eq).toEqual(["id", WS_ACTIVE]);
+    expect(held?.select).toBe("kb_sync_held_files");
+    expect(held?.eq).toEqual(["id", WS_ACTIVE]);
+  });
+
+  it("a failing held select (column missing) keeps the card connected, shows no notice, and mirrors once (D33(1))", async () => {
+    state.ws = { ...READY, kb_sync_held_files: 3 };
+    state.heldError = { message: 'column workspaces.kb_sync_held_files does not exist', code: "42703" };
+    const p = await pageProps();
+    expect(p.repoStatus).toBe("ready");
+    expect(p.repoUrl).toBe(READY.repo_url);
+    expect(p.repoLastSyncedAt).toBe(READY.repo_last_synced_at);
+    expect(p.heldFiles).toBeNull();
+    expect(predicate).not.toHaveBeenCalled();
+    expect(mirror).toHaveBeenCalledTimes(1);
+    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "read-held-files" });
   });
 
   it("calls the route predicate with the VIEWER's user id and the active workspace id, and threads the result", async () => {
@@ -145,6 +175,7 @@ describe("settings/page.tsx — held-files notice (#12714)", () => {
     const p = await pageProps();
     expect(wsCalls).toHaveLength(0);
     expect(p.heldFiles).toBeNull();
+    expect(mirror).not.toHaveBeenCalled();
     expect(predicate).not.toHaveBeenCalled();
   });
 });
