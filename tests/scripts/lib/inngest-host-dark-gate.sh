@@ -36,7 +36,7 @@
 #   silent        — the host emits nothing. Check the timer and the Vector shipper.
 #   unreadable    — the read path failed, or a field did not parse. Nothing about the host was
 #                   measured; retry.
-#   stale_schema  — the host is emitting, but from a pre-probe_schema=9 renderer. ACTIONABLE:
+#   stale_schema  — the host is emitting, but from a pre-probe_schema=10 renderer. ACTIONABLE:
 #                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
 #                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
 #                   OCI image and reaches the host via the digest literal in user_data, not via
@@ -122,10 +122,10 @@ _IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"
 
 # THE EXPECTED PROBE SCHEMA, DEFINED ONCE. The execute gate defaults `--expected-schema` to this
 # and its caller interpolates it into the `stale_schema` remedy. The emitter's schema has bumped
-# 3 -> 4 -> 7 -> 8 -> 9 and a bump that lands on one consumer and not the other would make the gate and
-# its caller disagree about the same row forever (the suite asserts the literal appears here and
-# nowhere else in this file).
-_IHDG_EXPECTED_SCHEMA="9"
+# 3 -> 4 -> 7 -> 8 -> 9 -> 10 (#12742) and a bump that lands on one consumer and not the other
+# would make the gate and its caller disagree about the same row forever (the suite asserts the
+# literal appears here and nowhere else in this file).
+_IHDG_EXPECTED_SCHEMA="10"
 
 # _ihdg_field <message> <field-name>
 #
@@ -538,12 +538,14 @@ _ihdg_graded_row() {
   # and counts them, so widening the window and leaving this bound behind reddens rather than
   # silently making the emptiness claim older than the argument that justifies it.
 
-  # ── G4 — probe_schema is EXACTLY the expected schema (9 today) ──────────────────
+  # ── G4 — probe_schema is EXACTLY the expected schema (10 today) ─────────────────
   # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
   # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
   # everything" shape one version forward. A schema bump must force a deliberate edit here.
   #
-  # BUMPED 8 -> 9 (#8525) when the emitter gained `data_luks` (blkid TYPE of the /mnt/data
+  # BUMPED 9 -> 10 (#12742, 2026-11-17) when the emitter gained `sdk_sync`/`sdk_app_url` (the
+  # server's own apps{url,error} poll state). BUMPED 8 -> 9 (#8525) when the emitter gained
+  # `data_luks` (blkid TYPE of the /mnt/data
   # backing device). BUMPED 7 -> 8 (#8017/#8015/#8013, 2026-09-10) when the emitter gained `data_mount_devid`,
   # `data_mount_base` and `registry_fns`, and the key histogram became identifier-aware. The
   # earlier 3 -> 4 bump (#7695) added `redis_key_patterns`. The bump is

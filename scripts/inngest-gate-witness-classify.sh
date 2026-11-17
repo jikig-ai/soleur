@@ -57,6 +57,12 @@ inngest_gate_witness_classify() {
     # The lib's refusal vocabulary, spelled out token-by-token so the suite's
     # `_ihdg_verdict` census pins an arm for every literal the lib can emit —
     # an added lib token lands UNLISTED and the census reddens.
+    # #12742 (CTO ruling 2026-11-17): `stale_schema` stays `refusal` DELIBERATELY. The witness
+    # measures execute-gate satisfiability, not host darkness — and during the schema-10
+    # merge→owner-replace window the gate IS unsatisfiable by design. Mapping the token to
+    # alive/not-dark (`suppressed`/`satisfy`) would forgive a STUCK replace past the
+    # 2026-11-20 ledger expiry: the one deduped action-required filing ~2h post-merge on the
+    # designed-for state is the accepted cost of keeping that alarm armed.
     unreadable|silent|wrong_host|stale_row|stale_schema|host_serving|flag_unreadable|fsm_unreadable|fsm_silent)
                       echo "refusal" ;;
     *)                echo "refusal" ;;

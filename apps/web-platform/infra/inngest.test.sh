@@ -1367,7 +1367,7 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns data_luks"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns data_luks sdk_sync sdk_app_url"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
@@ -1382,10 +1382,12 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # the field was added to detect can never be emitted.
 # #8525: data_luks joins the never-zero list -- its accepting values are blkid TYPEs
 # (crypto_LUKS, ext4) and the two sentinels; a literal `0` can only be a degradation.
-PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid data_luks"
+# #12742: sdk_sync and sdk_app_url join too -- every accepting value (ok/error/no_apps, a
+# URL, or a sentinel) is non-numeric, so a literal `0` can only be a degradation.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid data_luks sdk_sync sdk_app_url"
 
-assert "#8525 probe declares probe_schema=9 (the execute gate refuses a stale_schema row, E6)" \
-  "grep -qE 'probe_schema=9( |\$)' '$PROBE_LOG'"
+assert "#12742 probe declares probe_schema=10 (the execute gate refuses a stale_schema row, E6)" \
+  "grep -qE 'probe_schema=10( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1431,7 +1433,7 @@ PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
 
 assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
   "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
-for _f7695 in flush_latched redis_keys data_mount_src data_bytes data_luks; do
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes data_luks sdk_sync sdk_app_url; do
   assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
     "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
 done
@@ -1653,15 +1655,32 @@ S8_VOLID="106261946"
 # A GQL-aware curl. The base stub returns `exit 7` UNCONDITIONALLY, so it cannot express a
 # health-200-plus-registry-answer host at all; registry_fns would be pinned to __UNREADABLE__ by
 # the stub rather than by the code.
-s8_curl() {
+# #12742: the probe now issues TWO /v0/gql requests per run — RegistryProbe, then
+# SdkSyncProbe — so the stub discriminates on the REQUEST BODY (the --data-binary arg
+# carries the query name), not just the URL. It also emulates `-w '\n%{http_code}'` on the
+# sdk arm: the probe captures the response code off the write-out, and a stub that printed
+# only the body would pin sdk_sync to __UNREADABLE__ by fixture rather than by code.
+s8_curl() {  # s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code]
   cat > "$PROBE_S8_BIN/curl" <<CURLEOF
 #!/bin/sh
+_wantw=0
+_gql=none
 for a in "\$@"; do
   case "\$a" in
     *"/health") printf '%s' "$1"; exit 0 ;;
-    *"/v0/gql") printf '%s' '$2'; exit ${3:-0} ;;
+    -w) _wantw=1 ;;
+    *SdkSyncProbe*) _gql=sdk ;;
+    *RegistryProbe*) _gql=reg ;;
   esac
 done
+case "\$_gql" in
+  sdk)
+    printf '%s' '${4:-}'
+    [ "\$_wantw" = 1 ] && printf '\n%s' '${6:-200}'
+    exit ${5:-0} ;;
+  reg)
+    printf '%s' '$2'; exit ${3:-0} ;;
+esac
 exit 7
 CURLEOF
   chmod +x "$PROBE_S8_BIN/curl"
@@ -2096,6 +2115,89 @@ assert "#8525 blkid is NEVER invoked on \$data_mount_src under a mapper (the ext
   "awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'cryptsetup' >/dev/null && ! awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'blkid.*data_mount_src' >/dev/null"
 
 # ============================================================================================
+# ARM 5d — probe_schema=10: sdk_sync / sdk_app_url, the server's own pollSDKs state (#12742)
+# ============================================================================================
+# The post-replace measurement needs host-local evidence that the server's 60s sdk_url poll
+# still reaches the app. `apps[].error` is refreshed BY that poll, so `ok` certifies the LAST
+# attempt and `sdk_app_url` names the registered URL — the legible difference between the
+# stale private URL and https://app.soleur.ai in the same row.
+#
+# THE STUB DISCRIMINATES ON THE QUERY BODY. The probe issues two /v0/gql calls per run, so an
+# arg-blind stub answers the SdkSyncProbe with the functions fixture and pins the field to
+# __UNREADABLE__ by fixture, not by code. s8_curl's params 4-6 are the apps arm:
+# s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code].
+S10_FNS='{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- shape 1: a registered app with a clean last sync => ok + the URL -----------------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]}}'
+S10_OK="$(s8_run sdk-ok)"
+assert "#12742 a clean apps[] sync => sdk_sync=ok" \
+  "grep -qE 'sdk_sync=ok( |\$)' '$S10_OK'"
+assert "#12742 ...and names the registered URL in the same row (the stale-URL tell)" \
+  "grep -qE 'sdk_app_url=https://app.soleur.ai/api/inngest( |\$)' '$S10_OK'"
+assert "#12742 ...while the SAME row still carries the registry measurement" \
+  "grep -qE 'registry_fns=3( |\$)' '$S10_OK'"
+
+# --- shape 2: a non-empty apps[].error => error, and the URL still ships --------------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"http://10.0.1.10:3000/api/inngest","error":"dial tcp: connection refused"}]}}'
+S10_ERR="$(s8_run sdk-error)"
+assert "#12742 a failing sync => sdk_sync=error with registry_fns still positive" \
+  "grep -qE 'sdk_sync=error( |\$)' '$S10_ERR' && grep -qE 'registry_fns=3( |\$)' '$S10_ERR'"
+assert "#12742 ...and the stale private URL is LEGIBLE in the row (item 4's evidence)" \
+  "grep -qE 'sdk_app_url=http://10.0.1.10:3000/api/inngest( |\$)' '$S10_ERR'"
+assert "#12742 the GQL error TEXT never ships (the tag is allowlisted to a third party)" \
+  "! grep -qF 'connection refused' '$S10_ERR'"
+
+# --- shape 3: an empty apps array => no_apps (pre-registration / diagnostic boot) -----------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[]}}'
+S10_NONE="$(s8_run sdk-noapps)"
+assert "#12742 an empty apps[] => sdk_sync=no_apps" \
+  "grep -qE 'sdk_sync=no_apps( |\$)' '$S10_NONE'"
+assert "#12742 ...and sdk_app_url=none, never an empty field" \
+  "grep -qE 'sdk_app_url=none( |\$)' '$S10_NONE'"
+
+# --- shape 4: an error envelope => __UNREADABLE__, and no error text ships -------------------
+s8_curl 200 "$S10_FNS" 0 '{"errors":[{"message":"boom-secret"}],"data":null}'
+S10_GQLERR="$(s8_run sdk-gqlerr)"
+assert "#12742 a GQL error envelope => __UNREADABLE__" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_GQLERR' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_GQLERR'"
+assert "#12742 the error envelope's text never reaches the allowlisted row" \
+  "! grep -qF 'boom-secret' '$S10_GQLERR'"
+
+# --- shape 5: transport failure and non-200 => __UNREADABLE__ --------------------------------
+s8_curl 200 "$S10_FNS" 0 '' 7 000
+S10_DOWN="$(s8_run sdk-down)"
+assert "#12742 a transport failure (rc!=0, write-out 000) => __UNREADABLE__" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_DOWN'"
+s8_curl 200 "$S10_FNS" 0 '<html>bad gateway</html>' 0 502
+S10_502="$(s8_run sdk-502)"
+assert "#12742 a non-200 GQL response => __UNREADABLE__, never a parsed-looking guess" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_502' && ! grep -qF 'bad gateway' '$S10_502'"
+
+# --- shape 6: schema drift (an app row missing `url`) => __UNREADABLE__ ----------------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"name":"web"}]}}'
+S10_DRIFT="$(s8_run sdk-drift)"
+assert "#12742 schema drift (no url key) => __UNREADABLE__, not a silent ok" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_DRIFT'"
+
+# --- shape 7: a hostile URL cannot re-tokenize the row --------------------------------------
+# A space inside sdk_app_url would split the space-separated emit into extra key=value fields.
+# The tr -c charset guard collapses it to `_` before the row leaves the host.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest registry_fns=5","error":null}]}}'
+S10_HOSTILE="$(s8_run sdk-hostile)"
+assert "#12742 a space-bearing URL is charset-confined (cannot mask registry_fns=0)" \
+  "grep -qE 'sdk_app_url=https://app.soleur.ai/api/inngest_registry_fns_5( |\$)' '$S10_HOSTILE' && grep -qE 'registry_fns=3( |\$)' '$S10_HOSTILE'"
+
+# --- restore: downstream arms and the mutate_emitter rows model only the functions query ----
+s8_curl 200 "$S10_FNS"
+assert "#12742 the sdk arm is drift-pinned at column zero beside FUNCTIONS_GQL_QUERY" \
+  "grep -qE '^readonly SDK_SYNC_GQL_QUERY=' '$PROBE_SRC'"
+assert "#12742 the sdk curl is BOUNDED and discards stderr like the registry curl" \
+  "grep -cE 'timeout 10 curl -s --max-time 10' '$PROBE_SRC' | grep -qE '^[2-9]'"
+assert "#12742 every field emitted is one of the five sdk_sync values" \
+  "grep -oE 'sdk_sync=[^ ]+' '$S10_OK' '$S10_ERR' '$S10_NONE' '$S10_GQLERR' '$S10_DOWN' '$S10_502' '$S10_DRIFT' '$S10_HOSTILE' | grep -vE 'sdk_sync=(ok|error|no_apps|n/a|__UNREADABLE__)' ; test \$? -eq 1"
+
+# ============================================================================================
 # mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
 # ============================================================================================
 # THIS FILE HAD NO MUTATION HARNESS. Every emitter-side "we checked that neutering X breaks Y"
@@ -2389,8 +2491,8 @@ for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_
 done
 # Cardinality guard on the loop above: a typo in either list makes the body run zero times and
 # this block reports success having asserted nothing.
-assert "#7695 never-zero invariant covered 6 logs x 8 fields" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 8 ]]"
+assert "#7695 never-zero invariant covered 6 logs x 10 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 10 ]]"
 # TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
 # `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
 # numeric, so the never-zero loop has nothing to say about it either).

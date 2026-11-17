@@ -113,17 +113,18 @@ hb_line() {
 # sit downstream of the histogram's substr(out, 1, 400) cap and cannot displace an existing field.
 # probe_schema=9 (#8525) appends `data_luks` at the tail, after registry_fns — same reasoning:
 # a tail field can never displace an existing one under the histogram's cap.
+# probe_schema=10 (#12742) appends `sdk_sync`/`sdk_app_url` at the tail, after data_luks.
 PROBE_FIELDS=(http_code server_active vector_active redis_active uptime_s boot_id image_ref
               instance_id cli_version cutover_flag probe_schema host_role flush_latched
               redis_keys redis_expires redis_key_patterns data_mount_src data_bytes
-              data_mount_base data_mount_devid registry_fns data_luks)
+              data_mount_base data_mount_devid registry_fns data_luks sdk_sync sdk_app_url)
 declare -A PD=(
   [http_code]=000 [server_active]=inactive [vector_active]=active [redis_active]=active
   # boot_id is HYPHENATED, as /proc/sys/kernel/random/boot_id renders it (measured live:
   # `402c0d5b-1cf3-495a-92e1-cf137732156f`); the journald envelope `_BOOT_ID` is the same value
   # with the hyphens stripped, and that strip is the cross-stream join key (#8054, E7/E13).
   [uptime_s]=98765 [boot_id]=b0000000-0000-4000-8000-000000000001 [image_ref]=ghcr.io/example@sha256:aaa
-  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=9
+  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=10
   [host_role]=dedicated [flush_latched]=false [redis_keys]=0
   # __NONE__ is the COHERENT partner of redis_keys=0 (the retired gate's G14). The execute gate never
   # reads it; a default of __UNREADABLE__ here would only make the fixture incoherent.
@@ -139,6 +140,9 @@ declare -A PD=(
   # #8525: crypto_LUKS is the passing shape the ledger's live_verification reads; the execute
   # gate never grades it, so the default only keeps the fixture faithful to the schema-9 row.
   [data_luks]=crypto_LUKS
+  # #12742: the serving-sync shape the post-replace measurement reads; the execute gate never
+  # grades it either. The default keeps the fixture faithful to the schema-10 row.
+  [sdk_sync]=ok [sdk_app_url]=https://app.soleur.ai/api/inngest
 )
 PD[data_mount_src]="$DEV"
 PD[data_mount_base]="$DEVBASE"
@@ -598,14 +602,14 @@ predicate ERG-E5 "newest probe row 3h old => stale_row" stale_row "$EROWS" "$TMP
 predicate ERG-E5 "newest probe row from the FUTURE => stale_row" stale_row "$EROWS" "$HB" --now-epoch 1788429000
 expect "[ERG-E5] a 3h-old row is inside an explicitly widened bound => dark (bound is the gate's operand)" dark "$EROWS" "$TMP/erg-hb-late.json" --now-epoch 1788440400 --max-row-age 20000
 
-# E6 — probe_schema is EXACTLY 9. `>=` would accept a future schema whose fields this gate has
+# E6 — probe_schema is EXACTLY 10. `>=` would accept a future schema whose fields this gate has
 # never seen (matrix row 6 mutates this to `-ge`).
 erows e6 '2026-09-03 10:00:00' "$(emsg probe_schema=7)"
 predicate ERG-E6 "probe_schema=7 => stale_schema" stale_schema "$TMP/erg-e6.json" "$HB"
-erows e6a '2026-09-03 10:00:00' "$(emsg probe_schema=8)"
-predicate ERG-E6 "probe_schema=8 (the PREVIOUS schema, the baked-carrier window's live shape) => stale_schema" stale_schema "$TMP/erg-e6a.json" "$HB"
-erows e6b '2026-09-03 10:00:00' "$(emsg probe_schema=10)"
-predicate ERG-E6 "probe_schema=10 (FUTURE) => stale_schema, never >=" stale_schema "$TMP/erg-e6b.json" "$HB"
+erows e6a '2026-09-03 10:00:00' "$(emsg probe_schema=9)"
+predicate ERG-E6 "probe_schema=9 (the PREVIOUS schema, the baked-carrier window's live shape) => stale_schema" stale_schema "$TMP/erg-e6a.json" "$HB"
+erows e6b '2026-09-03 10:00:00' "$(emsg probe_schema=11)"
+predicate ERG-E6 "probe_schema=11 (FUTURE) => stale_schema, never >=" stale_schema "$TMP/erg-e6b.json" "$HB"
 erows e6c '2026-09-03 10:00:00' "$(emsg -probe_schema)"
 predicate ERG-E6 "no probe_schema at all => stale_schema" stale_schema "$TMP/erg-e6c.json" "$HB"
 
@@ -874,9 +878,9 @@ fi
 # `_ihdg_graded_row` on the previous-boot row: the HELPER grades the row (it knows no "current"
 # boot — that is E13's job), so it must PASS and hand back that row's own boot_id.
 mk_rows "$TMP/erg-oldboot-row.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg "boot_id=$OBOOT")" inngest-server-probe "$OBID")"
-_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-oldboot-row.json" 0 "$HOSTV" "$HOSTNAMEV" 9 "$NOW" 5400)" || _rc=$?
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-oldboot-row.json" 0 "$HOSTV" "$HOSTNAMEV" 10 "$NOW" 5400)" || _rc=$?
 if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | wc -l)" -eq 2 && "$(printf '%s\n' "$_out" | head -1)" == "600" && "$(printf '%s\n' "$_out" | tail -1)" == *"boot_id=$OBOOT "* ]]; then pass; else fail "[helper] _ihdg_graded_row must return <age>\\n<message> rc 0 for a gradable previous-boot row" "$_rc" "$_out"; fi
-_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-empty.json" 0 "$HOSTV" "$HOSTNAMEV" 9 "$NOW" 5400)" || _rc=$?
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-empty.json" 0 "$HOSTV" "$HOSTNAMEV" 10 "$NOW" 5400)" || _rc=$?
 [[ "$_rc" -eq 1 && "$_out" == "silent" ]] && pass || fail "[helper] _ihdg_graded_row must return the bare token rc 1 on refusal" "$_rc" "$_out"
 # Policy cannot leak into a shared helper: no `_ihdg_*` function body other than `_ihdg_verdict`
 # itself may call `_ihdg_verdict`. Awk over function bodies, comments stripped.
@@ -1059,9 +1063,9 @@ if [[ "$(printf '%s\n' "$_out" | tail -1)" == "stale_row" ]]; then pass; else fa
 # always hands `_ihdg_graded_row` a resolved `now_epoch`, so the helper's own `date -u +%s` fallback is
 # unreachable through the gate; an empty sixth operand is the only way to drive it. Without these two
 # rows the fallback line is deletable at full green (the differential run measured it surviving).
-_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-now.json" 0 "$HOSTV" "$HOSTNAMEV" 9 "" 5400)" || _rc=$?
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-now.json" 0 "$HOSTV" "$HOSTNAMEV" 10 "" 5400)" || _rc=$?
 if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | wc -l)" -eq 2 ]]; then pass; else fail "[helper] _ihdg_graded_row with an EMPTY now_epoch must grade a just-stamped row on the real clock" "$_rc" "$_out"; fi
-_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-old.json" 0 "$HOSTV" "$HOSTNAMEV" 9 "" 5400)" || _rc=$?
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-old.json" 0 "$HOSTV" "$HOSTNAMEV" 10 "" 5400)" || _rc=$?
 if [[ "$_rc" -eq 1 && "$_out" == "stale_row" ]]; then pass; else fail "[helper] _ihdg_graded_row with an EMPTY now_epoch must refuse a 2h-old row as stale_row on the real clock" "$_rc" "$_out"; fi
 # The lib defines exactly ONE entry point. The workflow-test census keys on the `inngest_*_gate` name
 # family, so a second entry point under another name would be invisible to it; this pins the count.

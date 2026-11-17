@@ -289,6 +289,51 @@ grep -qE '(^[[:space:]]*|&&[[:space:]]+)host_role=dedicated[[:space:]]*$' "$BOOT
   && ok "the emitter assigns host_role=dedicated on the dedicated arm (the value leg A/B scope on)" \
   || no "inngest-bootstrap.sh no longer assigns host_role=dedicated — the scope value is stale"
 
+# ── #12742 F4(ii): the free-text sanitizers are this alert's own protection ────────────────
+# A free-text field carrying ` registry_fns=5 ` re-tokenizes the emitted row: the negated
+# needle sees a positive-integer match and goes QUIET on a real registry_fns=0. The probe
+# therefore confines image_ref/cli_version (and sdk_app_url) to the row charset at bind time.
+# The rows below pin both sanitize sites, derive the charset from BOOT (never re-typed), run
+# a hostile value through it, and prove on BOTH emit paths: the SANITIZED render still FIRES
+# on registry_fns=0 while the UNSANITIZED render would have masked it — the sanitize is
+# load-bearing in both directions, not decorative.
+for _fv in image_ref cli_version; do
+  grep -qF "$_fv=\"\$(printf '%s' \"\$$_fv\" | tr -c 'A-Za-z0-9_:.@/+-' '_')\"" "$BOOT" \
+    && ok "BOOT: \$$_fv is charset-confined at bind time (a ' registry_fns=5 ' value cannot re-tokenize the row)" \
+    || no "BOOT: \$$_fv is not tr -c sanitized — a free-text value can mask a real registry_fns=0"
+done
+_san_expr="$(grep -oE "tr -c '[A-Za-z0-9_:.@/+-]+' '_'" "$BOOT" | head -1)"
+[ -n "$_san_expr" ] \
+  && ok "the sanitize tr -c expression is derivable from BOOT (the rows below never re-type it)" \
+  || no "no tr -c '<charset>' '_' sanitize expression found in BOOT — the hostile-render rows would be vacuous"
+_hostile='v1.2.3 registry_fns=5 hostile'
+_san_val="$(printf '%s' "$_hostile" | eval "$_san_expr")"
+_render_fv() {  # _render_fv <line> <registry-value> <field-var> <field-value>
+  local t="$1"
+  t="${t#*\"${INNGEST_PROBE_MARKER} }"; [ "$t" = "$1" ] && t="${1#*"${MUT_STAGE}" \"}"
+  t="${t%%\"*}"
+  t="${t//\$host_role/dedicated}"; t="${t//\$server_active/active}"; t="${t//\$http_code/200}"
+  t="${t//\$uptime_s/1000}"; t="${t//\$registry_fns/$2}"
+  t="${t//\$$3/$4}"
+  t="$(sed -E 's/\$[A-Za-z_]+/x/g' <<< "$t")"
+  [ "$1" = "$EMIT_LINE" ] && t="${INNGEST_PROBE_MARKER} $t"
+  printf '%s' "$t"
+}
+for _ln in EMIT PH; do
+  _txt="$EMIT_LINE"; _col=message
+  [ "$_ln" = PH ] && { _txt="$PH_LINE"; _col=detail; }
+  for _fv in image_ref cli_version; do
+    _rh="$(_render_fv "$_txt" 0 "$_fv" "$_san_val")"
+    _fires "$_col" "$_rh" \
+      && ok "rendered ${_ln} line: a sanitized hostile \$$_fv value cannot mask registry_fns=0" \
+      || no "rendered ${_ln} line: sanitized \$$_fv still masks registry_fns=0 — the charset admits a space"
+    _rr="$(_render_fv "$_txt" 0 "$_fv" "$_hostile")"
+    _fires "$_col" "$_rr" \
+      && no "control (${_ln}, \$$_fv): the RAW hostile value fails to mask registry_fns=0 — the decoy never exercised the negated needle" \
+      || ok "control (${_ln}, \$$_fv): the raw hostile value masks registry_fns=0, so the sanitize is load-bearing"
+  done
+done
+
 # ── negative rows: ruling F1 and ADR-282 ──────────────────────────────────────────────────────
 RG_EX="$(res_block logtail_exploration "$NAME")"
 RG_AL="$(res_block logtail_exploration_alert "$NAME")"
@@ -633,9 +678,25 @@ s = s[:i] + "  /*\n" + body + "  */\n" + gutted + s[j:]' \
     'old = " uptime_s=$uptime_s "
 assert s.count(old) == 2, "expected the emit line and the phone-home line, got %d" % s.count(old)
 s = s.replace(old, " ")
-s = s.replace("data_luks=$data_luks\"", "data_luks=$data_luks uptime_s=$uptime_s\"")
+s = s.replace("sdk_app_url=$sdk_app_url\"", "sdk_app_url=$sdk_app_url uptime_s=$uptime_s\"")
 assert s.count("uptime_s=$uptime_s\"") == 2' \
     "space-delimited"
+  # (iii)/(iv) #12742 F4(ii): dropping either free-text sanitizer must red the presence rows
+  # above — a hostile ` registry_fns=5 ` value would re-tokenize the row and mask a real 0.
+  mutate_red "(iii) the image_ref sanitize is dropped (a hostile ' registry_fns=5 ' value re-tokenizes the row)" BOOT \
+    'needle = "image_ref=" + chr(34) + "$(printf "
+i = s.index(needle)
+j = s.index(chr(10), i)
+assert "tr -c" in s[i:j], "anchor drift: the line after image_ref bind is not its sanitizer"
+s = s[:i] + s[j+1:]' \
+    "is not tr -c sanitized"
+  mutate_red "(iv) the cli_version sanitize is dropped (same re-tokenize class, second free-text field)" BOOT \
+    'needle = "cli_version=" + chr(34) + "$(printf "
+i = s.index(needle)
+j = s.index(chr(10), i)
+assert "tr -c" in s[i:j], "anchor drift: the line after cli_version bind is not its sanitizer"
+s = s[:i] + s[j+1:]' \
+    "is not tr -c sanitized"
   mutate_green "(ii) the probe adds a prior_registry_fns=5 field before registry_fns (harmless: the leading-space anchor; the rendered rows still fire on 0)" BOOT \
     'old = " registry_fns=$registry_fns "
 assert s.count(old) == 2, "expected the emit line and the phone-home line, got %d" % s.count(old)
@@ -648,7 +709,7 @@ s = s.replace(old, " prior_registry_fns=5 registry_fns=$registry_fns ")'
   mutate_self_red "the extraction is replaced with an empty string (the floor and canon rows must red)" \
     's|^LOCAL_SQL="$(sql_local_raw "${NAME}_sql")"$|LOCAL_SQL=""|'
   mutate_self_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor" \
-    's/^PRESENCE_ROWS=49$/PRESENCE_ROWS=50/'
+    's/^PRESENCE_ROWS=60$/PRESENCE_ROWS=61/'
   # Neutering row (#12737): the pair census lives in apps/web-platform/test/infra/logtail-pair-census.awk, shared by
   # the three Inngest logs-alert guards. An emptied lib must red this suite, not leave the census rows comparing nothing.
   _empty_awk="$MUT_DIR/empty-pair-census.awk"; : > "$_empty_awk"; _nrc=0
@@ -671,8 +732,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer
 # run adds one row per mutation. The instrument control above catches a floor that drifts past the
 # presence rows.
-PRESENCE_ROWS=49
-MUT_ROWS=28
+PRESENCE_ROWS=60
+MUT_ROWS=30
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
