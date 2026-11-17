@@ -147,6 +147,7 @@ GUARD = "apps/web-platform/infra/www-apex-canonicalizer.test.sh"
 WF    = ".github/workflows/deploy-docs.yml"
 UPTIME = "apps/web-platform/infra/uptime-alerts.tf"
 SENTRY = "apps/web-platform/infra/sentry/uptime-monitors.tf"
+CUTOVER = "apps/web-platform/infra/cutover-verify.sh"
 
 ROOT = sys.argv[2]
 def path(rel): return os.path.join(ROOT, rel)
@@ -447,10 +448,25 @@ def w_ignore():
                  "lifecycle insert anchor")
 
 
-# W14: the SENTRY_MONITORS <-> resource-name coupling. Two magic strings, no compiler.
+# W14(b): a marketing-host Sentry uptime monitor re-added (ADR-328 moved marketing-site
+#         uptime to Better Stack; a second Sentry slot bills and re-opens the question).
+#         APPENDED, not substituted, so the row is independent of the file's current blocks.
 def w_sentry_name():
-    _sub(SENTRY, 'name         = "soleur-ai-www-reachability"',
-                 'name         = "soleur-ai-www-renamed-again"', "sentry name anchor")
+    t = rd(SENTRY)
+    assert 'resource "sentry_uptime_monitor"' in t, "sentry file has no uptime monitor block"
+    wr(SENTRY, t + '\nresource "sentry_uptime_monitor" "mut_marketing" {\n'
+                   '  organization = var.sentry_org\n'
+                   '  project      = data.sentry_project.web_platform.slug\n'
+                   '  name         = "mut-marketing"\n'
+                   '  url          = "https://soleur.ai/x"\n'
+                   '}\n')
+
+
+# W14(a): CUT8 re-grows a Sentry array. Sentry watches no marketing URL after ADR-328, so a
+#         SENTRY_MONITORS row in the cutover gate would grade a monitor that does not watch it.
+def w_sentry_array():
+    _sub(CUTOVER, "\nBETTERSTACK_MONITORS=(\n", "\nSENTRY_MONITORS=(x)\nBETTERSTACK_MONITORS=(\n",
+         "BETTERSTACK_MONITORS assignment anchor")
 
 
 # W15: the pause bracket, REWORDED and carrying the Sentry credential back. The first draft
@@ -482,7 +498,8 @@ ROWS = {
     "G-stage": g_stage, "G-pinned": g_pinned, "G-unpinned": g_unpinned, "H2": h2,
     "W-url": w_url, "W-type": w_type, "W-paused": w_paused, "W-armed": w_armed,
     "W-conf": w_conf, "W-foreach": w_foreach, "W-ignore": w_ignore,
-    "W-sentry-name": w_sentry_name, "W-pause-reworded": w_pause_reworded,
+    "W-sentry-name": w_sentry_name, "W-sentry-array": w_sentry_array,
+    "W-pause-reworded": w_pause_reworded,
     "G-uptime-fmt": g_uptime_fmt,
 }
 
@@ -614,7 +631,7 @@ case_row M8  kill "vacuity floor" ""
 case_row H1  kill "vacuity floor" ""
 
 # --- GUARD 1 (#7798): the www-redirect alarm ---------------------------------------------
-# Nine kills + one far-side green. Before these, uptime-alerts.tf was copied into the
+# Ten kills + one far-side green (W-sentry-array joined at ADR-328). Before these, uptime-alerts.tf was copied into the
 # sandbox and mutated by nothing: replacing the entire Guard 1 section with tautologies
 # left this battery reporting 18/18.
 case_row G-uptime-fmt     green ""                                  "a terraform fmt-legal multi-line status-code list is accepted"
@@ -625,7 +642,8 @@ case_row W-armed          kill "notification channel armed"         ""
 case_row W-conf           kill "confirmation_period = 1200"         ""
 case_row W-foreach        kill "no count/for_each gate"             ""
 case_row W-ignore         kill "no lifecycle ignore_changes"        ""
-case_row W-sentry-name    kill "SENTRY_MONITORS matches"            ""
+case_row W-sentry-name    kill "no sentry_uptime_monitor probes a marketing host" ""
+case_row W-sentry-array   kill "declares no SENTRY_MONITORS array"  ""
 case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
 
 # ---------------------------------------------------------------------------------------
@@ -634,7 +652,7 @@ case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
 # which is the vacuity class this file exists to close, one level up. Bump it deliberately
 # when you add a row.
 # ---------------------------------------------------------------------------------------
-EXPECTED_ROWS=28
+EXPECTED_ROWS=29
 if [[ "$TOTAL" -ne "$EXPECTED_ROWS" ]]; then
   printf '[FATAL] battery cardinality: %d rows executed, expected exactly %d — a row was deleted, skipped, or added without updating EXPECTED_ROWS\n' \
     "$TOTAL" "$EXPECTED_ROWS" >&2

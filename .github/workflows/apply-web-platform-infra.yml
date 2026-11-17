@@ -432,17 +432,8 @@ jobs:
         # declared and targeted -- just on the stage that cannot provision it.
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
-          # with the ::error:: below instead of aborting silently.
-          #
-          # THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
-          # GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
-          # cannot clear what the invocation already applied, so on a plan failure the step
-          # died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
-          # below it were unreachable. The explicit `set +e` bracket is what delivers the
-          # property the comment claimed. The two sibling copies of the old comment (in
-          # apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
-          # which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
-          # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
+          # with the ::error:: below instead of aborting silently. Why `set +e` and not an
+          # omitted -e (#7304): the job-rationale runbook, `Comment prose relocated from the apply step` section.
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
@@ -590,6 +581,7 @@ jobs:
               -target=betteruptime_monitor.seo_redirect_zone_ruleset \
               -target=betteruptime_monitor.seo_redirect_bulk_item \
               -target=betteruptime_monitor.seo_redirect_blog_pair \
+              -target=betteruptime_monitor.soleur_changelog_deep \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
