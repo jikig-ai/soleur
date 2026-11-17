@@ -565,7 +565,39 @@ const BODY_FILE_SECRET_HINT =
 // #12847 escalation (observability P1) — a clone-relative script path of the plugin tree. Since #12824 the
 // plugin loads from the vendored root (`<plugin-root>`), so `bash plugins/soleur/…` is never allowlisted.
 const CLONE_PLUGIN_PATH_RE = /^(\.\/)?plugins\/soleur\//;
-const SCRIPT_INTERPRETERS = new Set(["bash", "sh", "node"]);
+// #12847 verification — the same tree by absolute path: the workspace clone is `<workspace-root>/soleur-<cron>-*/repo`,
+// so its plugin tree ends in a `/repo/plugins/soleur/` segment. The read-only plugin root (`/app/shared/plugins/
+// soleur`, and getPluginPath() only accepts an `/app/` path in production) never does; `/app/` is excluded too,
+// so an ops repoint to an `/app/…/repo/plugins/soleur` root cannot be counted as a clone path.
+const CLONE_PLUGIN_ABS_PATH_RE = /^\/(?!app\/)(?:[^/]+\/)*repo\/plugins\/soleur\//;
+const SCRIPT_INTERPRETERS = new Set(["bash", "sh", "node", "bun", "python3", "python", ".", "source"]);
+// Launchers that run the next word as the command. Their option tokens are skipped, plus `env`'s VAR=val
+// tokens and the number `timeout` (duration) and `nice` (`-n 10`) take.
+const SCRIPT_LAUNCHERS = new Set(["env", "timeout", "nice", "nohup", "command", "exec"]);
+const LAUNCHER_NUMBER_RE = /^\d+(\.\d+)?[smhd]?$/;
+// The word a segment runs as its script: past any launchers and their arguments, then past an interpreter
+// and its option tokens (`bash -x`, `bash --`). Undefined when the segment runs out of tokens.
+function scriptWordOf(tokens) {
+  let i = 0;
+  while (SCRIPT_LAUNCHERS.has(tokens[i])) {
+    const launcher = tokens[i++];
+    while (
+      i < tokens.length &&
+      (tokens[i].startsWith("-") ||
+        (launcher === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) ||
+        ((launcher === "timeout" || launcher === "nice") && LAUNCHER_NUMBER_RE.test(tokens[i])))
+    )
+      i++;
+  }
+  if (SCRIPT_INTERPRETERS.has(tokens[i])) {
+    i++;
+    while (i < tokens.length && tokens[i].startsWith("-")) i++;
+  }
+  return tokens[i];
+}
+const isClonePluginPath = (w) =>
+  typeof w === "string" &&
+  [w, posix.normalize(w)].some((t) => CLONE_PLUGIN_PATH_RE.test(t) || CLONE_PLUGIN_ABS_PATH_RE.test(t));
 
 // The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
 // Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
@@ -802,7 +834,7 @@ function argumentInjectionReason(tokens) {
       const v = tokens[i + 1] || "";
       if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
         return t === "-f"
-          ? "file-as-arg via -f -- a -f value may not contain @, .git, .env or ..; reword it, or file with gh issue create --body-file <relative path>"
+          ? "file-as-arg via -f -- a -f value may not contain @, .git, .env, .., or a /proc, /etc, /root or /home path; reword it, or file with gh issue create --body-file <relative path>"
           : `file-as-arg via ${t}`;
     }
     // #12847 fix round (security P1) — gh reads a body or input file itself, so the paths the Read gate
@@ -1450,7 +1482,8 @@ export function decide(input, allowPrefixes, opts = {}) {
 // `write-outside-roots`, `body-file-secret-path`, `plugin-clone-path`), or null. `body-file-secret-path`
 // is named for any argument-injection deny whose body-file value (every spelling, bodyFileValues) is a
 // Read-gate secret path; `plugin-clone-path` for a segment whose script word is a clone-relative
-// `plugins/soleur/` path (never allowlisted, so refused as not allowlisted).
+// `plugins/soleur/` path or the clone's absolute `…/repo/plugins/soleur/` path (never allowlisted, so
+// refused as not allowlisted).
 // The deny reason never leaves the host (permission_denials[] carries only the tool input), so
 // the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
 // function, which runs the same predicates decide() gates on (commandWordShapeReason,
@@ -1463,7 +1496,9 @@ export function decide(input, allowPrefixes, opts = {}) {
 // (length, metachar, unbalanced quote, argument injection, or a git-verb / dot-segment deny on
 // an earlier segment) is not a shape deny. RESIDUAL: the allowlist and the filing gate of an
 // earlier segment are unknown here, so a command whose earlier segment was refused for those
-// reasons, and whose later segment is irregular, is still counted as git-gh-shape. It also has no
+// reasons, and whose later segment is irregular, is still counted as git-gh-shape; the same holds for a
+// later segment that runs a clone-path script, counted as plugin-clone-path (`cd x ; bash plugins/soleur/…`
+// was refused for `cd x`). It also has no
 // view of the per-cron `no-file-tools` directive, which decide() checks first; the substrate
 // therefore skips this metric for the CRON_NO_FILE_TOOLS crons. It is an attribution metric: a
 // command that was never allowlisted (`git -C dir status`) and is now refused by the shape rule
@@ -1492,11 +1527,11 @@ export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
         if (commandWordShapeReason(tokens)) return "git-gh-shape";
         if (gitVerbReason(tokens)) return null;
         if (tokens[0] === "gh" && tokens[1] === "api" && tokens.some(hasDotSegment)) return null;
-        // The script word only (`plugins/soleur/…` or `bash|sh|node plugins/soleur/…`): no allowlist line
-        // starts that way (hook test pins it), so this segment was refused as not allowlisted. A clone path
-        // as an argument (`git add plugins/soleur/x`) is not counted.
-        const scriptWord = SCRIPT_INTERPRETERS.has(tokens[0]) ? tokens[1] : tokens[0];
-        if (typeof scriptWord === "string" && CLONE_PLUGIN_PATH_RE.test(scriptWord)) return "plugin-clone-path";
+        // The script word only (`plugins/soleur/…`, `bash -x plugins/soleur/…`, `timeout 60 bun …`, or the
+        // clone's absolute `…/repo/plugins/soleur/…`; scriptWordOf): no allowlist line runs that way (hook test
+        // pins it), so this segment was refused as not allowlisted. A clone path as an argument
+        // (`git add plugins/soleur/x`) is not counted.
+        if (isClonePluginPath(scriptWordOf(tokens))) return "plugin-clone-path";
       }
       return null;
     }

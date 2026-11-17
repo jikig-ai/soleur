@@ -892,12 +892,14 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
     prLabels?: string[];
     prFiles?: { filename: string }[];
     issuePriorityLabels?: string[];
+    headRef?: string;
   }) {
     const {
       prAuthor = "app/claude",
       prLabels = ["bot-fix/auto-merge-eligible"],
       prFiles = [{ filename: "apps/web-platform/foo.ts" }],
       issuePriorityLabels = ["priority/p3-low"],
+      headRef = `bot-fix/${SOURCE_ISSUE}-slug`,
     } = opts;
 
     wireOctokit({
@@ -913,7 +915,7 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
         {
           number: PR_NUMBER,
           node_id: PR_NODE_ID,
-          head: { ref: `bot-fix/${SOURCE_ISSUE}-slug` },
+          head: { ref: headRef },
           created_at: "2026-05-01T02:00:00Z",
         },
       ],
@@ -998,11 +1000,30 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
     expect(octokitGraphqlSpy).not.toHaveBeenCalled();
   });
 
+  // #12847 verification V1 — the gate refuses any PR already demoted to review-required, so a demotion holds
+  // even when stripping the eligibility label failed (a later clean run's any-bot-fix/* fallback can pick it up).
+  it("blocks auto-merge when the PR carries both auto-merge-eligible and review-required", async () => {
+    wireOctokitForGate({ prLabels: ["bot-fix/auto-merge-eligible", "bot-fix/review-required"] });
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).toContain("auto-merge-gate");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} carries bot-fix/review-required (demoted; never auto-merged)`,
+      }),
+      "Auto-merge not queued",
+    );
+  });
+
   // #12847 escalation (data-integrity + user-impact P3) — a run whose plugin mount was reseeded mid-run worked
   // from a mixed or half-copied tree: its otherwise-eligible PR is left for human review, never auto-merged.
-  it("skips the auto-merge gate and relabels review-required when the plugin was reseeded mid-run", async () => {
-    wireOctokitForGate({});
-    // The sentinel line changes once the claude child has started (a same-tag redeploy writes a new timestamp).
+  // The sentinel line changes once the claude child has started (a same-tag redeploy writes a new timestamp).
+  function wireReseededSpawn(): void {
     let claudeStarted = false;
     readTextOrNullSpy.mockImplementation(() =>
       claudeStarted ? "seeded 2026-11-17T09:30:00Z tag=t1\n" : "seeded x tag=t1\n",
@@ -1018,6 +1039,29 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
       queueMicrotask(() => claudeChild.emit("exit", 0, null));
       return claudeChild;
     });
+  }
+
+  // Wraps the wired octokit so the eligibility-label DELETE rejects with `err`.
+  function failEligibleDelete(err: Error): void {
+    const base = octokitRequestSpy.getMockImplementation()!;
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}") throw err;
+      return base(route, params);
+    });
+  }
+
+  const labelWrites = () =>
+    octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}" ||
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+    );
+  const relabelReports = () =>
+    reportSilentFallbackSpy.mock.calls.filter((c) => c[1]?.op === "relabel-reseeded-pr");
+
+  it("skips the auto-merge gate and relabels review-required when the plugin was reseeded mid-run", async () => {
+    wireOctokitForGate({});
+    wireReseededSpawn();
     const { cronBugFixerHandler } = await importHandler();
     const step = makeStep();
     const result = await cronBugFixerHandler({ step, logger });
@@ -1040,6 +1084,78 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
         (params as { name?: string }).name === "bot-fix/auto-merge-eligible",
     );
     expect(stripEligible).toBeDefined();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} came from a run whose plugin mount was reseeded mid-run`,
+      }),
+      "Auto-merge not queued",
+    );
+    expect(relabelReports()).toHaveLength(0);
+  });
+
+  // #12847 verification V1 — only a 404 (label already absent) is swallowed on the eligibility DELETE.
+  it("reports a non-404 failure to strip auto-merge-eligible from a reseeded run's PR", async () => {
+    wireOctokitForGate({});
+    failEligibleDelete(Object.assign(new Error("Server Error"), { status: 500 }));
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const result = await cronBugFixerHandler({ step: makeStep(), logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    const reports = relabelReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0][1]).toMatchObject({
+      feature: "cron-bug-fixer",
+      message: "Failed to strip auto-merge-eligible from a PR from a run whose plugin mount was reseeded",
+      extra: { fn: "cron-bug-fixer", prNumber: PR_NUMBER },
+    });
+    // The review-required add still ran, so the gate's review-required refusal holds the demotion.
+    expect(
+      labelWrites().some(([route]) => route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels"),
+    ).toBe(true);
+  });
+
+  it("swallows a 404 (label already absent) when stripping auto-merge-eligible from a reseeded run's PR", async () => {
+    wireOctokitForGate({ prLabels: [] });
+    failEligibleDelete(Object.assign(new Error("Label does not exist"), { status: 404 }));
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const result = await cronBugFixerHandler({ step: makeStep(), logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(relabelReports()).toHaveLength(0);
+    expect(
+      labelWrites().some(([route]) => route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels"),
+    ).toBe(true);
+  });
+
+  // #12847 verification V2 — detect-pr's any-bot-fix/* fallback can return an earlier run's PR for another
+  // issue. A reseeded run leaves that PR untouched and warns; it only demotes its own bot-fix/<issue>-* PR.
+  // `bot-fix/7001-…` also pins the prefix boundary: it must not pass for selected issue 700.
+  it("leaves a reseeded run's fallback PR for another issue untouched and warns", async () => {
+    wireOctokitForGate({ headRef: `bot-fix/${SOURCE_ISSUE}1-other-issue` });
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).not.toContain("auto-merge-gate");
+    expect(labelWrites()).toHaveLength(0);
+    const warns = warnSilentFallbackSpy.mock.calls.filter((c) => c[1]?.op === "reseeded-run-foreign-pr");
+    expect(warns).toHaveLength(1);
+    expect(warns[0][1]).toMatchObject({
+      feature: "cron-bug-fixer",
+      extra: { fn: "cron-bug-fixer", prNumber: PR_NUMBER, selectedIssue: SOURCE_ISSUE },
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} is not this run's bot-fix/${SOURCE_ISSUE}-* PR; a reseeded run left it untouched`,
+      }),
+      "Auto-merge not queued",
+    );
   });
 });
 

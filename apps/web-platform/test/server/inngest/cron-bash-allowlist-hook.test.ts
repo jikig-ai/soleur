@@ -417,13 +417,23 @@ describe("Bash — argument injection via allowlisted verbs (P0-B)", () => {
     expect(verdict(bash('gh issue create --title "Fix the flaky test" -F tmp/b.md --label meta/machinery'))).toBe("allow");
   });
   // #12847 escalation (agent-native P3) — the -f value deny names its next step.
+  const F_VALUE_DENY =
+    "cron-containment: file-as-arg via -f -- a -f value may not contain @, .git, .env, .., or a /proc, /etc, /root or /home path; reword it, or file with gh issue create --body-file <relative path>";
   it("the -f value deny names the fix (reword, or file with --body-file)", () => {
-    expect(reason(bash("gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f body=@playwright/mcp"))).toBe(
-      "cron-containment: file-as-arg via -f -- a -f value may not contain @, .git, .env or ..; reword it, or file with gh issue create --body-file <relative path>",
-    );
+    expect(reason(bash("gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f body=@playwright/mcp"))).toBe(F_VALUE_DENY);
   });
+  // #12847 verification V5 — the hint names every path segment the same regex refuses.
+  it.each(["/proc/1/status", "/etc/hosts", "/root/x", "/home/u/x"])(
+    "the -f value deny for a %s path segment carries the same full hint",
+    (path) => {
+      expect(reason(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f "body=see ${path}"`))).toBe(F_VALUE_DENY);
+    },
+  );
   it("control: the same -f filing with a plain value passes the -f value check", () => {
     expect(reason(bash("gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f body=b")) ?? "").not.toMatch(/file-as-arg/);
+    expect(reason(bash('gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f "body=see /etcetera"')) ?? "").not.toMatch(
+      /file-as-arg/,
+    );
   });
   it("allows -F of ux-audit's own issue body (the --body-file allow, short form)", () => {
     expect(verdict(bash("gh issue create --title t -F tmp/ux-audit/body-abc.md --label meta/machinery"))).toBe("allow");
@@ -2325,6 +2335,30 @@ describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
     "plugins/soleur/skills/growth/scripts/x.sh",
     "sh plugins/soleur/skills/growth/scripts/x.sh",
     "gh issue list ; bash plugins/soleur/skills/growth/scripts/x.sh",
+    // #12847 verification V3 — every spelling measured as a no-trace deny: interpreter options, launchers
+    // (with their VAR=val, option and duration tokens), the other interpreters repo skills use, and an
+    // absolute path into the workspace clone.
+    "bash -x plugins/soleur/skills/growth/scripts/x.sh",
+    "bash -- plugins/soleur/skills/growth/scripts/x.sh",
+    "bash -e plugins/soleur/skills/growth/scripts/x.sh",
+    "env bash plugins/soleur/skills/growth/scripts/x.sh",
+    "env FOO=1 bash plugins/soleur/skills/growth/scripts/x.sh",
+    "env -i bash plugins/soleur/skills/growth/scripts/x.sh",
+    "timeout 60 bash plugins/soleur/skills/growth/scripts/x.sh",
+    "timeout 5m bash -x plugins/soleur/skills/growth/scripts/x.sh",
+    "nice -n 10 bash plugins/soleur/skills/growth/scripts/x.sh",
+    "nohup bash plugins/soleur/skills/growth/scripts/x.sh",
+    "command bash plugins/soleur/skills/growth/scripts/x.sh",
+    "exec bash plugins/soleur/skills/growth/scripts/x.sh",
+    "timeout 60 plugins/soleur/skills/growth/scripts/x.sh",
+    "bun plugins/soleur/skills/growth/scripts/x.ts",
+    "python3 plugins/soleur/skills/growth/scripts/x.py",
+    "python plugins/soleur/skills/growth/scripts/x.py",
+    ". plugins/soleur/skills/growth/scripts/x.sh",
+    "source plugins/soleur/skills/growth/scripts/x.sh",
+    "bash /tmp/ws/repo/plugins/soleur/skills/growth/scripts/x.sh",
+    "bash /workspaces/soleur-cron-growth-audit-Ab12/repo/./plugins/soleur/skills/growth/scripts/x.sh",
+    "env bash /tmp/ws/repo/plugins/soleur/skills/growth/scripts/x.sh",
   ];
   it.each(CLONE_PLUGIN_CALLS)("classifyNewRuleDeny names plugin-clone-path for a denied clone-path script call: %s", (cmd) => {
     const out = decideOn(bash(cmd), CRON_BASH_ALLOWLISTS["cron-growth-audit"]);
@@ -2343,9 +2377,28 @@ describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
     // A near-miss directory name is not the plugin tree.
     expect(classifyNewRuleDeny("Bash", { command: "bash plugins/soleurx/x.sh" })).toBeNull();
   });
+  // #12847 verification V3 — the launcher/option skip and the absolute clone match never reach the read-only
+  // plugin root, a clone path passed as an argument to another verb, or a bare VAR=val prefix (refused
+  // earlier, as an env-assignment prefix).
+  it.each([
+    `env bash ${PLUGIN_ROOT_ABS}/skills/growth/scripts/x.sh audit`,
+    `timeout 60 bash -x ${PLUGIN_ROOT_ABS}/skills/growth/scripts/x.sh audit`,
+    `python3 ${PLUGIN_ROOT_ABS}/skills/growth/scripts/x.py`,
+    "bash /app/repo/plugins/soleur/skills/growth/scripts/x.sh",
+    "timeout 60 git add plugins/soleur/skills/x/SKILL.md",
+    "env bash plugins/soleurx/x.sh",
+    "bash /tmp/ws/notrepo/plugins/soleur/skills/growth/scripts/x.sh",
+    "FOO=1 bash plugins/soleur/skills/growth/scripts/x.sh",
+  ])("control: a denied call that is not a clone-path script call is not plugin-clone-path: %s", (cmd) => {
+    expect(decideOn(bash(cmd), CRON_BASH_ALLOWLISTS["cron-growth-audit"]).permissionDecision).toBe("deny");
+    expect(classifyNewRuleDeny("Bash", { command: cmd })).toBeNull();
+  });
   it("no allowlist line runs a clone-relative plugins/soleur path, so a plugin-clone-path call is always a deny", () => {
     const lines = Object.values(CRON_BASH_ALLOWLISTS).flat();
-    for (const l of lines) expect(l, l).not.toMatch(/^((ba)?sh |node )?(\.\/)?plugins\/soleur(\/|\s|$)/);
+    for (const l of lines) {
+      expect(l, l).not.toMatch(/^((ba)?sh |node |bun |python3? |\. |source )?(\.\/)?plugins\/soleur(\/|\s|$)/);
+      expect(l, l).not.toMatch(/\/repo\/plugins\/soleur\//);
+    }
   });
 
   it("classifyNewRuleDeny mirrors the realpath re-check: an in-clone link to a .gitconfig counts as protected-gitconfig", () => {
