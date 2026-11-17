@@ -13,13 +13,15 @@ legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(d
 sui_plans=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/.*\.md$' --diff-filter=AMT refs/remotes/origin/main...HEAD) || { [ $? -eq 42 ] || sui_plans=unknown; }
 # Every read keeps its own exit status: a failed read is `unknown`, never an empty "nothing found". All paths are repo-relative.
 sui_top=$(git rev-parse --show-toplevel) || sui_top=.; sui_why=""
-# No base to diff against (no refs/remotes/origin/main, a shallow clone): when HEAD tracks no legal doc at all, nothing legal changed.
-if [ "$legal_touch" = unknown ] && sui_ls=$(git -C "$sui_top" ls-files -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/) && [ -z "$sui_ls" ]; then
+# No base to diff against (no refs/remotes/origin/main, or no merge base with it, as in a shallow clone): when HEAD tracks no
+# legal doc at all, nothing legal changed. Any other unknown (a helper failure against a readable base) still fires.
+if [ "$legal_touch" = unknown ] && ! git -C "$sui_top" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 \
+  && sui_ls=$(git -C "$sui_top" ls-files -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/) && [ -z "$sui_ls" ]; then
   legal_touch=""; sui_why=" reason=no-legal-docs-tracked"
 fi
-# Scope the marker grep to legal-doc dirs ONLY, from the repo root, relative-, colour-, driver- and textconv-free;
+# Scope the marker grep to legal-doc dirs ONLY, from the repo root, as text, relative-, colour-, driver- and textconv-free;
 # otherwise it self-fires on this gate's own prose in ship/SKILL.md or on spec/tasks.md quoting the literal.
-if legal_diff=$(git -C "$sui_top" diff --no-relative --no-color --no-ext-diff --no-textconv refs/remotes/origin/main...HEAD -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/); then
+if legal_diff=$(git -C "$sui_top" diff --text --no-relative --no-color --no-ext-diff --no-textconv refs/remotes/origin/main...HEAD -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/); then
   draft_marker=$(printf '%s\n' "$legal_diff" | grep -m 1 -E '^\+.*\[DRAFT — pending CLO/counsel review'); [ $? -le 1 ] || draft_marker=unknown
 else draft_marker=unknown; fi
 # Plan candidates: every plan/spec path this repo's own open PR cites (fork PRs of the same branch name are ignored; trailing
@@ -35,11 +37,12 @@ else sui_unknown=1; fi
 while IFS= read -r sui_p; do
   [ -n "$sui_p" ] || continue
   if [ ! -f "$sui_top/$sui_p" ] || [ ! -r "$sui_top/$sui_p" ]; then
-    # Archived copy: plans/archive/<ts>-<name>.md, or a whole spec dir moved to specs/archive/<ts>-<dir>/<same file>.
+    # Archived copy (archive-kb names it <YYYYMMDD-HHMMSS>-<name>, exactly): plans/archive/<ts>-<name>.md, or a whole spec dir
+    # moved to specs/archive/<ts>-<dir>/<same file>.
     sui_rest=${sui_p#knowledge-base/project/*/}; sui_head=${sui_rest%%/*}; sui_tail=${sui_rest#"$sui_head"}
-    [ -d "$sui_top/$sui_p" ] || awk -v a="${sui_p%%"/$sui_rest"}/archive/" -v h="-$sui_head" -v t="$sui_tail" '
+    [ -d "$sui_top/$sui_p" ] || awk -v a="${sui_p%%"/$sui_rest"}/archive/" -v h="$sui_head" -v t="$sui_tail" '
       index($0, a) == 1 { r = substr($0, length(a) + 1); i = index(r, "/"); g = i ? substr(r, 1, i - 1) : r; m = i ? substr(r, i) : ""
-        if (length(g) > length(h) && substr(g, length(g) - length(h) + 1) == h && (t == "" || m == t)) f = 1 }
+        if (g ~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-/ && substr(g, 17) == h && (t == "" || m == t)) f = 1 }
       END { exit !f }' <<<"$sui_plans" || sui_unknown=1
     continue
   fi
@@ -55,6 +58,8 @@ else echo "COUNSEL_GATE=skip$sui_why"; fi
 ```
 
 **If the block prints `COUNSEL_GATE=fire`:**
+
+0. **A field reading `unknown` means a read failed, so nothing below may be decided on it yet.** For `legal=unknown` the base could not be read: run `git fetch origin main` (in a shallow clone, `git fetch --unshallow origin`) and run the block again. If a field is still `unknown`, hand the CLO agent no diff verdict: it may return BLOCKED with the failed read as the blocker, never DISCHARGED.
 
 1. **Invoke the `soleur:legal:clo` agent via Task** with: the diff, every changed legal artifact, and the implementing files it must cross-check against (migrations, RPC bodies, the consuming TS). Instruct it to produce/attest the counsel-review audit at `knowledge-base/legal/audits/<YYYY-MM>-counsel-review-<issue>.md` (house style: `2026-05-counsel-review-4353.md`), resolving lawful-basis, consent, retention, and Art. 6(1)(f) LIA questions, and to return a per-artifact verdict + an overall disposition (DISCHARGED or BLOCKED).
 2. **On DISCHARGED** — the CLO agent is the authority, so proceed without a human sign-off:
