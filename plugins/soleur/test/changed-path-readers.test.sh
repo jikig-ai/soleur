@@ -435,6 +435,40 @@ caller_rows() {
   done <<<"$lines"
   caller_consumer_rows "$da" "$db"
   assert_fixture_dir "$da"; rm -rf -- "$da"; assert_fixture_dir "$db"; rm -rf -- "$db"
+  census_rows
+}
+# The census itself, driven on synthetic roots through BOTH population arms (a git work tree: ls-files; a plain dir: find): each escape
+# the round-2 contract closes must be named in CENSUS_BAD, and a compliant capture must not be (#12809 verification pass).
+census_case() { # <git|find> <relpath> <printf format for the file>: CENSUS_BAD lines for that file after a census of a fresh root
+  local kind="$1" rel="$2" r="$WORK_ROOT/census-$1"
+  assert_fixture_dir "$r"; rm -rf -- "$r"; mkdir -p "$r/skills/ok" "$(dirname "$r/$rel")" || return 1
+  printf '%s\n' 'ok_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '"'^ok/'"' origin/main...HEAD) || { [ $? -eq 42 ] || ok_touch=unknown; }' > "$r/skills/ok/SKILL.md"
+  # shellcheck disable=SC2059 # the format IS the fixture (it carries the NUL byte)
+  printf "$3" > "$r/$rel"
+  if [ "$kind" = git ]; then git -C "$r" init -q && git -C "$r" add -A || return 1; fi
+  census_match_calls "$r"
+  CASE_BAD="$(grep -F -- "$rel:" <<<"$CENSUS_BAD" || true)"; CASE_OK_BAD="$(grep -F -- 'skills/ok/SKILL.md:' <<<"$CENSUS_BAD" || true)"
+  CASE_CAPS="$(cut -f1 <<<"$CENSUS_CAPS" | grep -c -x -F -- skills/ok/SKILL.md || true)"
+  rm -rf -- "$r"
+}
+census_rows() {
+  local kind rel fmt lbl
+  for kind in git find; do
+    census_case "$kind" skills/ok/README.md 'nothing here\n' || { h_bad "census $kind: could not build the control root"; continue; }
+    if [ -z "$CASE_OK_BAD" ] && [ "$CASE_CAPS" -eq 1 ]; then h_ok "census $kind: a compliant capture is censused as a capture and not reported"
+    else h_bad "census $kind: the compliant capture was reported or not censused (caps=$CASE_CAPS bad='${CASE_OK_BAD:0:100}')"; fi
+    while IFS=$'\t' read -r lbl rel fmt; do
+      [ -n "$lbl" ] || continue
+      census_case "$kind" "$rel" "$fmt" || { h_bad "census $kind: could not build the $lbl root"; continue; }
+      if [ -n "$CASE_BAD" ]; then h_ok "census $kind: $lbl is reported"
+      else h_bad "census $kind: $lbl is NOT reported (the census cannot see it)"; fi
+    done <<'CASES'
+a helper path held in a variable	skills/v/SKILL.md	CP=scripts/changed-paths.sh; v=$(bash "$CP" --match '^v/' origin/main...HEAD) || { [ $? -eq 42 ] || v=unknown; }\n
+an -eq 1 capture in a file carrying a NUL byte	skills/n/SKILL.md	a\000b\nn=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^n/' origin/main...HEAD) || { [ $? -eq 1 ] || n=unknown; }\n
+a variable-path call under an archive directory	skills/x/archive/y.md	y=$(bash "$CP_ARCHIVED" --match '^y/' origin/main...HEAD) # changed-paths\n
+a Markdown heading naming the helper without the call form	skills/h/SKILL.md	# Call changed-paths.sh through $HELPER\n
+CASES
+  done
 }
 # Where a capture's fail-closed value LANDS (CTO R4, R5(c)): the plan_refs consumer line and the counsel trigger block, run for real.
 caller_consumer_rows() { # <fixture A dir> <fixture B dir>
@@ -465,18 +499,25 @@ caller_consumer_rows() { # <fixture A dir> <fixture B dir>
   if grep -q -F -- '**If the block prints `COUNSEL_GATE=fire`:**' "$counsel" && [ -n "$COUNSEL_BLK" ]; then
     h_ok "precondition consumer: the counsel trigger block is extracted and the reference follows it only on COUNSEL_GATE=fire"
   else h_bad "precondition consumer: counsel trigger block missing or its 'If the block prints COUNSEL_GATE=fire' sentence changed"; fi
+  # Ship's load line: the block runs on EVERY ship and only its printed verdict decides (CTO C6a), never prose read off the diff.
+  n="$(grep -c -F -- '**Trigger:** on every ship, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) and run its block; follow it only when the block prints `COUNSEL_GATE=fire`.' "$ship" || true)"
+  if [ "$n" -eq 1 ]; then h_ok "precondition consumer: ship loads the counsel reference and runs its block on every ship, following it only on COUNSEL_GATE=fire"
+  else h_bad "precondition consumer: ship's counsel load line ('on every ship, read ... follow it only when the block prints COUNSEL_GATE=fire') appears $n times, want 1"; fi
   counsel_rows "$db"
 }
-# gh answers ONLY the exact argv the counsel block sends (anything else exits 64); GH_BODY is the open PR's body, empty = no PR.
+# gh answers ONLY the exact argv the counsel block sends (anything else exits 64) and applies the block's own --jq to GH_JSON, the
+# open-PR list gh would return for the branch (default `[]` = no PR). gh_json <body> builds a one-PR same-repo list.
 COUNSEL_SHIMS="$WORK_ROOT/shim-counsel"
+COUNSEL_JQ='[.[] | select(.isCrossRepository | not) | .body] | join("\n")'
+gh_json() { jq -cn --arg b "$1" '[{body: $b, isCrossRepository: false}]'; }
 counsel_shims() {
   mkdir -p "$COUNSEL_SHIMS/gh-ok" "$COUNSEL_SHIMS/gh-bad" "$COUNSEL_SHIMS/git-draft"
   cat > "$COUNSEL_SHIMS/gh-ok/gh" <<'SHIM'
 #!/usr/bin/env bash
-want=(pr list --head "$GH_EXPECT_BRANCH" --state open --json body --jq '.[0].body // ""')
+want=(pr list --head "$GH_EXPECT_BRANCH" --state open --json body,isCrossRepository --jq "$GH_EXPECT_JQ")
 [ "$#" -eq "${#want[@]}" ] || { echo "gh shim: argc $#" >&2; exit 64; }
 i=0; for a in "$@"; do [ "$a" = "${want[$i]}" ] || { echo "gh shim: argv[$i]='$a'" >&2; exit 64; }; i=$((i + 1)); done
-printf '%s\n' "${GH_BODY-}"
+printf '%s' "${GH_JSON:-[]}" | jq -r "$GH_EXPECT_JQ"
 SHIM
   printf '#!/bin/sh\necho "gh: injected failure" >&2\nexit 1\n' > "$COUNSEL_SHIMS/gh-bad/gh"
   # A git that fails only the content diff of the legal dirs (has `--`, no `-z`); the helper's own `diff -z` still runs.
@@ -489,7 +530,8 @@ counsel_branch() { # <dir>: move off `main` and delete it, so only refs/remotes/
 counsel_run() { # <dir> <subdir or .> <PATH prefix> [env...]: COUNSEL_OUT = the block's last stdout line, COUNSEL_LT = its legal_touch
   local d="$1" sub="$2" pre="$3"; shift 3
   : > "$WORK_ROOT/io/counsel.lt"
-  COUNSEL_OUT="$(cd "$d/$sub" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" PATH="$pre:$PATH" GH_EXPECT_BRANCH=counsel-feat REAL_GIT="$REAL_GIT" LT_FILE="$WORK_ROOT/io/counsel.lt" "$@" \
+  COUNSEL_OUT="$(cd "$d/$sub" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" PATH="$pre:$PATH" GH_EXPECT_BRANCH=counsel-feat GH_EXPECT_JQ="$COUNSEL_JQ" \
+    REAL_GIT="$REAL_GIT" LT_FILE="$WORK_ROOT/io/counsel.lt" "$@" \
     bash -c "$COUNSEL_BLK"$'\n''printf "%s" "$legal_touch" > "$LT_FILE"' 2> "$WORK_ROOT/io/counsel.err" | tail -n 1)"
   COUNSEL_LT="$(cat "$WORK_ROOT/io/counsel.lt")"
 }
@@ -498,57 +540,102 @@ counsel_expect() { # <label> <want verdict line, exact>
   else h_bad "consumer counsel: $1: want '$2' got '$COUNSEL_OUT' ($(head -c 160 "$WORK_ROOT/io/counsel.err"))"; fi
 }
 counsel_rows() { # <fixture B dir: a legal change plus one branch spec that is not single-user>
-  local db="$1" dc dd ok="$COUNSEL_SHIMS/gh-ok" sui='brand_survival_threshold: single-user incident' spec
-  local SKIP=COUNSEL_GATE=skip FIRE_U='COUNSEL_GATE=fire sui_threshold=unknown draft_marker='
+  local db="$1" dc dd de ok="$COUNSEL_SHIMS/gh-ok" sui='brand_survival_threshold: single-user incident' spec P=knowledge-base/project/plans
+  local SKIP=COUNSEL_GATE=skip F='COUNSEL_GATE=fire legal=changed'
+  local FIRE_U="$F sui_threshold=unknown draft_marker=none"
   spec="$(awk -F'\t' '$1 == "sui_plans" { print $2 }' <<<"$CALLER_FIXTURE_B")"
+  if command -v jq >/dev/null 2>&1; then h_ok "precondition counsel: jq is present (the gh shim applies the block's own --jq)"
+  else h_bad "precondition counsel: jq is missing, so the gh shim cannot answer"; return; fi
   counsel_shims
   counsel_branch "$db" || { h_bad "could not move counsel fixture B off main"; return; }
   if ! fg "$db" rev-parse -q --verify refs/heads/main >/dev/null && fg "$db" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
     h_ok "precondition counsel: no local main, refs/remotes/origin/main present (a bare main...HEAD range cannot pass)"
   else h_bad "precondition counsel: local main still present or refs/remotes/origin/main missing"; fi
-  counsel_run "$db" . "$ok" GH_BODY=
+  counsel_run "$db" . "$ok"
   counsel_expect "control (legal change, no PR yet, branch spec not single-user) skips" "$SKIP"
   if [ "$COUNSEL_LT" = docs/legal/x.md ]; then h_ok "consumer counsel: the control's legal_touch is exactly docs/legal/x.md"; else h_bad "consumer counsel: control legal_touch '$COUNSEL_LT'"; fi
   counsel_run "$db" . "$COUNSEL_SHIMS/gh-bad"
   counsel_expect "a failing PR-body read fires (unknown)" "$FIRE_U"
-  counsel_run "$db" . "$COUNSEL_SHIMS/git-draft:$ok" GH_BODY=
-  counsel_expect "a failing DRAFT-marker diff fires (unknown)" 'COUNSEL_GATE=fire sui_threshold=none draft_marker=present'
+  counsel_run "$db" . "$COUNSEL_SHIMS/git-draft:$ok"
+  counsel_expect "a failing DRAFT-marker diff fires and says unknown, not present" "$F sui_threshold=none draft_marker=unknown"
   if [ "$COUNSEL_LT" = docs/legal/x.md ]; then h_ok "consumer counsel: under the diff shim legal_touch still holds the real path (the row exercises draft_marker)"; else h_bad "consumer counsel: under the diff shim legal_touch '$COUNSEL_LT'"; fi
-  mkdir -p "$db/knowledge-base/project/plans"
-  printf -- '---\n%s\n---\n' "$sui" > "$db/knowledge-base/project/plans/sui-fixture.md"
-  printf -- '---\nbrand_survival_threshold: single-user-incident\n---\n' > "$db/knowledge-base/project/plans/hyphen-fixture.md"
-  printf -- '---\nbrand_survival_threshold: none\n---\n' > "$db/knowledge-base/project/plans/none-fixture.md"
-  counsel_run "$db" . "$ok" GH_BODY='Plan: `knowledge-base/project/plans/sui-fixture.md`.'
-  counsel_expect "a cited plan with a trailing backtick and period is read (single-user fires)" 'COUNSEL_GATE=fire sui_threshold=knowledge-base/project/plans/sui-fixture.md draft_marker='
-  counsel_run "$db" . "$ok" GH_BODY=$'See knowledge-base/project/plans/none-fixture.md\nand knowledge-base/project/plans/sui-fixture.md'
-  counsel_expect "the second of two cited plans declaring single-user fires" 'COUNSEL_GATE=fire sui_threshold=knowledge-base/project/plans/sui-fixture.md draft_marker='
-  counsel_run "$db" . "$ok" GH_BODY='knowledge-base/project/plans/absent-fixture.md'
+  fg "$db" checkout -q --detach || { h_bad "could not detach counsel fixture B"; return; }
+  # The shim answers `--head ""` here with an unrelated PR, as gh lists every open PR for an empty head: only the guard can fire.
+  counsel_run "$db" . "$ok" GH_EXPECT_BRANCH= GH_JSON="$(gh_json 'another PR, cites nothing')"
+  counsel_expect "a detached HEAD (no branch to look a PR up by) fires (unknown)" "$FIRE_U"
+  fg "$db" checkout -q counsel-feat || { h_bad "could not re-attach counsel fixture B"; return; }
+  mkdir -p "$db/$P"
+  printf -- '---\n%s\n---\n' "$sui" > "$db/$P/sui-fixture.md"
+  printf -- '---\nbrand_survival_threshold: single-user-incident\n---\n' > "$db/$P/hyphen-fixture.md"
+  printf -- '---\nbrand_survival_threshold: "single-user incident"\n---\n' > "$db/$P/quoted-fixture.md"
+  printf -- '---\nbrand_survival_threshold: none\n---\n' > "$db/$P/none-fixture.md"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "Plan: \`$P/sui-fixture.md\`.")"
+  counsel_expect "a cited plan with a trailing backtick and period is read (single-user fires)" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" docs "$ok" GH_JSON="$(gh_json "$P/sui-fixture.md")"
+  counsel_expect "a cited plan is read from the repo root when ship runs in a subdirectory" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "See $P/none-fixture.md, and \"$P/sui-fixture.md\"")"
+  counsel_expect "the second of two cited plans declaring single-user fires" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(jq -cn --arg p "$P/sui-fixture.md" '[{body: "cites nothing", isCrossRepository: true}, {body: $p, isCrossRepository: false}]')"
+  counsel_expect "a fork PR of the same branch name is ignored, so this repo's PR body is read" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/absent-fixture.md")"
   counsel_expect "a cited plan that is missing with no archived copy fires (unknown)" "$FIRE_U"
-  counsel_run "$db" . "$ok" GH_BODY='knowledge-base/project/plans/hyphen-fixture.md'
-  counsel_expect "the hyphenated single-user-incident spelling fires" 'COUNSEL_GATE=fire sui_threshold=knowledge-base/project/plans/hyphen-fixture.md draft_marker='
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/hyphen-fixture.md")"
+  counsel_expect "the hyphenated single-user-incident spelling fires" "$F sui_threshold=$P/hyphen-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/quoted-fixture.md")"
+  counsel_expect "the quoted \"single-user incident\" spelling fires" "$F sui_threshold=$P/quoted-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "Spec: ${spec%/*}/")"
+  counsel_expect "a cited spec directory that exists is not read as a missing file (skips)" "$SKIP"
   printf -- '---\n%s\n---\n' "$sui" > "$db/$spec"
-  counsel_run "$db" . "$ok" GH_BODY=
-  counsel_expect "no PR yet, and the branch's own spec declares single-user: fires" "COUNSEL_GATE=fire sui_threshold=$spec draft_marker="
-  # Fixture C: a legal change and no plan at all (skip), then an archived copy of a cited plan that is not single-user (still skip).
+  counsel_run "$db" . "$ok"
+  counsel_expect "no PR yet, and the branch's own spec declares single-user: fires" "$F sui_threshold=$spec draft_marker=none"
+  # Fixture C: a legal change and no plan at all (skip), then archived copies of cited plans and specs that are not single-user (still skip).
   new_row || { h_bad "could not build counsel row C"; return; }
   dc="$ROW_DIR"; put_in "$dc" docs/legal/z.md
   commit_row && counsel_branch "$dc" || { h_bad "could not commit counsel row C"; return; }
-  counsel_run "$dc" . "$ok" GH_BODY=
+  counsel_run "$dc" . "$ok"
   counsel_expect "a legal change with no PR and no plan anywhere skips" "$SKIP"
-  put_in "$dc" knowledge-base/project/plans/archive/20260101-000000-gone-fixture.md 'brand_survival_threshold: none'
+  put_in "$dc" "$P/archive/20260101-000000-gone-fixture.md" 'brand_survival_threshold: none'
+  put_in "$dc" knowledge-base/project/specs/archive/20260101-000000-feat-gone/spec.md 'brand_survival_threshold: none'
   fg "$dc" add -A && fg "$dc" commit -q -m archive || { h_bad "could not commit counsel row C archive"; return; }
-  counsel_run "$dc" . "$ok" GH_BODY='knowledge-base/project/plans/gone-fixture.md'
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json "$P/gone-fixture.md")"
   counsel_expect "a cited plan whose archived copy is on the branch and is not single-user skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'knowledge-base/project/specs/feat-gone/spec.md')"
+  counsel_expect "a cited spec whose whole directory was archived, not single-user, skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'Spec dir: knowledge-base/project/specs/feat-gone/')"
+  counsel_expect "a cited spec directory that was archived, not single-user, skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'knowledge-base/project/specs/feat-gone/tasks.md')"
+  counsel_expect "a cited spec file absent from its archived directory fires (unknown)" "$F sui_threshold=unknown draft_marker=none"
   assert_fixture_dir "$dc"; rm -rf -- "$dc"
-  # Fixture D: a DRAFT marker, found under a forced colour config and from a subdirectory (both rc 0 when they miss).
+  # Fixture D: a DRAFT marker, found under hostile diff config (colour forced, an external diff driver and a textconv that print
+  # nothing, diff.relative) from the root and from a subdirectory; each of those configs alone empties the diff at rc 0.
   new_row || { h_bad "could not build counsel row D"; return; }
   dd="$ROW_DIR"; put_in "$dd" docs/legal/w.md '[DRAFT — pending CLO/counsel review per #1]'
-  commit_row && counsel_branch "$dd" && fg "$dd" config color.diff always && fg "$dd" config color.ui always || { h_bad "could not commit counsel row D"; return; }
-  counsel_run "$dd" . "$ok" GH_BODY=
-  counsel_expect "a DRAFT marker is found with color.diff=always" 'COUNSEL_GATE=fire sui_threshold=none draft_marker=present'
-  counsel_run "$dd" docs "$ok" GH_BODY=
-  counsel_expect "a DRAFT marker is found when run from a subdirectory" 'COUNSEL_GATE=fire sui_threshold=none draft_marker=present'
+  commit_row && counsel_branch "$dd" && fg "$dd" config color.diff always && fg "$dd" config color.ui always \
+    && fg "$dd" config diff.external true && fg "$dd" config diff.blank.textconv true && fg "$dd" config diff.relative true \
+    && printf 'docs/legal/* diff=blank\n' > "$dd/.gitattributes" || { h_bad "could not commit counsel row D"; return; }
+  counsel_run "$dd" . "$ok"
+  counsel_expect "a DRAFT marker is found under forced colour, an external diff driver and a textconv" "$F sui_threshold=none draft_marker=present"
+  counsel_run "$dd" docs "$ok"
+  counsel_expect "a DRAFT marker is found from a subdirectory with diff.relative=true" "$F sui_threshold=none draft_marker=present"
   assert_fixture_dir "$dd"; rm -rf -- "$dd"
+  # Fixture E: no refs/remotes/origin/main. With legal docs tracked the gate fires and says legal=unknown; with none tracked it skips.
+  new_row || { h_bad "could not build counsel row E"; return; }
+  de="$ROW_DIR"; put_in "$de" apps/web-platform/server/keep.ts 'code only'
+  commit_row && counsel_branch "$de" && fg "$de" remote remove origin || { h_bad "could not commit counsel row E"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no origin/main, legal docs tracked: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  fg "$de" rm -q -r -- docs/legal knowledge-base/legal && fg "$de" commit -q -m drop-legal || { h_bad "could not drop counsel row E legal docs"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no origin/main and no legal doc tracked: skips and says why" 'COUNSEL_GATE=skip reason=no-legal-docs-tracked'
+  assert_fixture_dir "$de"; rm -rf -- "$de"
+  # Fixture F: WITH a base, a branch deleting every legal doc on a single-user plan still fires (the no-legal-docs skip is only for
+  # a base that cannot be read).
+  new_row || { h_bad "could not build counsel row F"; return; }
+  de="$ROW_DIR"; fg "$de" rm -q -r -- docs/legal knowledge-base/legal && commit_row && counsel_branch "$de" || { h_bad "could not commit counsel row F"; return; }
+  mkdir -p "$de/$P" && printf -- '---\n%s\n---\n' "$sui" > "$de/$P/sui-fixture.md"
+  counsel_run "$de" . "$ok" GH_JSON="$(gh_json "$P/sui-fixture.md")"
+  counsel_expect "deleting every legal doc on a single-user plan fires" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  assert_fixture_dir "$de"; rm -rf -- "$de"
   # The plan_refs capture lists no deleted path (AMT), so archiving a plan is never `unverifiable` (CTO C6c).
   new_row || { h_bad "could not build plan_refs archive row"; return; }
   dd="$ROW_DIR"; put_in "$dd" knowledge-base/project/plans/2026-01-01-fixture-plan.md 'plan body'
@@ -2189,7 +2276,7 @@ skill_ref_pins() {
 # a non-shell call split across lines without `\`; a line that carries the call form and also names the helper a second time.
 CENSUS_CAPS=""; CENSUS_PROSE=""; CENSUS_BAD=""
 census_files() { # <root>: NUL-separated root-relative paths of the population
-  if [ "$1" = "$REPO_ROOT" ]; then git -C "$1" ls-files -z -- . ':!knowledge-base'
+  if [ "$1" = "$REPO_ROOT" ] || [ "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" = "$1" ]; then git -C "$1" ls-files -z -- . ':!knowledge-base'
   else (cd "$1" && find . -type f ! -path './knowledge-base/*' | sed 's|^\./||' | tr '\n' '\0'); fi
 }
 census_match_calls() { # <root>
@@ -2615,7 +2702,7 @@ if [ "$SECTION" != all ]; then
   [ "$FAIL" -eq 0 ]
   exit
 fi
-MIN_HELPER_ROWS=177
+MIN_HELPER_ROWS=200
 if [ "$HELPER_ROWS" -lt "$MIN_HELPER_ROWS" ]; then
   printf '[FATAL] helper floor: only %s helper rows ran, want >=%s\n' "$HELPER_ROWS" "$MIN_HELPER_ROWS" >&2
   exit 1
@@ -2631,8 +2718,8 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1
 fi
-# Exact current total (the floor is the full count, not a margin below it): helper 177 + steps 187 + sentinel 122.
-MIN_TOTAL=486
+# Exact current total (the floor is the full count, not a margin below it): helper 200 + steps 187 + sentinel 122.
+MIN_TOTAL=509
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
