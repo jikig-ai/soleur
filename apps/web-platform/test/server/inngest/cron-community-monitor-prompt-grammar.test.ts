@@ -23,15 +23,20 @@ import {
   COMMUNITY_ROUTER_READ_VERBS,
   CRON_BASH_ALLOWLISTS,
 } from "../../../server/inngest/functions/_cron-claude-eval-substrate";
-import { COMMUNITY_MONITOR_PROMPT } from "../../../server/inngest/functions/cron-community-monitor";
+import { COMMUNITY_MONITOR_PROMPT as PROMPT_TEMPLATE, renderCommunityMonitorPrompt } from "../../../server/inngest/functions/cron-community-monitor";
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../../../server/plugin-path";
 
 const CRON = "cron-community-monitor";
-const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+// #12824 — the prompt and the allowlist both carry <plugin-root>; both are rendered with the prod root.
+const PROD_ROOT = SOLEUR_PLUGIN_PATH_DEFAULT;
+const COMMUNITY_MONITOR_PROMPT = renderCommunityMonitorPrompt(PROD_ROOT);
+const ROUTER = `bash ${PROD_ROOT}/skills/community/scripts/community-router.sh`;
+const READ_VERBS: readonly string[] = COMMUNITY_ROUTER_READ_VERBS.map((l) => l.replaceAll("<plugin-root>", PROD_ROOT));
 const CHANNEL_ID = "123456789012345678";
 
 type DecideFn = (input: unknown, lines: string[]) => { hookSpecificOutput: { permissionDecision: string } };
 
-const lines = buildAllowlistLines(CRON, CRON_BASH_ALLOWLISTS[CRON] ?? [], {}).lines;
+const lines = buildAllowlistLines(CRON, CRON_BASH_ALLOWLISTS[CRON] ?? [], {}, PROD_ROOT).lines;
 const verdict = (fn: DecideFn, command: string): string =>
   fn({ tool_name: "Bash", tool_input: { command } }, lines).hookSpecificOutput.permissionDecision;
 
@@ -112,7 +117,7 @@ describe("the prompt's commands vs the REAL hook grammar (#7122)", () => {
         span.split(";").map((seg) => seg.trim().replace(/<channel_id>/g, "<uint>")),
       ),
     );
-    expect([...normalised].sort()).toEqual([...COMMUNITY_ROUTER_READ_VERBS].sort());
+    expect([...normalised].sort()).toEqual([...READ_VERBS].sort());
   });
 
   it("a one-token departure from any of them is DENIED: quoting the hn query, a pipe, a redirect, an extra token, a different number, a dropped verb", () => {

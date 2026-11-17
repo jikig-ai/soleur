@@ -34,10 +34,10 @@
 //
 // PLUGIN-LOADING — Verbatim PR-5 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag — the plugins/soleur dir is NOT
+// `--plugin-dir` flag (substrate-owned since #12824) — the plugins/soleur dir is NOT
 // auto-discovered from spawn cwd in headless mode (the interactive
 // marketplace/enabledPlugins trust flow does not run under --print). This
 // producer's prompt invokes no /soleur:* skill, so it needs no flag change; the
@@ -319,6 +319,7 @@ export async function cronRoadmapReviewHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: false, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,

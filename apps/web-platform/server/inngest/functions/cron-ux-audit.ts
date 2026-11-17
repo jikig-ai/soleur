@@ -68,7 +68,7 @@ export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
-// PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
+// PR #4989): the substrate's `--plugin-dir <read-only root>` (`loadPlugin: true`, #12824) registers the plugin under
 // `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
 // `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 // Exported so a parity test can assert the `mcp__playwright__*` tokens in
@@ -83,8 +83,6 @@ export const CLAUDE_CODE_FLAGS = [
   "60",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Task,Skill,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for",
-  "--plugin-dir",
-  "plugins/soleur",
   // #5691 — the substrate (spawnClaudeEval) prepends `--strict-mcp-config`,
   // which ignores ALL MCP configs except those named via `--mcp-config`. This
   // re-supplies ONLY the Playwright server so ux-audit keeps its screenshot
@@ -316,33 +314,16 @@ export async function cronUxAuditHandler({
       const mcpConfig = {
         mcpServers: {
           playwright: {
-            command: "npx",
-            // #5676 — silence the intended-by-design registry-metadata dial at
-            // source. #5199 deliberately keeps registry.npmjs.org OFF the cron
-            // egress allowlist, so the firewall (correctly) DROPS npx's spawn-time
-            // registry check — generating steady, by-design `egress-blocked`
-            // noise to Cloudflare's npmjs.org anycast pool (104.16.x.34). Passing
-            // npm_config_prefer_offline makes npx resolve from the image-baked
-            // _cacache and skip the registry dial when cache-warm, so the drop
-            // stops being generated. prefer-offline (NOT offline): a cold cache
-            // degrades to today's drop+baked-dep fallback rather than hard-failing
-            // the cron. Do NOT allowlist registry.npmjs.org — that reverses #5199.
-            // The MCP stdio launcher MERGES this `env` over a base that retains
-            // PATH/HOME (so npx still spawns); the #5199 live dry-run on each apply
-            // is the spawn-success check. Worst case if it were NOT inherited: the
-            // drop persists and the baked-dep fallback holds — i.e. today's behavior,
-            // never a hard cron break.
-            env: { npm_config_prefer_offline: "true" },
+            // #12824 (CTO T6) — the root-owned image binary of the same pinned package
+            // (test/playwright-mcp-version-pin.test.ts pins it), never `npx`: npx runs code from a
+            // HOME cache, a write-then-execute path, and the per-spawn HOME starts empty.
+            command: "/app/node_modules/.bin/playwright-mcp",
+            // #5676 / #12824 — no npx, so no registry-metadata dial on spawn and no
+            // npm_config_prefer_offline env: the binary is resolved from the image's
+            // node_modules (package.json pins @playwright/mcp 0.0.75, aligned with the
+            // baked Chromium's playwright-core). registry.npmjs.org stays OFF the cron
+            // egress allowlist (#5199).
             args: [
-              // #5199 — pinned (was @latest). registry.npmjs.org is NOT in the
-              // cron egress allowlist, so this resolves to the image-baked
-              // dependency (package.json deps + npm ci --omit=dev) rather than a
-              // runtime supply-chain fetch. Its playwright-core (1.61.0-alpha) is
-              // aligned with the baked Chromium (the Dockerfile installs that
-              // exact revision via `npx playwright@1.61.0-alpha-… install`).
-              // 0.0.75 (not the newer 0.0.76) clears the .npmrc min-release-age
-              // supply-chain policy (3-day floor) so both lockfiles resolve it.
-              "@playwright/mcp@0.0.75",
               // #7980 — the trailing `--snapshot-mode none` below: PA-31 §(g) of
               // knowledge-base/legal/article-30-register.md. Measured 2026-09-14
               // on the pinned 0.0.75 (Phase 0 step 4, the fleet-copy row):
@@ -404,6 +385,7 @@ export async function cronUxAuditHandler({
       async (): Promise<SpawnResult> => {
         const storageStatePath = join(workspaceDir!, "storage-state.json");
         return spawnClaudeEval({
+          loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: spawnCwd!,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,
@@ -411,6 +393,10 @@ export async function cronUxAuditHandler({
           maxTurnDurationMs: MAX_TURN_DURATION_MS,
           cronName: "cron-ux-audit",
           buildSpawnEnv: (token) => buildSpawnEnv(token, {
+            // #12824 (CTO S1) — the containment hook now allows Write/Edit only under the clone and the
+            // spawn HOME. The skill writes findings and issue bodies to ${GITHUB_WORKSPACE}/tmp/ux-audit/,
+            // which with GITHUB_WORKSPACE unset was /tmp/ux-audit (outside both); point it at the clone.
+            GITHUB_WORKSPACE: spawnCwd!,
             // #5199 — restored to LIVE issue-filing. Defaults to "false" (files
             // the weekly scheduled-ux-audit issues, the whole point of the
             // restore); an operator can still set UX_AUDIT_DRY_RUN=true in the

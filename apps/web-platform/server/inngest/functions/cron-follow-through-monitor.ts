@@ -553,6 +553,7 @@ export async function cronFollowThroughMonitorHandler({
   // No ephemeral workspace: the child runs in the server process cwd, exactly as the inline spawn did.
   const result = await step.run("claude-eval", (): Promise<SpawnResult> =>
     spawnClaudeEval({
+      loadPlugin: false, // #12824 — the substrate owns --plugin-dir (read-only root)
       spawnCwd: process.cwd(),
       installationToken,
       flags: CLAUDE_CODE_FLAGS,

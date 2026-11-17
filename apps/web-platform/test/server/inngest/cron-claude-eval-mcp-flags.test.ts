@@ -1,6 +1,6 @@
 // #5691 — silence-at-source the sporadic cron egress drops to un-enumerated
 // plugin-MCP / CC-telemetry hosts. The claude-eval substrate spawns
-// `claude --print --plugin-dir plugins/soleur …`, which auto-connects the four
+// `claude --print --plugin-dir <plugin root> …` (the deployed read-only root since #12824), which auto-connects the four
 // remote HTTP MCP servers bundled in plugin.json (context7/cloudflare/vercel/
 // stripe) at startup — non-essential dials the containment hook denies anyway.
 // This file pins the at-source fix:
@@ -86,7 +86,8 @@ describe("#5691 — spawnClaudeEval at-source egress silencing", () => {
 
   async function captureSpawn(flags: string[]) {
     await spawnClaudeEval({
-      spawnCwd: tmpdir(),
+      loadPlugin: false,
+      spawnCwd: process.cwd(), // #12824 — not the tmp root the per-spawn HOME is created under
       installationToken: "tok-test",
       flags,
       prompt: "do the thing",
@@ -131,7 +132,8 @@ describe("#5691 — spawnClaudeEval at-source egress silencing", () => {
     });
     spawnSpy.mockClear();
     const r = await spawnClaudeEval({
-      spawnCwd: tmpdir(),
+      loadPlugin: false,
+      spawnCwd: process.cwd(), // #12824 — not the tmp root the per-spawn HOME is created under
       installationToken: "tok-test",
       flags: ["--print", "--"],
       prompt: "x",

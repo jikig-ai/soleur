@@ -180,6 +180,7 @@ export async function oneshotF2DeferGateReviewHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: false, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: workspace.spawnCwd,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,

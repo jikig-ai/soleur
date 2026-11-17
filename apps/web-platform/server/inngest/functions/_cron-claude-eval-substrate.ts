@@ -9,7 +9,8 @@ import {
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import { NonRetriableError } from "inngest";
 import { isDeepStrictEqual } from "node:util";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -35,6 +36,8 @@ import {
   type CaptureStatus,
 } from "@/server/claude-cost-marker";
 import { budgetFlags } from "@/server/inngest/cron-budgets";
+import { assertTrustedPluginPath, getPluginPath } from "@/server/plugin-path";
+import * as spawnFs from "./_cron-spawn-fs";
 import { UNTRUSTED_PREAMBLES } from "@/server/untrusted-content";
 
 export interface SpawnResult {
@@ -433,19 +436,19 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
 // are NOT in this list.
 // allow[0] MUST be a complete command that RUNS: runHookSelfTest executes it verbatim.
 export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
-  "bash plugins/soleur/skills/community/scripts/community-router.sh platforms",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh discord channels",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <uint> 50",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh platforms",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh discord guild-info",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh discord channels",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh discord messages <uint> 50",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh x fetch-metrics",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh bsky get-metrics",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh linkedin fetch-metrics",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh github activity 1",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh github contributors 1",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh github discussions 1",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh github repo-stats 1",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh github fetch-interactions 1",
+  "bash <plugin-root>/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20",
 ];
 
 // #7122 — crons whose allow file carries the `no-file-tools` directive: the hook then
@@ -582,8 +585,8 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   // EXCLUDED: `gh api` (F4a — arbitrary-method API defeats the exfil defense);
   // `gh pr merge` (auto-merge is armed node-side via runAutoMergeGate's GraphQL
   // mutation, a PERSISTENCE_PREFIX forbidden form); `eval`/`node -e`/raw curl
-  // (interpreters/egress the hook denies by design — the rewritten SKILL emits a
-  // literal `./node_modules/.bin/vitest run` instead). `git config`/`git remote`/
+  // (interpreters/egress the hook denies by design); `./node_modules/.bin/vitest run` (#12824 — code the
+  // agent can write, run below the hook). `git config`/`git remote`/
   // `git ls-remote` are NOT here — gitVerbReason denies them unconditionally
   // (token-bearing remote URL).
   "cron-bug-fixer": [
@@ -599,8 +602,12 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git worktree", // SKILL Phase 3/6 — git worktree add … / remove …
     "git branch", // SKILL Phase 6 — git branch -D … (cleanup)
     "git push", // SKILL Phase 5 — git push -u origin … (origin-only via gitVerbReason)
-    "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
-    "./node_modules/.bin/vitest run", // SKILL Phase 2/4 — LITERAL test verb (Phase 3.5 rewrite)
+    // #12824 — the read-only deployed plugin copy, never the clone's editable tree (the agent can Write
+    // the clone, so a clone path here was a write-then-execute route with the spawn env).
+    "bash <plugin-root>/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
+    // #12824 (CTO S1, R5/A4 reversed) — NO code-exec verb: `./node_modules/.bin/vitest run` ran test files
+    // the agent had just written, below the hook, with the spawn env. bug-fixer now opens a fix without a
+    // local test baseline (fix-issue's documented no-baseline path); CI runs the tests.
   ],
   // #8611 — the two crons that moved from an inline spawn onto spawnClaudeEval (for the
   // single-flight guard and the cost marker). They spawn in the server cwd, NOT through
@@ -679,6 +686,9 @@ export function buildAllowlistLines(
   cronName: string,
   allow: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
+  // #12824 — the resolved read-only plugin root (resolveCronPluginRoot). A parameter, not a lookup, so
+  // this stays pure; null for a cron whose lines carry no PLUGIN_ROOT_TOKEN (a token then throws).
+  pluginRoot: string | null = null,
 ): {
   lines: string[];
   navigateOrigin: string | null;
@@ -687,7 +697,9 @@ export function buildAllowlistLines(
 } {
   const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
   let navigateOrigin: string | null = null;
-  const lines = [...allow];
+  const lines = allow.map((line) =>
+    pluginRoot === null ? line : line.replaceAll(PLUGIN_ROOT_TOKEN, pluginRoot),
+  );
   if (mcpEntry) {
     for (const tool of mcpEntry.tools) lines.push(`mcp-allow ${tool}`);
     if (mcpEntry.navigateOriginEnv) {
@@ -714,8 +726,169 @@ export function buildAllowlistLines(
   // #7122 — a bare flag line (the hook's NO_FILE_TOOLS_DIRECTIVE). Written only here.
   const noFileTools = CRON_NO_FILE_TOOLS.includes(cronName);
   if (noFileTools) lines.push("no-file-tools");
+  // #12824 — fail closed on a line the substitution did not finish: a leftover token would reach the hook
+  // as a literal no command matches, and a `$` would be a shell expansion inside an allowlist line.
+  for (const line of lines) {
+    if (line.includes(PLUGIN_ROOT_TOKEN) || line.includes("$")) {
+      throw new Error(
+        `[${cronName}] allowlist line not fully substituted (${PLUGIN_ROOT_TOKEN} or $ left): ${line.slice(0, 120)}. Aborting cron.`,
+      );
+    }
+  }
   return { lines, navigateOrigin, runReportLabel, noFileTools };
 }
+
+// =============================================================================
+// #12824 — cron plugin root: the read-only deployed copy, never the clone
+// =============================================================================
+// Before #12824 every plugin-loading cron passed `--plugin-dir plugins/soleur`, which resolves against
+// the depth-1 clone — a tree the agent can Write. A plugin hook or allowlisted script edited in-run then
+// ran with the whole spawn env (paths 1 and 3 of #12824). The root is now the `:ro` bind of the image's
+// vendored copy (`/app/shared/plugins/soleur`, ci-deploy.sh / cloud-init `_VOLS`), resolved here and
+// nowhere else; there is no fallback to `/opt/soleur/plugin` (uid-1001 owned) or to the clone.
+
+/** The placeholder an allowlist line carries where the resolved plugin root goes. */
+export const PLUGIN_ROOT_TOKEN = "<plugin-root>";
+/** One wait before the single `.seed-complete` retry (a deploy reseeds the mount in place, CTO T1). */
+export const SEED_RETRY_MS = 30_000;
+
+export type CronPluginRootReason = "manifest-missing" | "seed-incomplete" | "writable" | "untrusted-path";
+
+export class CronPluginRootError extends Error {
+  constructor(
+    readonly reason: CronPluginRootReason,
+    detail: string,
+  ) {
+    super(
+      `cron plugin root refused (${reason}): ${detail}. The plugin root must be a read-only mount; ` +
+        `locally, bind-mount a copy :ro.`,
+    );
+    this.name = "CronPluginRootError";
+  }
+}
+
+export interface CronPluginRoot {
+  root: string;
+  /** The `tag=` field of `.seed-complete` at resolve time (the whole line when it has none). */
+  seedTag: string | null;
+}
+
+function seedTagOf(text: string | null): string | null {
+  if (text === null) return null;
+  const m = /\btag=(\S+)/.exec(text);
+  return m ? m[1] : text.trim();
+}
+
+/**
+ * Resolve the plugin root a cron spawn may load and run scripts from. Returns it only when it is the
+ * trusted absolute root, holds `.claude-plugin/plugin.json` and `.seed-complete` (one retry after
+ * SEED_RETRY_MS), and neither it nor `hooks/` is writable by this process (`EROFS`/`EACCES` only).
+ * Throws CronPluginRootError otherwise. The candidate is a parameter so a test can feed an untrusted
+ * path directly: getPluginPath() silently swaps a bad override for the default.
+ */
+export async function resolveCronPluginRoot(
+  candidate: string = getPluginPath(),
+  deps: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<CronPluginRoot> {
+  let root: string;
+  try {
+    root = assertTrustedPluginPath(candidate);
+  } catch {
+    throw new CronPluginRootError("untrusted-path", `${JSON.stringify(candidate)} is not under /app/`);
+  }
+  if (!isAbsolute(root)) {
+    throw new CronPluginRootError("untrusted-path", `${JSON.stringify(root)} is not absolute`);
+  }
+  if (!spawnFs.pathExists(join(root, ".claude-plugin", "plugin.json"))) {
+    throw new CronPluginRootError("manifest-missing", `${root}/.claude-plugin/plugin.json does not exist`);
+  }
+  const sentinel = join(root, ".seed-complete");
+  if (!spawnFs.pathExists(sentinel)) {
+    await (deps.sleep ?? spawnFs.sleep)(SEED_RETRY_MS);
+    if (!spawnFs.pathExists(sentinel)) {
+      throw new CronPluginRootError("seed-incomplete", `${sentinel} absent after one retry`);
+    }
+  }
+  for (const p of [root, join(root, "hooks")]) {
+    const probe = spawnFs.probeWritable(p);
+    // Only EROFS (a :ro bind) and EACCES (a tree this uid cannot write) prove read-only. EPERM, ENOENT
+    // or any other code is not proof, so it fails the same way a writable tree does.
+    if (probe.writable || (probe.code !== "EROFS" && probe.code !== "EACCES")) {
+      throw new CronPluginRootError("writable", `${p} is not read-only (W_OK probe: ${probe.code ?? "ok"})`);
+    }
+  }
+  return { root, seedTag: seedTagOf(spawnFs.readTextOrNull(sentinel)) };
+}
+
+/**
+ * resolveCronPluginRoot for a run: a refusal is reported once (op `cron-plugin-root-untrusted`) and
+ * rethrown as NonRetriableError, so a configuration fault does not retry into repeated events.
+ */
+export async function resolveCronPluginRootOrFail(cronName: string): Promise<CronPluginRoot> {
+  try {
+    return await resolveCronPluginRoot();
+  } catch (err) {
+    if (!(err instanceof CronPluginRootError)) throw err;
+    reportSilentFallback(err, {
+      feature: "cron-claude-eval",
+      op: "cron-plugin-root-untrusted",
+      message: `cron plugin root refused (${err.reason}); the cron did not spawn`,
+      tags: { cron: cronName, reason: err.reason },
+      extra: { cron: cronName, reason: err.reason }, // tags do not reach the Better Stack mirror
+    });
+    throw new NonRetriableError(err.message, { cause: err });
+  }
+}
+
+/**
+ * The claude argv, pure. `--plugin-dir <root>` goes before every caller flag, so it can never land after
+ * a caller's trailing `--`; pluginRoot null emits none. Exported so tests and the write-and-execute
+ * census read the real argv.
+ */
+export function buildClaudeArgv(
+  pluginRoot: string | null,
+  args: { flags: readonly string[]; prompt: string; budget: readonly string[] },
+): string[] {
+  const { flags, prompt, budget } = args;
+  // #cost-attribution (plan Phase 2): request the CLI's structured result event when the caller has not
+  // set `--output-format` (none do). See the comment at the spawn site.
+  const outputFormatFlags = flags.some((f) => f === "--output-format") ? [] : ["--output-format", "json"];
+  return [
+    "--strict-mcp-config",
+    // Untrusted-data caution for GitHub-sourced text (issue/PR/comment/CI-log) any
+    // cron may read with gh. A system-prompt append, NOT a prompt prefix: several
+    // crons pass a `/soleur:…` slash command as the prompt, and prepending text would
+    // stop the CLI recognising it (and change the single-flight prompt key). Single
+    // value, placed before `--print` and any variadic --allowedTools. #10194.
+    "--append-system-prompt",
+    UNTRUSTED_PREAMBLES.github,
+    ...(pluginRoot === null ? [] : ["--plugin-dir", pluginRoot]),
+    ...budget,
+    ...outputFormatFlags,
+    ...flags,
+    prompt,
+  ];
+}
+
+/** True for a caller flag that names a plugin dir in either the `--plugin-dir X` or `--plugin-dir=X` form. */
+export function isPluginDirFlag(flag: string): boolean {
+  return flag === "--plugin-dir" || flag.startsWith("--plugin-dir=");
+}
+
+/**
+ * #12824 (CTO S5) — command-level git config for every claude child, which outranks the clone's
+ * `.git/config`: no repo hook runs, no fsmonitor command runs, and git never treats a planted bare repo
+ * as the repository. The only `GIT_CONFIG_COUNT` setter under server/ (cron-spawn-git-config-pin.test.ts).
+ */
+export const CRON_GIT_HARDENING: Readonly<Record<string, string>> = Object.freeze({
+  GIT_CONFIG_COUNT: "3",
+  GIT_CONFIG_KEY_0: "core.hooksPath",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+  GIT_CONFIG_KEY_1: "core.fsmonitor",
+  GIT_CONFIG_VALUE_1: "false",
+  GIT_CONFIG_KEY_2: "safe.bareRepository",
+  GIT_CONFIG_VALUE_2: "explicit",
+});
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
 // `defaultMode:"default"` + `allow:[]` are inert (the hook is the boundary). The
@@ -776,6 +949,29 @@ function framingHookEntry(
 // the default output is byte-identical to the builder before this option existed. The key
 // is added conditionally: `PostToolUse: undefined` would serialise the same but leave an
 // own key on the object.
+/**
+ * #12824 (CTO S3, measured in Phase 0.7g/0.7h) — memory files the CLI must never load for a cron. A nested
+ * `CLAUDE.md` the agent writes inside the clone is loaded lazily after a Read in its directory, and its `@`-imports are
+ * expanded into Anthropic-bound context: `@../.git/config` would put the clone's token-bearing remote URL there. The
+ * CLI matches `claudeMdExcludes` (picomatch, absolute paths) against every memory file AND every file in its import
+ * chain, so this drops nested memory files, any import under a `.git/` directory and any pseudo-filesystem import,
+ * while the clone's root `CLAUDE.md` still loads. `settings.json` is write-protected, so the agent cannot widen it.
+ */
+export function cronClaudeMdExcludes(spawnCwd: string): string[] {
+  // Joined from segments so the source never spells a slash-star pair (naive comment strippers in the
+  // census tests would read it as a block comment).
+  const g = (...parts: string[]) => parts.join("/");
+  return [
+    g(spawnCwd, "*", "**", "CLAUDE.md"),
+    g(spawnCwd, "*", "**", "CLAUDE.local.md"),
+    g(spawnCwd, "*", "**", ".claude", "rules", "**"),
+    g("**", ".git", "**"),
+    g("", "proc", "**"),
+    g("", "sys", "**"),
+    g("", "dev", "**"),
+  ];
+}
+
 export function buildCronEvalSettings(
   spawnCwd: string,
   opts: { frameGhOutput?: boolean } = {},
@@ -790,6 +986,7 @@ export function buildCronEvalSettings(
   if (opts.frameGhOutput === true) hooks.PostToolUse = [framingHookEntry(spawnCwd)];
   return {
     ...DEFAULT_CLAUDE_SETTINGS,
+    claudeMdExcludes: cronClaudeMdExcludes(spawnCwd),
     hooks,
   };
 }
@@ -1122,6 +1319,15 @@ export function runHookSelfTest(args: {
     );
   }
 
+  // #12824 — delivery cross-check: the memory-file exclusion must be in the file the CLI reads.
+  const excludes = (settings as Record<string, unknown> | undefined)?.claudeMdExcludes;
+  if (JSON.stringify(excludes) !== JSON.stringify(cronClaudeMdExcludes(spawnCwd))) {
+    throw new Error(
+      `[${cronName}] containment hook self-test FAILED: settings.json does not carry the cron ` +
+        `claudeMdExcludes list — a nested CLAUDE.md could import .git/config into context. Aborting cron.`,
+    );
+  }
+
   // #5199 — egress / mcp containment probes. WebFetch is ALWAYS denied (no cron
   // gets raw web egress). browser_navigate is denied UNLESS this cron pins an
   // mcp-allow + navigate-origin, in which case the app-origin navigate must
@@ -1192,7 +1398,7 @@ export function runHookSelfTest(args: {
 export async function setupEphemeralWorkspace(args: {
   installationToken: string;
   cronName: string;
-}): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
+}): Promise<{ ephemeralRoot: string; spawnCwd: string; pluginRoot: string | null }> {
   const { installationToken, cronName } = args;
 
   // Deploy-lease drain gate (#5669 / ADR-078). If ci-deploy.sh is mid-swap it
@@ -1214,6 +1420,14 @@ export async function setupEphemeralWorkspace(args: {
     });
     throw new DeployInProgressError(cronName, leaseAgeMs);
   }
+
+  // #12824 — a cron whose allowlist names a plugin script resolves the read-only root once, here, before
+  // the clone (a refusal is a configuration fault: no workspace to leak). Spawns that load the plugin
+  // resolve it again at spawn time for the seed-tag compare; both read getPluginPath(), so they agree.
+  const allow = CRON_BASH_ALLOWLISTS[cronName] ?? [];
+  const pluginRoot = allow.some((l) => l.includes(PLUGIN_ROOT_TOKEN))
+    ? (await resolveCronPluginRootOrFail(cronName)).root
+    : null;
 
   const ephemeralRoot = await mkdtemp(
     join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
@@ -1243,22 +1457,15 @@ export async function setupEphemeralWorkspace(args: {
     );
   }
 
-  // #5091 — the depth-1 clone already contains the full tracked
-  // plugins/soleur tree, and headless `--plugin-dir plugins/soleur` resolves
-  // against it (spike-verified under a scrubbed HOME; the flag itself remains
-  // required per #4993/#4987). The previous rm+symlink(getPluginPath()) swap
-  // made clone-git see every tracked plugins/soleur file as DELETED on every
-  // run (the #5026 destructive-PR contamination, 654 files) and routed the
-  // spawned claude's plugin-docs edits to the HOST plugin dir — mutating the
-  // live install and making the edits uncommittable from the clone.
-  const pluginDir = join(spawnCwd, "plugins", "soleur");
-
+  // #12824 — the clone's tracked plugins/soleur tree is left alone (the #5026 rm+symlink swap made
+  // clone-git see 654 deleted files) and is no longer what any cron LOADS: the substrate passes
+  // `--plugin-dir <resolveCronPluginRoot()>`, the read-only deployed copy, so an agent edit to the
+  // clone's plugin tree stays a committable doc edit and never runs.
   const claudeDir = join(spawnCwd, ".claude");
   await mkdir(claudeDir, { recursive: true });
   // Per-cron Bash allowlist for the containment hook (deny-all if absent → the
   // cron fail-closes and self-reports FAILED; Tier-2 restores it). Read by the
   // hook from disk; the hook also denies any tool from READING `.claude/`.
-  const allow = CRON_BASH_ALLOWLISTS[cronName] ?? [];
   // #5199 — append the per-cron mcp__* policy as directive lines the hook's
   // parseAllowlist understands (`mcp-allow <tool>`, `navigate-origin <origin>`).
   // The origin is resolved from env HERE (not baked) and pinned in the file so
@@ -1269,7 +1476,7 @@ export async function setupEphemeralWorkspace(args: {
     navigateOrigin,
     runReportLabel,
     noFileTools,
-  } = buildAllowlistLines(cronName, allow, process.env);
+  } = buildAllowlistLines(cronName, allow, process.env, pluginRoot);
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
     allowlistLines.length ? allowlistLines.join("\n") + "\n" : "",
@@ -1281,13 +1488,6 @@ export async function setupEphemeralWorkspace(args: {
     "utf-8",
   );
 
-  const manifestPath = join(pluginDir, ".claude-plugin", "plugin.json");
-  if (!existsSync(manifestPath)) {
-    throw new Error(
-      `Plugin sentinel check failed: ${manifestPath} does not exist (clone incomplete or plugin tree moved)`,
-    );
-  }
-
   // D2 (mitigates probe D-new-1 fail-open): confirm the hook actually denies a
   // canonical exfil payload (and allows this cron's first verb) BEFORE any agent
   // spawns. A throw here aborts the cron → FAILED self-report, never an
@@ -1295,14 +1495,16 @@ export async function setupEphemeralWorkspace(args: {
   runHookSelfTest({
     spawnCwd,
     cronName,
-    allow,
+    // #12824 — the SUBSTITUTED bash lines (the first allow.length lines), never the raw map value: a
+    // literal <plugin-root> in allow[0] would make the hook deny community-monitor's self-test verb.
+    allow: allowlistLines.slice(0, allow.length),
     mcpAllow: mcpEntry?.tools ?? [],
     navigateOrigin,
     runReportLabel,
     noFileTools,
   });
 
-  return { ephemeralRoot, spawnCwd };
+  return { ephemeralRoot, spawnCwd, pluginRoot };
 }
 
 // #7122 — credential custody. The clone embeds its token in `.git/config` through
@@ -1464,6 +1666,9 @@ async function spawnClaudeEvalUnguarded(args: {
   // field nobody asked for must not exist on their result. Only a handler that validates
   // and publishes the message (community-monitor) opts in.
   captureFinalMessage?: boolean;
+  // #12824 — REQUIRED, no default: true makes the substrate pass `--plugin-dir <resolveCronPluginRoot()>`
+  // (the read-only deployed copy). A caller can no longer name a plugin dir itself.
+  loadPlugin: boolean;
 }): Promise<SpawnResult> {
   const {
     spawnCwd,
@@ -1477,6 +1682,7 @@ async function spawnClaudeEvalUnguarded(args: {
     runId,
     attempt,
     captureFinalMessage = false,
+    loadPlugin,
   } = args;
 
   if (!existsSync(spawnCwd)) {
@@ -1501,6 +1707,15 @@ async function spawnClaudeEvalUnguarded(args: {
     );
   }
   const budget = budgetFlags(cronName);
+  // #12824 — a caller-named plugin dir resolved against the agent-writable clone (paths 1 and 3). Both
+  // spellings are refused; the root comes only from resolveCronPluginRoot() below.
+  if (flags.some(isPluginDirFlag)) {
+    throw new Error(
+      `claude-eval ${cronName}: flags must not carry --plugin-dir; pass loadPlugin: true and the substrate sets the read-only root (#12824)`,
+    );
+  }
+  // Before any side effect: a refused root reports once and throws NonRetriableError.
+  const plugin = loadPlugin ? await resolveCronPluginRootOrFail(cronName) : null;
 
   // Child output is redacted for the installation token AND the operator Anthropic key the child
   // runs with, so a model answer that quotes its environment never reaches logs or Sentry.
@@ -1562,7 +1777,33 @@ async function spawnClaudeEvalUnguarded(args: {
     heartbeatTimer.unref?.();
   }
 
+  // #12824 — per-spawn HOME. A workspace clone (`<ephemeralRoot>/repo`) gets `<ephemeralRoot>/home-*`, a
+  // sibling of repo/ (never inside the git tree) that teardownEphemeralWorkspace and cron-workspace-gc
+  // already sweep. A server-cwd cron (no workspace) gets a `soleur-home-*` dir under the workspace root,
+  // which the GC's `soleur-` prefix also sweeps.
+  const inWorkspace = basename(spawnCwd) === "repo";
+  const homeParent = inWorkspace ? dirname(spawnCwd) : resolveCronWorkspaceRoot();
+  const homePrefix = inWorkspace ? "home-" : "soleur-home-";
+  let spawnHome: string | null = null;
   try {
+    try {
+      spawnHome = spawnFs.createSpawnHome(homeParent, homePrefix);
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "cron-claude-eval",
+        op: "cron-spawn-home-create",
+        message: "could not create the per-spawn HOME; the cron did not spawn",
+        tags: { cron: cronName },
+        extra: { cron: cronName },
+      });
+      throw err;
+    }
+    const home = spawnHome;
+    if (home === spawnCwd || home.startsWith(spawnCwd + sep)) {
+      // Structurally impossible today (the parent is dirname(spawnCwd) or the workspace root); asserted so
+      // a refactor can never put ~/.claude.json and session state inside the agent's git tree.
+      throw new Error(`claude-eval ${cronName}: per-spawn HOME ${home} is inside the spawn cwd`);
+    }
     return await new Promise<SpawnResult>((resolve) => {
       // #5691 — silence non-essential cron egress at source (keep-blocked, NOT
       // allowlisted; ADR-052 2026-06-29 amendment):
@@ -1577,40 +1818,30 @@ async function spawnClaudeEvalUnguarded(args: {
       //  • CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 kills Claude Code's own
       //    non-essential outbound traffic (telemetry / error-reporting /
       //    auto-update). Spike A (#5691 PR body) is the at-source proof.
-      // #cost-attribution (plan Phase 2): request the CLI's structured result
-      // event so the final `total_cost_usd`/`usage`/model are captured. Inject
-      // ONLY when the caller has not already set `--output-format` (today none
-      // do — plain text `--print`). `json` (single final object) is the low-
-      // log-volume choice; the result text is extracted back into stdoutTail
-      // below so the ADR-033 I8 classifier + scheduled-output-missing Sentry
-      // extra stay readable.
-      const outputFormatFlags = flags.some((f) => f === "--output-format")
-        ? []
-        : ["--output-format", "json"];
+      // #cost-attribution (plan Phase 2): buildClaudeArgv requests the CLI's structured
+      // result event so the final `total_cost_usd`/`usage`/model are captured, ONLY when the
+      // caller has not already set `--output-format` (today none do — plain text `--print`).
+      // `json` (single final object) is the low-log-volume choice; the result text is
+      // extracted back into stdoutTail below so the ADR-033 I8 classifier +
+      // scheduled-output-missing Sentry extra stay readable.
+      // #12757 — probes the CONTAINER HOME's XDG residual: spawnSimple (clone, set-url) still runs git
+      // with it. The claude child below gets a fresh HOME and never reads it (#12824).
       probeCronGitConfig();
       const child = spawn(
         claudeBin,
-        [
-          "--strict-mcp-config",
-          // Untrusted-data caution for GitHub-sourced text (issue/PR/comment/CI-log) any
-          // cron may read with gh. A system-prompt append, NOT a prompt prefix: several
-          // crons pass a `/soleur:…` slash command as the prompt, and prepending text would
-          // stop the CLI recognising it (and change the single-flight prompt key). Single
-          // value, placed before `--print` and any variadic --allowedTools. #10194.
-          "--append-system-prompt",
-          UNTRUSTED_PREAMBLES.github,
-          ...budget,
-          ...outputFormatFlags,
-          ...flags,
-          prompt,
-        ],
+        buildClaudeArgv(plugin?.root ?? null, { flags, prompt, budget }),
         {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
         cwd: spawnCwd,
         env: {
           ...buildSpawnEnv(installationToken),
+          // #12824 — substrate-owned and AFTER the cron's env, so a cron's `HOME: process.env.HOME` never
+          // reaches the child: a planted ~/.bashrc, ~/.claude.json or npx cache cannot carry across spawns.
+          HOME: home,
+          TMPDIR: join(home, "tmp"),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+          ...CRON_GIT_HARDENING,
           // #12757 — LAST, so a cron's buildSpawnEnv cannot replace it. Unlike spawnSimple this keeps no /dev/null:
           // the agent commits, and needs the identity the pinned file carries.
           ...CRON_GIT_CONFIG_PIN,
@@ -1907,5 +2138,34 @@ async function spawnClaudeEvalUnguarded(args: {
     // executor threw synchronously (spawn/buildSpawnEnv config error) before
     // finish() ran. clearInterval on an already-cleared handle is a safe no-op.
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    // #12824 — the promise settles only after `exit`, whose handler SIGKILLs the child's whole process
+    // group, so no grandchild can still be writing into the HOME when it is removed.
+    if (spawnHome) {
+      try {
+        spawnFs.removeSpawnHome(spawnHome);
+      } catch (err) {
+        warnSilentFallback(err, {
+          feature: "cron-claude-eval",
+          op: "cron-spawn-home-teardown",
+          message: "per-spawn HOME removal failed; teardownEphemeralWorkspace / cron-workspace-gc sweep it",
+          tags: { cron: cronName },
+          extra: { cron: cronName },
+        });
+      }
+    }
+    // #12824 (CTO T1) — ci-deploy.sh reseeds the :ro mount source in place; a tag change during the run
+    // means the child may have loaded files from two plugin versions.
+    if (plugin) {
+      const tagNow = seedTagOf(spawnFs.readTextOrNull(join(plugin.root, ".seed-complete")));
+      if (tagNow !== plugin.seedTag) {
+        reportSilentFallback(null, {
+          feature: "cron-claude-eval",
+          op: "plugin-reseeded-mid-run",
+          message: "the plugin mount was reseeded while the cron's claude child ran",
+          tags: { cron: cronName },
+          extra: { cron: cronName, seedTagAtSpawn: plugin.seedTag, seedTagAtExit: tagNow },
+        });
+      }
+    }
   }
 }

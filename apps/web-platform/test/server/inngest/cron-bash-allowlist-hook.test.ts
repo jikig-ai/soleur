@@ -4,7 +4,7 @@
 // panel surfaced (P0-A secret-read, P0-B argument injection, P1-F quoted-pipe)
 // has a case here. `decide()` is pure (JSON in → decision out), so no spawn.
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CRON_BASH_ALLOWLISTS, FRAMING_HOOK_REL_PATH } from "@/server/inngest/functions/_cron-claude-eval-substrate";
@@ -12,12 +12,14 @@ import { AGENT_GIT_GLOBAL_CONFIG } from "@/server/host-git";
 import {
   classifyNewRuleDeny,
   decide,
+  deriveWriteRoots,
   hasDotSegment,
   labelTokenEquals,
   filingJustificationReason,
   normalizeSegmentWhitespace,
   tokenize,
   splitSegments,
+  writeOutsideRootsReason,
 } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 
 // roadmap-review-shaped allowlist (the Tier-1 lead cron).
@@ -1555,7 +1557,8 @@ describe("no-file-tools — strict argument grammar and exact-literal matching (
 // =============================================================================
 type HookOut = { permissionDecision: string; permissionDecisionReason?: string };
 const RR_LINES = CRON_BASH_ALLOWLISTS["cron-roadmap-review"];
-const decideOn = (input: unknown, lines: string[]) => decide(input, lines).hookSpecificOutput as HookOut;
+const decideOn = (input: unknown, lines: string[], opts?: { writeRoots?: string[] | null }) =>
+  decide(input, lines, opts).hookSpecificOutput as HookOut;
 const NBSP = "\u00a0";
 const PROTECTED_REASON = /^cron-containment: protected-path write: /;
 const IRREGULAR_REASON = /^cron-containment: irregular command word in a (git|gh) command \(word #\d/;
@@ -1583,13 +1586,23 @@ const GUARD1_DENY: ReadonlyArray<readonly [string, string]> = [
   // The A3 drift row: the constant itself, imported, never a copy of its value.
   [AGENT_GIT_GLOBAL_CONFIG, "protected-trust-root"],
 ];
+// Near-miss paths the #12757 patterns must NOT match. Since #12824 (CTO S1) a write is also
+// allow-by-root, so the `/x/repo/<rest>` spellings are written under a real temp clone passed as
+// `writeRoots` (the row label keeps the canonical spelling). The `/usr/local/share/soleurx/y` row
+// lies outside every root: it is denied, but on the containment reason, never the protected-path
+// one, which is what proves the trust-root pattern still does not over-match it.
 const GUARD1_MUST_PASS = [
   "/x/repo/.gitconfig.example",
   "/x/repo/.config/github/x.yml",
   "/x/repo/docs/gitconfig.md",
   "/x/repo/apps/.gitconfig-notes",
-  "/usr/local/share/soleurx/y",
 ];
+const GUARD1_NO_MATCH_OUTSIDE_ROOTS = ["/usr/local/share/soleurx/y"];
+const GUARD1_CLONE = join(mkdtempSync(join(tmpdir(), "soleur-guard1-")), "repo");
+mkdirSync(GUARD1_CLONE);
+const GUARD1_OPTS = { writeRoots: [GUARD1_CLONE] };
+const inGuard1Clone = (p: string) => p.replace(/^\/x\/repo(?=\/)/, GUARD1_CLONE);
+const OUTSIDE_ROOTS_REASON = /^cron-containment: write outside run roots: /;
 
 describe("Write/Edit — git global config and its trust root are write-protected (#12757 F2)", () => {
   const rows = WRITE_TOOLS.flatMap((tool) => GUARD1_DENY.map(([path]) => ({ tool, path })));
@@ -1609,9 +1622,20 @@ describe("Write/Edit — git global config and its trust root are write-protecte
   });
 
   const passRows = WRITE_TOOLS.flatMap((tool) => GUARD1_MUST_PASS.map((path) => ({ tool, path })));
-  it.each(passRows)("$tool of $path stays allowed", ({ tool, path }) => {
-    expect(decideOn(writeCall(tool, path), RR_LINES).permissionDecision).toBe("allow");
+  it.each(passRows)("$tool of $path (inside the run clone) stays allowed", ({ tool, path }) => {
+    expect(decideOn(writeCall(tool, inGuard1Clone(path)), RR_LINES, GUARD1_OPTS).permissionDecision).toBe("allow");
   });
+
+  const outsideRows = WRITE_TOOLS.flatMap((tool) => GUARD1_NO_MATCH_OUTSIDE_ROOTS.map((path) => ({ tool, path })));
+  it.each(outsideRows)(
+    "$tool of $path is not a protected-path match (denied only as outside the run roots)",
+    ({ tool, path }) => {
+      const out = decideOn(writeCall(tool, path), RR_LINES, GUARD1_OPTS);
+      expect(out.permissionDecision).toBe("deny");
+      expect(out.permissionDecisionReason).toMatch(OUTSIDE_ROOTS_REASON);
+      expect(out.permissionDecisionReason).not.toMatch(PROTECTED_REASON);
+    },
+  );
 
   it("a Read of /home/soleur/.gitconfig stays denied on the secret-path rule (regression pin)", () => {
     const out = decideOn({ tool_name: "Read", tool_input: { file_path: "/home/soleur/.gitconfig" } }, RR_LINES);
@@ -1841,7 +1865,17 @@ describe("classifyNewRuleDeny — parity with decide() across the #12757 battery
         expect(classifyNewRuleDeny(tool, { file_path: path }), `${tool} ${path}`).toBe(rule);
       }
       for (const path of GUARD1_MUST_PASS) {
-        expect(decideOn(writeCall(tool, path), RR_LINES).permissionDecision, path).toBe("allow");
+        expect(decideOn(writeCall(tool, inGuard1Clone(path)), RR_LINES, GUARD1_OPTS).permissionDecision, path).toBe(
+          "allow",
+        );
+        expect(classifyNewRuleDeny(tool, { file_path: path }), `${tool} ${path}`).toBeNull();
+        expect(classifyNewRuleDeny(tool, { file_path: inGuard1Clone(path) }), `${tool} ${path}`).toBeNull();
+      }
+      // Denied, but on the #12824 containment rule — not a #12757 rule, so no new-rule attribution.
+      for (const path of GUARD1_NO_MATCH_OUTSIDE_ROOTS) {
+        expect(decideOn(writeCall(tool, path), RR_LINES, GUARD1_OPTS).permissionDecisionReason, path).toMatch(
+          OUTSIDE_ROOTS_REASON,
+        );
         expect(classifyNewRuleDeny(tool, { file_path: path }), `${tool} ${path}`).toBeNull();
       }
     }
@@ -2042,5 +2076,118 @@ describe("#12757 review: worktree paths, non-string paths, normalised reads, rea
     const out = decideOn(bash(`git '${NBSP.repeat(20000)}' status`), RR_LINES);
     expect(out.permissionDecision).toBe("deny");
     expect((out.permissionDecisionReason ?? "").length).toBeLessThan(600);
+  });
+});
+
+// #12824 (CTO S1) — Write/Edit/MultiEdit are ALLOW-BY-ROOT: the target must resolve inside the run's
+// clone (spawnCwd) or its per-spawn HOME. Every row goes through the REAL decide() against a real
+// on-disk layout shaped like the substrate's mkdtemp: `<base>/soleur-cron-x-AAA/{repo,home-abc123}`.
+describe("Write confinement — allow-by-root (#12824, CTO S1)", () => {
+  const BASE = mkdtempSync(join(tmpdir(), "soleur-wc-"));
+  const RUN = join(BASE, "soleur-cron-x-AAA");
+  const SPAWN = join(RUN, "repo");
+  const HOME = join(RUN, "home-abc123");
+  const OTHER_RUN_REPO = join(BASE, "soleur-cron-y-BBB", "repo");
+  const OUTSIDE = join(BASE, "outside");
+  for (const d of [SPAWN, join(HOME, "tmp"), OTHER_RUN_REPO, OUTSIDE]) mkdirSync(d, { recursive: true });
+  // A link inside the clone to a directory outside it, and a DANGLING link pointing outside.
+  symlinkSync(OUTSIDE, join(SPAWN, "link"));
+  symlinkSync(join(BASE, "nope", "file"), join(SPAWN, "dang"));
+
+  const ROOTS = deriveWriteRoots(SPAWN, HOME);
+  const OPTS = { writeRoots: ROOTS };
+  const OUTSIDE_REASON = /^cron-containment: write outside run roots: /;
+
+  it("the layout derives both roots (spawnCwd + its home-* sibling)", () => {
+    expect(ROOTS).toEqual([SPAWN, HOME]);
+  });
+
+  const DENIED: ReadonlyArray<readonly [string, string]> = [
+    ["the web server's build output", "/app/.next/server/x.js"],
+    ["the host user's dotfile", "/home/soleur/.bashrc"],
+    ["a founder workspace", "/workspaces/0b1c2d3e-0000-4000-8000-000000000000/x"],
+    ["another run's clone", join(OTHER_RUN_REPO, "x")],
+    ["the plugin install", "/opt/soleur/plugin/x"],
+    ["an absolute .. escape", `${SPAWN}/../outside`],
+    ["a relative .. escape", "../outside"],
+    ["a write through a symlink to a dir outside", join(SPAWN, "link", "x")],
+    ["a write to a dangling symlink pointing outside", join(SPAWN, "dang")],
+  ];
+  const ALLOWED: ReadonlyArray<readonly [string, string]> = [
+    ["a new file in the clone", join(SPAWN, "x")],
+    ["a relative path (resolves against spawnCwd)", "src/new.ts"],
+    ["a file in the spawn HOME", join(HOME, "x")],
+    ["a nested path in the spawn HOME", join(HOME, "tmp", "y")],
+  ];
+
+  const deniedRows = WRITE_TOOLS.flatMap((tool) => DENIED.map(([what, path]) => ({ tool, what, path })));
+  it.each(deniedRows)("$tool: $what is denied as outside the run roots", ({ tool, path }) => {
+    const out = decideOn(writeCall(tool, path), RR_LINES, OPTS);
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(OUTSIDE_REASON);
+    expect(out.permissionDecisionReason).toContain("write outside run roots");
+  });
+
+  const allowedRows = WRITE_TOOLS.flatMap((tool) => ALLOWED.map(([what, path]) => ({ tool, what, path })));
+  it.each(allowedRows)("$tool: $what is allowed", ({ tool, path }) => {
+    expect(decideOn(writeCall(tool, path), RR_LINES, OPTS).permissionDecision).toBe("allow");
+  });
+
+  it.each(WRITE_TOOLS)("%s: a protected path INSIDE the roots still denies on the protected-path reason", (tool) => {
+    const out = decideOn(writeCall(tool, join(SPAWN, ".claude", "settings.json")), RR_LINES, OPTS);
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(PROTECTED_REASON);
+  });
+
+  it.each(WRITE_TOOLS)("%s: an empty path denies", (tool) => {
+    const out = decideOn(writeCall(tool, ""), RR_LINES, OPTS);
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toContain("write with no path");
+  });
+
+  it.each(WRITE_TOOLS)("%s with NO opts uses the default derivation: /app/.next/server/x.js denies", (tool) => {
+    const out = decideOn(writeCall(tool, "/app/.next/server/x.js"), RR_LINES);
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(OUTSIDE_REASON);
+  });
+
+  it.each(WRITE_TOOLS)("%s with writeRoots [] fails closed", (tool) => {
+    const out = decideOn(writeCall(tool, join(SPAWN, "x")), RR_LINES, { writeRoots: [] });
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toContain("write roots unresolvable");
+  });
+
+  it("unresolvable roots (null / []) fail closed in writeOutsideRootsReason", () => {
+    expect(writeOutsideRootsReason(join(SPAWN, "x"), null)).toContain("write roots unresolvable");
+    expect(writeOutsideRootsReason(join(SPAWN, "x"), [])).toContain("write roots unresolvable");
+  });
+
+  it("deriveWriteRoots returns null for a non-absolute or missing spawnCwd", () => {
+    expect(deriveWriteRoots("relative/repo", HOME)).toBeNull();
+    expect(deriveWriteRoots(null as unknown as string, HOME)).toBeNull();
+  });
+
+  describe("deriveWriteRoots admits HOME only in the exact home-* sibling shape", () => {
+    it.each([
+      ["HOME is /", "/"],
+      ["HOME under the wrong parent", join(BASE, "elsewhere", "home-abc")],
+      ["HOME basename not home-*", join(RUN, "notahome")],
+      ["HOME non-normalized (../repo)", `${HOME}/../repo`],
+      ["HOME relative", "home-abc123"],
+      ["HOME unset", undefined],
+    ])("%s → only [spawnCwd]", (_what, envHome) => {
+      expect(deriveWriteRoots(SPAWN, envHome as string)).toEqual([SPAWN]);
+    });
+    it("the correct sibling HOME → both roots", () => {
+      expect(deriveWriteRoots(SPAWN, HOME)).toEqual([SPAWN, HOME]);
+    });
+    it("a write to the rejected HOME is then denied", () => {
+      const notHome = join(RUN, "notahome");
+      mkdirSync(notHome, { recursive: true });
+      const out = decideOn(writeCall("Write", join(notHome, "x")), RR_LINES, {
+        writeRoots: deriveWriteRoots(SPAWN, notHome),
+      });
+      expect(out.permissionDecisionReason).toMatch(OUTSIDE_REASON);
+    });
   });
 });

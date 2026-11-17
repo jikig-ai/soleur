@@ -44,11 +44,93 @@
 // (D-new-1), so the whole body is wrapped and the catch emits deny.
 // =============================================================================
 
-import { readFileSync } from "node:fs";
-import { dirname, posix, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, posix, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
+
+// --- Write confinement (#12824, CTO S1) ------------------------------------
+// Write/Edit/MultiEdit are ALLOW-BY-ROOT: the target must resolve inside the run's clone (spawnCwd) or
+// its per-spawn HOME. Before #12824 the branch allowed any path no WRITE_PROTECTED_PATTERNS entry hit,
+// so a prompt-injected cron could write `/app/.next/server/*.js` (code the web server runs) or a
+// founder's `/workspaces/<uuid>/…`. This is an allow-list, not another deny pattern.
+//
+// spawnCwd is a fixed walk up from THIS file (`<spawnCwd>/apps/web-platform/server/inngest/<hook>`),
+// never an env value. The HOME root is admitted only when `process.env.HOME` is exactly a `home-*`
+// child of dirname(spawnCwd) (the substrate's mkdtemp shape), so an env value cannot widen the area.
+// Computed lazily, inside a try: a module-init throw in the server bundle would take down every cron.
+export function hookSpawnCwd() {
+  try {
+    return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+  } catch {
+    return null;
+  }
+}
+
+/** The allowed write roots: [spawnCwd] plus the spawn HOME when its shape checks out; null fails closed. */
+export function deriveWriteRoots(spawnCwd = hookSpawnCwd(), envHome = process.env.HOME) {
+  if (typeof spawnCwd !== "string" || !isAbsolute(spawnCwd)) return null;
+  const roots = [spawnCwd];
+  if (
+    typeof envHome === "string" &&
+    isAbsolute(envHome) &&
+    resolve(envHome) === envHome &&
+    dirname(envHome) === dirname(spawnCwd) &&
+    /^home-[A-Za-z0-9]+$/.test(basename(envHome))
+  ) {
+    roots.push(envHome);
+  }
+  return roots;
+}
+
+// The realpath of `abs`'s nearest existing ancestor, with the missing tail re-appended. An existing
+// entry is detected with lstat, not existsSync: a DANGLING symlink in the clone (`repo/x -> /etc/y`)
+// must be realpath'd (and fail), never skipped as "absent" — the write would follow it outward.
+function realpathOfNearestExisting(abs) {
+  let cur = abs;
+  const rest = [];
+  for (;;) {
+    let present = false;
+    try {
+      lstatSync(cur);
+      present = true;
+    } catch {
+      present = false;
+    }
+    if (present) break;
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(basename(cur));
+    cur = parent;
+  }
+  let real;
+  try {
+    real = realpathSync(cur);
+  } catch {
+    return null; // a dangling or looping link: fail closed
+  }
+  return rest.length ? resolve(real, ...rest) : real;
+}
+
+/** null when `p` may be written; otherwise the deny reason. Relative paths resolve against spawnCwd. */
+export function writeOutsideRootsReason(p, roots) {
+  const shown = `write outside run roots: ${String(p).slice(0, 60)}`;
+  if (!Array.isArray(roots) || roots.length === 0) return "write roots unresolvable (fail-closed)";
+  const real = realpathOfNearestExisting(resolve(roots[0], p));
+  if (!real) return shown;
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    let rr;
+    try {
+      rr = realpathSync(root);
+    } catch {
+      continue;
+    }
+    if (real === rr || real.startsWith(rr + sep)) return null;
+  }
+  return shown;
+}
 
 // --- Filing justification (#8038) ----------------------------------------
 // CLASS 3 OF THE FILING SURFACE. `guardrails:require-filing-justification` in
@@ -1098,7 +1180,7 @@ export function strictArgumentGrammarReason(command, literalLines = null) {
 
 // ---- the decision function (pure; unit-tested) -----------------------------
 
-export function decide(input, allowPrefixes) {
+export function decide(input, allowPrefixes, opts = {}) {
   let parsed;
   try {
     parsed = typeof input === "string" ? JSON.parse(input) : input;
@@ -1206,6 +1288,7 @@ export function decide(input, allowPrefixes) {
     case "MultiEdit": {
       const p = ti.file_path || ti.path || "";
       if (nonStringPath(p)) return denyDecision("non-string path argument");
+      if (!p) return denyDecision("write with no path");
       const matches = protectedWriteMatches(p);
       if (matches.length)
         return denyDecision(
@@ -1214,6 +1297,9 @@ export function decide(input, allowPrefixes) {
               ? " -- git config and identity are platform-managed; do not write them under any path, report the failure instead"
               : ""),
         );
+      // #12824 (CTO S1) — after the pattern gate: protected paths inside the roots stay denied.
+      const outside = writeOutsideRootsReason(p, opts.writeRoots ?? deriveWriteRoots());
+      if (outside) return denyDecision(outside);
       return allowDecision();
     }
     case "ToolSearch":

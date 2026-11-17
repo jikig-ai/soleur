@@ -86,8 +86,6 @@ const CLAUDE_CODE_FLAGS = [
   "60",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -331,6 +329,7 @@ export async function cronArchitectureDiagramSyncHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,

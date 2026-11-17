@@ -3,7 +3,7 @@
 // AC16 5-case test matrix:
 //   (a) issue-selection cascade (p3-low → p2-medium → p1-high) with
 //       open-bot-fix-PR skip-list + label/title filters
-//   (b) ephemeral workspace scaffold + plugin symlink sentinel
+//   (b) ephemeral workspace scaffold + read-only plugin-root resolve (#12824)
 //   (c) spawn argv shape (CLAUDE_CODE_FLAGS + prompt + cwd + GH_TOKEN env)
 //   (d) auto-merge gate's 3 safety nets (bot identity, single-file diff,
 //       p3-low source) + label assertion
@@ -79,9 +79,13 @@ vi.mock("node:fs/promises", () => ({
 const existsSyncSpy = vi.fn();
 // readFileSync serves runHookSelfTest's settings-registration probe (#5046
 // PR-2 AC-P2.2): return a faithful spawn settings.json — the hook registered
-// under a `*` matcher — so the structural-inheritance assertion passes.
-const readFileSyncSpy = vi.fn(() =>
-  JSON.stringify({
+// under a `*` matcher — so the structural-inheritance assertion passes. #12824: when the handler WROTE
+// a settings.json at that path (writeFileSpy), serve those bytes, so the self-test's claudeMdExcludes
+// delivery cross-check reads what production would.
+const readFileSyncSpy = vi.fn((p?: unknown) => {
+  const written = [...writeFileSpy.mock.calls].reverse().find(([q]) => String(q) === String(p));
+  if (written) return String(written[1]);
+  return JSON.stringify({
     hooks: {
       PreToolUse: [
         {
@@ -96,8 +100,8 @@ const readFileSyncSpy = vi.fn(() =>
         },
       ],
     },
-  }),
-);
+  });
+});
 vi.mock("node:fs", () => ({
   existsSync: existsSyncSpy,
   readFileSync: readFileSyncSpy,
@@ -125,9 +129,32 @@ vi.mock("@/server/github-app", () => ({
   generateInstallationToken: generateInstallationTokenSpy,
 }));
 
+// #12824 — the substrate's cron plugin-root resolver reads getPluginPath() and
+// gates it through assertTrustedPluginPath(); both must be present on the mock.
+const MOCK_PLUGIN_ROOT = "/app/shared/plugins/soleur";
 vi.mock("@/server/plugin-path", () => ({
-  getPluginPath: () => "/app/shared/plugins/soleur",
-  SOLEUR_PLUGIN_PATH_DEFAULT: "/app/shared/plugins/soleur",
+  getPluginPath: () => MOCK_PLUGIN_ROOT,
+  assertTrustedPluginPath: (p: string) => p,
+  isPluginPathTestEnv: () => true,
+  SOLEUR_PLUGIN_PATH_DEFAULT: MOCK_PLUGIN_ROOT,
+}));
+
+// #12824 — the filesystem helpers behind resolveCronPluginRoot() and the
+// per-spawn HOME. Defaults model a healthy read-only, fully-seeded plugin
+// mount; createSpawnHome mirrors the real mkdtemp shape (`<parent>/<prefix>…`)
+// without touching mkdtempSpy, so mkdtempSpy.mock.calls[0] stays the workspace.
+const pathExistsSpy = vi.fn();
+const readTextOrNullSpy = vi.fn();
+const probeWritableSpy = vi.fn();
+const createSpawnHomeSpy = vi.fn();
+const removeSpawnHomeSpy = vi.fn();
+vi.mock("@/server/inngest/functions/_cron-spawn-fs", () => ({
+  pathExists: pathExistsSpy,
+  readTextOrNull: readTextOrNullSpy,
+  probeWritable: probeWritableSpy,
+  createSpawnHome: createSpawnHomeSpy,
+  removeSpawnHome: removeSpawnHomeSpy,
+  sleep: async () => {},
 }));
 
 // D6 (#5018): cron-bug-fixer is Tier-2-deferred in prod (broad bash + reads
@@ -231,6 +258,18 @@ beforeEach(() => {
     if (p.includes("soleur-cron-bug-fixer-") && p.endsWith("/repo")) return true;
     return false;
   });
+
+  pathExistsSpy.mockReset();
+  readTextOrNullSpy.mockReset();
+  probeWritableSpy.mockReset();
+  createSpawnHomeSpy.mockReset();
+  removeSpawnHomeSpy.mockReset();
+  pathExistsSpy.mockReturnValue(true);
+  readTextOrNullSpy.mockReturnValue("seeded x tag=t1\n");
+  probeWritableSpy.mockReturnValue({ writable: false, code: "EROFS" });
+  createSpawnHomeSpy.mockImplementation(
+    (parent: string, prefix: string) => `${parent}/${prefix}abc`,
+  );
 
   createProbeOctokitSpy.mockImplementation(async () => defaultOctokit());
   generateInstallationTokenSpy.mockResolvedValue("ghs_TESTTOKEN_REDACT_ME");
@@ -565,7 +604,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
 });
 
 // ===========================================================================
-// (b) Ephemeral workspace scaffold + symlink sentinel
+// (b) Ephemeral workspace scaffold + read-only plugin-root resolve (#12824)
 // ===========================================================================
 
 describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
@@ -634,12 +673,39 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
       .filter((l) => l.length > 0);
     expect(allowLines[0]).toBe("gh issue view");
     expect(allowLines).toContain("git push");
-    expect(allowLines).toContain("./node_modules/.bin/vitest run");
+    // #12824 — the vitest verb is gone (the clone is node_modules-free;
+    // SOLEUR_WORKTREE_SKIP_INSTALL=1), and the worktree-manager line names the
+    // resolved READ-ONLY plugin root, never the clone's editable plugins/soleur.
+    expect(allowLines).not.toContain("./node_modules/.bin/vitest run");
+    expect(allowLines).toContain(
+      `bash ${MOCK_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh`,
+    );
+    expect(allowLines.some((l) => l.includes("<plugin-root>"))).toBe(false);
+    expect(allowLines.some((l) => l.includes("bash plugins/soleur/"))).toBe(false);
     // F4a: arbitrary-method gh api must NOT be allowlisted.
     expect(allowLines).not.toContain("gh api");
+
+    // #12824 — the clone's own plugins/soleur manifest is NO LONGER checked
+    // (the old "sentinel"); the read-only plugin root is resolved instead:
+    // manifest + .seed-complete present, root and hooks/ not writable.
+    expect(
+      existsSyncSpy.mock.calls.some(
+        ([p]) => typeof p === "string" && p.includes("repo/plugins/soleur/.claude-plugin"),
+      ),
+    ).toBe(false);
+    expect(pathExistsSpy).toHaveBeenCalledWith(
+      `${MOCK_PLUGIN_ROOT}/.claude-plugin/plugin.json`,
+    );
+    expect(pathExistsSpy).toHaveBeenCalledWith(`${MOCK_PLUGIN_ROOT}/.seed-complete`);
+    expect(probeWritableSpy).toHaveBeenCalledWith(MOCK_PLUGIN_ROOT);
+    expect(probeWritableSpy).toHaveBeenCalledWith(`${MOCK_PLUGIN_ROOT}/hooks`);
+    // The resolve runs BEFORE the workspace mkdtemp/clone.
+    expect(pathExistsSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      mkdtempSpy.mock.invocationCallOrder[0]!,
+    );
   });
 
-  it("aborts run + emits Sentry status=error when plugin sentinel manifest missing", async () => {
+  it("aborts run + emits Sentry status=error when the read-only plugin root manifest is missing", async () => {
     const p3Issues = [
       {
         number: 510,
@@ -650,12 +716,10 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     ];
     wireOctokit({ p3Issues });
 
-    // Sentinel fails: plugin.json does NOT exist on disk after symlink.
-    existsSyncSpy.mockImplementation((p: string) => {
-      if (p.endsWith("/node_modules/.bin/claude")) return true;
-      if (p.includes(".claude-plugin/plugin.json")) return false; // sentinel fail
-      return false;
-    });
+    // #12824 — the plugin ROOT (not the clone) lacks its manifest.
+    pathExistsSpy.mockImplementation(
+      (p: string) => !p.endsWith(".claude-plugin/plugin.json"),
+    );
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -664,10 +728,21 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
 
     expect(result.ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    const rootErr = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "cron-plugin-root-untrusted",
+    );
+    expect(rootErr).toBeDefined();
+    expect((rootErr![1] as { tags?: Record<string, string> }).tags).toMatchObject({
+      cron: "cron-bug-fixer",
+      reason: "manifest-missing",
+    });
     const setupErr = reportSilentFallbackSpy.mock.calls.find(
       ([, ctx]) => (ctx as { op?: string }).op === "setup-ephemeral-workspace",
     );
     expect(setupErr).toBeDefined();
+    // Resolved before any workspace was created: no mkdtemp, no clone, no claude.
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const sentryCall = fetchMock.mock.calls.find(([url]) =>
@@ -718,8 +793,38 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(args[lastIdx]).toContain("/soleur:fix-issue 600");
     expect(args[lastIdx]).toContain("--exclude-label ux-audit");
 
+    // #12824 — the substrate inserts `--plugin-dir <read-only root>` right
+    // after the `--append-system-prompt <preamble>` pair, before the caller's
+    // flags (`--print` … `--`); the clone-relative `plugins/soleur` is gone.
+    const pluginDirIdx = args.indexOf("--plugin-dir");
+    expect(pluginDirIdx).toBeGreaterThan(-1);
+    expect(args[pluginDirIdx + 1]).toBe(MOCK_PLUGIN_ROOT);
+    expect(args.filter((a) => a === "--plugin-dir")).toHaveLength(1);
+    expect(args).not.toContain("plugins/soleur");
+    expect(args[pluginDirIdx - 2]).toBe("--append-system-prompt");
+    expect(pluginDirIdx).toBeLessThan(args.indexOf("--print"));
+    expect(pluginDirIdx).toBeLessThan(lastIdx - 1);
+
     // cwd is the cloned repo path under ephemeral root
     expect(opts.cwd).toContain("repo");
+
+    // #12824 — fresh per-spawn HOME beside repo/ (never the cron's own HOME,
+    // never inside the spawn cwd), TMPDIR under it, git hardening, and the
+    // worktree-manager install skip.
+    const expectedHome = "/tmp/soleur-cron-bug-fixer-XXXX/home-abc";
+    expect(createSpawnHomeSpy).toHaveBeenCalledWith(
+      "/tmp/soleur-cron-bug-fixer-XXXX",
+      "home-",
+    );
+    expect(opts.env?.HOME).toBe(expectedHome);
+    expect(opts.env?.HOME).not.toBe(process.env.HOME);
+    expect(opts.env?.TMPDIR).toBe(`${expectedHome}/tmp`);
+    expect(opts.env?.GIT_CONFIG_COUNT).toBe("3");
+    expect(opts.env?.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
+    expect(opts.env?.GIT_CONFIG_VALUE_0).toBe("/dev/null");
+    expect(opts.env?.SOLEUR_WORKTREE_SKIP_INSTALL).toBe("1");
+    // The per-spawn HOME is removed after the child exits.
+    expect(removeSpawnHomeSpy).toHaveBeenCalledWith(expectedHome);
 
     // GH_TOKEN env is the installation token, NOT process.env.GH_TOKEN
     expect(opts.env?.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");

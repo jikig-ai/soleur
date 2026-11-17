@@ -139,6 +139,8 @@ export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }):
 export interface EphemeralWorkspace {
   ephemeralRoot: string;
   spawnCwd: string;
+  /** #12824 — the read-only plugin root, resolved when the cron's allowlist names a plugin script. */
+  pluginRoot?: string | null;
 }
 
 /**

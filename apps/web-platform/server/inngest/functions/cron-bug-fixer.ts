@@ -23,12 +23,12 @@
 // scaffolds an ephemeral workspace at /tmp/soleur-cron-bug-fixer-<X>/
 // containing:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // The spawn cwd is repo/ so that:
-//   (a) the explicit `--plugin-dir plugins/soleur` flag (in CLAUDE_CODE_FLAGS
-//       below) registers the soleur plugin manifest at
-//       plugins/soleur/.claude-plugin/plugin.json — headless `--print` does NOT
+//   (a) the substrate's `--plugin-dir <read-only root>` (`loadPlugin: true`,
+//       #12824) registers the soleur plugin from the deployed :ro copy, never
+//       the clone's editable tree — headless `--print` does NOT
 //       auto-discover it from spawn cwd (see #4993 / #4987);
 //   (b) the fix-issue skill's worktree-manager.sh has a real git repo
 //       to create worktrees against. Clone is done in-handler (vs.
@@ -155,8 +155,6 @@ const CLAUDE_CODE_FLAGS = [
   "55",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -195,13 +193,19 @@ interface AutoMergeGateResult {
 // GITHUB_APP_PRIVATE_KEY) is excluded. RESEND_API_KEY in particular is
 // consumed by notify-ops-email OUTSIDE the spawn — leaking it into the
 // child env would let a prompt-injected Bash invocation exfiltrate it.
+//
+// #12824 — HOME is overridden by the substrate with a fresh per-spawn dir. SOLEUR_WORKTREE_SKIP_INSTALL=1
+// makes `worktree-manager.sh create` skip install_deps (package-install scripts are code the agent can
+// write, run below the containment hook), so the clone stays node_modules-free and fix-issue takes its
+// documented no-baseline path; CI runs the tests on the PR.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    HOME: process.env.HOME, // overridden by the substrate (#12824)
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    SOLEUR_WORKTREE_SKIP_INSTALL: "1",
     ...CRON_GIT_CONFIG_PIN,
   };
 }
@@ -733,6 +737,7 @@ export async function cronBugFixerHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: spawnCwd!,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,

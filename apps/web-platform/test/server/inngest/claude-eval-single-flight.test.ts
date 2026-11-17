@@ -94,6 +94,7 @@ function run(
   opts: { prompt?: string; flags?: string[] } = {},
 ) {
   return spawnClaudeEval({
+    loadPlugin: false,
     spawnCwd,
     installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
     flags: opts.flags ?? ["--print", "--"],
