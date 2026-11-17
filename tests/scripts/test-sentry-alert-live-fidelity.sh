@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=76
+EXPECTED_TESTS=89
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -450,9 +450,12 @@ t_reference_missing_key_refused() {
 # THE PINS are covered by F14/F15 below (#8023's rows, adapted: rc 2 and the
 # `refusing destination host` / `refusing org` anchors the drift workflow greps).
 # This shim records argv AND stdin so the end-to-end row can assert the bearer
-# header travels on stdin, which #8023's stub cannot see.
+# header travels on stdin, which #8023's stub cannot see. It also keeps each
+# call's argv in its own `call.<n>.argv` (the probe makes TWO credentialed GETs
+# since #6606: the uptime detectors, then the workflows), and serves the second
+# file to the detectors URL.
 _shim_dir=""
-_install_curl_shim() { # $1 = file to serve on a real call
+_install_curl_shim() { # $1 = file to serve on a real call; $2 = file for the detectors URL
   _shim_dir="$TMPD/shim.$RANDOM"
   mkdir -p "$_shim_dir"
   : > "$_shim_dir/calls.log"
@@ -461,8 +464,13 @@ _install_curl_shim() { # $1 = file to serve on a real call
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >> "$_shim_dir/calls.log"
 printf '%s\0' "\$@" >> "$_shim_dir/argv.bin"
+n=\$(find "$_shim_dir" -maxdepth 1 -name 'call.*.argv' | wc -l)
+printf '%s\n' "\$@" > "$_shim_dir/call.\$((n + 1)).argv"
 cat >> "$_shim_dir/stdin.log"
-cat "$1"
+case "\$*" in
+  */detectors/*) cat "${2:-$1}" ;;
+  *) cat "$1" ;;
+esac
 EOF
   chmod +x "$_shim_dir/curl"
 }
@@ -472,9 +480,10 @@ EOF
 # appears in argv) and serves the capture; the probe must print the LIVE PASS
 # line (no FIXTURE token) over all 28.
 t_pinned_path_end_to_end() {
-  _install_curl_shim "$CAPTURE"
+  _install_curl_shim "$CAPTURE" "$UP_CLEAN"
   local rc=0 out
-  out=$(PATH="$_shim_dir:$PATH" SENTRY_AUTH_TOKEN=fixture-token SENTRY_ORG=jikigai-eu \
+  out=$(env -u SENTRY_FIXTURE_UPTIME -u SENTRY_UPTIME_TF_DIR \
+        PATH="$_shim_dir:$PATH" SENTRY_AUTH_TOKEN=fixture-token SENTRY_ORG=jikigai-eu \
         SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_REFERENCE_FILE="$REFERENCE" bash "$PROBE" 2>&1) || rc=$?
   local why=()
   [[ "$rc" -eq 0 ]] || why+=("rc=$rc")
@@ -488,17 +497,26 @@ t_pinned_path_end_to_end() {
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '\*' || why+=("noproxy '*' absent")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '@-' || why+=("--header @- absent")
   grep -q 'fixture-token' "$_shim_dir/argv.bin" && why+=("the token appeared in curl argv")
-  grep -q '^Authorization: Bearer fixture-token$' "$_shim_dir/stdin.log" || why+=("the bearer header was not fed on stdin")
-  # The pinned URL must be the ONLY URL-shaped argument, with the page size the
-  # `>= 100` ceiling assumes; and the call must be a plain GET.
-  local urls; urls=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -E '^[a-z]+://' || true)
-  [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100" ]] || why+=("URL set is not exactly the pinned URL: $(tr '\n' ' ' <<<"$urls")")
+  [[ "$(grep -c '^Authorization: Bearer fixture-token$' "$_shim_dir/stdin.log")" -eq 2 ]] || why+=("the bearer header was not fed on stdin to BOTH calls")
+  # The pinned URLs must be the ONLY URL-shaped arguments, in this order (the
+  # uptime section runs first), with the page size the `>= 100` ceilings assume;
+  # and each call must be a plain GET.
+  local urls; urls=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -E '^[a-z]+://' | tr '\n' ' ' || true)
+  [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/?query=type:uptime_domain_failure&per_page=100 https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100 " ]] || why+=("URL set is not exactly the two pinned URLs: $urls")
+  # EVERY call is transport-confined with `--disable` literally first, not only the first one.
+  local cf
+  for cf in "$_shim_dir"/call.*.argv; do
+    [[ "$(head -1 "$cf")" == "--disable" ]] || why+=("$(basename "$cf"): argv[1]='$(head -1 "$cf")', want --disable")
+    grep -qx -- '--noproxy' "$cf" && grep -qx -- '=https' "$cf" && grep -qx -- '@-' "$cf" || why+=("$(basename "$cf"): --noproxy/--proto =https/--header @- missing")
+  done
+  [[ "$(find "$_shim_dir" -maxdepth 1 -name 'call.*.argv' | wc -l)" -eq 2 ]] || why+=("want exactly 2 curl calls")
+  grep -qx 'SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=[1-9][0-9]*' <<<"$out" || why+=("no LIVE (non-FIXTURE) clean uptime marker")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '-fsS' || why+=("-fsS absent")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--max-time' || why+=("--max-time absent")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--proto' || why+=("--proto absent")
   if [[ ${#why[@]} -eq 0 ]]; then
-    _report "F25 with host and org pinned, curl gets exactly the pinned URL (GET, --disable --noproxy '*' --proto, -fsS --max-time, --header @- with the token on stdin) and the probe prints the LIVE PASS over ${N}" ok
+    _report "F25 with host and org pinned, curl gets exactly the two pinned URLs (GET, --disable --noproxy '*' --proto, -fsS --max-time, --header @- with the token on stdin) and the probe prints the LIVE PASS over ${N}" ok
   else
     _report "F25 pinned path end to end" fail "${why[*]}; output: $(head -c 300 <<<"$out")"
   fi
@@ -529,7 +547,7 @@ _run_live() {
   _argv="$TMPD/$name.argv"; _envf="$TMPD/$name.env"
   : > "$_argv"; : > "$_envf"
   _rc=0
-  _out=$(env -u SENTRY_FIXTURE_RULES \
+  _out=$(env -u SENTRY_FIXTURE_RULES -u SENTRY_FIXTURE_UPTIME -u SENTRY_UPTIME_TF_DIR \
            PATH="$d:$PATH" STUB_ARGV="$_argv" STUB_ENV="$_envf" \
            SENTRY_AUTH_TOKEN=fixture SENTRY_REFERENCE_FILE="$REFERENCE" \
            "$@" bash "$PROBE" 2>&1) || _rc=$?
@@ -1455,6 +1473,236 @@ t_leaf_key_is_scrubbed() {
   fi
 }
 
+# ── Guard 1 — no unmanaged Sentry uptime monitor (#6606) ─────────────────────
+# PROPERTY: every live uptime detector is `mode == 1` (manual, i.e. Terraform-
+# created or imported), and the live count is not greater than the number of
+# declared `resource "sentry_uptime_monitor"` blocks. Sentry re-creates an
+# auto-detected (mode 3) monitor on its own; an apply never removes it, so a
+# probe is the only thing that sees one come back.
+#
+# Every row is FIXTURE-driven (SENTRY_FIXTURE_UPTIME), with the declared side read
+# from a scratch directory (SENTRY_UPTIME_TF_DIR, honoured in fixture mode ONLY),
+# so no row depends on how many blocks the committed uptime-monitors.tf holds
+# today. Fixtures are synthesized: ids in the 9000000 range, URLs on the real
+# hostnames only where the row is about URL shape.
+#
+# THE SUITE-WIDE DEFAULT. Every rule-side row above runs with SENTRY_ORG=fixture,
+# which the uptime section's org pin refuses on the live branch, so the suite
+# exports a CLEAN uptime fixture (one mode-1 row, one declared block). The live-
+# branch rows (`_run_live`, F25) unset both names explicitly.
+UP_TF1="$TMPD/uptime-tf-1"; UP_TF2="$TMPD/uptime-tf-2"
+UP_TF0="$TMPD/uptime-tf-0"; UP_TFWS="$TMPD/uptime-tf-ws"
+mkdir -p "$UP_TF1" "$UP_TF2" "$UP_TF0" "$UP_TFWS"
+cat > "$UP_TF1/uptime-monitors.tf" <<'TF'
+# resource "sentry_uptime_monitor" "commented_out_line" {
+resource "sentry_uptime_monitor" "app" {
+  name = "soleur-app-reachability"
+  url  = "https://app.soleur.ai"
+}
+TF
+cat > "$UP_TF2/uptime-monitors.tf" <<'TF'
+resource "sentry_uptime_monitor" "app" {
+  url = "https://app.soleur.ai"
+}
+resource "sentry_uptime_monitor" "second" {
+  url = "https://example.invalid/"
+}
+TF
+# Row 3's declared side: every block is commented out (line comments, `//`, and
+# a `/* … */` region), so a parser that does not strip comments counts 3.
+cat > "$UP_TF0/uptime-monitors.tf" <<'TF'
+# resource "sentry_uptime_monitor" "line_comment" {
+// resource "sentry_uptime_monitor" "slash_comment" {
+/*
+resource "sentry_uptime_monitor" "block_comment" {
+  url = "https://app.soleur.ai"
+}
+*/
+TF
+# H2's declared side: odd whitespace (tabs, runs of spaces) and a trailing comment.
+printf 'resource \t "sentry_uptime_monitor"    "app"\t{   # adopted from Sentry id 9000001\n  url = "https://app.soleur.ai"\n}\n' \
+  > "$UP_TFWS/uptime-monitors.tf"
+
+_up_row() { # id mode-json url -> one API-shaped uptime detector row
+  jq -nc --arg id "$1" --argjson m "$2" --arg u "$3" \
+    '{id: $id, type: "uptime_domain_failure", config: {mode: $m, environment: "production"},
+      dataSources: [{type: "uptime_subscription", queryObj: {url: $u, method: "GET", mode: null}}]}'
+}
+_up_fixture() { # label row-json… -> path of a JSON array of the rows
+  local f="$TMPD/uptime.$1.json"; shift
+  if [[ $# -eq 0 ]]; then printf '[]' > "$f"; else printf '%s\n' "$@" | jq -s -c . > "$f"; fi
+  printf '%s' "$f"
+}
+UP_CLEAN=$(_up_fixture clean "$(_up_row 9000001 1 https://app.soleur.ai)")
+export SENTRY_FIXTURE_UPTIME="$UP_CLEAN" SENTRY_UPTIME_TF_DIR="$UP_TF1"
+
+# _run_up <uptime-fixture> [VAR=val…] — rules from the (clean) capture, uptime from
+# the fixture; sets $_rc/$_out. The rule side is clean, so any red is the uptime side.
+_run_up() { local fx="$1"; shift; _run_env "$CAPTURE" SENTRY_FIXTURE_UPTIME="$fx" "$@"; }
+_up_marker() { grep -m1 '^SENTRY_UPTIME ' <<<"$_out" || true; }
+
+t_g1_mode3_on_declared_url() {
+  local fx; fx=$(_up_fixture g1m3 "$(_up_row 9000001 1 https://app.soleur.ai)" "$(_up_row 9000003 3 https://app.soleur.ai)")
+  # TWO declared blocks, so live (2) == declared (2): only the MODE check can red.
+  _run_up "$fx" SENTRY_UPTIME_TF_DIR="$UP_TF2"
+  local why=()
+  [[ "$_rc" -eq 1 ]] || why+=("rc=$_rc (want 1)")
+  grep -qF -- 'UPTIME UNMANAGED: 9000003:3:https://app.soleur.ai' <<<"$_out" || why+=("no 'UPTIME UNMANAGED: 9000003:3:https://app.soleur.ai' finding")
+  grep -q '^ERROR: sentry_alert live fidelity FAILED' <<<"$_out" || why+=("no FAILED line (the workflow derives drift from it)")
+  [[ "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=drift unmanaged=1 live=2 declared=2" ]] || why+=("marker '$(_up_marker)'")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-1 a live mode-3 detector on the declared app URL (live 2 == declared 2) is drift and names id:3:url" ok
+  else _report "G1-1 mode 3 is drift" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_live_exceeds_declared() {
+  local fx; fx=$(_up_fixture g1cnt "$(_up_row 9000001 1 https://app.soleur.ai)" "$(_up_row 9000002 1 https://soleur.ai/)")
+  _run_up "$fx"
+  local why=()
+  [[ "$_rc" -eq 1 ]] || why+=("rc=$_rc (want 1)")
+  grep -qF -- 'UPTIME UNMANAGED: live=2 > declared=1' <<<"$_out" || why+=("no live > declared finding")
+  grep -qF -- '9000002:1:https://soleur.ai/' <<<"$_out" || why+=("the mode-1 candidates are not named")
+  [[ "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=drift unmanaged=1 live=2 declared=1" ]] || why+=("marker '$(_up_marker)'")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-2 two live mode-1 detectors against one declared block is drift (live > declared)" ok
+  else _report "G1-2 live > declared is drift" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_zero_declared_is_unavailable() {
+  _run_up "$UP_CLEAN" SENTRY_UPTIME_TF_DIR="$UP_TF0"
+  local m; m=$(_up_marker)
+  if [[ "$m" == "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=1 declared=0" ]] && ! grep -q 'uptime_verdict=clean' <<<"$_out"; then
+    _report "G1-3 a declared side whose every block is commented out (#, //, /* */) parses to 0 and is UNAVAILABLE, never clean" ok
+  else _report "G1-3 zero declared is unavailable" fail "rc=$_rc marker '$m'; output: $(head -c 400 <<<"$_out")"; fi
+}
+# Two bodies: the error JSON Sentry returns, and `{}`. The second matters: an
+# empty object has length 0 and passes an all-rows-are-uptime check vacuously, so
+# only the array check stands between it and "0 live, clean".
+t_g1_non_array_is_unavailable() {
+  local fx="$TMPD/uptime.g1obj.json" fx2="$TMPD/uptime.g1empty.json" bad=""
+  printf '{"detail":"You do not have permission to perform this action."}' > "$fx"
+  printf '{}' > "$fx2"
+  local f m
+  for f in "$fx" "$fx2"; do
+    _run_up "$f"
+    m=$(_up_marker)
+    if [[ "$m" != "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1" ]] || grep -q 'uptime_verdict=clean' <<<"$_out"; then
+      bad+=" [$(basename "$f"): rc=$_rc marker '$m']"
+    fi
+  done
+  if [[ -z "$bad" ]]; then
+    _report "G1-4 a non-array detectors body (error JSON, and an empty object) is UNAVAILABLE" ok
+  else _report "G1-4 non-array is unavailable" fail "$bad"; fi
+}
+t_g1_host_refused_token_unsent() {
+  local d="$TMPD/stub.g1host"; mkdir -p "$d"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s/argv"\ncat >> "%s/stdin"\nprintf "[]"\n' "$d" "$d" > "$d/curl"
+  chmod +x "$d/curl"; : > "$d/argv"; : > "$d/stdin"
+  _rc=0
+  # The RULE side is fixture-served, so the ONLY code that can reach curl is the
+  # uptime section's live branch: this row pins THAT branch's host pin.
+  _out=$(env -u SENTRY_FIXTURE_UPTIME -u SENTRY_UPTIME_TF_DIR PATH="$d:$PATH" LC_ALL=C \
+         SENTRY_AUTH_TOKEN=g1-secret-token SENTRY_ORG=jikigai-eu SENTRY_API_HOST=attacker.tld \
+         SENTRY_REFERENCE_FILE="$REFERENCE" SENTRY_FIXTURE_RULES="$CAPTURE" bash "$PROBE" 2>&1) || _rc=$?
+  local why=()
+  [[ "$_rc" -eq 2 ]] || why+=("rc=$_rc (want 2)")
+  grep -q '^ERROR: refusing destination host attacker.tld (pinned: jikigai-eu.sentry.io)' <<<"$_out" || why+=("no anchored refusal")
+  [[ -s "$d/argv" || -s "$d/stdin" ]] && why+=("curl was invoked")
+  grep -q 'g1-secret-token' <<<"$_out" && why+=("the token was printed")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-5 the uptime live branch refuses a non-pinned SENTRY_API_HOST (rc 2, anchored) and never invokes curl" ok
+  else _report "G1-5 uptime host pin" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_pagination_ceiling() {
+  local rows=() i
+  for i in $(seq 1 100); do rows+=("$(_up_row "$((9100000 + i))" 1 "https://app.soleur.ai")"); done
+  local fx; fx=$(_up_fixture g1hundred "${rows[@]}")
+  _run_up "$fx"
+  local m; m=$(_up_marker)
+  if [[ "$m" == "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1" ]] \
+     && grep -q 'pagination ceiling' <<<"$_out" && ! grep -q 'UPTIME UNMANAGED' <<<"$_out"; then
+    _report "G1-6 a 100-row detectors page is refused at the pagination ceiling: UNAVAILABLE, not drift and not clean" ok
+  else _report "G1-6 100 rows is unavailable" fail "rc=$_rc marker '$m'; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_runs_before_rule_side_exit() {
+  local fx; fx=$(_up_fixture g1early "$(_up_row 9000003 3 https://app.soleur.ai)")
+  _run_up "$fx" SENTRY_REFERENCE_FILE="$TMPD/no-such-reference.json"
+  local why=()
+  [[ "$_rc" -eq 1 ]] || why+=("rc=$_rc (want 1)")
+  grep -q 'reference not readable' <<<"$_out" || why+=("the rule side did not exit early (row setup)")
+  grep -qF -- 'UPTIME UNMANAGED: 9000003:3:https://app.soleur.ai' <<<"$_out" || why+=("the uptime finding was not printed")
+  grep -q '^SENTRY_UPTIME uptime_verdict=drift ' <<<"$_out" || why+=("no drift marker")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-7 a rule-side early exit (unreadable reference) still prints the uptime finding and marker: the section runs first" ok
+  else _report "G1-7 uptime section runs first" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_url_is_scrubbed() {
+  local fx; fx=$(_up_fixture g1url "$(_up_row 9000009 3 'https://g1user:g1pass@app.soleur.ai/health?token=g1querysecret#g1frag')")
+  _run_up "$fx" SENTRY_UPTIME_TF_DIR="$UP_TF2"
+  local why=()
+  grep -qF -- 'UPTIME UNMANAGED: 9000009:3:https://app.soleur.ai/health ' <<<"$_out" || why+=("finding is not id:mode:scheme://host/path")
+  grep -qE -- 'g1user|g1pass|g1querysecret|g1frag|token=' <<<"$_out" && why+=("userinfo, query or fragment leaked")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-9 a URL carrying user:pass@ and ?token= prints scheme, host and path only" ok
+  else _report "G1-9 URL scrubbed" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_h1_clean() {
+  _run_up "$UP_CLEAN"
+  local why=()
+  [[ "$_rc" -eq 0 ]] || why+=("rc=$_rc (want 0)")
+  [[ "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=fixture-clean unmanaged=0 live=1 declared=1" ]] || why+=("marker '$(_up_marker)'")
+  grep -q '^::warning::.*FIXTURE MODE.*SENTRY_FIXTURE_UPTIME' <<<"$_out" || why+=("fixture mode not announced")
+  grep -q 'UPTIME UNMANAGED' <<<"$_out" && why+=("a finding on a clean fixture")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-H1 one live mode-1 row (URL without trailing slash), one declared block: fixture-clean, announced" ok
+  else _report "G1-H1 must-pass clean" fail "${why[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+t_g1_h2_whitespace_and_comment() {
+  _run_up "$UP_CLEAN" SENTRY_UPTIME_TF_DIR="$UP_TFWS"
+  if [[ "$_rc" -eq 0 && "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=fixture-clean unmanaged=0 live=1 declared=1" ]]; then
+    _report "G1-H2 a declared block with tabs, runs of spaces and a trailing comment counts as 1: clean" ok
+  else _report "G1-H2 declared whitespace/comment" fail "rc=$_rc marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
+}
+# A live row whose type is not uptime_domain_failure means the endpoint ignored
+# the query filter (or answered another collection): unavailable, never counted.
+t_g1_foreign_type_is_unavailable() {
+  local fx; fx=$(_up_fixture g1type "$(_up_row 9000001 1 https://app.soleur.ai | jq -c '.type = "metric_issue"')")
+  _run_up "$fx"
+  if [[ "$(_up_marker)" == "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1" ]]; then
+    _report "G1-10 a row whose type is not uptime_domain_failure is UNAVAILABLE (the query filter was not honoured)" ok
+  else _report "G1-10 foreign type" fail "rc=$_rc marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
+}
+# _up_live_stub <name> <body-file> <exit> — a curl that serves a file and exits rc.
+_up_live_stub() {
+  local d="$TMPD/stub.$1"; mkdir -p "$d"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\ncat "%s"\nexit %s\n' "$2" "$3" > "$d/curl"
+  chmod +x "$d/curl"; printf '%s' "$d"
+}
+_run_up_live() { # <stub-dir> [VAR=val…] — rules fixture-served, uptime LIVE through the stub
+  local d="$1"; shift
+  _rc=0
+  _out=$(env -u SENTRY_FIXTURE_UPTIME -u SENTRY_UPTIME_TF_DIR PATH="$d:$PATH" LC_ALL=C \
+         SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io \
+         SENTRY_REFERENCE_FILE="$REFERENCE" SENTRY_FIXTURE_RULES="$CAPTURE" "$@" bash "$PROBE" 2>&1) || _rc=$?
+  _guard_out
+}
+t_g1_transport_failure_is_unavailable() {
+  local d; d=$(_up_live_stub g1curl22 /dev/null 22)
+  _run_up_live "$d"
+  if [[ "$_rc" -eq 0 ]] && grep -q '^SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=' <<<"$_out" \
+     && grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G1-11 a failed detectors GET (curl rc 22) is UNAVAILABLE and does not abort the rule-side check" ok
+  else _report "G1-11 transport failure" fail "rc=$_rc marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
+}
+# The declared-dir seam is a TEST seam: on the live branch it must be ignored, or
+# a `$GITHUB_ENV` write could point the declared count anywhere.
+t_g1_tf_dir_seam_ignored_live() {
+  local d; d=$(_up_live_stub g1seam "$UP_CLEAN" 0)
+  _run_up_live "$d" SENTRY_UPTIME_TF_DIR="$UP_TF0"
+  local m; m=$(_up_marker)
+  if [[ "$m" =~ ^SENTRY_UPTIME\ uptime_verdict=clean\ unmanaged=0\ live=1\ declared=[1-9][0-9]*$ ]]; then
+    _report "G1-12 SENTRY_UPTIME_TF_DIR is ignored on the live branch (declared read from the committed root; live marker carries no FIXTURE)" ok
+  else _report "G1-12 declared-dir seam ignored live" fail "rc=$_rc marker '$m'; output: $(head -c 400 <<<"$_out")"; fi
+}
+
 # INSTRUMENT SELF-TEST for the bash-error guard: it must match a bash error and
 # pass a clean finding line (a regex grep cannot evaluate exits 2, which
 # `_bash_err` turns into a fatal). Reported by printf/exit, never through the guard.
@@ -1544,6 +1792,19 @@ t_frozen_derivation_parity_refuses
 t_bidi_name_is_scrubbed
 t_frozen_id_mismatch
 t_leaf_key_is_scrubbed
+t_g1_mode3_on_declared_url
+t_g1_live_exceeds_declared
+t_g1_zero_declared_is_unavailable
+t_g1_non_array_is_unavailable
+t_g1_host_refused_token_unsent
+t_g1_pagination_ceiling
+t_g1_runs_before_rule_side_exit
+t_g1_url_is_scrubbed
+t_g1_h1_clean
+t_g1_h2_whitespace_and_comment
+t_g1_foreign_type_is_unavailable
+t_g1_transport_failure_is_unavailable
+t_g1_tf_dir_seam_ignored_live
 
 echo "=== $pass passed, $fail failed ==="
 

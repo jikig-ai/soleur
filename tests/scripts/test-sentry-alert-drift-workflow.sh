@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # that has never been driven red is a reading, not a test.
 WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=21
+EXPECTED_TESTS=34
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -82,10 +82,15 @@ _drive() {
   _rc=$(sed -n 's/^rc=//p' <<<"$_out" | head -1)
 }
 
+# Every stub that models a run which got past the uptime section carries the
+# SENTRY_UPTIME marker the real probe prints there (#6606); a missing marker is
+# its own row (W11), because the step reads it as `unavailable`.
 STUB_CLEAN='#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1"
 echo "sentry_alert live fidelity: PASS (all 27 in-scope rules match the committed capture field-for-field)"
 exit 0'
 STUB_DRIFT='#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1"
 echo "  DELETED or RENAMED: byok-art-33-breach"
 echo "ERROR: sentry_alert live fidelity FAILED — 1 divergence(s)." >&2
 exit 1'
@@ -163,7 +168,8 @@ _close_gated_ok() {
   for id in close_unavailable close_drift; do
     if ! cond=$(_step_field "$1" id "$id" if 2>&1); then bad+=" [$id: $cond]"; continue; fi
     cond=$(_collapse <<<"$cond")
-    grep -qF -- "verdict == 'clean'" <<<"$cond" || bad+=" [$id lacks == 'clean']"
+    grep -qF -- "steps.probe.outputs.verdict == 'clean'" <<<"$cond" || bad+=" [$id lacks == 'clean']"
+    grep -qF -- "&& steps.probe.outputs.uptime_verdict == 'clean'" <<<"$cond" || bad+=" [$id lacks && uptime_verdict == 'clean' — a rule-side verdict would close an issue while uptime is unavailable]"
     grep -qF -- "!=" <<<"$cond" && bad+=" [$id carries an inequality]"
     grep -qF -- "always()" <<<"$cond" || bad+=" [$id lacks always() — implicit success() skips it on every drift run]"
   done
@@ -173,7 +179,7 @@ _close_gated_ok() {
 t_close_gated_on_clean_only() {
   local why
   if why=$(_close_gated_ok "$WF"); then
-    _report "W5 both close arms are gated on verdict == 'clean' (never '!= drift'), each under always()" ok
+    _report "W5 both close arms are gated on verdict == 'clean' AND uptime_verdict == 'clean' (never '!= drift'), each under always()" ok
   else
     _report "W5 close arm gating" fail "$why"
   fi
@@ -212,9 +218,16 @@ t_probe_marker_matches_what_the_step_greps() {
   # A REAL divergence through the REAL probe.
   local mut="$TMPD/w7-drift.json"
   jq -c 'map(select(.name != "byok-art-33-breach"))' "$capture" > "$mut" 2>/dev/null
+  # SENTRY_FIXTURE_UPTIME too (#6606): the probe's uptime section runs first and,
+  # without it, would take its LIVE branch, whose org pin refuses `fixture` with
+  # rc 2 before the rule side ever prints the marker. One mode-1 row is clean
+  # against any non-zero declared count.
+  local up="$TMPD/w7-uptime.json"
+  printf '[{"id":"9000001","type":"uptime_domain_failure","config":{"mode":1},"dataSources":[{"queryObj":{"url":"https://app.soleur.ai"}}]}]' > "$up"
   local out
   out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture SENTRY_FIXTURE_RULES="$mut" \
-        bash "$probe" 2>&1) || true
+        SENTRY_FIXTURE_UPTIME="$up" bash "$probe" 2>&1) || true
+  W7_OUT="$out"
   if grep -q "$marker" <<<"$out"; then
     _report "W7 the real probe emits the exact marker the real step greps ('$marker')" ok
   else
@@ -275,8 +288,8 @@ _collapse() { tr -s ' \n\t' ' ' | sed 's/^ //; s/ $//'; }
 # all pass (review mutations). GitHub's evaluator is not available locally, so
 # the text IS the contract; the diagnostic names the first missing fragment so a
 # legitimate edit still reads as a specific reason.
-FILER_IF="always() && !cancelled() && (steps.probe.outputs.verdict == 'unavailable' || steps.probe.outputs.verdict == '' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true'))"
-CLOSER_IF="always() && (steps.probe.outputs.verdict == 'clean' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed == 'true'))"
+FILER_IF="always() && !cancelled() && (steps.probe.outputs.verdict == 'unavailable' || steps.probe.outputs.verdict == '' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true') || steps.probe.outputs.uptime_verdict == 'unavailable')"
+CLOSER_IF="always() && (steps.probe.outputs.verdict == 'clean' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed == 'true')) && steps.probe.outputs.uptime_verdict == 'clean'"
 _w8_filer_gate_ok() {
   local cond
   if ! cond=$(_step_field "$1" id file_unavailable if 2>&1); then
@@ -289,6 +302,7 @@ _w8_filer_gate_ok() {
   grep -qF -- "verdict == 'unavailable'" <<<"$cond" || why+=("missing the 'unavailable' arm")
   grep -qF -- "verdict == ''" <<<"$cond" || why+=("missing the == '' arm — a run that aborts before the probe writes a verdict would file nothing")
   grep -qF -- "(steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true')" <<<"$cond" || why+=("missing the paired drift-not-filed arm (a bare filed != 'true' files on every CLEAN run)")
+  grep -qF -- "|| steps.probe.outputs.uptime_verdict == 'unavailable')" <<<"$cond" || why+=("missing the uptime_verdict == 'unavailable' arm — an uptime check that could not run would file nothing")
   grep -qF -- 'failure()' <<<"$cond" && why+=("contains failure() — true on every drift verdict because the drift filer exits 1 by design (#8058)")
   why+=("expression is not exactly: $FILER_IF (got: $cond)")
   printf '%s; ' "${why[@]}"; echo; return 1
@@ -308,6 +322,7 @@ _w8_closer_gate_ok() {
   local why=()
   grep -qF -- "verdict == 'clean'" <<<"$cond" || why+=("missing the 'clean' arm")
   grep -qF -- "verdict == 'drift' && steps.file_drift.outputs.filed == 'true'" <<<"$cond" || why+=("the 'drift' arm lacks the filed == 'true' conjunct — the closer would undo the filer's drift-not-filed arm in the same run")
+  grep -qF -- ")) && steps.probe.outputs.uptime_verdict == 'clean'" <<<"$cond" || why+=("missing the && uptime_verdict == 'clean' conjunct — a rule-side verdict would close an open uptime-unavailable issue")
   grep -qF -- "!=" <<<"$cond" && why+=("contains an inequality")
   grep -qF -- "always()" <<<"$cond" || why+=("missing always() — implicit success() skips the closer on every drift run")
   why+=("expression is not exactly: $CLOSER_IF (got: $cond)")
@@ -485,6 +500,144 @@ t_w9_mutant() {
   _red_row "W9-a an inline differing title in the close step reds W9" "$f" _w9_title_parity_ok "does not reference"
 }
 
+# ── Guard 1 (#6606) — the uptime verdict, carried beside the rule verdict ─────
+#
+# The probe prints `SENTRY_UPTIME uptime_verdict=<clean|drift|unavailable> …`
+# from its uptime section. An uptime DRIFT also reaches the rule verdict (each
+# unmanaged monitor is a `_finding`, so the FAILED line carries it); an uptime
+# UNAVAILABLE does not, so the step carries it as its own output and the filer,
+# both closers, and the step's colour read it.
+STUB_UP_FIXTURE='#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=fixture-clean unmanaged=0 live=1 declared=1"
+echo "sentry_alert live fidelity: PASS (all 27 in-scope rules match the committed capture field-for-field)"
+exit 0'
+STUB_UP_NOMARKER='#!/usr/bin/env bash
+echo "sentry_alert live fidelity: PASS (all 27 in-scope rules match the committed capture field-for-field)"
+exit 0'
+STUB_UP_DRIFT='#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=drift unmanaged=1 live=2 declared=1"
+echo "  UPTIME UNMANAGED: 1422253:3:https://app.soleur.ai"
+echo "ERROR: sentry_alert live fidelity FAILED — 1 divergence(s)." >&2
+exit 1'
+# Row 8's state: the RULE side drifted AND the uptime side could not run.
+STUB_DRIFT_UP_UNAVAIL='#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1"
+echo "  DELETED or RENAMED: byok-art-33-breach"
+echo "ERROR: sentry_alert live fidelity FAILED — 1 divergence(s)." >&2
+exit 1'
+_uv() { sed -n 's/^uptime_verdict=//p' <<<"$_out"; }
+
+t_w7b_real_probe_marker_shape() {
+  # W7's real-probe output must carry the uptime marker in the shape the step parses.
+  local re; re=$(grep -oE "\^SENTRY_UPTIME uptime_verdict=" "$TMPD/probe-step.sh" | head -1)
+  if [[ -n "$re" ]] && grep -qE '^SENTRY_UPTIME uptime_verdict=[^ ]+ unmanaged=[0-9]+ live=[0-9?]+ declared=[0-9]+$' <<<"${W7_OUT:-}"; then
+    _report "W7b the real probe prints the SENTRY_UPTIME marker line the step anchors on ('^SENTRY_UPTIME uptime_verdict=')" ok
+  else
+    _report "W7b real probe uptime marker" fail "step anchor='${re}'; probe marker: $(grep '^SENTRY_UPTIME' <<<"${W7_OUT:-}" || echo '<none>')"
+  fi
+}
+t_w10_uptime_clean() {
+  _drive "$STUB_CLEAN"
+  if [[ "$_rc" == "0" && "$(_uv)" == "clean" ]] && grep -q '^verdict=clean$' <<<"$_out"; then
+    _report "W10 a clean uptime marker yields uptime_verdict=clean beside verdict=clean, green step" ok
+  else _report "W10 uptime clean" fail "rc=$_rc out='$_out'"; fi
+}
+t_w11_missing_marker_is_unavailable() {
+  _drive "$STUB_UP_NOMARKER"
+  if [[ "$_rc" == "1" && "$(_uv)" == "unavailable" ]] && grep -q '^verdict=clean$' <<<"$_out"; then
+    _report "W11 a probe output with NO SENTRY_UPTIME marker yields uptime_verdict=unavailable and REDS the step" ok
+  else _report "W11 missing marker" fail "rc=$_rc out='$_out'"; fi
+}
+t_w12_fixture_marker_is_not_clean() {
+  _drive "$STUB_UP_FIXTURE"
+  if [[ "$_rc" == "1" && "$(_uv)" == "unavailable" ]]; then
+    _report "W12 a fixture-clean marker is NOT clean: uptime_verdict=unavailable, red step, so no closer fires" ok
+  else _report "W12 fixture marker" fail "rc=$_rc out='$_out'"; fi
+}
+t_w13_uptime_drift() {
+  _drive "$STUB_UP_DRIFT"
+  if [[ "$_rc" == "0" && "$(_uv)" == "drift" ]] && grep -q '^verdict=drift$' <<<"$_out"; then
+    _report "W13 an uptime drift reaches verdict=drift (FAILED line) and uptime_verdict=drift" ok
+  else _report "W13 uptime drift" fail "rc=$_rc out='$_out'"; fi
+}
+# Guard 1 row 8. GitHub's evaluator is not available locally, so this is the
+# DRIVEN outputs plus the exact filer/closer expressions W8/W8c pin: with
+# (verdict=drift, uptime_verdict=unavailable) the filer's uptime arm is true
+# regardless of `filed`, and both closers' `uptime_verdict == 'clean'` conjunct
+# is false — filed, and not closed.
+t_g1_row8_rule_drift_uptime_unavailable() {
+  _drive "$STUB_DRIFT_UP_UNAVAIL"
+  local why=()
+  grep -q '^verdict=drift$' <<<"$_out" || why+=("verdict is not drift")
+  [[ "$(_uv)" == "unavailable" ]] || why+=("uptime_verdict='$(_uv)'")
+  local w; w=$(_w8_filer_gate_ok "$WF") || why+=("filer: $w")
+  w=$(_w8_closer_gate_ok "$WF") || why+=("close_unavailable: $w")
+  w=$(_close_gated_ok "$WF") || why+=("closers: $w")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "G1-8 rule drift + uptime unavailable: the unavailable issue is FILED (uptime arm) and NOT closed (both closers need uptime_verdict == 'clean')" ok
+  else _report "G1-8 rule drift + uptime unavailable" fail "${why[*]}"; fi
+}
+
+# The two fixture pins. A `$GITHUB_ENV` write of SENTRY_FIXTURE_UPTIME would turn
+# the uptime half into a self-comparison; the marker's (FIXTURE) suffix keeps it
+# off `clean`, and this pin keeps it from arising at all.
+# _pin_ok <wf> <job> <step-selector: run-substring> — both fixture names pinned "".
+_pin_ok() {
+  python3 - "$1" "$2" "$3" <<'PYEOF'
+import sys, yaml
+wf, job, needle = sys.argv[1:4]
+d = yaml.safe_load(open(wf))
+steps = [s for s in d["jobs"][job]["steps"] if needle in (s.get("run") or "")]
+if len(steps) != 1:
+    sys.exit(f"expected exactly one step in {job} running {needle!r}, found {len(steps)}")
+env = steps[0].get("env") or {}
+bad = [k for k in ("SENTRY_FIXTURE_RULES", "SENTRY_FIXTURE_UPTIME") if env.get(k, None) != ""]
+if bad:
+    sys.exit("not pinned empty: " + ", ".join(f"{k}={env.get(k, '<absent>')!r}" for k in bad))
+PYEOF
+}
+APPLY_WF="${SENTRY_APPLY_WF:-$REPO_ROOT/.github/workflows/apply-sentry-infra.yml}"
+t_w14_drift_probe_pins_fixture_uptime() {
+  local why
+  if why=$(_pin_ok "$WF" drift-check 'bash scripts/sentry-alert-live-fidelity.sh' 2>&1); then
+    _report "W14 the drift probe step pins SENTRY_FIXTURE_UPTIME: \"\" beside SENTRY_FIXTURE_RULES: \"\"" ok
+  else _report "W14 drift probe fixture pin" fail "$why"; fi
+}
+t_w15_apply_probe_pins_fixture_uptime() {
+  local why
+  if why=$(_pin_ok "$APPLY_WF" apply 'bash scripts/sentry-alert-live-fidelity.sh' 2>&1); then
+    _report "W15 the apply job's post-apply probe pins SENTRY_FIXTURE_UPTIME: \"\" beside SENTRY_FIXTURE_RULES: \"\"" ok
+  else _report "W15 apply probe fixture pin" fail "$why"; fi
+}
+t_w16_drift_body_names_uptime_unmanaged() {
+  local run
+  run=$(_step_field "$WF" id file_drift run 2>&1) || { _report "W16 drift body" fail "$run"; return; }
+  if grep -qF -- '`UPTIME UNMANAGED`' <<<"$run" && grep -qF -- 'import the monitor or DELETE it; re-running the apply does not fix it' <<<"$run"; then
+    _report "W16 the drift issue body explains UPTIME UNMANAGED (import or DELETE; an apply does not fix it)" ok
+  else _report "W16 drift body names UPTIME UNMANAGED" fail "bullet absent from the file_drift run block"; fi
+}
+t_g1_mutants() {
+  local f why
+  f=$(_mutate_wf g1a "for s in steps:
+    if s.get('id') == 'file_unavailable': s['if'] = s['if'].replace(\" || steps.probe.outputs.uptime_verdict == 'unavailable'\", '')")
+  _red_row "W8-i dropping the filer's uptime_verdict == 'unavailable' arm reds W8" "$f" _w8_filer_gate_ok "missing the uptime_verdict == 'unavailable' arm"
+
+  f=$(_mutate_wf g1b "for s in steps:
+    if s.get('id') == 'close_unavailable': s['if'] = s['if'].replace(\" && steps.probe.outputs.uptime_verdict == 'clean'\", '')")
+  _red_row "W8-j dropping close_unavailable's uptime_verdict == 'clean' conjunct reds W8c" "$f" _w8_closer_gate_ok "missing the && uptime_verdict == 'clean' conjunct"
+
+  f=$(_mutate_wf g1c "for s in steps:
+    if s.get('id') == 'close_drift': s['if'] = s['if'].replace(\" && steps.probe.outputs.uptime_verdict == 'clean'\", '')")
+  _red_row "W5-b dropping close_drift's uptime_verdict == 'clean' conjunct reds W5" "$f" _close_gated_ok "close_drift lacks && uptime_verdict == 'clean'"
+
+  f=$(_mutate_wf g1d "for s in steps:
+    if s.get('id') == 'probe': s['env'].pop('SENTRY_FIXTURE_UPTIME', None)")
+  if [[ "$f" != PYFAIL && "$f" != NOLAND ]] && ! why=$(_pin_ok "$f" drift-check 'bash scripts/sentry-alert-live-fidelity.sh' 2>&1) \
+     && grep -qF 'SENTRY_FIXTURE_UPTIME' <<<"$why"; then
+    _report "W14-a removing the drift probe's SENTRY_FIXTURE_UPTIME pin reds W14" ok
+  else _report "W14-a pin mutant" fail "f=$f why='${why:-}'"; fi
+}
+
 t_clean
 t_drift
 t_unavailable
@@ -498,6 +651,16 @@ t_unavailable_on_other_exit_codes
 t_marker_is_anchored
 t_w8_mutants
 t_w9_mutant
+t_w7b_real_probe_marker_shape
+t_w10_uptime_clean
+t_w11_missing_marker_is_unavailable
+t_w12_fixture_marker_is_not_clean
+t_w13_uptime_drift
+t_g1_row8_rule_drift_uptime_unavailable
+t_w14_drift_probe_pins_fixture_uptime
+t_w15_apply_probe_pins_fixture_uptime
+t_w16_drift_body_names_uptime_unmanaged
+t_g1_mutants
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))

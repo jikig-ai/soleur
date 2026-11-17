@@ -44,7 +44,7 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
       `CUT8_TOTAL` term); rewrite the comment. No `BETTERSTACK_MONITORS` append.
 - [ ] 3.7 `sentry-alert-live-fidelity.sh`: uptime "unmanaged" section before the first
       rule-side exit; findings via `_finding` with scheme/host/path only; `SENTRY_UPTIME`
-      marker; `uptime_verdict=clean(FIXTURE)` in fixture mode.
+      marker; `uptime_verdict=fixture-clean` in fixture mode.
 - [ ] 3.7a `scheduled-sentry-alert-drift.yml`: `uptime_verdict` output, unavailable filer and
       both closers gated on it, `SENTRY_FIXTURE_UPTIME: ""`, `UPTIME UNMANAGED` body bullet.
 - [ ] 3.7b `apply-sentry-infra.yml`: `SENTRY_FIXTURE_UPTIME: ""` in the post-apply probe env.

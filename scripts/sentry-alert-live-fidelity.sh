@@ -63,10 +63,16 @@
 # workflows the census accepts (default: apps/web-platform/infra/sentry/
 # vendor-default-workflows.json; empty reads as unset). See "THE CENSUS".
 # Test injection (its own suite ONLY): SENTRY_FIXTURE_RULES — file path served
-# instead of the live GET.
+# instead of the live GET; SENTRY_FIXTURE_UPTIME — the same for the uptime
+# detectors GET, with SENTRY_UPTIME_TF_DIR (fixture mode only) overriding the
+# directory the declared sentry_uptime_monitor blocks are counted in. See
+# "SENTRY UPTIME" below (#6606).
 #
-# Exit 0 = every declared rule matches live, and every in-scope live rule is declared.
-# Exit 1 = a divergence, or the probe could not establish that it checked anything.
+# Exit 0 = every declared rule matches live, every in-scope live rule is declared,
+#          and no live uptime monitor is unmanaged.
+# Exit 1 = a divergence (an unmanaged uptime monitor included), or the probe could
+#          not establish that it checked any rule. An UNAVAILABLE uptime check does
+#          not change the exit code: it is carried by the SENTRY_UPTIME marker line.
 set -euo pipefail
 
 # REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
@@ -123,6 +129,203 @@ _safe() {
 # (d) Nothing downstream may re-point it.
 readonly SENTRY_ORG
 
+# THE DESTINATION PINS, shared by both credentialed GETs (the uptime detectors
+# below and the workflows in `fetch_rules`). Exact equality against a LITERAL,
+# never against another variable: on this surface the environment is the
+# adversary, and a pin that reads its expected value from the environment pins
+# nothing (#7997). The literals are the Doppler `prd` SENTRY_API_HOST value and
+# `variables.tf`'s `sentry_org` default. The message anchors (`refusing
+# destination host`, `refusing org`) and exit 2 are the contract the drift
+# workflow's unavailable-issue body greps (#8023); the value is rendered through
+# `_safe`, never raw. Remedy for a drifted repository secret: `gh secret set
+# SENTRY_API_HOST --body jikigai-eu.sentry.io` — a hostname, not a secret.
+# Called on the LIVE branches only: the suite's fixture rows run with
+# SENTRY_ORG=fixture and must not trip it.
+_pin_destination() {
+  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
+  case "$SENTRY_API_HOST" in
+    "jikigai-eu.sentry.io") ;;
+    *) printf 'ERROR: refusing destination host %s (pinned: jikigai-eu.sentry.io)\n' "$(_safe "$SENTRY_API_HOST")" >&2; exit 2 ;;
+  esac
+  case "$SENTRY_ORG" in
+    "jikigai-eu") ;;
+    *) printf 'ERROR: refusing org %s (pinned: jikigai-eu)\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
+  esac
+}
+
+# The ONE scrubber for API-supplied strings (names, ids, leaf keys, URLs),
+# prefixed to every jq program that prints one: C0/DEL, the two Unicode line
+# separators, and the zero-width and bidi-override ranges (a name reordered by
+# U+202E prints like another rule's). See the pin's comment on why live strings
+# are scrubbed at all.
+SAFE_JQ='def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"; "") | .[0:200];'
+
+# Defined BEFORE the uptime section, which reports through it, so an uptime
+# finding counts toward the one FAILED line and exit 1 the workflows read.
+findings=0
+_finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
+
+# ── SENTRY UPTIME: no unmanaged uptime monitor (Guard 1, #6606) ─────────────
+# Sentry auto-detects uptime monitors from the app's traffic (mode 3) and will
+# re-create one we deleted; a monitor created in the UI is just as invisible to
+# Terraform. Either way it bills a slot and no apply ever removes it. The
+# PROPERTY: every live uptime detector in the org has `mode == 1` (manual, i.e.
+# created or imported by Terraform), and the live count is not greater than
+# the number of declared `resource "sentry_uptime_monitor"` blocks in
+# apps/web-platform/infra/sentry/*.tf.
+#
+# PLACED BEFORE every rule-side `exit`, so a rule-side refusal cannot skip it.
+# It never exits on its own except at the destination pin (exit 2, as above):
+#   * drift        -> one `_finding` per monitor (`UPTIME UNMANAGED: id:mode:url`)
+#   * unavailable  -> NO finding, so the rule-side verdict is untouched; the
+#                     marker below carries it, and the drift workflow files the
+#                     probe-unavailable issue from it. 0 declared blocks, a
+#                     failed GET, a non-array body, a row of another type, and
+#                     >= 100 rows (one page, no cursor) are all unavailable —
+#                     never clean.
+# ONE MARKER LINE at column 0, always printed (findings are indented, so a live
+# URL cannot forge it):
+#   SENTRY_UPTIME uptime_verdict=<clean|drift|unavailable> unmanaged=<n> live=<n|?> declared=<n>
+# `unmanaged` is a LOWER BOUND on monitors nothing manages:
+# max(rows with mode != 1, live - declared), so a mode-3 extra is not counted twice.
+#
+# FIXTURE SEAM, its suite ONLY: SENTRY_FIXTURE_UPTIME=<json file> is served
+# instead of the live GET, announced loudly, and a clean verdict reads
+# `uptime_verdict=fixture-clean`. SENTRY_UPTIME_TF_DIR overrides the declared
+# directory IN FIXTURE MODE ONLY; on the live branch it is ignored, so no
+# environment value can point the declared count somewhere else.
+UPTIME_FIXTURE_MODE=0
+[[ -n "${SENTRY_FIXTURE_UPTIME:-}" ]] && UPTIME_FIXTURE_MODE=1
+UPTIME_TF_DIR="$REPO_ROOT/apps/web-platform/infra/sentry"
+if [[ "$UPTIME_FIXTURE_MODE" -eq 1 && -n "${SENTRY_UPTIME_TF_DIR:-}" ]]; then
+  UPTIME_TF_DIR="$SENTRY_UPTIME_TF_DIR"
+fi
+
+# DECLARED: `resource "sentry_uptime_monitor" "<label>" {` headers, counted after
+# comments are stripped. Both .tf files name removed resources in comments, so a
+# bare grep overcounts, and an overcount is the dangerous direction (it lets an
+# unmanaged monitor pass). A header must be the first token on its line, so a
+# `#` or `//` line comment never counts; a `/* … */` region that opens a line is
+# skipped to its `*/` (a `/*` mid-line is NOT treated as a comment opener: the
+# Sentry root's crontab strings carry `*/` and the strip must not eat them).
+# A trailing `#`/`//` comment after the `{` is allowed.
+uptime_tf_files=()
+if [[ -d "$UPTIME_TF_DIR" ]]; then
+  for f in "$UPTIME_TF_DIR"/*.tf; do [[ -r "$f" ]] && uptime_tf_files+=("$f"); done
+fi
+uptime_declared=0
+if [[ ${#uptime_tf_files[@]} -gt 0 ]]; then
+  uptime_declared=$(awk '
+    FNR == 1 { inc = 0 }
+    {
+      line = $0
+      if (inc) { p = index(line, "*/"); if (!p) next; line = substr(line, p + 2); inc = 0 }
+      sub(/^[[:space:]]+/, "", line)
+      while (substr(line, 1, 2) == "/*") {
+        p = index(substr(line, 3), "*/")
+        if (!p) { inc = 1; next }
+        line = substr(line, p + 4); sub(/^[[:space:]]+/, "", line)
+      }
+      if (line ~ /^resource[[:space:]]+"?sentry_uptime_monitor"?[[:space:]]+"?[A-Za-z_][A-Za-z0-9_-]*"?[[:space:]]*\{[[:space:]]*((#|\/\/).*)?$/) n++
+    }
+    END { print n + 0 }' "${uptime_tf_files[@]}")
+fi
+
+uptime_json=''
+uptime_unavail=''
+if [[ "$UPTIME_FIXTURE_MODE" -eq 1 ]]; then
+  echo "::warning::sentry uptime: FIXTURE MODE — SENTRY_FIXTURE_UPTIME is set, so this run did NOT read live Sentry uptime detectors. Its verdict reads fixture-clean and says NOTHING about production." >&2
+  if [[ -r "$SENTRY_FIXTURE_UPTIME" ]]; then
+    uptime_json=$(cat "$SENTRY_FIXTURE_UPTIME")
+  else
+    uptime_unavail="the fixture file is not readable"
+  fi
+else
+  _pin_destination
+  # Same transport confinement as `fetch_rules` (flag ORDER pinned by the suite,
+  # bearer header on STDIN). rc captured on its own line: a failed GET is
+  # UNAVAILABLE for this section and must not abort the rule-side check.
+  set +e
+  uptime_json=$(printf 'Authorization: Bearer %s\n' "$SENTRY_AUTH_TOKEN" |
+    curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 15 \
+      --header @- \
+      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/?query=type:uptime_domain_failure&per_page=100")
+  uptime_rc=$?
+  set -e
+  [[ "$uptime_rc" -eq 0 ]] || uptime_unavail="the detectors GET failed (curl rc=${uptime_rc})"
+fi
+
+uptime_live='?'
+uptime_bad_mode=0
+uptime_lines=''
+if [[ -z "$uptime_unavail" ]]; then
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$uptime_json"; then
+    uptime_unavail="the detectors response is not a JSON array"
+  elif (( $(jq 'length' <<<"$uptime_json") >= 100 )); then
+    uptime_unavail="the detectors payload returned >= 100 rows, this fetch's unpaginated ceiling (pagination ceiling); a detector on page 2 would go unseen"
+  elif ! jq -e 'all(.[]; type == "object" and .type == "uptime_domain_failure")' >/dev/null 2>&1 <<<"$uptime_json"; then
+    uptime_unavail="a detectors row is not of type uptime_domain_failure, so the query filter was not honoured"
+  else
+    uptime_live=$(jq 'length' <<<"$uptime_json")
+    # One TSV line per detector: id, mode (JSON), and the URL reduced to
+    # scheme://host/path. The drift issue body is PUBLIC, so userinfo (everything
+    # up to the LAST `@` before the query), port, query and fragment are dropped
+    # here, and every field goes through `safe`.
+    uptime_lines=$(jq -r "${SAFE_JQ}"'
+      def url_shape:
+        if type != "string" then "<no-url>" else
+          (split("?")[0] | split("#")[0]) as $u
+          | ([ $u | capture("^(?<s>[A-Za-z][A-Za-z0-9+.-]*)://(?<r>.*)$") ][0]) as $c
+          | if $c == null then "<unparsed-url>" else
+              ($c.r | sub("^.*@"; "")) as $r
+              | ($r | index("/")) as $i
+              | (if $i == null then $r else $r[:$i] end | sub(":[0-9]*$"; "")) as $h
+              | (if $i == null then "" else $r[$i:] end) as $p
+              | "\($c.s)://\($h)\($p)"
+            end
+        end;
+      .[] | [ (.id | safe),
+              ((.config.mode // .dataSources[0].queryObj.mode) | tojson),
+              (.dataSources[0].queryObj.url | url_shape | safe) ] | join("\t")' <<<"$uptime_json")
+    if [[ "$uptime_declared" -eq 0 ]]; then
+      uptime_unavail="zero resource \"sentry_uptime_monitor\" blocks parsed from ${UPTIME_TF_DIR}/*.tf (${#uptime_tf_files[@]} file(s) read), so there is nothing to compare the live set against"
+    fi
+  fi
+elif [[ "$uptime_declared" -eq 0 ]]; then
+  uptime_unavail+="; and zero resource \"sentry_uptime_monitor\" blocks parsed from ${UPTIME_TF_DIR}/*.tf"
+fi
+
+if [[ -n "$uptime_unavail" ]]; then
+  echo "ERROR: sentry uptime: UNAVAILABLE — ${uptime_unavail}. This run says NOTHING about unmanaged uptime monitors." >&2
+  echo "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=${uptime_live} declared=${uptime_declared}"
+else
+  while IFS=$'\t' read -r up_id up_mode up_url; do
+    [[ -n "$up_id" ]] || continue
+    if [[ "$up_mode" != "1" ]]; then
+      uptime_bad_mode=$((uptime_bad_mode + 1))
+      _finding "UPTIME UNMANAGED: $(_safe "${up_id}:${up_mode}:${up_url}") — this uptime monitor is not in manual mode (1): Sentry auto-detected it, or it was created outside Terraform, or its import has not applied. Import the monitor or DELETE it; re-running the apply does not fix it."
+    fi
+  done <<<"$uptime_lines"
+  uptime_excess=$(( uptime_live - uptime_declared ))
+  if (( uptime_excess > 0 )); then
+    _finding "UPTIME UNMANAGED: live=${uptime_live} > declared=${uptime_declared} — the org has more uptime monitors than resource \"sentry_uptime_monitor\" blocks in apps/web-platform/infra/sentry/*.tf, so at least ${uptime_excess} of them is managed by nothing. Import the monitor or DELETE it; re-running the apply does not fix it. Live mode-1 monitors (one of these is the extra unless a mode != 1 finding above names it):"
+    while IFS=$'\t' read -r up_id up_mode up_url; do
+      [[ -n "$up_id" && "$up_mode" == "1" ]] || continue
+      _finding "         $(_safe "${up_id}:${up_mode}:${up_url}")"
+    done <<<"$uptime_lines"
+  fi
+  uptime_unmanaged=$uptime_bad_mode
+  (( uptime_excess > uptime_unmanaged )) && uptime_unmanaged=$uptime_excess
+  if [[ "$uptime_unmanaged" -gt 0 ]]; then
+    uptime_verdict=drift
+  elif [[ "$UPTIME_FIXTURE_MODE" -eq 1 ]]; then
+    uptime_verdict='fixture-clean'
+  else
+    uptime_verdict=clean
+  fi
+  echo "SENTRY_UPTIME uptime_verdict=${uptime_verdict} unmanaged=${uptime_unmanaged} live=${uptime_live} declared=${uptime_declared}"
+fi
+
 [[ -r "$PROJECTION" ]] || { echo "ERROR: projection module not readable at $PROJECTION" >&2; exit 1; }
 [[ -r "$REFERENCE" ]] || { echo "ERROR: reference not readable at $REFERENCE" >&2; exit 1; }
 [[ -r "$FROZEN_CAPTURE" ]] || { echo "ERROR: frozen-rule capture not readable at $FROZEN_CAPTURE. The frozen-rule pin has no anchor, so this probe cannot check the excluded-type rules. Refusing." >&2; exit 1; }
@@ -150,26 +353,10 @@ fetch_rules() {
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi
-  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
   # THE PINS, inside the live branch and after the fixture `return` — the suite's
-  # fixture rows run with SENTRY_ORG=fixture and must not trip them. Exact
-  # equality against a LITERAL, never against another variable: on this surface
-  # the environment is the adversary, and a pin that reads its expected value
-  # from the environment pins nothing (#7997). The literals are the Doppler
-  # `prd` SENTRY_API_HOST value and `variables.tf`'s `sentry_org` default. The
-  # message anchors (`refusing destination host`, `refusing org`) and exit 2 are
-  # the contract the drift workflow's unavailable-issue body greps (#8023); the
-  # value is rendered through `_safe`, never raw. Remedy for a drifted repository
-  # secret: `gh secret set SENTRY_API_HOST --body jikigai-eu.sentry.io` — a
-  # hostname, not a secret.
-  case "$SENTRY_API_HOST" in
-    "jikigai-eu.sentry.io") ;;
-    *) printf 'ERROR: refusing destination host %s (pinned: jikigai-eu.sentry.io)\n' "$(_safe "$SENTRY_API_HOST")" >&2; exit 2 ;;
-  esac
-  case "$SENTRY_ORG" in
-    "jikigai-eu") ;;
-    *) printf 'ERROR: refusing org %s (pinned: jikigai-eu)\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
-  esac
+  # fixture rows run with SENTRY_ORG=fixture and must not trip them. Defined once
+  # in `_pin_destination` (above the uptime section, which calls it too).
+  _pin_destination
   # The NON-deprecated org workflows endpoint — the same one
   # assert-byok-rules-exist.sh migrated to in #7590. Deliberately not
   # `projects/{org}/{proj}/rules/`: that family was under brownout and has since
@@ -245,14 +432,8 @@ if [[ "$ref_count" -eq 0 ]]; then
   exit 1
 fi
 
-# The ONE scrubber for API-supplied strings (names, ids, leaf keys), prefixed to
-# every jq program that prints one: C0/DEL, the two Unicode line separators, and
-# the zero-width and bidi-override ranges (a name reordered by U+202E prints like
-# another rule's). See the pin's comment on why live strings are scrubbed at all.
-SAFE_JQ='def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"; "") | .[0:200];'
-
-findings=0
-_finding() { findings=$((findings + 1)); printf '  %s\n' "$*"; }
+# SAFE_JQ (the one scrubber for API-supplied strings) and `_finding` are defined
+# above the uptime section, which reports through both.
 
 # THE HAND-OFF LEDGER. The per-rule loop below defers some declared names to the
 # frozen-rule pass instead of reporting them itself. A deferral is only safe if
@@ -690,5 +871,5 @@ if [[ "$findings" -eq 0 ]]; then
 fi
 
 echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN RULE LEFT SCOPE is a Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the capture, never delete the captured id; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: UPTIME UNMANAGED is a live Sentry uptime monitor Terraform does not manage (mode != 1, or more live than declared): import it or DELETE it, an apply does not fix it; DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN RULE LEFT SCOPE is a Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the capture, never delete the captured id; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
 exit 1

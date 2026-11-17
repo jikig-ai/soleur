@@ -1373,6 +1373,9 @@ jobs:
           # a future `$GITHUB_ENV` write of this name would turn the one
           # post-apply probe into a green no-op with a log warning nobody reads.
           SENTRY_FIXTURE_RULES: ""
+          # Same for the uptime section's fixture seam (#6606): an unmanaged
+          # uptime monitor reds this step (set -e), and a fixture must not mask it.
+          SENTRY_FIXTURE_UPTIME: ""
           # Pinned empty (#8451): the frozen-rule pin reads the committed capture
           # unless overridden; a later $GITHUB_ENV write must not repoint it.
           SENTRY_FROZEN_CAPTURE_FILE: ""

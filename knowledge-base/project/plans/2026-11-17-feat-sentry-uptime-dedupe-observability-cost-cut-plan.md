@@ -446,7 +446,7 @@ only in learnings, post-mortems and archived plans (`git grep`), never in script
      skip it.
    - One marker line: `SENTRY_UPTIME uptime_verdict=<clean|drift|unavailable> unmanaged=<n> live=<n> declared=<n>`.
    - Fixture seam `SENTRY_FIXTURE_UPTIME=<json file>`, announced loudly in the same way as
-     `SENTRY_FIXTURE_RULES`; in fixture mode the marker reads `uptime_verdict=clean(FIXTURE)`
+     `SENTRY_FIXTURE_RULES`; in fixture mode the marker reads `uptime_verdict=fixture-clean`
      so a fixture run cannot satisfy the discoverability probe.
 2. Extend `tests/scripts/test-sentry-alert-live-fidelity.sh` with the Guard Contract rows.
 3. `.github/workflows/scheduled-sentry-alert-drift.yml` (no new step, no new trigger):
