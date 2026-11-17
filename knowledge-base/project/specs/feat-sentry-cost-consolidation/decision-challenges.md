@@ -1,0 +1,48 @@
+---
+feature: feat-sentry-cost-consolidation
+pr: 12844
+plan: knowledge-base/project/plans/2026-11-17-feat-sentry-uptime-dedupe-observability-cost-cut-plan.md
+---
+
+# Decision challenges: feat-sentry-cost-consolidation
+
+Rulings taken while planning. Two of them change what the brief said, and those two
+have an `operator (scope)` row each so the operator sees the change.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| D1 which monitor holds Sentry's one included uptime slot | technical | Ruled by CTO agent, 2026-11-17: the app.soleur.ai monitor holds the slot (declared in Terraform; how it is declared is D2); destroy apex, www_reachability, changelog_deep and acme_probe in Sentry; move changelog_deep to a free Better Stack slot; drop the ACME probe - 1422253 is Sentry's only watch on the production app and DC-1 (2026-07-17) plus model.c4 require two vendors there, while the ACME probe is a permanent pass since the Cloudflare Pages cutover (its own description says so). Dissent: the marketing apex is watched by Better Stack alone; accepted, the marketing site holds no user data |
+| D1a keep the app.soleur.ai Sentry uptime coverage instead of deleting it (brief item 2 said delete the auto-detected monitor) | operator (scope) | The auto-detected monitor 1422253 is not deleted: it is imported into Terraform, and the first apply converts it from auto-detected to manual, so no auto-detected monitor remains and Sentry keeps watching the production app at $0. It is deleted only on the fallback path (D3a) (split from D1; updated after the D2 re-ruling) |
+| D1b drop the ACME probe instead of keeping it as the included Sentry slot (brief item 1 said keep it) | operator (scope) | Drop `sentry_uptime_monitor.soleur_acme_probe`; the lost carve-out property stays tracked on #7799 (split from D1) |
+| D2 import 1422253 into Terraform or declare a new monitor | technical | Re-ruled by CTO agent, 2026-11-17 (supersedes the earlier "declare a new monitor" ruling, whose premise was wrong): import first - provider v0.15.7 `getUpdateJSONRequestBody` returns `getCreateJSONRequestBody` (`resource_uptime_monitor_impl.go`), so every update sends `mode = MANUAL` to `PUT /organizations/{org}/detectors/{id}/`, and Sentry's `UptimeDomainCheckFailureConfigValidator.validate` accepts that and sets an auto-detected monitor to manual; the "mode only on creation" error is in the legacy `/uptime/` validator the provider does not call; only `organization`/`project` force a replace. Conditions: read-only GET of detector 1422253 confirms `uptime_domain_failure` on `web-platform` (done 2026-11-17: mode 3, url `https://app.soleur.ai`); the plan must show `update` with importing id `jikigai-eu/1422253`, never create or replace; after apply read back `mode: 1`. Fallback if the flip fails: `removed { destroy = false }`, a new monitor, then GET/DELETE/GET of 1422253. Raised by the scoped advisor consult (adopted) |
+| D3 how auto-detection is turned off | technical | Ruled by CTO agent, 2026-11-17: no write to any auto-detection setting - there is no public field (org PUT has none, provider has none, a guessed key cannot be read back); the import removes the one auto-detected monitor, and a scheduled check ships in this PR as the lasting proof (its form is D-F-B). The committed delete script of the first ruling is cut: the delete happens only on the D2 fallback, as three agent-run calls |
+| D3a authorization to delete Sentry uptime monitor 1422253 through the API | operator (production-mutating) | Fallback only (if the import does not flip it to manual): authorise the agent-run DELETE of uptime monitor 1422253 (requested in brief item 2), run only after a new declared app monitor shows 3 passing checks, with GET read-back before and after (split from D3) |
+| D4 where the four host-kernel signals page from | technical | Ruled by CTO agent, 2026-11-17: four per-host Sentry cron monitors (~$3.12/mo, better vendor separation because the rows live in Better Stack Logs), built in the #12386 arming PR, not here; this PR records the routing in uptime-alerts.tf, the feeder workflow and #12386 - creating them now would bill or page with no emitter. Dissent: one feeder outage pages on 5 Sentry monitors instead of 1; accepted |
+| D5 ADR handling | technical | Ruled by CTO agent, 2026-11-17: new ADR (Sentry uptime holds one slot for the production app; Better Stack owns marketing-site uptime) plus an "Amended by" pointer in ADR-204 at its apex second-sourcing consequence and its rejected delete-www row; do not rewrite ADR-204's accepted body; update model.c4 prose |
+| D6 cutover-verify CUT8 coupling once Sentry watches no marketing URL | technical | Ruled by CTO agent, 2026-11-17; superseded by D-F-A and D-F-F after plan review. Original: SENTRY_MONITORS=() with empty-array guards and a rescoped W14 |
+| D7 declared app monitor cadence | technical | Ruled by CTO agent, 2026-11-17: interval_seconds 60, downtime_threshold 3, recovery_threshold 1 - keeps today's ~3 min time-to-page on the one user-facing surface; Sentry bills per monitor, not per check (unverified; a per-check usage line would flip this) |
+| D-F-A Sentry leg of CUT8 (revisits D6) | technical | Ruled by CTO agent, 2026-11-17: delete the leg entirely (the array, its 3 loops, its CUT8_TOTAL term) and drop Guard 2; W14 asserts the `SENTRY_MONITORS` line is absent and no `sentry_uptime_monitor` URL is on a marketing host - no workflow runs `cutover-verify.sh`, the cutover is done, and an empty array guarded at 3 identical sites is dead code that breaks the mutation harness's count(old)==1 check. Conditions: bump `EXPECTED_ROWS`, update the cutover runbook in the same change. Raised by DHH, code-simplicity and the CTO devex review |
+| D-F-B form of the D3 scheduled check | technical | Ruled by CTO agent, 2026-11-17: an uptime section inside `scripts/sentry-alert-live-fidelity.sh`, "unmanaged" only (every live uptime detector mode==1, live count not above the declared count), with fixture tests - reuses its host pinning, its single verdict that `close_unavailable` already keys on, and its closer; a standalone script splits the verdict, an inline jq step is untestable, and full live==declared repeats the terraform drift leg. DHH dissent (one inline jq step) not adopted |
+| D-F-C ADR handling (revisits D5) | technical | Ruled by CTO agent, 2026-11-17: keep D5 - new ADR-328 plus an "Amended by ADR-328" pointer in ADR-204; ending apex second-sourcing reverses a consequence of an accepted ADR. Condition: check no ADR-328 exists before committing. DHH and code-simplicity dissent (amend ADR-204 only) not adopted |
+| D-F-D where the host-kernel routing is recorded | technical | Ruled by CTO agent, 2026-11-17: a #12386 comment plus a one-line pointer in `uptime-alerts.tf` only; no feeder-workflow comment - the routing must-dos are #12386's work, and a must-do list in a `.tf` comment goes stale |
+| D-F-E Sentry paging for the app monitor | technical | Ruled by CTO agent, 2026-11-17: state plainly that Better Stack pages for app.soleur.ai and the Sentry monitor only detects (opens an issue) as a second source; no routed Sentry uptime alert - it would page the same outage twice, and `model.c4`'s `sentry -> founder` edge already says uptime detectors have no route. Raised by Kieran |
+| D-F-F where the Better Stack changelog entry in CUT8 lands | technical | Ruled by CTO agent, 2026-11-17: move the `BETTERSTACK_MONITORS` append and the baseline regeneration together into the post-merge follow-up PR - `cutover-verify.sh` requires an array entry and its baseline row in the same change, and the row can only be captured once the monitor is live. Raised by Kieran |
+| D-F-G post-merge ownership | technical | Ruled by CTO agent, 2026-11-17: the agent runs Phase 7 in the same session (apply only through the apply workflows; every check is a read), plus one tracking issue listing the post-merge ACs and the 2026-12-16 ledger re-read; tick each AC only with cited output. Raised by the CTO devex review |
+| D-F-H drop changelog_deep instead of moving it | technical | Kept as ruled in D1: move it to Better Stack. The brief offered both options; the move keeps the "root 200, deep pages 404" check at $0. Raised by code-simplicity as a possible cut; not adopted |
+
+## User-Challenge (D1a, D1b)
+
+- **What you said:** keep the ACME probe as Sentry's one free uptime check, and delete the
+  auto-detected app.soleur.ai monitor.
+- **What we recommend:** keep app.soleur.ai as Sentry's one free check. It is imported into
+  Terraform, which turns it from an auto-detected monitor into a normal managed one, so
+  nothing auto-detected is left. Delete the ACME probe.
+- **Why:** the app monitor is Sentry's only watch on the live product. On 2026-07-17 you
+  ruled not to delete it (DC-1, #6606) so the product stays on two vendors. The ACME probe
+  always reports healthy since the move to Cloudflare Pages, so it watches nothing.
+- **What context we might be missing:** you may want the certificate-renewal path watched
+  for a reason the probe's own description does not show.
+- **If we're wrong, the cost is:** nothing extra. Sentry uptime spend is $0 either way, and
+  the probe can be re-added in one block.
