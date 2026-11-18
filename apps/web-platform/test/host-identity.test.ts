@@ -87,8 +87,8 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
 
   it("trims the key before verifying it", () => {
     expect(
-      describeHostIdentity(env({ SOLEUR_HOST_KEY: "  web-1 ", SOLEUR_HOST_PRIVATE_IP: "10.0.1.10" })),
-    ).toEqual({ id: "web-1", source: "web-host-key" });
+      describeHostIdentity(env({ SOLEUR_HOST_KEY: "  web-2 ", SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" })),
+    ).toEqual({ id: "web-2", source: "web-host-key" });
   });
 
   it("a missing key falls back to the instance id (key-absent)", () => {
@@ -145,7 +145,7 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
   it("an unverified key with no instance id in production throws, never returns the key", () => {
     expect(() =>
       describeHostIdentity(
-        env({ SOLEUR_HOST_ID: "", SOLEUR_HOST_KEY: "web-1", SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" }),
+        env({ SOLEUR_HOST_ID: "", SOLEUR_HOST_KEY: "web-2", SOLEUR_HOST_PRIVATE_IP: "10.0.1.12" }),
       ),
     ).toThrow(/SOLEUR_HOST_ID is unset in production/);
   });
@@ -165,7 +165,7 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
     vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.11");
     expect(resolveHostId()).toBe("web-2");
     expect(resolveHostId()).toBe(describeHostIdentity().id);
-    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.10");
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.12");
     expect(resolveHostId()).toBe(INSTANCE);
   });
 

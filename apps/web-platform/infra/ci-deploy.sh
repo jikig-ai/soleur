@@ -331,7 +331,7 @@ readonly HOST_ID
 # is keyed by. HOST_ID above stays as telemetry: the Hetzner instance id changes on
 # every replace, so keying the lease by it split the roster key from the lease id.
 # Derived from the metadata `hostname` (the Terraform `name`) by inverting server.tf's
-# `each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"` exactly:
+# `each.key == <the first key> ? "soleur-web-platform" : "soleur-${each.key}"` exactly:
 # soleur-web-platform -> web-1; soleur-web-1 is never web-1's name (rc 1); any other
 # soleur-<k> -> <k>; anything else rc 1. The result must match the key regex.
 # web-hosts-generic.test.sh C8 round-trips every var.web_hosts key through this body.

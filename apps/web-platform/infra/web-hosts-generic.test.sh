@@ -214,7 +214,7 @@ IP_CEIL=318  # re-baselined at the origin/main merge (f6c475f15b): +9 from main'
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
-KEY_CEIL=415  # re-baselined at 4aadbe8109: +5 from main (host-private-ip.ts, exec-placement-forward test); unchanged at f6c475f15b
+KEY_CEIL=419  # re-baselined at 4aadbe8109: +5 from main (host-private-ip.ts, exec-placement-forward test); unchanged at f6c475f15b; +4 at #12910 (ci-deploy.sh resolve_host_key inverts server.tf's web-1 name special case, the T1 collision fixture in host-identity.test.ts, two prod-shaped roster fixtures)
 N_KEY="$(count_lit '"web-1"')"
 cases=$((cases + 1))
 if [[ "$N_KEY" -le "$KEY_CEIL" && "$N_KEY" -gt 0 ]]; then pass "ratchet: \"web-1\" literal count $N_KEY <= $KEY_CEIL"; else fail "ratchet: \"web-1\" literal count $N_KEY exceeds the ceiling $KEY_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
@@ -243,10 +243,70 @@ ok "census C6: no Terraform resource derives the relay roster or allowlist (hand
   "$(! grep -qE '"(SOLEUR_HOST_ROSTER|SOLEUR_PROXY_PEER_ALLOWLIST)"' < <(grep -hvE '^[[:space:]]*#' "$DIR"/*.tf); echo $?)"
 eq "census C7: one committed SSH host-key pin per var.web_hosts key ($N_KEYS keys)" \
   "$(find "$DIR" -maxdepth 1 -name 'web-*-ssh-host-key.pub' | wc -l | tr -d ' ')" "$N_KEYS"
-ok "census: the doc names all seven rows" "$([[ "$(grep -cE '^\| C[1-7] \|' "$CENSUS")" -eq 7 ]]; echo $?)"
+
+# ── C8 (#12910): placement-id parity. The lease host_id is the var.web_hosts key ci-deploy.sh derives
+# from the metadata hostname by inverting server.tf's name expression. For EVERY committed key, the
+# name server.tf assigns must round-trip through the real resolve_host_key body back to that key; the
+# three key regexes must be one regex; and hcloud_server.web must not create its replacement before
+# destroying the old host (a replacement re-acquires its predecessor's leases at the same generation,
+# safe only because the two never run at once). ──
+SRV_WEB="$(block "$SRV" 'resource "hcloud_server" "web" {')"
+NAME_EXPR="$(grep -E '^  name[[:space:]]+= ' <<<"$SRV_WEB" | head -1 | sed -E 's/^  name[[:space:]]+= //')"
+NAME_RE='^each\.key == "([a-z0-9-]+)" \? "([a-z0-9-]+)" : "([a-z0-9-]*)\$\{each\.key\}([a-z0-9-]*)"$'
+C8_SPECIAL="" C8_SPECIAL_NAME="" C8_PRE="" C8_SUF=""
+if [[ "$NAME_EXPR" =~ $NAME_RE ]]; then
+  C8_SPECIAL="${BASH_REMATCH[1]}" C8_SPECIAL_NAME="${BASH_REMATCH[2]}" C8_PRE="${BASH_REMATCH[3]}" C8_SUF="${BASH_REMATCH[4]}"
+fi
+ok "census C8: hcloud_server.web's name is the <key> == <special> ? <name> : <prefix>\${each.key}<suffix> shape resolve_host_key inverts" \
+  "$([[ -n "$C8_SPECIAL_NAME" ]]; echo $?)"
+TMPDIR_C8="$(mktemp -d "${TMPDIR:-/var/tmp}/c8.XXXXXX")"; C8_FN="$TMPDIR_C8/fn.sh"
+awk '/^resolve_host_key\(\) \{/,/^\}/' "$DIR/ci-deploy.sh" > "$C8_FN"
+C8_KEYS="$(block "$VARS" 'variable "web_hosts"' | sed -n '/^  default = {/,/^  }/p' | grep -oE '^    "[a-z][a-z0-9-]*"[[:space:]]*=' | sed -E 's/^    "([^"]+)".*/\1/')"
+C8_N=0 C8_BAD=""
+for k in $C8_KEYS; do
+  C8_N=$((C8_N + 1))
+  if [[ "$k" == "$C8_SPECIAL" ]]; then nm="$C8_SPECIAL_NAME"; else nm="${C8_PRE}${k}${C8_SUF}"; fi
+  printf '%s' "$nm" > "$TMPDIR_C8/hostname"
+  got="$( (set -euo pipefail; source "$C8_FN"; SOLEUR_HOST_KEY_METADATA_URL="file://$TMPDIR_C8/hostname" SOLEUR_HOST_KEY_RETRY_SLEEP=0 resolve_host_key) 2>/dev/null || true)"
+  [[ "$got" == "$k" ]] || C8_BAD+="$k->${nm}->[${got}] "
+done
+ok "census C8: resolve_host_key is extracted from ci-deploy.sh" "$([[ -s "$C8_FN" ]]; echo $?)"
+ok "census C8: at least two var.web_hosts keys were round-tripped ($C8_N)" "$([[ "$C8_N" -ge 2 ]]; echo $?)"
+eq "census C8: every var.web_hosts key's server name resolves back to the key" "$C8_BAD" ""
+# The name of the PRE-key form must never resolve to the special key (soleur-web-1 is not web-1's name).
+printf '%s' "${C8_PRE}${C8_SPECIAL}${C8_SUF}" > "$TMPDIR_C8/hostname"
+got="$( (set -euo pipefail; source "$C8_FN"; SOLEUR_HOST_KEY_METADATA_URL="file://$TMPDIR_C8/hostname" SOLEUR_HOST_KEY_RETRY_SLEEP=0 resolve_host_key) 2>/dev/null || true)"
+eq "census C8: the generic-form name of the special key (${C8_PRE}${C8_SPECIAL}${C8_SUF}) resolves to nothing" "$got" ""
+rm -rf "$TMPDIR_C8"; unset TMPDIR_C8 C8_FN got nm k
+RE_TS="$(grep -oE '^export const HOST_KEY_RE = /\^[^/]+\$/;$' "$ROOT/apps/web-platform/server/host-identity.ts" | sed -E 's|^export const HOST_KEY_RE = /(.*)/;$|\1|')"
+RE_GATE="$(grep -E 'fail "TOP_gated_host_malformed"' "$DIR/lb-weight-gate.sh" | grep -oE '=~ \^[^ ]+\$ \]\]' | sed -E 's/^=~ //; s/ \]\]$//')"
+RE_DEPLOY="$(awk '/^resolve_host_key\(\) \{/,/^\}/' "$DIR/ci-deploy.sh" | grep -oE '=~ \^[^ ]+\$ \]\]' | sed -E 's/^=~ //; s/ \]\]$//')"
+ok "census C8: the three key regexes are one regex (host-identity.ts = lb-weight-gate.sh = ci-deploy.sh) [$RE_TS]" \
+  "$([[ -n "$RE_TS" && "$RE_TS" == "$RE_GATE" && "$RE_TS" == "$RE_DEPLOY" ]]; echo $?)"
+C8_LC="$(python3 - "$SRV" <<'PYEOF'
+import sys
+lines = open(sys.argv[1]).read().split("\n")
+start = next(i for i, l in enumerate(lines) if l.startswith('resource "hcloud_server" "web" {'))
+end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+body = lines[start:end]
+lc = [i for i, l in enumerate(body) if l.strip().startswith("lifecycle {")]
+out = []
+for i in lc:
+    for l in body[i + 1:]:
+        if l.startswith("  }"):
+            break
+        out.append(l.split("#", 1)[0])
+print("LIFECYCLE_BLOCKS=%d" % len(lc))
+print("\n".join(out))
+PYEOF
+)"
+ok "census C8: hcloud_server.web has a lifecycle block and it carries no create_before_destroy" \
+  "$([[ "$C8_LC" == LIFECYCLE_BLOCKS=1* ]] && ! grep -q 'create_before_destroy' <<<"$C8_LC"; echo $?)"
+unset C8_LC RE_TS RE_GATE RE_DEPLOY C8_KEYS C8_N C8_BAD C8_SPECIAL C8_SPECIAL_NAME C8_PRE C8_SUF SRV_WEB NAME_EXPR NAME_RE
+ok "census: the doc names all eight rows" "$([[ "$(grep -cE '^\| C[1-8] \|' "$CENSUS")" -eq 8 ]]; echo $?)"
 
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────────────────
-MIN_CASES=42
+MIN_CASES=57  # #12910: +15 (census C8: name shape, extraction, key floor, round-trip, special-key negative, regex parity, lifecycle; the doc row count; measured 57)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'web-hosts-generic: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

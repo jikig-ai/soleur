@@ -36,7 +36,7 @@ import { readHostPrivateIp } from "./host-private-ip";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The `var.web_hosts` key shape, byte-identical to lb-weight-gate.sh's
+/** The `var.web_hosts` key shape, byte-identical to the serve gate's
  *  `TOP_gated_host_malformed` regex (pinned by web-hosts-generic.test.sh C8).
  *  It also matches `hetzner-176328334`: only the roster check rejects an
  *  instance-id key, so never "simplify" the verification down to this regex. */
