@@ -2779,9 +2779,11 @@ did not, the read exits 64). A refusal is read in the table below.
 preflight is a one-time read at dispatch, so a later dashboard flip is caught only by
 `.github/workflows/scheduled-terraform-drift.yml`, and the server keeps polling every 60 s for the life of the host.
 
+<!-- lint-infra-ignore start: describes the pre-existing OPERATOR_APPLIED_EXCLUSIONS break-glass (a local untargeted apply the HALT messages print); owner-reserved recovery, not a prescribed agent step -->
 **The ungated path.** A local, untargeted `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of
 `hcloud_server.inngest` because its user_data changed. Run the pair under "Read it yourself first" before it and abort on
 any refusal; if the plan replaces the Inngest host and you did not mean to, `-target` around it.
+<!-- lint-infra-ignore end -->
 
 **Every public-sdk_url boot carries three risks**: a stale non-zero registry the registry-empty alert cannot see, the #7228
 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive. They apply to an emergency
