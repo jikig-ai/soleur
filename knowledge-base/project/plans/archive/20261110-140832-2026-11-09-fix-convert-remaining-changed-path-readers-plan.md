@@ -381,8 +381,8 @@ discoverability_test:
 - [x] The header of `changed-path-readers.test.sh` no longer says "about twenty unconverted sites"; the remainder is a reasoned table whose every row is also an exemption-table row.
 - [x] `python3 scripts/lint-skill-body-budget.py --base origin/main` is green: ship and one-shot byte deltas <= 0 (or within headroom 18 B / 9 B) and no ceiling raised.
 - [x] All Phase 5.2 meta-guards pass on the final tree; registry rows (if any) are in sorted position and accept rows re-derived last.
-- [ ] PR body: `Ref #12246`, `Ref #12332`, `Ref #6480` (no `Closes`), `Filed: none` (or `Filed: #N` for the single consolidated tracker if and only if a size-driven drop happened), a `## Changelog` section, label `semver:patch`.
-- [ ] Required checks green (`test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`); `infra-validation` and `sandbox-canary-capture-gate` read by hand; merged; `deploy-arm.sh find --wait <sha>`, `served <sha>` = CONTAINS, `/health` ok.
+- [x] PR body: `Ref #12246`, `Ref #12332`, `Ref #6480` (no `Closes`), `Filed: none` (or `Filed: #N` for the single consolidated tracker if and only if a size-driven drop happened), a `## Changelog` section, label `semver:patch`.
+- [x] Required checks green (`test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`); `infra-validation` and `sandbox-canary-capture-gate` read by hand; merged; `deploy-arm.sh find --wait <sha>`, `served <sha>` = CONTAINS, `/health` ok.
 
 ## Test Scenarios
 

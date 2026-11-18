@@ -74,7 +74,7 @@ describe("grok-inspect-contract static artifacts", () => {
     const research = readdirSync(agentsDir).filter((name) =>
       name.startsWith("soleur-engineering-research-") && name.endsWith(".md"),
     );
-    expect(research.length).toBe(5);
+    expect(research.length).toBe(6);
     for (const name of research) {
       const frontmatter = readFileSync(join(agentsDir, name), "utf-8").split("---")[1] ?? "";
       expect(frontmatter).not.toMatch(/^model:/m);
