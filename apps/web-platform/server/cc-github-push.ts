@@ -31,7 +31,8 @@
  * Settings predicate below (D40(5), arch F9), so a precondition added to one cannot silently miss the other. A read the
  * dispatcher could not complete (`degradedReads`) is not a definite "off": it never registers, and its reason is the
  * transient `precondition-error` (D40(2)). A default-branch lookup answered 401/403/404 means the installation lost access:
- * `installation-unauthorized` (D40(3)), whose agent line asks for GitHub to be reconnected.
+ * `installation-unauthorized` (D40(3)), whose agent line asks for GitHub to be reconnected; a rate-limited 403 is the transient
+ * `default-branch-unresolved` instead (P3-11).
  *
  * The tool is built with `requireGrant: true` and the SAME `ExecutionGrants` object the gate writes to, so a call that
  * reaches the handler without a gate-written grant carrying the approved commit is refused (see `github-tools.ts`).
@@ -263,6 +264,22 @@ const OUTCOME_EVENT_REASONS: ReadonlySet<CcPushRegistrationReason> = new Set(["r
 /** HTTP statuses of a default-branch lookup that mean the installation lost access to the repo (reconnect, D40(3)). */
 const UNAUTHORIZED_LOOKUP_STATUSES: ReadonlySet<number> = new Set([401, 403, 404]);
 
+/** GitHub's own words for a primary ("API rate limit exceeded") or secondary / abuse-detection limit (github-api.ts sniffs the same). */
+const RATE_LIMIT_MESSAGE_RE = /rate limit|abuse detection/i;
+
+/**
+ * P3-11: a 403 that is GitHub throttling the installation (primary limit: `x-ratelimit-remaining: 0`; or a secondary /
+ * abuse-detection limit), not lost access. It is transient, so it must never become the lasting "reconnect GitHub" answer.
+ * github-api.ts's error keeps GitHub's `message` (its scrubbed form keeps the fixed phrase "rate limit") but not the headers, so
+ * the message is the production signal; the header is read when the error carries one (an Octokit `RequestError` shape).
+ */
+function isRateLimitedLookupFailure(err: unknown): boolean {
+  const e = err as { message?: unknown; response?: { headers?: Record<string, unknown> } } | null;
+  const remaining = e?.response?.headers?.["x-ratelimit-remaining"];
+  if (remaining === "0" || remaining === 0) return true;
+  return typeof e?.message === "string" && RATE_LIMIT_MESSAGE_RE.test(e.message.slice(0, 2000));
+}
+
 export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushArgs): Promise<CcPushRegistration> {
   const readFlag = args.readFlag ?? readApprovalQueueFlagDetailed;
   const lookup = args.lookupDefaultBranch ?? defaultFetchDefaultBranch;
@@ -351,16 +368,18 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
   } catch (err) {
     // NEVER a "main" fallback here: a push tool advertised while unable to protect the default branch is the failure to avoid.
     const extra = failureExtra(err);
-    const unauthorized = extra.status !== undefined && UNAUTHORIZED_LOOKUP_STATUSES.has(extra.status);
+    const rateLimited = extra.status === 403 && isRateLimitedLookupFailure(err);
+    const unauthorized = !rateLimited && extra.status !== undefined && UNAUTHORIZED_LOOKUP_STATUSES.has(extra.status);
     reportSilentFallback(null, {
       feature: "cc-dispatcher",
       op: "cc-push-default-branch-resolve",
-      tags: { cause: unauthorized ? "unauthorized" : "unresolved" },
+      tags: { cause: rateLimited ? "rate_limited" : unauthorized ? "unauthorized" : "unresolved" },
       extra: { userId: args.userId, ...extra },
       message: "default branch lookup failed for the cc push tool; github_push_branch not registered",
     });
     // D40(3): the installation no longer reaches the repo (revoked, suspended, or the repo moved out of its reach). Lasting
-    // until the GitHub connection is renewed, so not the transient "try a new session" answer.
+    // until the GitHub connection is renewed, so not the transient "try a new session" answer. A rate-limited 403 is the
+    // transient answer (P3-11).
     return done(unauthorized ? "installation-unauthorized" : "default-branch-unresolved");
   }
   if (!isSafeBranch(value)) {

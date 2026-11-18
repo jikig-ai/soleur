@@ -398,20 +398,37 @@ describe("the default branch is looked up fail-closed, only after every other pr
     expect(h.infoSilentFallback).not.toHaveBeenCalled();
   });
 
-  it.each([[401], [403], [404]])(
-    "lookup answers %s (the installation lost access) -> installation-unauthorized (D40(3)), reported, not registered",
-    async (status) => {
-      const apiError = Object.assign(new Error("GitHub API GET /repos/example-org/example-repo failed"), { name: "GitHubApiError", statusCode: status });
+  // P3-11 (verify round 1): a rate-limited 403 is GitHub throttling the installation, not lost access, so it is the transient
+  // `default-branch-unresolved` ("not available right now"), never the lasting "reconnect GitHub" answer. The messages are the
+  // shapes github-api.ts throws (its 403 message embeds GitHub's own `message`); the header row is an Octokit RequestError shape.
+  const AUTH_403 = 'GitHub API 403 for /repos/example-org/example-repo: "Resource not accessible by integration". This usually means the installation cannot access this resource (e.g. a wrong-installation token) — not a missing permission scope.';
+  const PRIMARY_LIMIT_403 = 'GitHub API 403 for /repos/example-org/example-repo: "API rate limit exceeded for installation ID 4242.". This usually means the installation cannot access this resource (e.g. a wrong-installation token) — not a missing permission scope.';
+  const SECONDARY_LIMIT_403 = 'GitHub API 403 for /repos/example-org/example-repo: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.". This usually means the installation cannot access this resource (e.g. a wrong-installation token) — not a missing permission scope.';
+  it.each([
+    ["401", { statusCode: 401, message: "GitHub API request failed: 401 /repos/example-org/example-repo" }, "installation-unauthorized", "unauthorized"],
+    ["403, access refused", { statusCode: 403, message: AUTH_403 }, "installation-unauthorized", "unauthorized"],
+    ["404", { statusCode: 404, message: "GitHub API request failed: 404 /repos/example-org/example-repo" }, "installation-unauthorized", "unauthorized"],
+    ["403, primary rate limit (body)", { statusCode: 403, message: PRIMARY_LIMIT_403 }, "default-branch-unresolved", "rate_limited"],
+    ["403, secondary rate limit (body)", { statusCode: 403, message: SECONDARY_LIMIT_403 }, "default-branch-unresolved", "rate_limited"],
+    ["403, scrubbed rate-limit message", { statusCode: 403, message: "GitHub API 403: rate limit" }, "default-branch-unresolved", "rate_limited"],
+    ["403, x-ratelimit-remaining: 0 (header)", { status: 403, message: "Forbidden", response: { headers: { "x-ratelimit-remaining": "0" } } }, "default-branch-unresolved", "rate_limited"],
+    ["403, x-ratelimit-remaining: 12 (header, not limited)", { status: 403, message: "Forbidden", response: { headers: { "x-ratelimit-remaining": "12" } } }, "installation-unauthorized", "unauthorized"],
+    ["429", { statusCode: 429, message: "GitHub API request failed: 429 /repos/example-org/example-repo" }, "default-branch-unresolved", "unresolved"],
+  ] as const)(
+    "lookup answers %s (D40(3), P3-11): the row's reason and cause, reported once, not registered",
+    async (_n, shape, reason, cause) => {
+      const apiError = Object.assign(new Error(shape.message), { name: "GitHubApiError" }, shape);
       const { args, buildTool } = make({}, { lookupDefaultBranch: vi.fn(async () => { throw apiError; }) });
       expect(await resolveCcGithubPushRegistration(args)).toEqual({
         registered: false,
-        reason: "installation-unauthorized",
+        reason,
         tools: [],
         toolNames: [],
         defaultBranch: null,
       });
       expect(buildTool).not.toHaveBeenCalled();
-      expect(h.reportSilentFallback.mock.calls.map((c) => [c[1].op, c[1].tags?.cause])).toEqual([["cc-push-default-branch-resolve", "unauthorized"]]);
+      expect(h.reportSilentFallback.mock.calls.map((c) => [c[1].op, c[1].tags?.cause])).toEqual([["cc-push-default-branch-resolve", cause]]);
+      expect(JSON.stringify(h.reportSilentFallback.mock.calls[0][1])).not.toContain("example-repo");
     },
   );
 

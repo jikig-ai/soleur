@@ -809,6 +809,17 @@ describe("cc held-files agent line (#12714)", () => {
       expect(prompt()).toContain("reconnect GitHub in Settings");
     });
 
+    it("P3-11: the lookup answers a rate-limited 403 (GitHub throttling, not lost access) -> the transient variant, never 'reconnect'", async () => {
+      eligible();
+      mockGithubApiGet.mockRejectedValue(
+        Object.assign(new Error('GitHub API 403 for /repos/o/r: "API rate limit exceeded for installation ID 1."'), { name: "GitHubApiError", statusCode: 403 }),
+      );
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).toContain(expected({ route: "transient", defaultBranch: null }));
+      expect(prompt()).not.toContain("reconnect GitHub");
+    });
+
     it("obs F12: one info line with the bucket, route, reason and runner, never the count", async () => {
       eligible();
       held("user-1", 12);
