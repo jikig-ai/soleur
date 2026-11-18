@@ -151,13 +151,19 @@ describe("writeRepoColsToWorkspace", () => {
 function heldChain(result: { data?: Array<{ id: string }> | null; error?: unknown; reject?: unknown } = {}) {
   const data = result.data === undefined ? [{ id: "ws-team" }] : result.data;
   const calls: Array<[string, ...unknown[]]> = [];
-  const builder: Record<string, unknown> = {};
-  builder.eq = vi.fn((col: string, val: string) => (calls.push(["eq", col, val]), builder));
-  builder.or = vi.fn((f: string) => (calls.push(["or", f]), builder));
-  builder.select = vi.fn((cols: string) => {
-    calls.push(["select", cols]);
-    return result.reject !== undefined ? Promise.reject(result.reject) : Promise.resolve({ data, error: result.error ?? null });
-  });
+  type Chain = {
+    eq: (col: string, val: string) => Chain;
+    or: (f: string) => Chain;
+    select: (cols: string) => Promise<{ data: Array<{ id: string }> | null; error: unknown }>;
+  };
+  const builder: Chain = {
+    eq: (col, val) => (calls.push(["eq", col, val]), builder),
+    or: (f) => (calls.push(["or", f]), builder),
+    select: (cols) => {
+      calls.push(["select", cols]);
+      return result.reject !== undefined ? Promise.reject(result.reject) : Promise.resolve({ data, error: result.error ?? null });
+    },
+  };
   const update = vi.fn((row: unknown) => (calls.push(["update", row]), builder));
   const from = vi.fn((t: string) => (calls.push(["from", t]), { update }));
   return { client: { from }, from, update, calls };
