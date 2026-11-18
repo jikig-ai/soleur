@@ -112,6 +112,12 @@ function assertAsked(a: ArmRecord) {
   for (const c of net(a)) expect(c.keys).toEqual(["host"]);
 }
 
+// A request routed at a dead forwarder fails in one of two measured shapes, and both mean no tunnel was opened:
+// rc=7 (curl could not connect: the path to the forwarder's port was refused) or rc=56 with a 502 on CONNECT (the SDK's
+// sandbox proxy accepted the tunnel request and its dial to the dead forwarder failed). Local runs show the first and CI
+// runners the second (PR #12897, run 44322968227). The no-leak and empty-gateway assertions in each arm prove that
+// nothing got out; this only pins that the request itself failed, and in no other way.
+const DEAD_FORWARDER = /^rc=7 |^rc=56 out=curl: \(56\) CONNECT tunnel failed, response 502 /;
 const ARMS_RUN = new Set<string>();
 
 describe("installed SDK matches the measured one (CTO T16)", () => {
@@ -189,7 +195,7 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     assertAsked(a);
     expect(a.forwarderDeadBeforeTurn).toBe(true);
     expect(a.gateway).toEqual([]);
-    expect(result(a, "e-2")).toMatch(/rc=7/);
+    expect(result(a, "e-2")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-E");
   });
 
@@ -200,7 +206,7 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     expect(result(a, "f-barrier")).toBe("seen=yes");
     expect(hosts(a)).toEqual(["198.51.100.1"]); // asked once, for three requests
     expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
-    expect(result(a, "f-3")).toMatch(/rc=7/);
+    expect(result(a, "f-3")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F");
   });
 
@@ -210,7 +216,7 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     expect(a).toMatchObject({ fStep1: true, fTornDown: true });
     expect(hosts(a)).toEqual(["198.51.100.1", "example.test"]);
     expect(net(a).length).toBe(2);
-    expect(result(a, "f2-2")).toMatch(/rc=7/);
+    expect(result(a, "f2-2")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F2");
   });
 });
