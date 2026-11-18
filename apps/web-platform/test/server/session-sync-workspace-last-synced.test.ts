@@ -132,6 +132,11 @@ vi.mock("fs", () => ({
     if (mergeHead.present && p.endsWith("MERGE_HEAD")) return {}; // a conflicted session-start merge
     throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // host-git shape guard: the fake workspace has no .git
   }),
+  // the autostash pin opens `.git/MERGE_AUTOSTASH` directly (no pre-open lstat): the fake workspace has none
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0, O_NONBLOCK: 0 },
+  openSync: vi.fn(() => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  }),
 }));
 
 vi.mock("@/server/approval/workspace-head", () => ({ readWorkspaceHeadRef: mockHead }));

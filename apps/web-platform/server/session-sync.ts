@@ -677,7 +677,7 @@ async function pullLocked(
     // D25(7): no raw error reaches Sentry (git's argv names the URL and shas): the class name and the first app frame only.
     const errName = err instanceof Error ? err.name : typeof err;
     const frame = firstAppFrame(err);
-    log.warn({ userId, errName, ...(frame ? { frame } : {}) }, "Sync pull failed — continuing with local state");
+    log.warn({ userIdHash: hashUserId(userId), errName, ...(frame ? { frame } : {}) }, "Sync pull failed — continuing with local state");
     reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPull",
@@ -723,7 +723,7 @@ async function stampBestEffort(service: SupabaseClient, workspaceId: string): Pr
 async function autoCommit(workspacePath: string, allowed: string[], stage: "pull" | "push", userId: string): Promise<void> {
   try {
     if (allowed.length === 0) {
-      log.info({ userId }, "No allowlisted changes to commit — skipping auto-commit");
+      log.info({ userIdHash: hashUserId(userId) }, "No allowlisted changes to commit — skipping auto-commit");
       return;
     }
     await runConnectedRepoGitAsync(["add", "--", ...allowed], { cwd: workspacePath });
@@ -914,7 +914,7 @@ async function pushLocked(
     try {
       await recordKbSyncHistory(userId, workspacePath);
     } catch (err) {
-      log.warn({ userId, errName: err instanceof Error ? err.name : typeof err }, "KB sync history recording failed");
+      log.warn({ userIdHash: hashUserId(userId), errName: err instanceof Error ? err.name : typeof err }, "KB sync history recording failed");
       reportSilentFallback(err, {
         feature: "session-sync",
         op: "recordKbSyncHistory",
