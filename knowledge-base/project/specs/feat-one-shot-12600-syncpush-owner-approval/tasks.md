@@ -246,6 +246,45 @@ phase, and record that phase's RED runs with it.
   - D30: the stale tree row after the KB pending notice is dismissed;
   - D26(3): an isolated `merge-tree` merge that reads no workspace config (closes the `filter.*` / `merge.<d>.driver`
     residual).
+  - [ ] FU-1 (D47; perf F2(b)): move the KB-route self-heal merge to a per-workspace background job. Reason: architectural
+    pivot (new Inngest function, concurrency key, route contract); D38(4)'s 15 s budget bounds it now. Re-evaluate when:
+    Better Stack shows more than 50 `self-heal merged the default branch` lines/day for one workspace, or p95 KB-write
+    latency above 3 s on held workspaces over 7 days, or one user report.
+  - [ ] FU-2 (D47; perf F3): a refusal memo for repeated terminal pull refusals. Reason: contested, stateful design (V4/W6
+    precedent: evidence first); no correctness impact. Re-evaluate when: the same workspace logs the same terminal reason
+    (`walk_cap`, `handover_too_large`, `side_declined`, `side_not_kb_only`, `side_conflict`) on 10 consecutive session
+    starts, or 5 such workspaces within 14 days.
+  - [ ] FU-3 (D47; perf F4): `index-pack` hand-over above about 100 objects plus streamed `pack-objects`. Reason: contested
+    design (a new connected-repo verb with its own threat review); the D38(1) async writer already removes the loop block.
+    Re-evaluate when: `handover_failed` + `handover_too_large` reach 1% or more of pulls over 14 days, or any container OOM
+    during a pull.
+  - [ ] FU-4 (D47; perf F5): streaming early stop for the held-files diff. Reason: the 10000 clamp and the 5 s budget bound
+    it now. Re-evaluate when: any stored count = 10000, or a `nullCause=git_failed` from maxBuffer.
+  - [ ] FU-5 (D47, D45(d); structural P2-2): widen `census-git-push-sites` to the sandbox token env, the key-auth wrapper, cron
+    clones, env-builders and code outside server/. Reason: pre-existing and unrelated (sandbox E1 by design). Re-evaluate
+    when: any new `GIT_INSTALLATION_TOKEN` or `buildIsolatedGitEnv` extraEnv consumer, or the X3 follow-up landing.
+  - [ ] FU-6 (D47, D45(c)): revoke anon's table-level SELECT on `workspaces`. Reason: pre-existing (the 174 grants snapshot,
+    all columns); RLS is the anon barrier today and `verify/187` pins that no policy names anon/PUBLIC. Re-evaluate when:
+    any migration adds a `workspaces` policy for anon/PUBLIC or edits 174's grants, or the next grants-snapshot migration.
+  - [ ] FU-7 (D47; type/security, P2, FILE NOW, no trigger): verify whether a cc sandbox raw `git push` or `gh pr create`
+    reaches GitHub outside the Owner-approval route. Reason: pre-existing; D41(b) fixes only the baseline text here.
+  - [ ] FU-8 (D47, D26 residual; data P3-1): autostash flattening a partially staged file. Reason: pre-existing (legacy
+    `pull --autostash`). Re-evaluate when: one user report, or #12719 work starting.
+  - [ ] FU-9 (D47; simplicity F19): deduplicate the fixture git helpers across the real-git test files. Reason:
+    cross-cutting (3 or more unrelated test files). Re-evaluate when: the next real-git suite is added.
+  - [ ] V12 root cause: a same-name team-icon replacement gets a 409 because the client never sends the existing file's
+    `sha`; fix the upload to send it (the V12 neutral string then stops appearing and needs no change). Reason: V6(6) scoped
+    it out and V12 only made the copy true. Re-evaluate when: one user report of "Replacing an icon ... is not available
+    yet", or the next change to `components/settings/conversation-names-settings.tsx` or the team-icon upload route.
+  - [ ] D38(4) residual: the self-heal's legacy-arm `fetch origin` keeps its own 30 s timeout and is not on the self-heal
+    budget, so a route self-heal can exceed 15 s on that arm. Reason: the legacy arm is X3's to replace (hardened fetch).
+    Re-evaluate when: X3 lands, or p95 KB-write latency above 3 s on legacy-arm workspaces over 7 days.
+  - [ ] Wireframe: `knowledge-base/product/design/settings/kb-sync-held-commits.pen` frames still show the pre-V7/V11 copy
+    ("Nothing is lost", "this notice clears once the merge reaches ..."): Owner held publish route, Owner singular, Owner no
+    publish route, Owner incl. recovered branch, Member held publish route, Member singular, Member no publish route,
+    Mobile 375 Owner and member, Owner and member transient predicate. Update them to the V7/V9/V11 strings
+    (ux-design-lead). Reason: the code ships the CPO strings verbatim; the frames are reference only. Re-evaluate when:
+    the next design pass on Settings, or before task 11.5's wireframe screenshot comparison.
 - [x] 11.7 Settings team icon (V6(6), D24): in `components/settings/conversation-names-settings.tsx`, on
   `workspace_sync: "pending"` show "Saved to GitHub. Your workspace has local changes that aren't on your repository's
   main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon.
