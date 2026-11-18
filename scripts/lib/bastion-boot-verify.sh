@@ -106,7 +106,7 @@ _bbv_record() {  # <poweroff_result> <summary line>
 
 bastion_boot_verify() {
   local since="${1:-}" apply_outcome="${2:-}" label="${3:-bastion-host-create}"
-  local job_status=failure reader out rc=0 verdicts host_id="" lrc=0 reason="" tmp
+  local job_status=failure reader out rc=0 verdicts host_id="" lrc=0 reason=""
   [[ "$label" =~ ^[a-z0-9-]+$ ]] || label=bastion-host-create
   reader="${BASTION_BOOT_TRAIL:-${_BBV_DIR}/../../apps/web-platform/infra/scripts/fresh-host-boot-trail.sh}"
   [[ "$apply_outcome" == success ]] && job_status=success
@@ -124,17 +124,13 @@ bastion_boot_verify() {
     out="bastion-boot-verify: ${reason}; the boot trail was not read"; rc=1
     printf '%s\n' "$out"
   elif [[ -f "$reader" ]]; then
-    tmp="$(mktemp 2>/dev/null)" || tmp=""
-    if [[ -n "$tmp" ]]; then
-      BOOT_TRAIL_STRICT=1 BOOT_TRAIL_HOST_NAME=soleur-bastion BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
-        JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "$tmp"
-      rc=${PIPESTATUS[0]}
-      out="$(cat "$tmp")"; rm -f "$tmp"
-    else
-      out="$(BOOT_TRAIL_STRICT=1 BOOT_TRAIL_HOST_NAME=soleur-bastion BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
-        JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1)" || rc=$?
-      printf '%s\n' "$out"
-    fi
+    # Stream the reader to the run log as it runs (its wait can last 25 minutes) and keep a copy:
+    # tee to a duplicate of stdout, and exit the substitution with the reader's own status.
+    local fd
+    exec {fd}>&1
+    out="$(BOOT_TRAIL_STRICT=1 BOOT_TRAIL_HOST_NAME=soleur-bastion BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
+      JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "/dev/fd/${fd}"; exit "${PIPESTATUS[0]}")" || rc=$?
+    exec {fd}>&-
   else
     out="bastion-boot-verify: the boot-trail reader is missing at ${reader}"; rc=2
     printf '%s\n' "$out"

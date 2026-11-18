@@ -896,23 +896,23 @@ cutover's user-facing check (git access and workspace saves keep working).
 
 ### Pre-merge
 
-- [ ] AC1. `bash apps/web-platform/infra/bastion.test.sh` passes, and each Guard 2 to Guard 5 mutation row
+- [x] AC1. `bash apps/web-platform/infra/bastion.test.sh` passes, and each Guard 2 to Guard 5 mutation row
   turns it red (run in work; results quoted in the PR body).
-- [ ] AC2. `bash tests/scripts/test-bastion-host-birth-gate.sh` passes, and each Guard 1 row behaves as
+- [x] AC2. `bash tests/scripts/test-bastion-host-birth-gate.sh` passes, and each Guard 1 row behaves as
   its table says; it is registered in `scripts/test-all.sh`.
-- [ ] AC3. No bastion resource address appears in the per-merge `-target` list, and every bastion
+- [x] AC3. No bastion resource address appears in the per-merge `-target` list, and every bastion
   resource is in `OPERATOR_APPLIED_EXCLUSIONS` (`terraform-target-parity.test.ts` passes, a static check
   over the workflow and the `.tf` files, not a live plan that a concurrent merge could change).
-- [ ] AC4. The destroy-guard counter test has a bastion fixture with `host_creates == 1`, and it passes.
-- [ ] AC5. `hcloud_firewall.bastion` has zero `rule` blocks, and the bastion has a private IP of
+- [x] AC4. The destroy-guard counter test has a bastion fixture with `host_creates == 1`, and it passes.
+- [x] AC5. `hcloud_firewall.bastion` has zero `rule` blocks, and the bastion has a private IP of
   `10.0.1.70` that the `hcloud_server.bastion` precondition proves unique and inside the subnet.
-- [ ] AC6. No new file contains `10.0.1.10` or `"web-1"`; `web-hosts-generic.test.sh` passes with its
+- [x] AC6. No new file contains `10.0.1.10` or `"web-1"`; `web-hosts-generic.test.sh` passes with its
   ceilings unchanged.
-- [ ] AC7. `fresh-host-boot-trail.sh` reads by host name; the web routes' existing reader tests pass
+- [x] AC7. `fresh-host-boot-trail.sh` reads by host name; the web routes' existing reader tests pass
   unchanged in result; the bastion job treats `verdict=skipped` (and anything but `verdict=ready`) as
   not ready.
-- [ ] AC8a. `python3 scripts/lint-encryption-posture.py` reports PASS with the bastion's store and connection rows ledgered.
-- [ ] AC8. The ADR-327 amendment, the C4 bastion container and edges, the two ledger rows and the runbook
+- [x] AC8a. `python3 scripts/lint-encryption-posture.py` reports PASS with the bastion's store and connection rows ledgered.
+- [x] AC8. The ADR-327 amendment, the C4 bastion container and edges, the two ledger rows and the runbook
   are in the PR; the three C4 tests pass.
 ### Post-merge
 

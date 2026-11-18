@@ -50,8 +50,8 @@ resource "hcloud_server" "bastion" {
   }
 
   user_data = templatefile("${path.module}/bastion-cloud-init.yml", {
-    host_name                    = local.bastion_host_name
-    sentry_dsn                   = var.sentry_dsn
+    host_name  = local.bastion_host_name
+    sentry_dsn = var.sentry_dsn
     # The egress allowlist's Sentry row. server.tf's one DSN parser; "" for an empty DSN, which the
     # job's DSN assertion refuses before any create.
     sentry_ingest_host           = local.sentry_dsn_parts.host

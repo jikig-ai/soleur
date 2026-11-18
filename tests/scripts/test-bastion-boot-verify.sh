@@ -198,9 +198,7 @@ mrow "a failed lookup treated as an absent server" '  if [[ "$lrc" -eq 3 ]]; the
     echo "bastion-boot-verify: no soleur-bastion server exists (the apply' lookup_failed_shape lookup500 'verdict=not_ready\n' 1 failure BBV_LOOKUP_CODE=500
 mrow "the GH_TOKEN-unset warning deleted" '    echo "::warning::bastion-boot-verify: GH_TOKEN is not set; the run URL was not commented on #12879."' '    :' nogh_shape nogh 'verdict=not_ready\n' 1 success GH_TOKEN=
 mrow "a lookup without a servers array read as empty" "'.servers | arrays | length'" "'.servers | length'" lookup_failed_shape lookupnoarray 'verdict=not_ready\n' 1 failure 'BBV_LOOKUP_BODY={}'
-mrow "the read not bound to the created server" 'BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
-        JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "$tmp"' 'BOOT_TRAIL_HOST_ID="" BOOT_TRAIL_SINCE="$since" \
-        JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "$tmp"' ready_bound_shape ready 'verdict=ready\n' 0 success
+mrow "the read not bound to the created server" 'BOOT_TRAIL_HOST_ID="$host_id"' 'BOOT_TRAIL_HOST_ID=""' ready_bound_shape ready 'verdict=ready\n' 0 success
 mrow "the comment claims a power-off that failed" '    *) poweroff_note="the power-off FAILED, soleur-bastion may still be running"' '    *) poweroff_note="soleur-bastion powered off, disk kept"' poweroff_failed_comment_shape poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
 mrow "the comment only on a successful power-off" 'if [[ -n "${GH_TOKEN:-}" ]]; then' 'if [[ -n "${GH_TOKEN:-}" && "$_BBV_POWEROFF" == powered_off ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
 mrow "the lookup takes the first of two servers" '  if [[ "$n" -ne 1 ]]; then' '  if [[ "$n" -lt 1 ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
