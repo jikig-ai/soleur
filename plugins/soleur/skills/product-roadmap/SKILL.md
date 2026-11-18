@@ -274,7 +274,7 @@ depends_on:
 
 If updating an existing roadmap, merge workshop decisions into the existing structure. Preserve content the user did not explicitly change.
 
-**Status lines come from the source's decision text, not its title.** Before writing a row's status, read the ADR/issue decision section and carry its qualifiers: what it does *not* decide, the open issue that owns production rollout, draft or counsel status, and flag defaults (grep the code key). `validate` checks milestone counts, not sentence meaning. **Why:** PR #12899 — 14 P1/P2 findings were true-but-incomplete status lines, three more came in the correction round. See `knowledge-base/project/learnings/2026-11-18-a-roadmap-status-line-kept-the-headline-and-dropped-the-qualifier.md`.
+**Status lines come from the source's decision text, not its title.** Before writing a row's status, read the ADR/issue decision section and carry its qualifiers: what it does *not* decide, the open issue that owns production rollout, draft or counsel status, and flag defaults (grep the code key). `validate` checks milestone counts, not sentence meaning. **Why:** PR #12899 — most of 14 P1/P2 findings were true-but-incomplete status lines, three more came in the correction round. See `knowledge-base/project/learnings/2026-11-18-a-roadmap-status-line-kept-the-headline-and-dropped-the-qualifier.md`.
 
 **Commit the artifact:**
 

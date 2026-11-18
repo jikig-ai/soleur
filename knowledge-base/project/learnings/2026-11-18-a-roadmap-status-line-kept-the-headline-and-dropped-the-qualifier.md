@@ -16,7 +16,7 @@ related:
 PR #12899 refreshed `knowledge-base/product/roadmap.md`: row 4.6 now cites epic #9842, new rows
 4.6a (#12517) and 4.6b (#12601) were added, and Current State moved from 2026-08-11 to 2026-11-18.
 `roadmap-reconcile.sh validate` was clean and every cited issue and PR state was checked with `gh`.
-The review panel still found 2 P1 and 12 P2 findings, and all of them were true-but-incomplete status lines:
+The review panel still found 2 P1 and 12 P2 findings. Most were true-but-incomplete status lines; one was a false flag name:
 
 - "ADR-325 keeps gVisor per session as the isolation path". This wording was inherited from epic #9842's
   title. ADR-325 actually decides credential injection apart from the runtime: it keeps bwrap now,
@@ -71,6 +71,9 @@ correction adds, including dates (`date -d <d> +%A`).
    Recovery: re-recorded the seats on this branch. **Prevention:** prefix every Bash call with `cd <worktree> &&` when the
    active worktree is not the session's primary directory.
 8. **`gh pr view 12827` exited 1**, because #12827 is an issue. Recovery: used `gh issue view`. **Prevention:** one-off;
-   use `gh issue view` when the number's kind is unknown, since it resolves only issues and fails loudly on PRs.
+   use `gh issue view` when the number's kind is unknown: it accepts both issues and PRs (gh 2.105.0).
 9. **Worktree creation outran the Bash timeout.** Recovery: re-ran it in the background. **Prevention:** one-off;
    run `worktree-manager.sh` with `run_in_background`.
+10. **The flag-name fix missed its twin in the MU4.1 row.** This is the same file-indexed sweep miss as item 4, and the
+   delta review of the compound commit caught it. Recovery: fixed the MU4.1 row. **Prevention:** after any rename-shaped fix, grep
+   the wrong token across the directory (`grep -rn <old> knowledge-base/product/`), not only the cell you edited.
