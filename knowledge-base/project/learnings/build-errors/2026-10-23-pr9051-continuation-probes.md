@@ -159,3 +159,34 @@ Session-start cleanup also reported its temporary sweep skipped because
 before retrying. Here the active owner was the root checkout's guard process,
 so the sweep correctly stayed skipped. The bare-config `guard-skip` marker came
 from a normal non-bare checkout and was likewise a safe no-op.
+
+The 2026-11-18 collector continuation caught three fixture/workflow issues:
+the synthetic adapter initially returned plain promise pairs after the
+lifecycle began requiring tracker-issued handles, its first rewritten
+completion scenario resolved before the tracker queued inspection, and a
+test command used a nonexistent nested CWD instead of the recovery worktree
+root. The focused suite exposed these errors; update fixtures to exercise the
+same provenance contract, queue simulated completion after tracker startup,
+and use repository-root-relative script paths. The corrected focused suite
+passed 33/33 and the local PostgreSQL timeout probe passed 1/1. An independent
+independent re-review confirmed that tracker handles are bound to the exact
+connection and then found a P1 escape: `adapter.start()` received the raw
+connection, so it could open an unrelated pending operation and return a
+separate completed tracked handle. The interface now passes a one-use tracking
+capability to `start()` and a regression confirms that the capability has no
+raw `begin` method; independent re-review is still pending. The P2
+synchronous-callback limitation also applies to cancel, verify, and close. Do
+not call this prototype an operationally bounded collector. A follow-up shell
+probe also assumed `signatures/cla.json` and
+`plugins/soleur/scripts/cla-signed-author-gate.sh` existed at those paths; use
+`rg --files` to locate the branch's actual CLA files before reading. Likewise,
+the first append patch for session-state did not match current text; re-read
+the tail after compaction or edits and anchor patches on exact current text.
+The PR's `cla-check` failure is due to historical `t@t` and
+`s@example.invalid` commit identities; do not attest to CLA terms or rewrite
+authorship without establishing the applicable contributor authorization.
+The first capability test run failed because the lifecycle module imported the
+provenance predicate but not its tracker constructor. The lifecycle correctly
+returned a sanitized failure; adding the missing named import restored the
+focused suite to 34/34. When a capability wrapper fails closed, inspect the
+sanitized start outcome and imports before weakening validation.

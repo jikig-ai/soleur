@@ -1,5 +1,4 @@
 import { observeDedicatedLifecycle } from './holder-evidence-dedicated.mjs';
-import { trackInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
 
 // A closed, in-memory simulation only. It has no injected transport, database
 // driver, credentials, PID or executable entry point. Its atomic ownership
@@ -34,11 +33,11 @@ export function createSyntheticDedicatedAdapter(scenario) {
       issued = true;
       return connection;
     },
-    start(candidate, signal) {
-      if (signal.aborted || started || !observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'ready') refuse();
+    start(boundary, signal) {
+      if (signal.aborted || started || !observerIndependent() || !ownsHeldRecord(connection) || current.state !== 'ready') refuse();
       started = true;
       starts++;
-      const operation = trackInspectionTransaction(candidate, (db) => {
+      const operation = boundary.track((db) => {
         db.begin('read only', () => undefined);
         return new Promise((resolve) => { inspect = resolve; });
       });

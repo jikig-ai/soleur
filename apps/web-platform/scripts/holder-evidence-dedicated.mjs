@@ -2,7 +2,7 @@
 // credentials, network client, executable entry point or persistence. A mock
 // observer cannot prove ownership or that a real backend stopped.
 import { types } from 'node:util';
-import { isTrackedInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
+import { isTrackedInspectionTransaction, trackInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
 
 const unknown = (operation = 'not_started', cancel = 'not_attempted', close = 'not_attempted') => ({
   operation, cancel, close, stop: 'unknown', evidence: 'adapter_report_only',
@@ -102,8 +102,16 @@ export async function observeDedicatedLifecycle(adapter, limits) {
   const controller = new AbortController();
   const workDeadline = performance.now() + limits.workMs;
   if (controller.signal.aborted || performance.now() >= workDeadline) return unknown('timeout');
+  let operationIssued = false;
+  const operationBoundary = Object.freeze({
+    track(inspect) {
+      if (operationIssued) throw new Error('operation_unavailable');
+      operationIssued = true;
+      return trackInspectionTransaction(connection, inspect);
+    },
+  });
   let started;
-  try { started = adapter.start(connection, controller.signal); }
+  try { started = adapter.start(operationBoundary, controller.signal); }
   catch { return unknown('failed'); }
   const operationPromises = readOperation(started, connection);
   if (!operationPromises) {

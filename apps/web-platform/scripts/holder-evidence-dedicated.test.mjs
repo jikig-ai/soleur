@@ -15,7 +15,10 @@ const adapter = (overrides = {}) => {
   const connection = overrides.connection ?? createConnection();
   return {
   create: () => connection,
-  start: (database) => transaction(database),
+  start: (boundary) => boundary.track((db) => {
+    db.begin('read only', () => undefined);
+    return { state: 'complete' };
+  }),
   cancel: async () => undefined,
   close: async () => undefined,
   verify: async (_connection, phase) => report(phase),
@@ -30,8 +33,8 @@ test('public collector timeout alone does not let the lifecycle observer close o
   const pins = await readLocalRoleBindings();
   const result = await observeDedicatedLifecycle(adapter({
     connection,
-    start: (database) => {
-      const tracked = trackInspectionTransaction(database, db => inspectBoundRoles(db, pins, { timeoutMs: 5 }));
+    start: (boundary) => {
+      const tracked = boundary.track(db => inspectBoundRoles(db, pins, { timeoutMs: 5 }));
       inspection = tracked.inspection;
       return tracked;
     },
@@ -53,7 +56,7 @@ test('settled public inspection cannot stand in for pending transaction settleme
   const connection = createConnection(() => new Promise((resolve) => { settleTransaction = resolve; }));
   const result = await observeDedicatedLifecycle(adapter({
     connection,
-    start: (database) => trackInspectionTransaction(database, (db) => {
+    start: (boundary) => boundary.track((db) => {
       db.begin('read only', () => undefined);
       return { state: 'failed' };
     }),
@@ -97,8 +100,26 @@ test('a tracker handle bound to a different connection is refused', async () => 
   assert.equal(closes, 0);
 });
 
+test('start receives a one-use tracking capability rather than the raw connection', async () => {
+  let boundary, raw;
+  const result = await observeDedicatedLifecycle(adapter({
+    create: () => { raw = createConnection(); return raw; },
+    start: (capability) => {
+      boundary = capability;
+      return capability.track((db) => {
+        db.begin('read only', () => undefined);
+        return { state: 'complete' };
+      });
+    },
+  }), limits);
+
+  assert.notEqual(boundary, raw);
+  assert.deepEqual(Object.keys(boundary), ['track']);
+  assert.equal(result.operation, 'completed');
+});
+
 test('normal completion reports only adapter assertions, never raw result or clearance', async () => {
-  const result = await observeDedicatedLifecycle(adapter({ start: (database) => trackInspectionTransaction(database, (db) => {
+  const result = await observeDedicatedLifecycle(adapter({ start: (boundary) => boundary.track((db) => {
     db.begin('read only', () => undefined);
     return { state: 'complete', private: 'private-result' };
   }) }), limits);
@@ -116,7 +137,7 @@ test('deadline cancels and observes stop before releasing the held connection', 
   const connection = createConnection(() => new Promise((resolve) => { settle = resolve; }));
   const result = await observeDedicatedLifecycle(adapter({
     connection,
-    start: (database) => trackInspectionTransaction(database, (db) => {
+    start: (boundary) => boundary.track((db) => {
       db.begin('read only', () => undefined);
       return new Promise((resolve) => { inspect = resolve; });
     }),
@@ -133,7 +154,7 @@ test('an unconfirmed cancellation does not release or claim the connection stopp
   let closeCalls = 0;
   const result = await observeDedicatedLifecycle(adapter({
     connection: createConnection(() => new Promise(() => {})),
-    start: (database) => trackInspectionTransaction(database, (db) => {
+    start: (boundary) => boundary.track((db) => {
       db.begin('read only', () => undefined);
       return new Promise(() => {});
     }),
@@ -149,7 +170,7 @@ test('unsettled work or missing independent observations stay unknown', async ()
   let closed = 0;
   const result = await observeDedicatedLifecycle(adapter({
     connection: createConnection(() => new Promise(() => {})),
-    start: (database) => trackInspectionTransaction(database, (db) => {
+    start: (boundary) => boundary.track((db) => {
       db.begin('read only', () => undefined);
       return new Promise(() => {});
     }),
@@ -168,7 +189,7 @@ test('a rejected cancellation cannot release even if the task has settled', asyn
   const connection = createConnection(() => new Promise((resolve) => { settle = resolve; }));
   const result = await observeDedicatedLifecycle(adapter({
     connection,
-    start: (database) => trackInspectionTransaction(database, (db) => {
+    start: (boundary) => boundary.track((db) => {
       db.begin('read only', () => undefined);
       return new Promise((resolve) => { inspect = resolve; });
     }),
@@ -218,10 +239,13 @@ test('invalid limits or non-synchronous ownership acquisition start no work', as
 });
 
 test('synchronous operation delay cannot be reported as completed before deadline', async () => {
-  const result = await observeDedicatedLifecycle(adapter({ start: (database) => {
+  const result = await observeDedicatedLifecycle(adapter({ start: (boundary) => {
     const until = performance.now() + 30;
     while (performance.now() < until) { /* synthetic event-loop stall */ }
-    return transaction(database);
+    return boundary.track((db) => {
+      db.begin('read only', () => undefined);
+      return { state: 'complete' };
+    });
   } }), { workMs: 10, cleanupMs: 80 });
   assert.equal(result.operation, 'timeout');
 });

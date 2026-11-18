@@ -4500,3 +4500,28 @@
   The original worktree remains unchanged at 144 entries; this recovery branch
   remains unpushed, and collection, writer-window, legal, review, QA, preflight
   and ship gates remain held.
+- At pushed head `4b4b568e89`, the lifecycle now accepts only tracker-issued
+  handles bound to the exact acquired connection; the foreign-connection
+  regression passes. Focused tracker/lifecycle/synthetic-adapter tests pass
+  33/33, `git diff --check` and three `node --check` invocations pass, and the
+  local PostgreSQL timeout probe passes 1/1. Independent re-review is pending.
+  The adapter's synchronous `create()` and `start()` calls still run before
+  the async deadline; a blocked callback can stall the process indefinitely.
+  This prototype therefore remains unbounded and cannot authorize collection.
+  No live collector, independent authority, vault fence, writer exclusion or
+  recovery path is established. The original worktree remains unchanged at
+  144 entries; collection, writer-window, legal, QA, preflight and ship gates
+  remain held.
+- Independent re-review at `4b4b568e89` confirmed WeakMap provenance blocks
+  unrelated promise-pair and foreign-handle substitutions, but found a P1
+  escape because `adapter.start()` still received the raw connection. The
+  lifecycle now gives `start()` a one-use tracking capability instead; a new
+  regression confirms it exposes no raw `begin` method and the focused suite
+  passes 34/34. This closes the reproduced raw-parameter path, pending
+  independent re-review. The P2 synchronous-callback limitation still applies
+  to create/start/cancel/verify/close, so the prototype remains unbounded and
+  cannot clear collection or writer gates. No live caller was found. PR #9051
+  remains OPEN draft; `cla-check` fails because two historical branch commits
+  have unresolved author/committer identities (`t@t`, `s@example.invalid`).
+  No CLA signature or attribution rewrite was performed. The original worktree
+  still has 144 dirty entries.
