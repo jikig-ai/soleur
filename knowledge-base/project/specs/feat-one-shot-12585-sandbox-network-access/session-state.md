@@ -50,3 +50,9 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - Rulings: CTO R1-R7 and CPO C1-C6 are in decision-challenges.md. cto_spawns=1 of 2.
 - #12907 body updated with the new gateway-unverified copy.
 - Next: Step 5 (code-review issues), the fix round from 69009ccbdf (5272dd01fc before the CLA identity rewrite), then QA, compound, ship.
+
+### Step 5 complete (2026-11-18)
+- There were no code-review issues for PR #12897, so no resolvers ran.
+- Fix round 1 ran 5 targeted seats and 1 verifier over 69009ccbdf..HEAD. All 19 findings were fixed inline in 8c5d81950e and 63159d9d66. The fix-round trailer is db88d68759, and a fresh Review-Evidence comment is posted.
+- A CLA failure was caused by commit 76ac3b2672, whose author was t@t. I rewrote it with filter-branch and force-pushed. The panel sha is now 69009ccbdf.
+- Next: QA, compound, ship.
