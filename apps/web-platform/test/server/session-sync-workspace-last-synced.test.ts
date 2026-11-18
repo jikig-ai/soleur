@@ -432,7 +432,8 @@ describe("held-files write (TW2)", () => {
     });
     expect(mockAdopt.mock.invocationCallOrder[0]).toBeLessThan(mockCompute.mock.invocationCallOrder[0]);
     expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: expect.objectContaining({ gitDir: "/tmp/iso" }), base: T_SHA, head: merged, recovered: [] });
-    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: READ_AT }]]);
+    // R2-B (D42, verify-coverage P3-5): a merged default merge clears the pull-blocked state with the count
+    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: READ_AT, pullBlocked: null }]]);
     expect(mockWriteHeld.mock.calls[0][0]).toBe(SERVICE);
     // The stamp is its own write (D29(1): never folded together).
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
@@ -447,7 +448,7 @@ describe("held-files write (TW2)", () => {
       pullReason: "up_to_date",
       checkedAt: READ_AT.toISOString(),
     });
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: READ_AT }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: READ_AT, pullBlocked: null }]]);
   });
 
   test("pull: no remote read (remote null) or an unresolved merge -> no write; a null count writes null with checked_at", async () => {
@@ -468,7 +469,14 @@ describe("held-files write (TW2)", () => {
     expect(mockCompute).toHaveBeenCalledTimes(1);
     // D39(b), W1: the null count is an attempt, so it writes null with this pull's ls-remote instant; the result still
     // reports no count (heldFiles and checkedAt null).
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: READ_AT }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: READ_AT, pullBlocked: null }]]);
+  });
+
+  test("R2-B (X5): HEAD not on the remote's default branch -> no count attempted, nothing written", async () => {
+    mockMerge.mockResolvedValueOnce({ reason: "non_default_branch", remote: { defaultBranch: "trunk", tip: T_SHA, sideTip: null, readAt: READ_AT } });
+    await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toMatchObject({ heldFiles: null, pullReason: "non_default_branch" });
+    expect(mockCompute).not.toHaveBeenCalled();
+    expect(mockWriteHeld).not.toHaveBeenCalled();
   });
 
   test("pull: a failed held write sends one mirror; the stamp stays written and the result is unchanged", async () => {

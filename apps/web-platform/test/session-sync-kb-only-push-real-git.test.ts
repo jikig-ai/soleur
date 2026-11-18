@@ -34,7 +34,7 @@ interface Call {
 }
 
 const H = vi.hoisted(() => ({
-  calls: [] as Array<{ args: string[]; hardened: boolean; cwd: string | undefined }>,
+  calls: [] as Array<{ args: string[]; hardened: boolean; cwd: string | undefined; timeout?: number }>,
   remoteUrl: "",
   beforeCall: null as null | ((args: string[]) => void),
   /** Runs after a token-bearing call SUCCEEDED (a push that lands at the remote while the client sees an error, D14). */
@@ -95,7 +95,7 @@ vi.mock("@/server/git-auth", async (importOriginal) => {
   return {
     ...actual,
     gitWithInstallationAuth: async (args: string[], id: number, opts: import("@/server/git-auth").GitExecOptions = {}) => {
-      H.calls.push({ args: [...args], hardened: opts.hardened !== undefined, cwd: opts.cwd });
+      H.calls.push({ args: [...args], hardened: opts.hardened !== undefined, cwd: opts.cwd, timeout: opts.timeout });
       H.beforeCall?.(args);
       const rewritten = args.map((a) => (a === "https://github.com/acme/widget.git" ? H.remoteUrl : a));
       const out = await actual.gitWithInstallationAuth(rewritten, id, opts);
@@ -150,6 +150,7 @@ vi.mock("@/server/host-git", async (importOriginal) => {
 
 import { syncPush } from "@/server/session-sync";
 import { syncWorkspace } from "@/server/workspace-sync";
+import { withWorkspaceGitLock } from "@/server/connected-repo-git";
 
 let base = "";
 let template = "";
@@ -677,6 +678,8 @@ describe("syncPush publishes only a Soleur-built KB commit (real git)", { timeou
     expect(git(row.remote, "rev-parse", "refs/heads/feature")).toBe(row.T);
     expect(remoteMain(row)).toBe(row.T);
     expect(heldWarn("non_default_branch")).toHaveLength(1);
+    // R2-B (X5, verify-coverage P3-6): no held count off the remote's default branch (as the self-heal and the refresh)
+    expect(H.writeHeld).not.toHaveBeenCalled();
   });
 
   test("a bare remote with no HEAD -> nothing pushed, remote_branch_absent", async () => {
@@ -1709,5 +1712,77 @@ describe("census (AC4)", () => {
     for (const f of ["session-sync.ts", "kb-sync-publish.ts", "workspace-sync.ts"]) {
       expect(code(join(SERVER, f))).not.toMatch(/resolveDefaultBranchForFallback|checkKbOnlyRange|simplify-merges/);
     }
+  });
+});
+
+describe("R2-B (verify-coverage P2-1): the push holds the workspace lock on a budget", { timeout: 30_000 }, () => {
+  test("a lock wait that outlasts the push budget: push_deadline (held), nothing read or pushed, no count", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    let release!: () => void;
+    const holding = withWorkspaceGitLock(row.ws, () => new Promise<void>((r) => (release = r)));
+    try {
+      await syncPush(USER, row.ws, {} as never, WS_ID, { budget: { remaining: () => 30 } });
+    } finally {
+      release();
+      await holding;
+    }
+    expect(heldInfo("push_deadline")).toHaveLength(1);
+    expect(heldWarn("push_deadline")).toHaveLength(1);
+    expect(H.calls).toEqual([]);
+    expect(remoteMain(row)).toBe(row.T);
+    expect(status(row)).toBe(" M knowledge-base/a.md"); // fn never ran: no auto-commit either
+    expect(H.writeHeld).not.toHaveBeenCalled();
+  });
+
+  test("a budget spent before the remote read: push_deadline, no ls-remote, nothing pushed", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await syncPush(USER, row.ws, {} as never, WS_ID, { budget: { remaining: () => 0 } });
+    expect(heldInfo("push_deadline")).toHaveLength(1);
+    expect(H.calls).toEqual([]);
+    expect(remoteMain(row)).toBe(row.T);
+  });
+
+  test("the ls-remote and the push children are capped at the budget left", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    await syncPush(USER, row.ws, {} as never, WS_ID, { budget: { remaining: () => 7_000 } });
+    expect(heldInfo("synthetic_pushed")).toHaveLength(1);
+    expect(H.calls.map((c) => [c.args[0], c.timeout])).toEqual([
+      ["ls-remote", 7_000],
+      ["push", 7_000],
+    ]);
+  });
+
+  test("a budget that runs out between the remote read and the push: push_deadline before the branch moves, nothing pushed", async () => {
+    row = newRow();
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    let left = 20_000;
+    H.afterCall = (args) => {
+      if (args[0] === "ls-remote") left = 0;
+    };
+    await syncPush(USER, row.ws, {} as never, WS_ID, { budget: { remaining: () => left } });
+    expect(heldInfo("push_deadline")).toHaveLength(1);
+    expect(pushesOf()).toEqual([]);
+    expect(remoteMain(row)).toBe(row.T);
+    // the local branch is the auto-commit's own commit (on T), never moved to a built S
+    expect(git(row.ws, "log", "-1", "--format=%s", "refs/heads/main")).toBe("Auto-commit after session");
+    expect(git(row.ws, "rev-parse", "refs/heads/main^")).toBe(row.T);
+  });
+
+  test("protected main: a budget spent by the rejected push does not let the side push start; held push_deadline, rolled back", async () => {
+    row = newRow({ protectedMain: true });
+    write(join(row.ws, "knowledge-base", "a.md"), "a\nkb\n");
+    let left = 20_000;
+    H.beforeCall = (args) => {
+      if (args[0] === "push") left = 0; // the default-branch push (rejected by the hook) spends what was left
+    };
+    await syncPush(USER, row.ws, {} as never, WS_ID, { budget: { remaining: () => left } });
+    expect(pushesOf()).toEqual(["refs/heads/main"].map((ref) => expect.stringContaining(`:${ref}`)));
+    expect(remoteSide(row)).toBeNull();
+    expect(heldLines()).toEqual(["push_deadline"]);
+    // D14(4): the fallback's pre-delivery exit rolled the local branch back to the auto-commit
+    expect(git(row.ws, "log", "-1", "--format=%s", "refs/heads/main")).toBe("Auto-commit after session");
   });
 });

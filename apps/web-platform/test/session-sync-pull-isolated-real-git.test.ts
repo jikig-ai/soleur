@@ -138,6 +138,7 @@ import { gitWithInstallationAuth } from "@/server/git-auth";
 import { AUTO_MERGE_MSG_PULL } from "@/server/kb-sync-pull";
 import { checkpointInflightWork, restoreInflightCheckpoint } from "@/server/inflight-checkpoint";
 import { syncPull, syncPush } from "@/server/session-sync";
+import { withWorkspaceGitLock } from "@/server/connected-repo-git";
 
 let base = "";
 let template = "";
@@ -315,7 +316,8 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     // #12714: the count is computed on the pull's own isolated dir after the merge (nothing local is held here) and written
     expect(result).toEqual({ heldFiles: 0, onRecovered: 0, pullReason: "merged", checkedAt: expect.any(String) });
     expect(H.writeHeld).toHaveBeenCalledTimes(1);
-    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: new Date(result.checkedAt as string) }]);
+    // R2-B (verify-coverage P3-5/#6): a merged pull clears the D42 pull-blocked state with the count
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: new Date(result.checkedAt as string), pullBlocked: null }]);
     for (const u of ups) expect(isAncestor(r, u, "HEAD")).toBe(true);
     expect(gitOk(r.ws, "rev-list", "--objects", "HEAD")).toBe(true);
     expect(gitOk(r.ws, "fsck", "--connectivity-only")).toBe(true);
@@ -780,6 +782,8 @@ describe("TX5 (X5): a non-default branch or a detached HEAD is not pulled", { ti
       expect(pullLines(), shape).toEqual([expect.objectContaining({ reason: "non_default_branch" })]);
       expect(H.mirrorWarnWithDebounce, shape).not.toHaveBeenCalled();
       expect(H.listPullRequestsForHead, shape).not.toHaveBeenCalled();
+      // R2-B (X5, verify-coverage P3-6): no held count off the remote's default branch (as the self-heal and the refresh)
+      expect(H.writeHeld, shape).not.toHaveBeenCalled();
     }
   });
 });
@@ -1268,4 +1272,41 @@ describe("WP1 D38: the async writer, the pull budget and the same-host lock", { 
   });
   // obs F4 (isolated_reason) is pinned in test/server/session-sync-sentry-mirror.test.ts: a refusal real git reaches only
   // after host git accepted the `.git` shape is not constructible here (host git refuses the same shapes first).
+});
+
+describe("R2-B: the pull's lock wait, the pull-blocked clear and the X5 count rule", { timeout: 60_000 }, () => {
+  test("verify-coverage P2-1: a lock wait that outlasts the budget is pull_deadline (ref=default); nothing ran under the lock", async () => {
+    const r = newRow();
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2;\n"));
+    const before = head(r);
+    let release!: () => void;
+    const holding = withWorkspaceGitLock(r.ws, () => new Promise<void>((res) => (release = res)));
+    let result: Awaited<ReturnType<typeof pull>>;
+    try {
+      result = await pull(r, { budget: { remaining: () => 30, mergeStartMinMs: 20_000 } });
+    } finally {
+      release();
+      await holding;
+    }
+    expect(result).toEqual({ heldFiles: null, onRecovered: null, pullReason: "pull_deadline", checkedAt: null });
+    expect(pullLines()).toEqual([expect.objectContaining({ reason: "pull_deadline", ref: "default" })]);
+    expect(hostRan("status")).toEqual([]);
+    expect(tokenVerbs()).toEqual([]);
+    expect(head(r)).toBe(before);
+    expect(H.writeHeld).not.toHaveBeenCalled();
+  });
+
+  test("verify-coverage P3-5/#6: up_to_date clears pullBlocked; a conflicted merge leaves it as it is (no pullBlocked key)", async () => {
+    const r = newRow();
+    await pull(r);
+    expect(H.writeHeld.mock.calls.map((c) => (c as unknown[])[2])).toEqual([expect.objectContaining({ pullBlocked: null })]);
+    git(r.ws, "commit", "-q", "--allow-empty", "-m", "noop"); // keep HEAD on main
+    write(join(r.ws, "src", "s.ts"), "export const s = 3; // local\n");
+    git(r.ws, "commit", "-q", "-am", "local edit");
+    upstreamCommit(r, (d) => write(join(d, "src", "s.ts"), "export const s = 2; // upstream\n"));
+    resetTurn();
+    expect((await pull(r)).pullReason).toBe("merge_conflict");
+    expect(H.writeHeld).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call((H.writeHeld.mock.calls[0] as unknown[])[2], "pullBlocked")).toBe(false);
+  });
 });

@@ -139,7 +139,11 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
     // #12718: no legacy token pull is left to throw; an unexpected throw inside the pull's try is the catch's input.
     headThrows.value = true;
 
-    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1")).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null });
+    // R2-B (obs F3, verify-coverage P3-17): the outer catch-all is a closed reason too, with its one pull-held line
+    await expect(syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1")).resolves.toEqual({ heldFiles: null, onRecovered: null, pullReason: "pull_unexpected", checkedAt: null });
+    const pullHeld = childLog.info.mock.calls.filter(([o]) => (o as { op?: string } | undefined)?.op === "kb-sync.pull-held");
+    expect(pullHeld).toEqual([[expect.objectContaining({ reason: "pull_unexpected", errName: "Error" }), expect.any(String)]]);
+    expect(JSON.stringify(pullHeld)).not.toMatch(/github\.com|[0-9a-f]{40}/);
 
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>

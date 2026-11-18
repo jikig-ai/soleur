@@ -99,6 +99,8 @@ vi.mock("@/lib/supabase/tenant", () => {
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  // R2-B: the pull's outer catch-all now writes its pull-held line (obs F3), whose warning mirror this reaches
+  mirrorWarnWithDebounce: vi.fn(),
 }));
 
 vi.mock("../server/git-auth", () => ({

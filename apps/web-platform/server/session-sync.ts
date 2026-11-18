@@ -32,12 +32,13 @@ import {
   readStatus,
   runConnectedRepoGitAsync,
   withWorkspaceGitLock,
+  WORKSPACE_GIT_LOCK_TIMEOUT,
   type PorcelainEntry,
 } from "./connected-repo-git";
 import { HostGitRefusedError } from "./host-git";
 import { KB_ROOT } from "./kb-root";
 import { writeHeldFromIsolated } from "./kb-sync-held-refresh";
-import { KbSyncError, publishKbOnly, reportPushHeld } from "./kb-sync-publish";
+import { KbSyncError, publishKbOnly, reportPushHeld, SYNC_PUSH_BUDGET_MS, type PushBudget } from "./kb-sync-publish";
 import {
   adoptSideTip,
   KB_PULL_HELD_MESSAGES,
@@ -547,8 +548,18 @@ export async function syncPull(
   }
 
   // D38(6): one workspace's git writers run one at a time on this host (a sibling pull never reads this one's in-flight
-  // MERGE_AUTOSTASH as an unfinished merge).
-  return withWorkspaceGitLock(workspacePath, () => pullLocked(userId, workspacePath, service, workspaceId, opts.limits, budget));
+  // MERGE_AUTOSTASH as an unfinished merge). R2-B (verify-coverage P2-1): the wait races what is left of the budget; a
+  // lock that is not free in time is `pull_deadline` and nothing runs under it.
+  const locked = await withWorkspaceGitLock(
+    workspacePath,
+    () => pullLocked(userId, workspacePath, service, workspaceId, opts.limits, budget),
+    { waitMs: budget.remaining() },
+  );
+  if (locked === WORKSPACE_GIT_LOCK_TIMEOUT) {
+    reportPullHeld("pull_deadline", { userId, workspaceId }, "default");
+    return { ...none, pullReason: "pull_deadline" };
+  }
+  return locked;
 }
 
 async function pullLocked(
@@ -635,8 +646,11 @@ async function pullLocked(
         // #12714 (D29(1), D39(a)(b), W1): after the merge and the adoption (up_to_date too), on this run's remote tip and
         // the HEAD those steps left, through the ONE write path (server/kb-sync-held-refresh.ts) with this pull's injected
         // service client: every attempt writes, a null count too, with checked_at = this run's ls-remote instant. No
-        // remote read: no tip, so no attempt. `pullBlocked` is the self-heal's alone (D42): left untouched here.
-        if (merged.remote) {
+        // remote read: no tip, so no attempt. X5 (R2-B, verify-coverage P3-6): HEAD not on the remote's default branch is no
+        // attempt either, as in the self-heal and the refresh. D42 (R2-B, verify-coverage P3-5): a default merge that
+        // `merged` or found the workspace `up_to_date` clears the pull-blocked state; any other reason leaves it as it is.
+        if (merged.remote && head.refName === `refs/heads/${merged.remote.defaultBranch}`) {
+          const clears = merged.reason === "merged" || merged.reason === "up_to_date";
           const counted = await writeHeldFromIsolated({
             isolated,
             workspacePath,
@@ -645,6 +659,7 @@ async function pullLocked(
             headSha: readWorkspaceHeadRef(workspacePath).sha,
             checkedAt: merged.remote.readAt,
             service,
+            ...(clears ? { pullBlocked: null } : {}),
           });
           if (counted) held = { ...counted, checkedAt: merged.remote.readAt.toISOString() };
         }
@@ -674,7 +689,9 @@ async function pullLocked(
       extra: { userId, errName, ...(frame ? { frame } : {}) },
       message: "Sync pull failed — continuing with local state",
     });
-    return none;
+    // R2-B (obs F3, verify-coverage P3-17): a closed reason for the legacy runner's line, and this run's one pull-held line.
+    reportPullHeld("pull_unexpected", ctx, undefined, { errName, ...(frame ? { frame } : {}) });
+    return { ...none, pullReason: "pull_unexpected" };
   } finally {
     disposeIsolated(isolated, "session-sync");
   }
@@ -746,7 +763,10 @@ export async function syncPush(
   // workspace id (see syncPull / agent-runner.ts).
   service: SupabaseClient,
   workspaceId: string,
+  /** `budget` is a test seam (R2-B); production passes none: `SYNC_PUSH_BUDGET_MS` from this call's entry. */
+  opts: { readonly budget?: PushBudget } = {},
 ): Promise<void> {
+  const budget: PushBudget = opts.budget ?? pullBudget(SYNC_PUSH_BUDGET_MS, 0);
   if (!(await hasRemote(workspacePath))) {
     return; // Empty workspace, no remote
   }
@@ -758,11 +778,23 @@ export async function syncPush(
     return;
   }
 
-  // D38(6): serialized with this workspace's pull and self-heal on this host.
-  return withWorkspaceGitLock(workspacePath, () => pushLocked(userId, workspacePath, service, workspaceId));
+  // D38(6): serialized with this workspace's pull and self-heal on this host. R2-B (verify-coverage P2-1): the publish holds
+  // the lock, so it runs on a budget: the wait races it (`push_deadline` when the lock is not free in time), and inside,
+  // the remote read and each push start only while it allows, each capped at what is left. A started git child is never
+  // killed mid-way beyond its own (capped) timeout.
+  const locked = await withWorkspaceGitLock(workspacePath, () => pushLocked(userId, workspacePath, service, workspaceId, budget), {
+    waitMs: budget.remaining(),
+  });
+  if (locked === WORKSPACE_GIT_LOCK_TIMEOUT) reportPushHeld("push_deadline", "held", { userId, workspaceId });
 }
 
-async function pushLocked(userId: string, workspacePath: string, service: SupabaseClient, workspaceId: string): Promise<void> {
+async function pushLocked(
+  userId: string,
+  workspacePath: string,
+  service: SupabaseClient,
+  workspaceId: string,
+  budget: PushBudget,
+): Promise<void> {
   const ctx = { userId, workspaceId };
   try {
     // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
@@ -808,6 +840,7 @@ async function pushLocked(userId: string, workspacePath: string, service: Supaba
       headSha: head.sha,
       refName: head.refName,
       writer: kbWorkspaceWriter(workspacePath),
+      budget,
       // #12714 (D29(1), D39(a)(b)): the publish runs this hook from its `finally`, before its isolated dir is disposed, on
       // every exit that read the remote tip (held exits too); the helper computes and writes (null with checked_at).
       onHeldFiles: async ({ isolatedDir, T, headSha, readAt }) => {

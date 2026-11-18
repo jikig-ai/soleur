@@ -31,7 +31,7 @@ import {
   type TreeEntry,
   type VerifiedCommit,
 } from "./kb-sync-objects";
-import { KbRemoteError, readRemoteState, resolveRepoUrl, SIDE_REF, type RemoteState } from "./kb-sync-remote";
+import { cappedTimeout, KbRemoteError, readRemoteState, resolveRepoUrl, SIDE_REF, type RemoteState } from "./kb-sync-remote";
 import { createKbSyncPr, ensureKbSyncPr, readSidePrState, type SidePrState } from "./kb-sync-side-pr";
 import { createChildLogger } from "./logger";
 
@@ -101,6 +101,18 @@ export function isRejectedPush(err: unknown): boolean {
 const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
 const PUSH_TIMEOUT_MS = 60_000;
 
+/**
+ * R2-B (verify-coverage P2-1): one budget for a session-end `syncPush`, measured from its entry. The publish holds the
+ * same-host workspace lock (D38(6)), so without a bound a stuck push held every sibling pull and self-heal behind it. Room
+ * for the remote read, the push to the default branch and the side push at their own caps. The lock wait counts against it.
+ */
+export const SYNC_PUSH_BUDGET_MS = 120_000;
+
+/** What is left of a push's budget (may be <= 0). The budget gates STARTS and caps each network child; it kills nothing. */
+export interface PushBudget {
+  remaining(): number;
+}
+
 /** Every reason a turn's KB push is held (R7). Warning-level reasons carry a static Sentry message; the rest log only. */
 export type KbPushHeldReason =
   | "merge_in_progress"
@@ -124,7 +136,9 @@ export type KbPushHeldReason =
   | "pr_failed"
   | "kb_absent"
   | "held_foreign"
-  | "synthetic_pushed";
+  | "synthetic_pushed"
+  // R2-B: the push budget left no time to wait for the workspace lock, read the remote or start a push
+  | "push_deadline";
 
 export type KbPushOutcome = "pushed" | "side_pushed" | "held";
 
@@ -153,6 +167,7 @@ const HELD_WARN_MESSAGES: Record<KbPushHeldReason, string | null> = {
   pr_failed: null,
   held_foreign: null,
   synthetic_pushed: null,
+  push_deadline: "KB sync held: the push ran out of time before a step could start",
 };
 
 export interface KbSyncContext {
@@ -278,7 +293,17 @@ interface VerifiedPush {
   /** `refs/heads/<D>` or `refs/heads/soleur/kb-sync`, nothing else. */
   readonly ref: string;
   readonly defaultBranch: string;
+  /** R2-B: the push budget; the child's timeout is `min(PUSH_TIMEOUT_MS, remaining)`. */
+  readonly budget?: PushBudget;
 }
+
+/** R2-B: a step that would start with nothing left of the push budget holds the turn (`push_deadline`). */
+function gateStart(budget: PushBudget | undefined): void {
+  if (budget !== undefined && budget.remaining() <= 0) throw new KbHeld("push_deadline");
+}
+
+/** R2-B: what is left of the push budget, as a child timeout bound (`undefined`: no budget, the child's own cap). */
+const budgetLeft = (budget: PushBudget | undefined): number | undefined => (budget === undefined ? undefined : Math.max(0, budget.remaining()));
 
 /**
  * The ONE push of the post-session sync (R6): `<sha>:<ref>` non-force from the isolated directory through the hardened
@@ -288,10 +313,11 @@ interface VerifiedPush {
 async function pushVerifiedKbOnly(p: VerifiedPush): Promise<void> {
   if (p.ref !== `refs/heads/${p.defaultBranch}` && p.ref !== SIDE_REF) throw new KbSyncError("remote_state_invalid");
   if (!GUARDED.has(p.guarded)) throw new KbHeld("guard_failed");
+  gateStart(p.budget);
   try {
     await gitWithInstallationAuth(["push", p.url, `${p.guarded.sha}:${p.ref}`], p.installationId, {
       hardened: p.guarded.isolated,
-      timeout: PUSH_TIMEOUT_MS,
+      timeout: cappedTimeout(PUSH_TIMEOUT_MS, budgetLeft(p.budget)),
     });
   } catch (err) {
     const pushClass = classifyPushError(err);
@@ -385,9 +411,12 @@ export interface KbPublishInput extends KbSyncContext {
   readonly writer: KbWorkspaceWriter;
   /**
    * #12714 seam (D29(1)): called once per turn BEFORE the isolated directory is disposed, on every exit that read the remote
-   * tip (held exits too). A throw or rejection never changes the turn's result.
+   * tip on the remote's default branch (held exits too; X5, R2-B: never off it). A throw or rejection never changes the
+   * turn's result.
    */
   readonly onHeldFiles?: (probe: KbHeldFilesProbe) => void | Promise<void>;
+  /** R2-B (verify-coverage P2-1): the push budget (syncPush: `SYNC_PUSH_BUDGET_MS` from its entry). None: each child's own cap. */
+  readonly budget?: PushBudget;
 }
 
 /** The fallback's state: the turn's input plus what steps 2-4 established (D25(4): no re-declared turn fields). */
@@ -532,8 +561,10 @@ async function deliverAndLinkSide(f: SideFallbackInput): Promise<SideStep> {
   // the workspace: a crash or a `head_moved` after it leaves a no-edit turn that reaches the D17 re-check (`side_pending`).
   await handOver(isolated, f.writer, linkTo === side ? [side, sideTree] : [side, sideTree, linkTo]);
   try {
-    await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D });
+    await pushVerifiedKbOnly({ installationId, url, guarded, ref: SIDE_REF, defaultBranch: D, budget: f.budget });
   } catch (err) {
+    // R2-B: a side push the budget did not let start is a pre-delivery exit (rolled back by the caller), held push_deadline.
+    if (err instanceof KbHeld && err.reason === "push_deadline") throw err;
     if (err instanceof KbHeld) return fail("side_guard_failed");
     // D21: a network failure of the side push is retried next turn (warning, off the paging op); a reject is a failure.
     return fail(err instanceof KbSyncError && err.reason === "push_transient" ? "side_push_transient" : "side_push_rejected");
@@ -600,11 +631,14 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     } catch (err) {
       throw new KbSyncError("isolated_refused", undefined, err instanceof IsolatedPushDirRefusal ? err.reason : undefined);
     }
-    const remote = await readRemoteState(isolated, installationId, url);
+    gateStart(input.budget);
+    const left = budgetLeft(input.budget);
+    const remote = await readRemoteState(isolated, installationId, url, left === undefined ? {} : { timeoutMs: left });
     if (!remote) throw new KbHeld("remote_branch_absent");
-    tipRead = { tip: remote.tip, readAt: remote.readAt };
     const D = remote.defaultBranch;
     if (input.refName !== `refs/heads/${D}`) throw new KbHeld("non_default_branch");
+    // X5 (R2-B, verify-coverage P3-6): a held count only on the remote's default branch, as the self-heal and the refresh.
+    tipRead = { tip: remote.tip, readAt: remote.readAt };
     const T = remote.tip;
     if (T === headSha) {
       // Nothing to push; the tracking ref stops the next turn's token mint (R8).
@@ -642,6 +676,9 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     const { sha: S, tree: sTree } = await buildKbOverlay(isolated, tV.root, headKb, [T]);
     const guardedS = await guardKbOnly(isolated, S, tV.root);
     if (!guardedS) throw new KbHeld("guard_failed");
+    // R2-B: the push sequence (hand-over, local CAS, push) starts only while the budget allows, so a refused start never
+    // leaves the local branch moved to a commit no push followed.
+    gateStart(input.budget);
 
     // Step 4 (R1, R14; P7): keep the clone fast-forwardable BEFORE the push. KB-only local changes: the branch moves to
     // `S` itself (same tree, linear history). Held non-KB changes, or a side tip in HEAD's history (D14(3): `S` has parent
@@ -653,7 +690,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     await casLocalBranch(writer, D, localNext, headSha);
 
     try {
-      await pushVerifiedKbOnly({ installationId, url, guarded: guardedS, ref: `refs/heads/${D}`, defaultBranch: D });
+      await pushVerifiedKbOnly({ installationId, url, guarded: guardedS, ref: `refs/heads/${D}`, defaultBranch: D, budget: input.budget });
     } catch (err) {
       if (!(err instanceof KbSyncError) || err.pushClass !== "protected_branch") throw err;
       return await runSideFallback({
