@@ -140,13 +140,28 @@ describe("POST /api/workspace/web-egress value=false (#12585 AC24)", () => {
     expect(isEgressForwarderLive("conv-b", other.token)).toBe(true);
   }, 20_000);
 
-  test.each([
-    ["403 (non-owner)", () => new WebEgressOwnerDeniedError("denied"), 403],
-    ["500 (infra fault)", () => new Error("rpc down"), 500],
-  ])("a failed write tears nothing down: %s", async (_label, makeErr, status) => {
+  test("a non-owner's denied toggle-off tears nothing down (403: no write happened)", async () => {
     const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
-    mockSetWebEgress.mockRejectedValue(makeErr());
-    expect((await post(false)).status).toBe(status);
+    mockSetWebEgress.mockRejectedValue(new WebEgressOwnerDeniedError("denied"));
+    expect((await post(false)).status).toBe(403);
+    expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
+    expect(isEgressRevoked("conv-a")).toBe(false);
+  }, 20_000);
+
+  test("a toggle-off whose write errors fails CLOSED (500: the RPC may have committed)", async () => {
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    const other = await spawnEgressForwarder("conv-b", "ws-other");
+    mockSetWebEgress.mockRejectedValue(new Error("rpc response lost after commit"));
+    expect((await post(false)).status).toBe(500);
+    expect(isEgressForwarderLive("conv-a", mine.token)).toBe(false);
+    expect(isEgressRevoked("conv-a")).toBe(true);
+    expect(isEgressForwarderLive("conv-b", other.token)).toBe(true); // another workspace is untouched
+  }, 20_000);
+
+  test("a toggle-ON whose write errors tears nothing down (500)", async () => {
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    mockSetWebEgress.mockRejectedValue(new Error("rpc down"));
+    expect((await post(true)).status).toBe(500);
     expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
     expect(isEgressRevoked("conv-a")).toBe(false);
   }, 20_000);

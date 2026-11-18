@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "value_must_be_boolean" }, { status: 400 });
   }
 
+  let workspaceId: string | undefined;
   try {
     // The owner check lives in the SECURITY DEFINER RPC; a non-owner caller
     // raises (P0001) → WebEgressOwnerDeniedError → 403. A genuine infra fault
@@ -56,14 +57,20 @@ export async function POST(request: Request) {
     // starting cannot register afterwards (CTO R4). A sandboxed request is
     // then denied egress-not-running. Not covered: the other web host's
     // forwarders (revoked by the next-dispatch re-resolve, #12903).
-    const workspaceId = await resolveCurrentWorkspaceId(userId, await getFreshTenantClient(userId));
+    workspaceId = await resolveCurrentWorkspaceId(userId, await getFreshTenantClient(userId));
     const webEgress = await setWebEgress(userId, body.value, workspaceId);
     if (webEgress === false) teardownEgressForwardersForWorkspace(workspaceId);
     return NextResponse.json({ webEgress });
   } catch (err) {
     if (err instanceof WebEgressOwnerDeniedError) {
+      // No write happened, and a non-owner must not tear down the owner's sessions.
       return NextResponse.json({ error: "not_authorized" }, { status: 403 });
     }
+    // A toggle-off that fails after the workspace resolved fails CLOSED: the RPC can
+    // commit and still report an error (a response lost after commit), and turning web
+    // access off withdraws consent (CTO R4). If the write did not land, the next
+    // dispatch re-reads the grant and spawns a fresh forwarder.
+    if (body.value === false && workspaceId) teardownEgressForwardersForWorkspace(workspaceId);
     return NextResponse.json({ error: "set_failed" }, { status: 500 });
   }
 }
