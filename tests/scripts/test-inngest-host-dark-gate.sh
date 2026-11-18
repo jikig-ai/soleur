@@ -142,7 +142,7 @@ declare -A PD=(
   [data_luks]=crypto_LUKS
   # #12742: the serving-sync shape the post-replace measurement reads; the execute gate never
   # grades it either. The default keeps the fixture faithful to the schema-10 row.
-  [sdk_sync]=ok [sdk_app_url]=https://app.soleur.ai/api/inngest
+  [sdk_sync]=ok [sdk_app_url]=https://app.soleur.ai/api/inngest!ok
 )
 PD[data_mount_src]="$DEV"
 PD[data_mount_base]="$DEVBASE"

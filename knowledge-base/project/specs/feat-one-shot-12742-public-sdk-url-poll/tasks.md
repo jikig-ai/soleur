@@ -59,6 +59,8 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     ≥1 enabled rule mentions `app.soleur.ai` AND the LAST enabled app-host rule with non-null `ssl`
     has `ssl=strict` AND no enabled rule positioned after it carries `ssl` in `{off, flexible}`
     (CTO-strengthened predicate, decision-challenges row 4: closes the wildcard-expression evasion).
+    Amended by review rulings R1 to R3 (decision-challenges.md, "Review-round rulings"); the current predicate is the
+    preflight script's header.
   - refuse rc=1 with distinct `::error::` messages: no token / doppler rc / `unverified` / malformed
     JSON / no matching rule / all matches disabled / last match `ssl!=strict` / trailing rule
     `ssl ∈ {off, flexible}` / ambiguous shape. Never echo the token or the raw API body.
@@ -78,7 +80,8 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     before first terraform step, `env.DOPPLER_TOKEN` present, `run` is the preflight script, no
     `CONFIRM_RAW`/`continue-on-error`/`if`; keep the "no always()/failure() step touches secrets
     after the gate" verifier and the no-job-env/no-checkout-`with` pins.
-  - neither job consumes `inputs.confirm`.
+  - neither job consumes `inputs.confirm`. Amended by review ruling R5 (decision-challenges.md, "Review-round
+    rulings"): the replace job requires `confirm=REPLACE-INNGEST-HOST` (typo-guard); the birth stays token-free.
   - inverted recipe sweep: ≥6 live recipes for the two targets still found (non-vacuity) AND zero
     may carry `confirm=PUBLIC-SDK-URL[-BIRTH]`; assert zero offenders.
   - script behavior table over `--from-file` fixtures: strict-last → 0; flexible-last, all-disabled,

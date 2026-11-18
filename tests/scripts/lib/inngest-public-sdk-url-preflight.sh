@@ -16,7 +16,8 @@
 # --preserve-env keeps the Tier-B loader's exports ahead of a same-named Doppler value (ADR-241 D6).
 # This script judges the wrapper's per-rule projection, never the wrapper's own dated-snapshot Records verdict, so an
 # added rule re-keys the answer. Cloudflare config rules are non-terminating and the LAST match wins. PASS only when ALL hold:
-#   - the wrapper's first line is `cloudflare-readonly: config-entrypoint ok`, followed by exactly one JSON value on one line;
+#   - the read printed something [empty-read], its first line is `cloudflare-readonly: config-entrypoint ok`, followed by
+#     exactly one JSON value on one line [malformed];
 #   - the projection has the pinned shape (subcommand config-entrypoint, a string id, rules[] of {enabled bool,
 #     ssl null|string, mentions_app_host bool, host_literal_only bool});
 #   - the projection id is RULESET_ID below, the entrypoint ruleset that apps/web-platform/infra/seo-config-rules.tf imports
@@ -32,9 +33,10 @@
 # so an SSL page rule cannot override L (documentation, not a live read). The zone ssl setting is not read; it is what L's
 # set_config overrides for app.soleur.ai. host_literal_only matches the expression text byte for byte, so if Cloudflare
 # normalises the stored text (spacing, quoting) the shape check fails closed ([strict-not-host-wide]), never open.
-# Every refusal prints one ::error:: line with a distinct bracketed tag and never a token, a rule ref, an id or a body.
+# Each refusal prints exactly one ::error:: line, led by a bracketed tag, and never a token, a rule ref, an id or a body.
 #
-# Usage: inngest-public-sdk-url-preflight.sh                    live read (needs DOPPLER_TOKEN; CI only)
+# Usage: inngest-public-sdk-url-preflight.sh                    live read: CI, or locally with DOPPLER_TOKEN exported
+#                                                               (`export DOPPLER_TOKEN="$(doppler configure get token --plain)"`)
 #        inngest-public-sdk-url-preflight.sh --from-file <path> judge a captured wrapper output (test seam)
 # Exit:  0 pass; 1 refused; 64 usage.
 set -euo pipefail
@@ -90,6 +92,7 @@ if [[ "$FIRST" =~ $UNVERIFIED_RE ]]; then
   refuse wrapper-unverified "the live read did not verify (${FIRST#cloudflare-readonly: config-entrypoint unverified - })"
 fi
 [[ "$RC" -eq 0 ]] || refuse wrapper-rc "the Cloudflare read exited $RC without a verdict line"
+[[ -n "$OUT" ]] || refuse empty-read "the read printed nothing; see its exit code"
 [[ "$FIRST" == "cloudflare-readonly: config-entrypoint ok" ]] || refuse malformed "the read's first line is not the config-entrypoint ok line"
 
 LINES="$(printf '%s\n' "$OUT" | grep -c '' || true)"
@@ -125,7 +128,7 @@ VERDICT="$(/usr/bin/env -i /usr/bin/jq -s -r --arg rid "$RULESET_ID" '
 
 PASS_RE='^pass [0-9]+$'
 case "$VERDICT" in
-  multi) refuse malformed "the projection line holds more than one JSON value" ;;
+  multi) refuse malformed "the projection line is not exactly one JSON value" ;;
   shape) refuse shape "the projection does not have the pinned config-entrypoint rule shape" ;;
   ruleset-id) refuse ruleset-id "the projection is not the seo-config-rules.tf entrypoint ruleset (wrong zone or token)" ;;
   no-match) refuse no-match "no enabled config rule with an ssl setting mentions app.soleur.ai" ;;

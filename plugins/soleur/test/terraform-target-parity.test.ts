@@ -5183,20 +5183,31 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
   // Cloudflare config-settings entrypoint before any terraform step. B10 pins the PROPERTY: the preflight is the step
   // immediately after `Load infra credentials (tiered)`, ahead of every terraform step, cannot be tolerated (no
   // continue-on-error / shell override at step, job or workflow level), runs the shared script with DOPPLER_TOKEN, the
-  // replace step first checks the exact REPLACE-INNGEST-HOST typo-guard (R5; the birth reads no confirm), and the script
-  // refuses every projection but a strict, host-wide last app-host rule that no later ssl rule can override.
+  // replace job checks the exact REPLACE-INNGEST-HOST typo-guard in its own step BEFORE the credential load (R5; a typo
+  // loads no Tier-B secret; the birth reads no confirm), and the script refuses every projection but a strict, host-wide
+  // last app-host rule that no later ssl rule can override.
   const PREFLIGHT_LIB = "tests/scripts/lib/inngest-public-sdk-url-preflight.sh";
-  const REPLACE_CONFIRM_LINE =
-    '[[ "$CONFIRM" == "REPLACE-INNGEST-HOST" ]] || { echo "::error::[confirm] inngest-host-replace needs -f confirm=REPLACE-INNGEST-HOST (a typo-guard, not authorization)"; exit 1; }';
-  // A later step whose `if:` can run on a FAILED job. GitHub expression function names are case-insensitive, and a
-  // `success()` negated or OR-ed with anything re-opens the step just like always()/failure()/cancelled().
-  const reopensAfterFailure = (cond: string) =>
-    /\b(?:always|failure|cancelled)\s*\(|!\s*success\s*\(|\bsuccess\s*\(\s*\)\s*\|\||\|\|\s*success\s*\(/i.test(cond);
+  const REPLACE_CONFIRM_RUN = [
+    'if [[ "$CONFIRM" != "REPLACE-INNGEST-HOST" ]]; then',
+    '  echo "::error::[confirm] inngest-host-replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."',
+    "  exit 1",
+    "fi",
+  ];
+  // A later step whose `if:` can run on a FAILED job. ALLOWLIST, not a denylist: an `if:` that names a status function
+  // (case-insensitive) is safe only as exactly `success()` or a `success() && <no status function, no ||>` conjunction;
+  // every other form (`success() == false`, `!(success())`, `success() != true`, `always()`, an OR) is a reopen. An `if:`
+  // with no status function carries GitHub's implicit success().
+  const reopensAfterFailure = (cond: string) => {
+    const c = cond.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
+    if (!/\b(?:success|failure|always|cancelled)\s*\(/i.test(c)) return false;
+    const m = /^success\s*\(\s*\)(?:\s*&&([\s\S]*))?$/i.exec(c);
+    return !(m && (m[1] === undefined || !/\b(?:success|failure|always|cancelled)\s*\(|\|\|/i.test(m[1])));
+  };
   test("B10: the post-gate status-function predicate denies every form that runs on a failed job", () => {
-    for (const c of ["always()", "failure()", "cancelled()", "Always()", "FAILURE()", "${{ !success() }}", "! Success()", "success() || inputs.x == 'y'", "inputs.x || success()"]) {
+    for (const c of ["always()", "failure()", "cancelled()", "Always()", "FAILURE()", "${{ !success() }}", "! Success()", "success() || inputs.x == 'y'", "inputs.x || success()", "success() == false", "${{ success() == false }}", "!(success())", "${{ !(success()) }}", "success() != true", "${{ success() != true }}", "success() && inputs.x || always()", "success() && !cancelled()", "(success())", "inputs.x && success()"]) {
       expect(reopensAfterFailure(c), c).toBe(true);
     }
-    for (const c of ["", "success()", "success() && inputs.plan_only != true", "inputs.apply_target == 'inngest-host-replace'"]) {
+    for (const c of ["", "success()", "${{ success() }}", "SUCCESS()", "success() && inputs.plan_only != true", "${{ success() && inputs.plan_only != true }}", "success() && !inputs.x", "inputs.apply_target == 'inngest-host-replace'"]) {
       expect(reopensAfterFailure(c), c).toBe(false);
     }
   });
@@ -5214,19 +5225,32 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const gate = steps[gi];
     expect(String(gate.name)).toContain("strict-SSL preflight");
     for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in gate, `step key ${k}`).toBe(false);
+    expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
+    expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
     if (job === "inngest_host_replace") {
-      // R5: the exact typo-guard token, checked BEFORE the script call, in the same step (nothing runs between them).
-      expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}", CONFIRM: "${{ inputs.confirm }}" });
-      expect(String(gate.run).trim().split("\n")).toEqual([REPLACE_CONFIRM_LINE, `bash ${PREFLIGHT_LIB}`]);
+      // R5: the exact typo-guard token, in its own unconditional step BEFORE the credential load (a typo loads no
+      // Tier-B secret), with no secret in its env.
+      const ci = steps.findIndex((s) => s.name === "Validate typed confirm (inngest-host-replace)");
+      expect(ci, `${job} has the confirm step before the credential load`).toBeGreaterThan(0);
+      expect(ci).toBeLessThan(cred);
+      const confirm = steps[ci];
+      for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in confirm, `confirm step key ${k}`).toBe(false);
+      expect(confirm.env).toEqual({ CONFIRM: "${{ inputs.confirm }}" });
+      expect(String(confirm.run).trim().split("\n")).toEqual(REPLACE_CONFIRM_RUN);
       for (const [v, rc] of [["REPLACE-INNGEST-HOST", 0], ["", 1], ["replace-inngest-host", 1], ["REPLACE-INNGEST-HOST ", 1], ["PUBLIC-SDK-URL", 1]] as const) {
-        const r = spawnSync("bash", ["-c", REPLACE_CONFIRM_LINE], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CONFIRM: v }, encoding: "utf8" });
+        const r = spawnSync("bash", ["-e", "-c", String(confirm.run)], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CONFIRM: v }, encoding: "utf8" });
         expect(`${JSON.stringify(v)} -> ${r.status}`).toBe(`${JSON.stringify(v)} -> ${rc}`);
         if (rc === 1) expect(r.stdout).toContain("::error::[confirm]");
       }
-      expect(JSON.stringify(j).split("inputs.confirm").length - 1, `${job} reads inputs.confirm only in the preflight step`).toBe(1);
+      expect(JSON.stringify(j).split("inputs.confirm").length - 1, `${job} reads inputs.confirm only in the confirm step`).toBe(1);
+      // The post-replace liveness read injects only the three Better Stack query keys (a planted BASH_ENV or BS_TABLE in
+      // prd_terraform never reaches inngest-host-state.sh's bash), like git-data-boot-signal-poll.sh's read.
+      const live = steps.find((s) => String(s.name).startsWith("Post-replace liveness gate"));
+      const runs = String(live?.run ?? "").split("\n").filter((l) => /doppler run/.test(l) && !/^\s*echo\b/.test(l)).map((l) => l.trim());
+      expect(runs, "the liveness gate's doppler legs").toEqual([
+        "timeout 90 doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- \\",
+      ]);
     } else {
-      expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
-      expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
       // CTO ruling 10: the birth stays token-free.
       expect(JSON.stringify(j), `${job} reads inputs.confirm`).not.toContain("inputs.confirm");
     }
@@ -5289,8 +5313,8 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 
   // The behaviour table runs the `--from-file` seam over synthesized wrapper outputs, and the live path runs against a
   // PATH-fake `doppler` that accepts ONLY the exact R3 argv (anything else is logged to a refusal file, asserted empty).
-  // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal arm has its own distinct
-  // ::error:: tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
+  // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal prints exactly one ::error::
+  // line led by its bracketed tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
   const SEO_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
   test("B10: the preflight's pinned ruleset id is the entrypoint id seo-config-rules.tf imports", () => {
     const tf = readFileSync(join(REPO_ROOT, "apps/web-platform/infra/seo-config-rules.tf"), "utf8");
@@ -5334,6 +5358,10 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ["flexible-last", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true }, { enabled: true, ssl: "flexible", app: true }])}\n`, 1, "[last-not-strict]"],
       ["other-last", `${OK}\n${proj([{ enabled: true, ssl: "other", app: true }])}\n`, 1, "[last-not-strict]"],
       ["negated-strict", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true, hl: false }, ...LIVE.slice(1)])}\n`, 1, "[strict-not-host-wide]"],
+      // The LAST app rule is judged for host-wideness, not the first and not any (a host-literal weak rule before it).
+      ["host-literal-full-then-non-literal-strict", `${OK}\n${proj([{ enabled: true, ssl: "full", app: true, hl: true }, { enabled: true, ssl: "strict", app: true, hl: false }])}\n`, 1, "[strict-not-host-wide]"],
+      // A trailing wildcard rule with NO ssl setting cannot override L's ssl.
+      ["trailing-wildcard-without-ssl", `${OK}\n${proj([...LIVE, { ...WILD, ssl: null }])}\n`, 0, "preflight passed"],
       ["all-disabled", `${OK}\n${proj([{ enabled: false, ssl: "strict", app: true }, { enabled: true, ssl: "full", app: false }])}\n`, 1, "[all-disabled]"],
       ["no-match", `${OK}\n${proj([{ enabled: true, ssl: "full", app: false }])}\n`, 1, "[no-match]"],
       ["app-rule-without-ssl", `${OK}\n${proj([{ enabled: true, ssl: null, app: true }])}\n`, 1, "[no-match]"],
@@ -5348,6 +5376,8 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ["unverified-uppercase-reason", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 1, "(no-credential (CF_API_TOKEN_RULESETS))"],
       ["unverified-reason-with-equals", `${UNV}canary=7f3e\n`, 1, "[malformed]"],
       ["unverified-reason-with-slash", `${UNV}canary/7f3e\n`, 1, "[malformed]"],
+      ["unverified-reason-81-chars", `${UNV}canary${"x".repeat(75)}\n`, 1, "[malformed]"],
+      ["unverified-reason-with-at", `${UNV}canary@7f3e\n`, 1, "[malformed]"],
       ["other-subcommand-ok-line", `cloudflare-readonly: ssl-mode ok\n${proj(LIVE)}\n`, 1, "[malformed]"],
       ["malformed-json", `${OK}\n{"rules":[canary-7f3e\n`, 1, "[malformed]"],
       ["no-projection-line", `${OK}\n`, 1, "[malformed]"],
@@ -5357,7 +5387,8 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ["rules-not-array", `${OK}\n${proj(LIVE, { rules: { a: 1 } })}\n`, 1, "[shape]"],
       ["enabled-not-boolean", `${OK}\n${proj(LIVE).replace('"enabled":true', '"enabled":"yes"')}\n`, 1, "[shape]"],
       ["host-literal-missing", `${OK}\n${proj(LIVE).replace(',"host_literal_only":true}', "}")}\n`, 1, "[shape]"],
-      ["empty-file", "", 1, "[malformed]"],
+      ["empty-file", "", 1, "[empty-read] public sdk_url boot refused (#12742): the read printed nothing; see its exit code"],
+      ["newlines-only-file", "\n\n", 1, "[empty-read]"],
       ["missing-file", null, 1, "[no-input]"],
     ];
     const outs: string[] = [];
@@ -5384,9 +5415,23 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ].join("\n"),
       { mode: 0o755 },
     );
+    // The bound is part of the R3 argv: a fake `timeout` that accepts only `90 doppler ...` and then runs the fake doppler.
+    const tcalls = join(dir, "timeout-calls.log");
+    writeFileSync(
+      join(fake, "timeout"),
+      [
+        "#!/bin/bash",
+        'if [ "$#" -lt 2 ] || [ "$1" != 90 ] || [ "$2" != doppler ]; then printf "timeout %q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi",
+        `echo call >> '${tcalls}'`,
+        'shift; exec "$@"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     const live: Array<[string, string, number, number, string]> = [
       ["live-ok", `${OK}\n${proj(LIVE)}\n`, 0, 0, "preflight passed"],
       ["live-nonzero-rc", "", 14, 1, "[wrapper-rc]"],
+      ["live-empty-rc0", "", 0, 1, "[empty-read]"],
       ["live-unverified-uppercase", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 10, 1, "[wrapper-unverified] public sdk_url boot refused (#12742): the live read did not verify (no-credential (CF_API_TOKEN_RULESETS))"],
       ["live-ruleset-id-mismatch", `${OK}\n${proj(LIVE, { id: "canaryid7f3e" })}\n`, 0, 1, "[ruleset-id]"],
     ];
@@ -5422,6 +5467,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       }
       expect(existsSync(refusals) ? readFileSync(refusals, "utf8") : "", "the fake doppler saw a non-R3 argv").toBe("");
       expect(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, "non-vacuity: every live run reached the fake doppler").toBe(liveRuns);
+      expect(readFileSync(tcalls, "utf8").split("\n").filter(Boolean).length, "every live run went through `timeout 90`").toBe(liveRuns);
       // Usage: the live mode takes no positional argument; the seam takes exactly one path.
       for (const args of [["extra"], ["--from-file"], ["--from-file", "a", "b"]]) {
         expect(spawnSync("bash", [lib, ...args], { env: { PATH: PATH0 }, encoding: "utf8" }).status, JSON.stringify(args)).toBe(64);

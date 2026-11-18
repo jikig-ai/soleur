@@ -1051,12 +1051,19 @@ dedicated)
       #
       # #12742 R4: one entry per app, `<url>!<ok|error>`, joined by `,`, so the row answers
       # BOTH "does the public poll work" and "is the stale private row gone". Each URL loses
-      # its query/fragment and userinfo first (this row reaches a third-party warehouse), then
-      # is reduced to [A-Za-z0-9_:./+-] — no `@`, no space, so it can never re-tokenize the row.
-      # The value is capped at 160 bytes at an ENTRY boundary (the row's other fields measure
-      # ~795 B and logger drops a message past 1024 B; 160 B still holds the public + private pair): the first k entries that fit,
-      # then `,+<dropped>` (just `+<n>` if none fits) — an entry is never cut mid-URL, so a cut
-      # can never read as a shorter, healthier list. The aggregate counts every app, kept or not.
+      # its userinfo FIRST — everything up to the last `@` before the first `/` after an
+      # optional scheme, so a `?` inside a password cannot end the URL early and ship the
+      # credential's head — then its query/fragment (this row reaches a third-party warehouse),
+      # then is reduced to [A-Za-z0-9_:./+-] — no `@`, no space, so it can never re-tokenize
+      # the row. The public entry is moved to the front (stable otherwise) so the cap can never
+      # drop the one entry item 4 reads. The value is capped at 160 bytes at an ENTRY boundary
+      # (the row's other fields measure ~837 B at live width and logger truncates the tail past
+      # 1024 B; 160 B still holds the public + private pair): the first k entries that fit, then
+      # `,+<dropped>` (just `+<n>` if none fits) — an entry is never cut mid-URL, so a cut can
+      # never read as a shorter, healthier list. The aggregate counts every app, kept or not.
+      # The search starts at min(n, 41): the shortest entry is 3 B (`!ok`), so 41 entries
+      # (163 B) can never fit — a search from n re-joins up to n entries n times (40 s of jq
+      # CPU measured at 5000 apps).
       _sdk_parsed="$(printf '%s' "$_sdk_body" | jq -r '
         (.data.apps // null) as $apps
         | if ((.errors // []) | if type == "array" then length > 0 else true end) then "bad\n"
@@ -1065,13 +1072,16 @@ dedicated)
           elif any($apps[]; (.url | type) != "string" or .url == "") then "bad\n"
           else
             [ $apps[]
-              | (.url | sub("[?#].*$"; "") | sub("^(?<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/]*@"; "\(.s)")
+              | (.url | sub("^(?<s>([A-Za-z][A-Za-z0-9+.-]*://)?)[^/]*@"; "\(.s)") | sub("[?#].*$"; "")
                       | gsub("[^A-Za-z0-9_:./+-]"; "_"))
-                + "!" + (if ((.error // "") | tostring) != "" then "error" else "ok" end) ] as $e
+                + "!" + (if ((.error // "") | tostring) != "" then "error" else "ok" end) ]
+            | map(select(startswith("https://app.soleur.ai/api/inngest!")))
+              + map(select(startswith("https://app.soleur.ai/api/inngest!") | not))
+            | . as $e
             | ($e | length) as $n
             | (if any($e[]; endswith("!error")) then "error" else "ok" end)
               + "\n"
-              + first(range($n; -1; -1) as $k
+              + first(range([$n, 41] | min; -1; -1) as $k
                   | ($e[0:$k] | join(",")) as $j
                   | if $k == $n then $j
                     elif $k == 0 then "+\($n)"

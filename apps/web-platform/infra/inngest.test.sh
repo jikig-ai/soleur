@@ -2155,10 +2155,8 @@ assert "#8525 blkid is NEVER invoked on \$data_mount_src under a mapper (the ext
 # attempt and `sdk_app_url` names the registered URL — the legible difference between the
 # stale private URL and https://app.soleur.ai in the same row.
 #
-# THE STUB DISCRIMINATES ON THE QUERY BODY. The probe issues two /v0/gql calls per run, so an
-# arg-blind stub answers the SdkSyncProbe with the functions fixture and pins the field to
-# __UNREADABLE__ by fixture, not by code. s8_curl's params 4-6 are the apps arm:
-# s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code].
+# The stub discriminates on the query body (why: the comment above s8_curl); params 4-6 are
+# the apps arm: s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code].
 S10_FNS='{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
 
 # --- shape 1: a registered app with a clean last sync => ok + the URL -----------------------
@@ -2219,6 +2217,14 @@ s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inn
 S10_PARTIAL="$(s8_run sdk-partial)"
 assert "#12742 data.apps PLUS a non-empty errors[] => __UNREADABLE__ (partial data never reads ok)" \
   "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_PARTIAL' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_PARTIAL' && ! grep -qF 'partial-secret' '$S10_PARTIAL'"
+# A NON-ARRAY `errors` (an object or a bare string) is drift, not "no errors": it must not be
+# skipped as an empty list. Kills `else true` -> `else false` in the errors arm.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]},"errors":{"message":"obj-secret"}}'
+S10_ERROBJ="$(s8_run sdk-errobj)"
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]},"errors":"str-secret"}'
+S10_ERRSTR="$(s8_run sdk-errstr)"
+assert "#12742 errors as a non-array OBJECT or STRING => __UNREADABLE__ (never read as no errors)" \
+  "grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_ERROBJ' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_ERRSTR' && ! grep -qE 'obj-secret|str-secret' '$S10_ERROBJ' '$S10_ERRSTR'"
 
 # --- shape 5: transport failure and non-200 => __UNREADABLE__ --------------------------------
 s8_curl 200 "$S10_FNS" 0 '' 7 000
@@ -2265,6 +2271,15 @@ assert "#12742 R4 userinfo + query + fragment stripped: the entry is the bare UR
   "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok( |\$)' '$S10_CRED'"
 assert "#12742 R4 ...and no fragment of the credential or the token reaches the row" \
   "! grep -qE 'fixture-user|fixture-pass|fixturetoken|frag' '$S10_CRED' && ! grep -oE 'sdk_app_url=[^ ]*' '$S10_CRED' | grep -qF '@'"
+# Userinfo is stripped BEFORE query/fragment: a `?` inside the password would otherwise end the
+# URL early and ship the credential's head (`https://u:pa`). And a scheme-less URL loses
+# everything up to the last `@` before its first `/` too — no scheme is no exemption.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://fixture-u:fixture-pa?fixture-ss@10.0.9.9/api/inngest","error":null},{"url":"fixture-nu:fixture-np@10.0.9.8:3000/api/inngest","error":null}]}}'
+S10_CRED2="$(s8_run sdk-cred2)"
+assert "#12742 R4 userinfo-first strip: a ? in the password and a scheme-less userinfo both reduce to the bare URL" \
+  "grep -qE 'sdk_app_url=https://10\.0\.9\.9/api/inngest!ok,10\.0\.9\.8:3000/api/inngest!ok( |\$)' '$S10_CRED2'"
+assert "#12742 R4 ...and no credential fragment of either reaches the row" \
+  "! grep -qF 'fixture-' '$S10_CRED2'"
 
 # --- shape 9 (R4): the 160-byte cap, at an ENTRY boundary, with a dropped-count marker -------
 # Each fixture entry is exactly 50 bytes (a 47-byte URL + `!ok`). Three fit (3*50+2 = 152) with
@@ -2296,29 +2311,59 @@ s8_curl 200 "$S10_FNS" 0 "{\"data\":{\"apps\":[{\"url\":\"http://10.0.9.9:3000/$
 S10_CAPBIG="$(s8_run sdk-capbig)"
 assert "#12742 R4 cap: a single over-cap URL ships as +1 (dropped, never truncated mid-URL)" \
   "grep -qE 'sdk_app_url=\+1( |\$)' '$S10_CAPBIG' && grep -qE 'sdk_sync=ok( |\$)' '$S10_CAPBIG'"
+# The PUBLIC entry is moved to the front (stable otherwise), so a cap can never drop the one
+# entry item 4 reads: ten private entries ahead of it still ship it, then the first two private.
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 10 | sed 's|\]}}$|,{"url":"https://app.soleur.ai/api/inngest","error":null}]}}|')"
+S10_CAPPUB="$(s8_run sdk-cappub)"
+assert "#12742 R4 cap: the public entry is kept FIRST past a cap; the rest keep their order (public,pad-00,pad-01,+8)" \
+  "grep -qE \"sdk_app_url=https://app\\.soleur\\.ai/api/inngest!ok,$(s10_entries 2),\\+8( |\\\$)\" '$S10_CAPPUB'"
+# The cap search is BOUNDED: no URL is shorter than 0 B, so no entry is shorter than 3 B (`!ok`),
+# and 41 entries (4*41-1 = 163 B) can never fit 160 B. A search from n down re-joins up to n
+# entries n times — measured 40 s of jq CPU for 5000 apps on a host whose probe runs each minute.
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 5000)"
+_s10_t0=$SECONDS
+S10_CAPHUGE="$(s8_run sdk-caphuge)"
+S10_CAPHUGE_S=$((SECONDS - _s10_t0))
+assert "#12742 R4 cap: 5000 apps finish in bounded time (${S10_CAPHUGE_S}s <= 5s) with the same three-plus-marker answer" \
+  "[[ '$S10_CAPHUGE_S' -le 5 ]] && grep -qE \"sdk_app_url=$(s10_entries 3),\\+4997( |\\\$)\" '$S10_CAPHUGE'"
+# The 160 B BOUNDARY: a 157 B entry plus `,+1` is exactly 160 B and ships (kills `< 160`); the
+# whole pair is 197 B, so a looser cap (e.g. `<= 202`) ships both and the 1024 B row below reds.
+S10_B157="http://10.0.9.9:3000/$(printf 'b%.0s' $(seq 1 133))"
+s8_curl 200 "$S10_FNS" 0 "{\"data\":{\"apps\":[{\"url\":\"$S10_B157\",\"error\":null},{\"url\":\"http://10.0.9.8:3000/api/inngest/pad\",\"error\":null}]}}"
+S10_CAP160="$(s8_run sdk-cap160)"
+assert "#12742 R4 cap: a value of EXACTLY 160 B ships (157 B entry + ,+1)" \
+  "grep -qE \"sdk_app_url=${S10_B157}!ok,\\+1( |\\\$)\" '$S10_CAP160' && [[ \$(grep -oE 'sdk_app_url=[^ ]*' '$S10_CAP160' | sed 's/^sdk_app_url=//' | tr -d '\n' | wc -c) -eq 160 ]]"
 
 # --- shape 10: the item-4 row fits logger's 1024-byte message limit --------------------------
 # util-linux `logger` TRUNCATES a single argument over its --size (default 1024; measured on
 # 2.42: the tail is dropped silently). sdk_app_url is the LAST field, so a truncation cuts it.
-# The row measured here is the post-replace evidence row (the public entry plus a stale private
-# one), with every field the fixture cannot render widened to the LIVE schema-8 row's measured
-# width (image_ref 122, cli_version 17, instance_id 17, redis_key_patterns 135, the LUKS mapper
-# path) — 795 B before the sdk_app_url value.
-# That leaves 229 B, so the 160 B cap fits (795 + 160 = 955 B). RESIDUAL, pre-existing: a row with
-# redis_key_patterns at ITS 400 B cap still exceeds 1024 B; a cut there lands inside the list and
-# can only forge item 4's single-entry pass shape if everything before the first entry exceeds
-# ~988 B. Closing that needs `logger --size` on the emit line (anchored by several suites).
-S10_LIVE_MSG="$(sed -n 's/^.*\(SOLEUR_INNGEST_SERVER_PROBE .*\)$/\1/p' "$S10_TWO" | head -1 | sed -E \
-  -e "s/ image_ref=[^ ]*/ image_ref=$(printf 'i%.0s' $(seq 1 122))/" \
-  -e "s/ cli_version=[^ ]*/ cli_version=$(printf 'c%.0s' $(seq 1 17))/" \
-  -e "s/ instance_id=[^ ]*/ instance_id=$(printf 'n%.0s' $(seq 1 17))/" \
-  -e "s/ redis_key_patterns=[^ ]*/ redis_key_patterns=$(printf 'p%.0s' $(seq 1 135))/" \
-  -e "s| data_mount_src=[^ ]*| data_mount_src=/dev/mapper/inngest-redis|")"
+# Every field the fixture cannot render is widened to the WIDEST live width seen (image_ref 138,
+# cli_version 17, instance_id 17, redis_key_patterns 158, the LUKS mapper path). Measured: the
+# widened row is 837 B up to and including the 13 B ` sdk_app_url=` key, so a value of
+# 160 B (the cap) makes 997 B — inside 1024. Two rows are measured: the post-replace
+# evidence row (public + stale private entry) and the 160 B BOUNDARY fixture (the widest value
+# the cap can emit; a looser cap such as `<= 202` ships 197 B there and this row reds).
+# RESIDUAL, pre-existing: redis_key_patterns at ITS 400 B cap still pushes the row past 1024 B;
+# the runbook's item-4 rule says to read that width in the same row before trusting a
+# single-entry pass. Closing it needs `logger --size` on the emit line (anchored by several suites).
+s10_widen() {  # s10_widen <log> -> the probe message with the live-width fields substituted
+  sed -n 's/^.*\(SOLEUR_INNGEST_SERVER_PROBE .*\)$/\1/p' "$1" | head -1 | sed -E \
+    -e "s/ image_ref=[^ ]*/ image_ref=$(printf 'i%.0s' $(seq 1 138))/" \
+    -e "s/ cli_version=[^ ]*/ cli_version=$(printf 'c%.0s' $(seq 1 17))/" \
+    -e "s/ instance_id=[^ ]*/ instance_id=$(printf 'n%.0s' $(seq 1 17))/" \
+    -e "s/ redis_key_patterns=[^ ]*/ redis_key_patterns=$(printf 'p%.0s' $(seq 1 158))/" \
+    -e "s| data_mount_src=[^ ]*| data_mount_src=/dev/mapper/inngest-redis|"
+}
+S10_LIVE_MSG="$(s10_widen "$S10_TWO")"
 S10_LIVE_LEN="$(printf '%s' "$S10_LIVE_MSG" | wc -c | tr -d ' ')"
-assert "#12742 live-width non-vacuity: the measured row carries both sdk entries and the widened fields" \
-  "printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'sdk_app_url=[^ ]+!ok,[^ ]+!error\$' && printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'image_ref=i{122} '"
+S10_EDGE_MSG="$(s10_widen "$S10_CAP160")"
+S10_EDGE_LEN="$(printf '%s' "$S10_EDGE_MSG" | wc -c | tr -d ' ')"
+assert "#12742 live-width non-vacuity: the measured rows carry the sdk entries and the widened fields" \
+  "printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'sdk_app_url=[^ ]+!ok,[^ ]+!error\$' && printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'image_ref=i{138} .* redis_key_patterns=p{158} ' && printf '%s' \"\$S10_EDGE_MSG\" | grep -qE 'redis_key_patterns=p{158} .* sdk_app_url=[^ ]+!ok,\\+1\$'"
 assert "#12742 the live-width post-replace probe row is <= 1024 bytes (measured ${S10_LIVE_LEN} B; logger does not cut sdk_app_url)" \
   "[[ '$S10_LIVE_LEN' -le 1024 ]]"
+assert "#12742 the live-width row at the 160 B cap boundary is <= 1024 bytes (measured ${S10_EDGE_LEN} B)" \
+  "[[ '$S10_EDGE_LEN' -le 1024 ]]"
 
 # --- restore: downstream arms and the mutate_emitter rows model only the functions query ----
 s8_curl 200 "$S10_FNS"
@@ -2326,7 +2371,7 @@ assert "#12742 the sdk arm is drift-pinned at column zero beside FUNCTIONS_GQL_Q
   "grep -qE '^readonly SDK_SYNC_GQL_QUERY=' '$PROBE_SRC'"
 assert "#12742 the sdk curl is BOUNDED and discards stderr like the registry curl" \
   "grep -cE 'timeout 10 curl -s --max-time 10' '$PROBE_SRC' | grep -qE '^[2-9]'"
-S10_ALL="'$S10_OK' '$S10_ERR' '$S10_TWO' '$S10_EMPTYERR' '$S10_NONE' '$S10_GQLERR' '$S10_PARTIAL' '$S10_DOWN' '$S10_502' '$S10_500OK' '$S10_DRIFT' '$S10_URLNULL' '$S10_HOSTILE' '$S10_CRED' '$S10_CAP5' '$S10_CAP10' '$S10_CAPBIG'"
+S10_ALL="'$S10_OK' '$S10_ERR' '$S10_TWO' '$S10_EMPTYERR' '$S10_NONE' '$S10_GQLERR' '$S10_PARTIAL' '$S10_ERROBJ' '$S10_ERRSTR' '$S10_DOWN' '$S10_502' '$S10_500OK' '$S10_DRIFT' '$S10_URLNULL' '$S10_HOSTILE' '$S10_CRED' '$S10_CRED2' '$S10_CAP5' '$S10_CAP10' '$S10_CAPBIG' '$S10_CAPPUB' '$S10_CAPHUGE' '$S10_CAP160'"
 assert "#12742 every field emitted is one of the five sdk_sync values" \
   "grep -hoE 'sdk_sync=[^ ]+' $S10_ALL | grep -vE 'sdk_sync=(ok|error|no_apps|n/a|__UNREADABLE__)' ; test \$? -eq 1"
 # Every sdk_app_url is a sentinel, or `,`-joined entries `<url>!<ok|error>` with an optional
@@ -3707,7 +3752,9 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # #12742 R4 review fix-round: 602 -> 620 (the per-entry sdk_app_url rows: two-app per-entry state, error:"",
 # partial errors[], HTTP 500 with an ok body, url:null, userinfo/query strip, the three cap rows, the
 # live-width 1024 B row pair, the entry-shape sweep, and the health-down + no-jq sdk arms; 18 rows).
-INNGEST_MIN_ASSERTIONS_FULL=620
+# #12742 R4 round 2: 620 -> 627 (non-array errors, the userinfo-first strip pair, public-first under
+# the cap, the bounded 5000-app search, the exact-160 B boundary, the 1024 B row at that boundary).
+INNGEST_MIN_ASSERTIONS_FULL=627
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \

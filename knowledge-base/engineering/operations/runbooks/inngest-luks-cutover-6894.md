@@ -747,7 +747,7 @@ several merge cycles; there is no faster data-safe route**:
    PR merges it opens a dated re-protect follow-through issue (step 3, with its date), because once step 1 lands the
    HCL, the live state and the drift plan all agree on `false` and nothing alerts. The per-merge apply lands it, so live
    state equals the HCL. Read back `not-protected` (the expected word for this PR; not a failure).
-2. Dispatch `inngest-host-replace` (the volume now plans as a no-op, which both gates accept), then `op=resume` per #7228.
+2. Dispatch `inngest-host-replace` with `-f confirm=REPLACE-INNGEST-HOST` (the volume now plans as a no-op, which both gates accept), then `op=resume` per #7228.
 3. A re-protect PR restores the attribute and the guards; the per-merge apply lands it; read back `protected`. **The
    unprotected window is a stated cost of this route**: from step 1's apply until step 3's apply the sole copy is deletable
    by a console click, a wrong id or a pasted recipe, and the dated issue from step 1 is the only forcing function.

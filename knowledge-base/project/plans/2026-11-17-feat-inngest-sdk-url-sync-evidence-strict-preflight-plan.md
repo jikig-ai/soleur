@@ -13,6 +13,14 @@ related: [10538, 10479, 12737, 12726, 12742, 9139, 7228]
 
 # Inngest public sdk_url — merge-before-replace safety work (#12742 item 1)
 
+> **Amendments (review, 2026-11-18).** The PR #12876 review rulings R1 to R6 in
+> `knowledge-base/project/specs/feat-one-shot-12742-public-sdk-url-poll/decision-challenges.md` ("Review-round rulings")
+> supersede this plan where they differ: the pass predicate (R1 `trailing-weak` via `host_literal_only`, R2
+> `strict-not-host-wide`, R3 `--only-secrets` read plus the `ruleset-id` pin), the `sdk_app_url` entry shape and charset
+> (R4), the replace's `confirm=REPLACE-INNGEST-HOST` typo-guard (R5; statements below that neither job consumes
+> `inputs.confirm` hold for the birth only), and no retry (R6). The predicate's current text is the header of
+> `tests/scripts/lib/inngest-public-sdk-url-preflight.sh`.
+
 ## Overview
 
 PR #12737 (merged 2026-11-16) changed the declared Inngest `--sdk-url` from
@@ -423,7 +431,8 @@ in_transit:
 
 Notes: the probe's new GQL read reuses the existing loopback socket
 (`http://127.0.0.1:8288/v0/gql`, same as `registry_fns`) — not a new connection. `sdk_app_url`
-carries hostnames (not secrets) through the `[A-Za-z0-9_:.@/+-]` sanitize; no GQL error text is
+carries hostnames (not secrets) as `<url>!<ok|error>` entries, userinfo then query/fragment stripped, through the
+`[A-Za-z0-9_:./+,!-]` emit charset (R4; no `@`); no GQL error text is
 shipped (stderr stays swallowed per the existing comment contract). Ledger row 6 conversion is
 item 5 — out of scope.
 

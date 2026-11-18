@@ -13,7 +13,7 @@ pass() { PASS_N=$((PASS_N + 1)); printf 'PASS  %s\n' "$1"; }
 fail() { FAIL_N=$((FAIL_N + 1)); printf 'FAIL  %s — got rc=%s out=%s\n' "$1" "$2" "$3"; }
 
 MSG_OK='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed cutover_flag=rolled-back probe_schema=9 host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_1 registry_fns=7 data_luks=crypto_LUKS'
-MSG_OK10='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active cutover_flag=done probe_schema=10 host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_1 registry_fns=7 data_luks=crypto_LUKS sdk_sync=ok sdk_app_url=https://app.soleur.ai/api/inngest'
+MSG_OK10='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active cutover_flag=done probe_schema=10 host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_1 registry_fns=7 data_luks=crypto_LUKS sdk_sync=ok sdk_app_url=https://app.soleur.ai/api/inngest!ok'
 MSG_S8='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed cutover_flag=rolled-back probe_schema=8 host_role=dedicated data_mount_src=/dev/sdb registry_fns=7'
 MSG_UNREAD='SOLEUR_INNGEST_SERVER_PROBE probe_schema=9 host_role=dedicated data_luks=__UNREADABLE__'
 MSG_EXT4='SOLEUR_INNGEST_SERVER_PROBE probe_schema=9 host_role=dedicated data_luks=ext4'

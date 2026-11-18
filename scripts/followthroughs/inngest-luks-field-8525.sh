@@ -7,7 +7,7 @@
 # SOLEUR_INNGEST_SERVER_PROBE row from THE SERVING dedicated host carrying BOTH
 # `probe_schema=9` or later AND `data_luks=crypto_LUKS` in the SAME row. `probe_schema=9` alone is not
 # the verdict (a field that resolved `__UNREADABLE__` still carries the schema), and
-# `data_luks=crypto_LUKS` alone is not the verdict (it must be the schema-9 row's field). The
+# `data_luks=crypto_LUKS` alone is not the verdict (it must be the probe row's field). The
 # pairing is the follow-through condition the issue names.
 #
 # HOST ISOLATION IS MANDATORY — same reasoning as inngest-host-not-serving-7674.sh: the probe

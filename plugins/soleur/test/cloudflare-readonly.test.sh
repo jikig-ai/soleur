@@ -1249,6 +1249,12 @@ grp_proj() {
   t "host_literal[B]: an uppercase host or a 254-character host is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
   pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":[{"ref":"n1","enabled":true,"action_parameters":{"ssl":"strict"}},{"ref":"n2","enabled":true,"action_parameters":{"ssl":"strict"},"expression":7}]}}'
   t "host_literal[B]: a missing or non-string expression is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
+  pr config-entrypoint "$(hl_body '(http.host ne "app.soleur.ai")' '(http.host contains "app.soleur.ai")' '(http.host matches "app.soleur.ai")' '(http.host wildcard "app.soleur.ai")')"
+  t "host_literal[B]: an ne, contains, matches or wildcard operator is not host_literal_only (eq and in only)" jqe '[.rules[].host_literal_only]==[false,false,false,false]'
+  pr config-entrypoint "$(hl_body '(http.referer eq "app.soleur.ai")' '(http.request.uri.path eq "app.soleur.ai")')"
+  t "host_literal[B]: an http.referer or http.request.uri.path field is not host_literal_only (http.host only)" jqe '[.rules[].host_literal_only]==[false,false]'
+  pr config-entrypoint "$(hl_body '(http.host eq "*.soleur.ai")' '(http.host in {"app.soleur.ai" "*.soleur.ai"})')"
+  t "host_literal[B]: a * inside an eq or in-set host is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
   pr pagerules-ssl "$(page_body '"w1"' '"active"' '"off"' '"*soleur.ai/*"')"
   t "records[C]: a wildcard *soleur.ai/* SSL page rule -> ssl_rule_count 1 although matches_app_host is false" jqe '.ssl_rule_count==1 and .ssl_rules[0].matches_app_host==false and .ssl_rules[0].ssl=="off"'
   t "records[C]: the wildcard pattern text is never printed" leak_scan "$WORK/comb.txt"
@@ -1774,7 +1780,7 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=178
+PROJ_FLOOR=181
 for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
@@ -2092,6 +2098,10 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W2.9 hostlit host class admits uppercase" "host_literal[B]: an uppercase host or a 254-character host" proj '"[a-z0-9.-]{1,253}"' '"[A-Za-z0-9.-]{1,253}"'
   mutate "W2.10 host_literal_only hard-coded true" "host_literal[B]: a missing or non-string expression" proj 'host_literal_only: (.expression | hostlit)' 'host_literal_only: true'
   mutate "W2.11 hostlit without the string guard" "host_literal[B]: a missing or non-string expression" proj 'def hostlit: type == "string" and test(' 'def hostlit: test('
+  mutate "W2.12 hostlit accepts any operator" "host_literal[B]: an ne, contains, matches or wildcard operator" proj '(eq \"" + hn' '([a-z]+ \"" + hn'
+  mutate "W2.13 hostlit accepts ne" "host_literal[B]: an ne, contains, matches or wildcard operator" proj '(eq \"" + hn' '((?:eq|ne) \"" + hn'
+  mutate "W2.14 hostlit accepts any http field" "host_literal[B]: an http.referer or http.request.uri.path field" proj 'test("\\A\\(http\\.host (' 'test("\\A\\(http\\.[a-z.]+ ('
+  mutate "W2.15 hostlit host class admits *" "host_literal[B]: a * inside an eq or in-set host" proj '"[a-z0-9.-]{1,253}"' '"[a-z0-9.*-]{1,253}"'
 
   # --- bad-response reasons, preflight, LIMIT, Z-only, hint (W3) ---
   mutate "W3.1 shape reported as a jq failure" "shape[ssl-mode]: a well-formed body of the wrong shape" shape $'    api) unverified api-error 14 ;;\n    *) bad_shape ;;' $'    api) unverified api-error 14 ;;\n    *) bad_jq 1 ;;'
@@ -2211,7 +2221,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 203 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 203
+  t "mutation floor: at least 207 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 207
 fi
 
 # --- accounting ---
@@ -2219,7 +2229,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 1980 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 1980
+  t "floor: at least 1993 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 1993
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
