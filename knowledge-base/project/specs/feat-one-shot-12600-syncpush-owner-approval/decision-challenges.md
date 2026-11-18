@@ -158,3 +158,27 @@ From the 14-seat review of d46340290b..a53a42875e. D34-D47 by the CTO agent, V7-
 - Technical items for the CTO/engineering (they decide how): the tri-state owner check (V10), and passing the count and route state into `DisconnectRepoDialog` (V8).
 - Not ruled here (outside this brief): F2 (rescue-branch count) and F3 (permanent precheck-conflict freeze on cc) are engineering or scope rulings. V11's hedge does not fix them. It only keeps the copy true while they exist.
 
+
+## Amendment notes to earlier rows (review fix round 1, WP5, 2026-11-18)
+
+Earlier rows above stay as written. Where a D34-D47 or V7-V12 ruling changes one of them, the row below says what now
+holds. These notes and the D34-D47 / V7-V12 rows win where they differ from the earlier text.
+
+| amended row | by | what now holds |
+|---|---|---|
+| D25(6), D28(5) | D44 | `side_conflict` is a **warning** (D25(6)), debounced per workspace and reason, with the `ref=side` tag. D28(5)'s "(info)" is superseded, and the `observability.ts` registry lists it with the warnings. |
+| D26(2) | D35 | `--no-overwrite-ignore` protects ignored files only on a fast-forward. It is not the guard for a non-fast-forward merge. That guard is the pull writer's `merge`: before every merge child (the syncPull default merge, `adoptSideTip` and the self-heal), it runs `hasUntrackedCollision` (`server/workspace-collision.ts`) against the verified target, and a hit returns `untracked_collision`. The flag stays in the argv for the fast-forward. |
+| D27 | D37 | Read D27's guarantee as: "never starts a merge over an unfinished one, never autostashes, and a precheck/merge parity break caused by same-uid workspace config is the D26(3) residual". This replaces "can never leave `MERGE_HEAD` or conflict markers". The self-heal uses the second pinned merge argv, without `--autostash` and with `AUTO_MERGE_MSG_SELF_HEAL`. `up_to_date` returns ok. |
+| D28(2) | D34 | Two gates. D28(2)'s `merge-base(T,P)` diff stays as the cheap first refusal. On the non-link path, adoption also needs the effect gate `diff --quiet --no-renames --no-ext-diff --no-textconv HEAD^{tree} <merge-tree HEAD P> -- . ':(exclude)knowledge-base/'` to exit 0. Otherwise the result is `side_not_kb_only`, with no hand-over, no PR create (D45(h)) and no merge. The link path and the push side (`deliverAndLinkSide`) keep D28(2) unchanged. |
+| W1 | D39(c), D39(b), D39(d) | For set-aside tips only (`soleur/recovered-kb-sync-*`, plus `soleur-store-tip-*` per D39(d), capped at 20 tips across both), a tip's files are the intersection of the `T...tip` and `T tip` diffs, so work that was squash- or rebase-merged on GitHub clears. HEAD keeps W1's three-dot form. A failed count now writes null with `checked_at` and a closed `nullCause` (D39(b)). It no longer leaves the old value in place. |
+| D26 residual | D47 FU-8 | data P3-1: an autostash flattens a partially staged file (its staged and unstaged states collapse on re-apply). This is pre-existing (the legacy `pull --autostash` did the same) and is recorded as a D26 residual beside D26(3). Follow-up FU-8; trigger: one user report, or #12719 work starting. |
+| D38(4) | WP5 | The self-heal's budget is also the `PullBudget` its hardened merge runs on (`mergeVerifiedDefault({ budget })`). Its `ls-remote`, fetch and isolated children are capped at the time left, so the 15 s (route) / 60 s (background) bound covers them. The count-only `ls-remote` on the pre-call collision is capped too, and skipped once the budget is spent. Residual: the legacy-arm `fetch origin` keeps its own 30 s timeout and is not budgeted. |
+
+Deviations from the round-1 work-package text, recorded:
+
+| item | deviation | why |
+|---|---|---|
+| WP1 TX4-e | `autostash_conflict` stamps `repo_last_synced_at`; the WP1 test list said "no stamp". | X1 and W5 stamp after a merge that exits 0, and `PULL_STAMPS` holds `autostash_conflict` (as TX1-h): HEAD is at `T`, and only the stash re-apply failed. So "Updated from GitHub" is true. TX4-e asserts one stamp. |
+| WP4 D46(2) | Superseded by V10. | D46(2) gave an unresolved identity the MEMBER audience. V10 makes "role unknown" (identity null, or the owner check errored or timed out) its own neutral notice, which ignores the route state. The owner check is tri-state. |
+| WP4 D41(h) | Superseded by V9. | D41(h) said "10000 or more". V9 sets the format on every surface, the agent line included: "10,000 or more", with a comma separator from 1,000 up. |
+| WP5 KB exclude pathspec | `KB_EXCLUDE_PATHSPEC` is defined in `server/kb-root.ts` (no imports), not in `server/kb-sync-objects.ts` (Phase 0's frozen location). | The held count, the self-heal and the agent line share it without loading the isolated git runner. A census row (`test/kb-sync-held-agent-line.test.ts`) fails on any other spelling of `:(exclude)` in server code. |

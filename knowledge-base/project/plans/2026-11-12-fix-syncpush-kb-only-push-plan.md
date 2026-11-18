@@ -519,7 +519,7 @@ Steps:
       first-parent chain (D24(9)/(12)), link instead of merging: `commit-tree(HEAD^{tree}, [HEAD, P])` in the
       isolated dir, handed over, plus a `--no-deref` CAS from HEAD; no file changes; `side_linked` (info).
    5. Otherwise a token-free `merge-tree --write-tree HEAD P` pre-check in the isolated dir: a conflict is
-      `side_conflict` (info) with files untouched; a clean result runs the step-6 argv with `P` as the target (the
+      `side_conflict` (warning, per D44 amending D28(5)) with files untouched; a clean result runs the step-6 argv with `P` as the target (the
       guard admits the HEX40 just written to `refs/remotes/origin/soleur/kb-sync`).
    6. Push side: the two interim `side_ahead` throws in `deliverAndLinkSide` stay the push-side hold for an absent
       `P`; their comments now say the next session-start pull adopts it. Where the push side would build on a present
@@ -708,6 +708,20 @@ where the card says "not on the repository's main branch yet" (D23).
   - On a 409 from the upload, instead of "Upload failed. Please try again.": "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub."
   - "Upload failed. Please try again." stays for every other failure. The 409 string is true whether or not a hold
     caused it. The pre-existing same-name replacement 409 (the client never sends the returned sha) is out of this PR.
+
+##### V7-V12 amendments (CPO, 2026-11-17; rows V7-V12 in `decision-challenges.md`)
+
+These amend the V6 strings above; the exact final strings are in rows V7-V12 of `decision-challenges.md` (and
+`review-ext-rulings.md` in the spec dir), which are binding where they differ from this section.
+
+| id | what changes |
+|---|---|
+| V7 | "Nothing is lost" is dropped everywhere. Sentence 2 of every V6(1)-(3) string becomes "The change is kept in your workspace." / "The changes are kept in your workspace." (Owner) or "... in the workspace." (member). The agent held line says the change is kept in this workspace and that disconnecting the repository deletes the workspace, including it. |
+| V8 | The Disconnect dialog warns (does not block): a count-renderable paragraph above the existing one, with a push instruction only when the route is available; when the count is not renderable, the existing paragraph names "any code changes your agent made that are not on your repository's main branch yet". |
+| V9 | `{n}` = 10000 (`HELD_FILES_RENDER_MAX`) renders as "10,000 or more"; 1,000 and up use a comma separator on every locale; below 1,000 a plain integer. Every surface: notice, dialog, agent line. |
+| V10 | Role unknown (identity null, or the owner check errored or timed out) gets a seventh, neutral notice that ignores the route state and says the steps are not shown and to reload. Supersedes D46(2)'s member fallback. |
+| V11 | The route-available last sentence becomes "... this notice should clear the next time your workspace is updated from GitHub. If it does not, ask your agent which files are still counted." The agent line adds that the count can lag a merge and to list the files before pushing again. |
+| V12 | The team-icon 409 splits by the saved path: the V6(6) string stands when the saved path equals the upload's target; otherwise "An icon with this file name is already on GitHub, so nothing was uploaded and the icon shown here stays as it is. Replacing an icon that was uploaded before is not available yet." |
 
 #### Research Insights (deepen 2026-11-17)
 
@@ -1418,7 +1432,7 @@ discoverability_test:
 
 ```yaml
 liveness_signal:
-  what: "layer 2 (pino -> Sentry via reportSilentFallback, static message, null error, tags reason and ref): op kb-sync.pull-held (feature session-sync), warning level, for the anomaly reasons (remote_state, fetch_failed, isolated_refused, tip_mismatch, shallow_changed, walk_cap, handover_failed, handover_too_large, unresolved_merge, merge_conflict, merge_refused, autostash_conflict, side_not_kb_only, side_pr_unknown); layer 2 (pino -> Better Stack): one info line per session-start pull with its reason, including the info-only up_to_date, merged, non_default_branch, side_declined, side_pr_created, side_linked, side_conflict"
+  what: "layer 2 (pino -> Sentry via reportSilentFallback, static message, null error, tags reason and ref): op kb-sync.pull-held (feature session-sync), warning level, for the anomaly reasons (remote_state, fetch_failed, isolated_refused, tip_mismatch, shallow_changed, walk_cap, handover_failed, handover_too_large, unresolved_merge, merge_conflict, merge_refused, autostash_conflict, side_not_kb_only, side_pr_unknown, and after the #12704 review side_conflict (D44), untracked_collision (D35), merge_unverified (D36(b)), pull_deadline (D38(2)), side_pr_create_failed (D45(h)), pull_unexpected (obs F3)); layer 2 (pino -> Better Stack): one info line per session-start pull with its reason, including the info-only up_to_date, merged, non_default_branch, side_declined, side_pr_created, side_linked"
   cadence: "per legacy-runner session start with a connected repo; the self-heal caller per webhook or cron run on a held-code workspace"
   alert_target: "Sentry issue stream for the web-platform project (no page); Better Stack web-platform source"
   configured_in: "apps/web-platform/server/session-sync.ts (syncPull's one report per run); the op constant, reasons and messages exported from apps/web-platform/server/kb-sync-pull.ts"
@@ -1450,10 +1464,10 @@ failure_modes:
     detection: "layer 2: op self-heal-aborted-held-commits (warning, debounced per workspace path), tag reason = merge_conflict_precheck or the pull reason; the KB route answers workspace_sync pending (D16)"
     alert_route: "Sentry issue stream (no page)"
   - mode: "held-files count not written or wrong"
-    detection: "layer 2 (pino -> Better Stack): Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) per sync; layer 2: writeRepoColsToWorkspace's existing write-to-workspace mirror on a failed separate UPDATE (the stamp is unaffected, D29(1))"
+    detection: "layer 2 (pino -> Better Stack): Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) and, for a null, the closed nullCause, per count attempt; layer 2 (Sentry): writeKbSyncHeldCols's own mirror on a failed separate UPDATE, feature workspace-repo-write, op kb-sync-held.write (kb-sync-held.clear for the disconnect/setup clear), a warning debounced per op and pg code, err null with tag pg_code; an UPDATE that matches no row (newer checked_at, not ready, or gone) is an info pino line with outcome no_row, never mirrored (the stamp is unaffected, D29(1); op names corrected per obs F13, unified under kb-sync-held.* per pattern P3-17)"
     alert_route: "Better Stack search (display-only value, no alert)"
   - mode: "the cc agent line's RPC read failed"
-    detection: "layer 2: one warning through reportSilentFallback (feature cc-dispatcher); no line is appended (D29(3))"
+    detection: "layer 2: op kb-sync-held-read, a warning debounced per workspace through mirrorWarnWithDebounce (feature cc-dispatcher on cc, agent-runner for the legacy fallback read), tag cause = timeout | rpc_error | rejected plus pg_code when present; no line is appended (D29(3); obs F7, F10)"
     alert_route: "Sentry issue stream (no page)"
 
 logs:
@@ -1468,7 +1482,7 @@ discoverability_test:
 #### Research Insights (deepen 2026-11-17)
 
 Applies D25(6)/(7) (the separate `KbPullHeldReason` union, levels, the `ref` tag, never-throw), D26(4), D27, D28(2)
-and D29(1)/(3). `merge_conflict_precheck` is reported only under the self-heal op. `side_conflict` is info per D28(5).
+and D29(1)/(3). `merge_conflict_precheck` is reported only under the self-heal op. `side_conflict` is a warning per D44 (D28(5)'s "info" amended; see the amendment notes in `decision-challenges.md`).
 Seats: architecture 11; security 9; data-integrity 11; realism F2.
 
 ## Encryption Posture
