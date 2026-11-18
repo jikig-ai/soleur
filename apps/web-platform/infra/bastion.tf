@@ -12,9 +12,10 @@
 # (F5) Terraform-minted host key, copied from git-data's tls_private_key + ssh_keys pattern. It does
 # NOT rotate on a replace: the replacement boots with the same key, so step 3's pin stays valid.
 #
-# EXPOSURE (the git-data residual, ADR-327): the private half sits in this root's state twice (here
-# and inside hcloud_server.bastion.user_data), and the Hetzner metadata endpoint serves user_data to
-# root on the host. A leaked copy stays valid until a deliberate rotation (runbook bastion-host.md).
+# EXPOSURE (the git-data residual, ADR-327): the private half sits in this root's state (here; the
+# locked hcloud provider stores hcloud_server.bastion.user_data as a hash, userDataHashSum), in the
+# runner-local plan file of a birth run, and the Hetzner metadata endpoint serves user_data to root
+# on the host. A leaked copy stays valid until a deliberate rotation (runbook bastion-host.md).
 resource "tls_private_key" "bastion_host_ssh" {
   algorithm = "ED25519"
 }
@@ -25,9 +26,6 @@ locals {
   # .50 reserved); the precondition below and bastion.test.sh SHAPE both check it.
   bastion_private_ip = "10.0.1.70"
   bastion_host_name  = "soleur-bastion"
-  # Sentry ingest host from the DSN, for the egress allowlist. "" when the DSN is empty, which the
-  # precondition and the job's DSN assertion refuse before any create.
-  bastion_sentry_ingest_host = try(regex("^https://[^@]+@([^/]+)/[0-9]+$", var.sentry_dsn)[0], "")
 }
 
 data "hcloud_server_type" "bastion" {
@@ -54,7 +52,10 @@ resource "hcloud_server" "bastion" {
   user_data = templatefile("${path.module}/bastion-cloud-init.yml", {
     host_name                    = local.bastion_host_name
     sentry_dsn                   = var.sentry_dsn
-    sentry_ingest_host           = local.bastion_sentry_ingest_host
+    # The egress allowlist's Sentry row. server.tf's one DSN parser; "" for an empty DSN, which the
+    # job's DSN assertion refuses before any create.
+    sentry_ingest_host           = local.sentry_dsn_parts.host
+    private_ip                   = local.bastion_private_ip
     host_ssh_ed25519_private_key = tls_private_key.bastion_host_ssh.private_key_openssh
     host_ssh_ed25519_public_key  = trimspace(tls_private_key.bastion_host_ssh.public_key_openssh)
     bastion_egress_b64           = base64encode(file("${path.module}/bastion-egress.sh"))
@@ -118,6 +119,8 @@ output "bastion_ssh_host_key_fingerprint" {
 }
 
 output "bastion_private_ip" {
-  description = "The bastion's private-network address."
-  value       = local.bastion_private_ip
+  description = "The bastion's private-network address, as the NIC attachment holds it."
+  # From the attachment, not the local: under -target a root output is written only when it depends
+  # on a targeted resource, so a local-only output is never in state and `terraform output` fails.
+  value = hcloud_server_network.bastion.ip
 }
