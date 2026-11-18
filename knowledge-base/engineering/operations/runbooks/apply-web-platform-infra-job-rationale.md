@@ -535,6 +535,13 @@ resource; it did not surface #7539, because a MISPLACED resource is
 declared and targeted -- just on the stage that cannot provision it.
 ```
 
+**The two `inngest_cutover_flip_silent_canary` `-target` lines are a throwaway (+1 pair, #12726).** They live only while
+the canary does (tracker #12878). This note sits here because the MAIN plan command is one backslash-continued line, and
+a `#` among its `-target` lines would break the command. The canary retirement PR deletes the canary blocks but keeps
+these two bare lines, and lists both addresses in the census `INTENDED_DESTROYS`, for its own destroying apply: a bare
+target on an address with no configuration is what plans the delete. A follow-up removes the lines after that apply, as
+the egress canary's retirement did (#12268 kept its lines, #12306 removed them).
+
 ## Comment prose relocated from the apply step
 
 The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
