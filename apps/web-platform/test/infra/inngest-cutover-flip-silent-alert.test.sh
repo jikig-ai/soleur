@@ -674,7 +674,7 @@ fi
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRESENCE_ROWS=63
-MUT_ROWS_EXPECTED=73
+MUT_ROWS_EXPECTED=74
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -1062,7 +1062,7 @@ s = sql_replace(s, "AS time, greatest(", "AS time,\n          greatest(")'
     's = blk_after(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "on_missing_data", "  # The old shape was operator = \"lower_than\", value = 1 (#11869, #12726).\n")'
   # ── review round 1 (#12726): what Terraform evaluates is not the raw text. Each row below SURVIVED the raw-text
   # guard (green on the mutated copy); each now reds for the row that reads the effective text.
-  mutate RED "R1 the replace() line is wrapped in /* */ and another infra .tf defines the canary local as production's (the canary never fires)" TF \
+  mutate RED "R1 the replace() line is wrapped in /* */ beside a planted canary local in another infra .tf (the alerts-file definition count drops to 0; the other-file half is R21)" TF \
     "a flip SQL local is defined other than exactly once in the alerts file" \
     'assert s.count(CANARY_LINE + "\n") == 1
 s = s.replace(CANARY_LINE + "\n", "  /*\n" + CANARY_LINE + "\n  */\n")' \
@@ -1158,6 +1158,9 @@ decoy = "locals {\n  flip_note = join(\"${\"#\"}\", [<<-EOT\n" + s[i:j] + "  EOT
 s = blk_set(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "paused", "  paused = true")
 i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
 s = s[:i] + decoy + s[i:j] + "# */\n" + s[j:]'
+  mutate RED "R21 another infra .tf defines the production SQL local while the alerts file is pristine (the other-file half of the definition row)" INFRATF \
+    "a flip SQL local is defined other than exactly once" \
+    's = "locals {\n  inngest_cutover_flip_silent_sql = \"SELECT 1 AS value\"\n}\n"'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
