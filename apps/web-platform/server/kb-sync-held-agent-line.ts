@@ -382,13 +382,13 @@ export async function readStoredKbSyncHeld(
       null,
       {
         feature: ctx.runner === "cc" ? "cc-dispatcher" : "agent-runner",
-        op: "kb-sync-held-read",
+        op: "kb-sync-held.read",
         tags: { cause, ...(pgCode ? { pg_code: pgCode } : {}) },
         extra: { userId: ctx.userId, workspaceId: ctx.workspaceId, errName: err instanceof Error ? err.name : undefined },
         message: "get_workspace_kb_sync_held read failed; no held-files line",
       },
       ctx.workspaceId,
-      "kb-sync-held-read",
+      "kb-sync-held.read",
     );
     return null;
   }
@@ -415,9 +415,9 @@ export function heldAgentLineLogFields(a: {
   readonly route: HeldLineRoute;
   readonly mergeBlocked: KbSyncMergeBlockedReason | null;
   readonly runner: HeldLineRunner;
-}): { op: "kb-sync.held-agent-line"; bucket: string; route: HeldLineRoute | "none"; mergeBlocked: string; runner: HeldLineRunner } {
+}): { op: "kb-sync-held.agent-line"; bucket: string; route: HeldLineRoute | "none"; mergeBlocked: string; runner: HeldLineRunner } {
   return {
-    op: "kb-sync.held-agent-line",
+    op: "kb-sync-held.agent-line",
     bucket: a.heldLine ? heldBucket(a.heldFiles) : "none",
     route: a.heldLine ? a.route : "none",
     mergeBlocked: a.mergeBlocked ?? "none",

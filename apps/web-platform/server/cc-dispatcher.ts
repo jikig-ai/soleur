@@ -1910,7 +1910,7 @@ export function handleCcCloseQuery({
       .catch((err: unknown) => {
         warnSilentFallback(null, {
           feature: "cc-dispatcher",
-          op: "kb-sync-held-refresh",
+          op: "kb-sync-held.refresh",
           extra: { userId, workspaceId: heldRefresh.workspaceId, errName: err instanceof Error ? err.name : undefined },
           message: "held-files refresh could not start after the session",
         });

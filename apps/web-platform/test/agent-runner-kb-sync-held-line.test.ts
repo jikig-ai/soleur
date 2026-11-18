@@ -338,15 +338,15 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
       const prompt = await promptFor(CONNECTED);
       expect(prompt).not.toContain(HELD_HEADING);
       expect(mockMirrorWarn).toHaveBeenCalledTimes(1);
-      expect(mockMirrorWarn.mock.calls[0][1]).toMatchObject({ feature: "agent-runner", op: "kb-sync-held-read", tags: { cause: "rpc_error", pg_code: "XX000" } });
+      expect(mockMirrorWarn.mock.calls[0][1]).toMatchObject({ feature: "agent-runner", op: "kb-sync-held.read", tags: { cause: "rpc_error", pg_code: "XX000" } });
     });
   });
 
   test("obs F12: one info line names the bucket, route, reason and runner, never the count", async () => {
     mockSyncPull.mockResolvedValue(pullResult({ pullReason: "merge_conflict", heldFiles: 12, onRecovered: 0, checkedAt: CHECKED_AT }));
     await promptFor(CONNECTED);
-    const lines = mockLogInfo.mock.calls.filter((c) => (c[0] as { op?: string })?.op === "kb-sync.held-agent-line");
+    const lines = mockLogInfo.mock.calls.filter((c) => (c[0] as { op?: string })?.op === "kb-sync-held.agent-line");
     expect(lines).toHaveLength(1);
-    expect(lines[0][0]).toEqual({ op: "kb-sync.held-agent-line", bucket: "10-99", route: "registered", mergeBlocked: "merge_conflict", runner: "legacy" });
+    expect(lines[0][0]).toEqual({ op: "kb-sync-held.agent-line", bucket: "10-99", route: "registered", mergeBlocked: "merge_conflict", runner: "legacy" });
   });
 });

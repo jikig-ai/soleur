@@ -337,9 +337,9 @@ describe("readStoredKbSyncHeld (the one reader of the stored columns, both runne
     expect(h.mirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
     const [err, opts, key, errorClass] = h.mirrorWarnWithDebounce.mock.calls[0];
     expect(err).toBeNull();
-    expect(opts).toMatchObject({ feature: "cc-dispatcher", op: "kb-sync-held-read", message: "get_workspace_kb_sync_held read failed; no held-files line" });
+    expect(opts).toMatchObject({ feature: "cc-dispatcher", op: "kb-sync-held.read", message: "get_workspace_kb_sync_held read failed; no held-files line" });
     expect(opts.tags).toEqual({ cause, ...(pgCode ? { pg_code: pgCode } : {}) });
-    expect([key, errorClass]).toEqual(["ws-1", "kb-sync-held-read"]);
+    expect([key, errorClass]).toEqual(["ws-1", "kb-sync-held.read"]);
     expect(JSON.stringify(opts)).not.toContain("socket hang up");
   });
 
@@ -364,14 +364,14 @@ describe("readStoredKbSyncHeld (the one reader of the stored columns, both runne
 describe("heldAgentLineLogFields (obs F12: which line was injected, never a count or a path)", () => {
   it("a bucket, the route, the merge-blocked reason and the runner", () => {
     expect(heldAgentLineLogFields({ heldLine: true, heldFiles: 2, route: "registered", mergeBlocked: null, runner: "cc" })).toEqual({
-      op: "kb-sync.held-agent-line",
+      op: "kb-sync-held.agent-line",
       bucket: "2-9",
       route: "registered",
       mergeBlocked: "none",
       runner: "cc",
     });
     expect(heldAgentLineLogFields({ heldLine: false, heldFiles: null, route: "transient", mergeBlocked: "untracked_collision", runner: "legacy" })).toEqual({
-      op: "kb-sync.held-agent-line",
+      op: "kb-sync-held.agent-line",
       bucket: "none",
       route: "none",
       mergeBlocked: "untracked_collision",
@@ -482,6 +482,15 @@ describe("grep row: the held line, ccPushPromptAddendum, the push tool descripti
     for (const t of merges) {
       for (const m of t.matchAll(/(?<!not )run `git commit`[^.]*/g)) expect(m[0]).toMatch(/\(not while a push approval is pending\)$/);
     }
+  });
+});
+
+describe("pattern P3-17 / verify P3-8: the held-files ops share one stem, kb-sync-held.<thing>", () => {
+  it.each(["server/kb-sync-held-agent-line.ts", "server/cc-dispatcher.ts", "server/agent-runner.ts"])("%s names every held op kb-sync-held.*", (rel) => {
+    const src = readFileSync(join(__dirname, "..", rel), "utf8");
+    const ops = [...src.matchAll(/"(kb-sync[-.]held[^"]*)"/g)].map((m) => m[1]);
+    expect(ops.length, rel).toBeGreaterThan(0);
+    for (const op of ops) expect(op, rel).toMatch(/^kb-sync-held\.[a-z-]+$/);
   });
 });
 

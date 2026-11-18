@@ -157,13 +157,13 @@ async function readLegacyStoredKbSyncHeld(userId: string, workspaceId: string): 
       null,
       {
         feature: "agent-runner",
-        op: "kb-sync-held-read",
+        op: "kb-sync-held.read",
         tags: { cause: "rejected" },
         extra: { userId, workspaceId, errName: err instanceof Error ? err.name : undefined },
         message: "stored held-files read could not start (tenant client); no held-files line",
       },
       workspaceId,
-      "kb-sync-held-read",
+      "kb-sync-held.read",
     );
     return null;
   }

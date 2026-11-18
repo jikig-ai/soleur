@@ -662,7 +662,7 @@ describe("cc held-files agent line (#12714)", () => {
   const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
   const heldReads = () => mockTenantRpc.mock.calls.filter(([fn]) => fn === "get_workspace_kb_sync_held");
   // obs F7: a display-only read failure is a debounced WARNING (mirrorWarnWithDebounce), never an error-level report.
-  const heldWarnings = () => mockMirrorWarnWithDebounce.mock.calls.filter(([, o]) => o?.op === "kb-sync-held-read");
+  const heldWarnings = () => mockMirrorWarnWithDebounce.mock.calls.filter(([, o]) => o?.op === "kb-sync-held.read");
   /** Every RPC answer by workspace id; an unknown workspace answers zero rows (the RPC's non-member shape). */
   let rpcByWorkspace: Record<string, unknown>;
   const tmpDirs: string[] = [];
@@ -843,9 +843,9 @@ describe("cc held-files agent line (#12714)", () => {
       eligible();
       held("user-1", 12);
       await realSdkQueryFactory(makeArgs());
-      const lines = mockLogInfo.mock.calls.filter(([o]) => (o as { op?: string })?.op === "kb-sync.held-agent-line");
+      const lines = mockLogInfo.mock.calls.filter(([o]) => (o as { op?: string })?.op === "kb-sync-held.agent-line");
       expect(lines).toHaveLength(1);
-      expect(lines[0][0]).toMatchObject({ op: "kb-sync.held-agent-line", bucket: "10-99", route: "registered", mergeBlocked: "none", runner: "cc" });
+      expect(lines[0][0]).toMatchObject({ op: "kb-sync-held.agent-line", bucket: "10-99", route: "registered", mergeBlocked: "none", runner: "cc" });
       expect(JSON.stringify(lines[0][0])).not.toMatch(/\b12\b/);
     });
 
@@ -911,7 +911,7 @@ describe("cc held-files agent line (#12714)", () => {
       expect(heldWarnings()).toHaveLength(1);
       const [err, ctx] = heldWarnings()[0];
       expect(err).toBeNull();
-      expect(ctx).toMatchObject({ feature: "cc-dispatcher", op: "kb-sync-held-read", message: "get_workspace_kb_sync_held read failed; no held-files line" });
+      expect(ctx).toMatchObject({ feature: "cc-dispatcher", op: "kb-sync-held.read", message: "get_workspace_kb_sync_held read failed; no held-files line" });
       // obs F10: a closed cause tag, never the error text.
       expect(["rpc_error", "rejected"]).toContain(ctx.tags.cause);
       expect(JSON.stringify(ctx)).not.toContain("socket hang up");
