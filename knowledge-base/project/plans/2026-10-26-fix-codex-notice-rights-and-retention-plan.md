@@ -254,7 +254,16 @@ transaction and idle timeouts are defense-in-depth, not an operation lease.
 If the candidate cannot prove an accepted maximum stop time for active sessions
 and transactions under scheduler or network failure, reject this collector
 substrate and keep collection blocked; select and review another substrate
-before implementation. See [PostgreSQL 17 client runtime configuration](https://www.postgresql.org/docs/17/runtime-config-client.html),
+before implementation. Current ADR values are `operation_deadline: UNSET / NO-GO`,
+`maximum_backend_stop: NOT PROVEN`, and `scheduler_maximum_lag: NOT PROVEN`.
+The existing 24-hour receipt-retention ceiling does not justify a 24-hour
+operation. Before setting a runtime value, cap each included source's connect
+time, full-response time, pages, rows, bytes and retries; verify its pagination
+contract; and measure worst-case throttling and stop lag. No retry may extend
+the absolute operation deadline. Require zero incomplete source arms: any
+timeout, cap, denial, malformed/unknown response, missing/changing page or
+unverified pagination makes the operation partial/failed/unsupported, never
+complete. See [PostgreSQL 17 client runtime configuration](https://www.postgresql.org/docs/17/runtime-config-client.html),
 [role creation](https://www.postgresql.org/docs/17/sql-createrole.html) and
 [backend termination](https://www.postgresql.org/docs/17/functions-admin.html).
 Child exit, connection identity, a database name, or the callback prototype's
@@ -268,6 +277,20 @@ read contents. A separate vault custodian can restore or erase only through
 audited, operation-scoped requests; it cannot authorize collection or release
 the worker fence. Durable tombstones, retention enforcement and tested restore
 and erasure behavior are required.
+One vault candidate for review is an EU GCS bucket with client-side envelope
+encryption and a unique imported-only Cloud KMS key per operation in a separate
+key project/IAM domain. The worker encrypts but cannot decrypt; the restore
+custodian can decrypt but cannot collect; the erasure authority can destroy but
+cannot decrypt or restore. Keep raw imported key material out of all backups,
+Terraform state, logs and the receipt store, and prove no re-import path remains
+after erasure. This candidate is not approved: Cloud KMS documents a zero
+destruction delay for imported-only keys but key material may remain in Google
+active/backup systems for up to 45 days. If CLO requires physical provider-side
+removal within 24 hours, reject this candidate; if customer-inaccessible
+crypto-erasure is sufficient, obtain explicit CLO and contract approval and
+prove it with disposable-project restore/erasure tests. See [key states](https://docs.cloud.google.com/kms/docs/key-states),
+[destroy and restore](https://docs.cloud.google.com/kms/docs/destroy-restore),
+and [key import](https://docs.cloud.google.com/kms/docs/importing-a-key).
 
 Use a new private network and subnet containing only the collector and its
 dedicated egress gateway; do not join `soleur-private`, which is shared with
@@ -276,14 +299,27 @@ public NIC. Route its only outbound path through the dual-homed gateway's
 private proxy address. Install host nftables on both machines: the collector
 may reach only the proxy, and the proxy accepts only the collector's private
 address. The gateway has no public ingress and an explicit Hetzner outbound
-firewall (DNS to a pinned resolver and TCP 443; stateful replies only). An
+firewall allowing DNS only to the pinned resolver, TCP 443 for Firestore/STS,
+and the exact database port from the reviewed Supabase endpoint manifest;
+stateful replies only. An
 authenticated CONNECT/TCP proxy enforces exact FQDN/port ACLs for
 `firestore.googleapis.com:443`, `sts.mtls.googleapis.com:443`, and the approved
-Supabase endpoint. The checked-in repo does not identify the primary app
+Supabase endpoint. This is a candidate source set, not a complete allowlist:
+`holder-provider-coverage-design.md` also describes GitHub surfaces. Before
+network implementation, explicitly mark every source included or excluded;
+each included source requires its own purpose/contract review and exact
+destination in the manifest and egress ACL. No source inherits authorization
+from another path. If GitHub is included, pin `api.github.com:443` and the
+reviewed API paths/scopes; include exact Doppler and Supabase Management
+destinations only when their sources are in scope. Otherwise record each as
+unsupported/excluded and limit every completeness statement accordingly. The
+checked-in repo does not identify the primary app
 project's pooler endpoint; do not reuse the documented endpoint for the
 separate Inngest project. Add a reviewed nonsecret endpoint-and-port manifest
 as the single source for worker settings and proxy ACLs; credentials remain in
-the vault. Give each operation a short-lived proxy credential delivered via
+the vault. Select and review the vault storage and key-management provider,
+service/account, region, replication and backup locations as part of this same
+vendor/transfer inventory. Give each operation a short-lived proxy credential delivered via
 systemd credentials or mTLS. The proxy resolves names itself through a dedicated
 validating resolver, rejects private, link-local and special-use addresses,
 client-supplied IPs and stale DNS, and fails closed on resolver errors. The
@@ -310,7 +346,11 @@ measured deadline-job maximum lag, stale-generation reconnect, server-side
 credential-lease expiry and observer/control outage. Refuse new operations
 whenever deadline execution is unhealthy. Run `systemd-analyze verify`; prove
 the cgroup empties, expired credentials cannot reconnect, and observer outage
-retains the fence.
+retains the fence. Before qualification, verify on the exact hosted project
+that `max_prepared_transactions=0`; if it is nonzero or unverifiable, prohibit
+`PREPARE TRANSACTION` and prove a database-owned recovery path removes every
+operation-owned prepared transaction before stop evidence can pass. Session
+termination cannot remove a prepared transaction.
 Passing these local tests
 does not establish production authority, Firestore IAM, provider coverage or
 permission to collect.
@@ -328,9 +368,10 @@ from production; and the Hetzner, Doppler, Vector and Sentry resources, regions,
 recipients, support access, processor terms and transfer safeguards. Confirm
 the source-specific DPAs and data-flow records. Network ACLs and TLS do not
 establish contractual or transfer authorization. Update the relevant processing
-record and Privacy Policy, Data Protection Disclosure and GDPR Policy (including
-published mirrors when applicable) before collection if CLO confirms this is a
-new processing activity.
+record (including an explicit decision whether to amend PA-8 or create a
+separate processing activity) and Privacy Policy, Data Protection Disclosure
+and GDPR Policy (including published mirrors when applicable) before
+collection if CLO confirms this is a new processing activity.
 
 Use distinct reviewed allowlists for provider receipts, durable authority
 records and telemetry. Start from the source projections in
@@ -340,9 +381,17 @@ persistence. Treat principal IDs/digests, operation IDs, timestamps and
 tombstones as potentially linkable. The control ledger never contains receipt
 bodies or raw provider responses. Preserve the existing 24-hour maximum for
 filtered receipt copies from capture; any longer or broader retention needs a
-new privacy review. Set separate necessity, access, retention and deletion
+new privacy review. No receipt-bearing copy may rely on a tombstone alone to
+meet the 24-hour deletion limit: either exclude it from backups/snapshots or
+use per-operation envelope encryption with keys outside every ciphertext
+backup/replica domain and prove crypto-erasure by 24 hours. A restore must
+consult an independently retained tombstone and reject deleted generations.
+Set separate necessity, access, retention and deletion
 rules for minimized reports, authority/revocation records, tombstones, deletion
-receipts and telemetry. Define rights and notice handling for people represented
+receipts and telemetry before collection. Keep operation IDs and principal
+digests out of Sentry; send only an approved aggregate projection there, with a
+CLO-approved retention bound for Sentry and each other control/report/tombstone/
+deletion record. Define rights and notice handling for people represented
 in the holder inventory; the Codex request-time DSAR snapshot is a distinct
 data store and does not satisfy those rights.
 
@@ -772,7 +821,9 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    short transactions, scheduler restart/queue/outage, measured deadline-job
    maximum lag, server-side credential lease expiry, stale-generation reconnect,
    vault restore/deletion and verifier outage using only disposable
-   infrastructure. Independent review
+   infrastructure. Verify `max_prepared_transactions=0` on the exact hosted
+   project; if this cannot be proven, the ADR must choose a tested prepared-
+   transaction cleanup or no-go. Independent review
    must confirm supervisor and backend absence evidence before this phase
    clears. Do not
    prepare exact collection commands while any item remains open.
@@ -841,7 +892,7 @@ failure_modes:
     detection: "Layer 3 Vector journald ships systemd/cgroup timeout and forced-kill status; Layer 4 Vector host_metrics shows a worker still consuming resources"
     alert_route: "Web Platform engineering on-call; collector status command reports the bounded operation state"
   - mode: "Deadline/revocation authority, server-side credential lease, or independent verifier fails"
-    detection: "Layer 3 Vector journald records bounded transition codes; authority acknowledgment and independently observed sessions/transactions/locks are persisted in the control record and mirrored to the Sentry monitor"
+    detection: "Layer 3 Vector journald records bounded transition codes; Sentry receives only an approved aggregate health projection, never operation IDs or principal digests; detailed authority acknowledgment and independently observed sessions/transactions/locks stay in the access-controlled control record"
     alert_route: "Web Platform engineering on-call; keep the operation fence held"
   - mode: "Collector or gateway attempts an unapproved destination, or resolver returns a private/special-use address"
     detection: "Layer 3 Vector journald ships host nftables/proxy refusal codes; Layer 4 Vector host_metrics exposes unexpected egress volume"
@@ -859,8 +910,8 @@ failure_modes:
     detection: "Sentry monitor reports stale cron completion and rising oldest-expired age; Layer 5 release context binds remediation to the deployed source"
     alert_route: "Web Platform engineering on-call"
 logs:
-  where: "Sentry monitor events, Vector-shipped systemd/nftables/proxy status, independent verifier result and bounded pg_cron status; aggregate counts/ages only"
-  retention: "Existing Sentry and database cron metadata retention; CLO must approve retention for worker, revocation and verifier records before qualification"
+  where: "Sentry receives only approved aggregate counts/ages and transition categories; Vector ships redacted systemd/nftables/proxy status; detailed verifier and pg_cron evidence stays in access-controlled records"
+  retention: "CLO-approved numeric retention bounds for each Sentry, database, authority, report, tombstone and deletion record must be set before collection; existing defaults are not evidence of approval"
 discoverability_test:
   command: "(planned) bash apps/web-platform/scripts/holder-collector-status.sh prd && bash apps/web-platform/scripts/codex-notice-retention-status.sh prd"
   expected_output: "collector_health=healthy; active_sessions=0; verifier_fresh=true; notice_retention_health=healthy; expired_backlog=0; oldest_expired_age_seconds<300"
@@ -952,6 +1003,25 @@ it must not be treated as available until added and tested.
       roles, Article 14 assessment, DPIA screening, service/transfer review,
       allowlists, per-copy retention and rights handling must pass independent
       technical, GDPR and CLO review first.
+- [ ] A reviewed ADR chooses a numeric operation deadline and maximum backend
+      stop lag, plus the exact database-side enforcement and failure tolerance,
+      or records a no-go for this collector substrate. No placeholder or
+      unmeasured scheduler cadence qualifies as a bound.
+- [ ] The source manifest explicitly includes or excludes every provider
+      surface in the coverage design. Each included source has separate purpose,
+      contract and destination review; its exact FQDN/port feeds the worker,
+      proxy ACL and Hetzner outbound firewall. No broad wildcard is allowed.
+- [ ] The vault provider, service/account, region, replication, backup and key
+      management are identified and reviewed. Receipt-bearing backups are
+      excluded or per-operation encryption keys are held outside every copy
+      domain and crypto-erased within 24 hours; restore tests reject tombstoned
+      generations. Sentry receives only approved aggregate counts/ages and
+      transition categories without operation IDs or principal digests, and
+      CLO-approved retention bounds exist for every record class.
+- [ ] Database stop evidence proves zero sessions, transactions, prepared
+      transactions and locks. Verify the exact hosted project's
+      `max_prepared_transactions=0`, or qualify an operation-scoped cleanup for
+      prepared transactions; `pg_terminate_backend` alone is insufficient.
 - [ ] Exact collection commands are pinned, dry-rendered and independently
       reviewed against the target and source revision before requesting a
       separate explicit authorization for collection. After collection, exact
@@ -978,8 +1048,9 @@ it must not be treated as available until added and tested.
       and telemetry schemas each have approved allowlists, necessity, access,
       retention, deletion, rights and restore behavior. Filtered receipts expire
       within 24 hours of capture across Firestore history, database, host/volume
-      snapshots, temporary files, dumps, logs and restored copies; an external
-      tombstone prevents resurrection and re-deletion is verified.
+      snapshots, temporary files, dumps, logs and restored copies by verified
+      deletion or crypto-erasure; an external tombstone prevents resurrection
+      and re-deletion is verified.
 - [ ] A CLO-approved rights process covers people represented in holder
       evidence across receipts, reports, authority records, tombstones,
       telemetry, backups and restored copies; it records identity/scope checks,
@@ -1067,3 +1138,7 @@ it must not be treated as available until added and tested.
    pooler FQDN and port for both worker configuration and proxy ACLs? The repo
    has no such endpoint today; do not infer it from the separate Inngest
    project's pooler. Add and validate the manifest before egress implementation.
+5. Which source set from `holder-provider-coverage-design.md` is in scope, and
+   what vault provider/region/key-management and backup topology satisfies
+   separate custody and 24-hour crypto-erasure? Resolve these in the technical
+   ADR and source-specific CLO review before infrastructure implementation.
