@@ -793,6 +793,25 @@ describe("cc held-files agent line (#12714)", () => {
       expect(prompt()).toContain(expected({ route, defaultBranch: null }));
     });
 
+    it("verify P3-12: a degraded repo-URL read (url null) gives no line and no strict re-read; the classifier has no repo arm", async () => {
+      eligible();
+      mockResolveWebEgress.mockResolvedValue(false);
+      mockResolveInstallationId.mockResolvedValue(null);
+      mockReadCurrentRepoUrlResult.mockImplementation(async () => ({ url: null, degraded: true }));
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).not.toContain(HELD_HEADING);
+      expect(mockResolveWebEgressStrict).not.toHaveBeenCalled();
+      expect(mockTenantRpc.mock.calls.map((c) => c[0])).not.toContain("resolve_workspace_installation_id");
+      // A degraded read always has a null url, which D41(d) already excludes, so a repo arm in the classifier is unreachable.
+      const { readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const src = readFileSync(join(__dirname, "..", "server", "cc-dispatcher.ts"), "utf8");
+      const start = src.indexOf("async function classifyHeldLineDegradedReads(");
+      expect(start).toBeGreaterThan(-1);
+      expect(src.slice(start, src.indexOf("\n}\n", start))).not.toMatch(/repoDegraded|push\("repo"\)/);
+    });
+
     it("D40(2) lazy: with no renderable count, no strict re-read runs", async () => {
       eligible();
       mockResolveWebEgress.mockResolvedValue(false);

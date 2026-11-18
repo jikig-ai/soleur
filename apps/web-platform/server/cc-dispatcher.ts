@@ -1985,7 +1985,12 @@ export function crmLeadPermissionToolNames(crmLead: boolean): string[] {
 /** Upper bound of each strict re-read that classifies a degraded precondition for the held line (D40(2)). */
 const HELD_LINE_STRICT_READ_TIMEOUT_MS = 2_000;
 
-type HeldLineDegradedRead = "repo" | "installation" | "entitlement";
+/**
+ * The reads the held line can find degraded. No `repo`: a degraded repo-URL read always has a null url, and the held line is
+ * built only for a non-null `repoUrl` (D41(d)), so a repo arm could never be seen (verify P3-12). The registrar keeps its own
+ * `degradedReads: "repo"` input for other callers.
+ */
+type HeldLineDegradedRead = "installation" | "entitlement";
 
 /**
  * #12704 D40(2): which of the push precondition reads were DEGRADED (a blip read as "no"), so the held line says "not
@@ -1997,7 +2002,6 @@ type HeldLineDegradedRead = "repo" | "installation" | "entitlement";
 async function classifyHeldLineDegradedReads(a: {
   readonly userId: string;
   readonly workspaceId: string;
-  readonly repoDegraded: boolean;
   readonly entitled: boolean;
   readonly installationId: number | null;
 }): Promise<HeldLineDegradedRead[]> {
@@ -2013,7 +2017,6 @@ async function classifyHeldLineDegradedReads(a: {
     a.installationId !== null ? false : strictDisagrees(() => readCcInstallationStrict(a.userId, a.workspaceId), "held-line-installation"),
   ]);
   const out: HeldLineDegradedRead[] = [];
-  if (a.repoDegraded) out.push("repo");
   if (installation) out.push("installation");
   if (entitlement) out.push("entitlement");
   return out;
@@ -2030,7 +2033,8 @@ function heldLineUnattemptedReason(
     holds ? true : degraded.includes(read) ? "unknown" : false;
   return (
     ccPushPreconditionVerdict({
-      repo: check(repoPresent, "repo"),
+      // Definite: the held line needs a non-null repoUrl, so the repo read was not degraded (an unparseable url is no repo).
+      repo: repoPresent,
       installation: check(installationId !== null, "installation"),
       entitled: check(entitled, "entitlement"),
     }) ?? "no-repo-or-installation"
@@ -2817,7 +2821,6 @@ export const realSdkQueryFactory: QueryFactory = async (
     ? await classifyHeldLineDegradedReads({
         userId: args.userId,
         workspaceId: activeWorkspaceId,
-        repoDegraded: repoUrlResult.degraded === true,
         entitled: webEgressEntitled === true,
         installationId: effectiveInstallationId,
       })
