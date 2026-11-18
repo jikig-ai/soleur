@@ -394,12 +394,17 @@ Live standing alarms over this source:
   2026-11-13 re-arm while 2 to 3 object rows arrived in every window). **The zero-fill mechanism is an
   INFERENCE**, as for `egress_gw_probe_silent`. A throwaway canary alert,
   `soleur-inngest-cutover-flip-silent-canary-prd`, runs the same query against a host no machine has and
-  must stay open: its incident and its mirror issue are expected, so do not resolve or close them. If it
-  never fires (its alert live, unpaused and older than 20 minutes, with no incident), the evaluator cannot
-  evaluate this predicate shape: keep this alert armed, build the heartbeat poller (#12190) next, and rely
-  on the LUKS key-probe deadman meanwhile; never revert. A follow-up PR retires the canary once the apply
-  +4 h tracker read shows it fired. An evaluator error also reads 0 (a quiet failure here; the residual
-  and its compensating controls are in the resource comment).
+  is expected to stay open: its incident and its mirror issue are expected, so do not resolve or close
+  them. If it never fires (its alert live, unpaused and older than 20 minutes, with no incident), the
+  evaluator cannot evaluate this predicate shape: keep this alert armed, build the heartbeat poller
+  (#12190) next, and rely on the LUKS key-probe deadman meanwhile; never revert. The canary-removal PR
+  (tracker #12878) opens at the first of: the first tracker read at or after apply +4 h showing the canary
+  incident exists; the +25 min read showing it absent after more than 20 minutes live and unpaused; or
+  apply +24 h, whatever the read shows. No production incident since the apply floor, 1051496324
+  resolved, this alert unpaused at `higher_than 0` and object rows present gate closing #12726 and
+  #12878, not the removal; a canary incident that recovered is a finding for #12190 that blocks closing
+  #12726. An evaluator error also reads 0 (a quiet failure here; the residual and its compensating
+  controls are in the resource comment).
   An open incident does not by itself mean the unit is silent; read the rows first. Object rows from
   `soleur-inngest-prd` in the last 15 minutes mean a false positive: the response is the poller (#12190),
   never a revert, and resolving the incident is a Better Stack write that needs the owner's explicit

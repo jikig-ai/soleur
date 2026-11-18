@@ -2119,26 +2119,40 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # incident 1051496324 was born at the first evaluation after the re-arm (back-dated to 2026-11-12T23:45:00Z) and read
 # `Current value: 0` for five days, while the alert's own SQL replayed on four 900 s windows returned 3, 2, 2 and 3
 # object rows and the largest gap between consecutive object rows since 2026-11-12 17:10Z was 370 s (measured
-# 2026-11-17 with betterstack-query.sh, read only). It was the fourth `lower_than` silence alert in this account to
-# read 0 on healthy data (egress_gw_probe_silent read 0 with no JSONType at all), so #12726 applied ADR-218's
-# 2026-11-05 rule to it: count the MISSING, not the present.
+# 2026-11-17 with betterstack-query.sh, read only). It was the third `lower_than` silence-alert incident in this
+# account opened on healthy data (1045365287 above, egress_gw_probe_silent's 1047829421, and this one; a fourth,
+# egress 1031046761, began as a true positive and then stayed open 24 days after the rows returned;
+# egress_gw_probe_silent read 0 with no JSONType at all), so #12726 applied ADR-218's 2026-11-05 rule to it: count
+# the MISSING, not the present.
 #
 # SHAPE (#12726, ADR-218 amendment 2026-11-17). The value is ADR-218's host-count canon with a roster of one,
 # greatest(toInt64(1) - toInt64(count(DISTINCT host_name)), 0) over the object-typed rows from the production host:
 # 0 = healthy, 1 = no object row in the window. The alert pages on `higher_than 0`, so an evaluator step that reads 0
 # now reads healthy instead of opening a false incident. The greatest/toInt64 form is kept on purpose although the
-# roster is one host: it is the exact value expression of egress_gw_probe_silent_sql, the only inverted shape whose
-# canary fired (incident 1048213461); relay_probe_silent_sql uses another form with no canary of its own. No GROUP BY:
-# an aggregate without one always returns one row, so a fully dark window reads 1, not "no data". The mechanism behind
-# the stuck 0 stays INFERRED, not measured: neither the incident nor the alert object carries an evaluated value.
+# roster is one host: it is the egress_gw_probe_silent_sql form with the roster constant 1, the only inverted shape
+# whose canary fired (incident 1048213461); relay_probe_silent_sql uses another form with no canary of its own. No
+# GROUP BY: an aggregate without one always returns one row, so a fully dark window reads 1, not "no data". The
+# mechanism behind the stuck 0 stays INFERRED, not measured: neither the incident nor the alert object carries an
+# evaluated value.
 #
-# THE CANARY (#12726, throwaway; retired in a follow-up PR after the apply +4 h tracker read). The canary pair below
-# runs this exact query with only the host pin swapped, by one replace() on the local, to a host no machine has. It
-# reads 1 on every evaluation and must open an incident that never recovers: the positive evidence that the evaluator
-# delivers a non-zero value for THIS predicate shape (the tag IN, the host pin and JSONType), which the egress canary
-# never exercised. If it never fires, the response is the egress rule: keep this alert armed in the inverted shape,
-# build the heartbeat poller (#12190) next, and rely on the LUKS key-probe deadman meanwhile. Never revert, never
-# guess a predicate. Its mirror issue is expected and must not be closed while the canary lives.
+# THE CANARY (#12726, throwaway; tracker #12878). The canary pair below runs this exact query with only the host pin
+# swapped, by one replace() on the local, to a host no machine has. It is expected (predicted, until the apply +25 min
+# tracker read measures it) to read 1 on every evaluation and to open an incident that never recovers: the positive
+# evidence that the evaluator delivers a non-zero value for THIS predicate shape (the tag IN, the host pin and
+# JSONType), which the egress canary never exercised. If it never fires, the response is the egress rule: keep this
+# alert armed in the inverted shape, build the heartbeat poller (#12190) next, and rely on the LUKS key-probe deadman
+# meanwhile. Never revert, never guess a predicate. Its mirror issue is expected and must not be closed while the
+# canary lives.
+# RETIREMENT (CTO F2 amended, tracker #12878): the canary-removal PR opens at the FIRST of (i) the first tracker read
+# at or after apply +4 h showing the canary incident exists (it fired), (ii) the +25 min read showing the canary absent
+# while its alert has been live and unpaused for more than 20 min (the F3 response above), (iii) apply +24 h, whatever
+# the read shows. No production incident since the apply floor, 1051496324 resolved, this alert unpaused at
+# `higher_than 0` and object rows present gate CLOSING #12726 and #12878, not the removal. A canary incident that
+# recovered is a finding for #12190 that blocks closing #12726, not the retirement.
+# DELETION TRAP: the removal PR deletes the two canary blocks but KEEPS their two bare `-target=` lines in
+# apply-web-platform-infra.yml (and lists both addresses in the census INTENDED_DESTROYS) for its own destroying
+# apply, because a bare target on an address with no configuration is what plans the delete; a follow-up removes them
+# after that apply. The egress canary went the same way (#12268 kept the targets, #12306 removed them).
 #
 # FALSE-SILENCE RESIDUAL (accepted, CTO R2/R7). Under treat_as_zero an evaluator error or timeout also reads 0, which
 # this shape reads as healthy. Compensating controls, each scoped to what it sees: the canary (this predicate shape,
@@ -2220,8 +2234,9 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   recovery_period     = 900
   on_missing_data     = "treat_as_zero"
 
-  # Armed: re-armed under #9927 step D2-1a (was paused under #11869; see HISTORY above). The reconciler's `logs-alert-paused` arm reports exactly this shape: a live
-  # pause under a declaration that resolves to `paused = false`.
+  # Armed: re-armed under #9927 step D2-1a (was paused under #11869; see HISTORY above). The
+  # reconciler's `logs-alert-paused` arm reports exactly this shape: a live pause under a
+  # declaration that resolves to `paused = false`.
   paused = false
 
   email          = true
@@ -2242,7 +2257,9 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
 }
 
 # The throwaway canary for the alert above (#12726): the same query with only the host pin swapped (see THE CANARY
-# above). It must fire and stay open; it is retired once the apply +4 h tracker read shows it fired.
+# above). It is expected to fire and stay open. Its removal PR opens at the first of the apply +4 h tracker read
+# showing it fired, the +25 min read showing it absent after more than 20 min live and unpaused, or apply +24 h
+# (RETIREMENT above, tracker #12878); that PR keeps the two canary -target= lines (DELETION TRAP above).
 resource "logtail_exploration" "inngest_cutover_flip_silent_canary" {
   name      = "soleur-inngest-cutover-flip-silent-canary-prd"
   team_name = "Your team"
@@ -2285,7 +2302,7 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "CANARY, expected to stay open; do not resolve or close its mirror issue (closing it files a fresh P1 at the next mirror run). Throwaway positive control for soleur-inngest-cutover-flip-silent-prd (#12726), NOT an outage: it runs that alert's query against a host no machine has, so it reads 1 on every evaluation. Never firing = the evaluator cannot evaluate this predicate shape: keep the production alert armed and build the poller (#12190). Retired once it has fired. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  incident_cause = "CANARY, expected to stay open; do not resolve or close its mirror issue (closing it files a fresh P1 at the next mirror run). Throwaway positive control for soleur-inngest-cutover-flip-silent-prd (#12726), NOT an outage: it runs that alert's query against a host no machine has, so it reads 1 on every evaluation. Never firing = the evaluator cannot evaluate this predicate shape: keep the production alert armed and build the poller (#12190). Retired after the apply +4 h tracker read (#12878). Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
   metadata = {
     runbook = local.inngest_cutover_flip_silent_runbook_url
   }
