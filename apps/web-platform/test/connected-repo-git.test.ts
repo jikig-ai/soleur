@@ -223,7 +223,7 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     ["a first line that is not 40 hex", (ws: string) => writeFileSync(join(ws, ".git", "MERGE_AUTOSTASH"), "refs/heads/main\n"), "malformed"],
     ["a directory", (ws: string) => mkdirSync(join(ws, ".git", "MERGE_AUTOSTASH")), "not_regular"],
     // verify-final B3: an agent-planted FIFO is refused without ever blocking the event loop
-    ["a FIFO", (ws: string) => execFileSync("mkfifo", [join(ws, ".git", "MERGE_AUTOSTASH")]), "not_regular"],
+    ["a FIFO", (ws: string) => execFileSync("mkfifo", [join(ws, ".git", "MERGE_AUTOSTASH")], { env: env(ws) }), "not_regular"],
   ] as const)("the pin refuses %s: no ref, one warning", async (_name, plant, cause) => {
     const { ws } = repo();
     const sha = staleAutostash(ws);
