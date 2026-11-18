@@ -214,7 +214,7 @@ describe("selfHealNonFastForward: held commits reset only when their content is 
     expect(kb).toEqual(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/main", "HEAD", "--", "knowledge-base/"]);
     expect(localSpy.mock.calls.find(([a]) => a[0] === "rev-list")?.[0]).toEqual(["rev-list", "--count", "refs/remotes/origin/main..HEAD"]);
     // D15(a): the precheck lists A/D paths HEAD -> target, then `reset --keep` (the structural backstop), never --hard
-    expect(localSpy.mock.calls.find(([a]) => isPrecheckDiff(a))?.[0]).toEqual(["diff", "--name-status", "-z", "--no-renames", "--diff-filter=AD", "HEAD", "refs/remotes/origin/main", "--"]);
+    expect(localSpy.mock.calls.find(([a]) => isPrecheckDiff(a))?.[0]).toEqual(["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-filter=AD", "HEAD", "refs/remotes/origin/main", "--"]);
     expect(localSpy.mock.calls.find(([a]) => a[0] === "reset")?.[0]).toEqual(["reset", "--keep", "refs/remotes/origin/main"]);
   });
 

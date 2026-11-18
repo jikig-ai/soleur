@@ -63,7 +63,7 @@ const KB_SYNC_TOKEN_FREE = ["server/kb-sync-objects.ts", "server/kb-sync-pull.ts
 
 /** The known `runIsolatedGitLocal` call sites per token-free KB sync file (a new token-free child is a reviewed row). */
 const ISOLATED_RUNNER_SITES: Record<string, number> = {
-  "server/kb-sync-objects.ts": 6, // isCommitPresent, isAncestor, commitTree, handOver, isKbOnlySide (merge-base, diff)
+  "server/kb-sync-objects.ts": 7, // isCommitPresent, isAncestor, commitTree, handOver, isKbOnlySide (merge-base, diff), mergeEffectIsKbOnly (D34)
   "server/kb-sync-pull.ts": 5, // the walk, the size check, merge-tree, the first-parent chain and its KB batch read
   "server/kb-sync-side-pr.ts": 0,
   "server/kb-sync-held.ts": 1, // the held count's diff (#12714)

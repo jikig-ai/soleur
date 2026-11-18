@@ -34,14 +34,17 @@ vi.mock("@sentry/nextjs", async (orig) => {
 const { publishSpy } = vi.hoisted(() => ({ publishSpy: vi.fn() }));
 
 // execFileSync (connected-repo wrapper): a remote exists, one local commit, a clean status (no auto-commit).
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_cmd: string, rawArgs: string[]) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("./helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((_cmd: string, rawArgs: string[]) => {
     const args = stripHostGitBlock(rawArgs);
     if (args[0] === "remote") return Buffer.from("origin\tgit@github.com:acme/widgets.git (fetch)\n");
     if (args[0] === "rev-list") return Buffer.from("1\n");
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 vi.mock("fs", async (orig) => ({
   ...(await orig<typeof import("fs")>()),
   readdirSync: vi.fn(() => []),
