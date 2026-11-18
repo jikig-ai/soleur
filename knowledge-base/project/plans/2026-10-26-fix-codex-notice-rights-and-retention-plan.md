@@ -220,22 +220,54 @@ existing `apps/web-platform/infra` Terraform root. Keep the resource disabled
 by default and separate it from the web and Inngest hosts. The coordinator
 must never receive a database client or socket. A per-operation systemd
 `Type=oneshot` child creates and exclusively owns its database connection under
-an operation-scoped read-only principal. Pin cgroup-v2 behavior and configure
-`RuntimeMaxSec`, `TimeoutStopSec`, `KillMode=control-group`, and forced-kill
-grace so the supervisor bounds synchronous loops and descendants. The child
+an operation-scoped read-only principal. Pin a minimum systemd version and
+unified cgroup-v2 mode. `RuntimeMaxSec` is ineffective for `Type=oneshot`; use a
+finite `TimeoutStartSec` with `TimeoutStartFailureMode=terminate`, short
+`TimeoutStopSec`, `KillMode=control-group`, and final SIGKILL so PID 1 bounds
+synchronous loops and descendants. This is a hard process-tree fallback, not
+proof that database authority was revoked ([systemd service unit
+documentation](https://freedesktop.org/software/systemd/man/latest/systemd.service.html)). The child
 returns only a bounded, sanitized result; receipt bodies, credential material,
 subject identifiers and raw provider responses never enter logs.
 
-On timeout or uncertainty, the independent authority durably revokes the
-operation generation and future credentials before the supervisor kills the
-whole cgroup. A separately authenticated narrow database observer then verifies
-that no sessions, transactions or locks remain for that operation principal.
+An off-host durable authority owns each operation's generation and deadline,
+persists the deadline event before arming work, and survives coordinator and
+worker failure. At deadline it atomically revokes the generation and database
+credential, waits for authoritative revocation acknowledgment, and only then
+asks the host supervisor over a narrow authenticated control API to kill the
+unit's full cgroup. A database-enforced operation-credential lease must also
+expire server-side; a process timer or host timeout cannot bound backend
+authority during an authority or network outage. A separately authenticated
+narrow database observer then verifies that no sessions, transactions or locks
+remain for that operation principal.
+Current source and CTO review establish no existing mechanism that gives the
+hosted database an absolute per-operation authority deadline. A candidate is a
+durable database deadline record plus a narrowly owned `pg_cron` expiry job
+that disables a unique operation role and calls `pg_terminate_backend` for all
+of its sessions, followed by the independent observer. This is only a design
+candidate: managed-role grants, scheduler maximum lag/availability, queueing,
+restart recovery, and fail-closed admission must be demonstrated on the exact
+PostgreSQL/Supabase versions before it can be called a bound. PostgreSQL
+`VALID UNTIL` only expires password authentication; role GUC defaults alone do
+not prevent session overrides or terminate existing sessions. PG17 statement,
+transaction and idle timeouts are defense-in-depth, not an operation lease.
+If the candidate cannot prove an accepted maximum stop time for active sessions
+and transactions under scheduler or network failure, reject this collector
+substrate and keep collection blocked; select and review another substrate
+before implementation. See [PostgreSQL 17 client runtime configuration](https://www.postgresql.org/docs/17/runtime-config-client.html),
+[role creation](https://www.postgresql.org/docs/17/sql-createrole.html) and
+[backend termination](https://www.postgresql.org/docs/17/functions-admin.html).
 Child exit, connection identity, a database name, or the callback prototype's
 shape-only `verify()` is not stop evidence. Keep the fence and resources held
-when revocation, supervisor status, observation or authority availability is
-unknown. The worker identity, verifier identity and vault operator must be
-separate; the vault requires encrypted storage, durable seal/tombstone,
-retention enforcement, and tested restore/erasure behavior.
+when lease expiry, revocation, supervisor status, observation or authority
+availability is unknown. The worker, revocation authority, verifier and vault
+custodian use separate identities and credentials. The worker may write only
+the operation's encrypted vault object; it cannot list, restore, erase or
+release objects. The authority may seal or tombstone an operation but cannot
+read contents. A separate vault custodian can restore or erase only through
+audited, operation-scoped requests; it cannot authorize collection or release
+the worker fence. Durable tombstones, retention enforcement and tested restore
+and erasure behavior are required.
 
 Use a new private network and subnet containing only the collector and its
 dedicated egress gateway; do not join `soleur-private`, which is shared with
@@ -246,10 +278,20 @@ may reach only the proxy, and the proxy accepts only the collector's private
 address. The gateway has no public ingress and an explicit Hetzner outbound
 firewall (DNS to a pinned resolver and TCP 443; stateful replies only). An
 authenticated CONNECT/TCP proxy enforces exact FQDN/port ACLs for
-`firestore.googleapis.com`, `sts.mtls.googleapis.com`, and the approved
-Supabase endpoint. Pin the Supabase hostname and port from approved nonsecret
-configuration; specify proxy authentication, resolver/DNS-rebinding controls,
-and gateway routes and nftables before code. Hetzner Cloud Firewalls do not
+`firestore.googleapis.com:443`, `sts.mtls.googleapis.com:443`, and the approved
+Supabase endpoint. The checked-in repo does not identify the primary app
+project's pooler endpoint; do not reuse the documented endpoint for the
+separate Inngest project. Add a reviewed nonsecret endpoint-and-port manifest
+as the single source for worker settings and proxy ACLs; credentials remain in
+the vault. Give each operation a short-lived proxy credential delivered via
+systemd credentials or mTLS. The proxy resolves names itself through a dedicated
+validating resolver, rejects private, link-local and special-use addresses,
+client-supplied IPs and stale DNS, and fails closed on resolver errors. The
+collector's only route is through the gateway; its nftables permits loopback,
+resolver access and the proxy only. Gateway nftables permits collector-private
+ingress to the proxy/resolver and only resolver DNS plus proxy-originated
+connections to approved destinations and ports. Specify these controls before
+code. Hetzner Cloud Firewalls do not
 filter private-network L2 traffic, so their rules cannot replace host-level
 controls ([Firewall FAQ](https://docs.hetzner.com/cloud/firewalls/faq/),
 [Networks FAQ](https://docs.hetzner.com/networking/networks/faq/)).
@@ -259,11 +301,85 @@ recheck current orderable stock and monthly cost, and obtain exact operator
 authorization for the Terraform apply. The hosts must be reproducible through
 Terraform from empty state and immutable replacement; no SSH key or in-host
 command is a primary status or debug path. Offline qualification uses the
-exact systemd/cgroup, route, nftables and proxy configuration with disposable
-PostgreSQL and fault cases for a busy loop, descendants, pending transaction,
-stale-generation reconnect and observer outage. Passing these local tests
+exact systemd/cgroup, route, nftables and proxy configuration with a disposable
+cgroup-v2 VM and PostgreSQL. Test busy loops, synchronous blocks, stubborn
+descendants, pending transactions, authority restart, revocation-before-kill
+ordering, active sessions, long-running and prepared-transaction denial,
+repeated short transactions, worker/network loss, scheduler restart/queue/outage,
+measured deadline-job maximum lag, stale-generation reconnect, server-side
+credential-lease expiry and observer/control outage. Refuse new operations
+whenever deadline execution is unhealthy. Run `systemd-analyze verify`; prove
+the cgroup empties, expired credentials cannot reconnect, and observer outage
+retains the fence.
+Passing these local tests
 does not establish production authority, Firestore IAM, provider coverage or
 permission to collect.
+
+#### Holder-evidence processing gate
+
+The accepted Codex notice policy and its Article 6(1)(b) analysis do not
+authorize holder-evidence collection. Before exact collection commands may be
+prepared, independently review the operation-specific purpose, necessity and
+balancing; subject categories; controller/processor roles; source-backed legal
+basis; Article 14 notice or exception; DPIA screening; and the applicable
+`soleur:gdpr-gate` and CLO reviews. Verify the exact Firestore project/account,
+Google service and region; the Supabase development project and its separation
+from production; and the Hetzner, Doppler, Vector and Sentry resources, regions,
+recipients, support access, processor terms and transfer safeguards. Confirm
+the source-specific DPAs and data-flow records. Network ACLs and TLS do not
+establish contractual or transfer authorization. Update the relevant processing
+record and Privacy Policy, Data Protection Disclosure and GDPR Policy (including
+published mirrors when applicable) before collection if CLO confirms this is a
+new processing activity.
+
+Use distinct reviewed allowlists for provider receipts, durable authority
+records and telemetry. Start from the source projections in
+`holder-provider-coverage-design.md`; enumerate exact fields, types, per-field
+limits and total response bounds, and reject unknown or unbounded fields before
+persistence. Treat principal IDs/digests, operation IDs, timestamps and
+tombstones as potentially linkable. The control ledger never contains receipt
+bodies or raw provider responses. Preserve the existing 24-hour maximum for
+filtered receipt copies from capture; any longer or broader retention needs a
+new privacy review. Set separate necessity, access, retention and deletion
+rules for minimized reports, authority/revocation records, tombstones, deletion
+receipts and telemetry. Define rights and notice handling for people represented
+in the holder inventory; the Codex request-time DSAR snapshot is a distinct
+data store and does not satisfy those rights.
+
+The holder-rights flow must provide a published request channel, verify the
+requester's identity and scope against the minimum necessary source mapping,
+search each approved copy, and return a status and response by the applicable
+deadline. It must include records retained in reports, authority metadata,
+tombstones, telemetry, backups and restored copies without exposing another
+person's records. If a request cannot be matched or a copy cannot be reached,
+record an unresolved state and escalate under the CLO-approved procedure;
+never report erasure complete based only on live-store deletion.
+
+Exact operation commands are generated from the reviewed schema and endpoint
+manifest, pinned to the source revision and tool versions, and include a no-op
+render/hash plus destination and retention summary. An independent technical,
+GDPR and CLO review records the exact command bytes and target. The operator's
+explicit authorization then covers only that collection command. After a
+verified collection result, generate and independently review the distinct
+writer-window commands against the observed evidence and exact migration
+hashes; obtain a second, separate authorization before any writer window. One
+authorization never covers both actions. If collection is partial, timed out,
+revoked or unknown, keep all fences held; preserve operation ID/generation,
+bounded result and deletion state; do not retry into the same generation or
+reconcile/write. A retry requires a new generation and independently reviewed
+command. Release only after authority revocation, credential expiry, empty
+cgroup, zero observed backend sessions/transactions/locks, and receipt
+retention/deletion evidence are all independently verified.
+
+Restore/erasure qualification covers Firestore history, database PITR, host and
+volume snapshots, temporary files, crash dumps, logs and restored copies. An
+external tombstone or equivalent must prevent restored data from becoming live
+again, with verified re-deletion evidence where applicable. Keep holder receipts
+and Codex rights-response archives in separate stores and lifecycles. Existing
+intent preparation and Firestore ledger contracts do not establish authenticated
+authority; Firestore writes remain hard-disabled. Exact-intent conformance,
+verified IAM, and separate exact-action authorization are required before any
+authority claim. No code or offline proof changes those holds.
 
 ### 1. Request-time rights snapshot and job-bound export
 
@@ -501,11 +617,26 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
   its operation generation and credentials, then a separate verifier observes
   zero sessions, transactions and locks for that operation principal before
   the fence or resource is released.
+- Given a worker that repeatedly completes short transactions or loses its
+  network while its database session remains open, when the operation deadline
+  fires, then the qualified database-side deadline mechanism terminates that
+  session within its measured maximum lag. Scheduler restart, queueing or
+  outage must preserve the bound or refuse new operations and keep every fence
+  held; `VALID UNTIL` and role defaults alone do not pass.
 - Given stale-generation reconnect, unavailable authority, worker crash,
   supervisor failure or observer outage, then the operation stays fenced and
   stop remains unknown; no new credentials or work are admitted.
 - Given a vault seal, tombstone, deletion or restore failure, then no receipt
   body is returned to the coordinator and the retention state fails closed.
+- Given partial, timed-out, revoked or unknown collection, then the operation
+  remains fenced with its generation and bounded outcome recorded; no same-
+  generation retry, reconciliation, writer window or deletion-complete claim is
+  permitted. A retry uses a new generation and reviewed command.
+- Given a rights request from a person represented in the holder inventory,
+  then the reviewed request flow scopes the request across each approved live
+  copy, report, authority record, tombstone, telemetry store, backup and
+  restored copy, returns a tracked status by the approved deadline, and records
+  unresolved copies without claiming complete erasure.
 - Given an unapproved network destination, when the isolated worker attempts
   egress, then the host policy refuses it and emits only bounded operational
   telemetry without subject or credential material.
@@ -570,6 +701,12 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
   auth-scope change and cache TTL expiry, then the client never uses an old
   nonce, never duplicates provider dispatch, and communicates whether the
   bounded tab-memory draft remains available.
+- Given expired, denied, offline, rate-limited or socket-dropped renewal, then
+  the interface exposes an accessible retryable or unresolved state, preserves
+  the held draft within its documented cache bounds, and never dispatches a
+  provider request. Keyboard and screen-reader announcements cover expiry,
+  pending, success, failure and resend; narrow-screen behavior passes the
+  served-build visual gate.
 - Given auth-generation change, membership-epoch replacement, account deletion,
   conversation deletion or membership removal, then existing lifecycle cleanup
   remains correct and is not delayed by the retention sweep.
@@ -613,42 +750,79 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    security tests. Verify unauthorized column denial before qualification.
    The estimate is at least 35 files across six subsystem roots and exceeds
    the split threshold.
-3. **Bounded holder-worker foundation:** update and review the dedicated-host
-   Terraform, systemd/cgroup worker, network and egress policy, operation-scoped
-   read-only DB identity, separate verifier and authority revocation, vault
+3. **Holder-evidence privacy and service review:** establish the separate
+   purpose, basis, subject categories, roles, Article 14 assessment, DPIA
+   screening, source-specific contracts/transfers, exact service/project/region
+   inventory, three allowlisted schemas, per-copy retention and rights rules,
+   and restore/erasure coverage defined above. Run the GDPR gate and obtain
+   independent CLO review. Do not prepare exact collection commands until this
+   review clears; accepted Codex notice policy is not collection authority.
+4. **Bounded holder-worker foundation:** record the selected trust boundaries
+   and failure semantics in a new architecture decision after rechecking the
+   decision ordinal. Add a reviewed nonsecret primary-app
+   Supabase endpoint-and-port manifest first; then update and review the
+   dedicated-host Terraform, systemd/cgroup worker, network and egress policy, operation-scoped
+   read-only DB identity, off-host durable deadline/revocation authority,
+   server-enforced expiring database credential, separate verifier and vault
    fencing, restoration and no-SSH observability before code. Keep host creation
    disabled by default. Before any apply, recheck EU stock and cost, record the
    chosen server type and location, and obtain the exact command's explicit
-   operator authorization. Test busy loops, descendants, pending transactions,
-   stale-generation reconnect, vault restore/deletion and verifier outage using
-   only disposable infrastructure. Independent review must confirm the
-   supervisor and backend absence evidence before this phase clears. Do not
+   operator authorization. Test busy loops, pending transactions, synchronous
+   blocks, stubborn descendants, revocation ordering, active sessions, repeated
+   short transactions, scheduler restart/queue/outage, measured deadline-job
+   maximum lag, server-side credential lease expiry, stale-generation reconnect,
+   vault restore/deletion and verifier outage using only disposable
+   infrastructure. Independent review
+   must confirm supervisor and backend absence evidence before this phase
+   clears. Do not
    prepare exact collection commands while any item remains open.
-4. **Slice A — request-time rights snapshot:** add RED tests for atomic
+5. **Collection command gate:** only after Phases 3–4 clear, prepare the exact
+   source, target, operation, scope, schema, version-pinned collection command
+   and a no-op render/hash. Obtain independent technical, GDPR and CLO review
+   of the exact command bytes. Request the separate explicit collection
+   authorization only after that review; execute only the authorized bytes.
+   Record operation ID/generation, start/stop, bounded result and deletion
+   evidence. Partial, timed-out, revoked or unknown outcomes stay fenced and
+   stop before reconciliation.
+6. **Writer-window command gate:** only after collection has a complete,
+   independently verified result, prepare the exact writer-window commands
+   against the observed evidence, target and migration hashes. Obtain a new
+   independent review and a separate explicit writer-window authorization.
+   Never reuse collection authorization. If either review or authorization is
+   absent, no writer window or reconciliation proceeds.
+7. **Reconciliation, schema equivalence and rehearsal:** reconcile only after
+   both preceding gates clear; verify exact source/schema equivalence and run
+   the approved rehearsal, keeping writes disabled until the writer-window
+   authorization is active. Preserve evidence of before/after state and stop on
+   any mismatch.
+8. **RLS parity and Slice A — request-time rights snapshot:** first prove the
+   disposable-database table/column grant registry matches effective grants
+   for all three API roles. Then add RED tests for atomic
    admission-time capture, same-request retry versus new request, completed-job
    non-reuse, job-bound worker reads, email admission, tenant scope, snapshot
    deletion/restore and no nonce/hash. Implement and QA this slice in a
    companion PR stacked on the held #9051 feature branch.
-5. **Slice B — lifetime, cleanup and renewal:** add RED tests for contract-role
+9. **Slice B — lifetime, cleanup and renewal:** add RED tests for contract-role
    refusal before issuance/provider admission, post-lock clock boundary,
    same-nonce and replacement timestamp, one-minute bounded `pg_cron`, backlog
    health, issuance refusal, rollback erasure coverage, renewal protocol/UI,
    cache expiry and exactly-one explicit resend. Commit the `.pen` before UI
    coding. Implement this dependent slice on Slice A; keep all six asks in one
    completion gate across the stack.
-6. **Offline integration and QA:** use only disposable PostgreSQL and
+10. **Offline integration and QA:** use only disposable PostgreSQL and
    synthesized fixtures, with no ambient shared DB/provider credentials. Run
    focused migration/DSAR/handler/client/UI suites, RLS fuzz, typecheck,
    screenshots, TOM4/legal cross-document checks and repository static gates.
    Verify archive and logs never contain raw nonce/hash. Run `soleur:gdpr-gate`,
    CLO review, exact-head code review, QA and preflight on both slices and the
    final integrated head.
-7. **Records and qualification:** append dated migration-conditioned
+11. **Records and qualification:** append dated migration-conditioned
    PA-2/compliance records and update the DPA, privacy and GDPR artifacts and
    their mirrors only after final CLO verification. Later runtime qualification
    still requires fresh exact-head recovery, provider permission for the exact
    route, current served-build renewal tests, fresh approved shared evidence,
-   writer exclusion and all recovery gates. Keep customer content blocked until
+   verified no-writer activity outside the authorized window, and all recovery
+   gates. Keep customer content blocked until
    that separate clearance exists.
 
 ## Observability
@@ -663,13 +837,13 @@ error_reporting:
   destination: "Sentry web-platform through Vector journald/host_metrics and the existing Sentry monitor inventory, correlated to the deployed release SHA; events contain aggregate state only, never subject IDs, receipt bodies, credentials or provider payloads"
   fail_loud: "A deadline revokes the generation before killing the full cgroup; stop is reported only after a separate verifier confirms zero operation sessions/transactions/locks. Unknown supervisor, revocation or verifier state keeps the fence held and refuses new credentials/work. Expiry rejects stale delivery/acknowledgment; unhealthy cleanup blocks issuance; a failed DSAR snapshot prevents archive publication"
 failure_modes:
-  - mode: "Collector busy-loops, forks descendants or exceeds its systemd deadline"
-    detection: "Layer 3 Vector journald ships systemd/cgroup exit and forced-kill status; Layer 4 Vector host_metrics shows a worker still consuming resources"
+  - mode: "Collector busy-loops, blocks synchronously, forks descendants or exceeds its systemd start deadline"
+    detection: "Layer 3 Vector journald ships systemd/cgroup timeout and forced-kill status; Layer 4 Vector host_metrics shows a worker still consuming resources"
     alert_route: "Web Platform engineering on-call; collector status command reports the bounded operation state"
-  - mode: "Authority revocation fails or the independent verifier still sees an operation session, transaction or lock"
-    detection: "Layer 3 Vector journald records only bounded transition codes; an independent verifier result is persisted in the control record and mirrored to the Sentry monitor"
+  - mode: "Deadline/revocation authority, server-side credential lease, or independent verifier fails"
+    detection: "Layer 3 Vector journald records bounded transition codes; authority acknowledgment and independently observed sessions/transactions/locks are persisted in the control record and mirrored to the Sentry monitor"
     alert_route: "Web Platform engineering on-call; keep the operation fence held"
-  - mode: "Collector or gateway attempts an unapproved network destination"
+  - mode: "Collector or gateway attempts an unapproved destination, or resolver returns a private/special-use address"
     detection: "Layer 3 Vector journald ships host nftables/proxy refusal codes; Layer 4 Vector host_metrics exposes unexpected egress volume"
     alert_route: "Web Platform engineering on-call; operation is refused"
   - mode: "Delivery repair or acknowledgment reaches the expiry boundary"
@@ -688,9 +862,9 @@ logs:
   where: "Sentry monitor events, Vector-shipped systemd/nftables/proxy status, independent verifier result and bounded pg_cron status; aggregate counts/ages only"
   retention: "Existing Sentry and database cron metadata retention; CLO must approve retention for worker, revocation and verifier records before qualification"
 discoverability_test:
-  command: "(planned) bash apps/web-platform/scripts/holder-collector-status.sh prd"
-  expected_output: "collector_health=healthy; active_sessions=0; verifier_fresh=true"
-  credentials_required: "Doppler read-only status and separately authenticated observer credentials; no database URL or secret in process arguments, logs or output"
+  command: "(planned) bash apps/web-platform/scripts/holder-collector-status.sh prd && bash apps/web-platform/scripts/codex-notice-retention-status.sh prd"
+  expected_output: "collector_health=healthy; active_sessions=0; verifier_fresh=true; notice_retention_health=healthy; expired_backlog=0; oldest_expired_age_seconds<300"
+  credentials_required: "Doppler read-only status and separately authenticated observer credentials; no database URL or secret in process arguments, logs or output; neither command exists yet"
 ```
 
 The planned status command must query only bounded aggregate health, use TLS
@@ -709,7 +883,7 @@ it must not be treated as available until added and tested.
 | 3 [issue #11170] | "Cover all issuance/delivery/consume paths, expiry boundaries, ownership/generation/membership fences, erasure and failure observability." | Data-flow inventory; both slices; lifecycle, backlog-age and failure tests | mapped |
 | 4 [issue #11170] | "Preserve unsent messages and explicit resend; expiry/acknowledgment must never dispatch a provider request." | Reachable metadata-only renewal and explicit resend; Slice B; wireframe/client/server tests | mapped |
 | 5 [issue #11170] | "Preserve all existing migration SQL bytes; use a reviewed forward correction if schema/functions must change." | Both forward migrations; stacked branch topology; Data Safety and Rollback | mapped |
-| 6 [issue #11170] | "Obtain source CPO/user-impact, GDPR and CLO reviews; retain all independent hosted-auth/provider, runtime and shipping holds." | User-Brand Impact; Legal and Operator Decisions; Phases 1, 5 and 6; final acceptance criteria | mapped |
+| 6 [issue #11170] | "Obtain source CPO/user-impact, GDPR and CLO reviews; retain all independent hosted-auth/provider, runtime and shipping holds." | User-Brand Impact; Legal and Operator Decisions; Phases 1, 3, 10 and 11; final acceptance criteria | mapped |
 | 7 [PR #9051 continuation] | "Complete the bound collector, independent authority, vault, workers, fencing, restoration, technical and GDPR/CLO reviews." | Bounded holder-evidence worker prerequisite; systemd/cgroup, authority revocation, independent verifier, separate vault, isolated network and offline fault suite | mapped |
 
 ### Plan-Item Provenance
@@ -721,7 +895,7 @@ it must not be treated as available until added and tested.
 | Reachable renewal action, held-cache disclosure and explicit resend tests with committed `.pen` | ask 4 | asked |
 | Ownership/generation/membership/erasure checks and lifecycle integration coverage | ask 3 | asked |
 | Independent cleanup freshness/backlog/oldest-expired-age monitoring and no-SSH discoverability probe | "Cover all issuance/delivery/consume paths, expiry boundaries, ownership/generation/membership fences, erasure and failure observability." — issue asks 3 | asked |
-| Dedicated bounded holder-evidence worker, operation-scoped DB principal, durable revocation, independent session verifier, separate vault, network/egress gateway and restore tests | "Complete the bound collector, independent authority, vault, workers, fencing, restoration, technical and GDPR/CLO reviews." — PR #9051 continuation | asked |
+| Dedicated bounded holder-evidence worker, operation-scoped DB principal, off-host durable deadline/revocation, server-side credential lease, independent session verifier, separate vault roles, network/egress gateway and restore tests | "Complete the bound collector, independent authority, vault, workers, fencing, restoration, technical and GDPR/CLO reviews." — PR #9051 continuation | asked |
 | TOM 4/DPA and PA-2/compliance wording updates | — | inferred — required so the processing records match the reviewed implementation and do not make an inaccurate legal commitment; CLO approval remains a prerequisite. |
 | Keep hosted-auth/provider, runtime, data and shipping holds; preserve PR #9051 draft/off state | "Obtain source CPO/user-impact, GDPR and CLO reviews; retain all independent hosted-auth/provider, runtime and shipping holds." — issue ask 6 | asked |
 | Probe only the cleanup status through a credential-safe, no-SSH command | — | inferred — required by the production observability gate; its code and credentials remain unimplemented until approval and review. |
@@ -734,7 +908,7 @@ it must not be treated as available until added and tested.
 | `server/ws-handler.ts` | asks 3 and 4 | asked |
 | `server/inngest/functions/`, `server/inngest/cron-manifest.ts`, `infra/sentry/cron-monitors.tf` | asks 2 and 3 | asked; exact files depend on Phase 2 inventory |
 | `scripts/codex-notice-retention-status.sh` | — | inferred — required by the no-SSH observability gate; see justification above |
-| `apps/web-platform/infra/holder-collector.tf`, dedicated private network/subnet, egress gateway, firewall/route resources, cloud-init, worker/gateway systemd, nftables and proxy templates, and `infra/tests/holder-collector-*` | PR #9051 continuation | asked; use the existing Terraform root and keep both servers disabled by default |
+| Reviewed nonsecret primary-app Supabase endpoint-and-port manifest; `apps/web-platform/infra/holder-collector.tf`, dedicated private network/subnet, egress gateway, firewall/route resources, cloud-init, worker/gateway systemd, nftables and proxy templates, and `infra/tests/holder-collector-*` | PR #9051 continuation | asked; use the existing Terraform root and keep both servers disabled by default |
 | `apps/web-platform/scripts/holder-collector-status.sh`, offline process/cgroup/PostgreSQL fault tests, Vector/Sentry bindings and independent verifier checks | PR #9051 continuation and ask 3 | asked |
 | DSAR allowlist completeness and worker per-row tests | ask 1 | asked |
 | Focused DSAR, handler, migration, RLS and RPC-grant tests | asks 1–5 | asked |
@@ -771,10 +945,20 @@ it must not be treated as available until added and tested.
 
 - [ ] No exact holder-evidence collection command is prepared until an opt-in
       dedicated worker has an externally enforced systemd/cgroup deadline,
-      operation-scoped read-only DB identity, durable revocation fence,
-      independently authenticated backend-session verifier, and separately
-      identified encrypted vault with tested restore and erasure. Offline
-      fault tests and independent technical, GDPR and CLO reviews pass first.
+      operation-scoped read-only DB identity, database-enforced credential
+      lease, durable revocation fence, independently authenticated
+      backend-session verifier, and separately identified encrypted vault with
+      tested all-copy restore and erasure. The separate purpose, basis, subjects,
+      roles, Article 14 assessment, DPIA screening, service/transfer review,
+      allowlists, per-copy retention and rights handling must pass independent
+      technical, GDPR and CLO review first.
+- [ ] Exact collection commands are pinned, dry-rendered and independently
+      reviewed against the target and source revision before requesting a
+      separate explicit authorization for collection. After collection, exact
+      writer-window commands receive a new independent review and separate
+      explicit authorization. Neither authorization covers the other action.
+      Partial/timed-out/revoked/unknown outcomes remain fenced and cannot enter
+      reconciliation or a writer window.
 - [x] CPO and user-impact-reviewer sign off the single-user impact framing and
       priority; the advisory GDPR gate runs and records its retention finding.
 - [x] CLO proposes purpose/basis, maximum lifetime, Article 15/20 and
@@ -790,13 +974,28 @@ it must not be treated as available until added and tested.
 - [ ] Archive and snapshot encryption, failure, first-download/expiry deletion,
       account erasure and PITR/restore lifecycles are verified before final CLO
       clearance.
+- [ ] Holder-evidence receipt, authority, report, tombstone, deletion-receipt
+      and telemetry schemas each have approved allowlists, necessity, access,
+      retention, deletion, rights and restore behavior. Filtered receipts expire
+      within 24 hours of capture across Firestore history, database, host/volume
+      snapshots, temporary files, dumps, logs and restored copies; an external
+      tombstone prevents resurrection and re-deletion is verified.
+- [ ] A CLO-approved rights process covers people represented in holder
+      evidence across receipts, reports, authority records, tombstones,
+      telemetry, backups and restored copies; it records identity/scope checks,
+      response status, applicable deadline and unresolved copies separately
+      from the Codex request-time export lifecycle.
 - [ ] Expiry is enforced by the database at delivery and acknowledgment; same
       nonce retries cannot renew lifetime, new notices follow the approved
       timestamp rule, and cleanup is indexed, bounded and monitored.
 - [ ] Expiry, acknowledgment, cleanup, renewal and recovery never dispatch
       provider work by themselves. A committed `.pen` precedes UI code, and the
       client requires a fresh notice, fresh acknowledgment and separate explicit
-      resend while accurately describing its 30-minute tab-cache limit.
+      resend while accurately describing its 30-minute tab-cache limit. Expired,
+      denied, offline, rate-limited and socket-dropped states are retryable or
+      explicitly unresolved without losing the held draft inside its cache
+      bounds. Keyboard, screen-reader and narrow-screen checks cover expiry,
+      pending, success, failure and resend.
 - [ ] Contract-subject eligibility is checked before notice issuance and
       provider admission; team or owner role alone never qualifies.
 - [ ] Migration/DSAR/handler tests pass with synthesized fixtures in an
@@ -806,6 +1005,10 @@ it must not be treated as available until added and tested.
 - [ ] The PA-2/compliance and DPA records accurately describe the final
       processing, access, expiry, roles and deletion behavior, conditioned on
       the reviewed migration. CLO verifies the final wording.
+- [ ] Before holder-evidence collection, source-specific services/projects,
+      regions, recipients, support access, DPAs, processor roles, data location
+      and transfer safeguards are verified. Any required processing records
+      and privacy disclosures are updated and published after CLO approval.
 - [ ] A one-minute database-owned `pg_cron` sweep has measured batch capacity;
       independent monitoring detects backlog/oldest expired age before the
       five-minute allowance, new issuance refuses unhealthy retention, and
@@ -822,6 +1025,7 @@ it must not be treated as available until added and tested.
 - DSAR snapshot/job lifecycle migrations and tests — fresh request versus retry, deletion, account erasure, encryption, PITR and restore behavior.
 - `apps/web-platform/server/ws-handler.ts`, `lib/types.ts`, `lib/ws-zod-schemas.ts`, `lib/ws-client.ts`, and chat UI — fresh nonce renewal, acknowledgment and separate explicit resend.
 - A committed Pencil `.pen` wireframe before any renewal UI implementation; served-build screenshot tests afterward.
+- Reviewed nonsecret primary-app Supabase pooler endpoint-and-port manifest as the sole input to worker configuration and proxy ACLs; never reuse the endpoint for the separate Inngest project.
 - `apps/web-platform/infra/holder-collector.tf`, dedicated private network/subnet,
   egress gateway, firewall/route resources, cloud-init, systemd units, nftables
   and authenticated proxy templates; all new hosts disabled by default.
@@ -829,6 +1033,8 @@ it must not be treated as available until added and tested.
   adapter, Vector/Sentry monitoring bindings and offline process/cgroup/
   PostgreSQL supervisor fault tests. These are planned artifacts, not present
   capabilities.
+- `knowledge-base/engineering/architecture/decisions/ADR-<rechecked-ordinal>-bounded-holder-evidence-worker.md` — choose a qualified database-side deadline/termination substrate with measured maximum lag, or a no-go/different substrate; record service boundaries, vault roles, egress, recovery and fail-closed held states. Recheck ordinal before creation.
+- `knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/holder-provider-coverage-design.md` source projections, source-specific service/contract/data-flow assessment, receipt/authority/log schemas, rights and retention matrix, and all-copy restore/erasure evidence; legal disclosures only after CLO approval.
 - `apps/web-platform/scripts/codex-notice-retention-status.sh` and the existing off-host monitoring/Sentry cron-monitor binding — no-SSH aggregate status probe, oldest-expired-age signal and freshness check; do not add a second cleanup scheduler.
 - `apps/web-platform/test/dsar-allowlist-completeness.test.ts`, `test/dsar-worker-per-row-where.test.ts`, focused DSAR/handler/client/UI/migration integration tests and RLS/RPC-grant tests.
 - `scripts/check-tom4-rls-posture.sh`, its mutation suite and `knowledge-base/legal/data-processing-agreement-template.md` — keep the table RPC-only and outside WORM; update the legal wording only after CLO review.
@@ -857,7 +1063,7 @@ it must not be treated as available until added and tested.
 3. Which existing independent off-host monitor can read oldest-expired age and
    freshness inside the five-minute window, and what measured cleanup batch
    rate proves capacity under lock contention?
-4. Before any infrastructure apply, which EU location and currently orderable
-   server type meet the isolation and cgroup requirements at an acceptable
-   monthly cost? Recheck stock and pricing at that later authorization gate; do
-   not apply infrastructure as part of plan review.
+4. What reviewed nonsecret source will pin the primary app project's Supabase
+   pooler FQDN and port for both worker configuration and proxy ACLs? The repo
+   has no such endpoint today; do not infer it from the separate Inngest
+   project's pooler. Add and validate the manifest before egress implementation.

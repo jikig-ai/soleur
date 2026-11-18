@@ -221,3 +221,16 @@ outside effective wall-clock bounds. This requires a process boundary and
 independent backend observer, not another promise race. A collaboration agent
 listing call also failed because it was passed an unsupported `timeout_ms`
 field; call `list_agents` with its declared `path_prefix` field only.
+
+The later plan-review continuation made two path/patch mistakes: it first
+looked for the canonical `go.md` one directory above its actual
+`local/commands/` location, and several `apply_patch` hunks failed because
+their expected context was guessed or malformed. Resolve paths from the loaded
+skill's own relative references, and re-read the exact target lines before
+each patch; a rejected patch changes nothing and is not evidence the edit
+landed. The first `cleanup-merged` run from the isolated linked worktree
+reported `SOLEUR_GIT_BARE_POISON` and was interrupted while waiting; its exit
+130 was not success. Rerunning the required cleanup from the shared repository
+root completed with exit 0, reaped five evidence-qualified merged worktrees,
+kept the PR recovery/original worktrees, and updated main. A shared tmp sweep
+still skipped due lock contention, as its explicit marker reported.
