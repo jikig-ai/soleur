@@ -478,3 +478,27 @@ describe("grep row: the held line, ccPushPromptAddendum, the push tool descripti
     }
   });
 });
+
+describe("pattern P3-11: the KB-exclude pathspec has one spelling, and the agent's listing command uses it", () => {
+  it("the listing command names KB_EXCLUDE_PATHSPEC, the same pathspec the count diffs with", async () => {
+    const { KB_EXCLUDE_PATHSPEC } = await import("@/server/kb-root");
+    const text = buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: "2026-11-12T10:00:00.000Z", route: "registered", runner: "cc", onRecovered: 0, defaultBranch: "main" });
+    expect(text).toContain(`\`git diff --name-only origin/main...HEAD -- . '${KB_EXCLUDE_PATHSPEC}'\``);
+  });
+
+  it("no server module spells the `:(exclude)` magic except server/kb-root.ts (comments excluded)", async () => {
+    const { readdirSync, statSync } = await import("node:fs");
+    const { relative } = await import("node:path");
+    const { stripComments } = await import("./approval/source-scan");
+    const APP = join(__dirname, "..");
+    const walk = (d: string): string[] =>
+      readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : /\.tsx?$/.test(f) ? [join(d, f)] : []));
+    const spelled = walk(join(APP, "server"))
+      .filter((abs) => {
+        const src = readFileSync(abs, "utf8");
+        return /\(exclude\)|:!/.test(src) && /\(exclude\)|:!/.test(stripComments(src, abs));
+      })
+      .map((abs) => relative(APP, abs));
+    expect(spelled).toEqual(["server/kb-root.ts"]);
+  });
+});

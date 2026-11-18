@@ -27,7 +27,7 @@ import type { Logger } from "pino";
 import { firstAppFrame } from "@/server/error-frame";
 import { validateBranchFormat } from "@/server/branch-validation";
 import { hasUntrackedCollision } from "@/server/workspace-collision";
-import { KB_ROOT } from "./kb-root";
+import { KB_EXCLUDE_PATHSPEC, KB_ROOT } from "./kb-root";
 
 // Re-declared as local constants typed by the shared union (the union is the
 // source of truth; these are the literal members, NOT a new union). Kept local
@@ -652,7 +652,7 @@ async function selfHealNonFastForward(
       const nonKbHeld =
         (await diffQuietExit(
           runLocal,
-          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `${target}...HEAD`, "--", ".", `:(exclude)${KB_ROOT}/`],
+          ["diff", "--quiet", "--no-ext-diff", "--no-textconv", `${target}...HEAD`, "--", ".", KB_EXCLUDE_PATHSPEC],
           gitOpts,
         )) === 1;
       const kbHeld =

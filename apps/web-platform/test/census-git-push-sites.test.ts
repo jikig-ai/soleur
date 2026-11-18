@@ -89,6 +89,7 @@ const TOKEN_FREE_IMPORTS: Record<string, string[]> = {
     "./approval/workspace-head HEX40",
     "./git-isolated-local runIsolatedGitLocal",
     "./git-isolated-local verifyObject",
+    "./kb-root KB_EXCLUDE_PATHSPEC",
     "./kb-root KB_ROOT",
   ],
   "server/kb-sync-pull.ts": [
@@ -126,7 +127,7 @@ const TOKEN_FREE_IMPORTS: Record<string, string[]> = {
     "./approval/workspace-head SmallFileError",
     "./approval/workspace-head readSmallRegularFile",
     "./git-isolated-local runIsolatedGitLocal",
-    "./kb-root KB_ROOT",
+    "./kb-root KB_EXCLUDE_PATHSPEC",
     "./logger createChildLogger",
     "@/lib/kb-sync-held-copy HELD_FILES_RENDER_MAX",
     "node:fs lstatSync",

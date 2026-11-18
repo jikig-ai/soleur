@@ -30,6 +30,7 @@
 import { formatHeldCount, isRenderableHeldCount } from "@/lib/kb-sync-held-copy";
 import { DeadlineExceededError, withDeadline, type CcPushRegistrationReason } from "./cc-github-push";
 import { AUTOSTASH_PIN_PREFIX } from "./connected-repo-git";
+import { KB_EXCLUDE_PATHSPEC } from "./kb-root";
 import { RECOVERED_REF_PREFIX, STORE_TIP_REF_PREFIX } from "./kb-sync-held";
 import type { KbPullHeldReason } from "./kb-sync-pull";
 import { mirrorWarnWithDebounce } from "./observability";
@@ -139,7 +140,7 @@ export function buildKbSyncHeldAgentLine(input: KbSyncHeldLineInput): string | n
       `pushing ${them} to another branch or opening a pull request does not clear the count. ` +
       "The count can lag behind a merge: if the user asks which files are still counted, or says " +
       `${they} ${one ? "was" : "were"} already merged, list ${them} with the command below before pushing anything again.`,
-    `To list ${them}, run \`git diff --name-only ${base}...HEAD -- . ':(exclude)knowledge-base/'\` ` +
+    `To list ${them}, run \`git diff --name-only ${base}...HEAD -- . '${KB_EXCLUDE_PATHSPEC}'\` ` +
       `(\`${base}\` is as of the last update from GitHub, so the list can differ slightly from the count).`,
   ];
 

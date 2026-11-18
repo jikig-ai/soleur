@@ -12,7 +12,7 @@ import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME } from "./agent-git-identity";
 import { HEX40 } from "./approval/workspace-head";
 import { runIsolatedGitLocal, verifyObject } from "./git-isolated-local";
 import type { IsolatedPushDirHandle } from "./git-isolated-push-dir";
-import { KB_ROOT } from "./kb-root";
+import { KB_EXCLUDE_PATHSPEC, KB_ROOT } from "./kb-root";
 
 /** A local step failed: the child could not run (`local_git_failed`, D13) or the hand-over did not land (`unpack_failed`). */
 export type KbObjectsErrorReason = "local_git_failed" | "unpack_failed";
@@ -25,9 +25,6 @@ export class KbObjectsError extends Error {
 }
 
 export const TREE_MODE = "40000";
-
-/** The pathspec that excludes the knowledge base: `:(exclude)knowledge-base/` (the one spelling, pattern P3-11). */
-export const KB_EXCLUDE_PATHSPEC = `:(exclude)${KB_ROOT}/`;
 
 export interface TreeEntry {
   readonly mode: string;

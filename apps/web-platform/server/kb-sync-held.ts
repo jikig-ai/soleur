@@ -38,7 +38,7 @@ import { HELD_FILES_RENDER_MAX } from "@/lib/kb-sync-held-copy";
 import { HEX40, readSmallRegularFile, SmallFileError } from "./approval/workspace-head";
 import { runIsolatedGitLocal } from "./git-isolated-local";
 import type { IsolatedPushDir } from "./git-hardened-env";
-import { KB_ROOT } from "./kb-root";
+import { KB_EXCLUDE_PATHSPEC } from "./kb-root";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("kb-sync-held");
@@ -69,7 +69,6 @@ const RECOVERED_REF = /^refs\/heads\/soleur\/recovered-kb-sync-[0-9A-Za-z_-]{1,6
 const STORE_TIP_REF = /^refs\/heads\/soleur-store-tip-[0-9a-f]{12}$/;
 const LOOSE_REF_MAX_BYTES = 64;
 const PACKED_REFS_MAX_BYTES = 1024 * 1024;
-const EXCLUDE_KB = `:(exclude)${KB_ROOT}/`;
 
 export interface HeldFiles {
   /** Distinct non-KB files on HEAD and every set-aside tip, clamped to 0..HELD_FILES_MAX. The stored value. */
@@ -126,7 +125,7 @@ async function nonKbFiles(isolated: IsolatedPushDir, range: readonly string[], d
   if (remaining <= 0) throw new HeldCountFailure("budget");
   const r = await runIsolatedGitLocal(
     isolated,
-    ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", ...range, "--", ".", EXCLUDE_KB],
+    ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", ...range, "--", ".", KB_EXCLUDE_PATHSPEC],
     { timeoutMs: remaining },
   );
   if (r.timedOut) throw new HeldCountFailure("budget");
