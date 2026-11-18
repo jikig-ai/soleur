@@ -921,7 +921,7 @@ grader), and the change adds no external API.
 - [ ] AC14: ADR-263 carries the 2026-11-18 addendum (including the G1 overflow fix and the AP-027 residual) and
       the supersession blockquote; ADR-068 carries the floor pointer; `model.c4` edits land and
       `c4-model-freshness`, `c4-count-parity`, `c4-code-syntax` and `c4-render` are green.
-- [ ] AC15: Both runbooks name the floor and the grader as serve preconditions.
+- [x] AC15: Both runbooks name the floor and the grader as serve preconditions.
 - [ ] AC16: The PR body says `Closes #12849`, `Ref #12008`, `Ref #9421`, and carries the Operator Holds below.
 - [x] AC17: A refusal is a red job whose `::error::` line names the reason, so the dispatcher is alerted, not
       only the log (CPO concern 1).
