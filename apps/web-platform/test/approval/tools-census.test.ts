@@ -181,7 +181,7 @@ describe("cc registration sweep (derived from the registry function)", () => {
       workspacePath: "/tmp/ws",
       webEgressEntitled: true,
       grants: new ExecutionGrants(),
-      isEnabled: async () => true,
+      readFlag: async () => ({ value: true, fellBack: false }),
       lookupDefaultBranch: async () => "main",
     });
   }, 120_000);

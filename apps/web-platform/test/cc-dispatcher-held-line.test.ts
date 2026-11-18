@@ -48,6 +48,7 @@ const {
   mockResolveSandboxUnixDeny,
   mockPushBranch,
   mockApprovalFlag,
+  mockRefreshHeldCount,
   mockGithubApiGet,
   mockHeadSha,
   registrarOverride,
@@ -67,6 +68,7 @@ const {
   // per-test switch (default OFF = the dark path); the default-branch lookup and the workspace HEAD are canned.
   mockPushBranch: vi.fn(async (_o: Record<string, unknown>) => ({ branch: "feat-x", pushed: true })),
   mockApprovalFlag: vi.fn(async (): Promise<unknown> => false),
+  mockRefreshHeldCount: vi.fn(async () => undefined),
   mockGithubApiGet: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ default_branch: "trunk" })),
   mockHeadSha: vi.fn(async () => "d".repeat(40)),
   mockResolveSandboxUnixDeny: vi.fn(async () => false),
@@ -446,10 +448,21 @@ vi.mock("@/server/cc-github-read", async (importOriginal) => {
 });
 
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
+// #12704 D40(1): the registrar reads the detailed shape; it wraps the same switch (a throw is the module's "error").
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
   isApprovalQueueEnabled: mockApprovalFlag,
+  readApprovalQueueFlagDetailed: async (identity: unknown) => {
+    try {
+      return { value: (await mockApprovalFlag(identity)) === true, fellBack: false };
+    } catch {
+      return "error";
+    }
+  },
 }));
+
+// #12704 D39(a): the close-hook refresh is WP3's; here only the call is observed.
+vi.mock("@/server/kb-sync-held-refresh", () => ({ refreshHeldCount: mockRefreshHeldCount }));
 
 // #11636: the default-branch lookup. The file-wide github-app mock exposes only three exports, so the REAL github-api is kept
 // (importOriginal) and only githubApiGet is replaced; GitHubApiError and the rest must survive.
@@ -474,7 +487,7 @@ vi.mock("@/server/approval/gate", async (importOriginal) => {
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { __resetDispatcherForTests, dispatchSoleurGo, realSdkQueryFactory } from "@/server/cc-dispatcher";
+import { __resetDispatcherForTests, dispatchSoleurGo, handleCcCloseQuery, realSdkQueryFactory } from "@/server/cc-dispatcher";
 import { ccPushPromptAddendum } from "@/server/cc-github-push";
 import { buildKbSyncHeldAgentLine, buildKbSyncMergeBlockedAgentLine } from "@/server/kb-sync-held-agent-line";
 import { C4_PROMPT_ADDENDUM } from "@/server/c4-concierge-tools";
@@ -648,16 +661,20 @@ describe("cc held-files agent line (#12714)", () => {
   const CHECKED = "2026-11-17T09:05:41+00:00";
   const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
   const heldReads = () => mockTenantRpc.mock.calls.filter(([fn]) => fn === "get_workspace_kb_sync_held");
-  const heldWarnings = () => mockReportSilentFallback.mock.calls.filter(([, o]) => o?.op === "kb-sync-held-read");
+  // obs F7: a display-only read failure is a debounced WARNING (mirrorWarnWithDebounce), never an error-level report.
+  const heldWarnings = () => mockMirrorWarnWithDebounce.mock.calls.filter(([, o]) => o?.op === "kb-sync-held-read");
   /** Every RPC answer by workspace id; an unknown workspace answers zero rows (the RPC's non-member shape). */
   let rpcByWorkspace: Record<string, unknown>;
   const tmpDirs: string[] = [];
 
-  function held(workspaceId: string, files: unknown, checkedAt: unknown = CHECKED) {
-    rpcByWorkspace[workspaceId] = { data: [{ kb_sync_held_files: files, kb_sync_held_checked_at: checkedAt }], error: null };
+  function held(workspaceId: string, files: unknown, checkedAt: unknown = CHECKED, pullBlocked?: unknown) {
+    rpcByWorkspace[workspaceId] = {
+      data: [{ kb_sync_held_files: files, kb_sync_held_checked_at: checkedAt, ...(pullBlocked === undefined ? {} : { kb_sync_pull_blocked: pullBlocked }) }],
+      error: null,
+    };
   }
   const expected = (over: Partial<Parameters<typeof buildKbSyncHeldAgentLine>[0]> = {}) =>
-    buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED, route: "registered", defaultBranch: "trunk", ...over }) as string;
+    buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED, route: "registered", runner: "cc", defaultBranch: "trunk", ...over }) as string;
 
   /** Push-registration preconditions (flag on, entitled, repo, installation); a test turns one off. */
   function eligible(over: { flag?: unknown; repo?: boolean } = {}) {
@@ -723,11 +740,83 @@ describe("cc held-files agent line (#12714)", () => {
       expect(prompt()).not.toContain("github_push_branch");
     });
 
-    it("no repo connected (no registration attempted): the not-registered variant", async () => {
+    it("D41(d): no repo connected (repoUrl null) -> no line, like the Settings card", async () => {
       eligible({ repo: false });
       held("user-1", 2);
       await realSdkQueryFactory(makeArgs());
+      expect(prompt()).not.toContain(HELD_HEADING);
+    });
+
+    it.each([["cloning"], ["error"], ["not_connected"]])("D41(d): repo_status %s (not ready) -> no line", async (repoStatus) => {
+      eligible();
+      mockGetCurrentRepoStatus.mockResolvedValue({ repoStatus, repoError: null });
+      held("user-1", 2);
+      try {
+        await realSdkQueryFactory(makeArgs());
+      } catch {
+        // cloning/error refuse the dispatch (RepoNotReadyError): no Query, so no line either way.
+      }
+      for (const c of mockQuery.mock.calls) expect(c[0].options.systemPrompt as string).not.toContain(HELD_HEADING);
+    });
+
+    it("a repo but no installation (no registration attempted, installation read held): not-registered", async () => {
+      eligible();
+      mockResolveInstallationId.mockResolvedValue(null);
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
       expect(prompt()).toContain(expected({ route: "not-registered", defaultBranch: null }));
+    });
+
+    it("D40(2): no installation because the read failed (the strict re-read errors) -> transient, never 'not available for this workspace'", async () => {
+      eligible();
+      mockResolveInstallationId.mockResolvedValue(null);
+      const base = mockTenantRpc.getMockImplementation()!;
+      mockTenantRpc.mockImplementation(async (fn: string, a: { p_workspace_id?: string }) =>
+        fn === "resolve_workspace_installation_id" ? { data: null, error: { message: "boom" } } : base(fn, a),
+      );
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).toContain(expected({ route: "transient", defaultBranch: null }));
+      expect(prompt()).not.toContain("not available for this workspace");
+    });
+
+    it.each([
+      ["the strict read says entitled (the fail-closed read hid a blip)", () => mockResolveWebEgressStrict.mockResolvedValue(true), "transient"],
+      ["the strict read throws", () => mockResolveWebEgressStrict.mockRejectedValue(new Error("rpc down")), "transient"],
+      ["the strict read agrees: not entitled", () => mockResolveWebEgressStrict.mockResolvedValue(false), "not-registered"],
+    ] as const)("D40(2): entitlement false and %s -> %s", async (_n, strict, route) => {
+      eligible();
+      mockResolveWebEgress.mockResolvedValue(false);
+      strict();
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).toContain(expected({ route, defaultBranch: null }));
+    });
+
+    it("D40(2) lazy: with no renderable count, no strict re-read runs", async () => {
+      eligible();
+      mockResolveWebEgress.mockResolvedValue(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(mockResolveWebEgressStrict).not.toHaveBeenCalled();
+    });
+
+    it("D40(3): the lookup answers 404 (installation lost access) -> the reconnect variant", async () => {
+      eligible();
+      mockGithubApiGet.mockRejectedValue(Object.assign(new Error("GitHub API GET failed"), { name: "GitHubApiError", statusCode: 404 }));
+      held("user-1", 2);
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).toContain(expected({ route: "reconnect", defaultBranch: null }));
+      expect(prompt()).toContain("reconnect GitHub in Settings");
+    });
+
+    it("obs F12: one info line with the bucket, route, reason and runner, never the count", async () => {
+      eligible();
+      held("user-1", 12);
+      await realSdkQueryFactory(makeArgs());
+      const lines = mockLogInfo.mock.calls.filter(([o]) => (o as { op?: string })?.op === "kb-sync.held-agent-line");
+      expect(lines).toHaveLength(1);
+      expect(lines[0][0]).toMatchObject({ op: "kb-sync.held-agent-line", bucket: "10-99", route: "registered", mergeBlocked: "none", runner: "cc" });
+      expect(JSON.stringify(lines[0][0])).not.toMatch(/\b12\b/);
     });
 
     it("a flag read that throws (registrar reason flag-error) -> the transient 'not available right now' variant", async () => {
@@ -793,6 +882,9 @@ describe("cc held-files agent line (#12714)", () => {
       const [err, ctx] = heldWarnings()[0];
       expect(err).toBeNull();
       expect(ctx).toMatchObject({ feature: "cc-dispatcher", op: "kb-sync-held-read", message: "get_workspace_kb_sync_held read failed; no held-files line" });
+      // obs F10: a closed cause tag, never the error text.
+      expect(["rpc_error", "rejected"]).toContain(ctx.tags.cause);
+      expect(JSON.stringify(ctx)).not.toContain("socket hang up");
       // The Query is still built: an optional line never breaks the dispatch.
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });
@@ -842,6 +934,30 @@ describe("cc held-files agent line (#12714)", () => {
       expect(prompt()).toContain(buildKbSyncMergeBlockedAgentLine("unresolved_merge") as string);
     });
 
+    it.each([["untracked_collision"], ["merge_conflict_precheck"]])(
+      "D42: the self-heal's persisted %s (kb_sync_pull_blocked) -> its line, with the registrar's default branch",
+      async (blocked) => {
+        workspaceWith(["HEAD"]);
+        eligible();
+        held("user-1", null, CHECKED, blocked);
+        await realSdkQueryFactory(makeArgs());
+        expect(prompt()).toContain(buildKbSyncMergeBlockedAgentLine(blocked as "untracked_collision", "trunk") as string);
+      },
+    );
+
+    it("D42: an unfinished merge wins over a persisted refusal; an unknown value and a missing column add nothing", async () => {
+      workspaceWith(["MERGE_HEAD"]);
+      held("user-1", null, CHECKED, "untracked_collision");
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).toContain(buildKbSyncMergeBlockedAgentLine("unresolved_merge") as string);
+      expect(prompt()).not.toContain("held by an untracked file");
+      workspaceWith(["HEAD"]);
+      held("user-1", null, CHECKED, "merge_conflict");
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt()).not.toContain(MERGE_HEADING);
+      expect(prompt()).not.toContain("## Workspace");
+    });
+
     it("no merge state -> no line", async () => {
       workspaceWith(["HEAD"]);
       await realSdkQueryFactory(makeArgs());
@@ -860,6 +976,42 @@ describe("cc held-files agent line (#12714)", () => {
     });
   });
 
+  describe("D39(a): the close hook refreshes the held count (fire-and-forget)", () => {
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+    };
+
+    it("a ready, connected repo with an installation -> refreshHeldCount once at close, with the build's workspace", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      handleCcCloseQuery({ userId: "user-1", conversationId: makeArgs().conversationId });
+      await flush();
+      expect(mockRefreshHeldCount).toHaveBeenCalledTimes(1);
+      expect(mockRefreshHeldCount.mock.calls[0][0]).toEqual({
+        workspaceId: "user-1",
+        workspacePath: WORKSPACE_PATH,
+        installationId: 987654,
+        userId: "user-1",
+      });
+      // Drained: a second close does not refresh again.
+      handleCcCloseQuery({ userId: "user-1", conversationId: makeArgs().conversationId });
+      await flush();
+      expect(mockRefreshHeldCount).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["no repo", () => eligible({ repo: false })],
+      ["no installation", () => (eligible(), mockResolveInstallationId.mockResolvedValue(null))],
+      ["the support persona", () => eligible()],
+    ])("%s -> no refresh", async (name, setup) => {
+      setup();
+      await realSdkQueryFactory(makeArgs(name === "the support persona" ? { persona: "support" } : {}));
+      handleCcCloseQuery({ userId: "user-1", conversationId: makeArgs().conversationId });
+      await flush();
+      expect(mockRefreshHeldCount).not.toHaveBeenCalled();
+    });
+  });
+
   describe("readers census (W2, D29(3)): no tenant select carries the held columns", () => {
     const root = join(__dirname, "..");
     const src = (p: string) => readFileSync(join(root, p), "utf8");
@@ -872,10 +1024,12 @@ describe("cc held-files agent line (#12714)", () => {
       expect(s).not.toMatch(/kb_sync_held_/);
     });
 
-    it("the dispatcher reads the held columns ONLY through the RPC: no select names them, and the RPC is called once", () => {
+    it("the dispatcher reads the held columns ONLY through the one stored reader: no select names them, one call", () => {
       const s = src("server/cc-dispatcher.ts");
       expect(s).not.toMatch(/\.select\(\s*[`"'][^`"']*kb_sync_held_/);
-      expect(s.match(/\.rpc\(\s*"get_workspace_kb_sync_held"/g)).toHaveLength(1);
+      expect(s).not.toMatch(/get_workspace_kb_sync_held/);
+      expect(s.match(/\breadStoredKbSyncHeld\(/g)).toHaveLength(1);
+      expect(src("server/kb-sync-held-agent-line.ts").match(/\.rpc\(\s*"get_workspace_kb_sync_held"/g)).toHaveLength(1);
     });
   });
 
