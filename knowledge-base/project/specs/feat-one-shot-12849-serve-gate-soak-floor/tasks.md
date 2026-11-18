@@ -1,7 +1,8 @@
 # Tasks: serve gate soak floor and per-instance grader (#12849)
 
 Plan: `knowledge-base/project/plans/2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md`
-Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G11, all Ruled by CTO agent, 2026-11-18).
+Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G13 Ruled by CTO agent, 2026-11-18; one operator
+scope row pending: the G13 replace-path fix, plan default ships with #12869).
 
 ## Phase 1 — tests first (RED)
 
@@ -18,9 +19,13 @@ Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G11, all Ruled by CTO age
 - [ ] 1.6 Workflow wiring rows (grader step key set, order, `if:`, no tolerance, host parity, EXIT trap, helper
       source lines, grader value, no marker-name mention, knob census) plus committed mutation rows (G5).
 - [ ] 1.7 Executed rows on `sse_instance_soak` (rc loop 0,1,2,3,78,126,127; ambient `SOLEUR_FT_EARLIEST`; G10
-      decoy row; web-3 row; empty-host row).
-- [ ] 1.8 Executed rows on `sse_gate_chain_check` (Guard 4 rows, G8 rows, message texts, fenced summary).
-- [ ] 1.9 Stub-`gh` row for `scripts/serve-soak-evidence-last.sh`.
+      decoy row; web-3 row; empty-host row; G12 `NOT YET: no GREEN web-2 readiness row` row with the 90-day
+      replace next-step; `$GRADE` shape filter row; EXIT/TERM trap row).
+- [ ] 1.8 Executed rows on `sse_gate_chain_check` (Guard 4 rows, G8 rows, message texts, fenced summary, rc=1
+      returns 1); wiring rows for the inline `gate_rc` backstop, the bare (unwrapped) helper call, the guarded
+      helper load in both steps, and the step-level `SOLEUR_GATED_HOST: web-2`.
+- [ ] 1.9 Stub-`gh` rows for `scripts/serve-soak-evidence-last.sh` using the real tab-prefixed `gh run view --log`
+      format; the no-match line carries neither token; `headBranch`/`headSha` printed.
 - [ ] 1.10 Seam row in `lb-weight-gate-with-marker.test.sh` (G6).
 - [ ] 1.11 Raise `MIN_CASES`; per-section executed-row counters.
 - [ ] 1.12 `BASELINE_DECLARED_PROBES` 98 -> 99 in `preflight-discoverability-test.test.ts`.
@@ -28,26 +33,31 @@ Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G11, all Ruled by CTO age
 
 ## Phase 2 — the gate
 
-- [ ] 2.1 `lb-weight-gate.sh`: `SOAK_FLOOR_DAYS=3`, three-digit regex, floor checks, `EV_*` record, emission in
+- [ ] 2.1 `lb-weight-gate.sh`: `SOAK_FLOOR_DAYS=3`, `EV_KIND=` initialised above `fail()`, three-digit regex, floor checks, `EV_*` record, emission in
       `fail()` and the two pass emits, header comments.
 
 ## Phase 3 — helper, probe and workflow
 
 - [ ] 3.1 Create `scripts/lib/serve-soak-evidence.sh` (Part 2).
 - [ ] 3.2 Create `scripts/serve-soak-evidence-last.sh` (G11).
-- [ ] 3.3 `cf-lb-overlay.yml`: gate chain capture + EXIT trap + helper call; new grader step; job header comment.
+- [ ] 3.3 `cf-lb-overlay.yml`: gate chain capture (redirect after the wrapper path) + EXIT trap + step-level
+      `SOLEUR_GATED_HOST` + guarded helper load + bare helper call + inline `gate_rc` backstop; new grader step;
+      job header comment. Keep the inner `SOLEUR_GATED_HOST="web-2"` literal and the exact wrapper hand-off
+      (`g3_dbin_ok`).
 - [ ] 3.4 `infra-validation.yml` `pull_request` paths (grader, helper, probe).
 - [ ] 3.5 Grader comment above `SOAK_DAYS=3` (the line itself untouched).
 
 ## Phase 4 — records
 
-- [ ] 4.1 ADR-263 addendum and supersession blockquote; ADR-068 pointer.
+- [ ] 4.1 ADR-263 addendum (floor, cap, grader, `env -i`, residuals AP-027 / #12938 / #12939, the 6604 reader)
+      and supersession blockquote; ADR-068 pointer.
 - [ ] 4.2 `model.c4` edit; regenerate `model.likec4.json`; C4 tests.
-- [ ] 4.3 Runbooks: `cf-lb-a-record-gaplessness-verify.md` (new section + refusal table), `web-host-replace.md`.
+- [ ] 4.3 Runbooks: `cf-lb-a-record-gaplessness-verify.md` (new section + refusal table incl. `*_invalid`, id
+      `none`, the 90-day `NOT_YET` row), `web-host-replace.md`.
 
 ## Phase 5 — verification
 
-- [ ] 5.1 Three suites green; `python3 scripts/lint-guard-contract.py` on the plan; C4 tests; actionlint;
+- [ ] 5.1 Three suites plus `workspaces-luks-verify-workflow.test.sh` green; `python3 scripts/lint-guard-contract.py` on the plan; C4 tests; actionlint;
       shellcheck on the gate, grader, helper and probe.
 - [ ] 5.2 Run every by-hand mutation once; record each and the row it turned RED for the PR body.
 - [ ] 5.3 PR body: `Closes #12849`, `Ref #12008`, `Ref #9421`, Operator Holds.

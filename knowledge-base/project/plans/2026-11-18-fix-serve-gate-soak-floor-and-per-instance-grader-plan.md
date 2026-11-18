@@ -18,6 +18,43 @@ lane: cross-domain
 
 > Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-18 (after the 5-agent plan review and the CTO rulings G1-G13).
+**Sections enhanced:** Proposed Solution Parts 1-4, Technical Considerations, Attack Surface, Observability,
+Guard Contract, Implementation Phases 1 and 5, Files to Create/Edit, Acceptance Criteria, Test Scenarios,
+Dependencies & Risks, Sharp Edges.
+**Review agents used:** terraform-architect, infra-security, observability-coverage-reviewer, a
+verify-the-negative / post-edit self-audit pass, plus the plan-review panel (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer), a sharp-edges pass, and the CTO for every technical fork.
+
+### Key Improvements
+
+1. **A pre-existing floor bypass is closed (G1).** An unbounded soak value wraps in bash arithmetic
+   (`200000000000000 * 86400` is negative), so today's gate passes it at once. The knob is now capped at three
+   digits.
+2. **The step logic moves into a sourced, executed helper (G2-G4).** `scripts/lib/serve-soak-evidence.sh` holds
+   the one copy of the grammar, the mirror, the anti-vacuity re-check of each pass line's numbers (G8), the
+   grader rc mapping and the host check. Evidence emission moves into the gate's existing `fail()` (G3).
+3. **The grader runs without the job's Hetzner and Doppler credentials (G10).** It runs under `env -i` with only
+   its three Better Stack read credentials; a decoy row proves it.
+4. **Fail-closed wiring that does not depend on the helper alone.** An inline `gate_rc` backstop, a guarded
+   helper load with a named `::error::`, explicit `|| return 1` inside the helper, an EXIT/TERM trap in both
+   steps, `EV_KIND` initialised before any refusal under `set -u`, and `SOLEUR_GATED_HOST` bound at step level.
+5. **Discoverable without SSH.** A committed read-only probe (`scripts/serve-soak-evidence-last.sh`, G11) that
+   handles `gh run view --log`'s line prefix and reports the run's branch and SHA; every failure mode names its
+   layer; every refusal has a runbook action.
+
+### New Considerations Discovered
+
+- A web-2 instance older than 90 days can never pass the grader (90-day readiness lookback); kept fail-closed,
+  remedy is a replace (G12, #12938).
+- A replaced web-2 keeps the pool weight it found and can serve without the serve arm; recorded residual (G13,
+  #12939). Whether the fix joins this PR is an operator scope decision (plan default: ships with #12869).
+- `g3_dbin_ok` in `workspaces-luks-verify-workflow.test.sh` pins the gate step's exact wrapper hand-off, so the
+  stderr redirect must follow the wrapper path and no new code line may name the wrapper file or `DOPPLER_BIN`.
+- The grader's `$GRADE` text is printed only when it matches a fixed shape (workflow-command injection).
+
 ## Overview
 
 The web-2 serve gate (`apps/web-platform/infra/lb-weight-gate.sh`, reached only through
@@ -83,7 +120,11 @@ All decisions below are recorded in
      the invalid checks, so `0` keeps refusing as `*_invalid` (tests at `assert_rejects_with
      "GIT_DATA_LUKS_SOAK_DAYS=0 (floor)"` and its workspaces twin pin that).
 - Evidence line (D3, F1, F2; emission per G3). A small record (`EV_KIND EV_DAYS EV_SRC EV_MARKER EV_AGE EV_REQ`),
-  every field assigned in `NAME=` form so `scn_allow_parity` stays unchanged. `EV_KIND=git_data` and the other
+  every field assigned in `NAME=` form so `scn_allow_parity` stays unchanged. `EV_KIND=` (empty) is initialised
+  above `fail()`, before any refusal, in plain `NAME=` form (never `${EV_KIND-}`): the gate runs under `set -u`,
+  so a `fail()` that reads an unassigned `EV_KIND` on a TOP_/Condition A/B.1 refusal would abort before printing
+  `gate_fail sub_condition=` (self-audit A1; a by-hand mutation deleting the init must redden the
+  `TOP_gated_host_absent` row). `EV_KIND=git_data` and the other
   fields `none` at B.2 entry; after the B.5 pass emit, `EV_KIND=workspaces_luks` and the fields reset at B.6
   entry; after the B.10 pass emit, `EV_KIND=`. The fields fill as each value is computed:
   - `soak_days`: the value when it matched `^[1-9][0-9]{0,2}$`, else `invalid`. A raw non-matching value is
@@ -128,6 +169,9 @@ marker's Doppler name.
   says the gate's `fail()` and pass emit are the producer of `SOAK_EV_RE`.
 - `readonly SOAK_FLOOR_S=259200` (G8). The F8 parity row also pins it equal to the gate's
   `SOAK_FLOOR_DAYS * 86400` and the grader's `SOAK_DAYS * 86400`.
+- **Error handling inside the helper.** Every guarded command carries an explicit `|| return 1`; the helper
+  never relies on `set -e` inside its functions, because bash turns errexit off in a function called as
+  `fn || ...` or `if fn` (observability 6).
 - `sse_gate_chain_check <stderr-file> <gated-host> <rc>`: called by the gate chain step after the wrapper ran
   (F6, CTO plan-review findings 1-5):
   1. Write to `$GITHUB_STEP_SUMMARY` a `### §(c) gate chain soak evidence` heading, a ```` ```text ```` fence, the
@@ -146,7 +190,10 @@ marker's Doppler name.
      `::error::§(c) gate chain: gate passed but soak evidence for kind=<k> is missing or malformed - a code
      defect, not a soak wait; do not re-dispatch`, return 1.
 - `sse_instance_soak <gated-host> <grader-path>`: called by the grader step (D2, F3, F5, G7):
-  1. Refuse xtrace (`case "$-" in *x*) ... return 78`), as the relay step does.
+  1. Refuse xtrace (`case "$-" in *x*) ... return 78`), as the relay step does. Then arm an EXIT/TERM trap that,
+     unless a verdict line was already printed, prints and mirrors
+     `SOLEUR_INSTANCE_SOAK host=<host> grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH`, so a cancel
+     or timeout while `$GRADE` is buffering still leaves a verdict line (observability 3).
   2. Host check (`# until #12869`): a value other than `web-2` prints
      `SOLEUR_INSTANCE_SOAK host=<value|invalid> grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH`
      (`host=invalid` when the value does not match `^[a-z][a-z0-9-]{0,30}$`), mirrors it, `::error::` (the grader
@@ -155,16 +202,24 @@ marker's Doppler name.
   3. `rc=0; GRADE="$(env -i PATH="$PATH" HOME="$HOME" TMPDIR="${RUNNER_TEMP:-/tmp}" BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" SOLEUR_FT_EARLIEST= bash "$grader")" || rc=$?`.
      G10 (Ruled by CTO agent, 2026-11-18): the job's `Load infra credentials (tiered)` step writes `HCLOUD_TOKEN`
      and `TF_VAR_github_app_runtime_doppler_token` to `$GITHUB_ENV` before the gate chain, so the grader step
-     inherits them; `env -i` hands the grader only the names it reads. The empty `SOLEUR_FT_EARLIEST` means "no
+     inherits them; `env -i` hands the grader only the names it reads. The Better Stack password sits briefly in
+     `env`'s argv (`/proc/<pid>/cmdline`) until `env` execs `bash`; accepted, as the existing gate step does the same
+     with `env DOPPLER_TOKEN=...` and the value is masked in logs (infra-security 5). The empty `SOLEUR_FT_EARLIEST` means "no
      clock", so an unmet soak reads NOT YET, never a window FAIL.
   4. Map: 0 PASS, 1 FAIL, 2 NOT_YET, 3 CANNOT_ESTABLISH, anything else CANNOT_ESTABLISH with the real rc (F3).
   5. Print `SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=<n> verdict=<V>` on stderr, the grader's
-     own text (`$GRADE`) to the log, and `### per-instance soak grader (serve only)` plus a fenced copy of the line
+     own text (`$GRADE`) to the log only when it matches `^(PASS|FAIL|NOT YET|CANNOT ESTABLISH): [^\r]*$` and does
+     not start with `::` (else `grade_text=unprintable`): the grader is shared with the sweeper and may change, and
+     GitHub reads workflow commands on stdout and stderr (infra-security 3), and `### per-instance soak grader (serve only)` plus a fenced copy of the line
      to the summary (G9). `rc=0` if and only if `verdict=PASS`.
   6. Non-zero rc: `::error::` naming the verdict, "NOTHING planned, NOTHING applied", and the next step for that
-     verdict (spec-flow 4): NOT_YET - "read the grader's NOT YET text above: a read fault means retry now; a soak
-     wait means retry no earlier than the newest readiness row + 3 distinct green probe days; still NOT_YET more
-     than 4 days after readiness means the probe telemetry is dark (see the runbook)"; FAIL - "the soak of this
+     verdict (spec-flow 4, G12): before the `::error::`, the helper prints the grader's first line (`$GRADE`
+     head -1, filtered as in step 5) to the step log, not the summary. NOT_YET - "NOT_YET: read the grader line
+     above; if it says no GREEN web-2 readiness row and web-2 was created more than 90 days ago, replace the host
+     (web-host-replace.md) and wait for the 3-day soak; otherwise wait or check web-2 probe telemetry" (G12,
+     Ruled by CTO agent, 2026-11-18: the grader's readiness lookback is 90 days, `W2L_READY_LOOKBACK_D=90` in
+     `scripts/lib/web2-luks-rows.sh`, and the row is written once per instance, so an instance older than 90 days
+     stays fail-closed and must be replaced to re-serve; no grader or lib change; follow-up #12938); FAIL - "the soak of this
      instance is spoiled; investigate, a replace is the repair"; CANNOT_ESTABLISH with rc 3 - "Better Stack
      credentials or the shared helper are missing"; any other rc or `none` - "a code or wiring defect; do not
      re-dispatch". Return 1.
@@ -181,9 +236,22 @@ marker's Doppler name.
 - The first line keeps starting `GATE_OUT="$(env DOPPLER_TOKEN=` (the C.4-P1m6 mutant still lands). The wrapper's
   stderr is redirected to the file inside the `$( )`, and the rc is captured with `|| gate_rc=$?` (not `|| true`).
   Doppler's own stderr lands in the file too; it is replayed, never mirrored.
-- Source the helper (`# shellcheck source=scripts/lib/serve-soak-evidence.sh`) and call
-  `sse_gate_chain_check "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"`; the existing
-  `requires_runtime_bind_probe=true` check runs before the pass half of the call.
+- Add a step-level `env: SOLEUR_GATED_HOST: web-2` so the helper call can read the gated host (today the step's
+  `env:` holds only `DOPPLER_TOKEN_PRD` and `DOPPLER_TOKEN_LUKS_MARKER`, and `$SOLEUR_GATED_HOST` would be unbound
+  under `set -u`; self-audit A2). The inner `env` line keeps its literal `SOLEUR_GATED_HOST="web-2"` unchanged:
+  `g3_dbin_ok` in `workspaces-luks-verify-workflow.test.sh` strips exactly that token before pinning the wrapper
+  hand-off. The host-literal parity row reads both the step `env:` value and the inner literal.
+- Source the helper with the grader's own load pattern (`# shellcheck source=scripts/lib/serve-soak-evidence.sh`;
+  `source "$f" && declare -F sse_gate_chain_check >/dev/null || { echo "::error::serve-soak-evidence helper not
+  loaded ($f) - wiring defect, do not re-dispatch"; exit 1; }`; a wiring row pins it; observability 5) and call
+  `sse_gate_chain_check "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"` as a bare statement
+  (never inside `if`, `||` or `&&`, which would switch errexit off for it; a wiring row pins that). Directly after
+  it, an inline backstop `[[ "$gate_rc" -eq 0 ]] || exit 1`, so a refusal fails the step even if the helper
+  returned 0 by mistake (an executed row: rc 1 returns 1; a wiring row: the backstop line follows the call).
+  Order on a pass: the call's mirror half, then the existing `requires_runtime_bind_probe=true` check on
+  `GATE_OUT`, then the helper's pass re-check (split into `sse_gate_chain_mirror` and `sse_gate_chain_verify`
+  if one call cannot sit on both sides of the existing check). On a refusal the existing check is never reached
+  (terraform-architect 2).
 
 **3b. New step `per-instance soak grader (serve only)` (D2, F4, F5).**
 
@@ -193,7 +261,8 @@ marker's Doppler name.
 - `env:` exactly: `SOLEUR_GATED_HOST: web-2` and the three `BETTERSTACK_QUERY_HOST|USERNAME|PASSWORD:
   ${{ secrets.BETTERSTACK_QUERY_* }}` lines (the same secrets the job's `relay bind probe` step binds). No
   `secrets.` expression in the run body.
-- Run body: `set -euo pipefail`, source the helper, call
+- Run body: `set -euo pipefail`, source the helper with the same guarded load pattern (checking
+  `declare -F sse_instance_soak`), call
   `sse_instance_soak "$SOLEUR_GATED_HOST" "${GITHUB_WORKSPACE}/scripts/followthroughs/web2-luks-live-6931.sh"`.
 - Update the job's header comment (lines above `environment: web-platform-infra-apply`) to name the grader.
 
@@ -276,6 +345,8 @@ Every way the soak decision can be shortened or skipped on the serve path, and w
 | A workflow-side pin that hides a stray value | `p_guard` |
 | A second host keyed onto web-2's grader | F5 host refusal |
 | The grader (network calls) inheriting the job's Hetzner and Doppler-runtime credentials | G10 `env -i` allowlist + decoy row |
+| A replaced instance serves at the weight the replace found (`web2_lb_weight` defaults to 1; the replace job's `-target` set omits the pool) | Not covered here (predates this PR). Runbook drain-first step at `web-host-replace.md:245`; follow-up #12939 (drain on replace, or a replace pre-gate); G13 |
+| A web-2 instance older than 90 days | Fail-closed by design: grader NOT_YET, remedy is a replace (G12; #12938) |
 | A planted marker value in shared `prd` | Not covered (recorded residual in ADR-263: provenance is not asserted) |
 
 ## User-Brand Impact
@@ -314,20 +385,35 @@ error_reporting:
 
 failure_modes:
   - mode: "a prd soak value below the floor"
-    detection: "gate_fail sub_condition=B_*_soak_days_below_floor plus SOLEUR_SOAK_EVIDENCE source=env soak_days=<n> verdict=fail"
+    detection: "gate_fail sub_condition=B_*_soak_days_below_floor plus SOLEUR_SOAK_EVIDENCE source=env soak_days=<n> verdict=fail (layer 6: workflow run log + ::error:: + step summary)"
     alert_route: "red serve run to the dispatcher"
   - mode: "per-instance soak not met or not readable (NOT_YET, FAIL, CANNOT_ESTABLISH, unknown rc)"
-    detection: "SOLEUR_INSTANCE_SOAK rc=<n> verdict=<V> with rc != 0"
+    detection: "SOLEUR_INSTANCE_SOAK rc=<n> verdict=<V> with rc != 0 (layer 6: workflow run log + ::error:: + step summary)"
     alert_route: "red serve run to the dispatcher"
   - mode: "the gate stops emitting a kind's evidence but still passes"
-    detection: "anti-vacuity refusal in the gate chain step (fewer than one well-formed verdict=pass line per kind)"
+    detection: "anti-vacuity refusal in the gate chain step (fewer than one well-formed verdict=pass line per kind) (layer 6: workflow run log + ::error:: + step summary)"
     alert_route: "red serve run to the dispatcher"
   - mode: "producer grammar and consumer regex drift"
-    detection: "none possible by construction: one SOAK_EV_RE in scripts/lib/serve-soak-evidence.sh, sourced by the suite (G4); its negative fixtures redden a loosening in deploy-script-tests; at runtime the anti-vacuity refusal"
+    detection: "none possible by construction: one SOAK_EV_RE in scripts/lib/serve-soak-evidence.sh, sourced by the suite (G4); its negative fixtures redden a loosening in deploy-script-tests; at runtime the anti-vacuity refusal (layer 6: workflow run log + ::error:: + step summary)"
     alert_route: "PR check failure; red serve run"
   - mode: "web-2 probe telemetry dark"
-    detection: "grader rc 2 NOT_YET on every dispatch (its verdict text names the missing row)"
+    detection: "grader rc 2 NOT_YET on every dispatch (its verdict text names the missing row) (layer 6: workflow run log + ::error:: + step summary)"
     alert_route: "red serve run to the dispatcher"
+  - mode: "a soak knob value that is not a plain integer from 1 to 999 (leading zero, more than 3 digits, text)"
+    detection: "gate_fail sub_condition=B_*_soak_days_invalid plus SOLEUR_SOAK_EVIDENCE soak_days=invalid verdict=fail (layer 6: workflow run log + ::error:: + step summary)"
+    alert_route: "red serve run to the dispatcher"
+  - mode: "the wrapper or Doppler fails before the gate runs"
+    detection: "::error:: with refusing id none and zero evidence lines; the EXIT trap replays the wrapper's stderr (layer 6: workflow run log + ::error:: + step summary)"
+    alert_route: "red serve run to the dispatcher"
+  - mode: "the helper is missing or fails to load in either step"
+    detection: "::error::serve-soak-evidence helper not loaded (<path>) - wiring defect, do not re-dispatch (layer 6: workflow run log + ::error:: + step summary)"
+    alert_route: "red serve run to the dispatcher"
+  - mode: "a step runs under xtrace with a live credential"
+    detection: "helper refuses with rc 78 before any credential is used (layer 6: workflow run log + ::error:: + step summary)"
+    alert_route: "red serve run to the dispatcher"
+  - mode: "the job is cancelled or times out while the grader runs"
+    detection: "sse_instance_soak EXIT/TERM trap prints SOLEUR_INSTANCE_SOAK ... rc=none verdict=CANNOT_ESTABLISH; a hard kill leaves only GitHub's timeout notice (layer 6: workflow run log + ::error:: + step summary)"
+    alert_route: "red or cancelled serve run to the dispatcher"
 
 logs:
   where: "GitHub Actions run logs and step summaries for cf-lb-overlay.yml runs (gh run view <id> --log)"
@@ -359,7 +445,10 @@ file's style (bold lead paragraphs):
 - **What is still not claimed.** Provenance of the marker; instance identity remains the weak anchor of the
   2026-10-08 addendum (AP-027: if a replacement's readiness row is lost, the predecessor's row still looks newest
   and the grader can PASS on the old instance; a generation anchor is a #12869 requirement); the grader is
-  web-2-only; the grader stays at 3 days when the gate is lengthened; Better Stack shipping is #12936.
+  web-2-only; the grader stays at 3 days when the gate is lengthened; Better Stack shipping is #12936. A host
+  replace keeps the pool weight it found, so a replaced instance can serve without the serve arm (residual,
+  predates this change; drain-first runbook step; #12939). An instance older than 90 days has no readiness row
+  in the grader's window and must be replaced to re-serve (#12938).
 - **Same name, different meaning.** `scripts/followthroughs/workspaces-luks-soak-6604.sh` also reads
   `WORKSPACES_LUKS_SOAK_DAYS` (default 7, the ADR-119 soak) and is not bounded by this floor; noted here and in
   #12933's scope so deleting the `prd` value is checked against both readers.
@@ -490,6 +579,8 @@ sites are: the gate step, the grader step, the wrapper's `MARKER_HOST="web-2"` a
 | 2 | Step moved after `Terraform plan` (committed) | RED (order row) |
 | 3 | `continue-on-error: true`, or `|| true` after the helper call (committed) | RED (tolerance row) |
 | 4 | A `shell:` key added to the step (committed) | RED (key-set row) |
+| 4b | The gate step's inline backstop `[[ "$gate_rc" -eq 0 ]] || exit 1` deleted, or the helper call wrapped in `if`/`||` (committed) | RED (gate-step wiring rows) |
+| 4c | `sse_gate_chain_check`'s refuse branch returns 0 (by hand) | RED (executed rc=1 row expects return 1; the backstop still fails the step) |
 | 5 | Host literal in the grader step changed to `web-3` while the gate step keeps `web-2` (committed) | RED (parity row) |
 | 6 | rc 2 mapped to 0 in the helper (by hand) | RED (executed row rc=2) |
 | 7 | rc 1, 2, 3 refuse but 78 passes (second member past the named codes; by hand) | RED (executed rows rc=78, 126, 127) |
@@ -607,8 +698,11 @@ ADR-263 addendum and blockquote; `model.c4` edits + regenerate `model.likec4.jso
   |---|---|
   | `*_soak_days_below_floor` | Delete the Doppler `prd` value (#12933, Operator-authorizes). Until #12933, every serve refuses this way. |
   | `*_soak_not_elapsed` | Wait until `marker_at` + `required_s`. |
-  | `NOT_YET` | A read fault: retry now. A soak wait: retry after 3 distinct green probe days. Still `NOT_YET` 4 days after readiness: telemetry dark, check `luks-monitor`. |
-  | `FAIL` | The instance's soak is spoiled: investigate; a replace is the repair. |
+  | `*_soak_days_invalid` | The knob is not a plain integer from 1 to 999 (a leading zero, more than 3 digits, or text); the log prints `soak_days=invalid` on purpose. Read the value (`doppler secrets get <KNOB> -p soleur -c prd --plain`), then set a plain integer from 3 to 999 or delete it (Operator-authorizes). |
+  | refusing id `none` | The wrapper or Doppler failed before the gate ran; read the replayed stderr in the step log. |
+  | `NOT_YET` with "no GREEN web-2 readiness row" and web-2 older than 90 days | The grader's readiness lookback is 90 days and the row is written once per instance: replace the host (this runbook) and wait for the 3-day soak (G12; #12938). |
+  | `NOT_YET` (other) | A read fault: retry now. A soak wait: retry after 3 distinct green probe days. Still `NOT_YET` 4 days after readiness: telemetry dark; run the readiness-row and daily probe-row (`SYSLOG_IDENTIFIER = luks-monitor`, `host_name = soleur-web-2`) Better Stack queries in `web-host-replace.md` (`scripts/betterstack-query.sh`). |
+  | `FAIL` | The instance's soak is spoiled: read the non-green probe rows with the same `web-host-replace.md` queries, then replace the host (the repair). |
   | `CANNOT_ESTABLISH` with rc 3 | Better Stack credentials or the shared helper are missing. |
   | `CANNOT_ESTABLISH` with rc 126, 127, another code, or `none` | A code or wiring defect; do not re-dispatch. |
   | Anti-vacuity ("soak evidence ... missing or malformed") | A code defect; do not re-dispatch. |
@@ -620,8 +714,9 @@ ADR-263 addendum and blockquote; `model.c4` edits + regenerate `model.likec4.jso
 
 ### Phase 5 — full verification
 
-Re-run the three suites, `python3 scripts/lint-guard-contract.py` on this plan, the C4 tests, `actionlint` (if
-installed) on `cf-lb-overlay.yml`, and `shellcheck` on the gate and the grader.
+Re-run the three suites plus `bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` (its G3
+census and `g3_dbin_ok` read `cf-lb-overlay.yml`), `python3 scripts/lint-guard-contract.py` on this plan, the C4 tests, `actionlint` (if
+installed) on `cf-lb-overlay.yml`, and `shellcheck` on the gate, the grader, the helper and the probe.
 
 ## Files to Edit
 
@@ -646,11 +741,18 @@ installed) on `cf-lb-overlay.yml`, and `shellcheck` on the gate and the grader.
 
 - `scripts/lib/serve-soak-evidence.sh`: the sourced step helper (Part 2; Ruled by CTO agent, 2026-11-18, G2).
 - `scripts/serve-soak-evidence-last.sh`: the read-only discoverability probe (G11, Ruled by CTO agent,
-  2026-11-18). It runs `gh run list --workflow cf-lb-overlay.yml` with a fixed `--limit` (default 20, at most
+  2026-11-18). It runs `gh run list --workflow cf-lb-overlay.yml` with a fixed `--limit` (default 50, at most
   50), reads runs newest first, and for the first run whose log holds either token prints the run id, at most 3
   `SOLEUR_SOAK_EVIDENCE` lines and 1 `SOLEUR_INSTANCE_SOAK` line, each matched by the helper's sourced
-  `SOAK_EV_RE` / `INSTANCE_EV_RE` (never a raw log dump). No match in the window: one line saying so, exit 2.
-  Tested with shellcheck and one executed row using a stub `gh`. It is not folded into the step helper: that
+  `SOAK_EV_RE` / `INSTANCE_EV_RE` (never a raw log dump), with control characters stripped from the printed
+  match. It lists `--branch main` runs by default and prints each reported run's `headBranch` and `headSha`, since a
+  run dispatched from another branch can print forged lines from a modified gate (infra-security 4). `gh run view --log` prefixes every line with
+  `<job>\t<step>\t<timestamp>` plus a space, so the probe strips that prefix (`sed -E 's/^[^\t]*\t[^\t]*\t[^ ]+ //'`) before
+  the anchored match (equivalently: an unanchored `grep -oE "$SOAK_EV_RE"`, then re-validate
+  `^${SOAK_EV_RE}$` on the extracted text). No match in the window: one line `no soak evidence in the last <N> runs` (it must not
+  contain either token, or it would satisfy `expected_output` by itself), exit 2. Default `--limit` 50 (a
+  20-run window can hold only non-serve modes; observability 7). Tested with shellcheck and executed rows using
+  a stub `gh` that prints the real tab-prefixed format (observability 1). It is not folded into the step helper: that
   runs inside the production job with credentials, and an operator read tool does not belong there.
 
 ## Open Code-Review Overlap
@@ -729,7 +831,7 @@ grader), and the change adds no external API.
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 | "In `lb-weight-gate.sh`, require at least 3 for both days values. Add `lb-weight-gate.test.sh` rows that refuse a value of `1`." [issue #12849] | Part 1; Phase 1 step 3 | mapped |
-| 2 | "In the serve step of `cf-lb-overlay.yml`, pin `WORKSPACES_LUKS_SOAK_DAYS=3` and `GIT_DATA_LUKS_SOAK_DAYS=3` in the inner env" [issue #12849] | — | descoped — justification: superseded by the binding CTO ruling of 2026-11-18 ("No pin in the workflow ... a pin would silently hide a stray value"); Guard 1 row 9 keeps a pin out |
+| 2 | "In the serve step of `cf-lb-overlay.yml`, pin `WORKSPACES_LUKS_SOAK_DAYS=3` and `GIT_DATA_LUKS_SOAK_DAYS=3` in the inner env" [issue #12849] | — | descoped — justification: superseded by the binding CTO ruling of 2026-11-18 ("No pin in the workflow ... a pin would silently hide a stray value"); Guard 1 row 10 keeps a pin out |
 | 3 | "Before serving, require the #6931 rule (3 distinct green probe days after the newest readiness row), or tie the marker to the instance's readiness time." [issue #12849] | Parts 2-3 (`sse_instance_soak`, grader step) | mapped |
 | 4 | "The fix must add a `SOLEUR_*` gate line carrying those fields, so a future shortened soak shows up in the run log and in Better Stack." [issue comment 2026-11-18] | Part 1 evidence line, Part 2 mirror | mapped (run log); Better Stack descoped — justification: Ruled by CTO agent, 2026-11-18 (F7), tracked #12936 |
 | 5 | "constant SOAK_FLOOR_DAYS=3. WORKSPACES_LUKS_SOAK_DAYS and GIT_DATA_LUKS_SOAK_DAYS: unset → 3; >=3 accepted (only lengthens); positive <3 fails with B_workspaces_luks_soak_days_below_floor / B_luks_soak_days_below_floor. Keep the existing *_invalid checks. No workflow pin." [brief] | Part 1 | mapped |
@@ -764,7 +866,7 @@ grader), and the change adds no external API.
 ### Split Assessment
 
 - Subsystems touched: 4 — `apps/web-platform`, `.github`, `scripts`, `knowledge-base`
-- Planned files: 14 (13 edited, 1 created) | Estimated changed lines: ~650 (most in `lb-weight-gate.test.sh`;
+- Planned files: 15 (13 edited, 2 created) | Estimated changed lines: ~650 (most in `lb-weight-gate.test.sh`;
   G5 cut most committed mutation rows)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the subsystem threshold trips, but the brief mandates one PR and the
@@ -865,6 +967,8 @@ All `unit` layer unless stated (bash suites, no network, no credentials).
 - Given `sse_instance_soak` and a stub grader exiting each of 1, 2, 3, 78, 126, 127 (`integration`: the
   real helper executed against a fake workspace tree), then return 1, `::error::`, the mapped verdict.
 - Given decoy `HCLOUD_TOKEN` and Doppler/AWS values in the environment, then the stub grader sees none of them.
+- Given a stub grader that prints `NOT YET: no GREEN web-2 readiness row opens the soak (...)` and exits 2, then
+  the step exits 1, that line is in stderr, and the `::error::` carries the 90-day replace next-step (G12).
 - Given `GIT_DATA_LUKS_SOAK_DAYS=200000000000000`, then `B_luks_soak_days_invalid` (the overflow bypass is
   closed).
 - Given rc 0, then exit 0 and `verdict=PASS` in the summary.
@@ -898,6 +1002,12 @@ serve.
   refusal with a real per-host check).
 - **After merge, serve refuses until #12933** removes the `prd` override (intended).
 - **PR #12918** rebase on the same files (Condition A, allowlist count).
+- **Residual (G13, #12939):** a replaced web-2 keeps the pool weight the replace found and can take traffic
+  without the serve gate chain or the grader; only the drain-first step in `web-host-replace.md` prevents it.
+  Whether the fix joins this PR or ships with #12869 is an operator scope decision (see `decision-challenges.md`);
+  the CTO's technical recommendation is to ship it with #12869.
+- **Risk (G12, #12938):** a web-2 older than 90 days cannot re-serve without a replace; intended, and the
+  `::error::` names the remedy.
 - **Risk:** the anti-vacuity check refuses every serve if the producer grammar drifts; mitigated by the
   single `SOAK_EV_RE` in the helper, sourced by the suite, with positive and negative fixtures (G4, amends F11).
 - **Risk:** web-2 telemetry gaps make the grader NOT_YET; intended, visible in the line.
@@ -919,8 +1029,8 @@ serve.
   extraction regex matching.
 - The new step must not contain the literal `lb-weight-gate.sh` or an assignment of
   `WORKSPACES_LUKS_CUTOVER_AT` (the wrapper census).
-- `cf-lb-overlay.yml` must not MENTION `WORKSPACES_LUKS_CUTOVER_AT` at all, in any case, not even in an
-  `::error::` text or a comment: the G3 census in `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`
+- `cf-lb-overlay.yml` must not mention `WORKSPACES_LUKS_CUTOVER_AT` on any code line, in any case, including an
+  `::error::` text (comment lines are exempt from the census, but say "the soak marker" there too): the G3 census in `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`
   (`READERS` set) flags any mention outside its reader list, and the workflow must not be added to that list.
   Say "the soak marker" instead. A wiring row asserts the absence (plan review, architecture 2).
 - Every `sub_condition=` check in both suites must anchor on the whole `gate_fail sub_condition=<id>` line,
@@ -939,6 +1049,12 @@ serve.
   (Condition A `has($HOST)`), and set `SOLEUR_WEB_HOSTS` once #12918 lands, or the gate refuses at Condition A
   and prints zero evidence lines (plan review, Kieran 10 / architecture 7).
 - After rebasing on #12918, re-measure `MIN_CASES` (it raises the same line to 357).
+- `g3_dbin_ok` (`workspaces-luks-verify-workflow.test.sh`) pins the gate step's wrapper hand-off on comment-stripped,
+  continuation-joined code: the exact `env DOPPLER_TOKEN=... DOPPLER_BIN=... bash ".../lb-weight-gate-with-marker.sh"`
+  substring once, `lb-weight-gate-with-marker.sh` exactly once and `DOPPLER_BIN` exactly once on code lines. So the
+  stderr redirect goes after the wrapper path (`... .sh" 2>"${RUNNER_TEMP}/lb-gate.stderr"`), and no new code line
+  in the workflow (helper call, `::error::` text, trap) may name the wrapper file or `DOPPLER_BIN`. Run that suite
+  in Phase 5.
 - `doppler run --preserve-env` lets an ambient value win, so a soak knob set in the gate step's `env:`, the
   job's `env:`, or an earlier step's `>> "$GITHUB_ENV"` write would reach the wrapper's allowlist without
   touching the inner `-- env` names that `p_guard` reads. A census row asserts no
