@@ -281,7 +281,7 @@ S2_BAD="$(LC_ALL=C sed -E 's/[$%]\{[^"#/<{}\\]*\}//g' "$TF" | LC_ALL=C grep -nE 
 [ -z "$S2_BAD" ] \
   && ok "subset S2: each of the ${S2_N} interpolation lines closes every \${ / %{ on its own line with no quote, #, /, <, brace or backslash in its body" \
   || no "subset S2: a \${ or %{ does not close on its own line or carries a quote, #, /, <, brace or backslash in its body (${S2_BAD}) — the lexer does not track \${ } depth (#12917), so it can end a string or open a comment Terraform does not"
-S3_OPEN_RE='^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$'
+S3_OPEN_RE='^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_][A-Za-z0-9_]*$'
 S3_BAD="$(LC_ALL=C grep -n '<<' "$TF" | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*#' | LC_ALL=C grep -vE "$S3_OPEN_RE" | lines_of)"
 S3_FLIP=""
 for _b in ALERT_RAW EXPL_RAW CANARY_ALERT_RAW CANARY_EXPL_RAW; do has '<<' "${!_b}" && S3_FLIP+=" ${_b}"; done
@@ -292,7 +292,7 @@ S4_BAD="$(LC_ALL=C grep -nE '^[[:space:]]*(resource|data)([^A-Za-z0-9_-]|$)' "$T
 [ -z "$S4_BAD" ] \
   && ok "subset S4: every resource / data line is the canonical column-0 'resource \"type\" \"name\" {' form" \
   || no "subset S4: a resource / data line is not the canonical column-0 'resource \"type\" \"name\" {' form (${S4_BAD}) — an escaped, unquoted or commented label is the same Terraform address but no header row counts it"
-S5_BAD="$(LC_ALL=C grep -n $'[^\t -~]' "$TF" | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*#' | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*".*"[[:space:]]*$' | lines_of)"
+S5_BAD="$(LC_ALL=C grep -n $'[^\t -~]' "$TF" | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*#' | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*"([^"\\]|\\.)*"[[:space:]]*$' | lines_of)"
 [ -z "$S5_BAD" ] \
   && ok "subset S5: every byte outside tab / 0x20-0x7e sits on a whole-line # comment or a single-line key = \"...\" string" \
   || no "subset S5: a byte outside tab / 0x20-0x7e sits on a line that is neither a whole-line # comment nor a single-line key = \"...\" string (${S5_BAD}) — Terraform trims Unicode space around a heredoc closer (bytes.TrimSpace) and the lexer does not, so a U+00A0 closer ends a heredoc for one of them only"
@@ -767,7 +767,7 @@ fi
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRESENCE_ROWS=69
-MUT_ROWS_EXPECTED=85
+MUT_ROWS_EXPECTED=87
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -1333,6 +1333,15 @@ i = s.index(H)
 s = s[:i] + "locals {\n  zz_note = length(\"%{ if \"#\" == \"\" }x%{ endif }\") /*\n}\n\n" + s[i:]
 i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
 s = s[:j] + "# */\n}\n" + s[j:]'
+  # Verifier 3 (#12726): HCL's heredoc opener is '<<' '-'? Ident Newline, so trailing spaces after the marker
+  # make it no opener for Terraform while the lexer opens one; and a lone CR or a second token on a
+  # 'key = "..."' line must not earn the S5 string exemption.
+  mutate RED "R33 a heredoc opener with trailing spaces after its marker (no opener to HCL, one to the lexer)" TF \
+     "subset S3: a << is neither in a whole-line # comment nor a canonical" \
+     's = s + "\nlocals {\n  zz_a = <<-EOT  \n  x\nEOT\n  zz_b = 1\n}\n"'
+  mutate RED "R34 a lone CR splits a 'key = \"...\"' line into two tokens and a non-ASCII byte rides the second" TF \
+     "subset S5: a byte outside tab / 0x20-0x7e sits on a line that is neither" \
+     's = s + "\nlocals {\n  zz_a = \"x\"\r  zz_b = \"\u00e9\"\n}\n"'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
