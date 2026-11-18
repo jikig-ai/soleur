@@ -552,7 +552,7 @@ seven tools still fall back to a card the requesting member can answer") on the 
 ## Addendum — 2026-11-13 (#12600): the post-session sync push publishes only Soleur-built knowledge-base commits
 
 Appended; no earlier text is edited. Ruled by CTO agent (rulings A-R20, review round 1 D5-D13 and review fix-round 1
-D14-D21) and by the review lead (fix-round 2, D22-D24), in the #12600 decision record, `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
+D14-D21) and by the review lead (fix-round 2, D22-D24), in the #12600 decision record, `knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`).
 
 - **What changed.** `syncPush` (`server/session-sync.ts`, push half in `server/kb-sync-publish.ts`) no longer runs a bare
   `git push` of the checked-out branch. Each turn it reads the default branch `D` and its tip `T` from one hardened

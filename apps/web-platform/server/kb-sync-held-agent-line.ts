@@ -1,6 +1,6 @@
 /**
  * #12714 agent lines (rulings W3, D29(4)-(8), V6 "agent consistency" in
- * knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md), as amended by the #12704
+ * knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md), as amended by the #12704
  * extension review (review-ext-rulings.md: D39(d)/(e), D40(3), D41, D42, CPO V7, V9, V11).
  *
  * Builders shared by both runners: the cc dispatcher appends them in the query factory's `effectiveSystemPrompt` next to
