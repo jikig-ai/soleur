@@ -1,0 +1,53 @@
+# Tasks: serve gate soak floor and per-instance grader (#12849)
+
+Plan: `knowledge-base/project/plans/2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md`
+Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G11, all Ruled by CTO agent, 2026-11-18).
+
+## Phase 1 — tests first (RED)
+
+- [ ] 1.1 Anchor all 7 `sub_condition=` substring checks (2 in `lb-weight-gate.test.sh`, 5 in
+      `lb-weight-gate-with-marker.test.sh`) on the whole `gate_fail sub_condition=<id>` line; add the census row.
+- [ ] 1.2 Source the helper for `SOAK_EV_RE` / `INSTANCE_EV_RE` / `SOAK_FLOOR_S`; add `ev_lines`, `ev_field`,
+      `assert_ev`; positive and negative grammar fixtures (G4).
+- [ ] 1.3 Floor rows for both knobs (1, 2 refuse below_floor; 3, 5, 999 accept; 0, 010, 08, abc, `1 verdict=pass`,
+      1000, 200000000000000, 18446744073709551619 refuse invalid; source default/env).
+- [ ] 1.4 Evidence rows per refusal id in B.2-B.10; pass gives two lines; standby / Condition A / B.1 give zero;
+      web-3 row with roster and allowlist fixture additions.
+- [ ] 1.5 Parity rows: grader `SOAK_DAYS` = gate `SOAK_FLOOR_DAYS`, helper `SOAK_FLOOR_S` = both x 86400; the four
+      web-2 literal sites.
+- [ ] 1.6 Workflow wiring rows (grader step key set, order, `if:`, no tolerance, host parity, EXIT trap, helper
+      source lines, grader value, no marker-name mention, knob census) plus committed mutation rows (G5).
+- [ ] 1.7 Executed rows on `sse_instance_soak` (rc loop 0,1,2,3,78,126,127; ambient `SOLEUR_FT_EARLIEST`; G10
+      decoy row; web-3 row; empty-host row).
+- [ ] 1.8 Executed rows on `sse_gate_chain_check` (Guard 4 rows, G8 rows, message texts, fenced summary).
+- [ ] 1.9 Stub-`gh` row for `scripts/serve-soak-evidence-last.sh`.
+- [ ] 1.10 Seam row in `lb-weight-gate-with-marker.test.sh` (G6).
+- [ ] 1.11 Raise `MIN_CASES`; per-section executed-row counters.
+- [ ] 1.12 `BASELINE_DECLARED_PROBES` 98 -> 99 in `preflight-discoverability-test.test.ts`.
+- [ ] 1.13 Confirm the new rows are RED.
+
+## Phase 2 — the gate
+
+- [ ] 2.1 `lb-weight-gate.sh`: `SOAK_FLOOR_DAYS=3`, three-digit regex, floor checks, `EV_*` record, emission in
+      `fail()` and the two pass emits, header comments.
+
+## Phase 3 — helper, probe and workflow
+
+- [ ] 3.1 Create `scripts/lib/serve-soak-evidence.sh` (Part 2).
+- [ ] 3.2 Create `scripts/serve-soak-evidence-last.sh` (G11).
+- [ ] 3.3 `cf-lb-overlay.yml`: gate chain capture + EXIT trap + helper call; new grader step; job header comment.
+- [ ] 3.4 `infra-validation.yml` `pull_request` paths (grader, helper, probe).
+- [ ] 3.5 Grader comment above `SOAK_DAYS=3` (the line itself untouched).
+
+## Phase 4 — records
+
+- [ ] 4.1 ADR-263 addendum and supersession blockquote; ADR-068 pointer.
+- [ ] 4.2 `model.c4` edit; regenerate `model.likec4.json`; C4 tests.
+- [ ] 4.3 Runbooks: `cf-lb-a-record-gaplessness-verify.md` (new section + refusal table), `web-host-replace.md`.
+
+## Phase 5 — verification
+
+- [ ] 5.1 Three suites green; `python3 scripts/lint-guard-contract.py` on the plan; C4 tests; actionlint;
+      shellcheck on the gate, grader, helper and probe.
+- [ ] 5.2 Run every by-hand mutation once; record each and the row it turned RED for the PR body.
+- [ ] 5.3 PR body: `Closes #12849`, `Ref #12008`, `Ref #9421`, Operator Holds.
