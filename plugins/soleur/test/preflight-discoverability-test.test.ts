@@ -3139,7 +3139,11 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `discoverability_test:` sub-block, value on one line. TRUTH: the probe (`bash scripts/betterstack-query.sh --since 30d --grep
   // relay_hello_key_fp`) is a Better Stack log query that needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler prd_terraform).
   // NO SUBSTITUTE: a host container's warn line is reachable only through that query, which has no unauthenticated reader. Genuine.
-  const BASELINE_DECLARED_PROBES = 97;
+  // 97 -> 98 on 2026-11-18 (#12585, PR #12897 SandboxNetworkAccess arm): measured by this test before the bump (Received 98, the new
+  // entry is `archive/20261118-150540-2026-11-18-fix-sandbox-network-access-canusetool-arm-plan.md`). PLACEMENT: a child of its
+  // `discoverability_test:` sub-block, value on one line. TRUTH: the probe is a Sentry events count query for op:sandbox-network-denied
+  // that needs SENTRY_ISSUE_RO_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: Sentry event counts have no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 98;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
