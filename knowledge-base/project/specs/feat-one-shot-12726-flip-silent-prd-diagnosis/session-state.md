@@ -15,9 +15,9 @@
 
 ### Decisions
 
-- Measured cause: the flip unit never went silent; object rows arrived 11-12 per hour, max gap 370 s vs 900 s window; incident 1051496324 reads Current value 0 on a lower_than 1 alert (4th lower_than false-zero on this account); evaluator cause INFERRED.
+- Measured cause: the flip unit never went silent; object rows arrived 11-12 per hour, max gap 370 s vs 900 s window; incident 1051496324 reads Current value 0 on a lower_than 1 alert (third lower_than false-zero on this account); evaluator cause INFERRED.
 - Fix PR-A (Ref #12726): invert the alert to the egress host-count form paging on higher_than 0, keep treat_as_zero, add a replace()-derived canary, flip guard pins its own operator/value, one ADR-218 amendment, tf comment and runbook rewrites; no new SOLEUR marker.
-- PR-B cut (F1); two dated tracker reads at apply +25 min and +4 h; PR-C canary retirement waits on the +4 h read (F2).
+- PR-B cut (F1); two dated tracker reads at apply +25 min and +4 h; PR-C canary retirement opens on the F2-amended trigger (the first of: +4 h read shows it fired, +25 min read shows it absent after more than 20 min live and unpaused, apply +24 h).
 - Canary-absent response follows the egress rule (F3).
 - Owner holds: merge of PR-A (push apply changes Better Stack), resolve of incident 1051496324, hotfix merge if apply fails.
 
