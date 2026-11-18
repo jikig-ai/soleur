@@ -79,9 +79,13 @@ vi.mock("@/server/connected-repo-git", () => ({
   WORKSPACE_GIT_LOCK_TIMEOUT: "lock_timeout",
   pinInterruptedAutostash: H2.pinSpy,
 }));
-vi.mock("@/server/kb-sync-held-refresh", () => ({ writeHeldFromIsolated: H2.heldWriteSpy }));
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => {
+vi.mock("@/server/kb-sync-held-refresh", async (importOriginal) => ({
+  // the real D43 system read (readSystemRepoUrl, over the mocked service client below); only the held write is a spy
+  ...(await importOriginal<typeof import("@/server/kb-sync-held-refresh")>()),
+  writeHeldFromIsolated: H2.heldWriteSpy,
+}));
+vi.mock("@/lib/supabase/service", () => {
+  const client = () => {
     const q = {
       from: (t: string) => (H2.serviceCalls.push(["from", t]), q),
       select: (c: string) => (H2.serviceCalls.push(["select", c]), q),
@@ -89,8 +93,9 @@ vi.mock("@/lib/supabase/service", () => ({
       maybeSingle: async () => (H2.serviceCalls.push(["maybeSingle"]), H2.serviceRow),
     };
     return q;
-  },
-}));
+  };
+  return { createServiceClient: client, getServiceClient: client };
+});
 
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: gitSpy }));
 vi.mock("@/server/workspace-local-git", () => ({ runWorkspaceLocalGit: localSpy }));

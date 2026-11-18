@@ -285,6 +285,16 @@ phase, and record that phase's RED runs with it.
     Mobile 375 Owner and member, Owner and member transient predicate. Update them to the V7/V9/V11 strings
     (ux-design-lead). Reason: the code ships the CPO strings verbatim; the frames are reference only. Re-evaluate when:
     the next design pass on Settings, or before task 11.5's wireframe screenshot comparison.
+  - [ ] Final-verification P3s (verify-final.md, 2026-11-18), one issue, each with its trigger:
+    NEW-1 the collision listing keeps the 1 MiB output cap (`workspace-collision.ts`), so about 15k upstream path changes
+    fail every merge; NEW-2 the pull's X5 check has no test that reds without it; N1 Supabase and PR REST calls inside
+    the workspace lock are not budgeted; N2 the self-heal route bound is not end to end (fast-forward pull fixed 30 s cap,
+    success-path count ignores the lock wait); N3 a busy lock is recorded as `sync_failed` in the reconcile and cron
+    audit rows and that push's reconcile is dropped; N4 the cc refresh does not apply X5; N5 a self-heal that started
+    before a disconnect/reconnect can write a stale pull-blocked value; P3-9 the guarded `.or()` filter is only tested
+    against a mock; P3-5 a route fast-forward and the cc refresh never clear pull-blocked; quality-advisory flags three
+    direct `userId` log emits in `session-sync.ts`. Trigger: any of these observed in Sentry/Better Stack, or the next
+    change to the sync path.
 - [x] 11.7 Settings team icon (V6(6), D24): in `components/settings/conversation-names-settings.tsx`, on
   `workspace_sync: "pending"` show "Saved to GitHub. Your workspace has local changes that aren't on your repository's
   main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon.

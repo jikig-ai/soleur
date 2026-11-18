@@ -222,6 +222,8 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     ["a file over 64 bytes", (ws: string, sha: string) => writeFileSync(join(ws, ".git", "MERGE_AUTOSTASH"), `${sha}\n${"x".repeat(64)}\n`), "too_large"],
     ["a first line that is not 40 hex", (ws: string) => writeFileSync(join(ws, ".git", "MERGE_AUTOSTASH"), "refs/heads/main\n"), "malformed"],
     ["a directory", (ws: string) => mkdirSync(join(ws, ".git", "MERGE_AUTOSTASH")), "not_regular"],
+    // verify-final B3: an agent-planted FIFO is refused without ever blocking the event loop
+    ["a FIFO", (ws: string) => execFileSync("mkfifo", [join(ws, ".git", "MERGE_AUTOSTASH")]), "not_regular"],
   ] as const)("the pin refuses %s: no ref, one warning", async (_name, plant, cause) => {
     const { ws } = repo();
     const sha = staleAutostash(ws);
@@ -231,6 +233,18 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     expect(pins(ws)).toBe("");
     expect(H.mirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
     expect(H.mirrorWarnWithDebounce.mock.calls[0][1]).toEqual(expect.objectContaining({ op: "kb-sync.autostash-pin", tags: { cause } }));
+  });
+
+  test("verify-final B3: the MERGE_AUTOSTASH open is O_NONBLOCK (a FIFO swapped in after the lstat cannot stall the loop)", () => {
+    const src = readFileSync(join(__dirname, "..", "server", "connected-repo-git.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    const start = src.indexOf("function readMergeAutostash(");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    const opens = [...body.matchAll(/openSync\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(opens).toHaveLength(1);
+    expect(opens[0]).toMatch(/^path, fsConstants\.O_RDONLY \| fsConstants\.O_NOFOLLOW \| fsConstants\.O_NONBLOCK$/);
   });
 
   test("no MERGE_AUTOSTASH: the pin does nothing and says nothing", async () => {

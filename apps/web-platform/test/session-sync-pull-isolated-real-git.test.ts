@@ -1302,7 +1302,7 @@ describe("R2-B: the pull's lock wait, the pull-blocked clear and the X5 count ru
     const r = newRow();
     await pull(r);
     expect(H.writePullBlocked.mock.calls.map((c) => (c as unknown[])[2])).toEqual([null]);
-    expect(H.writeHeld.mock.calls[0][2]).not.toHaveProperty("pullBlocked");
+    expect((H.writeHeld.mock.calls[0] as unknown[])[2]).not.toHaveProperty("pullBlocked");
     git(r.ws, "commit", "-q", "--allow-empty", "-m", "noop"); // keep HEAD on main
     write(join(r.ws, "src", "s.ts"), "export const s = 3; // local\n");
     git(r.ws, "commit", "-q", "-am", "local edit");

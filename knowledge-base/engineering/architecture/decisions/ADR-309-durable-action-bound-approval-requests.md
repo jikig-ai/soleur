@@ -584,7 +584,7 @@ D14-D21) and by the review lead (fix-round 2, D22-D24), in the #12600 decision r
   `side_declined` (D17) and `side_pr_created` (D23) log only. A `pr_failed` turn writes an info outcome line too; its error-level page is unchanged. A failed M-to-S relink after a lifted protection (D22(a)) is one debounced `kb-sync.relink` warning and the turn stays pushed.
 - **Protected default branch.** A rejection is `protected_branch` when its stderr has GitHub's `remote: error: GH006:`
   line or a `remote:` line whose message STARTS with "Changes must be made through a pull request" (after an optional
-  `error:` and `- `), the #5426 require-PR text that a `GH013` ruleset requiring a PR also prints (D9, amended by D18;
+  `error:` and a `-` followed by a space), the #5426 require-PR text that a `GH013` ruleset requiring a PR also prints (D9, amended by D18;
   stderr only). The classifier is per line: CR is normalised (`\r\n?` to `\n`, so CRLF and a lone CR both end a line),
   the text is split on `\n`, and each line is tested with NON-multiline regexes using `[ \t]`, never `\s`. So a
   `remote:   path: ...` echo of an agent-authored KB path cannot match, the text on a bare line after `remote:` cannot

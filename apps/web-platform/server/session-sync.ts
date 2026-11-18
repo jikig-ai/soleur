@@ -647,7 +647,7 @@ async function pullLocked(
         // the HEAD those steps left, through the ONE write path (server/kb-sync-held-refresh.ts) with this pull's injected
         // service client: every attempt writes, a null count too, with checked_at = this run's ls-remote instant. No
         // remote read: no tip, so no attempt. X5 (R2-B, verify-coverage P3-6): HEAD not on the remote's default branch is no
-        // attempt either, as in the self-heal and the refresh. D42 (R2-B, verify-coverage P3-5): a default merge that
+        // attempt either, as in the self-heal (the cc refresh does not yet apply X5: tasks.md 11.6). D42 (R2-B, verify-coverage P3-5): a default merge that
         // `merged` or found the workspace `up_to_date` clears the pull-blocked state; any other reason leaves it as it is.
         if (merged.remote && head.refName === `refs/heads/${merged.remote.defaultBranch}`) {
           const clears = merged.reason === "merged" || merged.reason === "up_to_date";

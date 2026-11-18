@@ -169,12 +169,11 @@ type RefreshTarget = {
 type RefreshArgs = RefreshTarget & ({ readonly userId: string; readonly system?: undefined } | { readonly system: true; readonly userId?: undefined });
 
 /**
- * The bounded lock call (R2-B's `withWorkspaceGitLock(path, fn, { waitMs })`). Until that option lands the extra argument
- * is ignored at run time (an unbounded wait, as every other locked body); the expiry is handled either way: a rejection
- * before the body, or a return without running it, is the quiet `lock_busy` skip.
+ * The bounded lock call: `withWorkspaceGitLock(path, fn, { waitMs })` resolves WORKSPACE_GIT_LOCK_TIMEOUT without running
+ * `fn` when the wait expires. The caller detects that through `entered`; a rejection before the body is handled the same
+ * way. Both are the quiet `lock_busy` skip.
  */
 function lockWithWait<T>(path: string, fn: () => Promise<T>, opts: { readonly waitMs: number }) {
-  // Resolves WORKSPACE_GIT_LOCK_TIMEOUT without running fn when the wait expires; the caller detects that via `entered`.
   return withWorkspaceGitLock(path, fn, opts);
 }
 
@@ -211,10 +210,20 @@ async function refreshRepoUrl(a: RefreshArgs): Promise<string | null> {
       throw err;
     }
   }
+  return serviceReadRepoUrl(a.workspaceId);
+}
+
+/**
+ * D43: the repo URL of a `ready` workspace through the service client, keyed on a server-resolved workspace id (a system
+ * job's own query, never user input, R3). Throws `RepoUrlReadError` on a failed read; null when not connected/parseable.
+ * The one service-role repo_url read for system callers (the self-heal uses it through `readSystemRepoUrl`), so only this
+ * allowlisted module holds the client.
+ */
+async function serviceReadRepoUrl(workspaceId: string): Promise<string | null> {
   const { data, error } = await getServiceClient()
     .from("workspaces")
     .select("repo_url")
-    .eq("id", a.workspaceId)
+    .eq("id", workspaceId)
     .eq("repo_status", "ready")
     .maybeSingle();
   if (error) throw Object.assign(new Error("repo_url service read failed"), { name: "RepoUrlReadError" });
@@ -222,6 +231,15 @@ async function refreshRepoUrl(a: RefreshArgs): Promise<string | null> {
   if (typeof raw !== "string") return null;
   const { owner, repo } = parseOwnerRepo(normalizeRepoUrl(raw));
   return owner && repo ? `https://github.com/${owner}/${repo}.git` : null;
+}
+
+/** The self-heal's D43 system read: `serviceReadRepoUrl`, with any failure as null (the caller answers `remote_state`). */
+export async function readSystemRepoUrl(workspaceId: string): Promise<string | null> {
+  try {
+    return await serviceReadRepoUrl(workspaceId);
+  } catch {
+    return null;
+  }
 }
 
 /** Exactly one of `system: true` or a non-empty `userId` (the run-time half of the discriminant). */

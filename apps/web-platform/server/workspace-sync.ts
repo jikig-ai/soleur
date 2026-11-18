@@ -342,25 +342,10 @@ async function resolveSelfHealRepoUrl(context: SyncWorkspaceContext): Promise<st
     }
   }
   // D43: a system job has no user to mint a tenant token for. Service read keyed on the job's own workspace id (from the
-  // job's own query, never user input, R3), connected rows only. A failed read is `remote_state`, like the tenant read's.
-  try {
-    const [{ createServiceClient }, { normalizeRepoUrl }] = await Promise.all([
-      import("@/lib/supabase/service"),
-      import("@/lib/repo-url"),
-    ]);
-    const { data, error } = await createServiceClient()
-      .from("workspaces")
-      .select("repo_url")
-      .eq("id", context.workspaceId)
-      .eq("repo_status", "ready")
-      .maybeSingle();
-    const raw = (data as { repo_url?: unknown } | null)?.repo_url;
-    if (error || typeof raw !== "string") return null;
-    const { owner, repo } = remoteMod.parseOwnerRepo(normalizeRepoUrl(raw));
-    return owner && repo ? `https://github.com/${owner}/${repo}.git` : null;
-  } catch {
-    return null;
-  }
+  // job's own query, never user input, R3), connected rows only, through the one allowlisted reader (kb-sync-held-refresh)
+  // so this module holds no service-role client. A failed read is `remote_state`, like the tenant read's.
+  const { readSystemRepoUrl } = await import("@/server/kb-sync-held-refresh");
+  return readSystemRepoUrl(context.workspaceId);
 }
 
 /**
