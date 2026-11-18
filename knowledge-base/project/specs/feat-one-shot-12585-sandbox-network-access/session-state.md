@@ -43,3 +43,10 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - Design pass (simplicity + architecture) done. Both found K1: toggle-off reports egress-not-running with granted=true, so the alert pages and the model gets false copy. Architecture also found K2: the globalThis registry is unpinned.
 - K1 contests D2 and the CPO copy ruling. Send it to the CTO in ONE batched spawn at synthesis (cto_spawns used: 0 of 2).
 - Panel of 11 spawned. Next: synthesis, then the coverage consult (single-user incident), CTO batch, inline fixes, the trailer, and Step 5.
+
+### Review Phase Complete (2026-11-18)
+- 13/13 seats. There were 47 findings (P2 13, P3 34). 28 were fixed inline in 5812293bd2 and e6b6922116. The other 19 were filed as #12914 (runtime flake), #12915 (review follow-ups) and #12916 (pre-existing findings).
+- Every fix mutant was killed. Trailer commit 0c7c35ce9e; the Review-Evidence comment is posted.
+- Rulings: CTO R1-R7 and CPO C1-C6 are in decision-challenges.md. cto_spawns=1 of 2.
+- #12907 body updated with the new gateway-unverified copy.
+- Next: Step 5 (code-review issues), the fix round from 5272dd01fc, then QA, compound, ship.

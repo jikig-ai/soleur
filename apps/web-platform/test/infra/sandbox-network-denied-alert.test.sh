@@ -170,7 +170,8 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 reds=0
 mutate() { # label var file python-replace-old python-replace-new
-  local label="$1" var="$2" src="$3" old="$4" new="$5" copy="$SCRATCH/$(basename "$3")"
+  local label="$1" var="$2" src="$3" old="$4" new="$5" copy
+  copy="$SCRATCH/$(basename "$3")"
   python3 - "$src" "$copy" "$old" "$new" <<'PY' || { printf 'FATAL: mutation anchor drifted: %s\n' "$label" >&2; exit 2; }
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
