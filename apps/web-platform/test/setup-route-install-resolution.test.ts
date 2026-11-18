@@ -371,7 +371,7 @@ describe("POST /api/repo/setup — install resolution", () => {
     // synchronous `await POST` does not await — asserting its value would race).
   });
 
-  test("#12714 (D29(1), D33(2), D42): after the cloning flip, a SEPARATE update nulls the held columns; the flip payload is unchanged", async () => {
+  test("#12714 (D29(1), D33(2), D42): after the cloning flip, a SEPARATE update clears the held columns; the flip payload is unchanged", async () => {
     storedInstallationId = 999;
     mockResolveReachable.mockResolvedValue([999]);
     mockResolveOwning.mockResolvedValue(999);
@@ -385,8 +385,13 @@ describe("POST /api/repo/setup — install resolution", () => {
     expect(workspacesUpdateCalls[flipIdx].patch).not.toHaveProperty("kb_sync_held_files");
     expect(workspacesUpdateCalls[flipIdx].patch).not.toHaveProperty("kb_sync_held_checked_at");
     expect(heldIdx).toBeGreaterThan(flipIdx);
+    // checked_at is stamped, never null (verify-data-sec P3-3): a run that read T before the re-clone loses the guard
     expect(workspacesUpdateCalls[heldIdx]).toEqual({
-      patch: { kb_sync_held_files: null, kb_sync_held_checked_at: null, kb_sync_pull_blocked: null },
+      patch: {
+        kb_sync_held_files: null,
+        kb_sync_held_checked_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+        kb_sync_pull_blocked: null,
+      },
       id: "user-1",
     });
   });

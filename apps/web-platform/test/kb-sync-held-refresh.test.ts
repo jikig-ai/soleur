@@ -7,6 +7,8 @@ const H = vi.hoisted(() => ({
   compute: vi.fn(),
   recovered: vi.fn(),
   write: vi.fn(),
+  pullBlocked: vi.fn(),
+  lock: vi.fn(),
   service: vi.fn(),
   readRemote: vi.fn(),
   resolveRepoUrl: vi.fn(),
@@ -25,7 +27,8 @@ vi.mock("@/server/kb-sync-held", async (importOriginal) => ({
   computeHeldFiles: H.compute,
   readRecoveredKbSyncTips: H.recovered,
 }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeKbSyncHeldCols: H.write }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeKbSyncHeldCols: H.write, writeKbSyncPullBlocked: H.pullBlocked }));
+vi.mock("@/server/connected-repo-git", () => ({ withWorkspaceGitLock: H.lock }));
 vi.mock("@/lib/supabase/service", () => ({ getServiceClient: H.service }));
 vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: H.tenantMint, RuntimeAuthError: class extends Error {} }));
 vi.mock("@/server/kb-sync-remote", async (importOriginal) => ({
@@ -54,7 +57,8 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 
 import { IsolatedPushDirRefusal } from "@/server/git-isolated-push-dir";
 import { KbRemoteError } from "@/server/kb-sync-remote";
-import { refreshHeldCount, writeHeldFromIsolated } from "@/server/kb-sync-held-refresh";
+import { HELD_COUNT_BUDGET_MS } from "@/server/kb-sync-held";
+import { REFRESH_LOCK_WAIT_MS, refreshHeldCount, writeHeldFromIsolated } from "@/server/kb-sync-held-refresh";
 
 const WS = "11111111-2222-3333-4444-555555555555";
 const T = "a".repeat(40);
@@ -78,6 +82,8 @@ beforeEach(() => {
   H.compute.mockResolvedValue({ total: 2, onRecovered: 0 });
   H.recovered.mockReturnValue([]);
   H.write.mockResolvedValue(undefined);
+  H.pullBlocked.mockResolvedValue(undefined);
+  H.lock.mockImplementation(async (_path: string, fn: () => Promise<unknown>) => fn());
   H.service.mockImplementation(serviceClient);
   H.readRemote.mockResolvedValue({ defaultBranch: "main", tip: T, sideTip: null, readAt: READ_AT });
   H.resolveRepoUrl.mockResolvedValue({ url: "https://github.com/acme/widget.git", owner: "acme", repo: "widget" });
@@ -128,15 +134,44 @@ describe("writeHeldFromIsolated (D39(a)/(b))", () => {
     expect(cls).toBe("kb-sync-held.count:recovered_unreadable");
   });
 
-  test("pullBlocked is passed through (D42); undefined leaves it out of the patch", async () => {
+  test("pullBlocked goes to its OWN write, off the count's ordering (D42, verify-data-sec P3-4); undefined writes nothing", async () => {
     await writeHeldFromIsolated({ ...base, pullBlocked: "merge_conflict_precheck" });
     await writeHeldFromIsolated({ ...base, pullBlocked: null });
     await writeHeldFromIsolated(base);
+    // the count patch never carries it
     expect(H.write.mock.calls.map((c) => c[2])).toEqual([
-      { heldFiles: 2, checkedAt: READ_AT, pullBlocked: "merge_conflict_precheck" },
-      { heldFiles: 2, checkedAt: READ_AT, pullBlocked: null },
+      { heldFiles: 2, checkedAt: READ_AT },
+      { heldFiles: 2, checkedAt: READ_AT },
       { heldFiles: 2, checkedAt: READ_AT },
     ]);
+    expect(H.pullBlocked.mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      [WS, "merge_conflict_precheck"],
+      [WS, null],
+    ]);
+    // the caller's injected service client carries it, as it carries the count
+    const injected = { injected: true } as never;
+    await writeHeldFromIsolated({ ...base, pullBlocked: null, service: injected });
+    expect(H.pullBlocked.mock.calls.at(-1)?.[0]).toBe(injected);
+  });
+
+  test("verify-coverage P2-2: T not in the object store (fetch_failed, an early pull_deadline, remote_unknown_tip) writes NO count", async () => {
+    // A null here would carry a newer checked_at and erase a good count written against a T this dir does have.
+    H.present.mockResolvedValueOnce(false);
+    await expect(writeHeldFromIsolated(base)).resolves.toBeNull();
+    expect(H.present).toHaveBeenCalledWith(ISO, T);
+    expect(H.compute).not.toHaveBeenCalled();
+    expect(H.write).not.toHaveBeenCalled();
+    // an unanswerable presence check is the same skip (unknown is not "absent, so null")
+    H.present.mockRejectedValueOnce(new Error("local_git_failed"));
+    await expect(writeHeldFromIsolated(base)).resolves.toBeNull();
+    expect(H.write).not.toHaveBeenCalled();
+  });
+
+  test("T absent still records the pull-blocked state: that verdict is not a count over T", async () => {
+    H.present.mockResolvedValueOnce(false);
+    await writeHeldFromIsolated({ ...base, pullBlocked: null });
+    expect(H.write).not.toHaveBeenCalled();
+    expect(H.pullBlocked.mock.calls.map((c) => c[2])).toEqual([null]);
   });
 
   test("budgetMs reaches the count (D38(5))", async () => {
@@ -154,13 +189,16 @@ describe("writeHeldFromIsolated (D39(a)/(b))", () => {
     await expect(writeHeldFromIsolated(base)).resolves.toEqual({ total: 2, onRecovered: 0 });
     H.write.mockRejectedValueOnce(new Error("socket"));
     await expect(writeHeldFromIsolated(base)).resolves.toEqual({ total: 2, onRecovered: 0 });
+    H.pullBlocked.mockRejectedValueOnce(new Error("socket"));
+    await expect(writeHeldFromIsolated({ ...base, pullBlocked: null })).resolves.toEqual({ total: 2, onRecovered: 0 });
   });
 });
 
 describe("refreshHeldCount (D39(a), D43)", () => {
-  const args = { workspaceId: WS, workspacePath: "/ws/x", installationId: 42 };
+  const args = { workspaceId: WS, workspacePath: "/ws/x", installationId: 42, system: true } as const;
+  const userArgs = { workspaceId: WS, workspacePath: "/ws/x", installationId: 42, userId: "user-1" } as const;
 
-  test("no userId: the repo URL comes from the service read on a ready row, and no tenant token is minted", async () => {
+  test("system: the repo URL comes from the service read on a ready row, and no tenant token is minted", async () => {
     await refreshHeldCount(args);
     expect(H.resolveRepoUrl).not.toHaveBeenCalled();
     expect(H.tenantMint).not.toHaveBeenCalled();
@@ -172,12 +210,20 @@ describe("refreshHeldCount (D39(a), D43)", () => {
     ]);
     expect(H.readRemote).toHaveBeenCalledWith(ISO, 42, "https://github.com/acme/widget.git");
     expect(H.write.mock.calls).toEqual([[expect.anything(), WS, { heldFiles: 2, checkedAt: READ_AT }]]);
+    // the refresh never touches the pull-blocked state (the self-heal's and the pull's verdict)
+    expect(H.pullBlocked).not.toHaveBeenCalled();
     expect(H.compute.mock.calls[0][0]).toMatchObject({ base: T, head: HEAD });
     expect(H.dispose).toHaveBeenCalledTimes(1);
   });
 
+  test("system: the stored repo_url is normalized like the self-heal's system read (verify-data-sec P3-5)", async () => {
+    H.serviceRow.data = { repo_url: "https://github.com/acme/widget.GIT" }; // a raw parse keeps ".GIT" in the repo name
+    await refreshHeldCount(args);
+    expect(H.readRemote).toHaveBeenCalledWith(ISO, 42, "https://github.com/acme/widget.git");
+  });
+
   test("with userId: the tenant-scoped repo URL read (resolveRepoUrl) keyed on (userId, workspaceId)", async () => {
-    await refreshHeldCount({ ...args, userId: "user-1" });
+    await refreshHeldCount(userArgs);
     expect(H.resolveRepoUrl).toHaveBeenCalledWith("user-1", WS);
     expect(H.serviceCalls.filter((c) => c[0] === "select")).toEqual([]);
     expect(H.write).toHaveBeenCalledTimes(1);
@@ -198,6 +244,53 @@ describe("refreshHeldCount (D39(a), D43)", () => {
     // Once settled, the next call runs again.
     await refreshHeldCount(args);
     expect(H.readRemote).toHaveBeenCalledTimes(2);
+  });
+
+  test("verify-data-sec P3-5: no discriminant is no read at all (never a silent switch to the service read)", async () => {
+    // @ts-expect-error -- neither `system: true` nor a `userId`: the type refuses it, and at run time it is a skip
+    await refreshHeldCount({ workspaceId: WS, workspacePath: "/ws/x", installationId: 42 });
+    // @ts-expect-error -- both at once is refused too
+    await refreshHeldCount({ ...userArgs, system: true });
+    // an empty user id is a string to the type, so only the run-time check refuses it
+    await refreshHeldCount({ ...userArgs, userId: "" });
+    expect(H.serviceCalls).toEqual([]);
+    expect(H.resolveRepoUrl).not.toHaveBeenCalled();
+    expect(H.createIso).not.toHaveBeenCalled();
+    expect(H.write).not.toHaveBeenCalled();
+  });
+
+  test("verify-coverage P3-4: HEAD, the ls-remote, the count and the write run under the workspace git lock, with a bounded wait", async () => {
+    const order: string[] = [];
+    H.lock.mockImplementation(async (path: string, fn: () => Promise<unknown>, opts: unknown) => {
+      order.push(`lock:${path}:${JSON.stringify(opts)}`);
+      const r = await fn();
+      order.push("unlock");
+      return r;
+    });
+    H.head.mockImplementation(() => (order.push("head"), { sha: HEAD, refName: "refs/heads/main" }));
+    H.write.mockImplementation(async () => void order.push("write"));
+    await refreshHeldCount(args);
+    expect(order).toEqual([`lock:/ws/x:${JSON.stringify({ waitMs: REFRESH_LOCK_WAIT_MS })}`, "head", "write", "unlock"]);
+    expect(REFRESH_LOCK_WAIT_MS).toBeGreaterThan(0);
+    expect(REFRESH_LOCK_WAIT_MS).toBeLessThanOrEqual(HELD_COUNT_BUDGET_MS);
+  });
+
+  test("a lock wait that expires (rejects, or returns without running the body) is a quiet skip: no git, no write, no mirror", async () => {
+    H.lock.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("lock wait expired"), { name: "WorkspaceGitLockTimeout" });
+    });
+    await expect(refreshHeldCount(args)).resolves.toBeUndefined();
+    H.lock.mockImplementationOnce(async () => undefined);
+    await expect(refreshHeldCount(args)).resolves.toBeUndefined();
+    expect(H.head).not.toHaveBeenCalled();
+    expect(H.createIso).not.toHaveBeenCalled();
+    expect(H.write).not.toHaveBeenCalled();
+    expect(H.mirrorWarn).not.toHaveBeenCalled();
+  });
+
+  test("the count runs on an explicit budget (D38(5))", async () => {
+    await refreshHeldCount(args);
+    expect(H.compute.mock.calls[0][1]).toEqual({ budgetMs: HELD_COUNT_BUDGET_MS });
   });
 
   test("another workspace is not joined", async () => {

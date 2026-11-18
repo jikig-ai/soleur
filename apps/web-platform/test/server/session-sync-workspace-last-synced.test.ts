@@ -142,6 +142,12 @@ vi.mock("@/server/git-isolated-push-dir", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/git-isolated-push-dir")>()),
   createIsolatedPushDir: () => ({ gitDir: "/tmp/iso", dispose: () => {} }),
 }));
+// verify-coverage P2-2: the held write counts only when T is in the isolated dir's object store; this suite's fake dir has
+// T (the real presence check is in test/kb-sync-held-refresh.test.ts and the real-git suites).
+vi.mock("@/server/kb-sync-objects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/kb-sync-objects")>()),
+  isCommitPresent: async () => true,
+}));
 vi.mock("@/server/kb-sync-pull", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/kb-sync-pull")>()),
   mergeVerifiedDefault: mockMerge,

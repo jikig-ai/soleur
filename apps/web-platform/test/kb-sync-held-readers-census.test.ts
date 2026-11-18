@@ -121,7 +121,7 @@ type Role = { role: string; required: boolean };
 const HELD_MENTIONS: Record<string, Role> = {
   "app/(dashboard)/dashboard/settings/page.tsx": { role: "reader: Settings, service client, active workspace id", required: true },
   "server/workspace-repo-mirror.ts": {
-    role: "type: KbSyncHeldRow (never WorkspaceRepoCols); writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (the held-count path, D29(1), D39)",
+    role: "type: KbSyncHeldRow (never WorkspaceRepoCols); writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (the held-count path, D29(1), D39), writeKbSyncPullBlocked (the pull-blocked state, its own ready-guarded UPDATE, D42)",
     required: true,
   },
   // #12704 (D41(e), D42): the ONE reader of the stored columns moved out of the dispatcher, shared by both runners.
@@ -175,18 +175,22 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service\(\),\s*workspaceId,\s*patch\s*\)/);
     expect([...refresh.matchAll(/\bpersist\(/g)]).toHaveLength(2); // its definition and its one call
     expect(refresh).toMatch(
-      /persist\(service \? \(\) => service : getServiceClient,\s*a\.workspaceId,\s*\{\s*heldFiles: held === null \? null : held\.total,\s*checkedAt: a\.checkedAt,/,
+      /persist\(client,\s*a\.workspaceId,\s*\{\s*heldFiles: held === null \? null : held\.total,\s*checkedAt: a\.checkedAt\s*\}\)/,
     );
+    // The pull-blocked state has ONE write, through its own UPDATE (verify-data-sec P3-4), never the count's patch.
+    expect([...refresh.matchAll(/\bwriteKbSyncPullBlocked\(/g)]).toHaveLength(1);
+    expect(refresh).toMatch(/if \(a\.pullBlocked !== undefined\) await persistPullBlocked\(client, a\.workspaceId, a\.pullBlocked\);/);
     // The pre-review entries are gone: one count-and-write entry (D39(a)).
     expect(refresh).not.toMatch(/\b(heldCountOn|writeHeldCount)\b/);
     expect(refresh).not.toMatch(/writeRepoColsToWorkspace/);
-    // workspace-repo-mirror.ts maps the patch to the migration-187 columns (the pull-blocked one only when given, D42),
-    // in the one shared held UPDATE body (simplicity F7).
+    // workspace-repo-mirror.ts maps the patch to the migration-187 columns, in the one shared held UPDATE body
+    // (simplicity F7); the pull-blocked column (188) only through writeKbSyncPullBlocked (verify-data-sec P3-4).
     const mirror = sources.get("server/workspace-repo-mirror.ts") ?? "";
     expect(mirror).toMatch(
       /const row: KbSyncHeldRow = \{\s*kb_sync_held_files: patch\.heldFiles,\s*kb_sync_held_checked_at: checkedAt\s*\};/,
     );
-    expect(mirror).toMatch(/if \(patch\.pullBlocked !== undefined\) row\.kb_sync_pull_blocked = patch\.pullBlocked;/);
+    expect(mirror).not.toMatch(/patch\.pullBlocked/);
+    expect(mirror).toMatch(/\{ kb_sync_pull_blocked: value \}, "kb-sync-held\.pull-blocked", "ready"\)/);
     expect([...mirror.matchAll(/\.update\(row\)/g)]).toHaveLength(1);
     const src = sources.get("server/session-sync.ts") ?? "";
     // session-sync reaches the held write only through the moved helper, never writeKbSyncHeldCols directly.

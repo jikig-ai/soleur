@@ -596,15 +596,21 @@ describe("DELETE /api/repo/disconnect — held-files columns (#12714)", () => {
   const heldMirrors = () =>
     mockMirrorWithDebounce.mock.calls.filter((c) => (c[1] as { op?: string } | undefined)?.op === "kb-sync-held.clear");
 
-  test("nulls the held columns on the active workspace, in its own UPDATE after the drain and before the reap (D39(f))", async () => {
+  test("clears the held columns on the active workspace, in its own UPDATE after the drain and before the reap (D39(f))", async () => {
     const { mockHeldUpdate, mockHeldUpdateEq } = setupServiceMocks({});
+    const before = Date.now();
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
+    // count and pull-blocked null; checked_at STAMPED with the clear's instant, never null (verify-data-sec P3-3), so
+    // a session that read T before the disconnect loses the D39(f) guard after a reconnect
     expect(mockHeldUpdate).toHaveBeenCalledWith({
       kb_sync_held_files: null,
-      kb_sync_held_checked_at: null,
+      kb_sync_held_checked_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       kb_sync_pull_blocked: null,
     });
+    const stamped = Date.parse(((mockHeldUpdate.mock.calls[0] as unknown[])[0] as { kb_sync_held_checked_at: string }).kb_sync_held_checked_at);
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
     expect(mockHeldUpdateEq).toHaveBeenCalledWith("id", TEAM_WORKSPACE_ID);
     const heldAt = mockHeldUpdate.mock.invocationCallOrder[0];
     expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
