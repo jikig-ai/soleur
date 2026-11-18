@@ -462,11 +462,11 @@ _install_curl_shim() { # $1 = file to serve on a real call; $2 = file for the de
   : > "$_shim_dir/stdin.log"
   cat > "$_shim_dir/curl" <<EOF
 #!/usr/bin/env bash
+cat >> "$_shim_dir/stdin.log"
 printf '%s\n' "\$@" >> "$_shim_dir/calls.log"
 printf '%s\0' "\$@" >> "$_shim_dir/argv.bin"
 n=\$(find "$_shim_dir" -maxdepth 1 -name 'call.*.argv' | wc -l)
 printf '%s\n' "\$@" > "$_shim_dir/call.\$((n + 1)).argv"
-cat >> "$_shim_dir/stdin.log"
 case "\$*" in
   */detectors/*) cat "${2:-$1}" ;;
   *) cat "$1" ;;
@@ -1620,7 +1620,12 @@ t_g1_non_array_is_unavailable() {
 }
 t_g1_host_refused_token_unsent() {
   local d="$TMPD/stub.g1host"; mkdir -p "$d"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s/argv"\ncat >> "%s/stdin"\nprintf "[]"\n' "$d" "$d" > "$d/curl"
+  cat > "$d/curl" <<STUB
+#!/usr/bin/env bash
+cat >> "$d/stdin"
+printf '%s\n' "\$@" >> "$d/argv"
+printf '[]'
+STUB
   chmod +x "$d/curl"; : > "$d/argv"; : > "$d/stdin"
   _rc=0
   # The RULE side is fixture-served, so the ONLY code that can reach curl is the
@@ -1782,7 +1787,12 @@ t_g1_foreign_type_is_unavailable() {
 # _up_live_stub <name> <body-file> <exit> — a curl that serves a file and exits rc.
 _up_live_stub() {
   local d="$TMPD/stub.$1"; mkdir -p "$d"
-  printf '#!/usr/bin/env bash\ncat >/dev/null\ncat "%s"\nexit %s\n' "$2" "$3" > "$d/curl"
+  cat > "$d/curl" <<STUB
+#!/usr/bin/env bash
+cat >/dev/null
+cat "$2"
+exit $3
+STUB
   chmod +x "$d/curl"; printf '%s' "$d"
 }
 _run_up_live() { # <stub-dir> [VAR=val…] — rules fixture-served, uptime LIVE through the stub

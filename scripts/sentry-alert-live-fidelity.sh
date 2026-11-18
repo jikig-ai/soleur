@@ -292,8 +292,10 @@ if [[ -z "$uptime_unavail" ]]; then
           (split("?")[0] | split("#")[0]) as $u
           | ([ $u | capture("^(?<s>[A-Za-z][A-Za-z0-9+.-]*)://(?<r>.*)$") ][0]) as $c
           | if $c == null then "<unparsed-url>" else
-              ($c.r | index("/")) as $i
-              | (if $i == null then $c.r else $c.r[:$i] end) as $a
+              # split+length, never index(): jq 1.7.x returns a BYTE offset from
+              # index() on a string while slicing is by codepoint, so a 2-byte
+              # homoglyph shifted the cut by one and ate the path slash.
+              ($c.r | split("/")[0] // "") as $a
               # A host that can be shown must be plain ASCII host characters. An
               # authority with userinfo (`@`, or a backslash some parsers read as
               # `/`), an empty one (`https:///…`, which a WHATWG parser resolves
@@ -302,7 +304,7 @@ if [[ -z "$uptime_unavail" ]]; then
               | (if ($a | test("[@\\\\]")) then "<userinfo-host>"
                  elif ($a == "" or ($a | test("^[A-Za-z0-9.:\\[\\]-]+$") | not)) then "<unprintable-host>"
                  else ($a | sub(":[0-9]*$"; "")) end) as $h
-              | (if $i == null then "" else $c.r[$i:] end) as $p
+              | $c.r[($a | length):] as $p
               | "\($c.s)://\($h)\($p)"
             end
         end;

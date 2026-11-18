@@ -2242,7 +2242,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-git-data-boot-signal-poll.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/21s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
   'tests/scripts/test-registry-d10-workflow-wiring.sh | doppler | exempt | text-only the suite runs the restore step body and the Restore summary step body, of which only the restore step calls doppler (bare, in a command substitution, no stdin); the text piped into doppler lives in other steps of the workflow file it names, and none of those steps runs (1 non-test producers)'
-  'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
+  'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 4 | *'
   'plugins/soleur/test/token-drift-workflow-causes.test.sh | curl | drains | 1 | *'
   'tests/scripts/test-supabase-advisor-scan.sh | curl | drains | 1 | --header @-'
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
