@@ -3373,6 +3373,8 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "cf-lb-overlay.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
+  // #12866: the reusable body of apply-web-platform-infra's bastion_host_create caller job.
+  "bastion-host-create.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -3501,7 +3503,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    expect(found.length).toBe(5);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -11258,7 +11260,33 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     .map((l) => l.replace(/#.*/, "").trim())
     .filter(Boolean);
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  const job = extractJobBlock(wf, "bastion_host_create");
+  // The job body lives in the reusable bastion-host-create.yml (the caller stays in wf: size gate, #8361).
+  const bwfText = readFileSync(resolve(REPO_ROOT, ".github/workflows/bastion-host-create.yml"), "utf8");
+  const job = extractJobBlock(bwfText, "bastion_host_create");
+  const caller = extractJobBlock(wf, "bastion_host_create");
+
+  test("the caller job dispatches the reusable body with the birth inputs and secrets: inherit", () => {
+    const c = stripComments(caller);
+    expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
+    expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
+    for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
+    expect(c).toMatch(/^\s*secrets: inherit\s*$/m);
+    expect(c).toMatch(/^\s*issues: write\s*$/m);
+    // The body runs inside the caller's run, which holds the workflow-level lock: a second group
+    // of the same name in the callee would only risk cancelling the caller.
+    expect((parseYaml(bwfText) as { concurrency?: unknown }).concurrency).toBeUndefined();
+    // W15 (caller side): a job-level group on the caller would split it from the per-merge apply
+    // (the R2 backend has no state lock).
+    expect(c).not.toMatch(/^\s*concurrency:/m);
+    expect((parseYaml(wf) as { concurrency?: { group?: string } }).concurrency?.group).toBe("terraform-apply-web-platform-host");
+    expect(stripComments(job)).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+  });
+
+  test("the reusable body redeclares the caller's Terraform env (workflow env is not propagated)", () => {
+    const callee = (parseYaml(bwfText) as { env: Record<string, string> }).env;
+    const callerEnv = (parseYaml(wf) as { env: Record<string, string> }).env;
+    for (const k of ["TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"]) expect([k, callee[k]]).toEqual([k, callerEnv[k]]);
+  });
 
   test("the list parses, holds the server, and has no duplicates (non-vacuity)", () => {
     expect(list.length).toBeGreaterThanOrEqual(5);

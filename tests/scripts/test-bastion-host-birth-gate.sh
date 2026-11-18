@@ -21,7 +21,8 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/bastion-host-birth-gate.sh"
-WORKFLOW="${ROOT}/.github/workflows/apply-web-platform-infra.yml"
+# The reusable body of apply-web-platform-infra.yml's bastion_host_create caller job (size gate, #8361).
+WORKFLOW="${ROOT}/.github/workflows/bastion-host-create.yml"
 
 cases=0
 passes=0
