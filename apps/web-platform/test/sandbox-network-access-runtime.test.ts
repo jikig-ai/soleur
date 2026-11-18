@@ -213,8 +213,9 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
   it("F2: the cache spans commands of one session (a NEW host is asked, the allowed one is not): the reason row 6' ships", () => {
     const a = arm("F2");
     assertNoLeak(a);
-    expect(a).toMatchObject({ fStep1: true, fTornDown: true });
+    expect(a).toMatchObject({ fStep1: true, fTornDown: true, fPortClosed: true });
     expect(hosts(a)).toEqual(["198.51.100.1", "example.test"]);
+    expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
     expect(net(a).length).toBe(2);
     expect(result(a, "f2-2")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F2");
