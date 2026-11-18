@@ -410,11 +410,15 @@ done
 # bastion_host_create (#12866) reaches the reader through scripts/lib/bastion-boot-verify.sh, which
 # #12879's replace job shares; it counts only when the job SOURCES that library and the library
 # names the reader, so dropping either link turns the row red.
+# Its BODY lives in the reusable bastion-host-create.yml (apply-web-platform-infra.yml is at its byte
+# gate, #8361); the caller job in $WF is pinned by terraform-target-parity.test.ts.
 BBV="$DIR/../../../scripts/lib/bastion-boot-verify.sh"
+BWF="$DIR/../../../.github/workflows/bastion-host-create.yml"
 for prov_job in web_host_create web_host_replace bastion_host_create; do
-  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  JWF="$WF"; [ "$prov_job" = bastion_host_create ] && JWF="$BWF"
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$JWF" || true)"
   if [ -z "$PROV" ]; then
-    no "AC8d: no ${prov_job} job in $(basename "$WF") — a provisioning path that does not exist cannot surface a boot trail"
+    no "AC8d: no ${prov_job} job in $(basename "$JWF") — a provisioning path that does not exist cannot surface a boot trail"
   elif grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' <<<"$PROV"; then
     ok "AC8d: ${prov_job} wires the extracted boot-trail reader"
   elif grep -qE '^\s*source "\$\{GITHUB_WORKSPACE\}/scripts/lib/bastion-boot-verify\.sh"' <<<"$PROV" \
@@ -425,6 +429,98 @@ for prov_job in web_host_create web_host_replace bastion_host_create; do
     no "AC8d: ${prov_job} does not invoke scripts/fresh-host-boot-trail.sh — a green apply is not a green boot, and without this call the job cannot tell the two apart"
   fi
 done
+
+# ── AC8e (#12866): the bastion birth's step WIRING ─────────────────────────────────────────
+#
+# The rows above prove the reader and the library work and that the job names them. None proves
+# the job CALLS them on the outcome that matters: a verify step whose `if:` drops the failed-apply
+# arm leaves a half-applied, unverified bastion running with no heartbeat (#12879), and every
+# library suite stays green (review, pattern P2-1: both that mutation and a 10-minute timeout
+# survived five suites). Each row reads the COMMENT-STRIPPED job block and anchors on a whole line,
+# so a comment or a second, unrelated occurrence cannot satisfy it. Each step is scoped from its own
+# `- name:` line to the next, so one step's line cannot satisfy a row about another.
+bjob_of() { awk '/^  bastion_host_create:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c' "$1" | grep -v '^[[:space:]]*#' || true; }
+bstep() { # <job text> <exact step name>: that step's lines
+  awk -v n="      - name: $2" '/^      - (name|uses):/{c=($0 == n)} c' <<<"$1"
+}
+# One predicate per property, so the mutation rows below drive the SAME code the real rows do.
+ac8e_verify_if() { bstep "$1" "Verify the bastion boot (power off on anything but ready)" \
+  | grep -qxF "        if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}"; }
+ac8e_apply_gated() { bstep "$1" "Terraform apply (bastion birth)" | grep -qxF '        if: inputs.plan_only != true'; }
+BJOB="$(bjob_of "$BWF")"
+[ -n "$BJOB" ] || no "AC8e: no bastion_host_create job in $(basename "$BWF")"
+for id in apply verify boot_anchor cancel_poweroff; do
+  if [ "$(grep -cxE "        id: ${id}" <<<"$BJOB")" -eq 1 ]; then ok "AC8e: exactly one step carries id ${id}"; else no "AC8e: step id ${id} is missing or duplicated (the summary and verify read steps.${id})"; fi
+done
+if ac8e_verify_if "$BJOB"; then ok "AC8e: verify runs on a SUCCESSFUL or a FAILED apply (a failed apply may still have created the server)"; else no "AC8e: the verify step's if: must be exactly !cancelled() && (apply success || apply failure)"; fi
+VSTEP="$(bstep "$BJOB" "Verify the bastion boot (power off on anything but ready)")"
+for kv in 'APPLY_OUTCOME: ${{ steps.apply.outcome }}' 'BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}' \
+          'SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}' 'GH_TOKEN: ${{ github.token }}'; do
+  if grep -qxF "          ${kv}" <<<"$VSTEP"; then ok "AC8e: verify binds ${kv%%:*}"; else no "AC8e: verify must bind '${kv}'"; fi
+done
+if grep -qxF '          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-create || rc=$?' <<<"$VSTEP"; then
+  ok "AC8e: verify calls bastion_boot_verify with the anchor, the apply outcome and the dispatch label"
+else
+  no "AC8e: verify must call bastion_boot_verify \"\${BOOT_TRAIL_SINCE:-}\" \"\${APPLY_OUTCOME:-}\" bastion-host-create"
+fi
+if ac8e_apply_gated "$BJOB" \
+   && bstep "$BJOB" "Stamp boot-trail run anchor (bastion create)" | grep -qxF '        if: inputs.plan_only != true'; then
+  ok "AC8e: plan_only stops the anchor and the apply (the verify, pin and cancel steps follow the apply's outcome)"
+else
+  no "AC8e: the anchor and apply steps must each carry if: inputs.plan_only != true"
+fi
+if bstep "$BJOB" "Power off on cancel (unverified bastion)" \
+   | grep -qxF "        if: \${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}"; then
+  ok "AC8e: a cancelled run that reached the apply powers an unverified bastion off"
+else
+  no "AC8e: the cancel power-off step's if: must be cancelled() && apply not skipped && verify not success && not plan_only"
+fi
+# The interlock's token-shape predicate is the READER's, byte for byte (LC_ALL=C included), so the
+# interlock never admits a token the reader then refuses (review, simplicity 8 / pattern P3-3).
+want_bo="$(grep -E '^_bearer_ok\(\) \{' "$TRAIL" | head -1)"
+got_bo="$(grep -E '^[[:space:]]*_bearer_ok\(\) \{' <<<"$BJOB" | sed 's/^[[:space:]]*//' | head -1)"
+if [ -n "$want_bo" ] && [ "$got_bo" = "$want_bo" ]; then ok "AC8e: the interlock's _bearer_ok is byte-identical to the reader's"; else no "AC8e: the interlock's _bearer_ok ('${got_bo}') differs from the reader's ('${want_bo}')"; fi
+TO="$(awk '/^  bastion_host_create:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$BWF")"
+if [[ "$TO" =~ ^[0-9]+$ ]] && [ "$TO" -ge 45 ]; then ok "AC8e: job timeout-minutes ($TO) is read (the budget row lives in kernel-currency.test.sh)"; else no "AC8e: bastion_host_create timeout-minutes unreadable or below 45 ('${TO}')"; fi
+# Mutation rows: the two edits the review drove past five suites must now red THESE predicates.
+M1="$(sed "s/ || steps.apply.outcome == 'failure')/)/" <<<"$BJOB")"
+if [ "$M1" != "$BJOB" ] && ! ac8e_verify_if "$M1"; then ok "AC8e (mutation): dropping the failed-apply arm from verify's if: is caught"; else no "AC8e (mutation): dropping the failed-apply arm was NOT caught (or did not land)"; fi
+M2="$(awk '/^      - name: Terraform apply \(bastion birth\)$/{a=1} a&&/^        if: inputs.plan_only != true$/{a=0; next} {print}' <<<"$BJOB")"
+if [ "$M2" != "$BJOB" ] && ! ac8e_apply_gated "$M2"; then ok "AC8e (mutation): removing plan_only from the apply step is caught"; else no "AC8e (mutation): removing plan_only from the apply step was NOT caught (or did not land)"; fi
+# The structural-enumeration seat's workflow mutation matrix (review, #12866): W01/W04/W11/W15 each
+# survived every suite on c994a02f38. Each predicate reads the comment-stripped bastion job.
+ac8e_gate_closed() { # <job> <gate fn>: `if ! <fn> tfplan.json; then` ... `exit 1` ... `fi`, no continue-on-error
+  bstep "$1" "Terraform plan (scoped bastion birth) + birth gate + stock preflight" | awk -v want="          if ! $2 tfplan.json; then" '
+    $0 == want { inb = 1; seen++; next }
+    inb && $0 == "            exit 1" { ex = 1 }
+    inb && $0 == "          fi" { inb = 0 }
+    END { exit !(seen == 1 && ex) }'
+}
+ac8e_no_coe() { ! grep -qE '^[[:space:]]*continue-on-error:' <<<"$1"; }
+ac8e_verify_exit() { bstep "$1" "Verify the bastion boot (power off on anything but ready)" | grep -qxF '          exit "$rc"'; }
+ac8e_no_concurrency() { ! grep -qE '^[[:space:]]*concurrency:' <<<"$1"; }
+for gate in bastion_host_birth_gate stock_preflight_gate; do
+  if ac8e_gate_closed "$BJOB" "$gate"; then ok "AC8e: a ${gate} refusal exits 1 (the bare call is the if! condition)"; else no "AC8e: the plan step must read 'if ! ${gate} tfplan.json; then' with an 'exit 1' before its 'fi'"; fi
+done
+if ac8e_no_coe "$BJOB"; then ok "AC8e: no step of the bastion job carries continue-on-error (a gate's exit 1 stops the run)"; else no "AC8e: a continue-on-error in the bastion job lets a refused gate fall through to the apply"; fi
+if ac8e_verify_exit "$BJOB"; then ok "AC8e: verify exits with boot-verify's own return code"; else no "AC8e: the verify step must end 'exit \"\$rc\"' (a hard-coded exit hides a not-ready verdict)"; fi
+if ac8e_no_concurrency "$BJOB" && ! grep -qE '^concurrency:' "$BWF"; then
+  ok "AC8e: neither the reusable file nor the bastion job declares concurrency (the caller's workflow-level group serialises it with the per-merge apply)"
+else
+  no "AC8e: a concurrency: in bastion-host-create.yml splits the lock (the R2 backend has no state lock) or can cancel the caller"
+fi
+# W01: the gate wrapped so its refusal can never reach the `if !`.
+M3="$(sed 's/^          if ! bastion_host_birth_gate tfplan.json; then$/          if ! { bastion_host_birth_gate tfplan.json || true; }; then/' <<<"$BJOB")"
+if [ "$M3" != "$BJOB" ] && ! ac8e_gate_closed "$M3" bastion_host_birth_gate; then ok "AC8e (mutation W01): a gate call neutered with '|| true' is caught"; else no "AC8e (mutation W01): '|| true' around the birth gate was NOT caught (or did not land)"; fi
+M4="$(sed '/^      - name: Terraform plan (scoped bastion birth)/a\        continue-on-error: true' <<<"$BJOB")"
+if [ "$M4" != "$BJOB" ] && ! ac8e_no_coe "$M4"; then ok "AC8e (mutation W01b): continue-on-error on the gated plan step is caught"; else no "AC8e (mutation W01b): continue-on-error on the plan step was NOT caught (or did not land)"; fi
+# W04: a quoted 'true' compares a boolean input to a string, so the step runs on every rehearsal.
+M5="$(sed "/^      - name: Terraform apply (bastion birth)\$/,/^        id: apply\$/ s/^        if: inputs.plan_only != true\$/        if: inputs.plan_only != 'true'/" <<<"$BJOB")"
+if [ "$M5" != "$BJOB" ] && ! ac8e_apply_gated "$M5"; then ok "AC8e (mutation W04): plan_only compared to the STRING 'true' on the apply is caught"; else no "AC8e (mutation W04): != 'true' on the apply step was NOT caught (or did not land)"; fi
+M6="$(sed 's/^          exit "\$rc"$/          exit 0/' <<<"$BJOB")"
+if [ "$M6" != "$BJOB" ] && ! ac8e_verify_exit "$M6"; then ok "AC8e (mutation W11): verify's exit \"\$rc\" -> exit 0 is caught"; else no "AC8e (mutation W11): exit \"\$rc\" -> exit 0 was NOT caught (or did not land)"; fi
+M7="$(sed 's/^    timeout-minutes: 60$/    concurrency: { group: bastion-birth, cancel-in-progress: false }\n    timeout-minutes: 60/' <<<"$BJOB")"
+if [ "$M7" != "$BJOB" ] && ! ac8e_no_concurrency "$M7"; then ok "AC8e (mutation W15): a job-level concurrency: on the bastion job is caught"; else no "AC8e (mutation W15): a job-level concurrency: was NOT caught (or did not land)"; fi
 
 # ── AC13 (#6090 follow-up, retargeted by #7946): the surfacing step binds its token from
 # the WORKFLOW ENV, never from Doppler — and names the unbound case rather than self-skipping.
@@ -1320,11 +1416,11 @@ else
 fi
 rm -rf "$F5_D"
 
-# ADR-193 floor at the MEASURED green count (138 after #12866 bastion rows; 124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
+# ADR-193 floor at the MEASURED green count (164 after the #12866 review AC8e rows and W-matrix; 138 after #12866 bastion rows; 124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
 # so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
 # matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
 # Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=138
+MIN_ASSERTIONS=164
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
