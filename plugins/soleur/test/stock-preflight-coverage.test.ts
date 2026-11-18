@@ -278,6 +278,16 @@ beforeAll(() => {
   const on = wf[true] ?? wf.on;
   options = on.workflow_dispatch.inputs.apply_target.options;
   jobs = wf.jobs;
+  // A thin caller job (`uses: ./.github/workflows/<file>.yml`, #12866) has no steps of its own:
+  // it runs inside this workflow's run, and its body is the called file's jobs. Read that body,
+  // so a gate the reusable file carries counts and a gate it drops reds here. Local files only;
+  // a caller whose file is missing keeps no steps and fails closed below.
+  for (const job of Object.values(jobs) as Array<Job & { uses?: string }>) {
+    const m = /^\.\/(\.github\/workflows\/[\w.-]+\.ya?ml)$/.exec(String(job.uses ?? ""));
+    if (!m) continue;
+    const called = parseYaml(readFileSync(resolve(REPO_ROOT, m[1]), "utf8"));
+    job.steps = Object.values(called.jobs ?? {}).flatMap((j) => (j as Job).steps ?? []);
+  }
 });
 
 describe("stock-preflight coverage over apply_target options (#6453 AC3)", () => {
