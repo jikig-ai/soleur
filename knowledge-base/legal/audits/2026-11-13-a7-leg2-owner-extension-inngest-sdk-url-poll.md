@@ -3,7 +3,7 @@ title: "A7 ledger: new acceptance after a lapse of the leg-2 accepted-risk recor
 status: record (owner-pending)
 date: 2026-11-13
 related: [10136, 10538, 10479, 10205]
-addenda: ["2026-11-13 CLO-cures addendum (PR #12737; its ledger-row and sdk_url limbs fire on that PR's merge), amended 2026-11-15 by CLO fix-round rulings (a) and (c): see 'Addendum — 2026-11-13 (CLO cures, PR #12737)' and 'Unsigned owner-record draft'"]
+addenda: ["2026-11-13 CLO-cures addendum (PR #12737; its ledger-row and sdk_url limbs fire on that PR's merge), amended 2026-11-15 by CLO fix-round rulings (a) and (c): see 'Addendum — 2026-11-13 (CLO cures, PR #12737)' and 'Unsigned owner-record draft'", "2026-11-17 supersession markers (owner renewal to 2026-12-10; ledger date fires on the merge of PR #12884)"]
 ---
 
 # A7 ledger: owner extension, leg-2 Inngest `sdk_url` poll
@@ -31,6 +31,8 @@ merge-queue run and the queue ejected every PR.
 > HTTP on 10.0.1.0/24) until 2026-11-20, because the replacement (#10538) is not merged. The 2026-11-02 voids and
 > compensating controls still apply. I will not extend past that date.
 
+> **Superseded 2026-11-17 (#12742) by the owner's own act, as to "I will not extend past that date":** the owner renewed to 2026-12-10 in session, typing "1 but let's make sure we prioritize the work to avoid extending another time" (`2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`).
+
 The owner chose the date 2026-11-20 from the options 2026-11-20 and 2026-12-10, in session on 2026-11-13.
 
 ## Scope and limits
@@ -44,6 +46,9 @@ The owner chose the date 2026-11-20 from the options 2026-11-20 and 2026-12-10, 
   no read-only Hetzner credential available in this session. The voids are therefore stated, not re-verified.
 - After 2026-11-20 the row lapses again. Any further extension is a new owner act and needs a record that begins
   "SIGNED BY OWNER (human, not an agent)" or a fresh in-session instruction the CLO rules sufficient.
+
+  > **Superseded 2026-11-17 (#12742), as to "After 2026-11-20 the row lapses again":** before that date the owner renewed this acceptance in session, on the same terms, until 2026-12-10, and the CLO agent ruled the in-session renewal sufficient (`2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`). The ledger row carries 2026-12-10 on the merge of PR #12884. The second sentence stands: this renewal is the "fresh in-session instruction the CLO rules sufficient".
+
 - The ledger row records the new date and cites this file. The agent edit moves a date the owner named. It is not
   a signature.
 
@@ -69,11 +74,15 @@ Appended by a Claude Code agent under the CLO agent's ruling of 2026-11-13 (agen
 - **Companion change superseded.** On the merge of PR #12737, ledger row 7 converts (Cloudflare to origin) to verified TLS and removes its exception. The 2026-11-19 date that this record's companion change set no longer applies once PR #12737 merges.
 - **After PR #12737.** That PR changes the declared `--sdk-url` to `https://app.soleur.ai/api/inngest`. The live host keeps the plain-HTTP poll until the owner's `inngest-host-replace` (#12742). *(Corrected 2026-11-15, CLO fix-round ruling (c): this sentence used to say "nothing live changes at merge".)* On the merge of PR #12737, the push apply rewrites the live Cloudflare config ruleset (`cloudflare_ruleset.seo_config_settings`: the adopted rule becomes `ssl = "strict"` for `app.soleur.ai` alone and the two ORIGIN-TLS rules are deleted). The effective SSL mode for `app.soleur.ai` (`strict`) and the live `--sdk-url` (private plain HTTP until #12742) stay the same. The void "pointing `--sdk-url` at the public host while Cloudflare to origin is flexible" is avoided only because #12742 lands after that apply; before #12742 runs, a read-only read-back (`cloudflare-readonly.sh config-entrypoint`) must show that no `flexible` rule matches `app.soleur.ai`. If the owner's act lands after 2026-11-20, a record that the owner types, beginning "SIGNED BY OWNER (human, not an agent)", is required. The draft is in the section 'Unsigned owner-record draft' below.
 
+  > **Superseded 2026-11-17 (#12742), as to "If the owner's act lands after 2026-11-20, a record that the owner types … is required":** no longer required for a replace before 2026-12-10, which the 2026-11-17 renewal covers. Superseded, not discharged. After 2026-12-10 no record of any kind extends the row.
+
 ## Unsigned owner-record draft (agent-authored; NOT a signature; no effect until the owner types it)
 
 Required only if the owner's `inngest-host-replace` (#12742) lands after 2026-11-20. The owner types the signed record
 as a comment on #12742, in their own words; an agent then mirrors it to a new audit file. Nothing below is filled in by
 an agent, and until the owner types it this draft records nothing.
+
+> **Superseded 2026-11-17 (#12742), as to "Required only if … lands after 2026-11-20":** no longer required (see the 2026-11-17 renewal record); kept as filed, it records nothing.
 
 *(Changed 2026-11-15, CLO fix-round ruling (a): this draft used to pre-write the owner's sentences. It is now a list of
 the elements the record must contain. Each element is a prompt the owner answers in their own words. The only fixed
