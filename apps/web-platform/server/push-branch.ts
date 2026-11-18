@@ -208,8 +208,9 @@ type CommitCheck = "present" | "absent" | "timeout" | "failed";
  * and is not `absent`. (`cat-file -e <sha>^{commit}` is not used: for a missing object it exits 128, the same status as every other
  * fatal error.) `^{commit}` peels an annotated tag object to the commit it points at, so a zero exit alone would accept a tag-object
  * sha; the printed sha must equal the approved one, else the commit is `absent` (the push of a non-commit sha would only be
- * rejected by the remote after the approval is spent). Everything, the import included, runs inside the `try`: the caller has a
- * directory to remove and no handle to remove it with, so this function never rejects.
+ * rejected by the remote after the approval is spent). The child runs through `runIsolatedGitLocal`, whose lazy import and spawn sit
+ * inside its own `try` and which never rejects (a spawn failure, kill or timeout is a result): the caller has a directory to remove
+ * and no handle to remove it with, so this function never rejects either.
  */
 async function checkCommitPresent(isolated: IsolatedPushDirHandle, commitSha: string): Promise<CommitCheck> {
   // The token-free isolated runner never rejects: a spawn failure, a kill or a timeout comes back as a result.
