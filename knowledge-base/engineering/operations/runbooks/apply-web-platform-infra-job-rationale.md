@@ -514,6 +514,27 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 - **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
   (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
 
+## MAIN plan step: the allow-list history (#7539)
+
+Relocated from the comment above the MAIN plan step (`Terraform plan (allow-list, non-SSH resources only)`) on 2026-11-17
+(#12726), to keep the workflow under the size gate (`workflow-file-size.test.ts`) when the flip-silence canary pair added
+two `-target` lines. The step comment keeps the GROUP BY TRANSPORT rule and the enforcement pointer. Verbatim, as it stood
+after that rule:
+
+```text
+This instruction already said so and did not hold: it landed 2026-05-20
+and `terraform_data.inngest_consumer_probe_install` was appended six
+lines beneath it on 2026-08-12, batched beside the other
+inngest-consumer resources by feature (#7539). Prose is not the
+enforcement -- Guard 1 in
+plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+the PR rather than the apply.
+
+`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+resource; it did not surface #7539, because a MISPLACED resource is
+declared and targeted -- just on the stage that cannot provision it.
+```
+
 ## Comment prose relocated from the apply step
 
 The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
