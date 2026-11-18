@@ -147,9 +147,13 @@ production acts or separate PRs.
     succeeded — recent by construction within one poll interval plus the probe's own cadence);
     `no_apps` when the array is empty (pre-registration / diagnostic boot); `n/a` on the web arm;
     `__UNREADABLE__` on GQL failure, non-200, or missing jq.
-  - `sdk_app_url=` — sanitized joined app URLs (charset `[A-Za-z0-9_:.@/+-]`, `,` separators,
-    `__UNREADABLE__`/`n/a`/`none` sentinels), so a stale `http://10.0.1.10:3000` row or a missing
-    `https://app.soleur.ai` registration is legible in the same row. This doubles as the read-only
+  - `sdk_app_url=` — one entry per app, `<url>!<ok|error>`, joined by `,` (review ruling R4,
+    2026-11-18): each URL loses userinfo and query/fragment and is reduced to `[A-Za-z0-9_:./+-]`;
+    the emit charset is `[A-Za-z0-9_:./+,!-]`; capped at 160 B (logger 1024 B row limit) on an entry boundary with `,+<n>`
+    for the dropped entries; `__UNREADABLE__`/`n/a`/`none` sentinels. So a stale
+    `http://10.0.1.10:3000` row, which poll fails, or a missing `https://app.soleur.ai`
+    registration is legible in the same row; item 4 passes only on the single entry
+    `https://app.soleur.ai/api/inngest!ok`. This doubles as the read-only
     evidence item 4 will need ("the stored `url` of each app row (host-local GQL, as the probe
     already does)").
   - `probe_schema` bumps `9` → `10`; `_IHDG_EXPECTED_SCHEMA` bumps to `10`. The bump cannot block
@@ -436,8 +440,11 @@ item 5 — out of scope.
   posture (Privacy Policy s11 / DPD 8.1(c) carve-out this remedy retires).
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** exposure is all-users' event traffic on the shared
-  scheduler, not one user's session — above `single-user incident`; it is bounded by a single
-  dispatch decision, not a systemic recurring leak, so not the maximal reading either.
+  scheduler, not one user's session — above `single-user incident`. It is not bounded by one
+  dispatch decision: once a host boots with the public sdk_url, the poll recurs every 60 s for
+  the host's life, and the dispatch-time preflight read does not see a later dashboard flip to
+  `flexible`. The post-boot backstop is `.github/workflows/scheduled-terraform-drift.yml`, which
+  sees the live ruleset diverge from the repo's `strict`.
 
 ## Domain Review
 

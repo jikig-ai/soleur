@@ -49,7 +49,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook (inngest-host-replace: REPLACE-INNGEST-HOST; inngest-host takes none). Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -1903,11 +1903,14 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      # #12742: live strict-SSL read, fail-closed, before any terraform step. Why: §inngest_host_replace rationale.
+      # #12742: REPLACE-INNGEST-HOST typo-guard, then the live strict-SSL read, fail-closed, before any terraform step. Why: §inngest_host_replace rationale.
       - name: Public sdk_url strict-SSL preflight (#12742)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: bash tests/scripts/lib/inngest-public-sdk-url-preflight.sh
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          [[ "$CONFIRM" == "REPLACE-INNGEST-HOST" ]] || { echo "::error::[confirm] inngest-host-replace needs -f confirm=REPLACE-INNGEST-HOST (a typo-guard, not authorization)"; exit 1; }
+          bash tests/scripts/lib/inngest-public-sdk-url-preflight.sh
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         run: |
@@ -2149,7 +2152,7 @@ jobs:
           last_rc=9
           verdict_reads=0
           while [ "$SECONDS" -lt "$deadline" ]; do
-            timeout 90 doppler run -p soleur -c prd_terraform -- \
+            timeout 90 doppler run --preserve-env -p soleur -c prd_terraform -- \
               env -u INNGEST_STATE_QUERY -u INNGEST_STATE_SINCE -u INNGEST_PROBE_ROW_LIB -u INNGEST_PROBE_EMITTER -u INNGEST_PROBE_MARKER \
               scripts/inngest-host-state.sh --since 30m --instance-id "$INNGEST_NEW_IID" --no-errors
             last_rc=$?

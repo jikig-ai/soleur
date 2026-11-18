@@ -292,7 +292,9 @@ grep -qE '(^[[:space:]]*|&&[[:space:]]+)host_role=dedicated[[:space:]]*$' "$BOOT
 # ── #12742 F4(ii): the free-text sanitizers are this alert's own protection ────────────────
 # A free-text field carrying ` registry_fns=5 ` re-tokenizes the emitted row: the negated
 # needle sees a positive-integer match and goes QUIET on a real registry_fns=0. The probe
-# therefore confines image_ref/cli_version (and sdk_app_url) to the row charset at bind time.
+# therefore confines image_ref/cli_version to the row charset [A-Za-z0-9_:.@/+-] at bind time,
+# and sdk_app_url (#12742 R4: `<url>!<ok|error>` entries joined by `,`) to its own charset
+# [A-Za-z0-9_:./+,!-] — no `@`, plus the two separators; neither admits a space or `=`.
 # The rows below pin both sanitize sites, derive the charset from BOOT (never re-typed), run
 # a hostile value through it, and prove on BOTH emit paths: the SANITIZED render still FIRES
 # on registry_fns=0 while the UNSANITIZED render would have masked it — the sanitize is
@@ -308,6 +310,16 @@ _san_expr="$(grep -oE "tr -c '[A-Za-z0-9_:.@/+-]+' '_'" "$BOOT" | head -1)"
   || no "no tr -c '<charset>' '_' sanitize expression found in BOOT — the hostile-render rows would be vacuous"
 _hostile='v1.2.3 registry_fns=5 hostile'
 _san_val="$(printf '%s' "$_hostile" | eval "$_san_expr")"
+# sdk_app_url's sanitize, derived from BOOT the same way (its charset differs, so it is its own pin).
+_sdk_san_expr="$(grep -E '^[[:space:]]*sdk_app_url="\$\(printf ' "$BOOT" | grep -oE "tr -c '[^']+' '_'" | head -1)"
+[ "$_sdk_san_expr" = "tr -c 'A-Za-z0-9_:./+,!-' '_'" ] \
+  && ok "BOOT: \$sdk_app_url is charset-confined at bind time to [A-Za-z0-9_:./+,!-] (#12742 R4 entry charset)" \
+  || no "BOOT: \$sdk_app_url's tr -c sanitize is missing or its charset drifted from [A-Za-z0-9_:./+,!-] (got: ${_sdk_san_expr:-none})"
+_sdk_san_val="$(printf '%s' "https://h/x!ok,$_hostile" | eval "${_sdk_san_expr:-cat}")"
+case "$_sdk_san_val" in
+  *' '* | *'='* | *'@'*) no "the sdk_app_url charset admits a space, '=' or '@' — a hostile entry can re-tokenize the row (got: $_sdk_san_val)" ;;
+  *) ok "a hostile sdk_app_url entry passes the sdk charset with no space, '=' or '@' (it cannot mask registry_fns=0)" ;;
+esac
 _render_fv() {  # _render_fv <line> <registry-value> <field-var> <field-value>
   local t="$1"
   t="${t#*\"${INNGEST_PROBE_MARKER} }"; [ "$t" = "$1" ] && t="${1#*"${MUT_STAGE}" \"}"
@@ -709,7 +721,7 @@ s = s.replace(old, " prior_registry_fns=5 registry_fns=$registry_fns ")'
   mutate_self_red "the extraction is replaced with an empty string (the floor and canon rows must red)" \
     's|^LOCAL_SQL="$(sql_local_raw "${NAME}_sql")"$|LOCAL_SQL=""|'
   mutate_self_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor" \
-    's/^PRESENCE_ROWS=60$/PRESENCE_ROWS=61/'
+    's/^PRESENCE_ROWS=62$/PRESENCE_ROWS=63/'
   # Neutering row (#12737): the pair census lives in apps/web-platform/test/infra/logtail-pair-census.awk, shared by
   # the three Inngest logs-alert guards. An emptied lib must red this suite, not leave the census rows comparing nothing.
   _empty_awk="$MUT_DIR/empty-pair-census.awk"; : > "$_empty_awk"; _nrc=0
@@ -732,7 +744,7 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer
 # run adds one row per mutation. The instrument control above catches a floor that drifts past the
 # presence rows.
-PRESENCE_ROWS=60
+PRESENCE_ROWS=62
 MUT_ROWS=30
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS

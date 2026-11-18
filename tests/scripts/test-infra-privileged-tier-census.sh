@@ -219,9 +219,9 @@ DOPPLER_RUN = re.compile(r"doppler\s+run\b")
 # `doppler run` wrapper fail-closes" is a sentence, not an invocation. A census anchored on the bare
 # token scores every one of those, so the anchor is SYNTACTIC: the token must sit where a command
 # can start (line start, or after `|`, `;`, `&&`, `||`, `(`, `$(`, `{`, `!`, `then`, `do`, `else`,
-# optionally behind VAR=value prefixes), on a line that is not a shell comment.
+# optionally behind VAR=value prefixes and one `timeout N[smhd]` prefix, #12742 R3), on a line that is not a shell comment.
 CMD_POS = re.compile(r"(?:^|[|;&({!]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*"
-                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*$")
+                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*(?:timeout\s+[0-9]+[smhd]?\s+)?$")
 
 HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
 
@@ -3664,6 +3664,13 @@ if mutate g2-2-second-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.ym
   fixcensus "$MUTDIR" "$T/mut/g2-2.tsv" ""
   mutant_red g2-2-second-run-no-flag wf_row "$T/mut/g2-2.tsv" "G2a:"
 fi
+# Row 2b (#12742 R3) — a SECOND `doppler run` behind a `timeout N` prefix, without the flag. CMD_POS must
+# read `timeout 90 doppler run` as a command, or every time-bounded leg escapes the census.
+MUTDIR="$(fixcopy g2-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g2-2b-timeout-prefixed-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          bash scripts\/tierb-helper\.sh$/a\          OUT="$(timeout 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x)"'; then
+  fixcensus "$MUTDIR" "$T/mut/g2-2b.tsv" ""
+  mutant_red g2-2b-timeout-prefixed-run-no-flag wf_row "$T/mut/g2-2b.tsv" "G2a:"
+fi
 # Row 3 — the flag removed from a `doppler run` inside the script a Tier-B job invokes by
 # `bash scripts/<x>.sh`. A census that skips script indirection stays green here.
 MUTDIR="$(fixcopy g2-3)"; assert_fixture_dir "$MUTDIR"
@@ -4895,7 +4902,8 @@ fi
 #   (caller-job secrets: block), g1-2h (secrets: inherit), g1-2i (lowercase spelling),
 #   g1-2j (DOPPLER_TOKEN_INNGEST_ARM name); 1 landing each. Measured: 163 ran.
 # 163 -> 164 (#9927 review): g1-2k (DOPPLER_TOKEN_INNGEST_FLIP_READ name in REPO_SCOPED_PRIV); 1 landing.
-MUTANT_FLOOR=164
+# 164 -> 165 (#12742 R3): g2-2b (a `timeout 90 doppler run` without --preserve-env); 1 landing.
+MUTANT_FLOOR=165
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4951,7 +4959,8 @@ _ran=$((passes + fails))
 # 404 -> 406 (#9755 review): g1-2c (1 landing + 1 verdict). Measured: 406 ran.
 # 406 -> 420 (#9755 review round 2): g1-2d..g1-2j (7 landings + 7 verdicts). Measured: 420 ran.
 # 420 -> 422 (#9927 review): g1-2k (1 landing + 1 verdict). Measured: 422 ran.
-FLOOR=422
+# 422 -> 424 (#12742 R3): g2-2b (1 landing + 1 verdict). Measured: 425 ran.
+FLOOR=424
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

@@ -109,4 +109,12 @@ rc=0; out="$(env -i PATH="$PATH" INNGEST_SERVING_QUERY_BIN="$TMP/query-q.sh" bas
 [[ "$rc" -eq 2 && "$out" == *credentials_unprovisioned* ]] && pass "missing creds => TRANSIENT credentials_unprovisioned" || fail "credentials" "$rc" "$out"
 
 printf '\n%d passed, %d failed\n' "$PASS_N" "$FAIL_N"
+# Pass-count floor, reported directly with printf + exit (ADR-193), never through pass()/fail():
+# a floor routed through the helper it backstops dies with the same edit that disarms the helper,
+# and a deleted or skipped case would otherwise leave a shorter all-green run. 10 cases today.
+P8525_MIN_PASS=10
+if [ "$PASS_N" -lt "$P8525_MIN_PASS" ]; then
+  printf 'FATAL: pass-count floor: only %d cases passed, expected >= %d (a case was skipped or emptied).\n' "$PASS_N" "$P8525_MIN_PASS" >&2
+  exit 1
+fi
 [ "$FAIL_N" -eq 0 ]

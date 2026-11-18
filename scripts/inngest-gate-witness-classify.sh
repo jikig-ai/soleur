@@ -61,8 +61,10 @@ inngest_gate_witness_classify() {
     # measures execute-gate satisfiability, not host darkness — and during the schema-10
     # merge→owner-replace window the gate IS unsatisfiable by design. Mapping the token to
     # alive/not-dark (`suppressed`/`satisfy`) would forgive a STUCK replace past the
-    # 2026-11-20 ledger expiry: the one deduped action-required filing ~2h post-merge on the
-    # designed-for state is the accepted cost of keeping that alarm armed.
+    # 2026-12-10 ledger limit (ledger row 6; the 2026-11-20 one is superseded). The accepted
+    # cost of keeping that alarm armed: once the refusal streak reaches 8 (~2h of 15-minute
+    # runs) scheduled-inngest-health.yml files one deduped action-required issue, then comments
+    # on that open issue on EVERY further refusing run until the replace clears the streak.
     unreadable|silent|wrong_host|stale_row|stale_schema|host_serving|flag_unreadable|fsm_unreadable|fsm_silent)
                       echo "refusal" ;;
     *)                echo "refusal" ;;

@@ -779,6 +779,8 @@ registry_fns=n/a
 data_luks=n/a
 # #12742 probe_schema=10. Same unconditional-emit contract: `n/a` = the question does not
 # apply on this host (web role); `__UNREADABLE__` = it applied and could not be answered.
+# sdk_sync is ok | error | no_apps (measured). sdk_app_url is `<url>!<ok|error>` entries joined
+# by `,` (capped, `,+<n>` = n more), or `none` = measured, the server lists zero apps.
 sdk_sync=n/a
 sdk_app_url=n/a
 
@@ -1041,34 +1043,54 @@ dedicated)
       sdk_sync=__UNREADABLE__
       sdk_app_url=__UNREADABLE__
     else
-      # Two emit lines: verdict, then the comma-joined app URLs. Drift — a non-array
-      # `apps`, or a row missing `url` — is `bad` -> __UNREADABLE__, never a silent
-      # healthy reading. A row's ABSENT `error` is the healthy shape (null == last sync
-      # ok), so only `url` is required.
+      # Two emit lines: verdict, then the entries. Drift — a non-array `apps`, a row whose
+      # `url` is not a non-empty string, or a non-empty top-level `errors` array (a PARTIAL
+      # answer: the apps listed are not the whole registry) — is `bad` -> __UNREADABLE__, never
+      # a silent healthy reading. A row's absent/null/"" `error` is the healthy shape (last
+      # sync ok), so only `url` is required.
+      #
+      # #12742 R4: one entry per app, `<url>!<ok|error>`, joined by `,`, so the row answers
+      # BOTH "does the public poll work" and "is the stale private row gone". Each URL loses
+      # its query/fragment and userinfo first (this row reaches a third-party warehouse), then
+      # is reduced to [A-Za-z0-9_:./+-] — no `@`, no space, so it can never re-tokenize the row.
+      # The value is capped at 160 bytes at an ENTRY boundary (the row's other fields measure
+      # ~795 B and logger drops a message past 1024 B; 160 B still holds the public + private pair): the first k entries that fit,
+      # then `,+<dropped>` (just `+<n>` if none fits) — an entry is never cut mid-URL, so a cut
+      # can never read as a shorter, healthier list. The aggregate counts every app, kept or not.
       _sdk_parsed="$(printf '%s' "$_sdk_body" | jq -r '
         (.data.apps // null) as $apps
-        | if ($apps | type) != "array" then "bad\n"
+        | if ((.errors // []) | if type == "array" then length > 0 else true end) then "bad\n"
+          elif ($apps | type) != "array" then "bad\n"
           elif ($apps | length) == 0 then "no_apps\nnone"
-          elif any($apps[]; has("url") | not) then "bad\n"
-          else (if any($apps[]; ((.error // "") | tostring) != "") then "error" else "ok" end)
-               + "\n" + ([ $apps[] | .url ] | join(",")) end
+          elif any($apps[]; (.url | type) != "string" or .url == "") then "bad\n"
+          else
+            [ $apps[]
+              | (.url | sub("[?#].*$"; "") | sub("^(?<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/]*@"; "\(.s)")
+                      | gsub("[^A-Za-z0-9_:./+-]"; "_"))
+                + "!" + (if ((.error // "") | tostring) != "" then "error" else "ok" end) ] as $e
+            | ($e | length) as $n
+            | (if any($e[]; endswith("!error")) then "error" else "ok" end)
+              + "\n"
+              + first(range($n; -1; -1) as $k
+                  | ($e[0:$k] | join(",")) as $j
+                  | if $k == $n then $j
+                    elif $k == 0 then "+\($n)"
+                    else $j + ",+\($n - $k)" end
+                  | select(length <= 160))
+          end
       ' 2>/dev/null || true)"
       sdk_sync="$(printf '%s' "$_sdk_parsed" | sed -n '1p')"
       sdk_app_url="$(printf '%s' "$_sdk_parsed" | sed -n '2p')"
       case "$sdk_sync" in
-      ok | error) : ;;
-      no_apps) sdk_app_url=none ;;
+      ok | error | no_apps)
+        # Defence in depth behind the jq reduction: confine to the emit charset (the URL
+        # charset plus the `,` entry separator and the `!` state separator).
+        sdk_app_url="$(printf '%s' "$sdk_app_url" | tr -c 'A-Za-z0-9_:./+,!-' '_')"
+        [ -n "$sdk_app_url" ] || { sdk_sync=__UNREADABLE__; sdk_app_url=__UNREADABLE__; }
+        ;;
       *)
         sdk_sync=__UNREADABLE__
         sdk_app_url=__UNREADABLE__
-        ;;
-      esac
-      # URLs ride the same space-separated row: confine to the emit charset so a URL
-      # (or a hostile fragment of one) can never re-tokenize the event.
-      case "$sdk_sync" in
-      ok | error)
-        sdk_app_url="$(printf '%s' "$sdk_app_url" | tr -c 'A-Za-z0-9_:.@/+-' '_')"
-        [ -n "$sdk_app_url" ] || sdk_app_url=__UNREADABLE__
         ;;
       esac
     fi

@@ -38,3 +38,18 @@ plan and tasks.md were amended to match (see `## Amendments` below).
 - The issue's owner-dispatch preconditions (#10479 closed, #12726 resolved, `INNGEST_CUTOVER_FLIP`
   handled, fresh strict rule read, zot mirror pin, idle concurrency group) are item-2 scope and
   remain the owner's checklist, not this PR's.
+
+## Review-round rulings (CTO agent, 2026-11-18)
+
+The PR #12876 review panel raised findings that dissent from rulings 4, 9 and 10. The CTO agent ruled each; all land in this PR.
+
+| Fork | Ruling | Rationale |
+|---|---|---|
+| R1 (dissents 4): a trailing enabled `full` rule passes `trailing-weak` | New per-rule wrapper projection field `host_literal_only` (expression is exactly `(http.host eq "<h>")` or `(http.host in {"<h>" ...})`). After the last strict app rule, refuse any enabled non-null-ssl rule unless `host_literal_only and (mentions_app_host\|not)`. Tag stays `trailing-weak`. | Equals the guard's property; the live third rule (`soleur.ai`/`www.soleur.ai`, `full`) still passes; no ruleset reorder. Unverified: Cloudflare returns the expression byte-for-byte (fails closed if not). |
+| R2 (dissents 4): the strict rule's own scope is unchecked (negated / path-narrowed) | The last enabled app rule with non-null ssl must also be `host_literal_only`; else `[strict-not-host-wide]`. No zone (A) / page-rule (C) backstop; residual written in script header + runbook. | A host-literal rule covers every request to the host; Cloudflare docs: Rules take precedence over Page Rules. |
+| R3: Doppler env isolation | `timeout 90 doppler run --preserve-env --only-secrets CF_ZONE_ID,CF_API_TOKEN_RULESETS,DOPPLER_PROJECT,DOPPLER_CONFIG -p soleur -c prd_terraform -- wrapper`; refuse `[ruleset-id]` unless projection `.id` is the repo's entrypoint ruleset id (seo-config-rules.tf import). Census `CMD_POS` accepts a `timeout N` prefix; `--preserve-env` added at the replace job's liveness gate. | Blocks planted BASH_ENV/LD_PRELOAD; keeps Tier-B precedence (ADR-241 D6); a forged zone/token cannot return the pinned ruleset id. |
+| R4 (dissents 9): aggregate `sdk_sync` cannot say whether the PUBLIC poll works | Keep aggregate `sdk_sync`; `sdk_app_url` entries become `<url>!<ok\|error>` joined by `,`; strip userinfo and query/fragment in jq; charset keeps `,` and `!`; cap at an entry boundary (lead set 160 B on review: the other fields measure ~795 B against logger's 1024 B) with `,+<n>`; schema stays 10. Item-4 pass: the public entry is `!ok` and no other entry exists. | One row answers "public poll works" and "private row gone". |
+| R5 (partly reverses 10 for replace): typed intent on the destructive replace | `inngest_host_replace` requires `confirm=REPLACE-INNGEST-HOST` (a typo-guard, not authorization), checked at the top of its preflight step; birth stays token-free. | `infra-privileged` has no reviewers; matches the other destroying targets. |
+| R6: retry the live read | No retry; runbook refusal-tag table, `wrapper-unverified (upstream-error)` = re-dispatch once. | Re-dispatch is free; a retry adds untested gate code. |
+
+Post-merge, before the replace dispatch: one read-only `config-entrypoint` read (R1/R2 expression normalisation) and one run of R3's exact `doppler run` line. Both fail closed if wrong.

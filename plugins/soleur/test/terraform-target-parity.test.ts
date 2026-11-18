@@ -5178,13 +5178,28 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
-  // #12742 item 1 (CTO rulings 4, 6, 10, 2026-11-17): BOTH jobs that boot hcloud_server.inngest from the public-sdk_url
-  // user_data (the replace and the birth) run a fail-closed LIVE read of the Cloudflare config-settings entrypoint before
-  // any terraform step; it replaced the #10538 typed confirm token. B10 pins the PROPERTY: the preflight is the step
+  // #12742 item 1 (CTO rulings 4, 6, 10, 2026-11-17; review rulings R1-R5, 2026-11-18): BOTH jobs that boot
+  // hcloud_server.inngest from the public-sdk_url user_data (the replace and the birth) run a fail-closed LIVE read of the
+  // Cloudflare config-settings entrypoint before any terraform step. B10 pins the PROPERTY: the preflight is the step
   // immediately after `Load infra credentials (tiered)`, ahead of every terraform step, cannot be tolerated (no
-  // continue-on-error / shell override at step, job or workflow level), runs the shared script with DOPPLER_TOKEN only,
-  // neither job reads `inputs.confirm`, and the script refuses every projection but a strict last app-host rule.
+  // continue-on-error / shell override at step, job or workflow level), runs the shared script with DOPPLER_TOKEN, the
+  // replace step first checks the exact REPLACE-INNGEST-HOST typo-guard (R5; the birth reads no confirm), and the script
+  // refuses every projection but a strict, host-wide last app-host rule that no later ssl rule can override.
   const PREFLIGHT_LIB = "tests/scripts/lib/inngest-public-sdk-url-preflight.sh";
+  const REPLACE_CONFIRM_LINE =
+    '[[ "$CONFIRM" == "REPLACE-INNGEST-HOST" ]] || { echo "::error::[confirm] inngest-host-replace needs -f confirm=REPLACE-INNGEST-HOST (a typo-guard, not authorization)"; exit 1; }';
+  // A later step whose `if:` can run on a FAILED job. GitHub expression function names are case-insensitive, and a
+  // `success()` negated or OR-ed with anything re-opens the step just like always()/failure()/cancelled().
+  const reopensAfterFailure = (cond: string) =>
+    /\b(?:always|failure|cancelled)\s*\(|!\s*success\s*\(|\bsuccess\s*\(\s*\)\s*\|\||\|\|\s*success\s*\(/i.test(cond);
+  test("B10: the post-gate status-function predicate denies every form that runs on a failed job", () => {
+    for (const c of ["always()", "failure()", "cancelled()", "Always()", "FAILURE()", "${{ !success() }}", "! Success()", "success() || inputs.x == 'y'", "inputs.x || success()"]) {
+      expect(reopensAfterFailure(c), c).toBe(true);
+    }
+    for (const c of ["", "success()", "success() && inputs.plan_only != true", "inputs.apply_target == 'inngest-host-replace'"]) {
+      expect(reopensAfterFailure(c), c).toBe(false);
+    }
+  });
   test.each(["inngest_host_replace", "inngest_host"])("B10: %s runs the strict-SSL preflight right after the credential load (#12742)", (job) => {
     const parsed = parseYaml(wf) as {
       defaults?: unknown;
@@ -5199,8 +5214,22 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const gate = steps[gi];
     expect(String(gate.name)).toContain("strict-SSL preflight");
     for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in gate, `step key ${k}`).toBe(false);
-    expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
-    expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
+    if (job === "inngest_host_replace") {
+      // R5: the exact typo-guard token, checked BEFORE the script call, in the same step (nothing runs between them).
+      expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}", CONFIRM: "${{ inputs.confirm }}" });
+      expect(String(gate.run).trim().split("\n")).toEqual([REPLACE_CONFIRM_LINE, `bash ${PREFLIGHT_LIB}`]);
+      for (const [v, rc] of [["REPLACE-INNGEST-HOST", 0], ["", 1], ["replace-inngest-host", 1], ["REPLACE-INNGEST-HOST ", 1], ["PUBLIC-SDK-URL", 1]] as const) {
+        const r = spawnSync("bash", ["-c", REPLACE_CONFIRM_LINE], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CONFIRM: v }, encoding: "utf8" });
+        expect(`${JSON.stringify(v)} -> ${r.status}`).toBe(`${JSON.stringify(v)} -> ${rc}`);
+        if (rc === 1) expect(r.stdout).toContain("::error::[confirm]");
+      }
+      expect(JSON.stringify(j).split("inputs.confirm").length - 1, `${job} reads inputs.confirm only in the preflight step`).toBe(1);
+    } else {
+      expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
+      expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
+      // CTO ruling 10: the birth stays token-free.
+      expect(JSON.stringify(j), `${job} reads inputs.confirm`).not.toContain("inputs.confirm");
+    }
     const firstTf = steps.findIndex((s) => /terraform/i.test(`${s.name ?? ""} ${s.run ?? ""}`) && !/setup-terraform/.test(String(s.uses ?? "")));
     expect(firstTf, `${job} has a terraform step after the preflight`).toBeGreaterThan(gi);
     expect("continue-on-error" in j, `${job} job-level continue-on-error`).toBe(false);
@@ -5210,21 +5239,19 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     // unless it is secret-free and touches no credential, terraform or Doppler; the job carries no env; checkout takes
     // no `with` (a `ref` input would swap the script the preflight runs).
     for (const [i, st] of steps.entries()) {
-      if (i <= gi || !/always\(|failure\(|cancelled\(/.test(String(st.if ?? ""))) continue;
+      if (i <= gi || !reopensAfterFailure(String(st.if ?? ""))) continue;
       expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused preflight`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
     }
     expect(j.env, `${job} job-level env`).toBeUndefined();
     expect(steps[0].with, `${job} checkout with`).toBeUndefined();
-    // CTO ruling 10: the `confirm` input stays for the other targets, but these two jobs no longer consume it.
-    expect(JSON.stringify(j), `${job} reads inputs.confirm`).not.toContain("inputs.confirm");
   });
 
-  // Inverted fix-round sweep: the typed token is gone, so a recovery recipe that still carries
-  // `confirm=PUBLIC-SDK-URL[-BIRTH]` is a stale instruction. Every copy-paste recipe (`-f`/`-F`/`--field`/
-  // `--raw-field apply_target=inngest-host[-replace]`, bare or quoted) in scripts, skills, workflows and runbooks must
-  // carry no such token, and no live file in those trees may name the retired token or the retired script at all.
+  // Recipe sweep (R5): every copy-paste recipe (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`,
+  // bare or quoted) in scripts, skills, workflows and runbooks is checked against the job it dispatches. A replace recipe
+  // carries `confirm=REPLACE-INNGEST-HOST` as the very next field (the job refuses without it); a birth recipe carries no
+  // confirm at all (ruling 10). No live file in those trees may name the retired PUBLIC-SDK-URL token or the retired script.
   // Exempt as before: a past-run `**done YYYY-MM-DD` record, and prose that only NAMES the selector.
-  test("B10: no live dispatch recipe or carrier for the two public-sdk_url jobs names the retired confirm token", () => {
+  test("B10: every live inngest-host-replace recipe carries the REPLACE-INNGEST-HOST confirm, birth recipes carry none, and nothing names the retired token", () => {
     const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
       encoding: "utf8",
       env: gitCleanEnv(),
@@ -5235,6 +5262,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const offenders: string[] = [];
     const carriers: string[] = [];
     let recipes = 0;
+    let replaceRecipes = 0;
     for (const f of files) {
       readFileSync(join(REPO_ROOT, f), "utf-8").split("\n").forEach((line, i) => {
         if (/PUBLIC-SDK-URL|inngest-public-sdk-url-confirm/.test(line)) carriers.push(`${f}:${i + 1}`);
@@ -5245,82 +5273,161 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
           if (tail.startsWith("`") && line[m.index! - 1] === "`") continue;
           if (/\*\*done \d{4}-\d{2}-\d{2}/.test(line.slice(0, m.index!))) continue;
           recipes++;
-          if (new RegExp(String.raw`^\s+${FLAG}["']?confirm=`).test(tail)) offenders.push(`${f}:${i + 1}`);
+          if (m.groups!.t === "inngest-host-replace") {
+            replaceRecipes++;
+            if (!new RegExp(String.raw`^\s+${FLAG}(["']?)confirm=REPLACE-INNGEST-HOST\1(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1} (replace recipe without -f confirm=REPLACE-INNGEST-HOST)`);
+          } else if (new RegExp(String.raw`^\s+${FLAG}["']?confirm=`).test(tail)) offenders.push(`${f}:${i + 1} (birth recipe with a confirm)`);
         }
       });
     }
     expect(recipes, "non-vacuity: the sweep found recipes").toBeGreaterThanOrEqual(6);
+    expect(replaceRecipes, "non-vacuity: the sweep found replace recipes").toBeGreaterThanOrEqual(4);
     expect(offenders).toEqual([]);
     expect(carriers).toEqual([]);
     expect(existsSync(join(REPO_ROOT, "tests/scripts/lib/inngest-public-sdk-url-confirm.sh")), "retired confirm script").toBe(false);
   });
 
-  // The behaviour table runs the `--from-file` seam over synthesized wrapper outputs (the live path is the dispatch
-  // itself, never CI). Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal arm has
-  // its own distinct ::error:: tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
-  test("B10: the preflight passes only a strict last app-host rule with no weaker trailing rule, and names each refusal", () => {
+  // The behaviour table runs the `--from-file` seam over synthesized wrapper outputs, and the live path runs against a
+  // PATH-fake `doppler` that accepts ONLY the exact R3 argv (anything else is logged to a refusal file, asserted empty).
+  // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal arm has its own distinct
+  // ::error:: tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
+  const SEO_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
+  test("B10: the preflight's pinned ruleset id is the entrypoint id seo-config-rules.tf imports", () => {
+    const tf = readFileSync(join(REPO_ROOT, "apps/web-platform/infra/seo-config-rules.tf"), "utf8");
+    const imp = /^import \{\n(?:.*\n)*?\s*to\s*=\s*cloudflare_ruleset\.seo_config_settings\n(?:.*\n)*?\s*id\s*=\s*"zone\/\$\{var\.cf_zone_id\}\/([0-9a-f]{32})"/m.exec(tf);
+    const libId = /^RULESET_ID="([0-9a-f]{32})"$/m.exec(readFileSync(join(REPO_ROOT, PREFLIGHT_LIB), "utf8"));
+    expect(imp?.[1], "the seo-config-rules.tf import id").toBe(SEO_RULESET_ID);
+    expect(libId?.[1], "the preflight's RULESET_ID").toBe(SEO_RULESET_ID);
+  });
+  test("B10: the preflight passes only a strict host-wide last app-host rule no later ssl rule can override, and names each refusal", () => {
     const lib = join(REPO_ROOT, PREFLIGHT_LIB);
     const dir = mkdtempSync(join(tmpdir(), "b10-preflight-"));
-    type R = { enabled: boolean; ssl: string | null; app: boolean };
+    // hl = host_literal_only (the wrapper's whole-expression `(http.host eq|in ...)` boolean); default true.
+    type R = { enabled: boolean; ssl: string | null; app: boolean; hl?: boolean };
     const proj = (rules: R[], extra: Record<string, unknown> = {}) =>
       JSON.stringify({
         subcommand: "config-entrypoint",
-        id: "canaryid7f3e",
+        id: SEO_RULESET_ID,
         version: "9",
         last_updated: "2026-11-16T13:12:15.428474Z",
         rule_count: rules.length,
         enabled_ssl_rules: rules.filter((r) => r.enabled && r.ssl !== null).length,
-        rules: rules.map((r, i) => ({ ref: `canaryref${i}`, enabled: r.enabled, ssl: r.ssl, mentions_app_host: r.app, mentions_lb_staging_host: false })),
+        rules: rules.map((r, i) => ({ ref: `canaryref${i}`, enabled: r.enabled, ssl: r.ssl, mentions_app_host: r.app, mentions_lb_staging_host: false, host_literal_only: r.hl ?? true })),
         ...extra,
       });
     const OK = "cloudflare-readonly: config-entrypoint ok";
+    const UNV = "cloudflare-readonly: config-entrypoint unverified - ";
+    // seo-config-rules.tf today: `(http.host eq "app.soleur.ai")` strict, an email-obfuscation rule (no ssl), then
+    // `(http.host in {"soleur.ai" "www.soleur.ai"})` full. All three are host-literal.
     const LIVE: R[] = [
       { enabled: true, ssl: "strict", app: true },
       { enabled: true, ssl: null, app: false },
       { enabled: true, ssl: "full", app: false },
     ];
+    const WILD = { enabled: true, app: false, hl: false }; // a wildcard / `true` expression: may match app.soleur.ai
     const table: Array<[string, string | null, number, string]> = [
       ["live-shape", `${OK}\n${proj(LIVE)}\n`, 0, "preflight passed"],
+      ["weak-app-then-strict-app", `${OK}\n${proj([{ enabled: true, ssl: "full", app: true }, ...LIVE])}\n`, 0, "preflight passed"],
+      ["leading-non-app-flexible", `${OK}\n${proj([{ ...WILD, ssl: "flexible" }, ...LIVE])}\n`, 0, "preflight passed"],
+      ["trailing-full-host-literal-non-app", `${OK}\n${proj([...LIVE, { enabled: true, ssl: "full", app: false }])}\n`, 0, "preflight passed"],
+      ["disabled-trailing-flexible-ignored", `${OK}\n${proj([...LIVE, { ...WILD, enabled: false, ssl: "flexible" }])}\n`, 0, "preflight passed"],
       ["flexible-last", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true }, { enabled: true, ssl: "flexible", app: true }])}\n`, 1, "[last-not-strict]"],
       ["other-last", `${OK}\n${proj([{ enabled: true, ssl: "other", app: true }])}\n`, 1, "[last-not-strict]"],
+      ["negated-strict", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true, hl: false }, ...LIVE.slice(1)])}\n`, 1, "[strict-not-host-wide]"],
       ["all-disabled", `${OK}\n${proj([{ enabled: false, ssl: "strict", app: true }, { enabled: true, ssl: "full", app: false }])}\n`, 1, "[all-disabled]"],
       ["no-match", `${OK}\n${proj([{ enabled: true, ssl: "full", app: false }])}\n`, 1, "[no-match]"],
       ["app-rule-without-ssl", `${OK}\n${proj([{ enabled: true, ssl: null, app: true }])}\n`, 1, "[no-match]"],
-      ["strict-then-trailing-flexible", `${OK}\n${proj([...LIVE, { enabled: true, ssl: "flexible", app: false }])}\n`, 1, "[trailing-weak]"],
-      ["strict-then-trailing-off", `${OK}\n${proj([...LIVE, { enabled: true, ssl: "off", app: false }])}\n`, 1, "[trailing-weak]"],
-      ["strict-then-trailing-other", `${OK}\n${proj([...LIVE, { enabled: true, ssl: "other", app: false }])}\n`, 1, "[trailing-weak]"],
-      ["disabled-trailing-flexible-ignored", `${OK}\n${proj([...LIVE, { enabled: false, ssl: "flexible", app: false }])}\n`, 0, "preflight passed"],
-      ["unverified", "cloudflare-readonly: config-entrypoint unverified - token-lacks-scope\n", 1, "[wrapper-unverified]"],
+      ["strict-then-trailing-flexible", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "flexible" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-off", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "off" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-other", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "other" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-full-true", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "full" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-strict-true", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "strict" }])}\n`, 1, "[trailing-weak]"],
+      ["ruleset-id-mismatch", `${OK}\n${proj(LIVE, { id: "canaryid7f3e" })}\n`, 1, "[ruleset-id]"],
+      ["ruleset-id-missing", `${OK}\n${proj(LIVE, { id: null })}\n`, 1, "[shape]"],
+      ["unverified", `${UNV}token-lacks-scope\n`, 1, "[wrapper-unverified]"],
+      ["unverified-uppercase-reason", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 1, "(no-credential (CF_API_TOKEN_RULESETS))"],
+      ["unverified-reason-with-equals", `${UNV}canary=7f3e\n`, 1, "[malformed]"],
+      ["unverified-reason-with-slash", `${UNV}canary/7f3e\n`, 1, "[malformed]"],
       ["other-subcommand-ok-line", `cloudflare-readonly: ssl-mode ok\n${proj(LIVE)}\n`, 1, "[malformed]"],
       ["malformed-json", `${OK}\n{"rules":[canary-7f3e\n`, 1, "[malformed]"],
       ["no-projection-line", `${OK}\n`, 1, "[malformed]"],
       ["extra-line", `${OK}\n${proj(LIVE)}\n${proj(LIVE)}\n`, 1, "[malformed]"],
+      ["two-json-values-one-line", `${OK}\n${proj(LIVE)} ${proj(LIVE)}\n`, 1, "[malformed]"],
       ["wrong-subcommand", `${OK}\n${proj(LIVE, { subcommand: "ssl-mode" })}\n`, 1, "[shape]"],
       ["rules-not-array", `${OK}\n${proj(LIVE, { rules: { a: 1 } })}\n`, 1, "[shape]"],
       ["enabled-not-boolean", `${OK}\n${proj(LIVE).replace('"enabled":true', '"enabled":"yes"')}\n`, 1, "[shape]"],
+      ["host-literal-missing", `${OK}\n${proj(LIVE).replace(',"host_literal_only":true}', "}")}\n`, 1, "[shape]"],
       ["empty-file", "", 1, "[malformed]"],
       ["missing-file", null, 1, "[no-input]"],
     ];
     const outs: string[] = [];
+    const PATH0 = process.env.PATH ?? "/usr/bin:/bin";
+    const CIS: Array<Record<string, string>> = [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }];
+    // The live path's fake doppler: exact argv or a logged refusal; on a match it replays a canned output and rc.
+    const fake = join(dir, "bin");
+    mkdirSync(fake);
+    const wrapper = join(REPO_ROOT, "plugins/soleur/scripts/cloudflare-readonly.sh");
+    const want = ["run", "--preserve-env", "--only-secrets", "CF_ZONE_ID,CF_API_TOKEN_RULESETS,DOPPLER_PROJECT,DOPPLER_CONFIG", "-p", "soleur", "-c", "prd_terraform", "--", wrapper, "config-entrypoint"];
+    const refusals = join(dir, "refusals.log");
+    const calls = join(dir, "calls.log");
+    writeFileSync(
+      join(fake, "doppler"),
+      [
+        "#!/bin/bash",
+        `want=(${want.map((a) => `'${a}'`).join(" ")})`,
+        'if [ "$#" -ne "${#want[@]}" ]; then printf "%q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi",
+        'i=0; for a in "$@"; do if [ "$a" != "${want[$i]}" ]; then printf "%q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi; i=$((i+1)); done",
+        `echo call >> '${calls}'`,
+        `cat '${join(dir, "live.out")}'`,
+        `exit "$(cat '${join(dir, "live.rc")}')"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const live: Array<[string, string, number, number, string]> = [
+      ["live-ok", `${OK}\n${proj(LIVE)}\n`, 0, 0, "preflight passed"],
+      ["live-nonzero-rc", "", 14, 1, "[wrapper-rc]"],
+      ["live-unverified-uppercase", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 10, 1, "[wrapper-unverified] public sdk_url boot refused (#12742): the live read did not verify (no-credential (CF_API_TOKEN_RULESETS))"],
+      ["live-ruleset-id-mismatch", `${OK}\n${proj(LIVE, { id: "canaryid7f3e" })}\n`, 0, 1, "[ruleset-id]"],
+    ];
+    let liveRuns = 0;
     try {
       // Run twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
-      for (const ci of [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }]) {
+      for (const ci of CIS) {
         for (const [name, body, rc, tag] of table) {
           const p = join(dir, `${name}.txt`);
           if (body !== null) writeFileSync(p, body);
-          const r = spawnSync("bash", [lib, "--from-file", p], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...ci }, encoding: "utf8" });
+          const r = spawnSync("bash", [lib, "--from-file", p], { env: { PATH: PATH0, ...ci }, encoding: "utf8" });
           expect(`${name} -> rc=${r.status}`).toBe(`${name} -> rc=${rc}`);
           expect(r.stdout, `${name} tag`).toContain(tag);
           if (rc === 1) expect(r.stdout, `${name} names #12742`).toContain("#12742");
           outs.push(r.stdout + r.stderr);
         }
+        for (const [name, body, wrc, rc, tag] of live) {
+          writeFileSync(join(dir, "live.out"), body);
+          writeFileSync(join(dir, "live.rc"), String(wrc));
+          const r = spawnSync("bash", [lib], { env: { PATH: `${fake}:${PATH0}`, DOPPLER_TOKEN: "dp.st.canary7f3e", ...ci }, encoding: "utf8" });
+          liveRuns++;
+          expect(`${name} -> rc=${r.status}`).toBe(`${name} -> rc=${rc}`);
+          expect(r.stdout, `${name} tag`).toContain(tag);
+          outs.push(r.stdout + r.stderr);
+        }
+        // xtrace: refused in live mode before DOPPLER_TOKEN is expanded; the from-file seam holds no credential and runs.
+        const xt = spawnSync("bash", ["-x", lib], { env: { PATH: `${fake}:${PATH0}`, DOPPLER_TOKEN: "dp.st.canary7f3e", ...ci }, encoding: "utf8" });
+        expect(xt.status).toBe(1);
+        expect(xt.stdout).toContain("[xtrace]");
+        outs.push(xt.stdout + xt.stderr);
+        const xf = spawnSync("bash", ["-x", lib, "--from-file", join(dir, "live-shape.txt")], { env: { PATH: PATH0, ...ci }, encoding: "utf8" });
+        expect(xf.status, "bash -x --from-file is not refused").toBe(0);
       }
+      expect(existsSync(refusals) ? readFileSync(refusals, "utf8") : "", "the fake doppler saw a non-R3 argv").toBe("");
+      expect(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, "non-vacuity: every live run reached the fake doppler").toBe(liveRuns);
       // Usage: the live mode takes no positional argument; the seam takes exactly one path.
       for (const args of [["extra"], ["--from-file"], ["--from-file", "a", "b"]]) {
-        expect(spawnSync("bash", [lib, ...args], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" }, encoding: "utf8" }).status, JSON.stringify(args)).toBe(64);
+        expect(spawnSync("bash", [lib, ...args], { env: { PATH: PATH0 }, encoding: "utf8" }).status, JSON.stringify(args)).toBe(64);
       }
       // Live mode without a token refuses before any network or Doppler call.
-      const nt = spawnSync("bash", [lib], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" }, encoding: "utf8" });
+      const nt = spawnSync("bash", [lib], { env: { PATH: `${fake}:${PATH0}` }, encoding: "utf8" });
       expect(nt.status).toBe(1);
       expect(nt.stdout).toContain("[no-token]");
     } finally {
