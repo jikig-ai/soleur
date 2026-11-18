@@ -34,8 +34,8 @@ export interface CodexAppServerTurn {
 
 export interface CodexAppServerSession {
   initialize(): Promise<Record<string, unknown>>;
-  start(input: string): Promise<CodexAppServerTurn>;
-  resume(threadId: string, input: string): Promise<CodexAppServerTurn>;
+  start(input: string, signal?: AbortSignal): Promise<CodexAppServerTurn>;
+  resume(threadId: string, input: string, signal?: AbortSignal): Promise<CodexAppServerTurn>;
   readThread(threadId: string): Promise<Record<string, unknown>>;
   listTurns(threadId: string, options?: CodexThreadTurnsListOptions): Promise<Record<string, unknown>>;
   listItems(threadId: string, options?: CodexThreadItemsListOptions): Promise<Record<string, unknown>>;
@@ -46,6 +46,12 @@ export interface CodexAppServerSession {
 
 function sessionError(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function assertActive(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw sessionError("Codex turn was cancelled before provider dispatch", "codex_turn_cancelled");
+  }
 }
 
 function extractThread(result: Record<string, unknown>): NativeSessionReference {
@@ -120,16 +126,24 @@ export function createCodexAppServerSession(
 
   return {
     initialize: ensureInitialized,
-    start: async (input) => {
+    start: async (input, signal) => {
+      assertActive(signal);
       await ensureInitialized();
-      return startTurn(await ensureThread(), input);
+      assertActive(signal);
+      const activeThread = await ensureThread();
+      assertActive(signal);
+      return startTurn(activeThread, input);
     },
-    resume: async (threadId, input) => {
+    resume: async (threadId, input, signal) => {
+      assertActive(signal);
       await ensureInitialized();
+      assertActive(signal);
       const result = await client.request(createCodexThreadResumeRequest(options.nextRequestId(), threadId));
+      assertActive(signal);
       const resumed = extractThread(result);
       thread = resumed;
       threadStart = Promise.resolve(resumed);
+      assertActive(signal);
       return startTurn(resumed, input);
     },
     readThread: async (threadId) => {

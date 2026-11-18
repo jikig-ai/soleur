@@ -41,3 +41,59 @@ Mutations that survived and why: dropping the bare-repo `elif` changes nothing o
 
 category: logic-errors
 module: plugins/soleur/commands/go.md, plugins/soleur/test/go-session-gates.test.sh
+
+## Addendum — 2026-10-11 PR #9051 maintenance
+
+The session-start gate completed asynchronously. Its final restore reads local
+`main`, which lagged this feature branch's MCP profile configuration. The branch
+was clean before the gate; afterward its generated `.mcp.json` diff replaced
+profile-slot wiring with old shared-profile wiring. Reversed only that generated
+diff and verified byte identity with HEAD. No browser was launched.
+
+Session errors and prevention:
+
+1. Broad source reads exceeded output budgets. Re-read the relevant sections
+   in bounded chunks; truncation provides no complete-file evidence.
+2. A previous `/tmp` gate helper and the installed CI-only reference were absent.
+   Extracted the current canonical gates and read the reference from this
+   worktree. Temporary helpers and installed references require existence probes.
+3. An incoming Vitest wrapper was read from the pre-merge tree, where it did
+   not exist. Read it with `git show <pinned-main>:<path>` before merging.
+4. Sandbox lock writes and a GitHub network read failed. Retried the necessary
+   operations through escalation; the successful cleanup still reported the
+   temporary sweep's independent lock contention, which remains a skipped sweep.
+5. Reversed the gate's generated MCP diff before its asynchronous execution
+   finished; the final restore wrote it again. Awaited the gate's completion,
+   reversed the generated diff again and verified the branch bytes. Future
+   repairs of a gate's output must follow its completion, never a partial log.
+6. A saved-description comparison looked in the feature worktree after its
+   writer had omitted `workdir`. Used a fresh authoritative PR-description read
+   in the feature worktree; every scratch writer and reader must share an
+   explicit absolute working directory.
+7. A repeated sentence placed the new verdict before an older dated section.
+   The post-edit tail check caught it; moved it to the end using unique adjacent
+   context. Append-only records require an end-of-file placement check.
+
+These were visible failures or local execution mistakes; no new cross-cutting
+rule or runtime qualification claim follows from this maintenance.
+
+## Addendum — 2026-10-11 remaining acceptance preparation
+
+The continuation repeated oversized combined reads and guessed absent source
+filenames. Discovery with `rg --files` and bounded rereads corrected the scope;
+no missing file or truncated output was treated as implementation evidence.
+The tally was initialized after the first two read-only audit agents launched;
+their seats were recorded before the third launch. Initialize and gate before
+each spawn, including audit-only preparation.
+
+Fresh scratch-runner generation initially used JavaScript replacement-string
+metasyntax against a Python regex containing dollar/apostrophe characters. Syntax
+checks caught the malformed copy before execution. Replacement callbacks and
+direct line parsing produced the valid fresh artifact. Its first read-only
+preview then refused a legitimate systemd filename containing `@`; bounded source
+inspection corrected the admission grammar and preview passed. The old consumed
+runner and authorization marker were preserved; no build or startup followed.
+
+Local C.9 passed in the verified PID namespace without a code change. A green
+isolated result narrows the observation; it cannot establish the earlier CI
+failure's cause or close its tracker. Retain that distinction in handoffs.

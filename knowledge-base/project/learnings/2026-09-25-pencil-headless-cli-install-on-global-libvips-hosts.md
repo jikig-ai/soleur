@@ -40,6 +40,7 @@ Before committing `.pen` files: `gitleaks git --staged --verbose`; add `fileToke
 1. **`gh issue create --body-file` rejected 4×.** The filing gate reads the file at PreToolUse, so (a) a rejected compound command runs nothing — the `mv` producing the file never executed, and (b) relative paths resolve against the hook's CWD, not the shell's. **Prevention:** write the body file in a dedicated step under a plain (non-dotfile) name, then invoke `gh` with the absolute path; expect the `User-Impact:`/`Fix-Size:` or `Mandated-By:` justification on every `gh issue create`, not just deferrals.
 2. **Lethook rejection buried in truncated output.** `git commit && git push` printed "Everything up-to-date" after the commit was actually blocked by `gitleaks-staged` — the push was a no-op over an uncommitted tree. **Prevention:** after any `commit && push` chain, verify `git log --oneline -1` before trusting the push line.
 3. **`rg --type tsx` invalid.** **Prevention:** use `-g '*.tsx'` globs.
+4. **Pencil `TakeScreenshot` rejects placeholder root IDs and rolls back the entire `execute` block.** **Prevention:** query top-level frame IDs with `Get` before taking screenshots; after any failed `execute`, repair the same `editId` with `edits` rather than resending the snippet.
 
 ## Prevention
 

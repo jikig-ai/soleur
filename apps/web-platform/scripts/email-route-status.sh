@@ -21,19 +21,19 @@
 
 set -euo pipefail
 
-case "${1:-}" in
-  -h|--help)
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
-    exit 0
-    ;;
-esac
-
 # Never trace this script: the environment carries a database credential
 # (#7797). Exits 78, like dev-ledger-parity.sh.
 case "$-" in
   *x*)
     echo "[FATAL] email-route-status: refusing to run under xtrace (credential in environment; see #7797)" >&2
     exit 78
+    ;;
+esac
+
+case "${1:-}" in
+  -h|--help)
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
     ;;
 esac
 

@@ -80,3 +80,18 @@ Two supporting insights:
 - related-rules: hr-no-ssh-fallback-in-runbooks, hr-exhaust-all-automated-options-before, hr-fresh-host-provisioning-reachable-from-terraform-apply
 - related-learnings: 2026-05-15-ci-sentinel-paren-safety (paren-safe sentinels), 2026-03-21-lefthook-gobwas-glob-double-star (dual-glob)
 - refs: #5933
+
+## Addendum — 2026-10-07 historical workflow citations
+
+The current `scripts/lint-infra-no-human-steps.py` also joins actor and
+imperative signals across adjacent nonblank lines; blank lines do not separate
+them, and inline backticks do not exempt commands. The earlier Solution
+description is historical and must not be used to infer those exemptions.
+
+During PR #9051 evidence capture, a bullet recording account-read authorization
+sat next to a description of a host-maintenance workflow and its nonexecution.
+The scanner reported the adjacent pair as a prescribed human action. Cite the
+actual `.yml` filename when identifying automation; the scanner has a filename
+carve-out. This preserves the evidence without an ignore region or scanner
+change. Rerun the linter on the corrected files before committing; a failed
+static check is not cleared by subsequent successful staging or secret scanning.

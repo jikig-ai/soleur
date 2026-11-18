@@ -270,6 +270,8 @@ export function ChatSurface({
     startSession,
     resumeSession,
     sendMessage,
+    resendMessage,
+    acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendApprovalDecide,
     sendAutonomousDisclosureResponse,
@@ -277,6 +279,7 @@ export function ChatSurface({
     resolveInteractivePrompt,
     status,
     sessionConfirmed,
+    hasPendingCodexHistoryTransfer,
     disconnectReason,
     lastError,
     reconnect,
@@ -562,7 +565,8 @@ export function ChatSurface({
   }, [recomputeNearBottom]);
 
   useEffect(() => {
-    if (status !== "connected" || sessionStarted || contextPending) return;
+    const heldCodexDraftNeedsRecovery = !sessionConfirmed && hasPendingCodexHistoryTransfer;
+    if (status !== "connected" || sessionStarted || contextPending || heldCodexDraftNeedsRecovery) return;
 
     if (conversationId === "new") {
       if (rebindConversationId) {
@@ -583,7 +587,7 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, rebindConversationId]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, sessionConfirmed, hasPendingCodexHistoryTransfer, rebindConversationId]);
 
   // #11525 - the server refused the rebind resume: the hook dropped the id, so
   // re-running the effect above takes the `startSession` branch (one-shot).
@@ -1077,7 +1081,10 @@ export function ChatSurface({
             </span>
             <Button
               variant="ghost"
-              onClick={resumeAfterUnrecoverable}
+              onClick={() => {
+                if (hasPendingCodexHistoryTransfer) setSessionStarted(true);
+                resumeAfterUnrecoverable();
+              }}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
             >
               Resume with full context
@@ -1141,12 +1148,19 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={cardCopy.title}
+                confirmLabel="Acknowledge provider change"
+                onConfirm={lastError.code === "codex_history_transfer_required"
+                  && lastError.conversationId
+                  && lastError.authModeGeneration !== undefined
+                  && lastError.noticeNonce
+                  ? () => acknowledgeCodexHistoryTransfer(lastError.conversationId!, lastError.authModeGeneration!, lastError.noticeNonce!)
+                  : undefined}
+                title={lastError.code === "codex_history_transfer_required" ? "Codex account changed" : cardCopy.title}
                 message={lastError.message}
                 onRetry={
                   credentialBlocked
                     ? onSessionReconnect
-                    : lastError.code !== "subscription_limit" &&
+                    : lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" && lastError.code !== "codex_dispatch_unavailable" && lastError.code !== "codex_resend_unavailable" &&
                         // #11599 — Reconnect does not resend and the socket stays up: no retry on either card.
                         !isAuthModeErrorCode(lastError.code)
                       ? reconnect
@@ -1227,6 +1241,10 @@ export function ChatSurface({
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
+                      delivery={msg.delivery}
+                      recoveryExpired={msg.recoveryExpired}
+                      onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
+                      resendDisabled
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}

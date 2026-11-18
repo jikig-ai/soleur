@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${DATABASE_URL:+x}${DATABASE_URL_POOLER:+x}" ]; then
+      printf '[FATAL] refusing to trace database credentials (see #11096)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Runs every SQL file under apps/web-platform/supabase/verify/ against prod
 # and fails if any check reports a non-zero `bad` count.
 #

@@ -145,6 +145,10 @@ export interface CommandBlock {
 
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
+  /** Local delivery feedback; held turns retain content and attachments for explicit resend. */
+  delivery?: "unsent" | "retryable" | "unresolved";
+  /** The bounded tab recovery copy expired; this mounted view may still show the draft. */
+  recoveryExpired?: boolean;
   /**
    * feat-concierge-stream-commands — retained for the command_stream arm's
    * chip-prune + liveness; nothing renders these. Append-only; `undefined`/empty on bubbles
@@ -432,17 +436,19 @@ export function pushActivity(
  * The text is the user-visible assistant content — already at the emit
  * boundary — so no new exposure; label is bounded to one line / 160 chars.
  * SNAPSHOT assumption: every live emitter sends cumulative-per-block content
- * (cc `onText` block.replace, agent-runner lastBlock.text). The dormant Codex
- * mapper emits per-delta FRAGMENTS — when it wires into ws-handler, gate this
- * fold off that path or accumulate deltas per itemId upstream.
+ * (cc `onText` block.replace, agent-runner lastBlock.text). Codex Web also
+ * emits complete answer snapshots across native items; those replacements
+ * must not be presented as reasoning steps. See
+ * codex-ws-events.ts › createCodexWebEventMapper().
  */
 function foldReplacedText(
   prevContent: string,
   nextContent: string,
   activity: ActivityEntry[] | undefined,
   contentStartedAt: number | undefined,
+  answerSnapshot?: true,
 ): ActivityEntry[] | undefined {
-  if (!prevContent || nextContent.startsWith(prevContent)) return activity;
+  if (answerSnapshot || !prevContent || nextContent.startsWith(prevContent)) return activity;
   const firstLine = prevContent
     .split("\n")
     .map((l) => l.trim())
@@ -1280,6 +1286,7 @@ export function applyStreamEvent(
             event.content,
             target.activity,
             target.contentStartedAt,
+            event.answerSnapshot,
           );
           const folded = foldCurrentStep(
             { ...target, activity: withText },
@@ -1315,6 +1322,7 @@ export function applyStreamEvent(
           event.content,
           current.activity,
           current.contentStartedAt,
+          event.answerSnapshot,
         );
         const folded = foldCurrentStep(
           { ...current, activity: withText },
@@ -1361,6 +1369,7 @@ export function applyStreamEvent(
                 prunedChips,
               ),
               working[errIdx].contentStartedAt,
+              event.answerSnapshot,
             ),
           },
         );

@@ -68,6 +68,22 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     article: "15",
     joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
   },
+  // Per-turn execution status is controller-generated Art. 15 data. Export
+  // only rows attached to the subject's owned engine runs; omit retry keys
+  // and native recovery checkpoint contents from the member-facing bundle.
+  agent_engine_attempts: {
+    ownerField: "run_id",
+    article: "15",
+    joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
+  },
+  agent_engine_recovery_checkpoints: {
+    ownerField: "run_id",
+    article: "15",
+    joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
+  },
+  // The member explicitly provides this service instruction. Include its raw
+  // activity record in access and portability exports, scoped to that member.
+  codex_history_transfer_acknowledgments: { ownerField: "member_user_id", article: "15+20" },
 
   // BYOK encrypted credentials (Art. 15: encrypted ciphertext returned
   // base64-encoded; the user provided the underlying key, hence 15+20).

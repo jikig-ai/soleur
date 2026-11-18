@@ -11,12 +11,43 @@ let conversationLookupResult: { data: unknown; error: unknown } = { data: null, 
 let messageCountResult: { count: number; error: unknown } = { count: 0, error: null };
 let engineRunLookupResult: { data: unknown; error: unknown } = { data: null, error: null };
 
+function codexRun(conversationId: string) {
+  return {
+    id: "run-1",
+    execution_kind: "conversation",
+    conversation_id: conversationId,
+    workspace_id: "user-1",
+    engine_id: "codex",
+    auth_mode: "api-key",
+    auth_mode_generation: 7,
+    adapter_version: "codex-v1",
+    created_at: "2026-09-27T00:00:00Z",
+  };
+}
+
 const mockMaybeSingle = vi.fn(() => Promise.resolve(conversationLookupResult));
 const mockCountQuery = vi.fn(() => Promise.resolve(messageCountResult));
 const { mockRpc } = vi.hoisted(() => ({
-  mockRpc: vi.fn().mockResolvedValue({
-    data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
-    error: null,
+  mockRpc: vi.fn(async (name: string) => name === "codex_history_transfer_acknowledged"
+    ? { data: true, error: null }
+    : name === "start_agent_engine_attempt"
+      ? { data: { id: "attempt-1" }, error: null }
+      : { data: [{ status: "ok", active_count: 1, effective_cap: 2 }], error: null }),
+}));
+
+vi.mock("@/server/codex-conversation-runtime", () => ({
+  codexConversationRuntime: (userId: string) => ({
+    dataClass: "synthetic",
+    runtime: { userId, transport: {},
+      apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+      createCodex: () => ({ start: async function* (context: { runId: string }) {
+        yield { runId: context.runId, eventId: "e-1", sequence: 1, payload: { type: "status", status: "running" } };
+        yield { runId: context.runId, eventId: "e-2", sequence: 2, payload: { type: "text", text: "synthetic answer" } };
+        yield { runId: context.runId, eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } };
+      }, dispose: async () => undefined }),
+    },
+    registry: { get: () => ({ id: "codex", enabledForExistingRuns: true }), resolve: () => ({ id: "codex", enabledForExistingRuns: true }) },
+    evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },
   }),
 }));
 
@@ -103,10 +134,11 @@ function makeFromDispatcher(): (table: string) => unknown {
             // tc_accepted_version added for recheckTcMidSession
             // (feat-oauth-tc-consent-3205) which queries users on
             // every gated inbound message.
-            data: {
-              id: "conv-1",
+          data: {
+              id: (conversationLookupResult.data as { id?: string } | null)?.id ?? "conv-1",
               status: "active",
               repo_url: mockUserRepoUrl,
+              workspace_id: "user-1",
               tc_accepted_version: "1.0.0",
             },
             error: null,
@@ -237,19 +269,46 @@ describe("start_session resumeByContextPath", () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it("rejects a Codex-bound context-path resume before announcing it", async () => {
+  it("resumes a Codex-bound context-path conversation without changing its binding", async () => {
     conversationLookupResult = {
       data: {
         id: "existing-conv-123",
         last_active: "2026-04-15T10:00:00Z",
         context_path: "knowledge-base/product/roadmap.md",
+        workspace_id: "user-1",
       },
       error: null,
     };
     engineRunLookupResult = {
-      data: { id: "run-1", execution_kind: "conversation", conversation_id: "existing-conv-123", engine_id: "codex" },
+      data: codexRun("existing-conv-123"),
       error: null,
     };
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({
+      type: "start_session",
+      context: { path: "knowledge-base/product/roadmap.md", type: "kb-viewer" },
+      resumeByContextPath: "knowledge-base/product/roadmap.md",
+    }));
+
+    expect(session.conversationId).toBe("existing-conv-123");
+    expect(sent.some((m) => m.type === "session_resumed")).toBe(true);
+    expect(sent.some((m) => m.type === "error")).toBe(false);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "bound"])("does not resume a %s context-path conversation with no run", async (state) => {
+    conversationLookupResult = {
+      data: {
+        id: "existing-conv-123",
+        last_active: "2026-04-15T10:00:00Z",
+        context_path: "knowledge-base/product/roadmap.md",
+        engine_binding_state: state,
+      },
+      error: null,
+    };
+    engineRunLookupResult = { data: null, error: null };
     const { session, sent } = createMockSession();
     sessions.set("user-1", session);
 
@@ -264,12 +323,13 @@ describe("start_session resumeByContextPath", () => {
     expect(sent.some((m) => m.type === "error")).toBe(true);
   });
 
-  it("rejects a Codex-bound context-path collision before dispatching its first chat turn", async () => {
+  it("uses the existing Codex binding after a context-path create collision", async () => {
     conversationLookupResult = {
       data: {
         id: "existing-conv-123",
         last_active: "2026-04-15T10:00:00Z",
         context_path: "knowledge-base/product/roadmap.md",
+        workspace_id: "user-1",
       },
       error: null,
     };
@@ -278,7 +338,7 @@ describe("start_session resumeByContextPath", () => {
       error: { code: "23505", constraint: "conversations_context_path_user_uniq", message: "duplicate" },
     });
     engineRunLookupResult = {
-      data: { id: "run-1", execution_kind: "conversation", conversation_id: "existing-conv-123", engine_id: "codex" },
+      data: codexRun("existing-conv-123"),
       error: null,
     };
     const { session, sent } = createMockSession();
@@ -293,9 +353,13 @@ describe("start_session resumeByContextPath", () => {
     await handleMessage("user-1", JSON.stringify({ type: "chat", content: "synthetic hello" }));
 
     expect(mockInsert).toHaveBeenCalledOnce();
-    expect(session.conversationId).toBeUndefined();
+    expect(session.conversationId).toBe("existing-conv-123");
     expect(sendUserMessage).not.toHaveBeenCalled();
-    expect(sent.some((m) => m.type === "error")).toBe(true);
+    expect(sent.some((m) => m.type === "error")).toBe(false);
+    expect(mockRpc).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
+      p_run_id: "run-1",
+    }));
+    expect(sent.some((m) => m.type === "stream")).toBe(true);
   });
 
   it("falls through to pending creation when no existing row found", async () => {

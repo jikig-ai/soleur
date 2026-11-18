@@ -11,6 +11,8 @@ interface ErrorCardProps {
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
+  onConfirm?: () => void;
+  confirmLabel?: string;
   action?: { label: string; href: string };
   /** Open the action in a new tab (plain external anchor) so the page that
    *  rendered the card, its draft and its state survive the trip. */
@@ -23,6 +25,8 @@ export function ErrorCard({
   message,
   onRetry,
   retryLabel = "Try again",
+  onConfirm,
+  confirmLabel = "Confirm",
   action,
   newTab = false,
   onDismiss,
@@ -64,6 +68,16 @@ export function ErrorCard({
             className="px-3 py-1.5 text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             {retryLabel}
+          </Button>
+        )}
+        {onConfirm && (
+          <Button
+            variant="outlined"
+            type="button"
+            onClick={onConfirm}
+            className="px-3 py-1.5 text-soleur-text-secondary hover:text-soleur-text-primary"
+          >
+            {confirmLabel}
           </Button>
         )}
         {action && newTab && (

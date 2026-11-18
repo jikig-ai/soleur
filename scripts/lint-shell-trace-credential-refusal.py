@@ -80,10 +80,16 @@ BASELINE_D_FILE = Path(__file__).resolve().parent / "lint-shell-trace-credential
 # trace the parent emits `+ doppler run -- ./child.sh` and nothing else. The
 # secret enters the CHILD, which is scored on its own row. Measured: including
 # it added 87 files of which 39 had no secret expansion at all.
+# DATABASE_URL and DATABASE_URL_POOLER carry connection passwords. Match these
+# exact names so ordinary public endpoints do not require a credential refusal.
 SIGNAL_EXPANSION = (
-    r"\$\{?[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)\}?(?![A-Za-z0-9_])"
+    r"\$\{?(?:[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)"
+    r"|DATABASE_URL(?:_POOLER)?)\}?(?![A-Za-z0-9_])"
 )
-SIGNAL_CAPTURE = r"[A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\"?\$\("
+SIGNAL_CAPTURE = (
+    r"(?<![A-Za-z0-9_])(?:[A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)"
+    r"|DATABASE_URL(?:_POOLER)?)=\"?\$\("
+)
 SIGNAL_DOPPLER_GET = r"doppler secrets get"
 SIGNAL_GH_AUTH = r"gh auth token"
 # `${!name}` expands a variable chosen at RUNTIME, so a static reader cannot
@@ -307,6 +313,7 @@ ACQUIRES = re.compile(
     r"doppler secrets get"
     r"|gh auth token"
     r"|[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\"?\$\("
+    r"|(?<![A-Za-z0-9_])DATABASE_URL(?:_POOLER)?=\"?\$\("
 )
 
 INDIRECT_RE = re.compile(SIGNAL_INDIRECT)
@@ -354,7 +361,9 @@ def unconditional_reason(body: str, lines: list[str]) -> tuple[str, str] | None:
         )
     return None
 
-CREDENTIAL_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b")
+CREDENTIAL_NAME = re.compile(
+    r"\b([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)|DATABASE_URL(?:_POOLER)?)\b"
+)
 # The alternate must be NON-EMPTY: `${VAR:+}` expands to "" whether or not VAR is set,
 # so `[ -n "${VAR:+}" ]` can never be true -- it is `[ -n "" ]` wearing the variable's
 # name. EMPTY_ALTERNATE reports that residue; GUARDED_NAME does not count it as a guard.
@@ -381,8 +390,8 @@ EMPTY_PREDICATE = re.compile(
     re.M,
 )
 EXPANDING_IN_ARM = re.compile(
-    r"\$\{([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))(?::?-[^}]*)?\}"
-    r"|\$([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b"
+    r"\$\{([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)|DATABASE_URL(?:_POOLER)?)(?::?-[^}]*)?\}"
+    r"|\$([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)|DATABASE_URL(?:_POOLER)?)\b"
 )
 
 

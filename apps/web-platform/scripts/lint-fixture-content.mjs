@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 
 const REAL_EMAIL = /\b([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
-const ALLOWED_EMAIL_HOSTS = /^(example\.com|example\.org|.+\.test|fixtures\.local|test\.local)$/i;
+const ALLOWED_EMAIL_HOSTS = /^(example\.com|example\.org|.+\.test|fixtures\.local|test\.local|.+\.invalid)$/i;
 
 // Synthesized UUIDs we actively use in fixtures — extend as new ones land.
 const ALLOWED_UUIDS = new Set([
@@ -65,7 +65,7 @@ function lintLine(line) {
     const host = match[2];
     if (!ALLOWED_EMAIL_HOSTS.test(host)) {
       reasons.push(
-        `real-looking email '${match[0]}' (use @example.com / @test.local / @fixtures.local)`,
+        `real-looking email '${match[0]}' (use @example.com / @test.local / @fixtures.local / @example.invalid)`,
       );
     }
   }

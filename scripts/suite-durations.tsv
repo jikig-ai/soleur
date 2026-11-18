@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-16T22:24:55Z
+# generated-at=2026-11-18T10:52:24Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -88,6 +88,7 @@ apps/web-platform/scripts/lint-migration-api-grants.test.sh	824	measured
 apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	94	measured
 apps/web-platform/scripts/lint-migration-immutability.test.sh	1536	measured
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	502	measured
+apps/web-platform/scripts/preflight-schema-vs-ledger	1802	floor
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	154	measured
 apps/web-platform/scripts/real-sdk-ask-probe.test.sh	8697	measured
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5001	measured
@@ -488,6 +489,7 @@ scripts/jobs1-stopgap-7432	60670	measured
 scripts/learning-retrieval-bench	1318	measured
 scripts/legal-acceptance-counts	20323	measured
 scripts/lib/bearer-curl.test.sh	3375	measured
+scripts/lib/codex-qualification.test.sh	1802	floor
 scripts/lib/frontmatter-strip.test.sh	172	measured
 scripts/lib/git-data-rotate-stamp.test.sh	654	measured
 scripts/lib/git-data-store-dirty-scan.test.sh	11529	measured

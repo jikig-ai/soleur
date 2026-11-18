@@ -34,6 +34,15 @@
 # not sufficient. See knowledge-base/.../2026-06-04-migration-not-null-column-insert-sweep.md.
 set -uo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${DATABASE_URL:+x}${DATABASE_URL_POOLER:+x}" ]; then
+      printf '[FATAL] refusing to trace database credentials (see #11096)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ONLY=""
 [[ "${1:-}" == "--only" ]] && ONLY="${2:-}"
 

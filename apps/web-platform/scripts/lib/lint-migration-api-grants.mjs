@@ -17,6 +17,10 @@
 // USAGE default) or the sentinel; standalone `create sequence` needs the
 // same. `GRANT … ON ALL TABLES/SEQUENCES IN SCHEMA public` is a blanket
 // over-grant — flagged outright, never a satisfying form.
+// Byte-frozen historical migrations may use the adjacent
+// `historical-migration-api-contracts.json` declaration. It is bound to the
+// exact repo-relative path and SHA-256 and satisfies only a named relation's
+// missing in-file marker; the SQL is still parsed for every other violation.
 //
 // PARSING: SQL noise is stripped FIRST (line comments, nested block comments,
 // single-quoted strings, dollar-quoted bodies) — a `create table` inside a
@@ -34,10 +38,51 @@
 // table %I', …)` inside a DO block is invisible to source-form detection;
 // `alter table … add column serial` on an existing table is likewise unseen.
 
+import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const API_ROLES = new Set(["anon", "authenticated", "service_role"]);
+const VALID_GRANT_VERBS = new Set([
+  "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "MAINTAIN",
+]);
+
+const MODULE_PATH = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(MODULE_PATH, "../../../../../");
+const HISTORICAL_CONTRACTS = JSON.parse(
+  readFileSync(new URL("./historical-migration-api-contracts.json", import.meta.url), "utf8"),
+).contracts;
+
+/**
+ * Match a frozen migration declaration by its repository-relative path and
+ * exact bytes. A changed file or a copy at another path gets no declaration.
+ */
+export function matchHistoricalContract(file, raw, contracts = HISTORICAL_CONTRACTS, repoRoot = REPO_ROOT) {
+  const rel = relative(repoRoot, resolve(file)).split(sep).join("/");
+  if (rel === ".." || rel.startsWith("../")) return null;
+  const sha256 = createHash("sha256").update(raw).digest("hex");
+  return contracts.find((contract) => contract.path === rel && contract.sha256 === sha256) ?? null;
+}
+
+function isValidHistoricalRelationContract(entry) {
+  if (!entry || typeof entry.reason !== "string" || !entry.reason.trim()) return false;
+  if (entry.kind !== "INTERNAL" && entry.kind !== "EXPOSED") return false;
+  const contract = entry.privilegeContract;
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) return false;
+  const roles = Object.keys(contract).sort();
+  if (roles.join(",") !== "anon,authenticated,service_role") return false;
+  let hasPrivilege = false;
+  for (const privileges of Object.values(contract)) {
+    if (!privileges || typeof privileges !== "object" || Array.isArray(privileges)) return false;
+    for (const [verb, columns] of Object.entries(privileges)) {
+      if (!VALID_GRANT_VERBS.has(verb)) return false;
+      if (!Array.isArray(columns) || columns.length === 0 || columns.some((column) => typeof column !== "string" || !column.trim())) return false;
+      hasPrivilege = true;
+    }
+  }
+  return entry.kind === "EXPOSED" ? hasPrivilege : !hasPrivilege;
+}
 
 // ---------------------------------------------------------------------------
 // Noise stripping — faithful port of test/migration-lint/definer-grants.ts
@@ -511,9 +556,10 @@ const FIX_HINT =
 
 /**
  * Check one migration file's text. Returns a list of violation strings
- * (empty = pass).
+ * (empty = pass). A matching historical declaration can satisfy only the
+ * named relation's missing in-file grant/sentinel; all other checks remain.
  */
-export function checkSql(raw) {
+export function checkSql(raw, historicalContract = null) {
   const stripped = stripSqlNoise(raw);
   const creates = extractCreates(stripped);
   // Grants scan a DIFFERENT noise profile (see stripSqlNoisePreserveBodies):
@@ -522,6 +568,7 @@ export function checkSql(raw) {
   const preserved = stripSqlNoisePreserveBodies(raw);
   const { tableGrants, seqUsage } = extractGrants(preserved);
   const sentinels = extractSentinels(raw);
+  const historicalRelations = new Map(Object.entries(historicalContract?.relations ?? {}));
   const violations = [];
 
   for (const b of extractBlanketGrants(preserved)) {
@@ -548,7 +595,8 @@ export function checkSql(raw) {
       }
       continue;
     }
-    if (!tableGrants.has(c.name)) {
+    const historical = historicalRelations.get(c.name);
+    if (!tableGrants.has(c.name) && !isValidHistoricalRelationContract(historical)) {
       violations.push(
         `creates public ${c.kind} '${c.name}' without an api-role GRANT naming it, or a soleur:no-data-api sentinel.\n  ${FIX_HINT}`,
       );
@@ -592,7 +640,8 @@ export function main(files) {
     if (label.endsWith(".down.sql")) continue; // operator-only rollback siblings, never applied
     const stripped = stripSqlNoise(raw);
     relations += extractCreates(stripped).length;
-    for (const v of checkSql(raw)) {
+    const historicalContract = matchHistoricalContract(file, raw);
+    for (const v of checkSql(raw, historicalContract)) {
       console.error(`::error::${label}: ${v.split("\n").join("\n::error::  ")}`);
       violations++;
     }

@@ -252,7 +252,11 @@ export function createCodexCodeAdapter(
   transport: CodexCodeAdapterTransport,
   auth: CodexAuthBoundary,
 ): EngineAdapter {
-  async function* stream<T extends AsyncIterable<EngineEvent>>(load: (lease: CodexCredentialLease) => Promise<T>, runId: string): AsyncIterable<EngineEvent> {
+  async function* stream<T extends AsyncIterable<EngineEvent>>(
+    load: (lease: CodexCredentialLease) => Promise<T>,
+    runId: string,
+    options: { allowAuthRetry?: boolean } = {},
+  ): AsyncIterable<EngineEvent> {
     let lease: CodexCredentialLease;
     try { lease = await auth.acquire(); } catch (error) { throw sanitizeCodexError(error); }
     let refreshed = false;
@@ -271,7 +275,7 @@ export function createCodexCodeAdapter(
         }
         return;
       } catch (error) {
-        if (!refreshed && lastSequence === 0 && isCodexAuthRecoveryError(error)) {
+        if (options.allowAuthRetry === true && !refreshed && lastSequence === 0 && isCodexAuthRecoveryError(error)) {
           try { lease = await auth.refresh(); } catch (refreshError) { throw sanitizeCodexError(refreshError); }
           refreshed = true;
           continue;
@@ -290,7 +294,11 @@ export function createCodexCodeAdapter(
     continue: (context, session, input) => stream(async (lease) => transport.continue(context, session, input, lease), context.runId),
     cancel: async (context, session) => call((lease) => transport.cancel(context, session, lease)),
     reconcile: async (context, session) => call((lease) => transport.reconcile(context, session, lease)),
-    resumeFromCursor: (context, cursor) => stream(async (lease) => transport.resumeFromCursor(context, cursor, lease), context.runId),
+    resumeFromCursor: (context, cursor) => stream(
+      async (lease) => transport.resumeFromCursor(context, cursor, lease),
+      context.runId,
+      { allowAuthRetry: true },
+    ),
     respondToApproval: async (context, requestId, decision) => call((lease) => transport.respondToApproval(context, requestId, decision, lease)),
     erase: async (context, session) => call((lease) => transport.erase(context, session, lease)),
     dispose: () => transport.dispose(),

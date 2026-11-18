@@ -101,6 +101,15 @@
 
 set -uo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${DATABASE_URL:+x}${DATABASE_URL_POOLER:+x}" ]; then
+      printf '[FATAL] refusing to trace database credentials (see #11096)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Overridable for tests; defaults to this repo's migrations dir on the checkout.
 MIGRATIONS_DIR="${MIGRATIONS_DIR_OVERRIDE:-$SCRIPT_DIR/../supabase/migrations}"

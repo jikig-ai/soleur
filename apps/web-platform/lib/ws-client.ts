@@ -38,8 +38,14 @@ import { STUCK_TIMEOUT_MS, CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-const
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type { CredentialScheme } from "@/lib/auth-scheme";
 import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
+import { codexHeldTurnCache, type HeldCodexTurn } from "@/lib/codex-held-turn-cache";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
+
+function codexResendQualified(): boolean {
+  // Re-enable only with durable, scope-bound claim/status and cross-socket fencing.
+  return false;
+}
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -66,6 +72,9 @@ export type StreamState = "idle" | "streaming" | "stopping";
 export interface WebSocketError {
   code: string;
   message: string;
+  conversationId?: string;
+  authModeGeneration?: number;
+  noticeNonce?: string;
   // #11086 - set on a `key_invalid` error only when the server tagged the
   // frame with the credential scheme; drives the card title/label.
   credentialScheme?: CredentialScheme;
@@ -105,6 +114,8 @@ interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, context?: ConversationContext) => void;
   resumeSession: (conversationId: string) => void;
+  resendMessage: (message: Extract<ChatMessage, { type: "text" }>) => void;
+  acknowledgeCodexHistoryTransfer: (conversationId: string, authModeGeneration: number, noticeNonce: string) => void;
   /** #11525 — returns `true` only when the message was handed to an open socket.
    *  `false` means refused (credential blocked, or socket not open): no optimistic
    *  bubble was added and the caller must keep the draft. */
@@ -130,6 +141,7 @@ interface UseWebSocketReturn {
   ) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
+  hasPendingCodexHistoryTransfer: boolean;
   disconnectReason: string | undefined;
   lastError: WebSocketError | null;
   reconnect: () => void;
@@ -327,6 +339,10 @@ export type ChatAction =
   | { type: "set_live_narration"; message: string }
   | { type: "ack_timer_action" }
   | { type: "add_message"; message: ChatMessage }
+  | { type: "set_message_delivery"; clientTurnId: string; delivery: "unsent" | "retryable" | "unresolved" | undefined }
+  | { type: "codex_dispatch_held"; clientTurnId: string }
+  | { type: "codex_recovery_expired"; clientTurnId: string }
+  | { type: "remove_held_messages"; clientTurnIds: string[] }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
   | { type: "resolve_gate"; gateId: string; selection: string }
@@ -603,6 +619,31 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
       return { ...state, messages: [...state.messages, action.message] };
+    case "remove_held_messages": {
+      const ids = new Set(action.clientTurnIds.map((id) => `user-${id}`));
+      return { ...state, messages: state.messages.filter((message) => !ids.has(message.id)) };
+    }
+    case "codex_dispatch_held":
+      return { ...state, messages: state.messages.map((message) =>
+        message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
+          ? { ...message, delivery: "unresolved" as const } : message) };
+    case "codex_recovery_expired":
+      return { ...state, messages: state.messages.map((message) =>
+        message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
+          ? { ...message, delivery: "unresolved" as const, recoveryExpired: true } : message) };
+    case "set_message_delivery":
+      return {
+        ...state,
+        messages: state.messages.map((message) => {
+          if (message.type !== "text" || message.role !== "user" || message.id !== `user-${action.clientTurnId}`) return message;
+          if (action.delivery === undefined) {
+            const updated = { ...message };
+            delete updated.delivery;
+            return updated;
+          }
+          return { ...message, delivery: action.delivery };
+        }),
+      };
     case "filter_prepend": {
       const existingIds = new Set(state.messages.map(m => m.id));
       const unique = action.messages.filter(m => !existingIds.has(m.id));
@@ -743,6 +784,115 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // Mirror of `realConversationId` for the `abort()` callback so a stale
   // closure cannot send the wrong conversationId on the wire.
   const realConversationIdRef = useRef<string | null>(null);
+  const pendingCodexHistoryTurnsRef = useRef(new Map<string, {
+    conversationId: string;
+    authModeGeneration: number;
+    acknowledged: boolean;
+    unresolved?: boolean;
+  }>());
+  // Keep tracking visible held messages even if the active conversation changes.
+  const retainedCodexHeldRef = useRef(new Map<string, string>());
+  const issuedClientTurnIdsRef = useRef(new Set<string>());
+  const explicitCodexResumeRef = useRef<string | null>(null);
+  const codexDraftScopeRef = useRef<string | null>(null);
+  const chatMessagesRef = useRef(chatState.messages);
+  chatMessagesRef.current = chatState.messages;
+
+  useEffect(() => codexHeldTurnCache.subscribe(() => {
+    dispatch({ type: "remove_held_messages", clientTurnIds: [...pendingCodexHistoryTurnsRef.current.keys(), ...retainedCodexHeldRef.current.keys()] });
+    pendingCodexHistoryTurnsRef.current.clear();
+    retainedCodexHeldRef.current.clear();
+    issuedClientTurnIdsRef.current.clear();
+    codexDraftScopeRef.current = null;
+    explicitCodexResumeRef.current = null;
+    setLastError((current) => current?.code === "codex_history_transfer_required" ? null : current);
+  }), []);
+
+  useEffect(() => codexHeldTurnCache.subscribeExpiry((event) => {
+    if (event.scopeEpoch !== codexHeldTurnCache.scopeEpoch(codexDraftScopeRef.current)
+      || retainedCodexHeldRef.current.get(event.clientTurnId) !== event.conversationId) return;
+    const held = pendingCodexHistoryTurnsRef.current.get(event.clientTurnId);
+    if (held && held.conversationId === event.conversationId) {
+      held.acknowledged = false;
+      held.unresolved = true;
+    }
+    dispatch({ type: "codex_recovery_expired", clientTurnId: event.clientTurnId });
+    const generation = held?.conversationId === event.conversationId ? held.authModeGeneration : undefined;
+    setLastError((current) => {
+      if (current?.code !== "codex_history_transfer_required" || current.conversationId !== event.conversationId
+        || current.authModeGeneration !== generation || current.noticeNonce === undefined) return current;
+      const { noticeNonce: _expiredNonce, ...withoutNonce } = current;
+      return withoutNonce;
+    });
+  }), []);
+
+  function historyTransferNotice(
+    targetConversationId: string,
+    generation: number,
+    authMode?: "api-key" | "managed",
+    draftRetentionFailed = false,
+    noticeNonce?: string,
+  ): WebSocketError {
+    const billingNotice = authMode === "api-key"
+      ? " API-key mode uses your own credential and charges your provider account."
+      : authMode === "managed"
+        ? " Managed mode uses your own connected ChatGPT account; confirm applicable billing."
+        : " Check the selected credential and billing mode in workspace settings.";
+    return {
+      code: "codex_history_transfer_required",
+      message: "OpenAI will receive the message you resend and any later messages. Saved conversation history is not transferred to the selected account."
+        + billingNotice
+        + (draftRetentionFailed ? " This draft could not be saved in this tab; copy this draft before leaving or reloading." : "")
+        + " Resending is temporarily unavailable. Keep or copy your draft while its delivery status is unresolved.",
+      conversationId: targetConversationId,
+      authModeGeneration: generation,
+      noticeNonce,
+    };
+  }
+
+  function restoreHeldCodexTurns(targetConversationId: string) {
+    // Only a server-confirmed conversation may select drafts from the cache.
+    const scope = codexDraftScopeRef.current;
+    const epoch = codexHeldTurnCache.scopeEpoch(scope);
+    if (epoch === null) return;
+    const currentScope = () => codexDraftScopeRef.current === scope && codexHeldTurnCache.scopeEpoch(scope) === epoch;
+    const candidates = codexHeldTurnCache.get(scope, targetConversationId)
+      .filter((turn) => !pendingCodexHistoryTurnsRef.current.has(turn.clientTurnId))
+      .filter((turn) => !retainedCodexHeldRef.current.has(turn.clientTurnId)
+        || retainedCodexHeldRef.current.get(turn.clientTurnId) === turn.conversationId);
+    if (!currentScope()) return;
+    const staged: HeldCodexTurn[] = [];
+    for (const turn of candidates) {
+      if (codexResendQualified() || turn.message.delivery === "unresolved") { staged.push(turn); continue; }
+      const marked = codexHeldTurnCache.markUnresolved(scope, turn.conversationId, turn.clientTurnId);
+      if (!currentScope()) return;
+      if (marked) { staged.push(marked); continue; }
+      // A full cache can prevent rewriting the delivery marker. Only project
+      // that fallback if the exact turn is still present after pruning.
+      const stillCached = codexHeldTurnCache.get(scope, targetConversationId).find((item) => item.clientTurnId === turn.clientTurnId);
+      if (!currentScope()) return;
+      if (stillCached) staged.push({ ...stillCached, message: { ...stillCached.message, delivery: "unresolved" } });
+    }
+    const liveIds = new Set(codexHeldTurnCache.get(scope, targetConversationId).map((turn) => turn.clientTurnId));
+    if (!currentScope()) return;
+    const restored = staged.filter((turn) => liveIds.has(turn.clientTurnId));
+    for (const turn of restored) {
+      retainedCodexHeldRef.current.set(turn.clientTurnId, turn.conversationId);
+      pendingCodexHistoryTurnsRef.current.set(turn.clientTurnId, {
+        conversationId: turn.conversationId, authModeGeneration: turn.authModeGeneration, acknowledged: false,
+        unresolved: turn.message.delivery === "unresolved",
+      });
+      dispatch({ type: "set_message_delivery", clientTurnId: turn.clientTurnId, delivery: turn.message.delivery === "unresolved" ? "unresolved" : "unsent" });
+    }
+    if (restored.length > 0) {
+      dispatch({ type: "filter_prepend", messages: restored.map((turn) => turn.message) });
+      const awaitingNotice = restored.filter((turn) => turn.message.delivery !== "unresolved");
+      if (awaitingNotice.length > 0) {
+        const latest = awaitingNotice.reduce((current, turn) => turn.authModeGeneration > current.authModeGeneration ? turn : current);
+        setLastError(historyTransferNotice(targetConversationId, latest.authModeGeneration, latest.authMode, false, latest.noticeNonce));
+      }
+    }
+  }
   // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
   // reconnect closure. That handler lives in the `connect` useCallback whose
   // dep array excludes `sessionKind`, so the useState would be captured STALE
@@ -926,6 +1076,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token || "";
+    // Retain one auth observer across panel unmounts; it never authorizes a
+    // cache read. Only this token's later server auth_ok accepts its scope.
+    if (token.split(".").length === 3) codexHeldTurnCache.observeAuth(supabase.auth);
     return { url: `${proto}://${window.location.host}/ws`, token };
   }, []);
 
@@ -1051,6 +1204,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         return;
       }
       const msg = parseResult.msg;
+      const currentConversationId = realConversationIdRef.current ?? (conversationId || null);
+
+      // Codex provider events are tagged at the server boundary. A delayed
+      // frame from a conversation that this hook has already replaced must
+      // not mutate the new conversation's reducer or trigger its history read.
+      if (
+        (msg.type === "stream_start" || msg.type === "stream" || msg.type === "stream_end"
+          || msg.type === "tool_use" || msg.type === "usage_update"
+          || msg.type === "reasoning_narration" || msg.type === "error")
+        && typeof msg.conversationId === "string"
+        && msg.conversationId !== currentConversationId
+      ) {
+        return;
+      }
 
       // feat-stream-since-disconnect (#5273) — replay dedup gate. Buffered-
       // family frames carry a server-stamped monotonic `seq`. After a within-
@@ -1101,6 +1268,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
       switch (msg.type) {
         case "auth_ok": {
+          codexDraftScopeRef.current = codexHeldTurnCache.acceptToken(token);
           setStatus("connected");
           backoffRef.current = INITIAL_BACKOFF;
           // feat-stream-since-disconnect (#5273) — on a genuine RECONNECT (not
@@ -1114,6 +1282,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const isReconnect = hasConnectedBeforeRef.current;
           hasConnectedBeforeRef.current = true;
           const activeConvId = realConversationIdRef.current;
+          const hasHeldCodexTurns = [...pendingCodexHistoryTurnsRef.current.values()]
+            .some((turn) => turn.conversationId === activeConvId);
+          // Only the existing recovery button may request a full resume: it
+          // replaces the live session, so reconnect auth must not do so itself.
+          if (explicitCodexResumeRef.current === activeConvId && activeConvId && hasHeldCodexTurns) {
+            try {
+              if (ws.readyState !== WebSocket.OPEN) {
+                dispatch({ type: "connection_change", phase: "unrecoverable" });
+                break;
+              }
+              ws.send(JSON.stringify({ type: "resume_session", conversationId: activeConvId }));
+              explicitCodexResumeRef.current = null;
+            } catch (err) {
+              reportSilentFallback(err, {
+                feature: "codex-history-transfer", op: "send-resume-throw",
+                extra: { conversationId: activeConvId },
+              });
+              dispatch({ type: "connection_change", phase: "unrecoverable" });
+            }
+            break;
+          }
           // #5290 false-positive fix — only request replay for a row that
           // PROVABLY EXISTS server-side, so the owner-scoped `(id,user_id)`
           // lookup cannot return zero rows and mint a spurious
@@ -1153,14 +1342,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             // flag; the FIRST genuinely-rendered post-reattach frame confirms the
             // stream is alive and promotes to State 4. The sticky guard still
             // no-ops this `live` if `unrecoverable` was already set (AC11).
-            reattachPendingRef.current = true;
-            dispatch({ type: "connection_change", phase: "live" });
+            // Replay proves stream continuity, not that this new socket's
+            // server session is bound for a held retry. Keep its explicit
+            // recovery available until session_resumed/session_started.
+            reattachPendingRef.current = !hasHeldCodexTurns;
+            dispatch({ type: "connection_change", phase: hasHeldCodexTurns ? "unrecoverable" : "live" });
           } else {
             // Not replay-eligible: a fresh initial connect, OR a reconnect of a
             // `"fresh"`/unknown-kind session (no materialized row to replay, no
-            // buffered turn worth requesting). Plain `live`, no replay request,
-            // no notice.
-            dispatch({ type: "connection_change", phase: "live" });
+            // buffered turn worth requesting). Held Codex drafts need the
+            // explicit recovery affordance before the session can accept a retry.
+            dispatch({ type: "connection_change", phase: hasHeldCodexTurns ? "unrecoverable" : "live" });
           }
           break;
         }
@@ -1231,6 +1423,66 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
+        case "codex_history_transfer_required": {
+          if (!codexResendQualified()) break;
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          let draftRetentionFailed = false;
+          if (msg.clientTurnId) {
+            const existing = pendingCodexHistoryTurnsRef.current.get(msg.clientTurnId);
+            const cached = codexHeldTurnCache.get(codexDraftScopeRef.current, msg.conversationId)
+              .find((turn) => turn.clientTurnId === msg.clientTurnId);
+            if (existing?.unresolved || cached?.message.delivery === "unresolved") break;
+            pendingCodexHistoryTurnsRef.current.set(msg.clientTurnId, {
+              conversationId: msg.conversationId,
+              authModeGeneration: msg.authModeGeneration,
+              acknowledged: false,
+            });
+            dispatch({ type: "set_message_delivery", clientTurnId: msg.clientTurnId, delivery: "unsent" });
+            const message = chatMessagesRef.current.find((candidate) => candidate.id === `user-${msg.clientTurnId}`);
+            if (message?.type === "text" && message.role === "user"
+              && !codexHeldTurnCache.put(codexDraftScopeRef.current, {
+                clientTurnId: msg.clientTurnId, conversationId: msg.conversationId,
+                authModeGeneration: msg.authModeGeneration, noticeNonce: msg.noticeNonce, authMode: msg.authMode, message,
+              })) {
+              draftRetentionFailed = true;
+              reportSilentFallback(new Error("Held Codex draft cache capacity exceeded"), {
+                feature: "codex-history-transfer", op: "draft-cache-capacity",
+              });
+            }
+          }
+          codexHeldTurnCache.setNoticeNonce(
+            codexDraftScopeRef.current, msg.conversationId, msg.authModeGeneration, msg.noticeNonce,
+          );
+          setLastError(historyTransferNotice(msg.conversationId, msg.authModeGeneration, msg.authMode, draftRetentionFailed, msg.noticeNonce));
+          break;
+        }
+
+        case "codex_history_transfer_acknowledge": {
+          reportSilentFallback(new Error("client-only acknowledgment frame received from server"), {
+            feature: "codex-history-transfer",
+            op: "unexpected-client-frame",
+          });
+          break;
+        }
+
+        case "codex_history_transfer_acknowledged": {
+          if (!codexResendQualified()) break;
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+            if (heldTurn.conversationId === msg.conversationId
+              && heldTurn.authModeGeneration === msg.authModeGeneration && !heldTurn.unresolved) {
+              heldTurn.acknowledged = true;
+              dispatch({ type: "set_message_delivery", clientTurnId, delivery: "retryable" });
+            }
+          }
+          setLastError((current) => current?.code === "codex_history_transfer_required"
+            && current.conversationId === msg.conversationId
+            && current.authModeGeneration === msg.authModeGeneration
+            ? null
+            : current);
+          break;
+        }
+
         case "c4_diagram_saved": {
           // #8739 — a Concierge `edit_c4_diagram` write completed on the
           // server. Re-broadcast as a DOM event so the open C4Workspace (or
@@ -1257,6 +1509,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "error": {
+          if (msg.errorCode === "codex_dispatch_unavailable") {
+            if (msg.conversationId !== realConversationIdRef.current || !msg.clientTurnId) break;
+            if (!retainedCodexHeldRef.current.has(msg.clientTurnId)) {
+              retainedCodexHeldRef.current.set(msg.clientTurnId, msg.conversationId);
+            }
+            dispatch({ type: "codex_dispatch_held", clientTurnId: msg.clientTurnId });
+            setLastError({ code: msg.errorCode, message: msg.message });
+            break;
+          }
           // `clear_streams` resets streamState to "idle" atomically.
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
@@ -1507,7 +1768,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_started": {
+          explicitCodexResumeRef.current = null;
           if (msg.conversationId) {
+            for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+              if (heldTurn.conversationId !== msg.conversationId) {
+                dispatch({ type: "set_message_delivery", clientTurnId, delivery: heldTurn.unresolved ? "unresolved" : "unsent" });
+                pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
+              }
+            }
+            setLastError((current) => current?.code === "codex_history_transfer_required"
+              && current.conversationId !== msg.conversationId ? null : current);
             setRealConversationId(msg.conversationId);
             // #3448 PR2 (review fix): mirror to ref synchronously so a
             // first-turn Stop click that races the realConversationId
@@ -1536,6 +1806,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // reconnect gate (a fresh deferred conv must NOT request resume_stream).
           sessionKindRef.current = "fresh";
           setSessionConfirmed(true);
+          if (msg.conversationId) restoreHeldCodexTurns(msg.conversationId);
           // #11525 — the server answers EVERY `resume_session` (UUID surface
           // included) with `session_started`: that completes a rebind. The
           // clear is unconditional (a no-op when nothing was captured or
@@ -1546,6 +1817,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_resumed": {
+          explicitCodexResumeRef.current = null;
+          for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+            if (heldTurn.conversationId !== msg.conversationId) {
+              dispatch({ type: "set_message_delivery", clientTurnId, delivery: heldTurn.unresolved ? "unresolved" : "unsent" });
+              pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
+            }
+          }
+          setLastError((current) => current?.code === "codex_history_transfer_required"
+            && current.conversationId !== msg.conversationId ? null : current);
           setRealConversationId(msg.conversationId);
           // feat-stream-since-disconnect (#5273) — full transcript resume
           // rehydrates from persisted history; reset the replay cursor.
@@ -1570,6 +1850,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // ONLY kind that may request resume_stream replay on reconnect.
           sessionKindRef.current = "resumed";
           setSessionConfirmed(true);
+          restoreHeldCodexTurns(msg.conversationId);
           // #11525 — defensive only: the server replies to `resume_session`
           // with `session_started` (never `session_resumed`), so this arm is
           // not expected to complete a rebind; clearing here is harmless and
@@ -1735,6 +2016,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // the terminal-screen event with the preamble (org name) and fall through
       // to the standard non-transient teardown path (no reconnect).
       if (event.code === WS_CLOSE_CODES.MEMBERSHIP_REVOKED) {
+        codexHeldTurnCache.clear();
         const preamble = pendingPreambleRef.current as
           | MembershipRevokedPreamble
           | null;
@@ -1766,6 +2048,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
       const entry = NON_TRANSIENT_CLOSE_CODES[event.code];
       if (entry) {
+        if (event.code === WS_CLOSE_CODES.AUTH_REQUIRED || event.code === WS_CLOSE_CODES.AUTH_TIMEOUT) codexHeldTurnCache.clear();
         teardown();
         setStatus("disconnected");
         setDisconnectReason(entry.reason);
@@ -2217,21 +2500,91 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // unified send path for BOTH the legacy fan-out and cc-soleur-go (AC9), so
       // wiring the reset here covers both paths without per-path branching. No-op
       // when already `live` (the reducer arm short-circuits).
+      const clientTurnId = crypto.randomUUID();
+      if (issuedClientTurnIdsRef.current.has(clientTurnId) || retainedCodexHeldRef.current.has(clientTurnId)
+        || chatMessagesRef.current.some((message) => message.id === `user-${clientTurnId}`)) {
+        reportSilentFallback(new Error("Generated chat turn ID already exists"), {
+          feature: "send-message", op: "duplicate-client-turn-id",
+        });
+        return false;
+      }
+      issuedClientTurnIdsRef.current.add(clientTurnId);
+      if (!send({ type: "chat", content, attachments, clientTurnId })) {
+        issuedClientTurnIdsRef.current.delete(clientTurnId);
+        mirrorRefusedSend();
+        return false;
+      }
       dispatch({ type: "reset_connection" });
       // Add the user message to local state immediately
       dispatch({
         type: "add_message",
         message: {
-          id: `user-${crypto.randomUUID()}`,
+          id: `user-${clientTurnId}`,
           role: "user",
           content,
           type: "text",
           attachments,
         },
       });
-      return send({ type: "chat", content, attachments });
+      return true;
     },
     [send, mirrorRefusedSend],
+  );
+
+  const resendMessage = useCallback(
+    (message: Extract<ChatMessage, { type: "text" }>) => {
+      if (!codexResendQualified()) {
+        setLastError({ code: "codex_resend_unavailable", message: "Resending is temporarily unavailable. Keep or copy this draft." });
+        return;
+      }
+      const clientTurnId = message.id.startsWith("user-") ? message.id.slice("user-".length) : "";
+      const heldTurn = pendingCodexHistoryTurnsRef.current.get(clientTurnId);
+      if (status !== "connected" || !sessionConfirmed || message.role !== "user" || message.delivery !== "retryable"
+        || !heldTurn?.acknowledged || heldTurn.unresolved || heldTurn.conversationId !== realConversationIdRef.current
+        || !clientTurnId) return;
+
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const retained = codexHeldTurnCache.markUnresolved(codexDraftScopeRef.current, heldTurn.conversationId, clientTurnId);
+      if (!retained) {
+        reportSilentFallback(new Error("Held Codex draft could not be retained"), {
+          feature: "codex-history-transfer", op: "resend-retention-unavailable",
+        });
+        return;
+      }
+      heldTurn.unresolved = true;
+      heldTurn.acknowledged = false;
+      dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unresolved" });
+      try {
+        ws.send(JSON.stringify({
+          type: "chat",
+          content: retained.message.content,
+          attachments: retained.message.attachments,
+          clientTurnId,
+        }));
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "codex-history-transfer", op: "send-resend-throw",
+          extra: { conversationId: heldTurn.conversationId },
+        });
+        return;
+      }
+      dispatch({ type: "reset_connection" });
+    },
+    [sessionConfirmed, status],
+  );
+
+  const acknowledgeCodexHistoryTransfer = useCallback(
+    (targetConversationId: string, authModeGeneration: number, noticeNonce: string) => {
+      if (!codexResendQualified()) return;
+      send({
+        type: "codex_history_transfer_acknowledge",
+        conversationId: targetConversationId,
+        authModeGeneration,
+        noticeNonce,
+      });
+    },
+    [send],
   );
 
   /** Send a gate-style response frame. Returns whether it left the client.
@@ -2355,7 +2708,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   }, [chatState.streamState, conversationId]);
 
   const reconnect = useCallback(() => {
-    setLastError(null);
+    const activeConvId = realConversationIdRef.current;
+    const hasHeldCodexTurns = activeConvId !== null && [...pendingCodexHistoryTurnsRef.current.values()]
+      .some((turn) => turn.conversationId === activeConvId);
+    setLastError((current) => hasHeldCodexTurns
+      && current?.code === "codex_history_transfer_required"
+      && current.conversationId === activeConvId
+      ? current
+      : null);
     credentialBlockedRef.current = false;
     rebindArmedRef.current = false;
     setRebindRefused(false);
@@ -2372,6 +2732,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // clear State 3, THEN re-open the socket. The next user turn resumes the SDK
   // transcript with full context (#5240 v1 verified rebind).
   const resumeAfterUnrecoverable = useCallback(() => {
+    const activeConvId = realConversationIdRef.current;
+    if (activeConvId && [...pendingCodexHistoryTurnsRef.current.values()]
+      .some((turn) => turn.conversationId === activeConvId)) {
+      explicitCodexResumeRef.current = activeConvId;
+    }
     dispatch({ type: "reset_connection" });
     reconnect();
   }, [reconnect]);
@@ -2381,6 +2746,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     startSession,
     resumeSession,
     sendMessage,
+    resendMessage,
+    acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendApprovalDecide,
     sendAutonomousDisclosureResponse,
@@ -2388,6 +2755,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resolveInteractivePrompt,
     status,
     sessionConfirmed,
+    hasPendingCodexHistoryTransfer: realConversationIdRef.current !== null
+      && [...pendingCodexHistoryTurnsRef.current.values()]
+        .some((turn) => turn.conversationId === realConversationIdRef.current),
     disconnectReason,
     lastError,
     reconnect,

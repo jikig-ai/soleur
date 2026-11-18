@@ -1,6 +1,6 @@
 import { composeReviewedEngineFactories } from "./agent-engine-adapter-composition";
 import type { CodexAuthMode, CodexAuthProvider, CodexCodeAdapterTransport, CodexAuthBoundary } from "./codex-code-adapter";
-import type { EngineAdapter } from "./agent-engine-contract";
+import type { EngineAdapter, EngineEvent, EngineRunContext } from "./agent-engine-contract";
 import type { EngineAdapterFactory } from "./agent-engine-adapter-factory";
 import { createCodexApiKeyProviderForUser } from "./codex-credential-provider";
 import type { CodexAppServerStdioLauncher } from "./codex-app-server-stdio";
@@ -16,6 +16,8 @@ export interface CodexWebRuntimeOptions {
   cwd?: string;
   maxEventSize?: number;
   observability?: EngineObservability;
+  /** Revalidate server-owned admission before each provider request, including auth retries. */
+  authorizeRequest?: (context: EngineRunContext) => Promise<void>;
   /** Injected by the approved managed-account Web authorization flow. */
   managedProvider?: CodexAuthProvider;
   /** Test/runtime override for the encrypted Web-settings API-key provider. */
@@ -27,6 +29,33 @@ export interface CodexWebRuntimeOptions {
 export interface CodexWebBinding {
   engineId: string;
   authMode: string;
+}
+
+function authorizeCodexTransport(
+  transport: CodexCodeAdapterTransport,
+  authorizeRequest: (context: EngineRunContext) => Promise<void>,
+): CodexCodeAdapterTransport {
+  async function* stream(context: EngineRunContext, load: () => AsyncIterable<EngineEvent>): AsyncIterable<EngineEvent> {
+    await authorizeRequest(context);
+    yield* load();
+  }
+  return {
+    start: (context, input, lease) => stream(context, () => transport.start(context, input, lease)),
+    continue: (context, session, input, lease) => stream(context, () => transport.continue(context, session, input, lease)),
+    resumeFromCursor: (context, cursor, lease) => stream(context, () => transport.resumeFromCursor(context, cursor, lease)),
+    reconcile: async (context, session, lease) => {
+      await authorizeRequest(context);
+      return transport.reconcile(context, session, lease);
+    },
+    respondToApproval: async (context, requestId, decision, lease) => {
+      await authorizeRequest(context);
+      return transport.respondToApproval(context, requestId, decision, lease);
+    },
+    // A stale generation must still be able to stop or erase its admitted native session.
+    cancel: (context, session, lease) => transport.cancel(context, session, lease),
+    erase: (context, session, lease) => transport.erase(context, session, lease),
+    dispose: () => transport.dispose(),
+  };
 }
 
 /** Select exactly the persisted auth mode; never fall back between credential modes. */
@@ -60,7 +89,7 @@ export function createCodexWebEngineFactories(options: CodexWebRuntimeOptions): 
   }
   return composeReviewedEngineFactories({
     additionalFactories: options.additionalFactories,
-    codexTransport: transport,
+    codexTransport: options.authorizeRequest ? authorizeCodexTransport(transport, options.authorizeRequest) : transport,
     codexAuth: auth,
     createCodex: options.createCodex,
   });

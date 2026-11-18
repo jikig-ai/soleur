@@ -137,7 +137,13 @@ DENY=(
 # API calls (site count 0) — so if one of these ever grows a real call, the allowlist stops
 # covering it and this guard reds. The allowlist buys "this file is not a caller", never
 # "this file is exempt".
+# Entries are literal audit metadata; command/variable examples must not expand.
+# shellcheck disable=SC2016
 ALLOWLIST=(
+  'scripts/codex-qualification/role_profiles.py|2026-10-13|pure controller profile admission: SUPABASE_ACCESS_TOKEN is forbidden environment metadata only; no socket, HTTP client or Management API call'
+  'scripts/codex-qualification/api_policy.py|2026-10-12|pure Docker request admission: SUPABASE_ACCESS_TOKEN occurs only in the environment denylist; opens no socket and makes no Management API call'
+  'scripts/codex-qualification/test_ownership_exec.py|2026-10-12|synthetic negative exec-environment fixture: SUPABASE_ACCESS_TOKEN must be refused before forwarding; no socket or HTTP client'
+  'scripts/codex-qualification/test_resource_ownership.py|2026-10-12|synthetic negative container-environment fixture: SUPABASE_ACCESS_TOKEN must be refused; pure policy calls only, no socket or HTTP client'
   '.github/workflows/cutover-inngest.yml|2026-08-26|env plumbing only (secrets.SUPABASE_ACCESS_TOKEN into a step env); the call lives in scripts/cutover-inngest.sh, which is pinned'
   '.github/workflows/scheduled-followthrough-sweeper.yml|2026-08-26|env plumbing only; the calls live in scripts/followthroughs/*.sh, all three pinned'
   '.github/workflows/scheduled-supabase-advisor-scan.yml|2026-08-26|env plumbing plus remediation prose naming the secret; the call lives in scripts/supabase-advisor-scan.sh, which is pinned'

@@ -124,6 +124,15 @@
 # self-hosted/shared, revisit argv/env exposure AND the state-dir guards.
 set -uo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${DATABASE_URL:+x}${DATABASE_URL_POOLER:+x}" ]; then
+      printf '[FATAL] refusing to trace database credentials (see #11096)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 MUTEX_NAME='tenant_integration_dev_suite'
 MARKER='DEV_SUITE_MUTEX_HELD'
 WAIT_S="${DEV_SUITE_MUTEX_WAIT_S:-180}"
@@ -164,9 +173,9 @@ Usage: dev-suite-mutex.sh acquire|release|probe
   release   drop the lock held by this runner (idempotent, safe under if:always())
   probe     report the current holder's application_name, or DEV_SUITE_MUTEX_FREE
 
-Exit contract: acquire/release/probe ALWAYS exit 0 (fail-open) — the only
-non-zero exit is 2, for a usage error or a REFUSED DEV_SUITE_MUTEX_STATE_DIR
-(empty/relative/../-bearing; the guard exits 2 rather than write under CWD).
+Exit contract: database-operation failures exit 0 (fail-open). A usage error or
+REFUSED DEV_SUITE_MUTEX_STATE_DIR exits 2 (empty/relative/../-bearing; the guard
+refuses to write under CWD). Tracing with database credentials exits 78.
 rc is uninformative; grep the banners:
 
   DEV_SUITE_MUTEX_WAITING / ACQUIRED wait_ms=<N> /

@@ -1,4 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { DSAR_TABLE_ALLOWLIST } from "../server/dsar-export-allowlist";
+
+const { listAttachments, enumerateCoUploaderAttachments } = vi.hoisted(() => ({
+  listAttachments: vi.fn().mockResolvedValue({ data: [], error: null }),
+  enumerateCoUploaderAttachments: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({ storage: { from: () => ({ list: listAttachments }) } }),
+  serverUrl: () => "https://supabase.test.local",
+}));
+vi.mock("../server/dsar-export-co-uploader", () => ({ enumerateCoUploaderAttachments }));
 
 // Phase 2 unit tests for `apps/web-platform/server/dsar-export.ts` —
 // covers the load-bearing cross-tenant invariant primitives:
@@ -15,7 +29,33 @@ import {
   assertReadScope,
   CrossTenantViolation,
   dsarStringify,
+  buildArchiveToDisk,
 } from "../server/dsar-export";
+
+describe("Codex history acknowledgment portability", () => {
+  it("labels the subject's acknowledgment as portable in the generated archive manifest", async () => {
+    const subject = "synthetic-ack-subject";
+    const archive = await buildArchiveToDisk(
+      randomUUID(), subject,
+      [{
+        table: "codex_history_transfer_acknowledgments",
+        spec: DSAR_TABLE_ALLOWLIST.codex_history_transfer_acknowledgments,
+        rows: [{ member_user_id: subject, conversation_id: "synthetic-conversation", acknowledged_at: "2026-01-01T00:00:00Z" }],
+      }],
+      null, Buffer.alloc(32, 1), new AbortController().signal,
+    );
+    try {
+      expect(listAttachments).toHaveBeenCalledWith(subject, { limit: 1000 });
+      expect(enumerateCoUploaderAttachments).toHaveBeenCalledWith(subject, expect.any(Buffer), expect.any(AbortSignal));
+      expect(archive.manifest.files).toContainEqual(expect.objectContaining({
+        source_table: "codex_history_transfer_acknowledgments",
+        article: "15+20", row_count: 1, included: true,
+      }));
+    } finally {
+      await unlink(archive.localPath);
+    }
+  });
+});
 
 describe("CrossTenantViolation", () => {
   it("is an Error subclass with name and tag", () => {
@@ -164,7 +204,7 @@ describe("dsarStringify (AC23 serialization conventions)", () => {
       table: "conversations",
       rows: [
         { id: "11111111-1111-1111-1111-111111111111", user_id: "u-1", title: "t" },
-        { id: "22222222-2222-2222-2222-222222222222", user_id: "u-1", title: null },
+        { id: "synthetic-row-2", user_id: "u-1", title: null },
       ],
     };
     const a = dsarStringify(fixture);

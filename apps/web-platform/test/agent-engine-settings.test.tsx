@@ -8,6 +8,7 @@ import { authFailureCopy } from "@/server/agent-auth-user-message";
 const fetchMock = vi.fn();
 
 beforeEach(() => {
+  fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockResolvedValue({
     ok: true,
@@ -38,9 +39,11 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
     fetchMock.mockResolvedValueOnce({ ok: false });
     const view = render(<AgentEngineSettings isOwner />);
-    fireEvent.click(await view.findByLabelText(/codex/));
+    const engine = await view.findByRole("combobox", { name: "Agent engine" });
+    await waitFor(() => expect(engine).not.toBeDisabled());
+    fireEvent.change(engine, { target: { value: "codex" } });
     await view.findByRole("alert");
-    expect(view.getByLabelText(/Claude Code/)).toBeChecked();
+    expect(view.getByRole("combobox", { name: "Agent engine" })).toHaveValue("claude-code");
     expect(view.getByLabelText("Authentication mode")).toHaveValue("managed");
   });
 
@@ -48,6 +51,7 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
     fetchMock.mockResolvedValueOnce({ ok: true });
     fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ ...availableSettings, defaultAuthMode: "api-key" }) });
     const view = render(<AgentEngineSettings isOwner />);
     const mode = await view.findByLabelText("Authentication mode");
     fireEvent.change(mode, { target: { value: "api-key" } });
@@ -64,20 +68,20 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
     fetchMock.mockResolvedValueOnce({ ok: true });
     const view = render(<StrictMode><AgentEngineSettings isOwner /></StrictMode>);
-    fireEvent.click(await view.findByLabelText(/codex/));
-    await waitFor(() => expect(view.getByLabelText(/codex/)).not.toBeDisabled());
+    fireEvent.change(await view.findByRole("combobox", { name: "Agent engine" }), { target: { value: "codex" } });
+    await waitFor(() => expect(view.getByRole("combobox", { name: "Agent engine" })).toHaveValue("codex"));
     await act(async () => {
       finishOldLoad({ ok: true, json: async () => availableSettings });
     });
-    expect(view.getByLabelText(/codex/)).toBeChecked();
+    expect(view.getByRole("combobox", { name: "Agent engine" })).toHaveValue("codex");
     expect(view.getByLabelText("Authentication mode")).toHaveValue("api-key");
   });
 
   it("loads the workspace default and renders future engines as unavailable", async () => {
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
-    const claude = await findByLabelText(/Claude Code/);
-    expect((claude as HTMLInputElement).checked).toBe(true);
-    expect((await findByLabelText(/codex/)) as HTMLInputElement).toBeDisabled();
+    const engine = await findByLabelText("Agent engine");
+    await waitFor(() => expect(engine).toHaveValue("claude-code"));
+    expect(viewOptionDisabled(engine, "codex")).toBe(true);
   });
 
   it("keeps Codex unavailable when the rollout flag is off", async () => {
@@ -92,7 +96,81 @@ describe("AgentEngineSettings", () => {
       }),
     });
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
-    expect(await findByLabelText(/codex/)).toBeDisabled();
+    const engine = await findByLabelText("Agent engine");
+    expect(viewOptionDisabled(engine, "codex")).toBe(true);
+  });
+
+  it("lets an owner configure Codex while execution rollout remains disabled", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        defaultEngineId: "claude-code",
+        engines: [
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true, rolloutEnabled: false },
+        ],
+      }),
+    });
+    const view = render(<AgentEngineSettings isOwner />);
+    const engine = await view.findByLabelText("Agent engine");
+    expect(viewOptionDisabled(engine, "codex")).toBe(false);
+    fireEvent.change(engine, { target: { value: "codex" } });
+    expect(engine).toHaveValue("codex");
+    expect(view.getByTestId("workspace-default-engine")).toHaveTextContent("Workspace default for new conversations: Claude Code");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(view.getByRole("status")).toHaveTextContent("Workspace default remains Claude Code");
+  });
+
+  it("restores the saved Codex mode when opening Codex settings", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...availableSettings,
+        codexAuthMode: "api-key",
+        engines: availableSettings.engines.map((engine) => engine.id === "codex"
+          ? { ...engine, authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true, rolloutEnabled: false }
+          : engine),
+      }),
+    });
+    const view = render(<AgentEngineSettings isOwner />);
+    const engine = await view.findByLabelText("Agent engine");
+    fireEvent.change(engine, { target: { value: "codex" } });
+    expect(await view.findByLabelText("Authentication mode")).toHaveValue("api-key");
+  });
+
+  it("keeps each engine's saved auth mode when browsing Codex settings", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...availableSettings,
+        defaultAuthMode: "api-key",
+        codexAuthMode: "managed",
+        engines: availableSettings.engines.map((engine) => engine.id === "codex"
+          ? { ...engine, authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true, rolloutEnabled: false }
+          : engine),
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true });
+
+    const view = render(<AgentEngineSettings isOwner />);
+    const engine = await view.findByLabelText("Agent engine");
+    const mode = view.getByLabelText("Authentication mode");
+
+    expect(mode).toHaveValue("api-key");
+    fireEvent.change(engine, { target: { value: "codex" } });
+    expect(mode).toHaveValue("managed");
+    fireEvent.change(engine, { target: { value: "claude-code" } });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dashboard/settings/agent-engine",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ engineId: "claude-code", authMode: "api-key", applyToExistingCodexConversations: false }),
+      }),
+    ));
+    expect(mode).toHaveValue("api-key");
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "PUT").map(([, options]) => options?.body))
+      .not.toContain(JSON.stringify({ engineId: "claude-code", authMode: "managed", applyToExistingCodexConversations: false }));
   });
 
   it("keeps legacy Claude payloads usable while missing rollout metadata stays fail-closed for future engines", async () => {
@@ -107,11 +185,12 @@ describe("AgentEngineSettings", () => {
       }),
     });
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
-    expect(await findByLabelText(/Claude Code/)).not.toBeDisabled();
-    expect(await findByLabelText(/grok-build/)).toBeDisabled();
+    const engine = await findByLabelText("Agent engine");
+    expect(engine).not.toBeDisabled();
+    expect(viewOptionDisabled(engine, "grok-build")).toBe(true);
   });
 
-  it("keeps the auth selector disabled for a persisted Codex default while rollout is off", async () => {
+  it("allows owner auth settings for a persisted Codex default while execution rollout is off", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -119,12 +198,12 @@ describe("AgentEngineSettings", () => {
         defaultAuthMode: "managed",
         engines: [
           { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
-          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: false },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true, rolloutEnabled: false },
         ],
       }),
     });
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
-    expect(await findByLabelText(/Authentication mode/)).toBeDisabled();
+    expect(await findByLabelText("Authentication mode")).not.toBeDisabled();
   });
 
   it("saves a changed default for an owner", async () => {
@@ -139,17 +218,17 @@ describe("AgentEngineSettings", () => {
       }),
     });
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
-    const codex = await findByLabelText(/codex/);
-    fireEvent.click(codex);
+    const engine = await findByLabelText("Agent engine");
+    fireEvent.change(engine, { target: { value: "codex" } });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/dashboard/settings/agent-engine",
-      expect.objectContaining({ method: "PUT", body: JSON.stringify({ engineId: "codex", authMode: "managed" }) }),
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ engineId: "codex", authMode: "managed", applyToExistingCodexConversations: false }) }),
     ));
   });
 
   it("keeps the selector read-only for members", async () => {
     const { findByLabelText } = render(<AgentEngineSettings isOwner={false} />);
-    expect(await findByLabelText(/Claude Code/)).toBeDisabled();
+    expect(await findByLabelText("Agent engine")).toBeDisabled();
   });
 
   it("saves an owner auth-mode choice for the selected engine", async () => {
@@ -166,7 +245,7 @@ describe("AgentEngineSettings", () => {
     fireEvent.change(mode, { target: { value: "api-key" } });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/dashboard/settings/agent-engine",
-      expect.objectContaining({ method: "PUT", body: JSON.stringify({ engineId: "claude-code", authMode: "api-key" }) }),
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ engineId: "claude-code", authMode: "api-key", applyToExistingCodexConversations: false }) }),
     ));
   });
 
@@ -174,15 +253,82 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        defaultEngineId: "claude-code",
-        defaultAuthMode: "managed",
-        engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
+        defaultEngineId: "codex",
+        defaultAuthMode: "api-key",
+        engines: [{ id: "codex", version: "v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
       }),
     });
     const { findByLabelText, findByTestId } = render(<AgentEngineSettings isOwner />);
-    const mode = await findByLabelText("Authentication mode");
+    await findByLabelText("Authentication mode");
+    const disclosure = await findByTestId("user-provider-disclosure");
+    expect(disclosure).toHaveTextContent(/history|retention/i);
+    expect(disclosure).toHaveTextContent("Saved conversation history is not transferred");
+  });
+
+  it("marks only an explicit Codex auth-mode choice as applying to existing conversations", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({
+      ...availableSettings,
+      defaultEngineId: "codex",
+      defaultAuthMode: "managed",
+      engines: availableSettings.engines.map((engine) => engine.id === "codex"
+        ? { ...engine, authModes: ["managed", "api-key"] }
+        : engine),
+    }) });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ affectedConversationCount: 3 }) });
+    const view = render(<AgentEngineSettings isOwner />);
+    const mode = await view.findByLabelText("Authentication mode");
     fireEvent.change(mode, { target: { value: "api-key" } });
-    expect(await findByTestId("user-provider-disclosure")).toHaveTextContent("retention");
+    const confirm = await view.findByRole("button", { name: "Apply to existing Codex conversations" });
+    expect(view.getByRole("alertdialog")).toHaveTextContent("Requested authentication mode: API key.");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/dashboard/settings/agent-engine",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          engineId: "codex",
+          authMode: "api-key",
+          applyToExistingCodexConversations: true,
+          expectedAffectedConversationCount: 3,
+        }),
+      }),
+    ));
+  });
+
+  it("rereads committed Codex settings after the save response is lost", async () => {
+    const initial = {
+      ...availableSettings, codexAuthMode: "managed",
+      engines: availableSettings.engines.map((engine) => engine.id === "codex"
+        ? { ...engine, authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true }
+        : engine),
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => initial });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ affectedConversationCount: 2 }) });
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic committed response loss"));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ ...initial, codexAuthMode: "api-key" }) });
+    const view = render(<AgentEngineSettings isOwner />);
+    fireEvent.change(await view.findByLabelText("Agent engine"), { target: { value: "codex" } });
+    fireEvent.change(view.getByLabelText("Authentication mode"), { target: { value: "api-key" } });
+    fireEvent.click(await view.findByRole("button", { name: "Apply to existing Codex conversations" }));
+    const alert = await view.findByRole("alert");
+    expect(alert).toHaveTextContent("Current settings have been refreshed");
+    expect(alert).not.toHaveTextContent("previous selection is still active");
+    expect(view.getByLabelText("Agent engine")).toHaveValue("codex");
+    expect(view.getByLabelText("Authentication mode")).toHaveValue("api-key");
+    expect(view.getByTestId("workspace-default-engine")).toHaveTextContent("Claude Code");
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "PUT")).toHaveLength(1);
+  });
+
+  it("blocks further changes when neither the save nor authoritative reread can be confirmed", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic lost save response"));
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic unavailable authoritative reread"));
+    const view = render(<AgentEngineSettings isOwner />);
+    fireEvent.change(await view.findByLabelText("Authentication mode"), { target: { value: "api-key" } });
+    expect(await view.findByRole("alert")).toHaveTextContent("Reload settings before making another change");
+    expect(view.getByLabelText("Agent engine")).toBeDisabled();
+    expect(view.getByLabelText("Authentication mode")).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "PUT")).toHaveLength(1);
   });
 
   describe("#11591 — option labels, helper and disclosure", () => {
@@ -194,15 +340,13 @@ describe("AgentEngineSettings", () => {
 
     it("shows Automatic / My API key while the stored values stay managed / api-key", async () => {
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
-      const { findByLabelText, getByRole, getByText } = render(<AgentEngineSettings isOwner />);
+      const { findByLabelText } = render(<AgentEngineSettings isOwner />);
       const mode = (await findByLabelText("Authentication mode")) as HTMLSelectElement;
       expect(Array.from(mode.options).map((o) => [o.value, o.textContent])).toEqual([
         ["managed", "Automatic"],
         ["api-key", "My API key"],
       ]);
-      // The radio sub-label tells the same story as the select (no raw "managed or api-key").
-      expect(getByText("local · Automatic or My API key")).toBeTruthy();
-      expect(getByRole("radio", { name: /Claude Code/ })).toBeTruthy();
+      expect(await findByLabelText("Agent engine")).toHaveValue("claude-code");
     });
 
     it("helper line for the Claude engine says new conversations and names no subscription", async () => {
@@ -243,15 +387,17 @@ describe("AgentEngineSettings", () => {
           ],
         }),
       });
-      const { findByLabelText, queryByTestId } = render(<AgentEngineSettings isOwner />);
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ affectedConversationCount: 1 }) });
+      const { findByLabelText, queryByTestId, findByRole } = render(<AgentEngineSettings isOwner />);
       const mode = (await findByLabelText("Authentication mode")) as HTMLSelectElement;
       expect(Array.from(mode.options).map((o) => o.textContent)).toEqual(["managed", "api-key"]);
       expect(queryByTestId("auth-mode-helper")).toBeNull();
       expect(queryByTestId("user-provider-disclosure")).toBeNull();
       expect(mode.getAttribute("aria-describedby")).toBeNull();
       fireEvent.change(mode, { target: { value: "api-key" } });
-      expect(queryByTestId("user-provider-disclosure")).toBeTruthy();
-      expect(mode.getAttribute("aria-describedby")).toBe("user-provider-disclosure");
+      expect(await findByRole("alertdialog")).toHaveTextContent("1 existing Codex conversation");
+      expect(mode.value).toBe("managed");
+      expect(queryByTestId("user-provider-disclosure")).toBeNull();
     });
   });
 
@@ -297,12 +443,12 @@ describe("AgentEngineSettings", () => {
 
     it("no non-owner text names a subscription or claims the viewer's own account, and the controls stay disabled", async () => {
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => claudeOnly });
-      const { findByTestId, findByLabelText, getByRole } = render(<AgentEngineSettings isOwner={false} />);
+      const { findByTestId, findByLabelText } = render(<AgentEngineSettings isOwner={false} />);
       const all = text(await findByTestId("auth-mode-helper")) + text(await findByTestId("user-provider-disclosure"));
       expect(all).not.toMatch(/subscription/i);
       expect(all).not.toMatch(/your own provider account|your saved API key|saved to your account/i);
       expect(await findByLabelText("Authentication mode")).toBeDisabled();
-      expect(getByRole("radio", { name: /Claude Code/ })).toBeDisabled();
+      expect(await findByLabelText("Agent engine")).toBeDisabled();
     });
 
     it("another engine under api-key keeps the single disclosure element, with the non-owner text for a non-owner", async () => {
@@ -318,7 +464,9 @@ describe("AgentEngineSettings", () => {
         }),
       });
       const { findByTestId } = render(<AgentEngineSettings isOwner={false} />);
-      expect(text(await findByTestId("user-provider-disclosure"))).toBe(NON_OWNER_DISCLOSURE);
+      const disclosure = text(await findByTestId("user-provider-disclosure"));
+      expect(disclosure).toContain(NON_OWNER_DISCLOSURE);
+      expect(disclosure).toContain("Saved conversation history is not transferred");
     });
   });
 });
@@ -333,3 +481,7 @@ describe("operator recovery copy names the Settings label", () => {
     expect(authFailureCopy("not_logged_in", "api_key")).not.toContain(`"${label}"`);
   });
 });
+
+function viewOptionDisabled(select: HTMLElement, value: string): boolean {
+  return (select.querySelector(`option[value="${value}"]`) as HTMLOptionElement | null)?.disabled ?? false;
+}

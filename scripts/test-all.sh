@@ -5979,6 +5979,7 @@ if want_scripts; then
   # for the same reason as its neighbour; the workflow census of the routes that must run it is a bun suite under
   # plugins/soleur/test/ (web-host-escrow-preflight-census.test.ts), picked up by that directory's run.
   run_suite "scripts/web-host-escrow-preflight" bash scripts/web-host-escrow-preflight.test.sh
+  run_suite "apps/web-platform/scripts/preflight-schema-vs-ledger" python3 apps/web-platform/scripts/preflight-schema-vs-ledger.test.py
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates

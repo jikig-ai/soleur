@@ -1,5 +1,5 @@
 {
-  "version": "2.9",
+  "version": "2.18",
   "children": [
     {
       "type": "frame",
@@ -124,7 +124,9 @@
               "id": "BipuW",
               "name": "intro2",
               "fill": "#B8B8B0",
-              "content": "Choose the engine for new conversations and future routine runs.\nExisting conversations and started runs keep their engine, including retries.",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Choose the default for new conversations. Codex runs stay disabled until qualification.",
               "lineHeight": 1.5,
               "fontFamily": "IBM Plex Mono",
               "fontSize": 12,
@@ -137,11 +139,9 @@
               "width": "fill_container",
               "height": 180,
               "fill": "#232323",
-              "stroke": {
-                "align": "inside",
-                "thickness": 1,
-                "fill": "#3D3D3D"
-              },
+              "stroke": "#3D3D3D",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
               "layout": "vertical",
               "gap": 14,
               "padding": 20,
@@ -183,11 +183,9 @@
                   "width": "fill_container",
                   "height": 64,
                   "fill": "#1A1A1A",
-                  "stroke": {
-                    "align": "inside",
-                    "thickness": 2,
-                    "fill": "#FFD600"
-                  },
+                  "stroke": "#FFD600",
+                  "strokeWidth": 2,
+                  "strokeAlignment": "inner",
                   "gap": 16,
                   "padding": 16,
                   "children": [
@@ -207,7 +205,7 @@
                       "id": "QKkaM",
                       "name": "chevron2",
                       "fill": "#FFD600",
-                      "content": "CHANGE  >",
+                      "content": "AGENT ENGINE  v",
                       "fontFamily": "IBM Plex Mono",
                       "fontSize": 11,
                       "fontWeight": "700",
@@ -234,11 +232,9 @@
               "width": "fill_container",
               "height": 330,
               "fill": "#1A1A1A",
-              "stroke": {
-                "align": "inside",
-                "thickness": 1,
-                "fill": "#3D3D3D"
-              },
+              "stroke": "#3D3D3D",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
               "layout": "vertical",
               "gap": 14,
               "padding": 20,
@@ -259,7 +255,9 @@
                   "id": "ldAVb",
                   "name": "codexBody2",
                   "fill": "#B8B8B0",
-                  "content": "Choose how Codex is connected. This choice determines the billing source.\nAvailability is checked separately for conversations and routines.",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Choose how members connect Codex. Owner confirmation changes the mode for existing Codex conversations.",
                   "lineHeight": 1.5,
                   "fontFamily": "IBM Plex Mono",
                   "fontSize": 12,
@@ -270,104 +268,64 @@
                   "id": "IiZGJ",
                   "name": "Codex authentication options",
                   "width": "fill_container",
-                  "height": 108,
-                  "gap": 16,
+                  "height": 100,
+                  "layout": "vertical",
+                  "gap": 8,
                   "children": [
                     {
+                      "type": "text",
+                      "id": "JKRlf",
+                      "name": "Authentication mode label",
+                      "fill": "#B8B8B0",
+                      "content": "AUTHENTICATION MODE",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
                       "type": "frame",
-                      "id": "GINTJ",
-                      "name": "API key selected",
+                      "id": "epFD9",
+                      "name": "Authentication mode dropdown",
                       "width": "fill_container",
-                      "height": "fill_container",
-                      "fill": "#232323",
-                      "stroke": {
-                        "align": "inside",
-                        "thickness": 2,
-                        "fill": "#FFD600"
-                      },
-                      "layout": "vertical",
-                      "gap": 8,
+                      "height": 48,
+                      "fill": "#1A1A1A",
+                      "stroke": "#3D3D3D",
+                      "strokeWidth": 1,
                       "padding": 14,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
                       "children": [
                         {
                           "type": "text",
-                          "id": "I2o8E",
-                          "name": "API key radio",
+                          "id": "jrFp1",
+                          "name": "Selected mode",
                           "fill": "#F5F5F0",
-                          "content": "● API KEY",
+                          "content": "API KEY",
                           "fontFamily": "Space Grotesk",
                           "fontSize": 13,
                           "fontWeight": "700"
                         },
                         {
                           "type": "text",
-                          "id": "4Znge",
-                          "name": "API billing",
-                          "fill": "#B8B8B0",
-                          "content": "Billed to your OpenAI API account",
-                          "fontFamily": "IBM Plex Mono",
-                          "fontSize": 11,
-                          "fontWeight": "normal"
-                        },
-                        {
-                          "type": "text",
-                          "id": "ULC3D",
-                          "name": "Connect API key button",
+                          "id": "UK7F7",
+                          "name": "Authentication mode chevron",
                           "fill": "#FFD600",
-                          "content": "CONNECT API KEY  →",
-                          "fontFamily": "Space Grotesk",
-                          "fontSize": 12,
-                          "fontWeight": "700"
+                          "content": "v",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
                     {
-                      "type": "frame",
-                      "id": "keTIH",
-                      "name": "ChatGPT subscription option",
-                      "width": "fill_container",
-                      "height": "fill_container",
-                      "fill": "#232323",
-                      "stroke": {
-                        "align": "inside",
-                        "thickness": 1,
-                        "fill": "#3D3D3D"
-                      },
-                      "layout": "vertical",
-                      "gap": 8,
-                      "padding": 14,
-                      "children": [
-                        {
-                          "type": "text",
-                          "id": "RTP6j",
-                          "name": "ChatGPT radio",
-                          "fill": "#F5F5F0",
-                          "content": "○ CHATGPT SUBSCRIPTION",
-                          "fontFamily": "Space Grotesk",
-                          "fontSize": 13,
-                          "fontWeight": "700"
-                        },
-                        {
-                          "type": "text",
-                          "id": "G2Zjc",
-                          "name": "ChatGPT billing",
-                          "fill": "#B8B8B0",
-                          "content": "Uses your eligible ChatGPT plan limits",
-                          "fontFamily": "IBM Plex Mono",
-                          "fontSize": 11,
-                          "fontWeight": "normal"
-                        },
-                        {
-                          "type": "text",
-                          "id": "ujrZG",
-                          "name": "Managed signin button",
-                          "fill": "#F5F5F0",
-                          "content": "SIGN IN WITH CHATGPT  →",
-                          "fontFamily": "Space Grotesk",
-                          "fontSize": 12,
-                          "fontWeight": "700"
-                        }
-                      ]
+                      "type": "text",
+                      "id": "R07baY",
+                      "name": "Member credential explanation",
+                      "fill": "#B8B8B0",
+                      "content": "Uses your credential. Provider charges apply to you.",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 10,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -376,7 +334,7 @@
                   "id": "xMUJ2",
                   "name": "Selected connection status",
                   "fill": "#B8B8B0",
-                  "content": "Selected method: API key · Not connected",
+                  "content": "Uses each resuming member credential",
                   "fontFamily": "IBM Plex Mono",
                   "fontSize": 11,
                   "fontWeight": "normal"
@@ -386,7 +344,7 @@
                   "id": "dMu8T",
                   "name": "Codex availability qualification",
                   "fill": "#FF6B35",
-                  "content": "NOT READY TO SELECT · Connection and workflow checks required",
+                  "content": "SETTINGS ONLY · CODEX EXECUTION DISABLED UNTIL QUALIFICATION",
                   "fontFamily": "IBM Plex Mono",
                   "fontSize": 11,
                   "fontWeight": "normal"
@@ -398,7 +356,9 @@
               "id": "kWYky",
               "name": "notice2",
               "fill": "#FF6B35",
-              "content": "If the selected engine or sign-in method is unavailable, work pauses with a clear reason.\nSoleur never switches engines or billing methods automatically.",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Engine selection affects new conversations. An owner-confirmed Codex mode change updates existing Codex conversations.",
               "lineHeight": 1.5,
               "fontFamily": "IBM Plex Mono",
               "fontSize": 12,
@@ -407,6 +367,581 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "CJ6eU",
+      "x": 1500,
+      "y": 0,
+      "name": "Member History Acknowledgment",
+      "width": 1440,
+      "height": 900,
+      "fill": "#1A1A1A",
+      "children": [
+        {
+          "type": "frame",
+          "id": "qGjBu",
+          "name": "Sidebar",
+          "width": 216,
+          "height": "fill_container",
+          "fill": "#232323",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "t0RfQ",
+              "name": "sideTitle2",
+              "fill": "#F5F5F0",
+              "content": "SOLEUR",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 18,
+              "fontWeight": "700",
+              "letterSpacing": 2
+            },
+            {
+              "type": "frame",
+              "id": "zzlyv",
+              "name": "sideNav2",
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fiOxY",
+                  "name": "nav12",
+                  "fill": "#FFD600",
+                  "content": "[01] WORKSPACE",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "letterSpacing": 1.5
+                },
+                {
+                  "type": "text",
+                  "id": "u23Me",
+                  "name": "nav22",
+                  "fill": "#6B6B6B",
+                  "content": "[02] TEAM",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "letterSpacing": 1.5
+                },
+                {
+                  "type": "text",
+                  "id": "VA38p",
+                  "name": "nav32",
+                  "fill": "#F5F5F0",
+                  "content": "[03] SETTINGS",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "letterSpacing": 1.5
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "zD59E",
+              "name": "Collapse navigation button",
+              "fill": "#B8B8B0",
+              "content": "‹ COLLAPSE",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ZzS5W",
+          "name": "Settings Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 36,
+          "children": [
+            {
+              "type": "text",
+              "id": "bVP8u",
+              "name": "eyebrow2",
+              "fill": "#6B6B6B",
+              "content": "WORKSPACE / SETTINGS",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 11,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            },
+            {
+              "type": "text",
+              "id": "cgPfl",
+              "name": "title2",
+              "fill": "#F5F5F0",
+              "content": "DEFAULT AGENT ENGINE",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 32,
+              "fontWeight": "700",
+              "letterSpacing": 1
+            },
+            {
+              "type": "text",
+              "id": "j1YV8x",
+              "name": "intro2",
+              "fill": "#B8B8B0",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Choose the default for new conversations. Codex mode changes require owner confirmation.",
+              "lineHeight": 1.5,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "c2bTN",
+              "name": "Engine Default Card",
+              "width": "fill_container",
+              "height": 180,
+              "fill": "#232323",
+              "stroke": "#3D3D3D",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "o55nO",
+                  "name": "cardHead2",
+                  "gap": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "pje4F",
+                      "name": "cardLabel2",
+                      "fill": "#FFD600",
+                      "content": "SELECTED SETTINGS",
+                      "fontFamily": "Space Grotesk",
+                      "fontSize": 13,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "bF6ir",
+                      "name": "status2",
+                      "fill": "#FFD600",
+                      "content": "MODE CHANGE",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 10,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "mfrX7",
+                  "name": "selector2",
+                  "width": "fill_container",
+                  "height": 64,
+                  "fill": "#1A1A1A",
+                  "stroke": "#FFD600",
+                  "strokeWidth": 2,
+                  "strokeAlignment": "inner",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "IWZ0u",
+                      "name": "selected2",
+                      "fill": "#F5F5F0",
+                      "content": "CODEX  ·  SETTINGS ONLY",
+                      "fontFamily": "Space Grotesk",
+                      "fontSize": 18,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "Ng6N1",
+                      "name": "chevron2",
+                      "fill": "#FFD600",
+                      "content": "AGENT ENGINE  v",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "qYPwh",
+                  "name": "helper2",
+                  "fill": "#B8B8B0",
+                  "content": "Workspace default remains Claude Code. Codex execution is disabled.",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "C5spTh",
+              "name": "Codex Availability",
+              "width": "fill_container",
+              "height": 330,
+              "fill": "#1A1A1A",
+              "stroke": "#3D3D3D",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Aey5q",
+                  "name": "codexTitle2",
+                  "fill": "#F5F5F0",
+                  "content": "CODEX MODE",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 13,
+                  "fontWeight": "700",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "YfaFC",
+                  "name": "codexBody2",
+                  "fill": "#B8B8B0",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Change the mode for existing Codex conversations. Each member uses their own provider account.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "fxO4k",
+                  "name": "Codex authentication options",
+                  "width": "fill_container",
+                  "height": 100,
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gZQxo",
+                      "name": "Authentication mode label",
+                      "fill": "#B8B8B0",
+                      "content": "AUTHENTICATION MODE",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "pmCCT",
+                      "name": "Authentication mode dropdown",
+                      "width": "fill_container",
+                      "height": 48,
+                      "fill": "#1A1A1A",
+                      "stroke": "#3D3D3D",
+                      "strokeWidth": 1,
+                      "padding": 14,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "bHRrU",
+                          "name": "Selected mode",
+                          "fill": "#F5F5F0",
+                          "content": "API KEY",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 13,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "jetpc",
+                          "name": "Authentication mode chevron",
+                          "fill": "#FFD600",
+                          "content": "v",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "JdalB",
+                      "name": "Member credential explanation",
+                      "fill": "#B8B8B0",
+                      "content": "Uses your credential. Provider charges apply to you.",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 10,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "XeCs6",
+                  "name": "Selected connection status",
+                  "fill": "#B8B8B0",
+                  "content": "Managed mode uses the workspace account",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "P6u3T",
+                  "name": "Codex availability qualification",
+                  "fill": "#FF6B35",
+                  "content": "EXECUTION DISABLED · QUALIFICATION PENDING",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "Gb4Bo",
+              "name": "notice2",
+              "fill": "#FF6B35",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Engine selection affects new conversations. An owner-confirmed Codex mode change updates existing Codex conversations.",
+              "lineHeight": 1.5,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "cbNNK",
+      "x": 430,
+      "y": 245,
+      "name": "Owner Mode Change Confirmation",
+      "width": 600,
+      "height": 370,
+      "fill": "#232323",
+      "stroke": "#FFD600",
+      "strokeWidth": 2,
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 24,
+      "children": [
+        {
+          "type": "text",
+          "id": "O2geum",
+          "name": "Owner dialog title",
+          "fill": "#F5F5F0",
+          "content": "CHANGE CODEX MODE FOR EXISTING CONVERSATIONS?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 18,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "oXv65",
+          "name": "Affected conversation count",
+          "fill": "#FFD600",
+          "content": "4 EXISTING CONVERSATIONS WILL CHANGE",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 13,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "TxxMv",
+          "name": "Owner transfer details",
+          "fill": "#B8B8B0",
+          "textGrowth": "fixed-width",
+          "width": 480,
+          "content": "Each member confirms before conversation history is shared with the selected provider. Members use their own credentials and pay provider charges. Recovery sessions are cleared.",
+          "lineHeight": 1.5,
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "AFQrD",
+          "name": "Owner confirmation actions",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Thwcq",
+              "name": "Apply mode change button",
+              "width": 250,
+              "height": 48,
+              "fill": "#FFD600",
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mvmas",
+                  "name": "Apply mode change label",
+                  "fill": "#1A1A1A",
+                  "content": "APPLY TO 4 CONVERSATIONS",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pYmlS",
+              "name": "Cancel mode change button",
+              "width": 100,
+              "height": 48,
+              "fill": "#1A1A1A",
+              "stroke": "#6B6B6B",
+              "strokeWidth": 1,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qQ5AH",
+                  "name": "Cancel mode change label",
+                  "fill": "#F5F5F0",
+                  "content": "CANCEL",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "QXCk6",
+      "x": 1930,
+      "y": 245,
+      "name": "Member History Transfer Acknowledgment",
+      "width": 600,
+      "height": 360,
+      "fill": "#232323",
+      "stroke": "#FFD600",
+      "strokeWidth": 2,
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 24,
+      "children": [
+        {
+          "type": "text",
+          "id": "YD8QE",
+          "name": "Member acknowledgment title",
+          "fill": "#F5F5F0",
+          "content": "CODEX ACCOUNT CHANGED",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 18,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "HYwoc",
+          "name": "Member acknowledgment disclosure",
+          "fill": "#B8B8B0",
+          "textGrowth": "fixed-width",
+          "width": 480,
+          "content": "This conversation now uses API-key mode. When you retry, your stored history will be sent to OpenAI using your own API key. Provider charges may apply. No message was sent. Acknowledge, then retry your message.",
+          "lineHeight": 1.5,
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "h5Eqt0",
+          "name": "Member acknowledgment choice",
+          "fill": "#B8B8B0",
+          "textGrowth": "fixed-width",
+          "width": 480,
+          "content": "I am authorized to share this history with the provider.",
+          "lineHeight": 1.5,
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "pJ91c",
+          "name": "Member acknowledgment actions",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "j1YhhX",
+              "name": "Acknowledge history transfer button",
+              "width": 250,
+              "height": 48,
+              "fill": "#FFD600",
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PuhsB",
+                  "name": "Acknowledge history transfer label",
+                  "fill": "#1A1A1A",
+                  "content": "ACKNOWLEDGE HISTORY TRANSFER",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Rr2NN",
+              "name": "Dismiss acknowledgment notice button",
+              "width": 120,
+              "height": 48,
+              "fill": "#1A1A1A",
+              "stroke": "#6B6B6B",
+              "strokeWidth": 1,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hHFb4",
+                  "name": "Dismiss acknowledgment notice label",
+                  "fill": "#F5F5F0",
+                  "content": "DISMISS",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
-  ]
+  ],
+  "fileToken": "ab02ea1c-1a13-4eba-9896-11e0aa9e5948"
 }
