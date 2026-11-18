@@ -77,6 +77,13 @@ WEIGHT="${WEIGHT%"${WEIGHT##*[![:space:]]}"}"   # rtrim
 [[ "$WEIGHT" =~ ^-?[0-9]+$ ]] || fail "TOP_web2_weight_not_integer"
 [[ "$WEIGHT" -ge 0 ]] || fail "TOP_web2_weight_negative"
 
+# Gated host key (#9421 Part 2a, ADR-327): the var.web_hosts key whose pooling this run gates. The gate
+# names no host itself, so any key at weight 0 gets the same standby branch and any key being pooled the
+# same Conditions A + B. Absent/blank/malformed -> FAIL CLOSED (same reasoning as the weight above).
+HOST="${SOLEUR_GATED_HOST-}"
+[[ -n "$HOST" ]] || fail "TOP_gated_host_absent"
+[[ "$HOST" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || fail "TOP_gated_host_malformed"
+
 # Rotation membership set: MUST be present (SET, even if the empty string = "no rotation"). An UNSET
 # var → FAIL CLOSED (not assume-empty→PASS; CTO ruling 2c.2). `${VAR+set}` is non-empty iff VAR is
 # set, so `-z` here is true ONLY when genuinely unset — distinct from an explicit empty "no rotation".
@@ -100,7 +107,7 @@ parse_rotation() {
 parse_rotation "$ROTATION_RAW"
 
 web2_in_rotation=0
-[[ -n "${ROTATION_SET[web-2]-}" ]] && web2_in_rotation=1
+[[ -n "${ROTATION_SET[$HOST]-}" ]] && web2_in_rotation=1
 
 # The PASS branch that fixes the #6575 flaw: web-2 weight==0 AND not in the serving rotation is the
 # correct OUT-OF-BAND STANDBY state — the state a correct pre-flip config is actually in. Short-
@@ -181,7 +188,7 @@ key_uniq=$(printf '%s\n' "$ROSTER_KEYS" | sort -u | grep -c . || true)
 [[ "$key_total" -eq "$key_uniq" ]] || fail "A_host_roster_duplicate_key"
 
 # web-2 specifically present as a roster host_id.
-jq -e 'has("web-2")' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
+jq -e --arg h "$HOST" 'has($h)' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
 
 # Allowlist peers ⊆ roster addresses (OUTBOUND-dial direction: every peer we accept must be reachable).
 declare -A ROSTER_ADDRS=()
@@ -197,7 +204,7 @@ done
 # REJECT an inbound relay from web-2 (its addr ∉ allowlist) → post-flip mis-route → empty /workspaces.
 declare -A ALLOWLIST_SET=()
 for peer in "${ALLOWLIST[@]}"; do ALLOWLIST_SET["$peer"]=1; done
-WEB2_ADDR=$(jq -r '.["web-2"]' <<<"$ROSTER_RAW")
+WEB2_ADDR=$(jq -r --arg h "$HOST" '.[$h]' <<<"$ROSTER_RAW")
 [[ -n "${ALLOWLIST_SET[$WEB2_ADDR]-}" ]] || fail "A_web2_addr_not_in_allowlist"
 
 # =============================================================================
@@ -256,6 +263,9 @@ WS_MARKER="${WORKSPACES_LUKS_CUTOVER_AT-}"
 WS_MARKER="${WS_MARKER#"${WS_MARKER%%[![:space:]]*}"}"
 WS_MARKER="${WS_MARKER%"${WS_MARKER##*[![:space:]]}"}"
 [[ -n "$WS_MARKER" ]] || fail "B_workspaces_luks_marker_absent"
+# The marker is UNKEYED: its only writer probes one host, so it attests that host and no other. The seam
+# names that host (WORKSPACES_LUKS_MARKER_HOST); pooling any OTHER key on it is refused, never inherited.
+[[ "${WORKSPACES_LUKS_MARKER_HOST-}" == "$HOST" ]] || fail "B_workspaces_luks_marker_other_host"
 [[ "$WS_MARKER" =~ $ISO_RE ]] || fail "B_workspaces_luks_marker_unparseable"
 ws_epoch=$(date -u -d "$WS_MARKER" +%s 2>/dev/null) || fail "B_workspaces_luks_marker_unparseable"
 [[ "$ws_epoch" =~ ^-?[0-9]+$ ]] || fail "B_workspaces_luks_marker_unparseable"

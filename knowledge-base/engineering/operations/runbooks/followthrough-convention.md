@@ -369,6 +369,30 @@ A probe whose exit 0 closes the issue after a window of recurring check-ins must
 - **Judge one JSON document** (`jq -s`, exactly one array), cap the reply (`--max-filesize` plus `--max-time`), and never echo the body.
 - Reference implementation and its mutation-proven suite: `scripts/followthroughs/git-data-rehearsal-evidence.test.sh` (the retired `orphan-sweeps-relook-10972` pair, deleted by the #6590 PR-B prune, was the prior reference — see git history for its curl-shim clock-injection pattern).
 
+## Sharp edges for mutation-grading harnesses (2026-11-16, #12698)
+
+A grading harness that defaults an expected value to a sentinel (`*) echo 9`,
+`-ge` slack floors) fabricates credit instead of flagging defects: any real
+exit code differs from the sentinel, so a forgotten or typo'd row id counts as
+"caught"/"red" toward a pass.
+
+- **One write site per expectation.** Record `want` where the row is declared
+  (e.g. `WANT[$name]=$want` inside `row()`) — never a second hand-maintained
+  lookup table the row can drift from.
+- **Fail loud on unregistered keys.** Consumers of the table check
+  `[ -z "${WANT[$r]+x}" ]` and fail, so a typo'd row id is a suite red, not a
+  free credit.
+- **Pin new guards both ways.** A fail-closed probe guard whose deletion
+  leaves the suite green is untested: add a fixture whose malformed input
+  yields a different verdict class without the guard, plus a mutant that
+  deletes the guard.
+- **`-eq` counters, never `-ge` floors.** Assertion floors, mutant counts, and
+  harness-row counts pinned at the actual number force a deliberate bump on
+  every row addition; a slack floor silently re-drifts.
+
+Reference: `scripts/followthroughs/main-health-monitor-mutations-12626.test.sh`;
+learning `knowledge-base/project/learnings/workflow-issues/generated-tsv-conflicts-resolve-semantically-20261116.md`.
+
 ## Relayed records (owner-knowledge acts, 2026-11-02)
 
 A marker probe whose act only the owner can complete (a knowledge claim, a risk acceptance) cannot tell an agent's post from the owner's:

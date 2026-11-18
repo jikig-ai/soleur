@@ -139,6 +139,8 @@ export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }):
 export interface EphemeralWorkspace {
   ephemeralRoot: string;
   spawnCwd: string;
+  /** #12824 — the read-only plugin root, resolved when the cron's allowlist names a plugin script. */
+  pluginRoot?: string | null;
 }
 
 /**
@@ -1431,7 +1433,13 @@ export async function resolveOutputAwareOk(args: {
   // #9272 — passthrough to verifyScheduledIssueCreated's bounded retry; tests
   // inject `verifyRetryDelayMs: 0` so the empty-read path does not sleep.
   verifyRetryDelayMs?: number;
+  // #12847 fix round — the run loaded a plugin tree that was reseeded mid-run (SpawnResult.pluginReseeded).
+  // Its output came from a mixed tree, so it is red even when the issue exists: the caller's
+  // persistence step (safe-commit-pr) is gated on this verdict. The tagged Sentry event is the
+  // substrate's `plugin-reseeded-mid-run`.
+  pluginReseeded?: boolean;
 }): Promise<boolean> {
+  if (args.pluginReseeded) return false;
   const {
     spawnOk,
     label,
@@ -1582,7 +1590,9 @@ export type EvalFatalClass =
   | "timeout"
   // #8611: the run hit its per-run `--max-budget-usd` ceiling (result subtype
   // `error_max_budget_usd`) and stopped before finishing its work.
-  | "budget-capped";
+  | "budget-capped"
+  // #12824: a deploy reseeded the read-only plugin mount while the child ran (SpawnResult.pluginReseeded).
+  | "plugin-reseeded";
 
 // The claude CLI's result-event subtype for a run stopped by `--max-budget-usd`
 // (string taken from the pinned @anthropic-ai/claude-code binary; #8611).
@@ -1595,9 +1605,16 @@ export const CLAUDE_BUDGET_STOP_SUBTYPE = "error_max_budget_usd";
 export function classifyEvalFatal(
   spawnResult: Pick<
     SpawnResult,
-    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype"
+    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype" | "pluginReseeded"
   >,
 ): { fatal: boolean; fatalClass?: EvalFatalClass; reason?: string } {
+  if (spawnResult.pluginReseeded === true) {
+    return {
+      fatal: true,
+      fatalClass: "plugin-reseeded",
+      reason: "the read-only plugin mount was reseeded while claude-eval ran (it may have loaded two plugin versions)",
+    };
+  }
   // Read from the parsed result event, not the tail: whatever the exit code, a
   // capped run did not finish, and a green monitor would hide it (#8611).
   if (spawnResult.subtype === CLAUDE_BUDGET_STOP_SUBTYPE) {
@@ -1677,6 +1694,7 @@ export function resolveBestEffortEvalOk(
     | "stdoutTail"
     | "stderrTail"
     | "subtype"
+    | "pluginReseeded"
   >,
 ): EvalHeartbeatDecision {
   const sentryExtra: Record<string, unknown> = {

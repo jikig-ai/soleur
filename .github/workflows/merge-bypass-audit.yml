@@ -1,0 +1,66 @@
+# merge-bypass-audit — per-merge enforcement-gap probe (#12666).
+#
+# Runs scripts/merge-bypass-audit.sh on every push to main. The push event carries the
+# merge SHA and covers the landing paths that matter through one chokepoint: direct merge,
+# admin/bypass merge, and direct push all emit a push event. Queue merges may not emit one
+# (#12478) — they need no audit: a merge_group success run is by construction the
+# full-battery authority (ADR-276). When the workflow DOES see a queue landing's push, the
+# squash-method queue run's head_sha differs from the landed SHA, so queue landings
+# typically classify `ok via=pr_head` off the resolved source PR — `via=merge_group` is
+# the sha-matching case (and only a ci.yml merge_group success confers queue authority).
+#
+# Verdict contract is in the script header (plan Guard 1): ok | bypass (+deduped
+# compliance/critical issue) | check_flipped_after_merge | unread. Any API read that
+# cannot establish the answer exits 2 — the run reds, never a silent green. The job has
+# no continue-on-error by design.
+#
+# Liveness: the workflow runs on every push to main (~5-15/day); absence of runs is itself
+# the anomaly — the same blind window every push-triggered audit shares.
+#
+# Manual backfill: gh workflow run merge-bypass-audit.yml -f merge_sha=<sha>
+# Backfill caution: a historical merge is judged by TODAY's canonical required set —
+# see the KNOWN RESIDUALS block in the script header before adjudicating findings.
+
+name: merge-bypass-audit
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      merge_sha:
+        description: 'Merge SHA to audit (backfill; defaults to the dispatch ref head)'
+        required: false
+        type: string
+
+permissions:
+  contents: read        # checkout + commit reads
+  checks: read          # check-runs on the source PR head
+  actions: read         # actions/runs merge_group lookup
+  pull-requests: read   # commits/{sha}/pulls + pulls/{n} source-PR resolution
+  issues: write         # deduped compliance/critical alert issue
+
+concurrency:
+  group: merge-bypass-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Probe self-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/merge-bypass-audit.sh --self-check
+
+      - name: Audit the pushed merge SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ inputs.merge_sha || github.sha }}
+        run: bash scripts/merge-bypass-audit.sh "$MERGE_SHA"

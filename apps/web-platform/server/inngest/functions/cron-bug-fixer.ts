@@ -23,12 +23,12 @@
 // scaffolds an ephemeral workspace at /tmp/soleur-cron-bug-fixer-<X>/
 // containing:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // The spawn cwd is repo/ so that:
-//   (a) the explicit `--plugin-dir plugins/soleur` flag (in CLAUDE_CODE_FLAGS
-//       below) registers the soleur plugin manifest at
-//       plugins/soleur/.claude-plugin/plugin.json — headless `--print` does NOT
+//   (a) the substrate's `--plugin-dir <read-only root>` (`loadPlugin: true`,
+//       #12824) registers the soleur plugin from the deployed :ro copy, never
+//       the clone's editable tree — headless `--print` does NOT
 //       auto-discover it from spawn cwd (see #4993 / #4987);
 //   (b) the fix-issue skill's worktree-manager.sh has a real git repo
 //       to create worktrees against. Clone is done in-handler (vs.
@@ -73,6 +73,7 @@ import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -154,14 +155,15 @@ const CLAUDE_CODE_FLAGS = [
   "55",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
 function fixIssuePrompt(issueNumber: number): string {
   return (
     `/soleur:fix-issue ${issueNumber} ` +
+    // #12824 — the containment denies every test command (a test run would execute code the agent just
+    // wrote); the flag makes fix-issue skip Phases 2 and 4 instead of retrying a denied verb.
+    `--no-local-tests ` +
     `--exclude-label ux-audit ` +
     `--exclude-label 'agent:*' ` +
     `--exclude-label content-publisher`
@@ -175,6 +177,9 @@ function fixIssuePrompt(issueNumber: number): string {
 interface DetectedPR {
   number: number;
   node_id: string;
+  // Head ref, so a reseeded run can tell its own `bot-fix/<issue>-*` PR from the any-bot-fix/* fallback.
+  // Absent on a detect-pr result memoized before #12847 verification (treated as not this run's PR).
+  headRef?: string;
 }
 
 interface AutoMergeGateResult {
@@ -194,13 +199,20 @@ interface AutoMergeGateResult {
 // GITHUB_APP_PRIVATE_KEY) is excluded. RESEND_API_KEY in particular is
 // consumed by notify-ops-email OUTSIDE the spawn — leaking it into the
 // child env would let a prompt-injected Bash invocation exfiltrate it.
+//
+// #12824 — HOME is overridden by the substrate with a fresh per-spawn dir. SOLEUR_WORKTREE_SKIP_INSTALL=1
+// makes `worktree-manager.sh create` skip install_deps (package-install scripts are code the agent can
+// write, run below the containment hook), so the clone stays node_modules-free; the prompt's
+// `--no-local-tests` makes fix-issue skip its test phases (2 and 4). CI runs the tests on the PR.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    HOME: process.env.HOME, // overridden by the substrate (#12824)
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    SOLEUR_WORKTREE_SKIP_INSTALL: "1",
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -306,7 +318,7 @@ async function detectBotFixPr(
   const matches = resp.data.filter((pr) => pr.head?.ref?.startsWith(issuePrefix));
   if (matches.length > 0) {
     const pr = matches[0]; // already sorted desc by created_at
-    return { number: pr.number, node_id: pr.node_id };
+    return { number: pr.number, node_id: pr.node_id, headRef: pr.head.ref };
   }
 
   // Fallback: any bot-fix/* PR, picking the most recently created one.
@@ -314,9 +326,49 @@ async function detectBotFixPr(
     pr.head?.ref?.startsWith("bot-fix/"),
   );
   if (anyBotFix) {
-    return { number: anyBotFix.number, node_id: anyBotFix.node_id };
+    return { number: anyBotFix.number, node_id: anyBotFix.node_id, headRef: anyBotFix.head.ref };
   }
   return null;
+}
+
+// #12847 escalation — strip auto-merge eligibility and add review-required on a PR that a reseeded run
+// opened. Best-effort, like the gate's own relabels: a failure is reported, and the PR is still not queued.
+// The review-required add is what holds the demotion across runs: runAutoMergeGate refuses any PR carrying
+// it, so a failed DELETE cannot let a later run's fallback detection queue this PR.
+async function demoteToReviewRequired(octokit: Octokit, prNumber: number): Promise<void> {
+  try {
+    await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      issue_number: prNumber,
+      name: "bot-fix/auto-merge-eligible",
+    });
+  } catch (err) {
+    // A 404 means the label is absent (the agent never set it) — the expected no-op. Anything else is reported.
+    if ((err as { status?: number } | null)?.status !== 404) {
+      reportSilentFallback(err, {
+        feature: "cron-bug-fixer",
+        op: "relabel-reseeded-pr",
+        message: "Failed to strip auto-merge-eligible from a PR from a run whose plugin mount was reseeded",
+        extra: { fn: "cron-bug-fixer", prNumber },
+      });
+    }
+  }
+  try {
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      issue_number: prNumber,
+      labels: ["bot-fix/review-required"],
+    });
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "cron-bug-fixer",
+      op: "relabel-reseeded-pr",
+      message: "Failed to add review-required to a PR from a run whose plugin mount was reseeded",
+      extra: { fn: "cron-bug-fixer", prNumber },
+    });
+  }
 }
 
 // Three safety nets + label assertion + GraphQL auto-merge mutation.
@@ -328,6 +380,18 @@ async function runAutoMergeGate(args: {
   logger: HandlerArgs["logger"];
 }): Promise<AutoMergeGateResult> {
   const { octokit, pr, sourceIssueNumber, logger } = args;
+
+  // (0) #12847 re-verification — queue only the selected issue's own `bot-fix/<issue>-*` PR. detect-pr's
+  // any-bot-fix/* fallback can return another issue's PR, or one a reseeded run opened under a wrong branch
+  // name and left eligible; such a PR goes to human review in every run. A memoized detect-pr result from
+  // before headRef existed has none, and is refused the same way (fail-safe).
+  const ownPrefix = `bot-fix/${sourceIssueNumber}-`;
+  if (!pr.headRef?.startsWith(ownPrefix)) {
+    return {
+      queued: false,
+      reason: `PR #${pr.number} branch '${pr.headRef ?? "unknown"}' is not ${ownPrefix}*; never auto-merged`,
+    };
+  }
 
   // (1) bot-identity check
   const prResp = (await octokit.request(
@@ -356,6 +420,13 @@ async function runAutoMergeGate(args: {
     return {
       queued: false,
       reason: `PR #${pr.number} missing bot-fix/auto-merge-eligible label`,
+    };
+  }
+  // #12847 verification — a demoted PR stays demoted even if stripping its eligibility label failed.
+  if (labelNames.includes("bot-fix/review-required")) {
+    return {
+      queued: false,
+      reason: `PR #${pr.number} carries bot-fix/review-required (demoted; never auto-merged)`,
     };
   }
 
@@ -731,6 +802,7 @@ export async function cronBugFixerHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: spawnCwd!,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,
@@ -819,15 +891,43 @@ export async function cronBugFixerHandler({
     }
 
     // --- Step 7: auto-merge-gate ---
-    const gateResult = await step.run("auto-merge-gate", async () => {
-      const octokit = await createProbeOctokit();
-      return runAutoMergeGate({
-        octokit: octokit as unknown as Octokit,
-        pr: detectedPr,
-        sourceIssueNumber: selectedIssue,
-        logger,
-      });
-    });
+    // #12847 escalation — a run whose plugin mount was reseeded mid-run read its skill from a mixed or
+    // half-copied tree (decision.ok is already false). Its PR is left for human review (review-required),
+    // never queued: auto-merge is this cron's persistence step, which the KB crons skip in the same case.
+    // Only this run's own `bot-fix/<selectedIssue>-*` PR is demoted. Any other PR detect-pr's fallback
+    // returns (another issue's, or this run's under a wrong branch name) is left untouched: runAutoMergeGate
+    // step (0) refuses it in every run, so its eligible label cannot get it queued later.
+    const gateResult: AutoMergeGateResult = spawnResult.pluginReseeded
+      ? await step.run("demote-reseeded-pr", async () => {
+          if (!detectedPr.headRef?.startsWith(`bot-fix/${selectedIssue}-`)) {
+            warnSilentFallback(new Error("reseeded run detected a bot-fix PR for another issue"), {
+              feature: "cron-bug-fixer",
+              op: "reseeded-run-foreign-pr",
+              message:
+                "A run whose plugin mount was reseeded found a bot-fix PR not on its own branch (another issue's, or its own under a wrong name); left it untouched, and the auto-merge gate refuses it in every run",
+              extra: { fn: "cron-bug-fixer", prNumber: detectedPr.number, selectedIssue },
+            });
+            return {
+              queued: false,
+              reason: `PR #${detectedPr.number} is not this run's bot-fix/${selectedIssue}-* PR; a reseeded run left it untouched`,
+            };
+          }
+          const octokit = await createProbeOctokit();
+          await demoteToReviewRequired(octokit as unknown as Octokit, detectedPr.number);
+          return {
+            queued: false,
+            reason: `PR #${detectedPr.number} came from a run whose plugin mount was reseeded mid-run`,
+          };
+        })
+      : await step.run("auto-merge-gate", async () => {
+          const octokit = await createProbeOctokit();
+          return runAutoMergeGate({
+            octokit: octokit as unknown as Octokit,
+            pr: detectedPr,
+            sourceIssueNumber: selectedIssue,
+            logger,
+          });
+        });
 
     if (!gateResult.queued) {
       logger.info(

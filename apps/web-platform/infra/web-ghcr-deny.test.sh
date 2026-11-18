@@ -548,8 +548,8 @@ PY
 row "17 copy A wrapped so it vanishes on the web_tunnel_connector=true (web-2) arm" parity cloud-init.yml
 sub server.tf '  user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {' '  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init.yml", {'
 row "18 hcloud_server.web user_data post-processed instead of the plain render" wiring server.tf
-sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n' \
-  $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
+sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22", lb_weight = 1, tunnel_connector = true }\n' \
+  $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22", lb_weight = 1, tunnel_connector = true }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
 row "19 a third web host that neither running-host route reaches" wiring variables.tf
 # #9390: the deny names THREE hosts. Rows 20-24 each break exactly one copy or the assertion for the third
 # (docker.pkg.github.com) name. Copy R is the reference every check compares against, so a BODY drift in R

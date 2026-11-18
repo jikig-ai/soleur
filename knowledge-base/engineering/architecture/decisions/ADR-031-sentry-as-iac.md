@@ -1195,6 +1195,24 @@ crons, muted monitors, and surfaces covered by downstream Better Stack journald 
   re-accretes past ~60 (#6590's own revisit criterion), and prune again on any future
   `single-user incident` cost regression.
 
+**Amendment (2026-11-13, IaC token rotation tool) — the rotation path and its store set.**
+
+- The IaC token is rotated by `scripts/rotate-sentry-actions-ro-token.sh --profile iac`, whose
+  `iac` `EXPECTED_SCOPES` is the executable copy of §"Why a dedicated Internal Integration"'s
+  scope set; `scripts/rotate-sentry-actions-ro-token.test.sh` pins the two against each other.
+  Runbook: `knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`
+  §IaC token rotation.
+- **Store set, named.** The GitHub repository secret, Doppler `soleur/prd` (the operator-run
+  mirror named in the 2026-09-11 amendment) and Doppler `soleur/prd_terraform` (read as
+  `SENTRY_IAC_AUTH_TOKEN` by the local Sentry-root workflow, `apps/web-platform/infra/sentry/README.md`).
+  A Doppler branch config either inherits the root's value or holds its own copy, so the tool
+  writes `prd_terraform` explicitly and classifies every other `prd_*` config that lists the key
+  by read-back digest; removal of the own-copy carriers is #12740.
+- **Permission form.** The `.auth.scopes` set above carries no `org:ci`, although the form above
+  lists `CI=checked`. If a rebuilt integration's token reads back with `org:ci` (or any other
+  extra), the tool's exact-equality gate refuses it before any store: uncheck the extra in-page
+  and re-read the scopes on the same token.
+
 ## Consequences
 
 ### Positive

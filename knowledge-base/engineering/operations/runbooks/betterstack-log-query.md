@@ -85,6 +85,17 @@ Live standing alarms over this source:
   then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
   an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
   check, so the `detail=''` disjunct is what carries it), not a healthy skip.
+- **`logtail_exploration_alert.inngest_registry_empty`** (#10538, `higher_than 0` over 900 s, checked every 300 s,
+  missing data counts as zero, recovery 7200 s): `soleur-inngest-registry-empty-prd`. Pages (email and push) when a
+  dedicated Inngest host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row is serving (`server_active=active`, `http_code=200`),
+  past the uptime floor (`uptime_s` above 900), and its `registry_fns` is NOT a positive integer (0, `__UNREADABLE__`, or
+  the field missing): the server answers but owns no functions, so nothing is planned. Leg B reads the same field row on the
+  vector-down phone-home envelope (`shipper='cloud-init-phone-home'`, `stage='inngest-server-probe-vector-down'`) from
+  `.detail`. A not-serving row is the probe heartbeat's (`betteruptime_heartbeat.inngest_server_probe`), not this alert's.
+  It does NOT see a stale non-zero registry (#12742). Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift
+  guard `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`. Runbook:
+  [`inngest-server.md`](./inngest-server.md) "Registry-empty alert (#10538)". Readback: `--grep SOLEUR_INNGEST_SERVER_PROBE`,
+  decode, keep `host_role=dedicated` rows, read `registry_fns=` / `uptime_s=` / `http_code=` per row.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -367,23 +378,39 @@ Live standing alarms over this source:
   web-2-class hosts. Runbook:
   [`web-nic-guard-unpinned-url-alert.md`](./web-nic-guard-unpinned-url-alert.md).
 
-- **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
-  checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
-  **ARMED** (re-armed 2026-11-12 under #9927 step D2-1a, on #12221 decision 2). It was paused pending
-  #11869: its first evaluation opened an incident and it read `Current value: 0` while the query API
-  showed the rows arriving every ~5 min; the same stuck-at-0 showed on `egress_gw_probe_silent` (no
-  `JSONType`) before #12180 inverted it. The cause was never isolated and the predicate is UNCHANGED,
-  so the stuck-at-0 can recur — an open incident while rows arrive is that failure mode, not a real
-  silence; the evaluated response is a #12180-class predicate change, not a silent re-pause. Armed behaviour:
-  Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
-  and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
-  row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
-  rows, including `unexpected-exit(...)`); the doppler error lines under the same tag carry a string
-  `message` and do not count. So it sees a unit that fails BEFORE the script's first emit (a revoked or
-  invalid flip token) and does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
+- **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, inverted 2026-11-17 in #12726:
+  `higher_than 0` over 900 s, checked every 300 s, missing data counts as zero, email only):
+  `soleur-inngest-cutover-flip-silent-prd`. **ARMED**. The value is 1 when no row with
+  `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'` and an OBJECT-typed
+  `message` (`JSONType(raw,'message')='Object'`) arrived in the last 15+ min, and 0 when one did: the
+  `egress_gw_probe_silent` missing-host count with a roster of one. Every JSON row the flip script emits
+  is object-typed (the throttled `noop-*` heartbeat and the FSM transition rows, including
+  `unexpected-exit(...)`); the doppler error lines under the same tag carry a string `message` and do not
+  count. So it sees a unit that fails BEFORE the script's first emit (a revoked or invalid flip token) and
+  does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
   emails during an owner-authorized host replace (expected; it clears at the first row after boot).
-  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
-  Resolve only if an object-typed `inngest-cutover-flip` row from `soleur-inngest-prd` arrived in the last 15 minutes. None means the silence is real, so leave the incident open and follow the "Flip-token split" runbook, unless an owner-authorized host replace is under way (expected; it clears at the first row after boot).
+  The metric was inverted because the old `lower_than 1` shape read `Current value: 0` on healthy data
+  twice: incident 1045365287 (#11869, 2026-11-02) and incident 1051496324 (#12726, open from the
+  2026-11-13 re-arm while 2 to 3 object rows arrived in every window). **The zero-fill mechanism is an
+  INFERENCE**, as for `egress_gw_probe_silent`. A throwaway canary alert,
+  `soleur-inngest-cutover-flip-silent-canary-prd`, runs the same query against a host no machine has and
+  is expected to stay open: its incident and its mirror issue are expected, so do not resolve or close
+  them. If it never fires (its alert live, unpaused and older than 20 minutes, with no incident), the
+  evaluator cannot evaluate this predicate shape: keep this alert armed, build the heartbeat poller
+  (#12190) next, and rely on the LUKS key-probe deadman meanwhile; never revert. The canary-removal PR
+  (tracker #12878) opens at the first of: the first tracker read at or after apply +4 h showing the canary
+  incident exists; the +25 min read showing it absent after more than 20 minutes live and unpaused; or
+  apply +24 h, whatever the read shows. No production incident since the apply floor, 1051496324
+  resolved, this alert unpaused at `higher_than 0` and object rows present gate closing #12726 and
+  #12878, not the removal; a canary incident that recovered is a finding for #12190 that blocks closing
+  #12726. An evaluator error also reads 0 (a quiet failure here; the residual and its compensating
+  controls are in the resource comment).
+  An open incident does not by itself mean the unit is silent; read the rows first. Object rows from
+  `soleur-inngest-prd` in the last 15 minutes mean a false positive: the response is the poller (#12190),
+  never a revert, and resolving the incident is a Better Stack write that needs the owner's explicit
+  per-command go-ahead. No object row means the silence is real, so leave the incident open and follow
+  the "Flip-token split" runbook, unless an owner-authorized host replace is under way (expected; it
+  clears at the first row after boot).
   To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
   with `--limit 500` (about 160 string rows per hour share the tag, so the default 100 can crowd the object rows out), as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
   (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section
@@ -916,6 +943,27 @@ outcomes by joining the marker's `run_id` to the Sentry tag `inngest.run_id`
 
 The marker is the deny-side half of that join; the Sentry event is the
 outcome-side half. Neither alone is the answer.
+
+### `cron-containment-new-rule-deny` — a #12757 containment rule refused a cron tool call
+
+Emitted by `_cron-claude-eval-substrate.ts` through `warnSilentFallback` (pino WARN plus a Sentry warning) once per
+rule per run, from the result event's `permission_denials[]` re-classified by the hook's `classifyNewRuleDeny`. Fields:
+`op` = `cron-containment-new-rule-deny`, `rule` (`git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`,
+`protected-trust-root`), `cron`, `count`. No command or path text is ever carried. Skipped for the `no-file-tools`
+crons. It is an attribution metric: a `git -C dir status` that was never allowlisted now counts as `git-gh-shape`, so
+read the run before calling a non-zero count an over-deny.
+
+Sentry: search `op:cron-containment-new-rule-deny` and group by the `rule` tag (or `cron`). Better Stack (the pino row
+carries `rule`/`cron`/`count` as fields; tags are Sentry-only):
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep cron-containment-new-rule-deny \
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .op == "cron-containment-new-rule-deny") | [.cron, .rule, .count] | @tsv'
+```
+
+A sustained `git-gh-shape` count on `cron-bug-fixer` with no bot-fix PR is the over-deny signature (plan
+`## User-Brand Impact`); check for a `bot-fix/attempted` label on the issue and remove it after a revert.
 
 ### `SOLEUR_COMPOUND_PROMOTE_OUTCOME` — what the weekly self-improvement run DID
 

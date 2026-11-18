@@ -37,10 +37,10 @@
 //
 // PLUGIN-LOADING — Verbatim PR-5 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the
+// `--plugin-dir` flag, which the substrate sets to the read-only deployed root (`loadPlugin: true`, #12824) — the
 // plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
 // interactive marketplace/enabledPlugins trust flow does not run under --print).
 // See #4993 / #4987.
@@ -71,6 +71,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -105,8 +106,6 @@ const CLAUDE_CODE_FLAGS = [
   "50",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Task,Skill",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -148,8 +147,9 @@ Idempotency: before filing, check
 and skip if any existing issue (open or closed within 30 days)
 matches. Prevents reopen-loops on stable findings.
 
-Injection safety: write each finding's body to a file (the Write
-tool) and pass it via \`--body-file <path>\` BEFORE \`gh issue
+Injection safety: write each finding's body to a file at a relative
+path under the working directory (the Write tool; writes outside it are
+denied) and pass it via \`--body-file <path>\` BEFORE \`gh issue
 create\` — never interpolate agent output into bash commands
 directly (env-var assignment prefixes are denied by the
 containment hook).
@@ -166,6 +166,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -259,6 +260,7 @@ export async function cronAgentNativeAuditHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: spawnCwd!,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,

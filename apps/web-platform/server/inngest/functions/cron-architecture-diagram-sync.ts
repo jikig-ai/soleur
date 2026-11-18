@@ -56,6 +56,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -85,8 +86,6 @@ const CLAUDE_CODE_FLAGS = [
   "60",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -156,6 +155,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -329,6 +329,7 @@ export async function cronArchitectureDiagramSyncHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
@@ -368,6 +369,7 @@ export async function cronArchitectureDiagramSyncHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-architecture-diagram-sync",

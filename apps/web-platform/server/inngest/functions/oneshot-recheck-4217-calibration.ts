@@ -27,6 +27,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 const FUNCTION_NAME = "oneshot-recheck-4217-calibration";
 
@@ -64,6 +65,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -173,6 +175,7 @@ export async function oneshotRecheck4217CalibrationHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: false, // #12824 — no plugin loaded; only CRON_PLUGIN_LOADERS crons may pass true
           spawnCwd: workspace.spawnCwd,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,

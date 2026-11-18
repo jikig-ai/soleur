@@ -34,7 +34,7 @@ Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is
    can be cited from CODE.** Sweep the branch's whole diff, then classify each hit:
 
    ```bash
-   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown (exit 2/127): sweep every tracked file, never an empty list
+   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown: sweep every tracked file, never an empty list
    while IFS= read -r f; do [[ -f $f ]] && grep -Hn -- 'ADR-<old>' "$f"; done <<< "$files"
    ```
 

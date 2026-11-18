@@ -419,30 +419,12 @@ jobs:
         # before `cf-tunnel-ssh-bridge` exports TF_VAR_ci_ssh_private_key, so an
         # SSH-provisioned resource here bakes `agent = true` and dies on
         # SSH_AUTH_SOCK. Those belong in the post-bridge apply step below.
-        # This instruction already said so and did not hold: it landed 2026-05-20
-        # and `terraform_data.inngest_consumer_probe_install` was appended six
-        # lines beneath it on 2026-08-12, batched beside the other
-        # inngest-consumer resources by feature (#7539). Prose is not the
-        # enforcement -- Guard 1 in
-        # plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
-        # the PR rather than the apply.
-        #
-        # `scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
-        # resource; it did not surface #7539, because a MISPLACED resource is
-        # declared and targeted -- just on the stage that cannot provision it.
+        # Enforcement: Guard 1 of plugins/soleur/test/terraform-target-parity.test.ts.
+        # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §MAIN plan step: the allow-list history (#7539)
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
-          # with the ::error:: below instead of aborting silently.
-          #
-          # THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
-          # GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
-          # cannot clear what the invocation already applied, so on a plan failure the step
-          # died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
-          # below it were unreachable. The explicit `set +e` bracket is what delivers the
-          # property the comment claimed. The two sibling copies of the old comment (in
-          # apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
-          # which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
-          # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
+          # with the ::error:: below instead of aborting silently. Why `set +e` and not an
+          # omitted -e (#7304): the job-rationale runbook, `Comment prose relocated from the apply step` section.
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
@@ -533,6 +515,7 @@ jobs:
               -target=doppler_service_account_token.token_drift \
               -target=github_actions_secret.doppler_token_drift \
               -target=doppler_service_token.inngest_arm_write \
+              -target=doppler_service_token.inngest_cutover_write \
               -target=doppler_service_token.inngest_flip_read \
               -target=github_repository_environment.inngest_cutover \
               -target=github_repository_environment.inngest_config_signing \
@@ -589,6 +572,8 @@ jobs:
               -target=betteruptime_monitor.seo_redirect_zone_ruleset \
               -target=betteruptime_monitor.seo_redirect_bulk_item \
               -target=betteruptime_monitor.seo_redirect_blog_pair \
+              -target=betteruptime_monitor.soleur_changelog_deep \
+              -target=betteruptime_monitor.soleur_legal_terms \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
@@ -652,6 +637,8 @@ jobs:
               -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
+              -target=logtail_exploration.inngest_registry_empty \
+              -target=logtail_exploration_alert.inngest_registry_empty \
               -target=logtail_exploration.claude_cost_daily_burn \
               -target=logtail_exploration_alert.claude_cost_daily_burn \
               -target=logtail_exploration.workspaces_luks_deadman_fired \
@@ -676,6 +663,8 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=logtail_exploration.inngest_cutover_flip_silent_canary \
+              -target=logtail_exploration_alert.inngest_cutover_flip_silent_canary \
               -target=logtail_exploration.relay_listener_down \
               -target=logtail_exploration_alert.relay_listener_down \
               -target=logtail_exploration.relay_probe_silent \
@@ -805,7 +794,7 @@ jobs:
             echo "::error::terraform plan would CREATE ${host_creates} hcloud_server resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode. (hcloud_volume creates are NOT counted since #6919/T55 — a for_each volume fan-out for a legitimate web host is routine, not a host birth.)"
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
             echo "::error::  • ANY hcloud_server.web[*] → dispatch '-f apply_target=web-host-create -f web_host_key=<key> -f confirm=BIRTH-<key>' (#6730, ADR-145). That job is the ONE route granted this capability: it resolves a digest pin, runs the coherence preflight, asserts SENTRY_DSN is non-empty, and grades the plan with an INVERTED guard (exactly one create, OF THE REQUESTED HOST, zero destroys/reboots/out-of-scope changes). It is environment-gated on web-platform-infra-apply, so it waits for a reviewer before any step runs. This HALT stays because it is correct for THIS path — the per-PR apply reaches the server but not its hcloud_server_network attachment, so a birth here yields a host with no private IP and, transiently, no firewall (#6416)."
-            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
+            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host -f confirm=PUBLIC-SDK-URL-BIRTH'."
             echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
             echo "::error::  • a legitimate new WEB host (e.g. web-3 added to var.web_hosts) → dispatch web-host-create for that key, as above. Order matters: adding a key to var.web_hosts makes EVERY subsequent merge HALT here until the host is actually born, so dispatch promptly after the merge that introduces the key. For a NON-web new host, no dispatch creates it; note also that the HALT is NOT inherited — it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), living in the apply job whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard."
             echo "::error::PINNED-IMAGE CHAIN — the BREAK-GLASS fallback only, for when the web-host-create dispatch is itself unavailable (the job automates every step below). A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
@@ -813,7 +802,7 @@ jobs:
             echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
             echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/host-image-coherence-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply."
             echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
-            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
+            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096); abort if it replaces hcloud_server.inngest (#12742)"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
@@ -1712,6 +1701,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # (#10538, CTO D2/F1) unconditional, before credentials. Why: §inngest_host_replace rationale.
+      - name: Validate dispatch inputs (PUBLIC-SDK-URL-BIRTH confirm token, #12742)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: bash tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL-BIRTH
+
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -1889,6 +1884,12 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # (#10538, CTO D2/F1) unconditional, before credentials. Why: §inngest_host_replace rationale.
+      - name: Validate dispatch inputs (PUBLIC-SDK-URL confirm token, #12742)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: bash tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -4672,9 +4673,9 @@ jobs:
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
     # Budget: digest resolve (~1m) + preflight docker pull/extract (~3m) + plan (~2m) +
-    # apply, whose dominant term is Hetzner provisioning the server + volume (~5m). 30m
-    # leaves room for a slow GHCR pull without letting a wedged apply run unbounded.
-    timeout-minutes: 30
+    # apply (Hetzner server + volume, ~5m), then the boot-trail poll (~26m worst, #12008);
+    # kernel-currency.test.sh checks that sum against this value.
+    timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
     steps:
@@ -5118,7 +5119,7 @@ jobs:
       # GHCR is a PRIVATE package; the digest resolve below authenticates with
       # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
       packages: read
-    # Budget = web_host_create's + the ~16m boot-trail poll ceiling; host is new either way.
+    # Budget = web_host_create's + one destroy minute (kernel-currency.test.sh checks it).
     timeout-minutes: 40
     env:
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"

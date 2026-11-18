@@ -34,7 +34,7 @@ PIN="${1:-$REPO_ROOT/apps/web-platform/infra/web-2-ssh-host-key.pub}"
 
 # Fingerprints observed on hosts web-2 no longer is. Extend ONLY with a verified
 # predecessor fingerprint (run log or superseded commit), never the current key's.
-PREDECESSOR_FPS='SHA256:mEDiVY6fDx+3uKNPUZdLn7F/Yzfjq7CZQRcemFC8qbM SHA256:P0J9dUv60r9UHDLAxaTZ9hZDLJ9TYuciQQnQTtdtYiQ SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE'
+PREDECESSOR_FPS='SHA256:mEDiVY6fDx+3uKNPUZdLn7F/Yzfjq7CZQRcemFC8qbM SHA256:P0J9dUv60r9UHDLAxaTZ9hZDLJ9TYuciQQnQTtdtYiQ SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE SHA256:OB3/fH+fWhoTolCCx9rNMtuW0shPUONHNbhYxRFyqic SHA256:+XVboH77jLWXHsCSimMKVijy5k0EYlZ3gh6zSO4NpDE'
 
 # Endpoint/file-derived tokens echoed to the operator's stderr: strip C0+DEL (the capture
 # script strips U+2028/U+2029 too; tokens here come from a committed reviewed file, and

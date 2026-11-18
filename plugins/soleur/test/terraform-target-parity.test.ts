@@ -73,6 +73,7 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -123,7 +124,10 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 367 -> 376 (#12363 A-0, +9): main declared 372 against this floor of 367 (5 rows of slack, absorbed here so it is exact again) and this change adds
 // 4 rows for the relay hello-signing pair (count gate, saved-plan membership, shape and no-output pin, two-mutant battery).
 // Exact: grep -cE '^\s*test\(' = 376.
-const TEST_FLOOR = 376;
+// 376 -> 397 (FIX B handed to the vendor, 2026-11-16, +21): main declared 395 against this floor of 376 (19 rows of slack,
+// absorbed here so it is exact again) and the one-row FIX B describe becomes the three-row forget pin (a/b/c).
+// Exact: grep -cE '^\s*test\(' = 397.
+const TEST_FLOOR = 397;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -252,7 +256,7 @@ function extractTargets(workflowText: string): Set<string> {
 
 function listInfraTfFiles(): string[] {
   return readdirSync(INFRA_DIR)
-    .filter((f) => f.endsWith(".tf"))
+    .filter((f) => f.endsWith(".tf") && !f.startsWith(".")) // Terraform ignores dotfiles; so must every guard reading this list
     .map((f) => resolve(INFRA_DIR, f))
     .sort();
 }
@@ -4184,26 +4188,6 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
   });
 });
 
-// ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────
-describe("betteruptime_team_member.ops is a per-merge -targeted managed resource (FIX B)", () => {
-  test("the resource exists in uptime-alerts.tf and is covered by a per-merge -target", () => {
-    const resources = listInfraTfFiles().flatMap((f) =>
-      extractAllResources(stripComments(readFileSync(f, "utf8"))),
-    );
-    expect(resources).toContain("betteruptime_team_member.ops");
-    // It auto-applies on merge, so its -target lives in the NON-stripped apply job — the
-    // stripped coverage set (what the #5566 guard uses) must still see it.
-    const strippedTargets = extractAllTargets(
-      stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
-    );
-    expect(strippedTargets.has("betteruptime_team_member.ops")).toBe(true);
-    // It is NOT an operator-applied exclusion (it is auto-appliable).
-    expect(OPERATOR_APPLIED_EXCLUSIONS.has("betteruptime_team_member.ops")).toBe(
-      false,
-    );
-  });
-});
-
 // ─── DP-11 F8 guard: every github_repository_environment must gate on a NON-EMPTY
 //     required-reviewer set. A zero-reviewer environment auto-approves, silently
 //     defeating the human ack these environments exist to enforce on irreversible
@@ -5192,6 +5176,124 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume.inngest_redis")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
+  });
+
+  // #10538 CTO D2 + fix-round F1: BOTH jobs that boot hcloud_server.inngest from the public-sdk_url user_data (the
+  // replace and the birth) must type a distinct token before any credential loads, until #12742 item 1 replaces the
+  // gate with a live-mode preflight. B10 pins the PROPERTY, not the text: the step is the one right after checkout,
+  // ahead of every credential step, cannot be tolerated (no continue-on-error / shell override at step, job or
+  // workflow level), runs the shared script with the job's own token, and the script refuses every wrong input.
+  const CONFIRM_LIB = "tests/scripts/lib/inngest-public-sdk-url-confirm.sh";
+  test.each([
+    ["inngest_host_replace", "PUBLIC-SDK-URL"],
+    ["inngest_host", "PUBLIC-SDK-URL-BIRTH"],
+  ])("B10: %s gates on its own %s confirm token right after checkout (#10538, #12742)", (job, token) => {
+    const parsed = parseYaml(wf) as {
+      defaults?: unknown;
+      jobs: Record<string, { steps: Array<Record<string, unknown>>; defaults?: unknown } & Record<string, unknown>>;
+    };
+    const j = parsed.jobs[job];
+    const steps = j.steps;
+    expect(String(steps[0].uses)).toMatch(/^actions\/checkout@/);
+    const gate = steps[1];
+    expect(String(gate.name)).toContain(`${token} confirm token`);
+    for (const k of ["if", "continue-on-error", "shell", "working-directory"]) expect(k in gate, `step key ${k}`).toBe(false);
+    expect((gate.env as Record<string, string>).CONFIRM_RAW).toBe("${{ inputs.confirm }}");
+    expect(String(gate.run).trim()).toBe(`bash ${CONFIRM_LIB} ${token}`);
+    expect("continue-on-error" in j, `${job} job-level continue-on-error`).toBe(false);
+    expect(j.defaults, `${job} job-level defaults`).toBeUndefined();
+    expect(parsed.defaults, "workflow-level defaults").toBeUndefined();
+    const firstCred = steps.findIndex((s) => /credential|doppler/i.test(`${s.name ?? ""} ${s.uses ?? ""}`));
+    expect(firstCred, `${job} has a credential step`).toBeGreaterThan(1);
+    // Verifier round: nothing may run past a refused gate or pre-arm it. No later step re-opens on a failed job
+    // (a status function in `if:`) unless it is secret-free and touches no credential, terraform or Doppler; the job
+    // carries no env (a job-level secret would reach the gate step); checkout takes no `with` (a `ref` input would
+    // swap the script the gate runs).
+    for (const [i, st] of steps.entries()) {
+      if (i < 2 || !/always\(|failure\(|cancelled\(/.test(String(st.if ?? ""))) continue;
+      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused gate`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
+    }
+    expect(j.env, `${job} job-level env`).toBeUndefined();
+    expect(steps[0].with, `${job} checkout with`).toBeUndefined();
+  });
+
+  test("B10: the birth and replace tokens are distinct, and the confirm description does not print either", () => {
+    expect("PUBLIC-SDK-URL").not.toBe("PUBLIC-SDK-URL-BIRTH");
+    const parsed = parseYaml(wf) as { on: { workflow_dispatch: { inputs: { confirm: { description: string } } } } };
+    expect(parsed.on.workflow_dispatch.inputs.confirm.description).not.toContain("PUBLIC-SDK-URL");
+  });
+
+  // Fix-round sweep (data-integrity / agent-native / user-impact seats): a recovery command that tells an operator or
+  // agent to dispatch either job without its token is refused at step 2, mid-incident. Every copy-paste recipe
+  // (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`, bare or quoted) in scripts, skills,
+  // workflows and runbooks carries its own token. Exempt: a recipe that sits inside the same backtick span as a
+  // `**done YYYY-MM-DD` marker earlier on its line (a past run), and prose that only NAMES the selector (the flag
+  // closed by a backtick right after the target, e.g. "selected by `-f apply_target=inngest-host-replace`").
+  test("B10: every live dispatch recipe for the two public-sdk_url jobs carries its confirm token", () => {
+    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github/workflows", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
+      encoding: "utf8",
+      env: gitCleanEnv(),
+    });
+    expect(ls.status).toBe(0);
+    const files = ls.stdout.split("\0").filter((f) => /\.(sh|ya?ml|md|tf)$/.test(f));
+    expect(files.length).toBeGreaterThan(100);
+    const offenders: string[] = [];
+    let recipes = 0;
+    for (const f of files) {
+      readFileSync(join(REPO_ROOT, f), "utf-8").split("\n").forEach((line, i) => {
+        const FLAG = String.raw`(?:-f|-F|--field|--raw-field)[ =]`;
+        const re = new RegExp(String.raw`(?<flag>${FLAG})(?<q>["']?)apply_target=(?<q2>["']?)(?<t>inngest-host-replace|inngest-host)(?![-\w])\k<q2>\k<q>`, "g");
+        for (const m of line.matchAll(re)) {
+          const t = m.groups!.t;
+          const want = t === "inngest-host" ? "PUBLIC-SDK-URL-BIRTH" : "PUBLIC-SDK-URL";
+          const tail = line.slice(m.index! + m[0].length);
+          if (tail.startsWith("`") && line[m.index! - 1] === "`") continue;
+          const head = line.slice(0, m.index!);
+          // A past-run record: a `**done YYYY-MM-DD` marker before the recipe on its line (a table row's status cell).
+          if (/\*\*done \d{4}-\d{2}-\d{2}/.test(head)) continue;
+          recipes++;
+          if (!new RegExp(String.raw`^\s+${FLAG}["']?confirm=["']?${want}(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1}`);
+        }
+      });
+    }
+    expect(recipes, "non-vacuity: the sweep found recipes").toBeGreaterThanOrEqual(6);
+    expect(offenders).toEqual([]);
+  });
+
+  test("B10: the shared confirm script refuses every input but the exact token, and never echoes the input", () => {
+    const lib = join(REPO_ROOT, CONFIRM_LIB);
+    const run = (args: string[], confirm: string | undefined) =>
+      spawnSync("bash", [lib, ...args], {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...ciEnv, ...(confirm === undefined ? {} : { CONFIRM_RAW: confirm }) },
+        encoding: "utf8",
+      });
+    const table: Array<[string[], string | undefined, number]> = [
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL", 0],
+      [["PUBLIC-SDK-URL"], undefined, 1],
+      [["PUBLIC-SDK-URL"], "", 1],
+      [["PUBLIC-SDK-URL"], "public-sdk-url", 1],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL ", 1],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL-BIRTH", 1],
+      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL", 1],
+      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL-BIRTH", 0],
+      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL*", 1],
+      [[], "PUBLIC-SDK-URL", 64],
+      [[""], "", 64],
+    ];
+    // Run the table twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
+    let ciEnv: Record<string, string> = {};
+    for (const env of [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }]) {
+    ciEnv = env;
+    for (const [args, confirm, rc] of table) {
+      const r = run(args, confirm);
+      expect(`${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${r.status}`).toBe(
+        `${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${rc}`,
+      );
+      if (rc === 1) expect(r.stdout).toContain("#12742");
+    }
+    }
+    const echoed = run(["PUBLIC-SDK-URL"], "canary-7f3e");
+    expect(echoed.stdout + echoed.stderr).not.toContain("canary-7f3e");
   });
 
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {
@@ -6419,6 +6521,89 @@ describe("#8754 inngest firewall attachment forget rides the per-merge saved pla
     expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * FIX B handed to the vendor (2026-11-16). ops@jikigai.com is the org's sole Better Stack Admin, set in
+ * the web app; the provider manages non-admin members only and deletes by email, so no Terraform root in
+ * this repo may declare a betteruptime_team_member again, and the old address must be FORGOTTEN. Rationale
+ * lives on the removed block in uptime-alerts.tf.
+ */
+describe("betteruptime_team_member.ops is forgotten, never destroyed (FIX B handed to the vendor, 2026-11-16)", () => {
+  const ADDR = "betteruptime_team_member.ops";
+  const FROM_LINE = /^[ \t]*from[ \t]*=[ \t]*betteruptime_team_member\.ops[ \t]*$/;
+  const UPTIME = resolve(INFRA_DIR, "uptime-alerts.tf");
+
+  /** Every tracked .tf / .tf.json in the repo: every root, every module, every rehearsal root. */
+  function repoTfFiles(): string[] {
+    const r = spawnSync("git", ["ls-files", "-z", "--", "*.tf", "*.tf.json"], { cwd: REPO_ROOT, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
+    const rel = r.stdout.split("\0").filter(Boolean);
+    // git ls-files emits repo-relative paths with no `..` segment; assert it rather than rely on it.
+    const escaping = rel.filter((f) => f.startsWith("/") || f.split("/").includes(".."));
+    if (escaping.length) throw new Error(`git ls-files returned non-relative paths: ${escaping.join(", ")}`);
+    return rel.map((f) => `${REPO_ROOT}/${f}`);
+  }
+
+  /** [start, end) line ranges of every heredoc in RAW text. Quotes are deliberately ignored, so a
+   *  quote-confused stripper cannot hide a heredoc opener from this scan. */
+  function rawHeredocLines(raw: string): Array<[number, number]> {
+    const lines = raw.replace(/\r\n/g, "\n").split("\n");
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = /<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*$/.exec(lines[i]);
+      if (!m) continue;
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() !== m[1]) j++;
+      out.push([i + 1, j]);
+      i = j;
+    }
+    return out;
+  }
+
+  test("(a) closed set: no tracked .tf/.tf.json anywhere names betteruptime_team_member except the forget's from", () => {
+    const files = repoTfFiles();
+    expect(files).toContain(UPTIME); // non-vacuity: the scan reads the root that held the member
+    expect(files.length).toBeGreaterThan(listInfraTfFiles().length); // non-vacuity: wider than one root
+    const offenders: string[] = [];
+    for (const f of files) {
+      // Strings are KEPT (a .tf.json key or an import id is a string); comments and heredocs are not code.
+      g2eStrip(readFileSync(f, "utf8")).split("\n").forEach((line, i) => {
+        if (!/betteruptime_team_member/.test(line)) return;
+        if (f === UPTIME && FROM_LINE.test(line)) return;
+        offenders.push(`${relative(REPO_ROOT, f)}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("(b) uptime-alerts.tf holds exactly one live removed block forgetting the address with destroy = false", () => {
+    const raw = readFileSync(UPTIME, "utf8").replace(/\r\n/g, "\n");
+    const code = g2eStrip(raw);
+    const heredocs = rawHeredocLines(raw);
+    const live = (line: number) => !heredocs.some(([a, b]) => line >= a && line < b);
+    const blocks: string[] = [];
+    for (const m of code.matchAll(/^removed[ \t]*\{/gm)) {
+      const line = code.slice(0, m.index).split("\n").length - 1;
+      const close = g2eClose(code, m.index! + m[0].length - 1);
+      expect(close).toBeGreaterThan(0);
+      const body = code.slice(m.index!, close);
+      if (live(line) && body.split("\n").some((l) => FROM_LINE.test(l))) blocks.push(body);
+    }
+    expect(blocks.length).toBe(1);
+    expect(blocks[0]).toMatch(/\blifecycle[ \t]*\{[^}]*^[ \t]*destroy[ \t]*=[ \t]*false[ \t]*$/m);
+    expect(readdirSync(INFRA_DIR).filter((f) => f.startsWith(".") && f.endsWith(".tf"))).toEqual([]); // nothing Terraform ignores
+  });
+
+  test("(c) the forget's exact -target rides the saved plan, not the post-bridge apply", () => {
+    const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+    const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+    const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(savedPlan).toMatch(/-target=betteruptime_team_member\.ops(?=[ \t\\]|$)/m); // exact operand, no [key]
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
   });
 });
 
