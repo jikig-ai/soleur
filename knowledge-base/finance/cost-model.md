@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-16
+last_updated: 2026-11-17
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -282,6 +282,34 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > COGS 85.33% gross / 85.02% net, all-in 46.97% gross / 45.86% net (each ~0.2 pt worse, as
 > predicted). The #9237 soak/arm follow-through rides on top.
 
+> **[2026-11-17 Review note — Sentry line re-read, #12844]** Out-of-cycle, against
+> `expenses.md@2026-11-17`. A live read of `GET /customers/jikigai-eu/` (period 2026-11-17 to
+> 2026-12-16) puts the Sentry line at **$54.06**: $29 base + $21.06 cron (28 active monitors,
+> 27 billable × $0.78) + $4.00 uptime (5 monitors, 4 billable × $1.00), accrued. The 73.56 it
+> replaces was anchored `@2026-08-03`; most of the drop is the 2026-10-29 monitor prune, and only
+> the $4.00/mo uptime is #12844's saving (ADR-328: Sentry keeps 1 uptime monitor, the production
+> app). The 2026-11-17 invoice of $84.48 is billing lag from the prune. Totals that sum the Sentry
+> line, recomputed from this file's own rows (the 22 COGS rows sum to 380.07; R&D subtotal 939.85):
+> Product COGS **380.07 − 73.56 + 54.06 = 360.57**; all-in floor **360.57 + 939.85 = ≥1,300.42**
+> (≥992.42 on #8611's post-fix projection, 360.57 + 631.85). Break-even: COGS ⌈360.57 ÷ 49⌉ =
+> ⌈7.36⌉ = **8** and ⌈360.57 ÷ 48⌉ = ⌈7.51⌉ = **8**; all-in ⌈1,300.42 ÷ 49⌉ = ⌈26.54⌉ = **27** and
+> ⌈1,300.42 ÷ 48⌉ = ⌈27.09⌉ = **28**, so no boundary moves against the 2026-11-16 basis. Margins at
+> 50 users: COGS (2,450 − 360.57) ÷ 2,450 = **85.28%** gross, (2,400 − 360.57) ÷ 2,400 = **84.98%**
+> net; all-in (2,450 − 1,300.42) ÷ 2,450 = **≤46.92%** gross, (2,400 − 1,300.42) ÷ 2,400 =
+> **≤45.82%** net (≤58.65% on the post-fix projection). The Totals list, Break-Even, margin and
+> Gate #4 sections below still read the 2026-09-29 basis (359.47 / 1,299.32), as the 2026-11-16
+> correction left them, and are re-derived at the next monthly review. Projection: the 2026-12-16
+> invoice is $50.06 to $55.06 (the top end if the new app monitor counts as a sixth uptime monitor
+> this period), depending on whether the accrued $4.00 uptime is refunded
+> (unverified); steady state **$50.06/mo** ($29 + 27 × $0.78), giving COGS 356.57 and all-in
+> ≥1,296.42 (8 / 8 and 27 / 28 users); **$53.18/mo** once #12386 adds 4 host-kernel cron monitors
+> ($29 + 31 × $0.78), giving COGS 359.69 and all-in ≥1,299.54 (8 / 8 and 27 / 28). That re-route
+> replaces the 2026-11-16 correction's pending change (2): the 4 paused heartbeats no longer buy a
+> second $20.00 Better Stack pack. The #12827 Responder 2→1 break-even figures in the 2026-11-16
+> correction were derived on the 73.56 Sentry line. Re-derived on this basis: the cut gives COGS
+> 326.57, **7** users at both $49 and $48 (8 on the old basis), and all-in ≥1,266.42, **26** users at
+> $49 and **27** at $48.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -378,13 +406,13 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
 | Anthropic API (cron-ux-audit) | 15.00 [expenses.md@2026-07-30] | `expenses.md` (one cron; figure unverified since 2026-04-19 — see the Anthropic note below this table) |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
-| Sentry Team (error tracking + cron monitors, $29 base + $44.56 PAYG: 52 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 73.56 [expenses.md@2026-08-03] | `expenses.md` (live-verified — see note) |
+| Sentry Team (error tracking + cron monitors, $29 base + $25.06 PAYG: 27 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors accrued this period) | 54.06 [expenses.md@2026-11-17] | `expenses.md` (live-verified 2026-11-17; 50.06 steady state once uptime is 1 monitor of 1 included, ADR-328 — see the 2026-11-17 review note) |
 | Better Stack Responder (2 licenses × $34) | 68.00 [expenses.md@2026-11-16] | `expenses.md` (invoice-read; 34.00 after the pending 2→1 cut, #12827) |
 | Better Stack (heartbeats $20.00 + Logs Europe PAYG $0.60) | 20.60 [expenses.md@2026-11-16] | `expenses.md` (invoice-read; logs vary month to month) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
 | Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
 | Flagsmith | 45.00 [expenses.md@2026-09-22] | `expenses.md` (active monthly subscription; upgraded after reaching the prior account limit) |
-| **Subtotal Product COGS** | **380.07 [expenses.md@2026-11-16]** | |
+| **Subtotal Product COGS** | **360.57 [expenses.md@2026-11-17]** | |
 
 > **2026-11-16 Better Stack correction.** `expenses.md` now splits Better Stack by invoice line
 > (the 2026-11-14 invoice): **Better Stack Responder 68.00** (2 Responder licenses at $34) and
@@ -510,8 +538,8 @@ Each row is a trigger that forces a spend upgrade. "Upgrade delta" is the monthl
 | Resend Pro | $20.00 [expenses.md@2026-06-16] (active; outbound + transactional, 50K emails/mo) | >50K emails/mo | Resend Scale-tier overage (delta TBD at trigger) | `expenses.md` (estimate — verify on next invoice) |
 | Buttondown | $0 [expenses.md@2026-04-19] (free tier) | >100 newsletter subscribers | +$9.00/mo (Basic) | `expenses.md` |
 | Plausible Analytics | $9.00 [expenses.md@2026-04-19] (Growth, EUR 9) | >10K pageviews/mo | Tier upgrade on Plausible Growth ladder — delta TBD at trigger | `expenses.md` |
-| Sentry Team | $73.56 [expenses.md@2026-08-03] (active; $29 base + $44.56 PAYG for 52 billable cron-monitor seats + 4 billable uptime monitors, live-verified) | Further cron-monitor growth — each new scheduled workflow adds $0.78/mo, uncapped (`reserved = 1`) | $30.44/mo residual PAYG headroom (**≈39 more monitors**) before the $75 cap binds; at the cap, **all monitors deactivate at renewal** | `expenses.md` |
-| Better Stack | $88.60 [expenses.md@2026-11-16] (Responder 68.00 + heartbeats/logs 20.60, invoice-read) | Active heartbeats above the next multiple of 10 (17 today; unpausing the 4 paused `soleur-host-kernel-*` takes it to 21); logs ingest above the included 3 GB | +$20/mo per additional 10 active heartbeats; about $0.60 per extra GB of logs (PAYG) | `expenses.md` |
+| Sentry Team | $54.06 [expenses.md@2026-11-17] (active; $29 base + $25.06 PAYG accrued this period: 27 billable cron-monitor seats × $0.78 + 4 billable uptime monitors × $1.00, live-verified; $50.06 steady state with uptime at 1 monitor of 1 included, ADR-328) | Further cron-monitor growth — each new scheduled workflow adds $0.78/mo, uncapped (`reserved = 1`); each Sentry uptime monitor beyond the 1 included adds $1.00/mo (ADR-328); the 4 host-kernel cron monitors of #12386 add $3.12/mo | $49.94/mo residual PAYG headroom this period (**≈64 more monitors**) before the $75 cap (last read 2026-08-03) binds; at the cap, **all monitors deactivate at renewal** | `expenses.md` |
+| Better Stack | $88.60 [expenses.md@2026-11-16] (Responder 68.00 + heartbeats/logs 20.60, invoice-read) | Active heartbeats above the next multiple of 10 (17 active of 21 today; the 4 paused `soleur-host-kernel-*` heartbeats are re-routed to per-host Sentry cron monitors when #12386 arms them, so they stay out of the active count and no second pack is bought: $3.12/mo on Sentry instead of $20/mo here); logs ingest above the included 3 GB. Uptime monitors: 9 of 10 included after #12844 (ADR-328) | +$20/mo per additional 10 active heartbeats; about $0.60 per extra GB of logs (PAYG) | `expenses.md` |
 | Claude Code Max 20x token ceiling | $400.00 [expenses.md@2026-04-19] (2 seats, flat) | Cumulative loop usage hits the Max-20x rolling token/usage ceiling → forces a 3rd seat or API spillover | +$200/mo (seat 3) or metered API overage | #5086 exposure note — no automated quota signal exists today; re-evaluate on sustained rate-limit/slowdown symptoms |
 
 Pre-planned upgrade exposure at "first paying customer" is **+$100/mo (X API Basic)** [expenses.md@2026-05-21]. Better Stack, Resend, and Sentry are active baseline costs counted in COGS above. Buttondown's trigger fires on volume.
