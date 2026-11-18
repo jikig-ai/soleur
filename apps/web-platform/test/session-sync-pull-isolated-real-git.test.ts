@@ -36,6 +36,7 @@ const H = vi.hoisted(() => ({
   iso: [] as Array<{ args: string[]; input: string; code: number }>,
   writeRepoCols: vi.fn(async () => undefined),
   writeHeld: vi.fn(async () => undefined),
+  writePullBlocked: vi.fn(async () => undefined),
   rpc: vi.fn(async () => ({ data: null, error: null })),
   prs: [] as Array<{ number: number; htmlUrl: string; url: string; state: "open" | "closed"; merged: boolean; headSha: string }>,
   prListFails: false,
@@ -64,7 +65,7 @@ vi.mock("@/server/observability", () => ({
   hashUserId: (x: string) => `h-${x}`,
 }));
 vi.mock("@/server/logger", () => ({ createChildLogger: () => H.log, default: H.log }));
-vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeld }));
+vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeld, writeKbSyncPullBlocked: H.writePullBlocked }));
 vi.mock("@/server/resolve-installation-id", () => ({ resolveInstallationId: H.resolveInstallationId }));
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("@/server/github-app", () => ({
@@ -258,7 +259,7 @@ const resetTurn = (): void => {
   H.host.length = 0;
   H.hostTicks.length = 0;
   H.iso.length = 0;
-  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.writeHeld, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
+  for (const f of [H.reportSilentFallback, H.warnSilentFallback, H.mirrorWithDebounce, H.mirrorWarnWithDebounce, H.writeRepoCols, H.writeHeld, H.writePullBlocked, H.createPullRequest, H.listPullRequestsForHead, H.log.info]) f.mockClear();
 };
 
 beforeEach(() => {
@@ -316,8 +317,9 @@ describe("syncPull on the hardened arm: the default-branch merge (TX1, real git)
     // #12714: the count is computed on the pull's own isolated dir after the merge (nothing local is held here) and written
     expect(result).toEqual({ heldFiles: 0, onRecovered: 0, pullReason: "merged", checkedAt: expect.any(String) });
     expect(H.writeHeld).toHaveBeenCalledTimes(1);
-    // R2-B (verify-coverage P3-5/#6): a merged pull clears the D42 pull-blocked state with the count
-    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: new Date(result.checkedAt as string), pullBlocked: null }]);
+    // R2-B (verify-coverage P3-5/#6): a merged pull clears the D42 pull-blocked state, in its own write (R2-A)
+    expect(H.writeHeld.mock.calls[0].slice(1)).toEqual([WS_ID, { heldFiles: 0, checkedAt: new Date(result.checkedAt as string) }]);
+    expect(H.writePullBlocked.mock.calls.map((c) => (c as unknown[]).slice(1))).toEqual([[WS_ID, null]]);
     for (const u of ups) expect(isAncestor(r, u, "HEAD")).toBe(true);
     expect(gitOk(r.ws, "rev-list", "--objects", "HEAD")).toBe(true);
     expect(gitOk(r.ws, "fsck", "--connectivity-only")).toBe(true);
@@ -1299,7 +1301,8 @@ describe("R2-B: the pull's lock wait, the pull-blocked clear and the X5 count ru
   test("verify-coverage P3-5/#6: up_to_date clears pullBlocked; a conflicted merge leaves it as it is (no pullBlocked key)", async () => {
     const r = newRow();
     await pull(r);
-    expect(H.writeHeld.mock.calls.map((c) => (c as unknown[])[2])).toEqual([expect.objectContaining({ pullBlocked: null })]);
+    expect(H.writePullBlocked.mock.calls.map((c) => (c as unknown[])[2])).toEqual([null]);
+    expect(H.writeHeld.mock.calls[0][2]).not.toHaveProperty("pullBlocked");
     git(r.ws, "commit", "-q", "--allow-empty", "-m", "noop"); // keep HEAD on main
     write(join(r.ws, "src", "s.ts"), "export const s = 3; // local\n");
     git(r.ws, "commit", "-q", "-am", "local edit");
@@ -1307,6 +1310,6 @@ describe("R2-B: the pull's lock wait, the pull-blocked clear and the X5 count ru
     resetTurn();
     expect((await pull(r)).pullReason).toBe("merge_conflict");
     expect(H.writeHeld).toHaveBeenCalledTimes(1);
-    expect(Object.prototype.hasOwnProperty.call((H.writeHeld.mock.calls[0] as unknown[])[2], "pullBlocked")).toBe(false);
+    expect(H.writePullBlocked).not.toHaveBeenCalled();
   });
 });

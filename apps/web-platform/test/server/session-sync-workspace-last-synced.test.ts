@@ -26,6 +26,7 @@ const {
   mockMerge,
   mockAdopt,
   mockWriteHeld,
+  mockWritePullBlocked,
   mockCompute,
   mockRecovered,
   mockReport,
@@ -52,6 +53,7 @@ const {
     // #12714: the held-files write and its computation are the seams (the count's git is asserted on real git in
     // test/kb-sync-held-real-git.test.ts; the helper's own UPDATE in test/workspace-repo-mirror.test.ts).
     mockWriteHeld: vi.fn().mockResolvedValue(undefined),
+    mockWritePullBlocked: vi.fn().mockResolvedValue(undefined),
     mockCompute: vi.fn(),
     mockRecovered: vi.fn(),
     mockReport: vi.fn(),
@@ -91,6 +93,7 @@ vi.mock("@/server/resolve-installation-id", () => ({
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: mockWriteRepoCols,
   writeKbSyncHeldCols: mockWriteHeld,
+  writeKbSyncPullBlocked: mockWritePullBlocked,
 }));
 
 vi.mock("@/server/kb-sync-held", async (importOriginal) => ({
@@ -185,6 +188,8 @@ function publishWith(outcome: { result?: unknown; throws?: unknown; hook?: boole
 
 const heldWrites = (): Array<[string, { heldFiles: number | null; checkedAt: Date }]> =>
   mockWriteHeld.mock.calls.map(([, ws, patch]) => [ws, patch]);
+// R2-A (verify-data-sec #6): pull-blocked is its own repo_status-guarded UPDATE, never part of the count patch.
+const pullBlockedWrites = (): Array<[string, unknown]> => mockWritePullBlocked.mock.calls.map(([, ws, v]) => [ws, v]);
 
 describe("session-sync write relocation (ADR-044 PR-B)", () => {
   beforeEach(() => {
@@ -438,8 +443,9 @@ describe("held-files write (TW2)", () => {
     });
     expect(mockAdopt.mock.invocationCallOrder[0]).toBeLessThan(mockCompute.mock.invocationCallOrder[0]);
     expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: expect.objectContaining({ gitDir: "/tmp/iso" }), base: T_SHA, head: merged, recovered: [] });
-    // R2-B (D42, verify-coverage P3-5): a merged default merge clears the pull-blocked state with the count
-    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: READ_AT, pullBlocked: null }]]);
+    // R2-B (D42, verify-coverage P3-5): a merged default merge clears the pull-blocked state, in its own write (R2-A)
+    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: READ_AT }]]);
+    expect(pullBlockedWrites()).toEqual([[TEAM_WORKSPACE_ID, null]]);
     expect(mockWriteHeld.mock.calls[0][0]).toBe(SERVICE);
     // The stamp is its own write (D29(1): never folded together).
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
@@ -454,7 +460,8 @@ describe("held-files write (TW2)", () => {
       pullReason: "up_to_date",
       checkedAt: READ_AT.toISOString(),
     });
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: READ_AT, pullBlocked: null }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: READ_AT }]]);
+    expect(pullBlockedWrites()).toEqual([[SOLO_WORKSPACE_ID, null]]);
   });
 
   test("pull: no remote read (remote null) or an unresolved merge -> no write; a null count writes null with checked_at", async () => {
@@ -475,7 +482,9 @@ describe("held-files write (TW2)", () => {
     expect(mockCompute).toHaveBeenCalledTimes(1);
     // D39(b), W1: the null count is an attempt, so it writes null with this pull's ls-remote instant; the result still
     // reports no count (heldFiles and checkedAt null).
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: READ_AT, pullBlocked: null }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: READ_AT }]]);
+    // the clear rides the one pull that reached the count (fetch_failed and unresolved_merge never clear)
+    expect(pullBlockedWrites()).toEqual([[SOLO_WORKSPACE_ID, null]]);
   });
 
   test("R2-B (X5): HEAD not on the remote's default branch -> no count attempted, nothing written", async () => {

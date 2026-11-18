@@ -130,7 +130,7 @@ describe("settings/page.tsx — held-files notice (#12714)", () => {
     expect(mirror).toHaveBeenCalledTimes(1);
     // null first (never the error object, #8629), the Postgres code as a tag, no error text.
     expect(mirror.mock.calls[0][0]).toBeNull();
-    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "read-held-files", tags: { pg_code: "42703" } });
+    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "kb-sync-held.read", tags: { pg_code: "42703" } });
     expect(JSON.stringify(mirror.mock.calls[0][1])).not.toContain("does not exist");
   });
 

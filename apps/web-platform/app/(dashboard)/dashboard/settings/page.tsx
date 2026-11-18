@@ -80,7 +80,7 @@ export default async function SettingsPage() {
       null,
       {
         feature: "settings",
-        op: "read-held-files",
+        op: "kb-sync-held.read",
         ...(typeof pgCode === "string" ? { tags: { pg_code: pgCode } } : {}),
         extra: { userId: user.id },
         message: "held-files select failed; no held notice",

@@ -1467,7 +1467,7 @@ failure_modes:
     detection: "layer 2 (pino -> Better Stack): Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) and, for a null, the closed nullCause, per count attempt; layer 2 (Sentry): writeKbSyncHeldCols's own mirror on a failed separate UPDATE, feature workspace-repo-write, op kb-sync-held.write (kb-sync-held.clear for the disconnect/setup clear), a warning debounced per op and pg code, err null with tag pg_code; an UPDATE that matches no row (newer checked_at, not ready, or gone) is an info pino line with outcome no_row, never mirrored (the stamp is unaffected, D29(1); op names corrected per obs F13, unified under kb-sync-held.* per pattern P3-17)"
     alert_route: "Better Stack search (display-only value, no alert)"
   - mode: "the cc agent line's RPC read failed"
-    detection: "layer 2: op kb-sync-held-read, a warning debounced per workspace through mirrorWarnWithDebounce (feature cc-dispatcher on cc, agent-runner for the legacy fallback read), tag cause = timeout | rpc_error | rejected plus pg_code when present; no line is appended (D29(3); obs F7, F10)"
+    detection: "layer 2: op kb-sync-held.read (Settings: feature settings, op kb-sync-held.read), a warning debounced per workspace through mirrorWarnWithDebounce (feature cc-dispatcher on cc, agent-runner for the legacy fallback read), tag cause = timeout | rpc_error | rejected plus pg_code when present; no line is appended (D29(3); obs F7, F10)"
     alert_route: "Sentry issue stream (no page)"
 
 logs:

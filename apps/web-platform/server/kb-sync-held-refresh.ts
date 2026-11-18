@@ -173,10 +173,9 @@ type RefreshArgs = RefreshTarget & ({ readonly userId: string; readonly system?:
  * is ignored at run time (an unbounded wait, as every other locked body); the expiry is handled either way: a rejection
  * before the body, or a return without running it, is the quiet `lock_busy` skip.
  */
-function lockWithWait<T>(path: string, fn: () => Promise<T>, opts: { readonly waitMs: number }): Promise<T> {
-  // read at call time, not module load: a test double of connected-repo-git need not define the lock to import this file
-  const lock = withWorkspaceGitLock as <U>(p: string, f: () => Promise<U>, o: { readonly waitMs: number }) => Promise<U>;
-  return lock(path, fn, opts);
+function lockWithWait<T>(path: string, fn: () => Promise<T>, opts: { readonly waitMs: number }) {
+  // Resolves WORKSPACE_GIT_LOCK_TIMEOUT without running fn when the wait expires; the caller detects that via `entered`.
+  return withWorkspaceGitLock(path, fn, opts);
 }
 
 /** Why a refresh wrote nothing (a closed `outcome` on the `kb-sync-held.refresh` info line). */
