@@ -341,13 +341,12 @@ top_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
 top_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
   && ok "treat_as_zero kept (CTO R2): a no-data read is 0 = healthy; a dark window is caught by the aggregate, which returns 1" \
   || no "on_missing_data is not treat_as_zero"
-# Operator lines are counted over the EFFECTIVE text (the blocks above are already comment-free; the grep below only
-# drops what is left of a whole-line comment): a comment recording the old shape is allowed (mutation row 18), a
-# second executable operator line or a lower_than anywhere in executable text of either flip alert is not.
-ALERT_CODE="$(grep -vE '^[[:space:]]*#' <<< "$ALERT")"
-CANARY_ALERT_CODE="$(grep -vE '^[[:space:]]*#' <<< "$CANARY_ALERT")"
-if [ "$(grep -cE '^[[:space:]]*operator[[:space:]]*=' <<< "$ALERT_CODE")" -eq 1 ] \
-   && ! grep -qF 'lower_than' <<< "$ALERT_CODE"$'\n'"$CANARY_ALERT_CODE"; then
+# Operator lines are counted over the blocks as read (code view: whole-line and `/* */` comments already blank, a
+# trailing comment kept): a whole-line comment recording the old shape is allowed (mutation row M18), a second
+# executable operator line or a lower_than anywhere in the executable text of either flip alert is not (a trailing
+# `# was lower_than` on a code line counts as executable text and reds).
+if [ "$(grep -cE '^[[:space:]]*operator[[:space:]]*=' <<< "$ALERT")" -eq 1 ] \
+   && ! grep -qF 'lower_than' <<< "$ALERT"$'\n'"$CANARY_ALERT"; then
   ok "exactly one executable operator line in the production alert, and no lower_than in the executable text of either flip alert"
 else
   no "the production alert has more than one executable operator line, or lower_than appears in the executable text of a flip alert"
@@ -492,13 +491,13 @@ top_in "$CANARY_ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
 top_in "$CANARY_ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
   && ok "the canary alert keeps treat_as_zero" \
   || no "the canary alert's on_missing_data is not treat_as_zero"
-# Block equality: comment and blank lines dropped, a trailing `#` / `//` comment outside "strings" cut (cut_tc), the
-# three per-alert keys dropped, the header normalised, and the alignment padding between an attribute key and its `=`
-# collapsed to one space (fmt_eq). `terraform fmt`, which CI enforces, re-aligns the `=` of a group of attribute lines
-# whenever a comment or blank line splits the group, and aligns the trailing comments of a group, so a doc comment
-# added in ONE block re-aligns that block only; that padding and the comments are the only cross-block difference fmt
-# makes. Nothing else is normalised: whitespace inside a value or a "string" still has to match exactly (CTO
-# 2026-11-18, option B: exact block parity).
+# Block equality: blank lines dropped (whole-line comments are blank already in the code view), a trailing `#` /
+# `//` comment outside "strings" cut (cut_tc), the three per-alert keys dropped, the header normalised, and the
+# alignment padding between an attribute key and its `=` collapsed to one space (fmt_eq). `terraform fmt`, which CI
+# enforces, re-aligns the `=` of a group of attribute lines whenever a comment or blank line splits the group, and
+# aligns the trailing comments of a group, so a doc comment added in ONE block re-aligns that block only; that
+# padding and the comments are the only cross-block difference fmt makes. Nothing else is normalised: whitespace
+# inside a value or a "string" still has to match exactly (CTO 2026-11-18, option B: exact block parity).
 fmt_eq() { LC_ALL=C sed -E 's/^([[:space:]]*[A-Za-z_][A-Za-z0-9_-]*)[[:space:]]+=/\1 =/'; }
 # cut_tc: stdin -> stdout, each line cut at its first `#` or `//` outside a "string" (escapes honoured), with the
 # whitespace before it.
@@ -512,11 +511,11 @@ cut_tc() {
     }
     print l }'
 }
-strip_alert() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | cut_tc | grep -vE '^  (name|exploration_id|incident_cause)[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
+strip_alert() { grep -vE '^[[:space:]]*$' <<< "$1" | cut_tc | grep -vE '^  (name|exploration_id|incident_cause)[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
 [ -n "$CANARY_ALERT" ] && [ -n "$ALERT" ] && [ "$(strip_alert "$CANARY_ALERT")" = "$(strip_alert "$ALERT")" ] \
   && ok "the canary alert block equals the production alert block apart from name / exploration_id / incident_cause" \
   || no "the canary alert block differs from the production alert block beyond name / exploration_id / incident_cause"
-strip_expl() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | cut_tc | grep -vE '^  name[[:space:]]*=[[:space:]]*"soleur-inngest-cutover-flip-silent(-canary)?-prd"[[:space:]]*$' | grep -vE '^    sql_query[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
+strip_expl() { grep -vE '^[[:space:]]*$' <<< "$1" | cut_tc | grep -vE '^  name[[:space:]]*=[[:space:]]*"soleur-inngest-cutover-flip-silent(-canary)?-prd"[[:space:]]*$' | grep -vE '^    sql_query[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
 [ -n "$CANARY_EXPL" ] && [ -n "$EXPL" ] && [ "$(strip_expl "$CANARY_EXPL")" = "$(strip_expl "$EXPL")" ] \
   && ok "the canary exploration equals the production exploration apart from name / sql_query" \
   || no "the canary exploration differs from the production exploration beyond name / sql_query"
