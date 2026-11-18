@@ -7,7 +7,7 @@
 // - The async runner rejects with git's exit status and stderr, and the same-host lock serializes one workspace.
 // Synthesized data only (cq-test-fixtures-synthesized-only).
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -44,6 +44,7 @@ import {
   pinInterruptedAutostash,
   runConnectedRepoGitAsync,
   withWorkspaceGitLock,
+  WORKSPACE_GIT_LOCK_TIMEOUT,
 } from "@/server/connected-repo-git";
 import { AUTO_MERGE_MSG_PULL, AUTO_MERGE_MSG_SELF_HEAL } from "@/server/kb-sync-pull";
 
@@ -173,12 +174,44 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     expect(git(ws, "show", `${sha}:a.txt`)).toBe("a\nUSER-DIRTY");
   });
 
-  test("a MERGE_HEAD next to MERGE_AUTOSTASH (a content conflict) is in_progress and pins nothing", async () => {
+  test("R2-B (data P2-1): a MERGE_HEAD next to MERGE_AUTOSTASH (a content conflict) is in_progress AND the autostash is pinned", async () => {
     const { ws, T } = repo();
-    staleAutostash(ws);
+    const sha = staleAutostash(ws);
     writeFileSync(join(ws, ".git", "MERGE_HEAD"), `${T}\n`);
     expect(await kbPullWriter(ws).merge(T)).toBe("in_progress");
-    expect(pins(ws)).toBe("");
+    expect(pins(ws)).toBe(`${AUTOSTASH_PIN_PREFIX}${sha} ${sha}`);
+    // MERGE_AUTOSTASH and MERGE_HEAD are untouched (git commit / merge --abort still apply the autostash)
+    expect(git(ws, "rev-parse", "--verify", "MERGE_AUTOSTASH")).toBe(sha);
+    expect(git(ws, "rev-parse", "--verify", "MERGE_HEAD")).toBe(T);
+  });
+
+  test("R2-B (data P2-1): a conflicted pull merge leaves MERGE_HEAD + MERGE_AUTOSTASH; the writer pins it on its conflict return, and it survives gc", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "ws-")));
+    git(ws, "init", "-q", "-b", "main");
+    git(ws, "config", "user.name", "Local");
+    git(ws, "config", "user.email", "local@example.test");
+    writeFileSync(join(ws, "a.txt"), "a\n");
+    writeFileSync(join(ws, "c.txt"), "c\n");
+    git(ws, "add", "-A");
+    git(ws, "commit", "-q", "-m", "one");
+    git(ws, "checkout", "-q", "-b", "up");
+    writeFileSync(join(ws, "a.txt"), "upstream\n");
+    git(ws, "commit", "-q", "-am", "upstream edit");
+    const T = git(ws, "rev-parse", "HEAD");
+    git(ws, "checkout", "-q", "main");
+    git(ws, "branch", "-q", "-D", "up");
+    writeFileSync(join(ws, "a.txt"), "local\n");
+    git(ws, "commit", "-q", "-am", "local edit");
+    writeFileSync(join(ws, "c.txt"), "c\nUSER-DIRTY-OTHER\n"); // the uncommitted edit only the autostash holds
+    expect(await kbPullWriter(ws).merge(T)).toBe("conflict");
+    const autostash = git(ws, "rev-parse", "--verify", "MERGE_AUTOSTASH");
+    expect(git(ws, "rev-parse", "--verify", "MERGE_HEAD")).toBe(T);
+    expect(pins(ws)).toBe(`${AUTOSTASH_PIN_PREFIX}${autostash} ${autostash}`);
+    git(ws, "gc", "-q", "--prune=now");
+    expect(git(ws, "show", `${autostash}:c.txt`)).toBe("c\nUSER-DIRTY-OTHER");
+    // the next sync's entry refusal pins idempotently: still exactly one ref
+    expect(await kbPullWriter(ws).merge(T)).toBe("in_progress");
+    expect(pins(ws)).toBe(`${AUTOSTASH_PIN_PREFIX}${autostash} ${autostash}`);
   });
 
   test.each([
@@ -227,6 +260,44 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
   });
 });
 
+describe("R2-B (data-sec P3-1): directory-rename detection is off in the merge, so an upstream add never lands on an ignored path", { timeout: 30_000 }, () => {
+  /** Local renames old/ -> new/ with an ignored new/x; upstream (T) adds old/x. Returns T. */
+  function renameScenario(ws: string): string {
+    git(ws, "init", "-q", "-b", "main");
+    git(ws, "config", "user.name", "Local");
+    git(ws, "config", "user.email", "local@example.test");
+    mkdirSync(join(ws, "old"));
+    writeFileSync(join(ws, "old", "a"), "a\n");
+    writeFileSync(join(ws, "old", "b"), "b\n");
+    writeFileSync(join(ws, ".gitignore"), "new/x\n");
+    git(ws, "add", "-A");
+    git(ws, "commit", "-q", "-m", "base");
+    git(ws, "checkout", "-q", "-b", "up");
+    writeFileSync(join(ws, "old", "x"), "upstream-x\n");
+    git(ws, "add", "-A");
+    git(ws, "commit", "-q", "-m", "upstream adds old/x");
+    const T = git(ws, "rev-parse", "HEAD");
+    git(ws, "checkout", "-q", "main");
+    git(ws, "branch", "-q", "-D", "up");
+    git(ws, "mv", "old", "new");
+    git(ws, "commit", "-q", "-m", "local renames old/ to new/");
+    writeFileSync(join(ws, "new", "x"), "IGNORED-LOCAL\n");
+    return T;
+  }
+
+  test.each([
+    ["the pull shape", {}],
+    ["the self-heal shape", { autostash: false }],
+  ] as const)("%s: the ignored new/x keeps its bytes, the upstream file lands at old/x, the merge is clean", async (_name, opts) => {
+    const ws = realpathSync(mkdtempSync(join(base, "ws-")));
+    const T = renameScenario(ws);
+    expect(await kbPullWriter(ws, opts).merge(T)).toBe("clean");
+    expect(readFileSync(join(ws, "new", "x"), "utf8")).toBe("IGNORED-LOCAL\n");
+    expect(readFileSync(join(ws, "old", "x"), "utf8")).toBe("upstream-x\n");
+    expect(git(ws, "status", "--porcelain")).toBe("");
+  });
+});
+
 describe("the async runner and the same-host lock (D38(1)(6))", { timeout: 30_000 }, () => {
   test("a failing child rejects with git's exit status and stderr; a refused argv rejects before any child", async () => {
     const { ws } = repo();
@@ -266,5 +337,72 @@ describe("the async runner and the same-host lock (D38(1)(6))", { timeout: 30_00
       throw new Error("boom");
     })).rejects.toThrow("boom");
     await expect(withWorkspaceGitLock(base, async () => "next")).resolves.toBe("next");
+  });
+});
+
+describe("R2-B: the lock wait is bounded by the caller's budget (verify-coverage P2-1)", { timeout: 30_000 }, () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const hold = (ms: number, order: string[], tag: string) => async () => {
+    order.push(`${tag}:start`);
+    await sleep(ms);
+    order.push(`${tag}:end`);
+    return tag;
+  };
+
+  test("a wait that outlasts waitMs resolves lock_timeout and never runs fn", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "lock-")));
+    const order: string[] = [];
+    const a = withWorkspaceGitLock(ws, hold(200, order, "a"));
+    const fn = vi.fn(async () => "b");
+    const startedAt = Date.now();
+    const b = await withWorkspaceGitLock(ws, fn, { waitMs: 20 });
+    expect(b).toBe(WORKSPACE_GIT_LOCK_TIMEOUT);
+    expect(Date.now() - startedAt).toBeLessThan(150); // it did not wait for the holder
+    expect(fn).not.toHaveBeenCalled();
+    expect(order).toEqual(["a:start"]);
+    expect(await a).toBe("a");
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  test("FIFO is kept across a timed-out waiter: a later caller still waits for the holder", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "lock-")));
+    const order: string[] = [];
+    const a = withWorkspaceGitLock(ws, hold(150, order, "a"));
+    const b = withWorkspaceGitLock(ws, hold(1, order, "b"), { waitMs: 10 });
+    const c = withWorkspaceGitLock(ws, hold(1, order, "c"));
+    expect(await b).toBe(WORKSPACE_GIT_LOCK_TIMEOUT);
+    // a caller arriving after the timeout, while the holder still runs, queues behind it too
+    const d = withWorkspaceGitLock(ws, hold(1, order, "d"), { waitMs: 5_000 });
+    expect(await Promise.all([a, c, d])).toEqual(["a", "c", "d"]);
+    expect(order).toEqual(["a:start", "a:end", "c:start", "c:end", "d:start", "d:end"]);
+  });
+
+  test("the timed-out waiter was the queue's tail: the next caller still waits for the holder (the queue entry is kept)", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "lock-")));
+    const order: string[] = [];
+    const a = withWorkspaceGitLock(ws, hold(150, order, "a"));
+    expect(await withWorkspaceGitLock(ws, hold(1, order, "b"), { waitMs: 10 })).toBe(WORKSPACE_GIT_LOCK_TIMEOUT);
+    const c = withWorkspaceGitLock(ws, hold(1, order, "c"));
+    expect(await Promise.all([a, c])).toEqual(["a", "c"]);
+    expect(order).toEqual(["a:start", "a:end", "c:start", "c:end"]);
+  });
+
+  test("a holder that finishes inside the wait releases it: the waiter runs and returns its value", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "lock-")));
+    const order: string[] = [];
+    const a = withWorkspaceGitLock(ws, hold(20, order, "a"));
+    expect(await withWorkspaceGitLock(ws, hold(1, order, "b"), { waitMs: 2_000 })).toBe("b");
+    expect(await a).toBe("a");
+    expect(order).toEqual(["a:start", "a:end", "b:start", "b:end"]);
+  });
+
+  test("no holder: the lock is taken at once whatever the wait (an Infinity wait never fires early)", async () => {
+    const ws = realpathSync(mkdtempSync(join(base, "lock-")));
+    expect(await withWorkspaceGitLock(ws, async () => "x", { waitMs: 0 })).toBe("x");
+    const order: string[] = [];
+    const a = withWorkspaceGitLock(ws, hold(30, order, "a"));
+    expect(await withWorkspaceGitLock(ws, hold(1, order, "b"), { waitMs: Number.POSITIVE_INFINITY })).toBe("b");
+    await a;
+    expect(order).toEqual(["a:start", "a:end", "b:start", "b:end"]);
   });
 });

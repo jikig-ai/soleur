@@ -18,6 +18,9 @@ const H = vi.hoisted(() => ({
   remoteUrl: "",
   lsRemote: null as null | string,
   calls: [] as string[][],
+  /** R2-B: the timeout each token-bearing child was given, and a hook run before each isolated local child. */
+  timeouts: [] as Array<[string, number | undefined]>,
+  beforeIso: null as null | ((args: readonly string[]) => void),
 }));
 
 vi.mock("@/server/github-app", () => ({ generateInstallationToken: async () => ["ghs", "_", "u".repeat(36)].join("") }));
@@ -27,6 +30,7 @@ vi.mock("@/server/git-auth", async (importOriginal) => {
     ...actual,
     gitWithInstallationAuth: async (args: string[], id: number, opts: import("@/server/git-auth").GitExecOptions = {}) => {
       H.calls.push([...args]);
+      H.timeouts.push([args[0], opts.timeout]);
       if (args[0] === "ls-remote" && H.lsRemote !== null) return Buffer.from(H.lsRemote);
       return actual.gitWithInstallationAuth(args.map((a) => (a === LITERAL_URL ? H.remoteUrl : a)), id, opts);
     },
@@ -40,6 +44,21 @@ vi.mock("@/server/git-hardened-env", async (importOriginal) => {
       ...actual.buildIsolatedGitEnv(dir, extra),
       GIT_ALLOW_PROTOCOL: "https:file",
     }),
+  };
+});
+
+vi.mock("@/server/git-isolated-local", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/git-isolated-local")>();
+  return {
+    ...actual,
+    runIsolatedGitLocal: async (
+      iso: import("@/server/git-hardened-env").IsolatedPushDir,
+      args: readonly string[],
+      opts: import("@/server/git-isolated-local").IsolatedGitLocalOptions = {},
+    ) => {
+      H.beforeIso?.(args);
+      return actual.runIsolatedGitLocal(iso, args, opts);
+    },
   };
 });
 
@@ -76,6 +95,8 @@ beforeEach(() => {
   for (const k of ["HOME", "TMPDIR"]) savedEnv[k] = process.env[k];
   H.lsRemote = null;
   H.calls.length = 0;
+  H.timeouts.length = 0;
+  H.beforeIso = null;
 });
 afterEach(() => {
   iso?.dispose();
@@ -170,6 +191,21 @@ describe("mergeVerifiedDefault with a recording writer (TX1-e equality half, D26
     const { writer } = recordingWriter(f);
     await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer });
     expect(() => git(iso!.gitDir, "rev-parse", "--git-dir")).not.toThrow();
+  });
+});
+
+describe("R2-B (data-sec P3-1): the isolated merge-tree runs with directory-rename detection off, as the merge does", { timeout: 30_000 }, () => {
+  test("the precheck's merge-tree argv carries -c merge.directoryRenames=false (the same pin as the workspace merge)", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const seen: string[][] = [];
+    H.beforeIso = (args) => {
+      if (args.includes("merge-tree")) seen.push([...args]);
+    };
+    const { writer } = recordingWriter(f);
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer, precheck: true });
+    expect(r.reason).toBe("merged");
+    expect(seen).toEqual([["-c", "merge.directoryRenames=false", "merge-tree", "--write-tree", "--no-messages", f.headSha, f.T]]);
   });
 });
 

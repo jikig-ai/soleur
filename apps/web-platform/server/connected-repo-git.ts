@@ -20,6 +20,7 @@ import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
 import type { KbWorkspaceWriter } from "./kb-sync-publish";
+import { DIRECTORY_RENAMES_PIN } from "./kb-sync-objects";
 import { AUTO_MERGE_MSG_PULL, AUTO_MERGE_MSG_SELF_HEAL, type KbMergeOutcome, type KbPullWriter } from "./kb-sync-pull";
 import { createChildLogger } from "./logger";
 import { hasUntrackedCollision } from "./workspace-collision";
@@ -51,8 +52,9 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
 
 /**
  * D26(2): the config pins of the session-start merge. Each closes a workspace-config route to a host-side program or a
- * silent content change: signature verification and its gpg programs, renormalization, a configured merge default, rerere
- * (a replayed resolution), the diffstat, auto-maintenance and gc, and hooks. `filter.*` and an attribute-selected merge
+ * silent content change: signature verification and its gpg programs, renormalization, directory-rename relocation onto an
+ * ignored path (R2-B, `DIRECTORY_RENAMES_PIN`), a configured merge default, rerere (a replayed resolution), the diffstat,
+ * auto-maintenance and gc, and hooks. `filter.*` and an attribute-selected merge
  * driver still run on the host (D26(3), same-uid residual; the closure is an isolated `merge-tree`, a follow-up).
  */
 export const MERGE_CONFIG_PINS: readonly string[] = [
@@ -61,6 +63,7 @@ export const MERGE_CONFIG_PINS: readonly string[] = [
   "gpg.ssh.program=/bin/false",
   "gpg.x509.program=/bin/false",
   "merge.renormalize=false",
+  DIRECTORY_RENAMES_PIN,
   "merge.default=text",
   "rerere.enabled=false",
   "rerere.autoUpdate=false",
@@ -402,7 +405,7 @@ async function readStashTip(workspacePath: string): Promise<string | null | unde
  *   2. D35: the untracked/ignored collision check (`hasUntrackedCollision`, shapes 1-3) against the in-memory, verified
  *      target is `collision`; a non-ff merge ignores `--no-overwrite-ignore` (measured), so this check, not the flag, guards;
  *   3. the merge child; exit 1 with `MERGE_HEAD` is a content `conflict`; anything else that fails (an unrelated history, a
- *      refusal, a timeout, a signal) is `refused`, after pinning a stranded `MERGE_AUTOSTASH` (D36(c));
+ *      refusal, a timeout, a signal) is `refused`; both pin a `MERGE_AUTOSTASH` the merge left (D36(c), R2-B);
  *   4. D36(a)(b): after exit 0, a status run that cannot be read is `unverified`; an unmerged entry, or a `refs/stash` that
  *      moved (git parked an autostash it could not re-apply), is `autostash_conflict` (D26(4)); else `clean`.
  * A status or stash read that cannot run before the merge refuses it (`refused`): nothing was written.
@@ -437,9 +440,10 @@ export function kbPullWriter(workspacePath: string, opts: { readonly autostash?:
         });
       } catch (err) {
         const code = (err as { status?: unknown } | null)?.status;
-        if (code === 1 && mergeHeadPresent(workspacePath)) return "conflict";
+        // R2-B (data P2-1): a content conflict on the `--autostash` merge leaves MERGE_HEAD + MERGE_AUTOSTASH; the
+        // autostash commit is then reachable from no ref until the user resolves, so it is pinned on this return too.
         await pinInterruptedAutostash(workspacePath);
-        return "refused";
+        return code === 1 && mergeHeadPresent(workspacePath) ? "conflict" : "refused";
       }
       const after = await readStatus(workspacePath, "kbPullWriter-merge");
       if (after === null) return "unverified";
@@ -502,14 +506,16 @@ function readMergeAutostash(workspacePath: string): AutostashRead {
 }
 
 /**
- * D36(c): when `.git/MERGE_AUTOSTASH` exists without `MERGE_HEAD` (a merge child killed or refused after it stashed), pin the
- * autostash commit as `refs/soleur/autostash/<sha>` so `gc` cannot prune the only copy of the user's uncommitted edits.
- * Idempotent (the ref is named by its own value). `MERGE_AUTOSTASH` itself is never moved or deleted (recovery is #12719).
- * Anything but a small regular file whose first line is 40 hex, or a failed `update-ref`, is no pin and one warning
- * (debounced per workspace and cause). Never throws. Run by the writer and at every `mergeInProgress` refusal.
+ * D36(c): whenever `.git/MERGE_AUTOSTASH` exists, pin the autostash commit as `refs/soleur/autostash/<sha>` so `gc` cannot
+ * prune the only copy of the user's uncommitted edits: a merge child killed or refused after it stashed (no `MERGE_HEAD`),
+ * AND a content-conflicted `--autostash` merge (`MERGE_HEAD` too, R2-B / data P2-1: the stash stays unreferenced until the
+ * user resolves, which can outlast `gc.pruneExpire`). Additive and idempotent (the ref is named by its own value), so `git
+ * commit` / `merge --abort` still apply the autostash as usual. `MERGE_AUTOSTASH` itself is never moved or deleted (recovery
+ * is #12719). Anything but a small regular file whose first line is 40 hex, or a failed `update-ref`, is no pin and one
+ * warning (debounced per workspace and cause). Never throws. Run by the writer (its conflict and refused returns, its entry
+ * check), at every `mergeInProgress` refusal of syncPull and syncPush, and at the top of the self-heal's checks.
  */
 export async function pinInterruptedAutostash(workspacePath: string): Promise<void> {
-  if (gitFilePresent(workspacePath, "MERGE_HEAD")) return;
   const read = readMergeAutostash(workspacePath);
   if (read === null) return;
   let cause: string;
@@ -566,13 +572,44 @@ export function mergeInProgress(workspacePath: string, entries: readonly Porcela
 /** The tail of each workspace's lock queue, keyed on its real path (in-process; the cross-host lease is separate). */
 const workspaceGitLocks = new Map<string, Promise<void>>();
 
+/** What `withWorkspaceGitLock` resolves to when its bounded wait expired before the lock was free (`fn` never ran). */
+export const WORKSPACE_GIT_LOCK_TIMEOUT = "lock_timeout" as const;
+export type WorkspaceGitLockTimeout = typeof WORKSPACE_GIT_LOCK_TIMEOUT;
+
+/** Resolves true when `prev` settles within `waitMs`, false when the wait expires first (a non-finite wait never expires). */
+function waitFor(prev: Promise<void>, waitMs: number | undefined): Promise<boolean> {
+  if (waitMs === undefined || !Number.isFinite(waitMs)) return prev.then(() => true);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), Math.max(0, Math.min(waitMs, 2_147_483_647)));
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([prev.then(() => true), expired]).finally(() => clearTimeout(timer));
+}
+
 /**
- * Same-host serialization of the workspace git writers (D38(6)): syncPull, the syncPush publish and the self-heal's
- * `mergeHeldCommits` run `fn` under one in-process lock keyed on the workspace's real path (the path itself when it cannot
- * be resolved), so a sibling never reads another's in-flight `MERGE_AUTOSTASH` as an unfinished merge (arch F12). FIFO; a
- * throwing `fn` releases the lock. The wait counts against the caller's own budget (the caller measures from its entry).
+ * Same-host serialization of the workspace git writers (D38(6)): syncPull, the syncPush publish and the self-heal (its
+ * `pull --ff-only`, merge, branch-aside and reset, R2-B) run `fn` under one in-process lock keyed on the workspace's real
+ * path (the path itself when it cannot be resolved), so a sibling never reads another's in-flight `MERGE_AUTOSTASH` as an
+ * unfinished merge (arch F12). FIFO; a throwing `fn` releases the lock.
+ *
+ * `waitMs` (verify-coverage P2-1) bounds the wait by what is left of the caller's budget: when the lock is not free in time
+ * the call resolves `WORKSPACE_GIT_LOCK_TIMEOUT` and `fn` never runs (syncPull answers `pull_deadline`, the self-heal its
+ * route's `pending`). The timed-out caller gives up its place without letting anyone past the holder: the queue tail it
+ * appended still waits for the holder, so FIFO holds. A running holder is never interrupted (its git children keep their
+ * own bounds; the holders bound their own starts). Without `waitMs` the wait is unbounded, as before.
  */
-export async function withWorkspaceGitLock<T>(workspacePath: string, fn: () => Promise<T>): Promise<T> {
+export function withWorkspaceGitLock<T>(workspacePath: string, fn: () => Promise<T>): Promise<T>;
+export function withWorkspaceGitLock<T>(
+  workspacePath: string,
+  fn: () => Promise<T>,
+  opts: { readonly waitMs?: number },
+): Promise<T | WorkspaceGitLockTimeout>;
+export async function withWorkspaceGitLock<T>(
+  workspacePath: string,
+  fn: () => Promise<T>,
+  opts: { readonly waitMs?: number } = {},
+): Promise<T | WorkspaceGitLockTimeout> {
   let key = workspacePath;
   try {
     key = realpathSync(workspacePath);
@@ -586,11 +623,15 @@ export async function withWorkspaceGitLock<T>(workspacePath: string, fn: () => P
   });
   const tail = prev.then(() => mine);
   workspaceGitLocks.set(key, tail);
+  // The entry is dropped only once the tail itself settles (after the holder AND this caller), never on a timeout while
+  // the holder still runs: a later caller must still queue behind the holder.
+  void tail.then(() => {
+    if (workspaceGitLocks.get(key) === tail) workspaceGitLocks.delete(key);
+  });
   try {
-    await prev;
+    if (!(await waitFor(prev, opts.waitMs))) return WORKSPACE_GIT_LOCK_TIMEOUT;
     return await fn();
   } finally {
     release();
-    if (workspaceGitLocks.get(key) === tail) workspaceGitLocks.delete(key);
   }
 }

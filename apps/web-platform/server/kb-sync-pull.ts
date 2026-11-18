@@ -22,6 +22,7 @@ import type { IsolatedPushDirHandle, IsolatedPushDirReason } from "./git-isolate
 import { KB_ROOT } from "./kb-root";
 import {
   commitTree,
+  DIRECTORY_RENAMES_PIN,
   handOver,
   isAncestor,
   isCommitPresent,
@@ -277,9 +278,12 @@ async function transfer(
 /** A `merge-tree` result: `clean` carries the merged tree id (the D34 effect gate reads it; one child for both). */
 type MergeTreeResult = { readonly kind: "clean"; readonly tree: string } | { readonly kind: "conflict" } | { readonly kind: "refused" };
 
-/** `merge-tree --write-tree a b` in the isolated directory (token-free): 0 + a tree id is clean, 1 a conflict, else refused. */
+/**
+ * `merge-tree --write-tree a b` in the isolated directory (token-free): 0 + a tree id is clean, 1 a conflict, else refused.
+ * Directory-rename detection is off, as in the workspace merge (`DIRECTORY_RENAMES_PIN`, R2-B), so both agree.
+ */
 async function mergeTreeCheck(isolated: IsolatedPushDirHandle, a: string, b: string, budget: PullBudget): Promise<MergeTreeResult> {
-  const r = await runIsolatedGitLocal(isolated, ["merge-tree", "--write-tree", "--no-messages", a, b], localOpts(budget));
+  const r = await runIsolatedGitLocal(isolated, ["-c", DIRECTORY_RENAMES_PIN, "merge-tree", "--write-tree", "--no-messages", a, b], localOpts(budget));
   const first = r.stdout.toString("utf8").split("\n")[0] ?? "";
   // measured (9.1 probe7): exit 1 is a conflict, and also a missing object; only a tree id on stdout is a real conflict.
   if (!HEX40.test(first)) return { kind: "refused" };

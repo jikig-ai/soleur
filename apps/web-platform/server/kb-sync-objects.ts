@@ -26,6 +26,15 @@ export class KbObjectsError extends Error {
 
 export const TREE_MODE = "40000";
 
+/**
+ * R2-B (data-sec P3-1): ort's directory-rename detection relocates an upstream-added `old/x` to `new/x` when the workspace
+ * renamed `old/` to `new/`, a path the collision listing (`diff --no-renames HEAD <T>`) never names, so an IGNORED file
+ * there was overwritten (measured, git 2.56). Pinned off in the workspace merge (server/connected-repo-git.ts
+ * `MERGE_CONFIG_PINS`) and in every isolated `merge-tree` (the self-heal's pre-check, the side tip's D34 effect gate), so
+ * the pre-check and the merge give the same answer.
+ */
+export const DIRECTORY_RENAMES_PIN = "merge.directoryRenames=false";
+
 export interface TreeEntry {
   readonly mode: string;
   /** latin1, so the bytes round-trip exactly into `mktree -z`. */

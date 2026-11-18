@@ -384,6 +384,8 @@ describe("connected-repo argv guard: the pinned session-start merge (#12718)", (
       "gpg.ssh.program=/bin/false",
       "gpg.x509.program=/bin/false",
       "merge.renormalize=false",
+      // R2-B (data-sec P3-1): no directory-rename relocation of an upstream path onto an ignored local one
+      "merge.directoryRenames=false",
       "merge.default=text",
       "rerere.enabled=false",
       "rerere.autoUpdate=false",
@@ -409,6 +411,9 @@ describe("connected-repo argv guard: the pinned session-start merge (#12718)", (
     ["an all-zero target", mergeArgv("0".repeat(40))],
     ["a second target", [...mergeArgv(T), T]],
     ["an option-shaped target", [...MERGE_CONFIG_PINS, ...MERGE.slice(0, -1), "--strategy=ours"]],
+    ["no merge.directoryRenames=false pin (pull shape)", without("merge.directoryRenames=false").filter((a, i, all) => !(a === "-c" && all[i + 1] === "-c"))],
+    ["merge.directoryRenames=true", mergeArgv(T).map((a) => (a === "merge.directoryRenames=false" ? "merge.directoryRenames=true" : a))],
+    ["no merge.directoryRenames=false pin (self-heal shape)", mergeArgv(T, { autostash: false }).map((a) => (a === "merge.directoryRenames=false" ? "merge.directoryRenames=conflict" : a))],
   ])("refuses %s", (_name, argv) => {
     expect(() => assertConnectedRepoArgv(argv)).toThrow(/pinned session-start merge/);
   });
