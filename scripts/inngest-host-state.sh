@@ -332,6 +332,8 @@ print("  boot_id        %s" % f.get("boot_id", "?"))
 print("  probe_schema   %s" % f.get("probe_schema", "?"))
 print("  server_active  %s        http_code=%s" % (f.get("server_active", "?"), f.get("http_code", "?")))
 print("  registry_fns   %s" % f.get("registry_fns", "?"))
+# probe_schema=10 (#12742): the sdk_url poll verdict and the registered app URL(s).
+print("  sdk_sync       %s        sdk_app_url=%s" % (f.get("sdk_sync", "?"), f.get("sdk_app_url", "?")))
 print("  redis_active   %s        redis_keys=%s expires=%s" % (
     f.get("redis_active", "?"), f.get("redis_keys", "?"), f.get("redis_expires", "?")))
 print("  data_mount     %s  devid=%s  bytes=%s  luks=%s" % (

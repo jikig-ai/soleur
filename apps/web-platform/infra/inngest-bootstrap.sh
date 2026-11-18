@@ -652,8 +652,7 @@ readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers
 # FUNCTIONS_GQL_QUERY above (the drift pin greps `^readonly`, an indented copy is invisible).
 # `apps { url error }` reads the server's OWN pollSDKs state: `error` is refreshed by the
 # server's poll loop each interval, so the row reports the LAST sync attempt's verdict, and
-# `url` names what the server actually registered — the legible difference between "still
-# polling http://10.0.1.10:3000" and "polling https://app.soleur.ai" after the host replace.
+# `url` names what the server actually registered (rationale: the gather block below).
 readonly SDK_SYNC_GQL_QUERY='query SdkSyncProbe { apps { url error } }'
 
 # --- gather (never branch on the results before the emit below) ---
@@ -1019,8 +1018,8 @@ dedicated)
   # the server's 60s pollSDKs loop can still reach the app — which is the question the
   # post-replace measurement (item 4, #10538/#10479) has to answer. `apps[].error` is
   # refreshed BY that poll each interval, so `ok` certifies the last attempt, and
-  # `sdk_app_url` names the registered URL so a stale `http://10.0.1.10:3000` row is legible
-  # in the same event rather than a second query.
+  # `sdk_app_url` names the registered URL so a stale private web-host row (still polling the
+  # pre-#12737 private address) is legible in the same event rather than a second query.
   #
   # Same failure-arm shape as registry_fns: the /health http_code gates first, jq is a host
   # fact (guarded, never assumed), every failure arm lands on __UNREADABLE__ — a refused

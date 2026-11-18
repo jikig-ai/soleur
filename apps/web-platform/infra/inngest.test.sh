@@ -2139,12 +2139,13 @@ assert "#12742 ...while the SAME row still carries the registry measurement" \
   "grep -qE 'registry_fns=3( |\$)' '$S10_OK'"
 
 # --- shape 2: a non-empty apps[].error => error, and the URL still ships --------------------
-s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"http://10.0.1.10:3000/api/inngest","error":"dial tcp: connection refused"}]}}'
+# (A synthesized private address, not the real web host: web-hosts-generic.test.sh ratchets that literal.)
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"http://10.0.9.9:3000/api/inngest","error":"dial tcp: connection refused"}]}}'
 S10_ERR="$(s8_run sdk-error)"
 assert "#12742 a failing sync => sdk_sync=error with registry_fns still positive" \
   "grep -qE 'sdk_sync=error( |\$)' '$S10_ERR' && grep -qE 'registry_fns=3( |\$)' '$S10_ERR'"
 assert "#12742 ...and the stale private URL is LEGIBLE in the row (item 4's evidence)" \
-  "grep -qE 'sdk_app_url=http://10.0.1.10:3000/api/inngest( |\$)' '$S10_ERR'"
+  "grep -qE 'sdk_app_url=http://10.0.9.9:3000/api/inngest( |\$)' '$S10_ERR'"
 assert "#12742 the GQL error TEXT never ships (the tag is allowlisted to a third party)" \
   "! grep -qF 'connection refused' '$S10_ERR'"
 

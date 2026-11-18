@@ -118,6 +118,14 @@ else
   fail "expected exit 0 with summary, got rc=$rc out='$out'"
 fi
 
+echo "T1b: the summary prints the probe_schema=10 sync fields (#12742) — the responder's read path"
+CASES_RUN=$((CASES_RUN + 1))
+if grep -qE '^  sdk_sync +ok +sdk_app_url=https://app\.soleur\.ai/api/inngest$' <<<"$out"; then
+  pass "summary carries sdk_sync and sdk_app_url from the row"
+else
+  fail "summary lacks the sdk_sync/sdk_app_url line, out='$out'"
+fi
+
 echo "T2: web-1 rows ONLY -> exit 4, empty stdout (the wrong-machine guard)"
 make_query; row "2026-09-17 13:00:00" soleur-web-platform "$WEB1_MSG" > "$SANDBOX/probe.jsonl"
 res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
@@ -606,8 +614,8 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # doppler row), T21b (marker + space anchor), T22 (lib unloadable -> 6), T22b (names the path).
 # 30 with #8873's T23 (inherited emitter/marker + a lib defining nothing -> 6).
 # 34 with #12708's T24 (pin selects), T24b (hetzner- spelling), T25 (unmatched pin -> 4),
-# T25b (malformed pin -> 2). 35 with the review-P2 T25c (empty pin -> 2).
-_min_cases=35
+# T25b (malformed pin -> 2). 35 with the review-P2 T25c (empty pin -> 2). 36 with #12742's T1b.
+_min_cases=36
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

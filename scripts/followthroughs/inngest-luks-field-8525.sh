@@ -5,8 +5,8 @@
 #
 # WHAT IT VERIFIES — POSITIVELY, NEVER BY ABSENCE. PASS requires an observed
 # SOLEUR_INNGEST_SERVER_PROBE row from THE SERVING dedicated host carrying BOTH
-# `probe_schema=9` AND `data_luks=crypto_LUKS` in the SAME row. `probe_schema=9` alone is not
-# the verdict (a field that resolved `__UNREADABLE__` still carries schema 9), and
+# `probe_schema=9` or later AND `data_luks=crypto_LUKS` in the SAME row. `probe_schema=9` alone is not
+# the verdict (a field that resolved `__UNREADABLE__` still carries the schema), and
 # `data_luks=crypto_LUKS` alone is not the verdict (it must be the schema-9 row's field). The
 # pairing is the follow-through condition the issue names.
 #
@@ -20,7 +20,7 @@
 # outer row matches nothing ever. Filter on the decoded .message, as the sibling probe does.
 #
 # EXIT CONTRACT (scripts/sweep-followthroughs.sh):
-#   0 = PASS       an observed serving-host row with probe_schema=9 AND data_luks=crypto_LUKS.
+#   0 = PASS       an observed serving-host row with probe_schema>=9 AND data_luks=crypto_LUKS.
 #   2 = TRANSIENT  host not yet emitting schema 9 (the emitter is a baked carrier — it lands on
 #                  the next image+host replace), channel dark, credentials unprovisioned, or any
 #                  query/decode failure. Each prints a DISTINCT reason.

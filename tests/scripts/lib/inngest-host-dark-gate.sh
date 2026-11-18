@@ -645,7 +645,7 @@ _ihdg_verdict() {
 #     --hb-file   <heartbeat rows: same shape, --grep inngest-cutover-flip> \
 #     --hb-rc     <n> \
 #     [--emit-file <abs path>] [--now-epoch <n>] [--max-row-age 5400] [--hb-max-age 900] \
-#     [--host soleur-inngest] [--host-name soleur-inngest-prd] [--expected-schema 9])" || ERG_RC=$?
+#     [--host soleur-inngest] [--host-name soleur-inngest-prd] [--expected-schema 10])" || ERG_RC=$?
 #   # stdout is EXACTLY the verdict token; rc 0 ONLY for `dark`. The caller runs `set -e`, so the
 #   # `|| ERG_RC=$?` shape is load-bearing: a bare `$(…)` aborts before any `::error::` prints.
 #   # `--emit-file` receives `key=value` lines (flag, boot_id, row_age, hb_age, hb_flag), each
